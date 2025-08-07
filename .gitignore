@@ -1,0 +1,313 @@
+# Personal CRM - Comprehensive .gitignore
+
+# ===========================================
+# ENVIRONMENT & SECRETS
+# ===========================================
+.env
+.env.local
+.env.production
+.env.staging
+.env.*.local
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+config/secrets.yaml
+
+# ===========================================
+# OPERATING SYSTEM
+# ===========================================
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ===========================================
+# EDITORS & IDEs
+# ===========================================
+# VSCode
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# IntelliJ / GoLand
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Cursor IDE
+.cursor/
+
+# ===========================================
+# GO BACKEND
+# ===========================================
+# Binaries
+backend/bin/
+backend/*.exe
+backend/*.exe~
+backend/*.dll
+backend/*.so
+backend/*.dylib
+
+# Go modules
+go.sum
+
+# Test coverage
+backend/coverage.out
+backend/coverage.html
+*.cover
+
+# Delve debugger
+backend/__debug_bin
+
+# Air live reload
+backend/tmp/
+
+# ===========================================
+# NODE.JS / FRONTEND
+# ===========================================
+# Dependencies
+frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Build outputs
+frontend/.next/
+frontend/out/
+frontend/dist/
+frontend/build/
+
+# Runtime data
+frontend/pids
+frontend/*.pid
+frontend/*.seed
+frontend/*.pid.lock
+
+# Coverage directory used by tools like istanbul
+frontend/coverage/
+frontend/.nyc_output
+
+# ESLint cache
+frontend/.eslintcache
+
+# Optional npm cache directory
+frontend/.npm
+
+# Optional REPL history
+frontend/.node_repl_history
+
+# Output of 'npm pack'
+frontend/*.tgz
+
+# Yarn Integrity file
+frontend/.yarn-integrity
+
+# Parcel cache
+frontend/.cache
+frontend/.parcel-cache
+
+# Next.js build output
+frontend/.next
+frontend/out
+
+# Nuxt.js build / generate output
+frontend/.nuxt
+frontend/dist
+
+# Storybook build outputs
+frontend/.out
+frontend/.storybook-out
+
+# Temporary folders
+frontend/tmp/
+frontend/temp/
+
+# ===========================================
+# TESTING
+# ===========================================
+# Test results
+tests/test-results/
+tests/playwright-report/
+tests/coverage/
+tests/*.xml
+tests/junit.xml
+
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Screenshots and videos from tests
+tests/screenshots/
+tests/videos/
+
+# ===========================================
+# DATABASE & DATA
+# ===========================================
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Database dumps
+*.sql.gz
+*.dump
+backup/*.sql
+
+# Migration logs
+migrations/*.log
+
+# ===========================================
+# DOCKER & CONTAINERS
+# ===========================================
+# Docker override files
+docker-compose.override.yml
+docker-compose.*.override.yml
+
+# Docker volumes data (if using local volumes)
+volumes/
+
+# ===========================================
+# LOGS & MONITORING
+# ===========================================
+# Log files
+*.log
+logs/
+log/
+
+# Runtime logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Application logs
+app.log
+error.log
+access.log
+
+# ===========================================
+# CERTIFICATES & KEYS
+# ===========================================
+# SSL certificates
+*.crt
+*.cert
+*.key
+*.pem
+ssl/
+
+# SSH keys
+id_rsa
+id_rsa.pub
+known_hosts
+
+# ===========================================
+# BACKUP & TEMP FILES
+# ===========================================
+# Backup files
+*.bak
+*.backup
+*.tmp
+backup/
+backups/
+
+# Temporary files
+temp/
+tmp/
+*.temp
+
+# Archive files (if they contain sensitive data)
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# ===========================================
+# DEVELOPMENT TOOLS
+# ===========================================
+# Hot reload
+.hot-reload
+
+# Development databases
+dev.db
+development.sqlite
+
+# Local development overrides
+local.config.js
+local.config.json
+
+# Benchmark results
+benchmark/
+
+# Profiling
+*.prof
+*.pprof
+
+# ===========================================
+# DOCUMENTATION BUILDS
+# ===========================================
+# Generated documentation
+docs/_build/
+docs/build/
+site/
+
+# ===========================================
+# MISC
+# ===========================================
+# Ignore files with credentials in the name
+*credentials*
+*secret*
+*password*
+*token*
+
+# Ignore local configuration overrides
+*.local.*
+local.*
+
+# OS generated files
+.fseventsd
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Network Trash Folder
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
