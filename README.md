@@ -77,8 +77,17 @@ personal-crm/
 ## Testing
 
 ```bash
-# Backend tests
-cd backend && go test ./...
+# Unit tests (fast, no external dependencies)
+make test-unit
+
+# Integration tests (requires database)
+make test-integration
+
+# All backend tests
+make test-all
+
+# API-specific tests
+make test-api
 
 # Frontend tests (when implemented)
 cd frontend && npm test
@@ -86,6 +95,39 @@ cd frontend && npm test
 # E2E tests
 npx playwright test
 ```
+
+See [TEST_GUIDE.md](TEST_GUIDE.md) for detailed testing information.
+
+## Smoke Testing
+
+**🚀 Idiot-Proof Smoke Test**
+
+Run the complete smoke test that handles everything automatically:
+
+```bash
+./smoke-test.sh
+```
+
+This script will:
+1. ✅ Stop all running services
+2. ✅ Start Docker, Backend API, and Frontend
+3. ✅ Run database migrations
+4. ✅ Test all endpoints
+5. ✅ Create and cleanup test data
+6. ✅ Generate detailed logs
+
+**🐛 Debug & Share Logs**
+
+If something goes wrong, collect all logs for debugging:
+
+```bash
+./share-logs.sh
+```
+
+This creates a comprehensive debug bundle with:
+- System information and running processes
+- API test results and Docker container status
+- Environment variables and recent log files
 
 ## Database
 

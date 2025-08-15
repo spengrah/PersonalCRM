@@ -1,0 +1,513 @@
+basePath: /api/v1
+definitions:
+  api.APIError:
+    properties:
+      code:
+        type: string
+      details:
+        type: string
+      message:
+        type: string
+    type: object
+  api.APIResponse:
+    properties:
+      data: {}
+      error:
+        $ref: '#/definitions/api.APIError'
+      meta:
+        $ref: '#/definitions/api.Meta'
+      success:
+        type: boolean
+    type: object
+  api.Meta:
+    properties:
+      limit:
+        type: integer
+      page:
+        type: integer
+      total:
+        type: integer
+      total_pages:
+        type: integer
+    type: object
+  handlers.ContactResponse:
+    description: Contact information
+    properties:
+      birthday:
+        example: "1990-01-15T00:00:00Z"
+        type: string
+      cadence:
+        enum:
+        - weekly
+        - monthly
+        - quarterly
+        - biannual
+        - annual
+        example: monthly
+        type: string
+      created_at:
+        example: "2024-01-01T00:00:00Z"
+        type: string
+      email:
+        example: john.doe@example.com
+        type: string
+      full_name:
+        example: John Doe
+        type: string
+      how_met:
+        example: Met at tech conference
+        type: string
+      id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+      last_contacted:
+        example: "2024-01-15T10:30:00Z"
+        type: string
+      location:
+        example: San Francisco, CA
+        type: string
+      phone:
+        example: +1-555-0123
+        type: string
+      profile_photo:
+        example: https://example.com/photo.jpg
+        type: string
+      updated_at:
+        example: "2024-01-15T10:30:00Z"
+        type: string
+    type: object
+  handlers.CreateContactRequest:
+    description: Create contact request
+    properties:
+      birthday:
+        example: "1990-01-15T00:00:00Z"
+        type: string
+      cadence:
+        enum:
+        - weekly
+        - monthly
+        - quarterly
+        - biannual
+        - annual
+        example: monthly
+        type: string
+      email:
+        example: john.doe@example.com
+        maxLength: 255
+        type: string
+      full_name:
+        example: John Doe
+        maxLength: 255
+        minLength: 1
+        type: string
+      how_met:
+        example: Met at tech conference
+        maxLength: 500
+        type: string
+      location:
+        example: San Francisco, CA
+        maxLength: 255
+        type: string
+      phone:
+        example: +1-555-0123
+        maxLength: 50
+        type: string
+      profile_photo:
+        example: https://example.com/photo.jpg
+        maxLength: 500
+        type: string
+    required:
+    - full_name
+    type: object
+  handlers.UpdateContactRequest:
+    description: Update contact request
+    properties:
+      birthday:
+        example: "1990-01-15T00:00:00Z"
+        type: string
+      cadence:
+        enum:
+        - weekly
+        - monthly
+        - quarterly
+        - biannual
+        - annual
+        example: monthly
+        type: string
+      email:
+        example: john.doe@example.com
+        maxLength: 255
+        type: string
+      full_name:
+        example: John Doe
+        maxLength: 255
+        minLength: 1
+        type: string
+      how_met:
+        example: Met at tech conference
+        maxLength: 500
+        type: string
+      location:
+        example: San Francisco, CA
+        maxLength: 255
+        type: string
+      phone:
+        example: +1-555-0123
+        maxLength: 50
+        type: string
+      profile_photo:
+        example: https://example.com/photo.jpg
+        maxLength: 500
+        type: string
+    required:
+    - full_name
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: A personal customer relationship management API
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: http://swagger.io/terms/
+  title: Personal CRM API
+  version: "1.0"
+paths:
+  /contacts:
+    get:
+      description: Get a paginated list of contacts with optional search
+      parameters:
+      - default: 1
+        description: Page number
+        in: query
+        minimum: 1
+        name: page
+        type: integer
+      - default: 20
+        description: Items per page
+        in: query
+        maximum: 100
+        minimum: 1
+        name: limit
+        type: integer
+      - description: Search term (name or email)
+        in: query
+        maxLength: 255
+        name: search
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Contacts retrieved successfully
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.ContactResponse'
+                  type: array
+                meta:
+                  $ref: '#/definitions/api.Meta'
+              type: object
+        "400":
+          description: Invalid query parameters
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List contacts
+      tags:
+      - contacts
+    post:
+      consumes:
+      - application/json
+      description: Create a new contact with the provided information
+      parameters:
+      - description: Contact information
+        in: body
+        name: contact
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.CreateContactRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Contact created successfully
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ContactResponse'
+              type: object
+        "400":
+          description: Invalid request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "409":
+          description: Contact already exists
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Create a new contact
+      tags:
+      - contacts
+  /contacts/{id}:
+    delete:
+      description: Soft delete a contact by ID
+      parameters:
+      - description: Contact ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: Contact deleted successfully
+        "400":
+          description: Invalid contact ID
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Contact not found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Delete a contact
+      tags:
+      - contacts
+    get:
+      description: Get a specific contact by its ID
+      parameters:
+      - description: Contact ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Contact retrieved successfully
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ContactResponse'
+              type: object
+        "400":
+          description: Invalid contact ID
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Contact not found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get a contact by ID
+      tags:
+      - contacts
+    put:
+      consumes:
+      - application/json
+      description: Update a contact with the provided information
+      parameters:
+      - description: Contact ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Updated contact information
+        in: body
+        name: contact
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.UpdateContactRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Contact updated successfully
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ContactResponse'
+              type: object
+        "400":
+          description: Invalid request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Contact not found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "409":
+          description: Email already exists
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Update a contact
+      tags:
+      - contacts
+  /contacts/{id}/last-contacted:
+    patch:
+      consumes:
+      - application/json
+      description: Update when a contact was last contacted
+      parameters:
+      - description: Contact ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Last contacted date updated successfully
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "400":
+          description: Invalid contact ID
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Contact not found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Update last contacted date
+      tags:
+      - contacts
+schemes:
+- http
+- https
+securityDefinitions:
+  BearerAuth:
+    description: Type "Bearer" followed by a space and JWT token.
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

@@ -1,10 +1,12 @@
-package health
+package unit
 
 import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"personal-crm/backend/internal/health"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -14,18 +16,13 @@ type HealthResponse struct {
 	Status string `json:"status"`
 }
 
-func HealthHandler(c *gin.Context) {
-	response := HealthResponse{Status: "ok"}
-	c.JSON(http.StatusOK, response)
-}
-
 func TestHealthEndpoint(t *testing.T) {
 	// Set Gin to test mode
 	gin.SetMode(gin.TestMode)
 
 	// Create a new Gin router
 	router := gin.New()
-	router.GET("/health", HealthHandler)
+	router.GET("/health", health.HealthHandler)
 
 	// Create a request
 	req, err := http.NewRequest("GET", "/health", nil)
