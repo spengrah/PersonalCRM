@@ -231,6 +231,18 @@ export default function ContactDetailPage() {
                 </div>
               )}
               
+              {contact.birthday && (
+                <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                  <dt className="text-sm font-medium text-gray-500">Birthday</dt>
+                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                    <div className="flex items-center">
+                      <Calendar className="w-4 h-4 mr-2 text-gray-400" />
+                      {new Date(contact.birthday).toLocaleDateString()}
+                    </div>
+                  </dd>
+                </div>
+              )}
+              
               {contact.cadence && (
                 <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
                   <dt className="text-sm font-medium text-gray-500">Contact cadence</dt>

@@ -38,6 +38,7 @@ export function ContactForm({ contact, onSubmit, loading, submitText = 'Save Con
       email: contact.email || '',
       phone: contact.phone || '',
       location: contact.location || '',
+      birthday: contact.birthday ? contact.birthday.split('T')[0] : '', // Format date for input
       notes: contact.notes || '',
       cadence: contact.cadence || '',
     } : {
@@ -45,6 +46,7 @@ export function ContactForm({ contact, onSubmit, loading, submitText = 'Save Con
       email: '',
       phone: '',
       location: '',
+      birthday: '',
       notes: '',
       cadence: '',
     },
@@ -98,14 +100,24 @@ export function ContactForm({ contact, onSubmit, loading, submitText = 'Save Con
           />
         </div>
 
-        {/* Location */}
-        <Input
-          {...register('location')}
-          label="Location"
-          placeholder="Enter location (city, country)"
-          error={errors.location?.message}
-          disabled={isLoading}
-        />
+        {/* Location and Birthday */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <Input
+            {...register('location')}
+            label="Location"
+            placeholder="Enter location (city, country)"
+            error={errors.location?.message}
+            disabled={isLoading}
+          />
+          <Input
+            {...register('birthday')}
+            label="Birthday"
+            type="date"
+            error={errors.birthday?.message}
+            disabled={isLoading}
+            helpText="Optional - for birthday reminders"
+          />
+        </div>
 
         {/* Cadence */}
         <div className="space-y-1">

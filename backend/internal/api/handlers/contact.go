@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"personal-crm/backend/internal/api"
@@ -13,6 +15,44 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 )
+
+// DateOnly represents a date-only value that can be unmarshaled from JSON
+type DateOnly struct {
+	*time.Time
+}
+
+// UnmarshalJSON implements json.Unmarshaler for DateOnly
+func (d *DateOnly) UnmarshalJSON(data []byte) error {
+	// Remove quotes from JSON string
+	s := strings.Trim(string(data), "\"")
+	
+	if s == "null" || s == "" {
+		d.Time = nil
+		return nil
+	}
+
+	// Try parsing as date only first (YYYY-MM-DD)
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		d.Time = &t
+		return nil
+	}
+
+	// Fall back to RFC3339 format if needed
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		d.Time = &t
+		return nil
+	}
+
+	return errors.New("invalid date format, expected YYYY-MM-DD")
+}
+
+// MarshalJSON implements json.Marshaler for DateOnly
+func (d DateOnly) MarshalJSON() ([]byte, error) {
+	if d.Time == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(d.Time.Format("2006-01-02"))
+}
 
 // ContactHandler handles contact-related HTTP requests
 type ContactHandler struct {
@@ -48,27 +88,27 @@ type ContactResponse struct {
 // CreateContactRequest represents the request to create a contact
 // @Description Create contact request
 type CreateContactRequest struct {
-	FullName     string     `json:"full_name" validate:"required,min=1,max=255" example:"John Doe"`
-	Email        *string    `json:"email,omitempty" validate:"omitempty,email,max=255" example:"john.doe@example.com"`
-	Phone        *string    `json:"phone,omitempty" validate:"omitempty,max=50" example:"+1-555-0123"`
-	Location     *string    `json:"location,omitempty" validate:"omitempty,max=255" example:"San Francisco, CA"`
-	Birthday     *time.Time `json:"birthday,omitempty" example:"1990-01-15T00:00:00Z"`
-	HowMet       *string    `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
-	Cadence      *string    `json:"cadence,omitempty" validate:"omitempty,oneof=weekly monthly quarterly biannual annual" example:"monthly"`
-	ProfilePhoto *string    `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
+	FullName     string    `json:"full_name" validate:"required,min=1,max=255" example:"John Doe"`
+	Email        *string   `json:"email,omitempty" validate:"omitempty,email,max=255" example:"john.doe@example.com"`
+	Phone        *string   `json:"phone,omitempty" validate:"omitempty,max=50" example:"+1-555-0123"`
+	Location     *string   `json:"location,omitempty" validate:"omitempty,max=255" example:"San Francisco, CA"`
+	Birthday     *DateOnly `json:"birthday,omitempty" example:"1990-01-15"`
+	HowMet       *string   `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
+	Cadence      *string   `json:"cadence,omitempty" validate:"omitempty,oneof=weekly monthly quarterly biannual annual" example:"monthly"`
+	ProfilePhoto *string   `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
 }
 
 // UpdateContactRequest represents the request to update a contact
 // @Description Update contact request
 type UpdateContactRequest struct {
-	FullName     string     `json:"full_name" validate:"required,min=1,max=255" example:"John Doe"`
-	Email        *string    `json:"email,omitempty" validate:"omitempty,email,max=255" example:"john.doe@example.com"`
-	Phone        *string    `json:"phone,omitempty" validate:"omitempty,max=50" example:"+1-555-0123"`
-	Location     *string    `json:"location,omitempty" validate:"omitempty,max=255" example:"San Francisco, CA"`
-	Birthday     *time.Time `json:"birthday,omitempty" example:"1990-01-15T00:00:00Z"`
-	HowMet       *string    `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
-	Cadence      *string    `json:"cadence,omitempty" validate:"omitempty,oneof=weekly monthly quarterly biannual annual" example:"monthly"`
-	ProfilePhoto *string    `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
+	FullName     string    `json:"full_name" validate:"required,min=1,max=255" example:"John Doe"`
+	Email        *string   `json:"email,omitempty" validate:"omitempty,email,max=255" example:"john.doe@example.com"`
+	Phone        *string   `json:"phone,omitempty" validate:"omitempty,max=50" example:"+1-555-0123"`
+	Location     *string   `json:"location,omitempty" validate:"omitempty,max=255" example:"San Francisco, CA"`
+	Birthday     *DateOnly `json:"birthday,omitempty" example:"1990-01-15"`
+	HowMet       *string   `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
+	Cadence      *string   `json:"cadence,omitempty" validate:"omitempty,oneof=weekly monthly quarterly biannual annual" example:"monthly"`
+	ProfilePhoto *string   `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
 }
 
 // ListContactsQuery represents query parameters for listing contacts
@@ -98,12 +138,17 @@ func contactToResponse(contact *repository.Contact) ContactResponse {
 
 // Helper function to convert create request to repository request
 func createRequestToRepo(req CreateContactRequest) repository.CreateContactRequest {
+	var birthday *time.Time
+	if req.Birthday != nil {
+		birthday = req.Birthday.Time
+	}
+	
 	return repository.CreateContactRequest{
 		FullName:     req.FullName,
 		Email:        req.Email,
 		Phone:        req.Phone,
 		Location:     req.Location,
-		Birthday:     req.Birthday,
+		Birthday:     birthday,
 		HowMet:       req.HowMet,
 		Cadence:      req.Cadence,
 		ProfilePhoto: req.ProfilePhoto,
@@ -112,12 +157,17 @@ func createRequestToRepo(req CreateContactRequest) repository.CreateContactReque
 
 // Helper function to convert update request to repository request
 func updateRequestToRepo(req UpdateContactRequest) repository.UpdateContactRequest {
+	var birthday *time.Time
+	if req.Birthday != nil {
+		birthday = req.Birthday.Time
+	}
+	
 	return repository.UpdateContactRequest{
 		FullName:     req.FullName,
 		Email:        req.Email,
 		Phone:        req.Phone,
 		Location:     req.Location,
-		Birthday:     req.Birthday,
+		Birthday:     birthday,
 		HowMet:       req.HowMet,
 		Cadence:      req.Cadence,
 		ProfilePhoto: req.ProfilePhoto,

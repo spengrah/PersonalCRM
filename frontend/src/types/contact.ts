@@ -4,6 +4,7 @@ export interface Contact {
   email?: string
   phone?: string
   location?: string
+  birthday?: string
   notes?: string
   cadence?: string
   last_contacted?: string
@@ -17,6 +18,7 @@ export interface CreateContactRequest {
   email?: string
   phone?: string
   location?: string
+  birthday?: string
   notes?: string
   cadence?: string
 }
@@ -26,6 +28,7 @@ export interface UpdateContactRequest {
   email?: string
   phone?: string
   location?: string
+  birthday?: string
   notes?: string
   cadence?: string
 }

@@ -91,6 +91,9 @@ function ContactsTable({ contacts, loading }: { contacts: Contact[]; loading: bo
               Location
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              Birthday
+            </th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Last Contacted
             </th>
             <th className="relative px-6 py-3">
@@ -158,6 +161,12 @@ function ContactsTable({ contacts, loading }: { contacts: Contact[]; loading: bo
                     {contact.location}
                   </div>
                 )}
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                {contact.birthday 
+                  ? new Date(contact.birthday).toLocaleDateString()
+                  : '-'
+                }
               </td>
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                 {contact.last_contacted 

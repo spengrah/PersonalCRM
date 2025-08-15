@@ -16,6 +16,14 @@ export const contactSchema = z.object({
     .max(255, 'Location must be less than 255 characters')
     .optional()
     .or(z.literal('')),
+  birthday: z.string()
+    .refine((date) => {
+      if (!date) return true // Allow empty birthday
+      const parsedDate = new Date(date)
+      return !isNaN(parsedDate.getTime()) && parsedDate <= new Date()
+    }, 'Please enter a valid date that is not in the future')
+    .optional()
+    .or(z.literal('')),
   notes: z.string()
     .max(2000, 'Notes must be less than 2000 characters')
     .optional()
@@ -35,6 +43,7 @@ export function transformContactFormData(data: ContactFormData) {
     email: data.email || undefined,
     phone: data.phone || undefined,
     location: data.location || undefined,
+    birthday: data.birthday || undefined,
     notes: data.notes || undefined,
     cadence: data.cadence || undefined,
   }
