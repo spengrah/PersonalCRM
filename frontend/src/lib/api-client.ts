@@ -71,6 +71,11 @@ class ApiClient {
         throw new ApiError(errorMessage, response.status, errorCode)
       }
 
+      // Handle 204 No Content responses (e.g., DELETE operations)
+      if (response.status === 204) {
+        return undefined as T
+      }
+
       const data: ApiResponse<T> = await response.json()
       
       if (!data.success && data.error) {
