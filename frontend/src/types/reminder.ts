@@ -1,6 +1,6 @@
 export interface Reminder {
   id: string
-  contact_id: string
+  contact_id?: string
   title: string
   description?: string
   due_date: string
@@ -11,12 +11,12 @@ export interface Reminder {
 }
 
 export interface DueReminder extends Reminder {
-  contact_name: string
+  contact_name?: string
   contact_email?: string
 }
 
 export interface CreateReminderRequest {
-  contact_id: string
+  contact_id?: string
   title: string
   description?: string
   due_date: string

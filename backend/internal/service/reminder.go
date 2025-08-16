@@ -96,7 +96,7 @@ func (s *ReminderService) GenerateRemindersForOverdueContacts(ctx context.Contex
 		description := reminder.GenerateReminderDescription(contact.FullName, cadenceType, daysSinceLastContact)
 
 		_, err = s.reminderRepo.CreateReminder(ctx, repository.CreateReminderRequest{
-			ContactID:   contact.ID,
+			ContactID:   &contact.ID,
 			Title:       title,
 			Description: &description,
 			DueDate:     today,

@@ -29,10 +29,10 @@ func NewReminderHandler(reminderService *service.ReminderService) *ReminderHandl
 // CreateReminderRequest represents the request body for creating a reminder
 // @Description Request body for creating a new reminder
 type CreateReminderRequest struct {
-	ContactID   uuid.UUID `json:"contact_id" validate:"required" example:"123e4567-e89b-12d3-a456-426614174000"`
-	Title       string    `json:"title" validate:"required,max=255" example:"Follow up with John"`
-	Description *string   `json:"description" validate:"omitempty,max=1000" example:"Check on project status"`
-	DueDate     time.Time `json:"due_date" validate:"required" example:"2024-03-15T09:00:00Z"`
+	ContactID   *uuid.UUID `json:"contact_id" validate:"omitempty" example:"123e4567-e89b-12d3-a456-426614174000"`
+	Title       string     `json:"title" validate:"required,max=255" example:"Follow up with John"`
+	Description *string    `json:"description" validate:"omitempty,max=1000" example:"Check on project status"`
+	DueDate     time.Time  `json:"due_date" validate:"required" example:"2024-03-15T09:00:00Z"`
 } // @name CreateReminderRequest
 
 // UpdateReminderRequest represents the request body for updating a reminder

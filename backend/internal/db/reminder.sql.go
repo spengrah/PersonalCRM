@@ -136,11 +136,11 @@ func (q *Queries) HardDeleteReminder(ctx context.Context, id pgtype.UUID) error 
 const ListDueReminders = `-- name: ListDueReminders :many
 SELECT r.id, r.contact_id, r.title, r.description, r.due_date, r.completed, r.completed_at, r.created_at, r.deleted_at, c.full_name as contact_name, c.email as contact_email
 FROM reminder r
-JOIN contact c ON r.contact_id = c.id
+LEFT JOIN contact c ON r.contact_id = c.id
 WHERE r.due_date <= $1 
   AND r.completed = FALSE 
   AND r.deleted_at IS NULL
-  AND c.deleted_at IS NULL
+  AND (c.deleted_at IS NULL OR r.contact_id IS NULL)
 ORDER BY r.due_date ASC
 `
 
@@ -154,7 +154,7 @@ type ListDueRemindersRow struct {
 	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	DeletedAt    pgtype.Timestamptz `json:"deleted_at"`
-	ContactName  string             `json:"contact_name"`
+	ContactName  pgtype.Text        `json:"contact_name"`
 	ContactEmail pgtype.Text        `json:"contact_email"`
 }
 

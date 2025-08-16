@@ -21,11 +21,11 @@ LIMIT $1 OFFSET $2;
 -- name: ListDueReminders :many
 SELECT r.*, c.full_name as contact_name, c.email as contact_email
 FROM reminder r
-JOIN contact c ON r.contact_id = c.id
+LEFT JOIN contact c ON r.contact_id = c.id
 WHERE r.due_date <= $1 
   AND r.completed = FALSE 
   AND r.deleted_at IS NULL
-  AND c.deleted_at IS NULL
+  AND (c.deleted_at IS NULL OR r.contact_id IS NULL)
 ORDER BY r.due_date ASC;
 
 -- name: ListRemindersByContact :many

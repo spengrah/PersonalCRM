@@ -12,7 +12,7 @@ import (
 
 type Reminder struct {
 	ID          uuid.UUID  `json:"id"`
-	ContactID   uuid.UUID  `json:"contact_id"`
+	ContactID   *uuid.UUID `json:"contact_id"`
 	Title       string     `json:"title"`
 	Description *string    `json:"description"`
 	DueDate     time.Time  `json:"due_date"`
@@ -24,15 +24,15 @@ type Reminder struct {
 
 type DueReminder struct {
 	Reminder
-	ContactName  string  `json:"contact_name"`
+	ContactName  *string `json:"contact_name"`
 	ContactEmail *string `json:"contact_email"`
 }
 
 type CreateReminderRequest struct {
-	ContactID   uuid.UUID `json:"contact_id" validate:"required"`
-	Title       string    `json:"title" validate:"required,max=255"`
-	Description *string   `json:"description" validate:"omitempty,max=1000"`
-	DueDate     time.Time `json:"due_date" validate:"required"`
+	ContactID   *uuid.UUID `json:"contact_id" validate:"omitempty"`
+	Title       string     `json:"title" validate:"required,max=255"`
+	Description *string    `json:"description" validate:"omitempty,max=1000"`
+	DueDate     time.Time  `json:"due_date" validate:"required"`
 }
 
 type UpdateReminderRequest struct {
@@ -60,10 +60,14 @@ func NewReminderRepository(queries db.Querier) *ReminderRepository {
 func convertDbReminder(dbReminder *db.Reminder) Reminder {
 	reminder := Reminder{
 		ID:        uuid.UUID(dbReminder.ID.Bytes),
-		ContactID: uuid.UUID(dbReminder.ContactID.Bytes),
 		Title:     dbReminder.Title,
 		Completed: dbReminder.Completed.Bool,
 		CreatedAt: dbReminder.CreatedAt.Time,
+	}
+
+	if dbReminder.ContactID.Valid {
+		contactID := uuid.UUID(dbReminder.ContactID.Bytes)
+		reminder.ContactID = &contactID
 	}
 
 	if dbReminder.Description.Valid {
@@ -90,12 +94,19 @@ func convertDbDueReminder(dbReminder db.ListDueRemindersRow) DueReminder {
 	due := DueReminder{
 		Reminder: Reminder{
 			ID:        uuid.UUID(dbReminder.ID.Bytes),
-			ContactID: uuid.UUID(dbReminder.ContactID.Bytes),
 			Title:     dbReminder.Title,
 			Completed: dbReminder.Completed.Bool,
 			CreatedAt: dbReminder.CreatedAt.Time,
 		},
-		ContactName: dbReminder.ContactName,
+	}
+
+	if dbReminder.ContactID.Valid {
+		contactID := uuid.UUID(dbReminder.ContactID.Bytes)
+		due.Reminder.ContactID = &contactID
+	}
+
+	if dbReminder.ContactName.Valid {
+		due.ContactName = &dbReminder.ContactName.String
 	}
 
 	if dbReminder.Description.Valid {
@@ -127,8 +138,13 @@ func (r *ReminderRepository) CreateReminder(ctx context.Context, req CreateRemin
 		description = pgtype.Text{String: *req.Description, Valid: true}
 	}
 
+	var contactID pgtype.UUID
+	if req.ContactID != nil {
+		contactID = pgtype.UUID{Bytes: *req.ContactID, Valid: true}
+	}
+
 	dbReminder, err := r.queries.CreateReminder(ctx, db.CreateReminderParams{
-		ContactID:   pgtype.UUID{Bytes: req.ContactID, Valid: true},
+		ContactID:   contactID,
 		Title:       req.Title,
 		Description: description,
 		DueDate:     pgtype.Timestamptz{Time: req.DueDate, Valid: true},

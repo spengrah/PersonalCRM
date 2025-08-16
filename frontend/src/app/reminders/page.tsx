@@ -2,11 +2,12 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { Plus, Search, CheckCircle, AlertCircle, User, Calendar, MoreHorizontal } from 'lucide-react'
+import { Plus, Search, CheckCircle, AlertCircle, User, Calendar, MoreHorizontal, X } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
-import { useReminders, useCompleteReminder, useDeleteReminder } from '@/hooks/use-reminders'
-import type { DueReminder, ReminderListParams } from '@/types/reminder'
+import { ReminderForm } from '@/components/reminders/reminder-form'
+import { useReminders, useCompleteReminder, useDeleteReminder, useCreateReminder } from '@/hooks/use-reminders'
+import type { DueReminder, ReminderListParams, CreateReminderRequest } from '@/types/reminder'
 import { clsx } from 'clsx'
 
 function RemindersTable({ reminders, loading }: { reminders: DueReminder[]; loading: boolean }) {
@@ -104,18 +105,27 @@ function RemindersTable({ reminders, loading }: { reminders: DueReminder[]; load
                   </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="flex items-center">
-                    <User className="w-4 h-4 mr-2 text-gray-400" />
-                    <Link
-                      href={`/contacts/${reminder.contact_id}`}
-                      className="text-sm text-blue-600 hover:text-blue-500"
-                    >
-                      {reminder.contact_name}
-                    </Link>
-                  </div>
-                  {reminder.contact_email && (
-                    <div className="text-sm text-gray-500">
-                      {reminder.contact_email}
+                  {reminder.contact_id ? (
+                    <>
+                      <div className="flex items-center">
+                        <User className="w-4 h-4 mr-2 text-gray-400" />
+                        <Link
+                          href={`/contacts/${reminder.contact_id}`}
+                          className="text-sm text-blue-600 hover:text-blue-500"
+                        >
+                          {reminder.contact_name}
+                        </Link>
+                      </div>
+                      {reminder.contact_email && (
+                        <div className="text-sm text-gray-500">
+                          {reminder.contact_email}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="flex items-center text-sm text-gray-500">
+                      <User className="w-4 h-4 mr-2 text-gray-400" />
+                      Standalone reminder
                     </div>
                   )}
                 </td>
@@ -177,6 +187,8 @@ function RemindersTable({ reminders, loading }: { reminders: DueReminder[]; load
 export default function RemindersPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [filter, setFilter] = useState<'all' | 'due' | 'completed'>('all')
+  const [showCreateForm, setShowCreateForm] = useState(false)
+  
   const params: ReminderListParams = {
     page: 1,
     limit: 50,
@@ -186,11 +198,13 @@ export default function RemindersPage() {
     ...params,
     ...(filter === 'due' && { due_today: true }),
   })
+  
+  const createReminderMutation = useCreateReminder()
 
   const filteredReminders = reminders?.filter(reminder => {
     const matchesSearch = !searchTerm || 
       reminder.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      reminder.contact_name.toLowerCase().includes(searchTerm.toLowerCase())
+      (reminder.contact_name && reminder.contact_name.toLowerCase().includes(searchTerm.toLowerCase()))
     
     const matchesFilter = filter === 'all' || 
       (filter === 'completed' && reminder.completed) ||
@@ -198,6 +212,15 @@ export default function RemindersPage() {
     
     return matchesSearch && matchesFilter
   }) || []
+
+  const handleCreateReminder = async (data: CreateReminderRequest) => {
+    try {
+      await createReminderMutation.mutateAsync(data)
+      setShowCreateForm(false)
+    } catch (error) {
+      console.error('Error creating reminder:', error)
+    }
+  }
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
@@ -219,13 +242,13 @@ export default function RemindersPage() {
               {reminders?.length ? `${reminders.length} reminders` : 'Loading reminders...'}
             </p>
           </div>
-          <div className="mt-4 flex md:mt-0 md:ml-4">
-            <Link href="/contacts">
-              <Button>
-                <Plus className="w-4 h-4 mr-2" />
-                Add Contact
-              </Button>
-            </Link>
+          <div className="mt-4 flex space-x-3 md:mt-0 md:ml-4">
+            <Button
+              onClick={() => setShowCreateForm(true)}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              New Reminder
+            </Button>
           </div>
         </div>
 
@@ -309,6 +332,44 @@ export default function RemindersPage() {
           <RemindersTable reminders={filteredReminders} loading={isLoading} />
         </div>
       </div>
+
+      {/* Create Reminder Modal */}
+      {showCreateForm && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+            <div className="flex items-start justify-between mb-6">
+              <h3 className="text-lg font-medium text-gray-900">
+                Create New Reminder
+              </h3>
+              <button
+                type="button"
+                className="text-gray-400 hover:text-gray-600"
+                onClick={() => setShowCreateForm(false)}
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            <ReminderForm
+              onSubmit={handleCreateReminder}
+              onCancel={() => setShowCreateForm(false)}
+              loading={createReminderMutation.isPending}
+            />
+            
+            {createReminderMutation.error && (
+              <div className="mt-4 bg-red-50 border border-red-200 rounded-md p-4">
+                <h3 className="text-sm font-medium text-red-800">Error creating reminder</h3>
+                <p className="mt-1 text-sm text-red-700">
+                  {createReminderMutation.error instanceof Error 
+                    ? createReminderMutation.error.message 
+                    : 'An unexpected error occurred'
+                  }
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
