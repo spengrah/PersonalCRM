@@ -1,17 +1,30 @@
 # Personal CRM Makefile
 
-.PHONY: help dev build test clean docker-up docker-down docker-reset
+.PHONY: help dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing
 
 # Default target
 help:
 	@echo "Available targets:"
+	@echo ""
+	@echo "Environment Management:"
+	@echo "  testing     - Switch to testing environment (ultra-fast cadences)"
+	@echo "  staging     - Switch to staging environment (fast cadences)" 
+	@echo "  prod        - Switch to production environment (real cadences)"
+	@echo ""
+	@echo "Development:"
 	@echo "  dev         - Start development servers (frontend and backend)"
 	@echo "  build       - Build both frontend and backend"
 	@echo "  test        - Run all tests"
 	@echo "  clean       - Clean build artifacts"
+	@echo ""
+	@echo "Docker:"
 	@echo "  docker-up   - Start Docker Compose services"
 	@echo "  docker-down - Stop Docker Compose services"
 	@echo "  docker-reset- Reset Docker volumes and restart"
+	@echo ""
+	@echo "Cadence Testing:"
+	@echo "  test-cadence-ultra - Test all cadences in minutes (testing env)"
+	@echo "  test-cadence-fast  - Test all cadences in hours (staging env)"
 
 # Development
 dev:
@@ -62,6 +75,75 @@ api-build:
 api-run: api-build
 	@echo "Starting API server..."
 	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && ./backend/bin/crm-api
+
+# Environment switching
+testing:
+	@echo "Switching to TESTING environment (ultra-fast cadences)..."
+	@cp env.testing .env
+	@echo "✅ Testing environment active:"
+	@echo "   - Weekly cadence: 2 minutes"  
+	@echo "   - Monthly cadence: 10 minutes"
+	@echo "   - Quarterly cadence: 30 minutes"
+	@echo "   - Scheduler runs every 30 seconds"
+	@echo ""
+	@echo "Use 'make test-cadence-ultra' to validate all cadences quickly"
+
+staging:
+	@echo "Switching to STAGING environment (fast cadences)..."
+	@cp env.staging .env
+	@echo "✅ Staging environment active:"
+	@echo "   - Weekly cadence: 10 minutes (1 week = 10 min)"
+	@echo "   - Monthly cadence: 1 hour (1 month = 1 hour)"  
+	@echo "   - Quarterly cadence: 3 hours (1 quarter = 3 hours)"
+	@echo "   - Scheduler runs every 5 minutes"
+	@echo ""
+	@echo "Use 'make test-cadence-fast' to validate cadences in hours"
+
+prod:
+	@echo "Switching to PRODUCTION environment (real cadences)..."
+	@cp env.production .env
+	@echo "✅ Production environment active:"
+	@echo "   - Weekly cadence: 7 days"
+	@echo "   - Monthly cadence: 30 days"
+	@echo "   - Quarterly cadence: 90 days"  
+	@echo "   - Scheduler runs daily at 8 AM"
+	@echo ""
+	@echo "⚠️  CAUTION: Real-world timing active"
+
+# Cadence testing commands
+test-cadence-ultra:
+	@echo "🚀 Starting ULTRA-FAST cadence testing..."
+	@echo "This will test all reminder cadences in minutes!"
+	@echo ""
+	@make testing
+	@make docker-up
+	@echo "Starting backend with ultra-fast cadences..."
+	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && go run cmd/crm-api/main.go &
+	@echo ""
+	@echo "⏱️  CADENCE TIMING (ultra-fast):"
+	@echo "   - Weekly: 2 minutes"
+	@echo "   - Monthly: 10 minutes" 
+	@echo "   - Quarterly: 30 minutes"
+	@echo "   - Scheduler: every 30 seconds"
+	@echo ""
+	@echo "💡 Add test contacts with different cadences and watch reminders generate!"
+
+test-cadence-fast:
+	@echo "🏎️  Starting FAST cadence testing..."
+	@echo "This will test all reminder cadences in hours!"
+	@echo ""
+	@make staging
+	@make docker-up
+	@echo "Starting backend with fast cadences..."
+	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && go run cmd/crm-api/main.go &
+	@echo ""
+	@echo "⏱️  CADENCE TIMING (fast):"
+	@echo "   - Weekly: 10 minutes (1 week = 10 min)"
+	@echo "   - Monthly: 1 hour (1 month = 1 hour)"
+	@echo "   - Quarterly: 3 hours (1 quarter = 3 hours)" 
+	@echo "   - Scheduler: every 5 minutes"
+	@echo ""
+	@echo "💡 Perfect for validating 3+ months of cadence behavior in 3 hours!"
 
 # Clean
 clean:

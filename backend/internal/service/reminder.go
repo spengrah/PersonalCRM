@@ -53,8 +53,8 @@ func (s *ReminderService) GenerateRemindersForOverdueContacts(ctx context.Contex
 			continue
 		}
 
-		// Check if contact is overdue
-		if !reminder.IsOverdue(cadenceType, contact.LastContacted, contact.CreatedAt, now) {
+		// Check if contact is overdue using environment-aware cadences
+		if !reminder.IsOverdueWithConfig(cadenceType, contact.LastContacted, contact.CreatedAt, now) {
 			continue
 		}
 
@@ -108,7 +108,7 @@ func (s *ReminderService) GenerateRemindersForOverdueContacts(ctx context.Contex
 		}
 
 		remindersCreated++
-		log.Printf("Created reminder for %s (overdue by %d days)", contact.FullName, reminder.GetOverdueDays(cadenceType, contact.LastContacted, contact.CreatedAt, now))
+		log.Printf("Created reminder for %s (overdue by %d days)", contact.FullName, reminder.GetOverdueDaysWithConfig(cadenceType, contact.LastContacted, contact.CreatedAt, now))
 	}
 
 	log.Printf("Reminder generation completed. Created %d new reminders.", remindersCreated)
