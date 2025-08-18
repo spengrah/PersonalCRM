@@ -135,13 +135,13 @@ func (h *ReminderHandler) GetReminders(c *gin.Context) {
 	}
 
 	// Get total count for pagination
-	totalReminders, err := h.reminderService.GetReminderStats(c.Request.Context())
+	totalRemindersMap, err := h.reminderService.GetReminderStats(c.Request.Context())
 	if err != nil {
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to fetch reminder count", err.Error())
 		return
 	}
 
-	total := totalReminders.(map[string]interface{})["total_reminders"].(int64)
+	total := totalRemindersMap["total_reminders"].(int64)
 	totalPages := int((total + int64(limit) - 1) / int64(limit))
 
 	api.SendSuccess(c, http.StatusOK, reminders, &api.Meta{
