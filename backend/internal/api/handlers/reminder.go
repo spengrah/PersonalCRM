@@ -124,32 +124,31 @@ func (h *ReminderHandler) GetReminders(c *gin.Context) {
 		return
 	}
 
-	// Get all due reminders (up to current time)
-	now := time.Now()
-	reminders, err := h.reminderService.GetDueReminders(c.Request.Context(), now)
+	// Get all reminders (not just due ones)
+	reminders, err := h.reminderService.GetAllReminders(c.Request.Context(), repository.ListRemindersParams{
+		Limit:  limit,
+		Offset: (page - 1) * limit,
+	})
 	if err != nil {
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to fetch reminders", err.Error())
 		return
 	}
 
-	// Apply pagination
-	offset := (page - 1) * limit
-	end := offset + limit
-	if end > len(reminders) {
-		end = len(reminders)
-	}
-	if offset > len(reminders) {
-		offset = len(reminders)
+	// Get total count for pagination
+	totalReminders, err := h.reminderService.GetReminderStats(c.Request.Context())
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to fetch reminder count", err.Error())
+		return
 	}
 
-	paginatedReminders := reminders[offset:end]
-	totalPages := (len(reminders) + limit - 1) / limit
+	total := totalReminders.(map[string]interface{})["total_reminders"].(int64)
+	totalPages := int((total + int64(limit) - 1) / int64(limit))
 
-	api.SendSuccess(c, http.StatusOK, paginatedReminders, &api.Meta{
+	api.SendSuccess(c, http.StatusOK, reminders, &api.Meta{
 		Pagination: &api.PaginationMeta{
 			Page:  page,
 			Limit: limit,
-			Total: int64(len(reminders)),
+			Total: total,
 			Pages: totalPages,
 		},
 	})

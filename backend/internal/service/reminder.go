@@ -137,6 +137,11 @@ func (s *ReminderService) CreateReminder(ctx context.Context, req repository.Cre
 	return s.reminderRepo.CreateReminder(ctx, req)
 }
 
+// GetAllReminders returns all reminders with pagination
+func (s *ReminderService) GetAllReminders(ctx context.Context, params repository.ListRemindersParams) ([]repository.Reminder, error) {
+	return s.reminderRepo.ListReminders(ctx, params)
+}
+
 // GetRemindersByContact returns all reminders for a specific contact
 func (s *ReminderService) GetRemindersByContact(ctx context.Context, contactID uuid.UUID) ([]repository.Reminder, error) {
 	return s.reminderRepo.ListRemindersByContact(ctx, contactID)

@@ -1,11 +1,12 @@
 'use client'
 
-import { useForm } from 'react-hook-form'
+import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { ContactSelector } from '@/components/ui/contact-selector'
 import { useContacts } from '@/hooks/use-contacts'
 import type { CreateReminderRequest } from '@/types/reminder'
 
@@ -40,6 +41,7 @@ export function ReminderForm({ onSubmit, onCancel, loading }: ReminderFormProps)
   const {
     register,
     handleSubmit,
+    control,
     formState: { errors, isSubmitting },
     reset,
   } = useForm<ReminderFormData>({
@@ -89,22 +91,20 @@ export function ReminderForm({ onSubmit, onCancel, loading }: ReminderFormProps)
           <label htmlFor="contact_id" className="block text-sm font-medium text-gray-700">
             Contact (Optional)
           </label>
-          <select
-            {...register('contact_id')}
-            id="contact_id"
-            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-gray-900 disabled:bg-gray-50 disabled:text-gray-500"
-            disabled={isLoading}
-          >
-            <option value="">No contact (standalone reminder)</option>
-            {contactsData?.contacts?.map((contact) => (
-              <option key={contact.id} value={contact.id}>
-                {contact.full_name}
-              </option>
-            ))}
-          </select>
-          {errors.contact_id && (
-            <p className="text-sm text-red-600">{errors.contact_id.message}</p>
-          )}
+          <Controller
+            name="contact_id"
+            control={control}
+            render={({ field: { value, onChange } }) => (
+              <ContactSelector
+                contacts={contactsData?.contacts || []}
+                value={value || undefined}
+                onChange={(contactId) => onChange(contactId || '')}
+                placeholder="Search contacts or leave blank for standalone reminder"
+                disabled={isLoading}
+                error={errors.contact_id?.message}
+              />
+            )}
+          />
           <p className="text-sm text-gray-500">
             Link this reminder to a specific contact, or leave blank for a standalone reminder
           </p>

@@ -113,12 +113,14 @@ function StatsCard({
   title, 
   value, 
   icon: Icon, 
-  color = 'blue' 
+  color = 'blue',
+  href
 }: { 
   title: string
   value: number
   icon: React.ElementType
   color?: 'blue' | 'green' | 'red' | 'yellow'
+  href?: string
 }) {
   const colorClasses = {
     blue: 'bg-blue-50 text-blue-600 border-blue-200',
@@ -127,8 +129,11 @@ function StatsCard({
     yellow: 'bg-yellow-50 text-yellow-600 border-yellow-200',
   }
 
-  return (
-    <div className="bg-white rounded-lg shadow-sm border p-4">
+  const content = (
+    <div className={clsx(
+      "bg-white rounded-lg shadow-sm border p-4",
+      href && "hover:shadow-md transition-shadow cursor-pointer"
+    )}>
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm font-medium text-gray-600">{title}</p>
@@ -143,6 +148,12 @@ function StatsCard({
       </div>
     </div>
   )
+
+  if (href) {
+    return <Link href={href}>{content}</Link>
+  }
+
+  return content
 }
 
 export default function DashboardPage() {
@@ -198,18 +209,21 @@ export default function DashboardPage() {
               value={stats.total_reminders}
               icon={Bell}
               color="blue"
+              href="/reminders"
             />
             <StatsCard
               title="Due Today"
               value={stats.due_today}
               icon={Clock}
               color="yellow"
+              href="/reminders"
             />
             <StatsCard
               title="Overdue"
               value={stats.overdue}
               icon={AlertCircle}
               color="red"
+              href="/reminders"
             />
           </div>
         )}

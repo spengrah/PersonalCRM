@@ -114,7 +114,7 @@ type UpdateContactRequest struct {
 // ListContactsQuery represents query parameters for listing contacts
 type ListContactsQuery struct {
 	Page   int    `form:"page" validate:"omitempty,min=1" example:"1"`
-	Limit  int    `form:"limit" validate:"omitempty,min=1,max=100" example:"20"`
+	Limit  int    `form:"limit" validate:"omitempty,min=1,max=1000" example:"20"`
 	Search string `form:"search" validate:"omitempty,max=255" example:"john"`
 }
 
