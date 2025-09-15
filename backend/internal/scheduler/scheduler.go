@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 
+	"personal-crm/backend/internal/reminder"
 	"personal-crm/backend/internal/service"
 
 	"github.com/robfig/cron/v3"
@@ -30,9 +31,12 @@ func NewScheduler(reminderService *service.ReminderService) *Scheduler {
 func (s *Scheduler) Start() error {
 	log.Println("Starting scheduler...")
 
-	// Schedule reminder generation job to run daily at 8:00 AM
-	// Cron format: second minute hour day month weekday
-	_, err := s.cron.AddFunc("0 0 8 * * *", func() {
+	// Get environment-aware cron specification
+	cronSpec := reminder.GetSchedulerCronSpec()
+	log.Printf("Using scheduler cron spec: %s", cronSpec)
+
+	// Schedule reminder generation job with environment-aware timing
+	_, err := s.cron.AddFunc(cronSpec, func() {
 		ctx := context.Background()
 		log.Println("Running scheduled reminder generation job...")
 
@@ -44,15 +48,9 @@ func (s *Scheduler) Start() error {
 		return err
 	}
 
-	// Optional: Schedule a cleanup job to run weekly on Sundays at 2:00 AM
-	// This could clean up old completed reminders if needed
-	_, err = s.cron.AddFunc("0 0 2 * * 0", func() {
-		log.Println("Running weekly cleanup job...")
-		// TODO: Implement cleanup logic if needed
-	})
-	if err != nil {
-		return err
-	}
+	// Optional: Schedule a cleanup job (only in production to avoid noise in testing)
+	// Skip cleanup job in testing environments
+	// In testing mode, we want to see all activity and avoid confusion
 
 	// Start the cron scheduler
 	s.cron.Start()
@@ -79,4 +77,3 @@ func (s *Scheduler) RunReminderGenerationNow() error {
 func (s *Scheduler) GetScheduledJobs() []cron.Entry {
 	return s.cron.Entries()
 }
-

@@ -68,6 +68,7 @@ func main() {
 	// Initialize handlers
 	contactHandler := handlers.NewContactHandler(contactRepo)
 	reminderHandler := handlers.NewReminderHandler(reminderService)
+	systemHandler := handlers.NewSystemHandler(contactRepo, reminderRepo)
 
 	// Initialize and start scheduler
 	cronScheduler := scheduler.NewScheduler(reminderService)
@@ -99,6 +100,7 @@ func main() {
 		contacts := v1.Group("/contacts")
 		{
 			contacts.POST("", contactHandler.CreateContact)
+			contacts.GET("/overdue", contactHandler.ListOverdueContacts)
 			contacts.GET("", contactHandler.ListContacts)
 			contacts.GET("/:id", contactHandler.GetContact)
 			contacts.PUT("/:id", contactHandler.UpdateContact)
@@ -116,6 +118,17 @@ func main() {
 			reminders.PATCH("/:id/complete", reminderHandler.CompleteReminder)
 			reminders.DELETE("/:id", reminderHandler.DeleteReminder)
 		}
+
+		// System routes
+		system := v1.Group("/system")
+		{
+			system.GET("/time", systemHandler.GetSystemTime)
+			system.POST("/time/acceleration", systemHandler.SetTimeAcceleration)
+		}
+
+		// Export/Import routes
+		v1.POST("/export", systemHandler.ExportData)
+		v1.POST("/import", systemHandler.ImportData)
 	}
 
 	// Swagger documentation

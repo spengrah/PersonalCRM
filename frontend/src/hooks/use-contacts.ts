@@ -3,7 +3,8 @@ import { contactsApi } from '@/lib/contacts-api'
 import type { 
   CreateContactRequest, 
   UpdateContactRequest, 
-  ContactListParams 
+  ContactListParams,
+  OverdueContact
 } from '@/types/contact'
 
 // Query keys
@@ -13,6 +14,7 @@ export const contactKeys = {
   list: (params: ContactListParams) => [...contactKeys.lists(), params] as const,
   details: () => [...contactKeys.all, 'detail'] as const,
   detail: (id: string) => [...contactKeys.details(), id] as const,
+  overdue: () => [...contactKeys.all, 'overdue'] as const,
 }
 
 // Get contacts list
@@ -30,6 +32,28 @@ export function useContact(id: string) {
     queryKey: contactKeys.detail(id),
     queryFn: () => contactsApi.getContact(id),
     enabled: !!id,
+  })
+}
+
+// Get overdue contacts
+export function useOverdueContacts() {
+  return useQuery({
+    queryKey: contactKeys.overdue(),
+    queryFn: async () => {
+      console.log('🔄 Fetching overdue contacts...')
+      try {
+        const result = await contactsApi.getOverdueContacts()
+        console.log('✅ Overdue contacts fetched:', result?.length || 0, 'contacts')
+        return result
+      } catch (error) {
+        console.error('❌ Failed to fetch overdue contacts:', error)
+        throw error
+      }
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes - match query client default
+    refetchInterval: 1000 * 60 * 5, // Refetch every 5 minutes
+    retry: 3, // Explicit retry count
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000), // Exponential backoff
   })
 }
 
@@ -90,8 +114,9 @@ export function useUpdateLastContacted() {
         contactKeys.detail(updatedContact.id),
         updatedContact
       )
-      // Invalidate lists to refresh
+      // Invalidate all related queries to refresh
       queryClient.invalidateQueries({ queryKey: contactKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: contactKeys.overdue() })
     },
   })
 }

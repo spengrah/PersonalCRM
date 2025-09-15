@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/reminder"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/gin-gonic/gin"
@@ -25,7 +28,7 @@ type DateOnly struct {
 func (d *DateOnly) UnmarshalJSON(data []byte) error {
 	// Remove quotes from JSON string
 	s := strings.Trim(string(data), "\"")
-	
+
 	if s == "null" || s == "" {
 		d.Time = nil
 		return nil
@@ -85,6 +88,15 @@ type ContactResponse struct {
 	UpdatedAt     time.Time  `json:"updated_at" example:"2024-01-15T10:30:00Z"`
 }
 
+// OverdueContactResponse represents an overdue contact with additional metadata
+// @Description Overdue contact information with action metadata
+type OverdueContactResponse struct {
+	ContactResponse
+	DaysOverdue     int       `json:"days_overdue" example:"5"`
+	NextDueDate     time.Time `json:"next_due_date" example:"2024-01-15T00:00:00Z"`
+	SuggestedAction string    `json:"suggested_action" example:"Send a quick check-in message"`
+}
+
 // CreateContactRequest represents the request to create a contact
 // @Description Create contact request
 type CreateContactRequest struct {
@@ -142,7 +154,7 @@ func createRequestToRepo(req CreateContactRequest) repository.CreateContactReque
 	if req.Birthday != nil {
 		birthday = req.Birthday.Time
 	}
-	
+
 	return repository.CreateContactRequest{
 		FullName:     req.FullName,
 		Email:        req.Email,
@@ -161,7 +173,7 @@ func updateRequestToRepo(req UpdateContactRequest) repository.UpdateContactReque
 	if req.Birthday != nil {
 		birthday = req.Birthday.Time
 	}
-	
+
 	return repository.UpdateContactRequest{
 		FullName:     req.FullName,
 		Email:        req.Email,
@@ -498,11 +510,86 @@ func (h *ContactHandler) UpdateContactLastContacted(c *gin.Context) {
 		return
 	}
 
-	err = h.contactRepo.UpdateContactLastContacted(c.Request.Context(), id, time.Now())
+	err = h.contactRepo.UpdateContactLastContacted(c.Request.Context(), id, accelerated.GetCurrentTime())
 	if err != nil {
 		api.SendInternalError(c, "Failed to update last contacted date")
 		return
 	}
 
-	api.SendSuccess(c, http.StatusOK, gin.H{"message": "Last contacted date updated successfully"}, nil)
+	// Get the updated contact to return
+	updatedContact, err := h.contactRepo.GetContact(c.Request.Context(), id)
+	if err != nil {
+		api.SendInternalError(c, "Failed to retrieve updated contact")
+		return
+	}
+
+	response := contactToResponse(updatedContact)
+	api.SendSuccess(c, http.StatusOK, response, nil)
+}
+
+// ListOverdueContacts retrieves contacts that are overdue for contact
+// @Summary List overdue contacts
+// @Description Get contacts that are overdue based on their cadence settings
+// @Tags contacts
+// @Produce json
+// @Success 200 {object} api.APIResponse{data=[]OverdueContactResponse} "Overdue contacts retrieved successfully"
+// @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
+// @Router /contacts/overdue [get]
+func (h *ContactHandler) ListOverdueContacts(c *gin.Context) {
+	contacts, err := h.contactRepo.ListContacts(c.Request.Context(), repository.ListContactsParams{
+		Limit:  1000, // Get all contacts to check cadence
+		Offset: 0,
+	})
+	if err != nil {
+		api.SendInternalError(c, "Failed to retrieve contacts")
+		return
+	}
+
+	now := accelerated.GetCurrentTime()
+	var overdueContacts []OverdueContactResponse
+
+	for _, contact := range contacts {
+		// Skip contacts without cadence
+		if contact.Cadence == nil {
+			continue
+		}
+
+		cadence, err := reminder.ParseCadence(*contact.Cadence)
+		if err != nil {
+			continue // Skip invalid cadence
+		}
+
+		// Check if contact is overdue using environment-aware calculation
+		if reminder.IsOverdueWithConfig(cadence, contact.LastContacted, contact.CreatedAt, now) {
+			daysOverdue := reminder.GetOverdueDaysWithConfig(cadence, contact.LastContacted, contact.CreatedAt, now)
+			nextDue := reminder.CalculateNextDueDate(cadence, contact.LastContacted, contact.CreatedAt)
+
+			// Generate suggested action based on days overdue
+			var suggestedAction string
+			if daysOverdue <= 2 {
+				suggestedAction = "Send a quick check-in message"
+			} else if daysOverdue <= 7 {
+				suggestedAction = "Schedule a call or coffee"
+			} else if daysOverdue <= 30 {
+				suggestedAction = "Send a meaningful update about your life"
+			} else {
+				suggestedAction = "Reconnect with something specific and personal"
+			}
+
+			overdueContact := OverdueContactResponse{
+				ContactResponse: contactToResponse(&contact),
+				DaysOverdue:     daysOverdue,
+				NextDueDate:     nextDue,
+				SuggestedAction: suggestedAction,
+			}
+			overdueContacts = append(overdueContacts, overdueContact)
+		}
+	}
+
+	// Sort by days overdue (most overdue first)
+	sort.Slice(overdueContacts, func(i, j int) bool {
+		return overdueContacts[i].DaysOverdue > overdueContacts[j].DaysOverdue
+	})
+
+	api.SendSuccess(c, http.StatusOK, overdueContacts, nil)
 }

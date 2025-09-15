@@ -43,16 +43,22 @@ class ApiClient {
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`
     
+    // Add timeout to prevent hanging requests
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout
+    
     const config: RequestInit = {
       headers: {
         'Content-Type': 'application/json',
         ...options.headers,
       },
+      signal: controller.signal,
       ...options,
     }
 
     try {
       const response = await fetch(url, config)
+      clearTimeout(timeoutId) // Clear timeout on successful response
       
       if (!response.ok) {
         let errorMessage = `HTTP ${response.status}: ${response.statusText}`
@@ -84,8 +90,15 @@ class ApiClient {
       
       return data.data as T
     } catch (error) {
+      clearTimeout(timeoutId) // Clear timeout on error
+      
       if (error instanceof ApiError) {
         throw error
+      }
+      
+      // Handle timeout errors specifically
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new ApiError('Request timed out', 408, 'TIMEOUT_ERROR')
       }
       
       // Network or other errors

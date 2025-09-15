@@ -13,6 +13,12 @@ export interface Contact {
   deleted_at?: string
 }
 
+export interface OverdueContact extends Contact {
+  days_overdue: number
+  next_due_date: string
+  suggested_action: string
+}
+
 export interface CreateContactRequest {
   full_name: string
   email?: string

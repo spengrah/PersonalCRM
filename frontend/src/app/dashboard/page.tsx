@@ -2,174 +2,185 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { CheckCircle, Clock, AlertCircle, User, Calendar, Bell, Plus } from 'lucide-react'
+import { CheckCircle, Clock, AlertCircle, User, Calendar, MessageCircle, Plus, Phone } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
-import { useTodayReminders, useReminderStats, useCompleteReminder, useDeleteReminder } from '@/hooks/use-reminders'
-import type { DueReminder } from '@/types/reminder'
+import { useOverdueContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
+import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
+import type { OverdueContact } from '@/types/contact'
 import { clsx } from 'clsx'
 
-function ReminderCard({ reminder }: { reminder: DueReminder }) {
-  const completeReminderMutation = useCompleteReminder()
-  const deleteReminderMutation = useDeleteReminder()
+function OverdueContactCard({ contact }: { contact: OverdueContact }) {
+  const updateLastContactedMutation = useUpdateLastContacted()
+  const { currentTime } = useAcceleratedTime()
 
-  const handleComplete = async () => {
+  const handleMarkContacted = async () => {
     try {
-      await completeReminderMutation.mutateAsync(reminder.id)
+      await updateLastContactedMutation.mutateAsync(contact.id)
     } catch (error) {
-      console.error('Error completing reminder:', error)
+      console.error('Error marking as contacted:', error)
     }
   }
 
-  const handleDelete = async () => {
-    if (confirm('Are you sure you want to delete this reminder?')) {
-      try {
-        await deleteReminderMutation.mutateAsync(reminder.id)
-      } catch (error) {
-        console.error('Error deleting reminder:', error)
-      }
-    }
+  const getUrgencyColor = (daysOverdue: number) => {
+    if (daysOverdue <= 2) return 'border-yellow-200 bg-yellow-50'
+    if (daysOverdue <= 7) return 'border-orange-200 bg-orange-50'
+    return 'border-red-200 bg-red-50'
   }
 
-  const isOverdue = new Date(reminder.due_date) < new Date()
+  const getUrgencyIndicator = (daysOverdue: number) => {
+    if (daysOverdue <= 2) return 'bg-yellow-500'
+    if (daysOverdue <= 7) return 'bg-orange-500'
+    return 'bg-red-500'
+  }
+
+  const formatLastContacted = (lastContacted?: string) => {
+    if (!lastContacted) return 'Never contacted'
+    const date = new Date(lastContacted)
+    const now = currentTime // Use accelerated time instead of new Date()
+    const diffTime = Math.abs(now.getTime() - date.getTime())
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+    
+    if (diffDays === 1) return 'Yesterday'
+    if (diffDays <= 7) return `${diffDays} days ago`
+    if (diffDays <= 30) return `${Math.floor(diffDays / 7)} weeks ago`
+    return `${Math.floor(diffDays / 30)} months ago`
+  }
 
   return (
     <div className={clsx(
-      'bg-white rounded-lg shadow-sm border p-4 hover:shadow-md transition-shadow',
-      isOverdue && 'border-red-200 bg-red-50'
+      'bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow',
+      getUrgencyColor(contact.days_overdue)
     )}>
       <div className="flex items-start justify-between">
         <div className="flex-1">
-          <div className="flex items-center space-x-2 mb-2">
+          <div className="flex items-center space-x-3 mb-3">
             <div className={clsx(
-              'w-2 h-2 rounded-full',
-              isOverdue ? 'bg-red-500' : 'bg-yellow-500'
+              'w-3 h-3 rounded-full',
+              getUrgencyIndicator(contact.days_overdue)
             )} />
-            <h3 className="text-sm font-medium text-gray-900">
-              {reminder.title}
+            <h3 className="text-lg font-semibold text-gray-900">
+              {contact.full_name}
             </h3>
+            <span className="text-sm font-medium text-gray-500">
+              ({contact.cadence} cadence)
+            </span>
           </div>
           
-          <div className="flex items-center space-x-4 text-sm text-gray-500 mb-2">
-            <div className="flex items-center space-x-1">
-              <User className="w-4 h-4" />
-              <Link 
-                href={`/contacts/${reminder.contact_id}`}
-                className="hover:text-blue-600 underline"
-              >
-                {reminder.contact_name}
-              </Link>
-            </div>
-            <div className="flex items-center space-x-1">
-              <Calendar className="w-4 h-4" />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+            <div className="flex items-center space-x-2 text-sm text-gray-600">
+              <Clock className="w-4 h-4" />
               <span>
-                {new Date(reminder.due_date).toLocaleDateString()}
+                <strong>{contact.days_overdue} days overdue</strong> - Last contacted {formatLastContacted(contact.last_contacted)}
               </span>
             </div>
+            
+            {contact.email && (
+              <div className="flex items-center space-x-2 text-sm text-gray-600">
+                <MessageCircle className="w-4 h-4" />
+                <a 
+                  href={`mailto:${contact.email}`}
+                  className="hover:text-blue-600 underline"
+                >
+                  {contact.email}
+                </a>
+              </div>
+            )}
+            
+            {contact.phone && (
+              <div className="flex items-center space-x-2 text-sm text-gray-600">
+                <Phone className="w-4 h-4" />
+                <a 
+                  href={`tel:${contact.phone}`}
+                  className="hover:text-blue-600 underline"
+                >
+                  {contact.phone}
+                </a>
+              </div>
+            )}
+
+            <div className="flex items-center space-x-2 text-sm text-gray-600">
+              <User className="w-4 h-4" />
+              <Link 
+                href={`/contacts/${contact.id}`}
+                className="hover:text-blue-600 underline"
+              >
+                View details
+              </Link>
+            </div>
           </div>
 
-          {reminder.description && (
-            <p className="text-sm text-gray-600 mb-3">
-              {reminder.description}
+          <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-4">
+            <p className="text-sm font-medium text-blue-800">
+              💡 {contact.suggested_action}
             </p>
-          )}
+          </div>
         </div>
 
-        <div className="flex items-center space-x-2 ml-4">
+        <div className="flex items-center space-x-3 ml-6">
           <Button
             size="sm"
-            variant="outline"
-            onClick={handleComplete}
-            loading={completeReminderMutation.isPending}
-            disabled={reminder.completed}
+            onClick={handleMarkContacted}
+            loading={updateLastContactedMutation.isPending}
+            className="whitespace-nowrap"
           >
-            <CheckCircle className="w-4 h-4 mr-1" />
-            {reminder.completed ? 'Done' : 'Complete'}
-          </Button>
-          
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={handleDelete}
-            loading={deleteReminderMutation.isPending}
-            disabled={completeReminderMutation.isPending}
-          >
-            ×
+            <CheckCircle className="w-4 h-4 mr-2" />
+            Mark as Contacted
           </Button>
         </div>
       </div>
-      
-      {isOverdue && (
-        <div className="mt-2 flex items-center text-red-600 text-sm">
-          <AlertCircle className="w-4 h-4 mr-1" />
-          Overdue
-        </div>
-      )}
     </div>
   )
 }
 
-function StatsCard({ 
-  title, 
-  value, 
-  icon: Icon, 
-  color = 'blue',
-  href
-}: { 
-  title: string
-  value: number
-  icon: React.ElementType
-  color?: 'blue' | 'green' | 'red' | 'yellow'
-  href?: string
-}) {
-  const colorClasses = {
-    blue: 'bg-blue-50 text-blue-600 border-blue-200',
-    green: 'bg-green-50 text-green-600 border-green-200',
-    red: 'bg-red-50 text-red-600 border-red-200',
-    yellow: 'bg-yellow-50 text-yellow-600 border-yellow-200',
-  }
-
-  const content = (
-    <div className={clsx(
-      "bg-white rounded-lg shadow-sm border p-4",
-      href && "hover:shadow-md transition-shadow cursor-pointer"
-    )}>
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium text-gray-600">{title}</p>
-          <p className="text-2xl font-bold text-gray-900">{value}</p>
-        </div>
-        <div className={clsx(
-          'rounded-full p-3 border',
-          colorClasses[color]
-        )}>
-          <Icon className="w-6 h-6" />
-        </div>
+function EmptyState() {
+  return (
+    <div className="text-center py-16 bg-white rounded-lg shadow-sm border">
+      <CheckCircle className="mx-auto h-16 w-16 text-green-500 mb-6" />
+      <h3 className="text-xl font-semibold text-gray-900 mb-3">
+        All caught up! 🎉
+      </h3>
+      <p className="text-gray-600 mb-8 max-w-md mx-auto">
+        You don't have any overdue contacts right now. You're doing a great job staying connected with your network!
+      </p>
+      <div className="flex items-center justify-center space-x-4">
+        <Link href="/contacts">
+          <Button variant="outline">
+            <User className="w-4 h-4 mr-2" />
+            View All Contacts
+          </Button>
+        </Link>
+        <Link href="/contacts/new">
+          <Button>
+            <Plus className="w-4 h-4 mr-2" />
+            Add New Contact
+          </Button>
+        </Link>
       </div>
     </div>
   )
-
-  if (href) {
-    return <Link href={href}>{content}</Link>
-  }
-
-  return content
 }
 
 export default function DashboardPage() {
-  const { data: todayReminders, isLoading: loadingReminders, error: remindersError } = useTodayReminders()
-  const { data: stats, isLoading: loadingStats } = useReminderStats()
+  const { data: overdueContacts, isLoading, error } = useOverdueContacts()
   
-  const [filter, setFilter] = useState<'all' | 'overdue'>('all')
+  const [sortBy, setSortBy] = useState<'urgency' | 'name' | 'lastContacted'>('urgency')
 
-  const filteredReminders = todayReminders?.filter(reminder => {
-    if (filter === 'overdue') {
-      return new Date(reminder.due_date) < new Date()
+  const sortedContacts = overdueContacts?.slice().sort((a, b) => {
+    switch (sortBy) {
+      case 'urgency':
+        return b.days_overdue - a.days_overdue
+      case 'name':
+        return a.full_name.localeCompare(b.full_name)
+      case 'lastContacted':
+        if (!a.last_contacted && !b.last_contacted) return 0
+        if (!a.last_contacted) return 1
+        if (!b.last_contacted) return -1
+        return new Date(a.last_contacted).getTime() - new Date(b.last_contacted).getTime()
+      default:
+        return 0
     }
-    return true
   }) || []
-
-  const overdueCount = todayReminders?.filter(r => new Date(r.due_date) < new Date()).length || 0
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -177,103 +188,92 @@ export default function DashboardPage() {
       
       <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         {/* Header */}
-        <div className="md:flex md:items-center md:justify-between mb-6">
+        <div className="md:flex md:items-center md:justify-between mb-8">
           <div className="flex-1 min-w-0">
-            <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
-              Dashboard
+            <h2 className="text-3xl font-bold leading-7 text-gray-900 sm:text-4xl">
+              Action Required
             </h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Your personal CRM overview and reminders
+            <p className="mt-2 text-lg text-gray-600">
+              {overdueContacts?.length === 0 
+                ? "You're all caught up! No contacts need attention right now."
+                : `${overdueContacts?.length || 0} contacts need your attention`
+              }
             </p>
           </div>
-          <div className="mt-4 flex space-x-3 md:mt-0 md:ml-4">
-            <Link href="/contacts/new">
+          <div className="mt-6 flex space-x-3 md:mt-0 md:ml-4">
+            <Link href="/reminders">
               <Button variant="outline">
+                <Calendar className="w-4 h-4 mr-2" />
+                View Reminders
+              </Button>
+            </Link>
+            <Link href="/contacts/new">
+              <Button>
                 <Plus className="w-4 h-4 mr-2" />
                 Add Contact
               </Button>
             </Link>
-            <Link href="/contacts">
-              <Button>
-                View All Contacts
-              </Button>
-            </Link>
           </div>
         </div>
 
-        {/* Stats Cards */}
-        {!loadingStats && stats && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            <StatsCard
-              title="Total Reminders"
-              value={stats.total_reminders}
-              icon={Bell}
-              color="blue"
-              href="/reminders"
-            />
-            <StatsCard
-              title="Due Today"
-              value={stats.due_today}
-              icon={Clock}
-              color="yellow"
-              href="/reminders"
-            />
-            <StatsCard
-              title="Overdue"
-              value={stats.overdue}
-              icon={AlertCircle}
-              color="red"
-              href="/reminders"
-            />
-          </div>
-        )}
-
-        {/* Filters */}
-        <div className="mb-6">
-          <div className="flex items-center space-x-4">
-            <h3 className="text-lg font-medium text-gray-900">Today&apos;s Reminders</h3>
+        {/* Sort Controls */}
+        {overdueContacts && overdueContacts.length > 0 && (
+          <div className="mb-6 flex items-center space-x-4">
+            <span className="text-sm font-medium text-gray-700">Sort by:</span>
             <div className="flex space-x-2">
               <button
-                onClick={() => setFilter('all')}
+                onClick={() => setSortBy('urgency')}
                 className={clsx(
                   'px-3 py-1 text-sm font-medium rounded-md',
-                  filter === 'all'
+                  sortBy === 'urgency'
                     ? 'bg-blue-100 text-blue-700'
                     : 'text-gray-500 hover:text-gray-700'
                 )}
               >
-                All ({todayReminders?.length || 0})
+                Most Urgent
               </button>
               <button
-                onClick={() => setFilter('overdue')}
+                onClick={() => setSortBy('name')}
                 className={clsx(
                   'px-3 py-1 text-sm font-medium rounded-md',
-                  filter === 'overdue'
-                    ? 'bg-red-100 text-red-700'
+                  sortBy === 'name'
+                    ? 'bg-blue-100 text-blue-700'
                     : 'text-gray-500 hover:text-gray-700'
                 )}
               >
-                Overdue ({overdueCount})
+                Name
+              </button>
+              <button
+                onClick={() => setSortBy('lastContacted')}
+                className={clsx(
+                  'px-3 py-1 text-sm font-medium rounded-md',
+                  sortBy === 'lastContacted'
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'text-gray-500 hover:text-gray-700'
+                )}
+              >
+                Last Contacted
               </button>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* Reminders List */}
-        <div className="space-y-4">
-          {loadingReminders && (
-            <div className="space-y-4">
+        {/* Contacts List */}
+        <div className="space-y-6">
+          {isLoading && (
+            <div className="space-y-6">
               {[...Array(3)].map((_, i) => (
-                <div key={i} className="bg-white rounded-lg shadow-sm border p-4 animate-pulse">
-                  <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
-                  <div className="h-3 bg-gray-200 rounded w-1/2 mb-2"></div>
-                  <div className="h-3 bg-gray-200 rounded w-2/3"></div>
+                <div key={i} className="bg-white rounded-lg shadow-sm border p-6 animate-pulse">
+                  <div className="h-6 bg-gray-200 rounded w-1/3 mb-3"></div>
+                  <div className="h-4 bg-gray-200 rounded w-2/3 mb-2"></div>
+                  <div className="h-4 bg-gray-200 rounded w-1/2 mb-4"></div>
+                  <div className="h-8 bg-gray-200 rounded w-24"></div>
                 </div>
               ))}
             </div>
           )}
 
-          {remindersError && (
+          {error && (
             <div className="bg-red-50 border border-red-200 rounded-md p-4">
               <div className="flex">
                 <div className="flex-shrink-0">
@@ -281,41 +281,24 @@ export default function DashboardPage() {
                 </div>
                 <div className="ml-3">
                   <h3 className="text-sm font-medium text-red-800">
-                    Error loading reminders
+                    Error loading overdue contacts
                   </h3>
                   <p className="mt-1 text-sm text-red-700">
-                    {remindersError instanceof Error ? remindersError.message : 'An unexpected error occurred'}
+                    {error instanceof Error ? error.message : 'An unexpected error occurred'}
                   </p>
                 </div>
               </div>
             </div>
           )}
 
-          {!loadingReminders && !remindersError && filteredReminders.length === 0 && (
-            <div className="text-center py-12 bg-white rounded-lg shadow-sm border">
-              <CheckCircle className="mx-auto h-12 w-12 text-green-500 mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">
-                {filter === 'overdue' ? 'No overdue reminders' : 'All caught up!'}
-              </h3>
-              <p className="text-gray-500 mb-6">
-                {filter === 'overdue' 
-                  ? 'You have no overdue reminders right now.'
-                  : 'You don&apos;t have any reminders due today. Great job staying on top of your contacts!'
-                }
-              </p>
-              <Link href="/contacts">
-                <Button variant="outline">
-                  <User className="w-4 h-4 mr-2" />
-                  View Contacts
-                </Button>
-              </Link>
-            </div>
+          {!isLoading && !error && (overdueContacts?.length === 0) && (
+            <EmptyState />
           )}
 
-          {!loadingReminders && !remindersError && filteredReminders.length > 0 && (
+          {!isLoading && !error && sortedContacts.length > 0 && (
             <>
-              {filteredReminders.map((reminder) => (
-                <ReminderCard key={reminder.id} reminder={reminder} />
+              {sortedContacts.map((contact) => (
+                <OverdueContactCard key={contact.id} contact={contact} />
               ))}
             </>
           )}
@@ -324,4 +307,3 @@ export default function DashboardPage() {
     </div>
   )
 }
-

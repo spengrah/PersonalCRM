@@ -81,7 +81,7 @@ func convertDbContact(dbContact *db.Contact) Contact {
 
 	// Convert UUID
 	if dbContact.ID.Valid {
-		contact.ID = dbContact.ID.Bytes
+		contact.ID = uuid.UUID(dbContact.ID.Bytes)
 	}
 
 	// Convert timestamps
@@ -103,7 +103,8 @@ func convertDbContact(dbContact *db.Contact) Contact {
 		contact.Location = &dbContact.Location.String
 	}
 	if dbContact.Birthday.Valid {
-		contact.Birthday = &dbContact.Birthday.Time
+		birthday := dbContact.Birthday.Time
+		contact.Birthday = &birthday
 	}
 	if dbContact.HowMet.Valid {
 		contact.HowMet = &dbContact.HowMet.String
@@ -112,7 +113,8 @@ func convertDbContact(dbContact *db.Contact) Contact {
 		contact.Cadence = &dbContact.Cadence.String
 	}
 	if dbContact.LastContacted.Valid {
-		contact.LastContacted = &dbContact.LastContacted.Time
+		lastContacted := dbContact.LastContacted.Time
+		contact.LastContacted = &lastContacted
 	}
 	if dbContact.ProfilePhoto.Valid {
 		contact.ProfilePhoto = &dbContact.ProfilePhoto.String

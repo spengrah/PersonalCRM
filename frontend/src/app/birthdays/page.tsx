@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Calendar, Cake, Gift, Users } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { useContacts } from '@/hooks/use-contacts'
+import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import type { Contact } from '@/types/contact'
 
 // Birthday data with calculated fields
@@ -19,9 +20,8 @@ interface BirthdayInfo {
 }
 
 // Calculate age turning this year
-function calculateAgeThisYear(birthday: Date): number {
-  const today = new Date()
-  const currentYear = today.getFullYear()
+function calculateAgeThisYear(birthday: Date, currentTime: Date): number {
+  const currentYear = currentTime.getFullYear()
   const birthdayThisYear = new Date(currentYear, birthday.getMonth(), birthday.getDate())
   
   // Age they turn this calendar year
@@ -29,37 +29,34 @@ function calculateAgeThisYear(birthday: Date): number {
 }
 
 // Calculate days until next birthday
-function calculateDaysUntilBirthday(birthday: Date): number {
-  const today = new Date()
-  const currentYear = today.getFullYear()
+function calculateDaysUntilBirthday(birthday: Date, currentTime: Date): number {
+  const currentYear = currentTime.getFullYear()
   
   // Birthday this year
   let nextBirthday = new Date(currentYear, birthday.getMonth(), birthday.getDate())
   
   // If birthday already passed this year, calculate for next year
-  if (nextBirthday < today) {
+  if (nextBirthday < currentTime) {
     nextBirthday = new Date(currentYear + 1, birthday.getMonth(), birthday.getDate())
   }
   
   // Calculate difference in days
-  const diffTime = nextBirthday.getTime() - today.getTime()
+  const diffTime = nextBirthday.getTime() - currentTime.getTime()
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24))
 }
 
 // Check if we should show next year's early birthdays (for gift planning)
-function shouldShowNextYearBirthdays(today: Date): boolean {
-  const month = today.getMonth() + 1 // getMonth() is 0-based
-  const day = today.getDate()
+function shouldShowNextYearBirthdays(currentTime: Date): boolean {
+  const month = currentTime.getMonth() + 1 // getMonth() is 0-based
+  const day = currentTime.getDate()
   
   // Show next year's Jan-Mar birthdays if we're in November or December
   return month >= 11 // November (11) or December (12)
 }
 
 // Get next year's early birthdays for gift planning
-function getNextYearEarlyBirthdays(contacts: Contact[]): BirthdayInfo[] {
-  const today = new Date()
-  
-  if (!shouldShowNextYearBirthdays(today)) {
+function getNextYearEarlyBirthdays(contacts: Contact[], currentTime: Date): BirthdayInfo[] {
+  if (!shouldShowNextYearBirthdays(currentTime)) {
     return []
   }
   
@@ -72,9 +69,9 @@ function getNextYearEarlyBirthdays(contacts: Contact[]): BirthdayInfo[] {
       // Only include Jan-Mar birthdays from next year
       if (birthdayMonth > 3) return null
       
-      const nextYear = today.getFullYear() + 1
+      const nextYear = currentTime.getFullYear() + 1
       const nextYearBirthday = new Date(nextYear, birthday.getMonth(), birthday.getDate())
-      const daysUntil = Math.ceil((nextYearBirthday.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+      const daysUntil = Math.ceil((nextYearBirthday.getTime() - currentTime.getTime()) / (1000 * 60 * 60 * 24))
       
       return {
         contact,
@@ -91,30 +88,29 @@ function getNextYearEarlyBirthdays(contacts: Contact[]): BirthdayInfo[] {
 }
 
 // Check if birthday already passed this year
-function isBirthdayPastThisYear(birthday: Date): boolean {
-  const today = new Date()
-  const currentYear = today.getFullYear()
+function isBirthdayPastThisYear(birthday: Date, currentTime: Date): boolean {
+  const currentYear = currentTime.getFullYear()
   const birthdayThisYear = new Date(currentYear, birthday.getMonth(), birthday.getDate())
   
-  return birthdayThisYear < today
+  return birthdayThisYear < currentTime
 }
 
 // Process contacts to extract birthday information
-function processBirthdayContacts(contacts: Contact[]): BirthdayInfo[] {
+function processBirthdayContacts(contacts: Contact[], currentTime: Date): BirthdayInfo[] {
   return contacts
     .filter(contact => contact.birthday) // Only contacts with birthdays
     .map(contact => {
       const birthday = new Date(contact.birthday!)
-      const daysUntil = calculateDaysUntilBirthday(birthday)
+      const daysUntil = calculateDaysUntilBirthday(birthday, currentTime)
       
       return {
         contact,
         birthday,
         dayOfWeek: birthday.toLocaleDateString('en-US', { weekday: 'long' }),
         monthDay: birthday.toLocaleDateString('en-US', { month: 'long', day: 'numeric' }),
-        ageThisYear: calculateAgeThisYear(birthday),
+        ageThisYear: calculateAgeThisYear(birthday, currentTime),
         daysUntil,
-        isPastThisYear: isBirthdayPastThisYear(birthday)
+        isPastThisYear: isBirthdayPastThisYear(birthday, currentTime)
       }
     })
     .sort((a, b) => {
@@ -194,32 +190,15 @@ function BirthdayCard({ birthdayInfo }: { birthdayInfo: BirthdayInfo }) {
 }
 
 export default function BirthdaysPage() {
-  const [currentTime, setCurrentTime] = useState(new Date())
+  const { currentTime } = useAcceleratedTime()
   const { data: contactsData, isLoading, error } = useContacts({ limit: 1000 })
   
-  // Update current time when page gains focus
-  useEffect(() => {
-    const updateTime = () => setCurrentTime(new Date())
-    
-    // Update immediately
-    updateTime()
-    
-    // Update when page gains focus
-    const handleFocus = () => updateTime()
-    window.addEventListener('focus', handleFocus)
-    
-    // Update every minute while page is active
-    const interval = setInterval(updateTime, 60000)
-    
-    return () => {
-      window.removeEventListener('focus', handleFocus)
-      clearInterval(interval)
-    }
-  }, [])
+  // Note: currentTime from useAcceleratedTime automatically updates and handles focus/blur
+  // No need for manual time management anymore
   
-  // Process birthday data
-  const birthdayInfos = contactsData ? processBirthdayContacts(contactsData.contacts) : []
-  const nextYearEarlyBirthdays = contactsData ? getNextYearEarlyBirthdays(contactsData.contacts) : []
+  // Process birthday data with accelerated time
+  const birthdayInfos = contactsData ? processBirthdayContacts(contactsData.contacts, currentTime) : []
+  const nextYearEarlyBirthdays = contactsData ? getNextYearEarlyBirthdays(contactsData.contacts, currentTime) : []
   
   const todaysBirthdays = birthdayInfos.filter(info => info.daysUntil === 0)
   const upcomingBirthdays = birthdayInfos.filter(info => info.daysUntil > 0 && !info.isPastThisYear)

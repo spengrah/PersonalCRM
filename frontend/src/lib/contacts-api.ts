@@ -3,7 +3,8 @@ import type {
   Contact, 
   CreateContactRequest, 
   UpdateContactRequest, 
-  ContactListParams 
+  ContactListParams,
+  OverdueContact
 } from '@/types/contact'
 
 export interface ContactsListResponse {
@@ -72,6 +73,11 @@ export const contactsApi = {
   // Update last contacted
   updateLastContacted: async (id: string): Promise<Contact> => {
     return apiClient.patch<Contact>(`/api/v1/contacts/${id}/last-contacted`)
+  },
+
+  // Get overdue contacts
+  getOverdueContacts: async (): Promise<OverdueContact[]> => {
+    return apiClient.get<OverdueContact[]>('/api/v1/contacts/overdue')
   },
 }
 
