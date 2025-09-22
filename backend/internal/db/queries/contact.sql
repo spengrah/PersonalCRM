@@ -26,9 +26,9 @@ LIMIT $2 OFFSET $3;
 
 -- name: CreateContact :one
 INSERT INTO contact (
-  full_name, email, phone, location, birthday, how_met, cadence, profile_photo
+  full_name, email, phone, location, birthday, how_met, cadence, last_contacted, profile_photo
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8
+  $1, $2, $3, $4, $5, $6, $7, $8, $9
 ) RETURNING *;
 
 -- name: UpdateContact :one

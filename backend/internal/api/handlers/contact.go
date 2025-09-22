@@ -106,7 +106,7 @@ type CreateContactRequest struct {
 	Location     *string   `json:"location,omitempty" validate:"omitempty,max=255" example:"San Francisco, CA"`
 	Birthday     *DateOnly `json:"birthday,omitempty" example:"1990-01-15"`
 	HowMet       *string   `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
-	Cadence      *string   `json:"cadence,omitempty" validate:"omitempty,oneof=weekly monthly quarterly biannual annual" example:"monthly"`
+	Cadence      *string   `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual" example:"monthly"`
 	ProfilePhoto *string   `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
 }
 
@@ -119,7 +119,7 @@ type UpdateContactRequest struct {
 	Location     *string   `json:"location,omitempty" validate:"omitempty,max=255" example:"San Francisco, CA"`
 	Birthday     *DateOnly `json:"birthday,omitempty" example:"1990-01-15"`
 	HowMet       *string   `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
-	Cadence      *string   `json:"cadence,omitempty" validate:"omitempty,oneof=weekly monthly quarterly biannual annual" example:"monthly"`
+	Cadence      *string   `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual" example:"monthly"`
 	ProfilePhoto *string   `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
 }
 
@@ -155,15 +155,19 @@ func createRequestToRepo(req CreateContactRequest) repository.CreateContactReque
 		birthday = req.Birthday.Time
 	}
 
+	// Set last_contacted to current date when creating a contact
+	now := time.Now()
+
 	return repository.CreateContactRequest{
-		FullName:     req.FullName,
-		Email:        req.Email,
-		Phone:        req.Phone,
-		Location:     req.Location,
-		Birthday:     birthday,
-		HowMet:       req.HowMet,
-		Cadence:      req.Cadence,
-		ProfilePhoto: req.ProfilePhoto,
+		FullName:      req.FullName,
+		Email:         req.Email,
+		Phone:         req.Phone,
+		Location:      req.Location,
+		Birthday:      birthday,
+		HowMet:        req.HowMet,
+		Cadence:       req.Cadence,
+		LastContacted: &now,
+		ProfilePhoto:  req.ProfilePhoto,
 	}
 }
 

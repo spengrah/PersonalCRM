@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# Personal CRM Launcher Script
+# Run this script to launch your Personal CRM
+
+cd "$(dirname "$0")"
+
+case "$1" in
+    start)
+        echo "🚀 Starting Personal CRM..."
+        make start
+        ;;
+    stop)
+        echo "🛑 Stopping Personal CRM..."
+        make stop
+        ;;
+    restart)
+        echo "🔄 Restarting Personal CRM..."
+        make restart
+        ;;
+    status)
+        echo "📊 Checking Personal CRM status..."
+        make status
+        ;;
+    dev)
+        echo "🛠️  Starting development environment..."
+        make dev
+        ;;
+    *)
+        echo "Personal CRM - Your Professional Contact Management System"
+        echo ""
+        echo "Usage: ./crm [command]"
+        echo ""
+        echo "Commands:"
+        echo "  start      Start Personal CRM (production mode)"
+        echo "  stop       Stop Personal CRM"
+        echo "  restart    Restart Personal CRM"
+        echo "  status     Check system status"
+        echo "  dev        Start in development mode"
+        echo ""
+        echo "Quick start: ./crm start"
+        echo "Then visit: http://localhost:3001"
+        ;;
+esac

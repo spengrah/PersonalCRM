@@ -40,12 +40,12 @@ export type ContactFormData = z.infer<typeof contactSchema>
 export function transformContactFormData(data: ContactFormData) {
   return {
     full_name: data.full_name,
-    email: data.email || undefined,
-    phone: data.phone || undefined,
-    location: data.location || undefined,
-    birthday: data.birthday || undefined,
-    notes: data.notes || undefined,
-    cadence: data.cadence || undefined,
+    email: data.email && data.email.trim() !== '' ? data.email : undefined,
+    phone: data.phone && data.phone.trim() !== '' ? data.phone : undefined,
+    location: data.location && data.location.trim() !== '' ? data.location : undefined,
+    birthday: data.birthday && data.birthday.trim() !== '' ? data.birthday : undefined,
+    notes: data.notes && data.notes.trim() !== '' ? data.notes : undefined,
+    cadence: data.cadence && data.cadence.trim() !== '' ? data.cadence : undefined,
   }
 }
 

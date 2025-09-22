@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# Personal CRM Desktop Launcher
+CRM_DIR="/Users/giovannigabriele/Documents/Code/Personal CRM"
+
+cd "$CRM_DIR"
+
+# Check if CRM is already running
+if curl -s http://localhost:3001 >/dev/null 2>&1; then
+    echo "Personal CRM is already running!"
+    open "http://localhost:3001"
+else
+    # Start CRM
+    echo "Starting Personal CRM..."
+    ./crm start
+    
+    # Wait for it to start and open browser
+    sleep 5
+    open "http://localhost:3001"
+fi

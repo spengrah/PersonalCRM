@@ -38,14 +38,15 @@ type Contact struct {
 
 // CreateContactRequest represents the request to create a contact
 type CreateContactRequest struct {
-	FullName     string     `json:"full_name"`
-	Email        *string    `json:"email,omitempty"`
-	Phone        *string    `json:"phone,omitempty"`
-	Location     *string    `json:"location,omitempty"`
-	Birthday     *time.Time `json:"birthday,omitempty"`
-	HowMet       *string    `json:"how_met,omitempty"`
-	Cadence      *string    `json:"cadence,omitempty"`
-	ProfilePhoto *string    `json:"profile_photo,omitempty"`
+	FullName      string     `json:"full_name"`
+	Email         *string    `json:"email,omitempty"`
+	Phone         *string    `json:"phone,omitempty"`
+	Location      *string    `json:"location,omitempty"`
+	Birthday      *time.Time `json:"birthday,omitempty"`
+	HowMet        *string    `json:"how_met,omitempty"`
+	Cadence       *string    `json:"cadence,omitempty"`
+	LastContacted *time.Time `json:"last_contacted,omitempty"`
+	ProfilePhoto  *string    `json:"profile_photo,omitempty"`
 }
 
 // UpdateContactRequest represents the request to update a contact
@@ -214,14 +215,15 @@ func (r *ContactRepository) SearchContacts(ctx context.Context, params SearchCon
 // CreateContact creates a new contact
 func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContactRequest) (*Contact, error) {
 	dbContact, err := r.queries.CreateContact(ctx, db.CreateContactParams{
-		FullName:     req.FullName,
-		Email:        stringToPgText(req.Email),
-		Phone:        stringToPgText(req.Phone),
-		Location:     stringToPgText(req.Location),
-		Birthday:     timeToPgDate(req.Birthday),
-		HowMet:       stringToPgText(req.HowMet),
-		Cadence:      stringToPgText(req.Cadence),
-		ProfilePhoto: stringToPgText(req.ProfilePhoto),
+		FullName:      req.FullName,
+		Email:         stringToPgText(req.Email),
+		Phone:         stringToPgText(req.Phone),
+		Location:      stringToPgText(req.Location),
+		Birthday:      timeToPgDate(req.Birthday),
+		HowMet:        stringToPgText(req.HowMet),
+		Cadence:       stringToPgText(req.Cadence),
+		LastContacted: timeToPgDate(req.LastContacted),
+		ProfilePhoto:  stringToPgText(req.ProfilePhoto),
 	})
 	if err != nil {
 		return nil, err

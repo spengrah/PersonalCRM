@@ -1,10 +1,16 @@
 # Personal CRM Makefile
 
-.PHONY: help dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing
+.PHONY: help dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start stop restart status
 
 # Default target
 help:
 	@echo "Available targets:"
+	@echo ""
+	@echo "🚀 Production Commands:"
+	@echo "  start       - Start Personal CRM (production mode on port 3001)"
+	@echo "  stop        - Stop Personal CRM"
+	@echo "  restart     - Restart Personal CRM"
+	@echo "  status      - Check CRM status"
 	@echo ""
 	@echo "Environment Management:"
 	@echo "  testing     - Switch to testing environment (ultra-fast cadences)"
@@ -164,3 +170,47 @@ docker-reset:
 	@echo "Resetting Docker environment..."
 	@cd infra && docker compose down -v
 	@cd infra && docker compose up -d
+
+# Production Commands
+start:
+	@echo "🚀 Starting Personal CRM..."
+	@make prod
+	@make build
+	@make docker-up
+	@echo "Starting CRM backend on port 8080..."
+	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && ./backend/bin/crm-api &
+	@echo "Starting CRM frontend on port 3001..."
+	@cd frontend && PORT=3001 npm run start &
+	@sleep 3
+	@echo ""
+	@echo "✅ Personal CRM is running!"
+	@echo "🌐 Frontend: http://localhost:3001"
+	@echo "🔧 Backend:  http://localhost:8080"
+	@echo "📖 API Docs: http://localhost:8080/swagger/index.html"
+	@echo ""
+	@echo "Use 'make stop' to stop the CRM"
+
+stop:
+	@echo "🛑 Stopping Personal CRM..."
+	@pkill -f crm-api || true
+	@pkill -f "next start" || true
+	@make docker-down
+	@echo "✅ Personal CRM stopped"
+
+restart:
+	@echo "🔄 Restarting Personal CRM..."
+	@make stop
+	@sleep 2
+	@make start
+
+status:
+	@echo "📊 Personal CRM Status:"
+	@echo ""
+	@echo "Backend (port 8080):"
+	@curl -s http://localhost:8080/health | jq -r '.status' 2>/dev/null && echo "  ✅ Running" || echo "  ❌ Not running"
+	@echo ""
+	@echo "Frontend (port 3001):"
+	@curl -s http://localhost:3001 >/dev/null 2>&1 && echo "  ✅ Running" || echo "  ❌ Not running"
+	@echo ""
+	@echo "Database:"
+	@docker ps --filter "name=crm-postgres" --format "table {{.Names}}\t{{.Status}}" | grep crm-postgres >/dev/null && echo "  ✅ Running" || echo "  ❌ Not running"
