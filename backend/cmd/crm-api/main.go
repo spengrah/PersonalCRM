@@ -23,7 +23,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -134,25 +136,40 @@ func main() {
 	// Swagger documentation
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	// Start server
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+    // Start server (bind to 127.0.0.1; support dynamic port when PORT=0)
+    port := os.Getenv("PORT")
+    if port == "" {
+        port = "8080"
+    }
 
-	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: router,
-	}
+    addr := "127.0.0.1:" + port
+    // Use a listener so we can discover the selected port when PORT=0
+    ln, err := net.Listen("tcp", addr)
+    if err != nil {
+        log.Fatal("Failed to bind listener:", err)
+    }
 
-	// Graceful shutdown
-	go func() {
-		log.Printf("Starting server on port %s", port)
-		log.Printf("API documentation available at http://localhost:%s/swagger/index.html", port)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal("Failed to start server:", err)
-		}
-	}()
+    // Discover the actual port (useful when PORT=0)
+    tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+    if !ok {
+        _ = ln.Close()
+        log.Fatal("Failed to determine TCP address")
+    }
+    selectedPort := tcpAddr.Port
+
+    srv := &http.Server{
+        Addr:    ln.Addr().String(),
+        Handler: router,
+    }
+
+    // Graceful shutdown
+    go func() {
+        log.Printf("Starting server on 127.0.0.1:%d", selectedPort)
+        log.Printf("API documentation available at http://127.0.0.1:%d/swagger/index.html", selectedPort)
+        if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+            log.Fatal("Failed to start server:", err)
+        }
+    }()
 
 	// Wait for interrupt signal to gracefully shutdown the server
 	quit := make(chan os.Signal, 1)
@@ -168,5 +185,8 @@ func main() {
 		log.Fatal("Server forced to shutdown:", err)
 	}
 
-	log.Println("Server exited")
+    log.Println("Server exited")
+
+    // Print the selected port on graceful exit for supervising processes
+    fmt.Printf("PORT=%d\n", selectedPort)
 }
