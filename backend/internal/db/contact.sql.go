@@ -139,7 +139,6 @@ func (q *Queries) HardDeleteContact(ctx context.Context, id pgtype.UUID) error {
 const ListContacts = `-- name: ListContacts :many
 SELECT id, full_name, email, phone, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact 
 WHERE deleted_at IS NULL
-ORDER BY full_name ASC
 LIMIT $1 OFFSET $2
 `
 
@@ -189,7 +188,6 @@ WHERE deleted_at IS NULL
     full_name ILIKE '%' || $1 || '%' 
     OR email ILIKE '%' || $1 || '%'
   )
-ORDER BY full_name ASC
 LIMIT $2 OFFSET $3
 `
 

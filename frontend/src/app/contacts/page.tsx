@@ -3,16 +3,39 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Plus, Search, MoreHorizontal, Mail, Phone, MapPin, CheckCircle } from 'lucide-react'
+import { Plus, Search, MoreHorizontal, Mail, Phone, MapPin, CheckCircle, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
 import { useContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
 import { Button } from '@/components/ui/button'
 import { Navigation } from '@/components/layout/navigation'
 import type { Contact, ContactListParams } from '@/types/contact'
 
-function ContactsTable({ contacts, loading }: { contacts: Contact[]; loading: boolean }) {
+type SortField = 'name' | 'location' | 'birthday' | 'last_contacted'
+
+function ContactsTable({ 
+  contacts, 
+  loading,
+  sortBy,
+  sortOrder,
+  onSort
+}: { 
+  contacts: Contact[]
+  loading: boolean
+  sortBy?: SortField
+  sortOrder?: 'asc' | 'desc'
+  onSort: (field: SortField) => void
+}) {
   const router = useRouter()
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const updateLastContacted = useUpdateLastContacted()
+  
+  const getSortIcon = (field: SortField) => {
+    if (sortBy !== field) {
+      return <ArrowUpDown className="w-4 h-4 ml-1 text-gray-400" />
+    }
+    return sortOrder === 'asc' 
+      ? <ArrowUp className="w-4 h-4 ml-1 text-blue-600" />
+      : <ArrowDown className="w-4 h-4 ml-1 text-blue-600" />
+  }
 
   const handleRowClick = (contactId: string) => {
     router.push(`/contacts/${contactId}`)
@@ -81,20 +104,44 @@ function ContactsTable({ contacts, loading }: { contacts: Contact[]; loading: bo
       <table className="min-w-full divide-y divide-gray-300">
         <thead className="bg-gray-50">
           <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Name
+            <th 
+              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              onClick={() => onSort('name')}
+            >
+              <div className="flex items-center">
+                Name
+                {getSortIcon('name')}
+              </div>
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Contact Info
             </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Location
+            <th 
+              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              onClick={() => onSort('location')}
+            >
+              <div className="flex items-center">
+                Location
+                {getSortIcon('location')}
+              </div>
             </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Birthday
+            <th 
+              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              onClick={() => onSort('birthday')}
+            >
+              <div className="flex items-center">
+                Birthday
+                {getSortIcon('birthday')}
+              </div>
             </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Last Contacted
+            <th 
+              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              onClick={() => onSort('last_contacted')}
+            >
+              <div className="flex items-center">
+                Last Contacted
+                {getSortIcon('last_contacted')}
+              </div>
             </th>
             <th className="relative px-6 py-3">
               <span className="sr-only">Actions</span>
@@ -227,6 +274,26 @@ export default function ContactsPage() {
     setParams(prev => ({ ...prev, page: 1 }))
   }
 
+  const handleSort = (field: SortField) => {
+    setParams(prev => {
+      // If clicking the same field, toggle order
+      if (prev.sort === field) {
+        return {
+          ...prev,
+          order: prev.order === 'asc' ? 'desc' : 'asc',
+          page: 1, // Reset to first page when sorting
+        }
+      }
+      // If clicking a new field, default to ascending
+      return {
+        ...prev,
+        sort: field,
+        order: 'asc',
+        page: 1,
+      }
+    })
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
@@ -293,7 +360,13 @@ export default function ContactsPage() {
 
         {/* Contacts Table */}
         <div className="bg-white shadow overflow-hidden sm:rounded-md">
-          <ContactsTable contacts={data?.contacts || []} loading={isLoading} />
+          <ContactsTable 
+            contacts={data?.contacts || []} 
+            loading={isLoading}
+            sortBy={params.sort}
+            sortOrder={params.order}
+            onSort={handleSort}
+          />
         </div>
 
         {/* Pagination */}

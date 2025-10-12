@@ -11,7 +11,6 @@ WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL;
 -- name: ListContacts :many
 SELECT * FROM contact 
 WHERE deleted_at IS NULL
-ORDER BY full_name ASC
 LIMIT $1 OFFSET $2;
 
 -- name: SearchContacts :many
@@ -21,7 +20,6 @@ WHERE deleted_at IS NULL
     full_name ILIKE '%' || $1 || '%' 
     OR email ILIKE '%' || $1 || '%'
   )
-ORDER BY full_name ASC
 LIMIT $2 OFFSET $3;
 
 -- name: CreateContact :one
