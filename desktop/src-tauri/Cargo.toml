@@ -1,0 +1,18 @@
+[package]
+name = "personal-crm-desktop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tauri = { version = "2.7", features = [] }
+ureq = "2"
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+

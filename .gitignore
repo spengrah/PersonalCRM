@@ -311,3 +311,9 @@ local.*
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Desktop artifacts
+desktop-ui/node_modules
+desktop-ui/dist
+desktop/src-tauri/target
+desktop/src-tauri/target/release/bundle
