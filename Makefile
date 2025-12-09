@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start stop restart status
+.PHONY: help dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start stop restart status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart
 
 # Default target
 help:
@@ -32,14 +32,76 @@ help:
 	@echo "  test-cadence-ultra - Test all cadences in minutes (testing env)"
 	@echo "  test-cadence-fast  - Test all cadences in hours (staging env)"
 
+# Create logs directory
+logs:
+	@mkdir -p logs
+
 # Development
 dev:
 	@echo "Starting development environment..."
 	@make docker-up
+	@make logs
 	@echo "Starting backend server..."
-	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && go run cmd/crm-api/main.go &
+	@bash scripts/start-backend.sh
+	@echo "✅ Backend server started (logs: logs/backend-dev.log, PID: $$(cat logs/backend-dev.pid 2>/dev/null || echo 'unknown'))"
 	@echo "Starting frontend development server..."
-	@cd frontend && npm run dev
+	@bash scripts/start-frontend-dev.sh
+	@echo "✅ Frontend dev server started (logs: logs/frontend-dev.log, PID: $$(cat logs/frontend-dev.pid 2>/dev/null || echo 'unknown'))"
+	@echo ""
+	@echo "🌐 Frontend: http://localhost:3000"
+	@echo "🔧 Backend:  http://localhost:8080"
+	@echo ""
+	@echo "💡 Both servers are running detached and will continue after you close this terminal"
+	@echo "   Use 'make dev-stop' to stop both servers"
+	@echo ""
+	@echo "📋 To view logs:"
+	@echo "   tail -f logs/backend-dev.log"
+	@echo "   tail -f logs/frontend-dev.log"
+	@echo ""
+	@echo "Press Ctrl+C to exit (servers will keep running)"
+	@tail -f logs/frontend-dev.log logs/backend-dev.log 2>/dev/null || sleep infinity
+
+# Development helpers
+dev-stop:
+	@echo "Stopping development servers (backend and frontend dev)..."
+	@pkill -f crm-api || true
+	@pkill -f "next dev" || true
+	@pkill -f "node.*next" || true
+	@if [ -f logs/frontend-dev.pid ]; then kill $$(cat logs/frontend-dev.pid) 2>/dev/null || true; fi
+	@if [ -f logs/backend-dev.pid ]; then kill $$(cat logs/backend-dev.pid) 2>/dev/null || true; fi
+	@echo "✅ Dev servers stopped (if they were running)"
+
+dev-restart:
+	@echo "🔄 Restarting development environment..."
+	@make dev-stop
+	@sleep 1
+	@make dev
+
+dev-api-stop:
+	@echo "Stopping backend dev server..."
+	@pkill -f crm-api || true
+	@# Wait briefly for port 8080 to be released
+	@for i in 1 2 3 4 5; do \
+	  if lsof -ti tcp:8080 >/dev/null 2>&1; then \
+	    sleep 0.4; \
+	  else \
+	    break; \
+	  fi; \
+	done
+	@echo "✅ Backend dev server stopped (if it was running) and port freed"
+
+dev-api-start:
+	@echo "Starting backend dev server..."
+	@make docker-up
+	@make logs
+	@bash scripts/start-backend.sh
+	@echo "✅ Backend dev server started (logs: logs/backend-dev.log, PID: $$(cat logs/backend-dev.pid 2>/dev/null || echo 'unknown'))"
+
+dev-api-restart:
+	@echo "🔄 Restarting backend dev server..."
+	@make dev-api-stop
+	@sleep 1
+	@make dev-api-start
 
 # Build
 build:
@@ -123,8 +185,9 @@ test-cadence-ultra:
 	@echo ""
 	@make testing
 	@make docker-up
+	@make logs
 	@echo "Starting backend with ultra-fast cadences..."
-	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && go run cmd/crm-api/main.go &
+	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && nohup go run cmd/crm-api/main.go > ../logs/backend-testing.log 2>&1 & echo $$! > ../logs/backend-testing.pid && cd ../.. && bash -c "disown %1" 2>/dev/null || true
 	@echo ""
 	@echo "⏱️  CADENCE TIMING (ultra-fast):"
 	@echo "   - Weekly: 2 minutes"
@@ -132,7 +195,9 @@ test-cadence-ultra:
 	@echo "   - Quarterly: 30 minutes"
 	@echo "   - Scheduler: every 30 seconds"
 	@echo ""
+	@echo "📋 Logs: logs/backend-testing.log"
 	@echo "💡 Add test contacts with different cadences and watch reminders generate!"
+	@echo "💡 Process will continue running after you close this terminal"
 
 test-cadence-fast:
 	@echo "🏎️  Starting FAST cadence testing..."
@@ -140,8 +205,9 @@ test-cadence-fast:
 	@echo ""
 	@make staging
 	@make docker-up
+	@make logs
 	@echo "Starting backend with fast cadences..."
-	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && go run cmd/crm-api/main.go &
+	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && nohup go run cmd/crm-api/main.go > ../logs/backend-staging.log 2>&1 & echo $$! > ../logs/backend-staging.pid && cd ../.. && bash -c "disown %1" 2>/dev/null || true
 	@echo ""
 	@echo "⏱️  CADENCE TIMING (fast):"
 	@echo "   - Weekly: 10 minutes (1 week = 10 min)"
@@ -149,13 +215,20 @@ test-cadence-fast:
 	@echo "   - Quarterly: 3 hours (1 quarter = 3 hours)" 
 	@echo "   - Scheduler: every 5 minutes"
 	@echo ""
+	@echo "📋 Logs: logs/backend-staging.log"
 	@echo "💡 Perfect for validating 3+ months of cadence behavior in 3 hours!"
+	@echo "💡 Process will continue running after you close this terminal"
 
 # Clean
 clean:
 	@echo "Cleaning build artifacts..."
 	@cd backend && rm -rf bin/
 	@cd frontend && rm -rf .next/ out/
+
+clean-logs:
+	@echo "Cleaning log files..."
+	@rm -rf logs/*.log logs/*.pid
+	@echo "✅ Logs cleaned"
 
 # Docker operations
 docker-up:
@@ -177,10 +250,11 @@ start:
 	@make prod
 	@make build
 	@make docker-up
+	@make logs
 	@echo "Starting CRM backend on port 8080..."
-	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && ./backend/bin/crm-api &
+	@bash scripts/start-backend-prod.sh
 	@echo "Starting CRM frontend on port 3001..."
-	@cd frontend && PORT=3001 npm run start &
+	@bash scripts/start-frontend-prod.sh
 	@sleep 3
 	@echo ""
 	@echo "✅ Personal CRM is running!"
@@ -188,7 +262,12 @@ start:
 	@echo "🔧 Backend:  http://localhost:8080"
 	@echo "📖 API Docs: http://localhost:8080/swagger/index.html"
 	@echo ""
-	@echo "Use 'make stop' to stop the CRM"
+	@echo "📋 Logs:"
+	@echo "   Backend:  logs/backend.log"
+	@echo "   Frontend: logs/frontend.log"
+	@echo ""
+	@echo "💡 Processes will continue running after you close this terminal"
+	@echo "   Use 'make stop' to stop the CRM"
 
 stop:
 	@echo "🛑 Stopping Personal CRM..."
@@ -209,8 +288,16 @@ status:
 	@echo "Backend (port 8080):"
 	@curl -s http://localhost:8080/health | jq -r '.status' 2>/dev/null && echo "  ✅ Running" || echo "  ❌ Not running"
 	@echo ""
-	@echo "Frontend (port 3001):"
+	@echo "Frontend Dev (port 3000):"
+	@curl -s http://localhost:3000 >/dev/null 2>&1 && echo "  ✅ Running" || echo "  ❌ Not running"
+	@echo ""
+	@echo "Frontend Prod (port 3001):"
 	@curl -s http://localhost:3001 >/dev/null 2>&1 && echo "  ✅ Running" || echo "  ❌ Not running"
 	@echo ""
 	@echo "Database:"
 	@docker ps --filter "name=crm-postgres" --format "table {{.Names}}\t{{.Status}}" | grep crm-postgres >/dev/null && echo "  ✅ Running" || echo "  ❌ Not running"
+	@echo ""
+	@if [ -d logs ]; then \
+		echo "📋 Recent Log Files:"; \
+		ls -lh logs/*.log 2>/dev/null | tail -5 || echo "  No log files found"; \
+	fi

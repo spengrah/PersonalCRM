@@ -63,6 +63,7 @@ func main() {
 	// Initialize repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
 	reminderRepo := repository.NewReminderRepository(database.Queries)
+	timeEntryRepo := repository.NewTimeEntryRepository(database.Queries)
 
 	// Initialize services
 	reminderService := service.NewReminderService(reminderRepo, contactRepo)
@@ -71,6 +72,7 @@ func main() {
 	contactHandler := handlers.NewContactHandler(contactRepo)
 	reminderHandler := handlers.NewReminderHandler(reminderService)
 	systemHandler := handlers.NewSystemHandler(contactRepo, reminderRepo)
+	timeEntryHandler := handlers.NewTimeEntryHandler(timeEntryRepo)
 
 	// Initialize and start scheduler
 	cronScheduler := scheduler.NewScheduler(reminderService)
@@ -126,6 +128,18 @@ func main() {
 		{
 			system.GET("/time", systemHandler.GetSystemTime)
 			system.POST("/time/acceleration", systemHandler.SetTimeAcceleration)
+		}
+
+		// Time entry routes
+		timeEntries := v1.Group("/time-entries")
+		{
+			timeEntries.POST("", timeEntryHandler.CreateTimeEntry)
+			timeEntries.GET("", timeEntryHandler.ListTimeEntries)
+			timeEntries.GET("/running", timeEntryHandler.GetRunningTimeEntry)
+			timeEntries.GET("/stats", timeEntryHandler.GetTimeEntryStats)
+			timeEntries.GET("/:id", timeEntryHandler.GetTimeEntry)
+			timeEntries.PUT("/:id", timeEntryHandler.UpdateTimeEntry)
+			timeEntries.DELETE("/:id", timeEntryHandler.DeleteTimeEntry)
 		}
 
 		// Export/Import routes

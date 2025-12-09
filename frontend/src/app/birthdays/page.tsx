@@ -1,10 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import { Calendar, Cake, Gift, Users } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { useContacts } from '@/hooks/use-contacts'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
+import { parseDateOnly } from '@/lib/utils'
 import type { Contact } from '@/types/contact'
 
 // Birthday data with calculated fields
@@ -63,7 +63,9 @@ function getNextYearEarlyBirthdays(contacts: Contact[], currentTime: Date): Birt
   return contacts
     .filter(contact => contact.birthday)
     .map(contact => {
-      const birthday = new Date(contact.birthday!)
+      const birthday = parseDateOnly(contact.birthday)
+      if (!birthday) return null
+      
       const birthdayMonth = birthday.getMonth() + 1
       
       // Only include Jan-Mar birthdays from next year
@@ -100,7 +102,9 @@ function processBirthdayContacts(contacts: Contact[], currentTime: Date): Birthd
   return contacts
     .filter(contact => contact.birthday) // Only contacts with birthdays
     .map(contact => {
-      const birthday = new Date(contact.birthday!)
+      const birthday = parseDateOnly(contact.birthday)
+      if (!birthday) return null
+      
       const daysUntil = calculateDaysUntilBirthday(birthday, currentTime)
       
       return {
@@ -113,13 +117,14 @@ function processBirthdayContacts(contacts: Contact[], currentTime: Date): Birthd
         isPastThisYear: isBirthdayPastThisYear(birthday, currentTime)
       }
     })
+    .filter(info => info !== null)
     .sort((a, b) => {
       // Sort by days until birthday (closest first)
       // Past birthdays this year go to end
-      if (a.isPastThisYear && !b.isPastThisYear) return 1
-      if (!a.isPastThisYear && b.isPastThisYear) return -1
-      return a.daysUntil - b.daysUntil
-    })
+      if (a!.isPastThisYear && !b!.isPastThisYear) return 1
+      if (!a!.isPastThisYear && b!.isPastThisYear) return -1
+      return a!.daysUntil - b!.daysUntil
+    }) as BirthdayInfo[]
 }
 
 // Birthday card component

@@ -7,6 +7,7 @@ import { Plus, Search, MoreHorizontal, Mail, Phone, MapPin, CheckCircle, ArrowUp
 import { useContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
 import { Button } from '@/components/ui/button'
 import { Navigation } from '@/components/layout/navigation'
+import { formatDateOnly } from '@/lib/utils'
 import type { Contact, ContactListParams } from '@/types/contact'
 
 type SortField = 'name' | 'location' | 'birthday' | 'last_contacted'
@@ -211,7 +212,7 @@ function ContactsTable({
               </td>
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                 {contact.birthday 
-                  ? new Date(contact.birthday).toLocaleDateString()
+                  ? formatDateOnly(contact.birthday)
                   : '-'
                 }
               </td>

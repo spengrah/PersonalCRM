@@ -27,7 +27,7 @@ export const contactsApi = {
     }
     
     // We need to make a raw request to get both data and meta
-    const url = new URL('/api/v1/contacts', process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080')
+    const url = new URL('/api/v1/contacts', process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080')
     Object.entries(queryParams).forEach(([key, value]) => {
       if (value !== undefined) {
         url.searchParams.append(key, String(value))

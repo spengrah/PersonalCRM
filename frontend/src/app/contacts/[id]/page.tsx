@@ -7,6 +7,7 @@ import { ContactForm } from '@/components/contacts/contact-form'
 import { Button } from '@/components/ui/button'
 import { useContact, useUpdateContact, useDeleteContact, useUpdateLastContacted } from '@/hooks/use-contacts'
 import { useRemindersByContact } from '@/hooks/use-reminders'
+import { formatDateOnly } from '@/lib/utils'
 import { Edit, Trash2, MessageCircle, Mail, Phone, MapPin, Calendar, Bell, Clock } from 'lucide-react'
 import type { ContactFormData } from '@/lib/validations/contact'
 
@@ -237,7 +238,7 @@ export default function ContactDetailPage() {
                   <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
                     <div className="flex items-center">
                       <Calendar className="w-4 h-4 mr-2 text-gray-400" />
-                      {new Date(contact.birthday).toLocaleDateString()}
+                      {formatDateOnly(contact.birthday)}
                     </div>
                   </dd>
                 </div>

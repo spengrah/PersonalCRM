@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Users, Calendar, Bell, Settings, Cake } from 'lucide-react'
+import { Users, Calendar, Bell, Settings, Cake, Clock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { TimeAccelerationWidget } from '@/components/ui/time-acceleration-widget'
 
@@ -11,6 +11,7 @@ const navigation = [
   { name: 'Contacts', href: '/contacts', icon: Users },
   { name: 'Birthdays', href: '/birthdays', icon: Cake },
   { name: 'Reminders', href: '/reminders', icon: Bell },
+  { name: 'Time Tracking', href: '/time-tracking', icon: Clock },
   { name: 'Settings', href: '/settings', icon: Settings },
 ]
 

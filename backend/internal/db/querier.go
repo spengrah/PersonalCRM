@@ -23,9 +23,11 @@ type Querier interface {
 	CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error)
 	CreateReminder(ctx context.Context, arg CreateReminderParams) (*Reminder, error)
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)
+	CreateTimeEntry(ctx context.Context, arg CreateTimeEntryParams) (*TimeEntry, error)
 	DeleteInteraction(ctx context.Context, id pgtype.UUID) error
 	DeleteNote(ctx context.Context, id pgtype.UUID) error
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
+	DeleteTimeEntry(ctx context.Context, id pgtype.UUID) error
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
 	GetContactByEmail(ctx context.Context, lower string) (*Contact, error)
@@ -35,9 +37,12 @@ type Querier interface {
 	// Note queries
 	GetNote(ctx context.Context, id pgtype.UUID) (*Note, error)
 	GetReminder(ctx context.Context, id pgtype.UUID) (*Reminder, error)
+	GetRunningTimeEntry(ctx context.Context) (*TimeEntry, error)
 	// Tag queries
 	GetTag(ctx context.Context, id pgtype.UUID) (*Tag, error)
 	GetTagByName(ctx context.Context, name string) (*Tag, error)
+	GetTimeEntry(ctx context.Context, id pgtype.UUID) (*TimeEntry, error)
+	GetTimeEntryStats(ctx context.Context) (*GetTimeEntryStatsRow, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	HardDeleteReminder(ctx context.Context, id pgtype.UUID) error
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
@@ -48,6 +53,9 @@ type Querier interface {
 	ListReminders(ctx context.Context, arg ListRemindersParams) ([]*Reminder, error)
 	ListRemindersByContact(ctx context.Context, contactID pgtype.UUID) ([]*Reminder, error)
 	ListTags(ctx context.Context) ([]*Tag, error)
+	ListTimeEntries(ctx context.Context, arg ListTimeEntriesParams) ([]*TimeEntry, error)
+	ListTimeEntriesByContact(ctx context.Context, contactID pgtype.UUID) ([]*TimeEntry, error)
+	ListTimeEntriesByDateRange(ctx context.Context, arg ListTimeEntriesByDateRangeParams) ([]*TimeEntry, error)
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error)
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
@@ -59,6 +67,7 @@ type Querier interface {
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
 	UpdateReminder(ctx context.Context, arg UpdateReminderParams) (*Reminder, error)
 	UpdateTag(ctx context.Context, arg UpdateTagParams) (*Tag, error)
+	UpdateTimeEntry(ctx context.Context, arg UpdateTimeEntryParams) (*TimeEntry, error)
 }
 
 var _ Querier = (*Queries)(nil)

@@ -104,3 +104,15 @@ type Tag struct {
 	Color     pgtype.Text        `json:"color"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
+
+type TimeEntry struct {
+	ID              pgtype.UUID        `json:"id"`
+	Description     string             `json:"description"`
+	Project         pgtype.Text        `json:"project"`
+	ContactID       pgtype.UUID        `json:"contact_id"`
+	StartTime       pgtype.Timestamptz `json:"start_time"`
+	EndTime         pgtype.Timestamptz `json:"end_time"`
+	DurationMinutes pgtype.Int4        `json:"duration_minutes"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
