@@ -198,7 +198,8 @@ func convertDbNewTable(dbItem *db.NewTable) NewTable {
     }
     
     if dbItem.Field2.Valid {
-        item.Field2 = &dbItem.Field2.String
+        field2 := dbItem.Field2.String  // Copy value before taking address
+        item.Field2 = &field2
     }
     
     if dbItem.CreatedAt.Valid {

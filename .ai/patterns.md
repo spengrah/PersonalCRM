@@ -58,14 +58,16 @@ func convertDbContact(dbContact *db.Contact) Contact {
         FullName: dbContact.FullName,
     }
     
-    // Handle nullable string
+    // Handle nullable string - copy value before taking address
     if dbContact.Email.Valid {
-        contact.Email = &dbContact.Email.String
+        emailStr := dbContact.Email.String
+        contact.Email = &emailStr
     }
     
-    // Handle nullable time
+    // Handle nullable time - copy value before taking address
     if dbContact.LastContacted.Valid {
-        contact.LastContacted = &dbContact.LastContacted.Time
+        lastContactedTime := dbContact.LastContacted.Time
+        contact.LastContacted = &lastContactedTime
     }
     
     // Handle timestamps
