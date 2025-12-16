@@ -62,7 +62,7 @@ Notes:
 
 - Docker and Docker Compose
 - Go 1.22+
-- Node.js 18+
+- Bun 1.0+ (for frontend)
 - Make
 
 ## Environment Variables

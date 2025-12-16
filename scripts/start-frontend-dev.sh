@@ -3,7 +3,7 @@
 
 cd frontend
 # Use nohup in a subshell that exits immediately
-(nohup npm run dev > ../logs/frontend-dev.log 2>&1 &)
+(nohup bun run dev > ../logs/frontend-dev.log 2>&1 &)
 sleep 3
 # Get the actual PID of next/node process
 ACTUAL_PID=$(pgrep -f "next dev" | head -1)

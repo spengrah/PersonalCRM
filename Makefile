@@ -108,7 +108,7 @@ build:
 	@echo "Building backend..."
 	@cd backend && go build -o bin/crm-api cmd/crm-api/main.go
 	@echo "Building frontend..."
-	@cd frontend && npm run build
+	@cd frontend && bun run build
 
 # Tests
 test: test-unit test-integration
@@ -129,7 +129,7 @@ test-all:
 	@echo "Running all backend tests..."
 	@cd backend && go test ./tests/... -v
 	@echo "Running frontend tests..."
-	@cd frontend && npm test
+	@cd frontend && bun test
 
 # API specific commands
 api-docs:

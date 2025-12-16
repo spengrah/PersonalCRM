@@ -3,10 +3,10 @@
 
 cd frontend
 # Use nohup in a subshell that exits immediately
-(nohup sh -c "PORT=3001 npm run start" > ../logs/frontend.log 2>&1 &)
+(nohup sh -c "PORT=3001 bun run start" > ../logs/frontend.log 2>&1 &)
 sleep 2
-# Get the actual PID of npm/node process
-ACTUAL_PID=$(pgrep -f "PORT=3001 npm run start" | head -1)
+# Get the actual PID of bun/node process
+ACTUAL_PID=$(pgrep -f "PORT=3001 bun run start" | head -1)
 if [ -z "$ACTUAL_PID" ]; then
     ACTUAL_PID=$(pgrep -f "next start" | head -1)
 fi
