@@ -94,8 +94,10 @@ gh issue list --label "agent-ready" --state open
 # View issue details
 gh issue view 123
 
-# Create branch from issue
-gh issue develop 123 --name "feature/auto-migrations"
+# Create branch from issue (use appropriate prefix)
+gh issue develop 123 --name "feat/auto-migrations"  # for features
+gh issue develop 45 --name "fix/health-check"       # for bugs
+gh issue develop 67 --name "refactor/handlers"      # for refactors
 
 # Work on code...
 
@@ -109,6 +111,8 @@ Fixes #123"
 # Create PR (auto-links to issue)
 gh pr create --fill
 ```
+
+> **Note:** See [`.ai/rules.md`](.ai/rules.md#2-git-workflow-rules) for full branch naming conventions.
 
 ### For Humans
 

@@ -87,10 +87,37 @@ gh issue list --label "agent-ready" --state open
 gh issue view 123
 
 # Create branch from issue
-gh issue develop 123 --name "feature/feature-name"
+gh issue develop 123 --name "feat/auto-migrations"
 ```
 
-### 2. Before Starting Any Work
+### 2. Git Workflow Rules
+
+**NEVER commit directly to main.** All work must happen in issue-specific branches.
+
+**Branch naming convention (Conventional Commits style):**
+
+- `feat/issue-123-short-description` - New features (from "feature" issues)
+- `fix/issue-45-bug-description` - Bug fixes (from "bug" issues)
+- `refactor/issue-67-refactor-name` - Code refactoring (from "refactor" issues)
+- `docs/issue-89-doc-update` - Documentation only changes
+- `test/issue-12-add-tests` - Adding or updating tests
+- `chore/issue-34-deps-update` - Maintenance (dependencies, config, tooling)
+- `perf/issue-56-optimize-query` - Performance improvements
+
+**Issue type → Branch prefix mapping:**
+- Feature issue → `feat/`
+- Bug issue → `fix/`
+- Refactor issue → `refactor/`
+- Improvement issue → Choose based on change type: `feat/`, `refactor/`, `perf/`, or `chore/`
+
+**Workflow:**
+1. Create branch from issue: `gh issue develop 123 --name "feat/auto-migrations"`
+2. Make changes and commit with conventional commit messages
+3. Reference issue in commits: `Fixes #123` or `Closes #123`
+4. Create PR: `gh pr create --fill`
+5. PR automatically links to issue and closes it on merge. If there are multiple commits, they will be squashed into a single commit on merge.
+
+### 3. Before Starting Any Work
 
 1. **Read the context:**
    - **Existing code first** - The code is the source of truth
@@ -110,7 +137,7 @@ gh issue develop 123 --name "feature/feature-name"
    - Finally frontend
    - **Always** write tests
 
-### 3. Development Commands
+### 4. Development Commands
 
 See [README.md](../README.md#development-commands) for full command reference.
 
