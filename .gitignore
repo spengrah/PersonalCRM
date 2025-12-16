@@ -72,6 +72,9 @@ $RECYCLE.BIN/
 
 # Cursor IDE
 .cursor/
+# But allow configuration files
+!.cursor/config.json
+!.cursor/rules
 
 # ===========================================
 # GO BACKEND
@@ -317,3 +320,10 @@ desktop-ui/node_modules
 desktop-ui/dist
 desktop/src-tauri/target
 desktop/src-tauri/target/release/bundle
+
+# ===========================================
+# TEMPORARY PLANNING DOCUMENTS
+# ===========================================
+# IMPROVEMENTS.md is a temp file used to bootstrap GitHub Issues
+# Don't commit it - use GitHub Issues as source of truth
+IMPROVEMENTS.md

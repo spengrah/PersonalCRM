@@ -1,5 +1,10 @@
 # Super-Connector CRM – Architecture & Implementation Plan
 
+> **⚠️ Note:** This document captures the original architecture vision from the project's inception.
+> For current development guidelines, see [`.ai/rules.md`](.ai/rules.md).
+> For current architecture details, see [`.ai/architecture.md`](.ai/architecture.md).
+> The code itself is always the source of truth.
+
 ---
 
 ## 0. Guiding Principles
