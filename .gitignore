@@ -71,7 +71,8 @@ $RECYCLE.BIN/
 *.sublime-workspace
 
 # Cursor IDE
-.cursor/
+# Exclude all contents but allow specific files to be re-included
+.cursor/*
 # But allow configuration files
 !.cursor/config.json
 !.cursor/rules
