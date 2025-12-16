@@ -1,0 +1,67 @@
+name: ✨ Improvement
+description: Quick-create improvement task
+labels: ["enhancement", "agent-ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Quick Improvement Task
+        Use this for improvements and enhancements with a clear implementation plan.
+        
+  - type: input
+    id: task_id
+    attributes:
+      label: Task ID (optional)
+      description: Optional reference ID for tracking
+      placeholder: "A.1.1"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - "Priority 1: High Impact, Low Effort"
+        - "Priority 2: Important for Production"
+        - "Priority 3: Nice to Have"
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: content
+    attributes:
+      label: Implementation Details
+      description: Technical approach and implementation notes
+      placeholder: |
+        **Current State:**
+        Description of what exists now
+        
+        **Proposed Change:**
+        What needs to be done
+        
+        **Implementation:**
+        ```go
+        // Code example
+        ```
+        
+        **Files to Modify:**
+        - file1.go
+        - file2.go
+        
+        **Time Estimate:** X hours
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: ready
+    attributes:
+      label: Readiness Check
+      description: Is this task ready to start?
+      options:
+        - label: Task is well-defined
+        - label: No blocking dependencies
+        - label: Implementation approach is clear
+        - label: Acceptance criteria are clear
+

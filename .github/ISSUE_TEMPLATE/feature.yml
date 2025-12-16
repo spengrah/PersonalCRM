@@ -1,0 +1,133 @@
+name: 🚀 Feature
+description: New feature or enhancement
+labels: ["enhancement", "agent-ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before You Start
+        - Read [AGENTS.md](../AGENTS.md) for development guidelines
+        - Follow the layered architecture: Handler → Service → Repository → DB
+        - Write tests for all new features
+        
+  - type: input
+    id: title
+    attributes:
+      label: Feature Title
+      description: Brief, clear description of the feature
+      placeholder: "Add authentication middleware"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - "P0: Critical (blocks deployment)"
+        - "P1: High (needed soon)"
+        - "P2: Medium (nice to have)"
+        - "P3: Low (future enhancement)"
+      default: 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What does this feature do? Why is it needed?
+      placeholder: |
+        **What:**
+        Add API key authentication middleware to protect endpoints
+        
+        **Why:**
+        Pi backend will be exposed via Tailscale and needs basic security
+        
+        **User Story:**
+        As a user, I want my API to require authentication so unauthorized devices can't access my data
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: layers
+    attributes:
+      label: Architecture Layers Affected
+      description: Which layers need changes? (Check all that apply)
+      options:
+        - label: Database (schema changes, migrations)
+        - label: Repository (data access layer)
+        - label: Service (business logic)
+        - label: Handler (HTTP endpoints)
+        - label: Frontend (UI components)
+        - label: Infrastructure (Docker, deployment)
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation Notes
+      description: Technical approach, files to modify, APIs to use
+      placeholder: |
+        **Files to create/modify:**
+        - `backend/internal/auth/middleware.go` (create)
+        - `backend/cmd/crm-api/main.go` (apply middleware)
+        - `frontend/src/lib/api-client.ts` (add API key header)
+        
+        **Dependencies:**
+        - Use `os.Getenv("API_KEY")` for key
+        - Add `X-API-Key` header to all frontend requests
+        
+        **Reference:**
+        See similar pattern in other Go projects
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: How do we know this is done?
+      placeholder: |
+        - [ ] Middleware added and applied to all `/api/v1` routes
+        - [ ] Frontend sends API key in headers
+        - [ ] Unauthorized requests return 401
+        - [ ] Unit tests for middleware
+        - [ ] Integration test for protected endpoint
+        - [ ] Documentation updated
+    validations:
+      required: true
+
+  - type: dropdown
+    id: testing
+    attributes:
+      label: Testing Required
+      description: What level of testing does this need?
+      options:
+        - "Unit tests only"
+        - "Unit + Integration tests"
+        - "Unit + Integration + E2E tests"
+        - "All tests + Manual testing"
+      default: 1
+    validations:
+      required: true
+
+  - type: input
+    id: estimate
+    attributes:
+      label: Time Estimate
+      description: Rough estimate for an experienced developer
+      placeholder: "2-3 hours"
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Links, examples, design decisions, etc.
+      placeholder: |
+        **Related Issues:**
+        - #123
+        
+        **Examples:**
+        - https://github.com/example/similar-feature
+        
+        **Design Decisions:**
+        - Using simple API key auth (not OAuth) for simplicity
+        - Key stored in environment variable, not database

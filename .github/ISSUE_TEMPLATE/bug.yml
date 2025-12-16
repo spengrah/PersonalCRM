@@ -1,0 +1,158 @@
+name: 🐛 Bug
+description: Something isn't working correctly
+labels: ["bug", "agent-ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before You Start
+        - Read [AGENTS.md](../AGENTS.md) for development guidelines
+        - Run `./smoke-test.sh` to reproduce the issue
+        - Check if this is a known issue in existing PRs
+        
+  - type: input
+    id: title
+    attributes:
+      label: Bug Title
+      description: Brief description of what's broken
+      placeholder: "Reminder generation fails for biweekly cadence"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - "Critical: App doesn't work"
+        - "High: Major feature broken"
+        - "Medium: Feature partially broken"
+        - "Low: Minor issue"
+      default: 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: What's happening? What should happen instead?
+      placeholder: |
+        **Current Behavior:**
+        When a contact has a "biweekly" cadence, reminders are never generated
+        
+        **Expected Behavior:**
+        Reminders should be generated every 2 weeks
+        
+        **Impact:**
+        Users with biweekly contacts don't get reminded at all
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: How can someone reproduce this bug?
+      placeholder: |
+        1. Create a contact with cadence="biweekly"
+        2. Set last_contacted to 15 days ago
+        3. Wait for scheduler to run (or trigger manually)
+        4. Check reminders table
+        5. No reminder is created
+      value: |
+        1. 
+        2. 
+        3. 
+        4. 
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of the system has the bug?
+      options:
+        - Backend - Database/Repository
+        - Backend - Service Layer
+        - Backend - Handler/API
+        - Backend - Scheduler/Cron
+        - Frontend - UI Component
+        - Frontend - API Integration
+        - Frontend - State Management
+        - Infrastructure - Docker/Deployment
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error Logs
+      description: Any error messages, stack traces, or relevant logs
+      placeholder: |
+        ```
+        2024-12-15 10:30:00 ERROR: unknown cadence: biweekly
+        2024-12-15 10:30:00 WARN: Skipping reminder generation for contact abc-123
+        ```
+      render: shell
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: When does this happen?
+      placeholder: |
+        **Environment:** development / staging / production
+        **OS:** macOS / Linux / Windows
+        **Go version:** 1.24
+        **Database:** PostgreSQL 16
+        **Browser:** Chrome 120 (if frontend issue)
+      value: |
+        **Environment:** 
+        **OS:** 
+        **Go version:** 
+        **Database:** 
+
+  - type: textarea
+    id: investigation
+    attributes:
+      label: Initial Investigation
+      description: What have you found so far? (Optional but helpful)
+      placeholder: |
+        **Likely Cause:**
+        The `ParseCadence()` function in `backend/internal/reminder/cadence.go` 
+        only handles "weekly", "monthly", etc. but not "biweekly"
+        
+        **Proposed Fix:**
+        Add `case "biweekly": return CadenceBiweekly, nil` to the switch statement
+        
+        **Files to Check:**
+        - backend/internal/reminder/cadence.go
+        - backend/migrations/005_add_biweekly_cadence.up.sql
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Fix Checklist
+      description: What needs to be done to fix this? (Agent will complete)
+      options:
+        - label: Identify root cause
+        - label: Write failing test that reproduces bug
+        - label: Implement fix
+        - label: Verify all tests pass
+        - label: Run smoke test
+        - label: Update documentation if needed
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Screenshots, related issues, etc.
+      placeholder: |
+        **Related Issues:**
+        - Similar to #45 but for different cadence
+        
+        **Screenshots:**
+        [Attach if relevant]

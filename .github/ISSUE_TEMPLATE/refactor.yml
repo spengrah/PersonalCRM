@@ -1,0 +1,218 @@
+name: ♻️ Refactor
+description: Code improvement without changing functionality
+labels: ["refactor", "agent-ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before You Start
+        - Read [AGENTS.md](../AGENTS.md) for development guidelines
+        - Ensure you have good test coverage before refactoring
+        - Refactors should not change external behavior
+        
+  - type: input
+    id: title
+    attributes:
+      label: Refactor Title
+      description: What are you improving?
+      placeholder: "Extract config loading into dedicated package"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Refactor Type
+      options:
+        - "Code organization (moving/renaming)"
+        - "Extract function/method"
+        - "Simplify complex code"
+        - "Remove duplication"
+        - "Performance optimization"
+        - "Improve error handling"
+        - "Add type safety"
+        - "Update dependencies"
+      default: 0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - "P0: Blocks other work"
+        - "P1: Technical debt causing issues"
+        - "P2: Would improve maintainability"
+        - "P3: Nice to have"
+      default: 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Current Problem
+      description: What's wrong with the current code?
+      placeholder: |
+        **Current State:**
+        Configuration is scattered across multiple files:
+        - Environment variables read directly in handlers
+        - Hardcoded magic numbers in multiple places
+        - No validation of required config
+        
+        **Issues:**
+        - Hard to test (depends on environment)
+        - Easy to miss required variables
+        - Magic numbers duplicated
+        - No single source of truth
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How will you improve it?
+      placeholder: |
+        **New Approach:**
+        Create `backend/internal/config/config.go` that:
+        - Defines `Config` struct with all settings
+        - Loads and validates on startup
+        - Provides typed access to config
+        - Fails fast on missing required vars
+        
+        **Benefits:**
+        - Single source of truth
+        - Type-safe access
+        - Easy to test (inject config)
+        - Self-documenting
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      description: What's included in this refactor?
+      options:
+        - label: No external behavior changes
+        - label: All tests pass without modification
+        - label: API contracts unchanged
+        - label: Database schema unchanged
+        - label: Can be deployed independently
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Files to Modify
+      description: Which files will be affected?
+      placeholder: |
+        **Files to create:**
+        - `backend/internal/config/config.go`
+        
+        **Files to modify:**
+        - `backend/cmd/crm-api/main.go` (load config at startup)
+        - All files using `os.Getenv()` directly
+        
+        **Files to check:**
+        - Any file with hardcoded values
+        - Test files that mock environment
+      value: |
+        **Files to create:**
+        - 
+        
+        **Files to modify:**
+        - 
+    validations:
+      required: true
+
+  - type: textarea
+    id: approach
+    attributes:
+      label: Implementation Approach
+      description: How will you safely make this change?
+      placeholder: |
+        **Strategy:**
+        1. Create new config package
+        2. Add config loading to main.go
+        3. Refactor one package at a time
+        4. Run tests after each change
+        5. Update all packages
+        6. Remove old code
+        
+        **Safety:**
+        - Keep old code working alongside new initially
+        - Migrate package by package
+        - Run full test suite after each step
+        - Deploy incrementally if possible
+      value: |
+        1. 
+        2. 
+        3. 
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Refactor Checklist
+      description: Steps to complete (agent will check off)
+      options:
+        - label: Write tests for current behavior (if missing)
+        - label: Create new structure/interface
+        - label: Migrate code incrementally
+        - label: Ensure all tests still pass
+        - label: Run smoke test
+        - label: Remove old/deprecated code
+        - label: Update documentation
+        - label: Run linters
+
+  - type: dropdown
+    id: testing
+    attributes:
+      label: Testing Strategy
+      options:
+        - "Existing tests should pass unchanged"
+        - "Minor test updates needed"
+        - "Significant test refactoring needed"
+        - "New tests required"
+      default: 0
+    validations:
+      required: true
+
+  - type: input
+    id: estimate
+    attributes:
+      label: Time Estimate
+      description: How long will this take?
+      placeholder: "2-4 hours"
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks & Mitigation
+      description: What could go wrong? How to prevent it?
+      placeholder: |
+        **Risks:**
+        - Could break existing code that depends on environment directly
+        - Might miss some hardcoded values
+        - Could introduce subtle bugs in config parsing
+        
+        **Mitigation:**
+        - Comprehensive grep for all environment usage
+        - Keep old code working alongside new initially
+        - Add validation tests for config loading
+        - Deploy to staging first
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: References, examples, related work
+      placeholder: |
+        **References:**
+        - Similar pattern used in project X
+        - See IMPROVEMENTS.md A.1.5 for full details
+        
+        **Related Issues:**
+        - Part of larger cleanup effort (#45)
+
