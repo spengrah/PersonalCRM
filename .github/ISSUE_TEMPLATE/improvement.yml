@@ -49,8 +49,6 @@ body:
         **Files to Modify:**
         - file1.go
         - file2.go
-        
-        **Time Estimate:** X hours
     validations:
       required: true
 

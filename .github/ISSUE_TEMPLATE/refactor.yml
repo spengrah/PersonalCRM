@@ -179,13 +179,6 @@ body:
     validations:
       required: true
 
-  - type: input
-    id: estimate
-    attributes:
-      label: Time Estimate
-      description: How long will this take?
-      placeholder: "2-4 hours"
-
   - type: textarea
     id: risks
     attributes:

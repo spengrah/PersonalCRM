@@ -109,13 +109,6 @@ body:
     validations:
       required: true
 
-  - type: input
-    id: estimate
-    attributes:
-      label: Time Estimate
-      description: Rough estimate for an experienced developer
-      placeholder: "2-3 hours"
-
   - type: textarea
     id: context
     attributes:
