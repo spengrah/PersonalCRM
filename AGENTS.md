@@ -39,7 +39,7 @@ This project uses AI-specific documentation in the `.ai/` directory for better o
 2. **[`.ai/rules.md`](.ai/rules.md)** - Development rules and workflow
 3. **GitHub Issues** - Current work and context
 4. **[`.ai/development.md`](.ai/development.md)** - How to implement features
-5. **[`PLAN.md`](PLAN.md)** - Historical context (may be outdated)
+5. **[`PLAN.md`](docs/PLAN.md)** - Historical context (may be outdated)
 
 ---
 

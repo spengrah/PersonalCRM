@@ -109,8 +109,7 @@ personal-crm/
 ├── desktop/            # Tauri app (Rust)
 ├── infra/              # Docker Compose & infrastructure
 ├── tests/              # E2E and integration tests
-├── docs/               # Documentation
-└── PLAN.md            # Architecture and implementation plan
+└── docs/               # Documentation
 ```
 
 ## Testing
@@ -135,7 +134,7 @@ cd frontend && npm test
 npx playwright test
 ```
 
-See [TEST_GUIDE.md](TEST_GUIDE.md) for detailed testing information.
+See [TEST_GUIDE.md](docs/TEST_GUIDE.md) for detailed testing information.
 
 ## Smoke Testing
 
@@ -178,7 +177,7 @@ The application uses PostgreSQL with the pgvector extension for vector similarit
 - **Phase 2**: AI Agent v0 (Embeddings, RAG, Chat UI)
 - **Phase 3**: AI Agent v1 (Advanced features, Graph view, Export)
 
-See `PLAN.md` for detailed architecture and implementation roadmap.
+See `docs/PLAN.md` for detailed architecture and implementation roadmap.
 
 ## Contributing
 
