@@ -113,9 +113,10 @@ gh issue develop 123 --name "feat/auto-migrations"
 **Workflow:**
 1. Create branch from issue: `gh issue develop 123 --name "feat/auto-migrations"`
 2. Make changes and commit with conventional commit messages
-3. Reference issue in commits: `Fixes #123` or `Closes #123`
-4. Create PR: `gh pr create --fill`
-5. PR automatically links to issue and closes it on merge. If there are multiple commits, they will be squashed into a single commit on merge.
+3. **Always sign commits** with `-S` flag: `git commit -S -m "..."`
+4. Reference issue in commits: `Fixes #123` or `Closes #123`
+5. Create PR: `gh pr create --fill`
+6. PR automatically links to issue and closes it on merge. If there are multiple commits, they will be squashed into a single commit on merge.
 
 ### 3. Before Starting Any Work
 
@@ -276,6 +277,11 @@ make prod                   # Real-world timing
 7. **Always run smoke test before committing major changes**
    ```bash
    ./smoke-test.sh
+   ```
+
+8. **Always sign commits**
+   ```bash
+   git commit -S -m "feat: your message here"
    ```
 
 ---

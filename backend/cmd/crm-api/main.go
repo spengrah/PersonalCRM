@@ -48,6 +48,22 @@ import (
 )
 
 func main() {
+	// Run migrations before connecting to database
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL environment variable is required")
+	}
+
+	migrationsPath := os.Getenv("MIGRATIONS_PATH")
+	if migrationsPath == "" {
+		migrationsPath = "migrations"
+	}
+
+	log.Println("Running database migrations...")
+	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+		log.Fatal("Failed to run migrations:", err)
+	}
+
 	// Initialize database
 	ctx := context.Background()
 	database, err := db.NewDatabase(ctx)
@@ -56,8 +72,6 @@ func main() {
 	}
 	defer database.Close()
 
-	// Run migrations if needed
-	// Note: In production, migrations should be run separately
 	log.Println("Database connected successfully")
 
 	// Initialize repositories

@@ -3,6 +3,8 @@ package tests
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"personal-crm/backend/internal/db"
@@ -12,6 +14,53 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// getMigrationsPath returns the absolute path to the migrations directory
+func getMigrationsPath() string {
+	// If MIGRATIONS_PATH is set as absolute path, use it
+	if path := os.Getenv("MIGRATIONS_PATH"); path != "" && filepath.IsAbs(path) {
+		return path
+	}
+
+	// Otherwise, compute path relative to this test file
+	_, filename, _, _ := runtime.Caller(0)
+	testDir := filepath.Dir(filename)
+	return filepath.Join(testDir, "..", "migrations")
+}
+
+// TestRunMigrations_Integration tests the migration runner
+func TestRunMigrations_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	migrationsPath := getMigrationsPath()
+
+	t.Run("RunMigrations_NoChange", func(t *testing.T) {
+		// Running migrations on an already-migrated database should succeed
+		// and return nil (ErrNoChange is handled internally)
+		err := db.RunMigrations(databaseURL, migrationsPath)
+		assert.NoError(t, err)
+	})
+
+	t.Run("RunMigrations_InvalidPath", func(t *testing.T) {
+		// Invalid migrations path should return error
+		err := db.RunMigrations(databaseURL, "/nonexistent/path")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to create migration instance")
+	})
+
+	t.Run("RunMigrations_InvalidDatabaseURL", func(t *testing.T) {
+		// Invalid database URL should return error
+		err := db.RunMigrations("postgres://invalid:invalid@localhost:9999/invalid?sslmode=disable", migrationsPath)
+		assert.Error(t, err)
+	})
+}
 
 // TestContactRepository_Integration tests the contact repository with a real database
 // This test requires a running PostgreSQL database with the DATABASE_URL environment variable set

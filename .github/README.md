@@ -101,8 +101,8 @@ gh issue develop 67 --name "refactor/handlers"      # for refactors
 
 # Work on code...
 
-# Reference issue in commits
-git commit -m "feat: auto-run migrations on startup
+# Reference issue in commits (always sign with -S)
+git commit -S -m "feat: auto-run migrations on startup
 
 Implements golang-migrate auto-migration.
 

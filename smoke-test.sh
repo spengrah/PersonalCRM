@@ -101,10 +101,7 @@ fi
 # Give PostgreSQL a moment to fully initialize
 sleep 5
 
-# Run database migrations
-log_and_print "🔸 Running database migrations..."
-docker exec -i crm-postgres psql -U crm_user -d personal_crm < backend/migrations/001_initial_schema.up.sql >> "$LOG_FILE" 2>&1
-docker exec -i crm-postgres psql -U crm_user -d personal_crm < backend/migrations/002_add_reminder_soft_delete.up.sql >> "$LOG_FILE" 2>&1
+# Note: Database migrations are now run automatically on backend startup
 
 # Build and start backend API
 log_and_print "🔸 Building backend API..."
@@ -121,6 +118,7 @@ log_and_print "🔸 Starting backend API..."
     source ./.env
     set +a
     export DATABASE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT:-5432}/${POSTGRES_DB}?sslmode=disable"
+    export MIGRATIONS_PATH="backend/migrations"
     ./backend/bin/crm-api >> "$LOG_FILE" 2>&1
 ) &
 
