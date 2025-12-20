@@ -3,7 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
-	"log"
+
+	"personal-crm/backend/internal/logger"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -27,9 +28,9 @@ func RunMigrations(databaseURL string, migrationsPath string) error {
 	}
 
 	if err == migrate.ErrNoChange {
-		log.Println("No new migrations to run")
+		logger.Info().Msg("no new migrations to run")
 	} else {
-		log.Println("Migrations completed successfully")
+		logger.Info().Msg("migrations completed successfully")
 	}
 
 	return nil
@@ -45,8 +46,7 @@ SELECT 1;
 
 	// For now, we'll implement basic seeding
 	// In a full implementation, you would read the seed.sql file and execute it
-	log.Println("Database seeding would be implemented here")
-	log.Printf("Seed file: %s", seedFile)
+	logger.Debug().Str("seed_file", seedFile).Msg("database seeding would be implemented here")
 
 	// Execute the seed SQL
 	_, err := db.Pool.Exec(ctx, seedSQL)

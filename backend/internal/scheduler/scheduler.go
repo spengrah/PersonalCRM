@@ -2,8 +2,8 @@ package scheduler
 
 import (
 	"context"
-	"log"
 
+	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/reminder"
 	"personal-crm/backend/internal/service"
 
@@ -15,11 +15,34 @@ type Scheduler struct {
 	reminderService *service.ReminderService
 }
 
+// zerologCronAdapter adapts zerolog to cron.Logger interface
+type zerologCronAdapter struct{}
+
+func (z zerologCronAdapter) Info(msg string, keysAndValues ...interface{}) {
+	event := logger.Debug().Str("component", "cron")
+	for i := 0; i < len(keysAndValues)-1; i += 2 {
+		if key, ok := keysAndValues[i].(string); ok {
+			event = event.Interface(key, keysAndValues[i+1])
+		}
+	}
+	event.Msg(msg)
+}
+
+func (z zerologCronAdapter) Error(err error, msg string, keysAndValues ...interface{}) {
+	event := logger.Error().Err(err).Str("component", "cron")
+	for i := 0; i < len(keysAndValues)-1; i += 2 {
+		if key, ok := keysAndValues[i].(string); ok {
+			event = event.Interface(key, keysAndValues[i+1])
+		}
+	}
+	event.Msg(msg)
+}
+
 func NewScheduler(reminderService *service.ReminderService) *Scheduler {
-	// Create cron with second precision and logging
+	// Create cron with second precision and structured logging
 	c := cron.New(
 		cron.WithSeconds(),
-		cron.WithLogger(cron.VerbosePrintfLogger(log.New(log.Writer(), "cron: ", log.LstdFlags))),
+		cron.WithLogger(zerologCronAdapter{}),
 	)
 
 	return &Scheduler{
@@ -29,19 +52,19 @@ func NewScheduler(reminderService *service.ReminderService) *Scheduler {
 }
 
 func (s *Scheduler) Start() error {
-	log.Println("Starting scheduler...")
+	logger.Info().Msg("starting scheduler")
 
 	// Get environment-aware cron specification
 	cronSpec := reminder.GetSchedulerCronSpec()
-	log.Printf("Using scheduler cron spec: %s", cronSpec)
+	logger.Info().Str("cron_spec", cronSpec).Msg("using scheduler cron spec")
 
 	// Schedule reminder generation job with environment-aware timing
 	_, err := s.cron.AddFunc(cronSpec, func() {
 		ctx := context.Background()
-		log.Println("Running scheduled reminder generation job...")
+		logger.Info().Msg("running scheduled reminder generation job")
 
 		if err := s.reminderService.GenerateRemindersForOverdueContacts(ctx); err != nil {
-			log.Printf("Error in scheduled reminder generation: %v", err)
+			logger.Error().Err(err).Msg("error in scheduled reminder generation")
 		}
 	})
 	if err != nil {
@@ -54,22 +77,22 @@ func (s *Scheduler) Start() error {
 
 	// Start the cron scheduler
 	s.cron.Start()
-	log.Println("Scheduler started successfully")
+	logger.Info().Msg("scheduler started successfully")
 
 	return nil
 }
 
 func (s *Scheduler) Stop() {
-	log.Println("Stopping scheduler...")
+	logger.Info().Msg("stopping scheduler")
 	s.cron.Stop()
-	log.Println("Scheduler stopped")
+	logger.Info().Msg("scheduler stopped")
 }
 
 // RunReminderGenerationNow triggers the reminder generation job immediately
 // This is useful for testing or manual triggering
 func (s *Scheduler) RunReminderGenerationNow() error {
 	ctx := context.Background()
-	log.Println("Running reminder generation job manually...")
+	logger.Info().Msg("running reminder generation job manually")
 	return s.reminderService.GenerateRemindersForOverdueContacts(ctx)
 }
 
