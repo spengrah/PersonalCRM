@@ -2,9 +2,9 @@ package service
 
 import (
 	"context"
-	"log"
 	"time"
 
+	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/reminder"
 	"personal-crm/backend/internal/repository"
 
@@ -26,7 +26,7 @@ func NewReminderService(reminderRepo *repository.ReminderRepository, contactRepo
 // GenerateRemindersForOverdueContacts creates reminders for contacts that are overdue based on their cadence
 // This function is idempotent - it won't create duplicate reminders for the same day
 func (s *ReminderService) GenerateRemindersForOverdueContacts(ctx context.Context) error {
-	log.Println("Starting reminder generation job...")
+	logger.Info().Msg("starting reminder generation job")
 
 	// Get all contacts with a cadence set
 	contacts, err := s.contactRepo.ListContacts(ctx, repository.ListContactsParams{
@@ -34,7 +34,7 @@ func (s *ReminderService) GenerateRemindersForOverdueContacts(ctx context.Contex
 		Offset: 0,
 	})
 	if err != nil {
-		log.Printf("Error fetching contacts: %v", err)
+		logger.Error().Err(err).Msg("error fetching contacts")
 		return err
 	}
 
@@ -49,7 +49,11 @@ func (s *ReminderService) GenerateRemindersForOverdueContacts(ctx context.Contex
 
 		cadenceType, err := reminder.ParseCadence(*contact.Cadence)
 		if err != nil {
-			log.Printf("Invalid cadence for contact %s: %v", contact.FullName, err)
+			logger.Warn().
+				Err(err).
+				Str("contact_name", contact.FullName).
+				Str("cadence", *contact.Cadence).
+				Msg("invalid cadence for contact")
 			continue
 		}
 
@@ -61,7 +65,10 @@ func (s *ReminderService) GenerateRemindersForOverdueContacts(ctx context.Contex
 		// Check if we already have a reminder for today for this contact
 		existingReminders, err := s.reminderRepo.ListRemindersByContact(ctx, contact.ID)
 		if err != nil {
-			log.Printf("Error checking existing reminders for contact %s: %v", contact.FullName, err)
+			logger.Error().
+				Err(err).
+				Str("contact_name", contact.FullName).
+				Msg("error checking existing reminders for contact")
 			continue
 		}
 
@@ -103,15 +110,22 @@ func (s *ReminderService) GenerateRemindersForOverdueContacts(ctx context.Contex
 		})
 
 		if err != nil {
-			log.Printf("Error creating reminder for contact %s: %v", contact.FullName, err)
+			logger.Error().
+				Err(err).
+				Str("contact_name", contact.FullName).
+				Msg("error creating reminder for contact")
 			continue
 		}
 
 		remindersCreated++
-		log.Printf("Created reminder for %s (overdue by %d days)", contact.FullName, reminder.GetOverdueDaysWithConfig(cadenceType, contact.LastContacted, contact.CreatedAt, now))
+		overdueDays := reminder.GetOverdueDaysWithConfig(cadenceType, contact.LastContacted, contact.CreatedAt, now)
+		logger.Info().
+			Str("contact_name", contact.FullName).
+			Int("overdue_days", overdueDays).
+			Msg("created reminder")
 	}
 
-	log.Printf("Reminder generation completed. Created %d new reminders.", remindersCreated)
+	logger.Info().Int("reminders_created", remindersCreated).Msg("reminder generation completed")
 	return nil
 }
 

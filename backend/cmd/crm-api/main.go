@@ -24,7 +24,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -36,6 +35,7 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/health"
+	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
@@ -48,10 +48,13 @@ import (
 )
 
 func main() {
+	// Initialize structured logger
+	logger.Init()
+
 	// Run migrations before connecting to database
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
-		log.Fatal("DATABASE_URL environment variable is required")
+		logger.Fatal().Msg("DATABASE_URL environment variable is required")
 	}
 
 	migrationsPath := os.Getenv("MIGRATIONS_PATH")
@@ -59,20 +62,20 @@ func main() {
 		migrationsPath = "migrations"
 	}
 
-	log.Println("Running database migrations...")
+	logger.Info().Msg("running database migrations")
 	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
-		log.Fatal("Failed to run migrations:", err)
+		logger.Fatal().Err(err).Msg("failed to run migrations")
 	}
 
 	// Initialize database
 	ctx := context.Background()
 	database, err := db.NewDatabase(ctx)
 	if err != nil {
-		log.Fatal("Failed to connect to database:", err)
+		logger.Fatal().Err(err).Msg("failed to connect to database")
 	}
 	defer database.Close()
 
-	log.Println("Database connected successfully")
+	logger.Info().Msg("database connected successfully")
 
 	// Initialize repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -91,7 +94,7 @@ func main() {
 	// Initialize and start scheduler
 	cronScheduler := scheduler.NewScheduler(reminderService)
 	if err := cronScheduler.Start(); err != nil {
-		log.Fatal("Failed to start scheduler:", err)
+		logger.Fatal().Err(err).Msg("failed to start scheduler")
 	}
 	defer cronScheduler.Stop()
 
@@ -175,14 +178,14 @@ func main() {
 	// Use a listener so we can discover the selected port when PORT=0
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatal("Failed to bind listener:", err)
+		logger.Fatal().Err(err).Str("addr", addr).Msg("failed to bind listener")
 	}
 
 	// Discover the actual port (useful when PORT=0)
 	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
 	if !ok {
 		_ = ln.Close()
-		log.Fatal("Failed to determine TCP address")
+		logger.Fatal().Msg("failed to determine TCP address")
 	}
 	selectedPort := tcpAddr.Port
 
@@ -193,10 +196,15 @@ func main() {
 
 	// Graceful shutdown
 	go func() {
-		log.Printf("Starting server on 127.0.0.1:%d", selectedPort)
-		log.Printf("API documentation available at http://127.0.0.1:%d/swagger/index.html", selectedPort)
+		logger.Info().
+			Int("port", selectedPort).
+			Str("addr", "127.0.0.1").
+			Msg("starting server")
+		logger.Info().
+			Str("url", fmt.Sprintf("http://127.0.0.1:%d/swagger/index.html", selectedPort)).
+			Msg("API documentation available")
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Fatal("Failed to start server:", err)
+			logger.Fatal().Err(err).Msg("failed to start server")
 		}
 	}()
 
@@ -204,17 +212,17 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("Shutting down server...")
+	logger.Info().Msg("shutting down server")
 
 	// Give outstanding requests a 30 second timeout to complete
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatal("Server forced to shutdown:", err)
+		logger.Fatal().Err(err).Msg("server forced to shutdown")
 	}
 
-	log.Println("Server exited")
+	logger.Info().Msg("server exited")
 
 	// Print the selected port on graceful exit for supervising processes
 	fmt.Printf("PORT=%d\n", selectedPort)

@@ -1,8 +1,9 @@
 package api
 
 import (
-	"log"
 	"time"
+
+	"personal-crm/backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -22,21 +23,51 @@ func RequestIDMiddleware() gin.HandlerFunc {
 	}
 }
 
-// LoggingMiddleware logs HTTP requests
+// LoggingMiddleware logs HTTP requests with structured logging
 func LoggingMiddleware() gin.HandlerFunc {
-	return gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
-		log.Printf("[%s] %s %s %d %s \"%s\" %s \"%s\"",
-			param.TimeStamp.Format(time.RFC1123),
-			param.ClientIP,
-			param.Method,
-			param.StatusCode,
-			param.Latency,
-			param.Path,
-			param.Request.UserAgent(),
-			param.ErrorMessage,
-		)
-		return ""
-	})
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+		raw := c.Request.URL.RawQuery
+
+		// Process request
+		c.Next()
+
+		// Calculate latency
+		latency := time.Since(start)
+
+		// Get request ID from context (safe type assertion with fallback)
+		requestID := "unknown"
+		if id, ok := c.Get("request_id"); ok {
+			if idStr, ok := id.(string); ok {
+				requestID = idStr
+			}
+		}
+
+		// Build log event
+		event := logger.Info()
+		if c.Writer.Status() >= 500 {
+			event = logger.Error()
+		} else if c.Writer.Status() >= 400 {
+			event = logger.Warn()
+		}
+
+		event.
+			Str("request_id", requestID).
+			Str("method", c.Request.Method).
+			Str("path", path).
+			Str("query", raw).
+			Int("status", c.Writer.Status()).
+			Dur("latency", latency).
+			Str("client_ip", c.ClientIP()).
+			Str("user_agent", c.Request.UserAgent())
+
+		if len(c.Errors) > 0 {
+			event.Str("error", c.Errors.String())
+		}
+
+		event.Msg("http request")
+	}
 }
 
 // CORSMiddleware adds CORS headers
