@@ -109,7 +109,8 @@ func main() {
 	router.Use(api.ErrorHandlerMiddleware())
 
 	// Health check endpoint
-	router.GET("/health", health.HealthHandler)
+	healthChecker := health.NewHealthChecker(database)
+	router.GET("/health", healthChecker.Handler)
 
 	// API routes
 	v1 := router.Group("/api/v1")
