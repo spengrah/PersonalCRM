@@ -30,6 +30,7 @@ This project uses AI-specific documentation in the `.ai/` directory for better o
 - Never skip architectural layers
 - Never write raw SQL in Go → use sqlc
 - Always run `./smoke-test.sh` before major commits
+- Always sign commits → `git commit -S -m "..."`
 
 ---
 
