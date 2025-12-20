@@ -56,7 +56,7 @@ func main() {
 
 	migrationsPath := os.Getenv("MIGRATIONS_PATH")
 	if migrationsPath == "" {
-		migrationsPath = "backend/migrations"
+		migrationsPath = "migrations"
 	}
 
 	log.Println("Running database migrations...")

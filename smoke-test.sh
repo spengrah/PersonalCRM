@@ -118,6 +118,7 @@ log_and_print "🔸 Starting backend API..."
     source ./.env
     set +a
     export DATABASE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT:-5432}/${POSTGRES_DB}?sslmode=disable"
+    export MIGRATIONS_PATH="backend/migrations"
     ./backend/bin/crm-api >> "$LOG_FILE" 2>&1
 ) &
 
