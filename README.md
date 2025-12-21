@@ -351,26 +351,55 @@ Deploy updates automatically via GitHub Actions when you push to main.
    sudo tailscale up --ssh
    ```
 
-2. **Generate deployment key** on your Pi:
+2. **Create dedicated deploy user** on your Pi (security best practice):
    ```bash
-   ssh-keygen -t ed25519 -f ~/.ssh/deploy_key -N ""
-   cat ~/.ssh/deploy_key.pub >> ~/.ssh/authorized_keys
-   cat ~/.ssh/deploy_key  # Copy this for GitHub secrets
+   # Create deploy-only user
+   sudo useradd -m -s /bin/bash deploy
+
+   # Grant minimal sudo permissions for deployment
+   sudo tee /etc/sudoers.d/deploy << 'EOF'
+   # Allow deploy user to restart services and run install script
+   deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart personalcrm.target
+   deploy ALL=(root) NOPASSWD: /usr/bin/systemctl start personalcrm.target
+   deploy ALL=(root) NOPASSWD: /usr/bin/systemctl stop personalcrm.target
+   deploy ALL=(root) NOPASSWD: /usr/bin/systemctl status personalcrm.target
+   deploy ALL=(root) NOPASSWD: /opt/personalcrm/infra/install-systemd.sh
+   EOF
+
+   sudo chmod 440 /etc/sudoers.d/deploy
+
+   # Allow deploy user to access the project directory
+   sudo usermod -aG crm deploy
    ```
 
-3. **Create Tailscale OAuth client**:
+3. **Generate deployment key** for the deploy user:
+   ```bash
+   # Switch to deploy user
+   sudo -u deploy bash
+
+   # Generate SSH key
+   ssh-keygen -t ed25519 -f ~/.ssh/deploy_key -N ""
+   cat ~/.ssh/deploy_key.pub >> ~/.ssh/authorized_keys
+   chmod 600 ~/.ssh/authorized_keys
+   cat ~/.ssh/deploy_key  # Copy this for GitHub secrets
+
+   # Exit back to your user
+   exit
+   ```
+
+4. **Create Tailscale OAuth client**:
    - Go to [Tailscale admin console → Settings → OAuth clients](https://login.tailscale.com/admin/settings/oauth)
    - Generate a new OAuth client
    - Add tag `tag:ci` to the client
    - Copy the client ID and secret
 
-4. **Add GitHub secrets** (Settings → Secrets and variables → Actions):
+5. **Add GitHub secrets** (Settings → Secrets and variables → Actions):
    - `TS_OAUTH_CLIENT_ID`: OAuth client ID from Tailscale
    - `TS_OAUTH_SECRET`: OAuth secret from Tailscale
    - `PI_HOSTNAME`: Your Pi's Tailscale hostname (e.g., `your-pi-name`)
-   - `PI_SSH_KEY`: Private key content from `~/.ssh/deploy_key`
+   - `PI_DEPLOY_KEY`: Private key content from deploy user's `~/.ssh/deploy_key`
 
-5. **Create workflow** `.github/workflows/deploy.yml`:
+6. **Create workflow** `.github/workflows/deploy.yml`:
    ```yaml
    name: Deploy to Raspberry Pi
 
@@ -394,27 +423,35 @@ Deploy updates automatically via GitHub Actions when you push to main.
          - name: Setup SSH
            run: |
              mkdir -p ~/.ssh
-             echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/deploy_key
+             echo "${{ secrets.PI_DEPLOY_KEY }}" > ~/.ssh/deploy_key
              chmod 600 ~/.ssh/deploy_key
 
          - name: Deploy to Pi
            env:
              PI_HOSTNAME: ${{ secrets.PI_HOSTNAME }}
            run: |
-             ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $PI_HOSTNAME << 'EOF'
+             ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no deploy@$PI_HOSTNAME << 'EOF'
                cd ~/PersonalCRM
                git pull origin main
-               sudo ./infra/install-systemd.sh
+               sudo /opt/personalcrm/infra/install-systemd.sh
                sudo systemctl restart personalcrm.target
              EOF
    ```
 
-6. **Test the deployment**:
+7. **Test the deployment**:
    ```bash
    git commit -m "test: trigger deployment"
    git push origin main
    # Watch GitHub Actions tab for deployment status
    ```
+
+**Security Considerations**:
+
+- **Dedicated deploy user**: The `deploy` user has minimal sudo permissions - only what's needed for deployment
+- **Principle of least privilege**: If the SSH key is compromised, attacker can only restart services and run the install script, not gain full system access
+- **Key rotation**: Rotate the deploy SSH key periodically (quarterly recommended)
+- **GitHub Environments** (optional): Add environment protection rules requiring manual approval for production deployments
+- **Monitor logs**: Regularly check `/var/log/auth.log` for unauthorized access attempts
 
 **Benefits**:
 - Automatic deployments on push to main
