@@ -1,0 +1,61 @@
+[Unit]
+Description=PersonalCRM Backend API Server
+Documentation=https://github.com/spengrah/PersonalCRM
+After=personalcrm-database.service
+Requires=personalcrm-database.service
+PartOf=personalcrm.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/personalcrm
+User=crm
+Group=crm
+
+# Environment configuration
+EnvironmentFile=/opt/personalcrm/.env
+Environment="MIGRATIONS_PATH=/opt/personalcrm/backend/migrations"
+Environment="PORT=8080"
+Environment="NODE_ENV=production"
+Environment="LOG_LEVEL=info"
+
+# IMPORTANT: Network binding configuration
+# Option 1 (default): Bind to localhost only (secure, requires reverse proxy)
+Environment="BIND_ADDR=127.0.0.1"
+
+# Option 2: Uncomment to bind to all interfaces (allows direct network access)
+# WARNING: Ensure firewall is properly configured before using 0.0.0.0
+# Environment="BIND_ADDR=0.0.0.0"
+
+# Executable
+ExecStart=/opt/personalcrm/backend/bin/crm-api
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=crm-api
+
+# Process management
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Health monitoring
+ExecStartPost=/bin/sleep 2
+ExecStartPost=/bin/bash -c 'curl -sf http://127.0.0.1:8080/health || exit 1'
+
+# Security hardening (Raspberry Pi compatible)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/personalcrm/logs
+
+# Resource limits (adjust for Raspberry Pi)
+MemoryLimit=512M
+CPUQuota=150%
+
+[Install]
+WantedBy=multi-user.target
+WantedBy=personalcrm.target

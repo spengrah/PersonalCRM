@@ -1,0 +1,56 @@
+[Unit]
+Description=PersonalCRM Frontend (Next.js)
+Documentation=https://github.com/spengrah/PersonalCRM
+After=personalcrm-backend.service
+Requires=personalcrm-backend.service
+PartOf=personalcrm.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/personalcrm/frontend
+User=crm
+Group=crm
+
+# Environment configuration
+EnvironmentFile=/opt/personalcrm/.env
+Environment="PORT=3001"
+Environment="NODE_ENV=production"
+Environment="NEXT_TELEMETRY_DISABLED=1"
+
+# Backend API URL (for frontend to connect to backend)
+Environment="NEXT_PUBLIC_API_URL=http://localhost:8080"
+
+# Executable (using bun for production)
+ExecStart=/usr/local/bin/bun run start
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=crm-frontend
+
+# Process management
+Restart=always
+RestartSec=5s
+TimeoutStopSec=15s
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Health monitoring
+ExecStartPost=/bin/sleep 3
+ExecStartPost=/bin/bash -c 'curl -sf http://localhost:3001 || exit 1'
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/personalcrm/logs
+ReadWritePaths=/opt/personalcrm/frontend/.next/cache
+
+# Resource limits (adjust for Raspberry Pi)
+MemoryLimit=512M
+CPUQuota=150%
+
+[Install]
+WantedBy=multi-user.target
+WantedBy=personalcrm.target

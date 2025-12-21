@@ -1,0 +1,8 @@
+[Unit]
+Description=PersonalCRM Full Stack Application
+Documentation=https://github.com/spengrah/PersonalCRM
+Wants=personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service
+After=personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service
+
+[Install]
+WantedBy=multi-user.target
