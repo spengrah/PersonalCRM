@@ -99,6 +99,47 @@ make docker-reset   # Reset database with fresh data
 make clean
 ```
 
+## Authentication & Security
+
+### API Key Setup
+
+The API requires authentication via API key in production.
+
+1. **Generate a secure API key**:
+   ```bash
+   openssl rand -hex 32
+   ```
+
+2. **Add to backend `.env`**:
+   ```
+   API_KEY=<your-generated-key>
+   ```
+
+3. **Add to frontend `.env.local`**:
+   ```
+   NEXT_PUBLIC_API_KEY=<your-generated-key>
+   ```
+
+4. **Rebuild frontend when key changes**:
+   ```bash
+   cd frontend && bun run build
+   ```
+
+### API Key Rotation
+
+To rotate the API key:
+
+1. Generate new key with `openssl rand -hex 32`
+2. Update both backend and frontend .env files
+3. Restart backend: `sudo systemctl restart crm-api` (or restart development server)
+4. Rebuild and restart frontend: `cd frontend && bun run build && sudo systemctl restart crm-frontend`
+
+### Security Features
+
+- **API Key Authentication**: All `/api/v1/*` endpoints require API key via `X-API-Key` header
+- **Public Endpoints**: `/health` and `/swagger/*` remain public for monitoring and documentation
+- **Defense in Depth**: When deployed via Tailscale, combines network-layer (VPN) + application-layer (API key) security
+
 ## Raspberry Pi Deployment with Systemd
 
 Deploy PersonalCRM as a systemd service on Raspberry Pi for automatic startup on boot.

@@ -327,3 +327,43 @@ func TestConfig_ValidationErrorFormat(t *testing.T) {
 		t.Error("Expected error message to contain LOG_LEVEL")
 	}
 }
+
+func TestConfig_Validate_MissingAPIKeyInProduction(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "production")
+	WithEnv(t, "SESSION_SECRET", "test-secret")
+	// Don't set API_KEY
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Expected error when API_KEY is missing in production")
+	}
+
+	if verr, ok := err.(ValidationErrors); ok {
+		found := false
+		for _, e := range verr {
+			if e.Field == "API_KEY" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("Expected validation error for API_KEY")
+		}
+	}
+}
+
+func TestConfig_Validate_APIKeyOptionalInDevelopment(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	// Don't set API_KEY
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Should allow empty API_KEY in development: %v", err)
+	}
+
+	if cfg.External.APIKey != "" {
+		t.Error("Expected empty API_KEY in development")
+	}
+}

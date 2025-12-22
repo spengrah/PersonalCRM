@@ -82,7 +82,7 @@ func CORSMiddleware(cfg config.CORSConfig) gin.HandlerFunc {
 
 		c.Header("Access-Control-Allow-Origin", origin)
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Request-ID")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Request-ID, X-API-Key")
 		c.Header("Access-Control-Expose-Headers", "X-Request-ID")
 
 		// Handle credentials if not allowing all
