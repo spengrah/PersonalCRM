@@ -291,6 +291,13 @@ benchmark/
 *.pprof
 
 # ===========================================
+# CI/CD
+# ===========================================
+# GitHub Actions runner (for self-hosted runners)
+actions-runner/
+_work/
+
+# ===========================================
 # DOCUMENTATION BUILDS
 # ===========================================
 # Generated documentation

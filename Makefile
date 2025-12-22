@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start stop restart status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart
+.PHONY: help dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start stop restart status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test
 
 # Default target
 help:
@@ -130,6 +130,20 @@ test-all:
 	@cd backend && go test ./tests/... -v
 	@echo "Running frontend tests..."
 	@cd frontend && bun test
+
+# CI/CD targets
+ci-build-backend:
+	@echo "Building backend for ARM64..."
+	@cd backend && GOOS=linux GOARCH=arm64 go build -o bin/crm-api cmd/crm-api/main.go
+
+ci-build-frontend:
+	@echo "Building frontend..."
+	@cd frontend && bun run build
+
+ci-build: ci-build-backend ci-build-frontend
+
+ci-test: test-unit test-integration
+	@echo "✅ All CI tests passed"
 
 # API specific commands
 api-docs:
