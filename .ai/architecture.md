@@ -406,7 +406,7 @@ graph LR
 
 ### Time-Accelerated Testing
 
-Use `env.testing` for fast cadence testing:
+Use `.env.example.testing` for fast cadence testing:
 ```bash
 TIME_ACCELERATION=1440  # 1 min = 1 day
 # Weekly cadence = 2 minutes

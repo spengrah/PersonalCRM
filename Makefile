@@ -147,7 +147,7 @@ api-run: api-build
 # Environment switching
 testing:
 	@echo "Switching to TESTING environment (ultra-fast cadences)..."
-	@cp env.testing .env
+	@cp .env.example.testing .env
 	@echo "✅ Testing environment active:"
 	@echo "   - Weekly cadence: 2 minutes"  
 	@echo "   - Monthly cadence: 10 minutes"
@@ -158,7 +158,7 @@ testing:
 
 staging:
 	@echo "Switching to STAGING environment (fast cadences)..."
-	@cp env.staging .env
+	@cp .env.example.staging .env
 	@echo "✅ Staging environment active:"
 	@echo "   - Weekly cadence: 10 minutes (1 week = 10 min)"
 	@echo "   - Monthly cadence: 1 hour (1 month = 1 hour)"  
@@ -169,7 +169,7 @@ staging:
 
 prod:
 	@echo "Switching to PRODUCTION environment (real cadences)..."
-	@cp env.production .env
+	@cp .env.example.production .env
 	@echo "✅ Production environment active:"
 	@echo "   - Weekly cadence: 7 days"
 	@echo "   - Monthly cadence: 30 days"

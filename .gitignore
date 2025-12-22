@@ -3,11 +3,18 @@
 # ===========================================
 # ENVIRONMENT & SECRETS
 # ===========================================
+# Gitignore all .env files (they contain secrets)
 .env
 .env.local
 .env.production
 .env.staging
 .env.*.local
+
+# BUT allow .env.example files (these are templates)
+!.env.example
+!.env.*.example
+
+# Other secrets
 *.key
 *.pem
 *.p12
@@ -322,9 +329,3 @@ desktop-ui/dist
 desktop/src-tauri/target
 desktop/src-tauri/target/release/bundle
 
-# ===========================================
-# TEMPORARY PLANNING DOCUMENTS
-# ===========================================
-# IMPROVEMENTS.md is a temp file used to bootstrap GitHub Issues
-# Don't commit it - use GitHub Issues as source of truth
-IMPROVEMENTS.md

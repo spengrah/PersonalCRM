@@ -781,11 +781,11 @@ export function NewTableForm() {
 ### Environment Files
 
 ```
-.env              # Active environment (gitignored)
-env.example       # Template with all variables
-env.production    # Real-world timing
-env.staging       # Fast cadences (hours)
-env.testing       # Ultra-fast (minutes)
+.env                      # Active environment (gitignored)
+.env.example              # Template with all variables
+.env.example.production   # Real-world timing
+.env.example.staging      # Fast cadences (hours)
+.env.example.testing      # Ultra-fast (minutes)
 ```
 
 ### Required Environment Variables

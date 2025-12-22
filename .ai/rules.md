@@ -229,7 +229,7 @@ make prod                   # Real-world timing
 
 7. **Never commit `.env` files**
    - Already in `.gitignore`
-   - Use `env.example` as template
+   - Use `.env.example` as template
 
 8. **Never use `console.log` in frontend production code**
    ```typescript
