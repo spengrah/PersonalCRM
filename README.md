@@ -2,6 +2,8 @@
 
 A single-user, local-first customer relationship management system with AI-powered insights.
 
+![CI Status](https://github.com/spengrah/PersonalCRM/workflows/CI/badge.svg)
+
 ## Quick Start
 
 1. **Clone and setup environment**:
