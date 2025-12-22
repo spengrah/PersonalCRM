@@ -1,0 +1,40 @@
+[Unit]
+Description=PersonalCRM PostgreSQL Database (Docker)
+Documentation=https://github.com/spengrah/PersonalCRM
+After=docker.service
+Requires=docker.service
+PartOf=personalcrm.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/personalcrm/infra
+User=crm
+Group=crm
+
+# Environment
+EnvironmentFile=/opt/personalcrm/.env
+
+# Start: docker compose up -d
+ExecStart=/usr/bin/docker compose up -d
+
+# Stop: docker compose down (graceful)
+ExecStop=/usr/bin/docker compose down
+
+# Reload: restart the container
+ExecReload=/usr/bin/docker compose restart
+
+# Health check
+ExecStartPost=/bin/bash -c 'for i in {1..30}; do docker exec crm-postgres pg_isready -U ${POSTGRES_USER:-crm_user} && exit 0; sleep 1; done; exit 1'
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Restart policy
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+WantedBy=personalcrm.target
