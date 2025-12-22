@@ -64,6 +64,7 @@ type ExternalConfig struct {
 	SessionSecret    string // Required in production
 	AnthropicAPIKey  string // Optional (future use)
 	TelegramBotToken string // Optional (if EnableTelegramBot)
+	APIKey           string // Required in production (API authentication)
 	BackupPath       string // Optional
 	HomeServerHost   string // Optional
 	HomeServerUser   string // Optional
@@ -141,6 +142,7 @@ func Load() (*Config, error) {
 			SessionSecret:    getEnv("SESSION_SECRET", ""),
 			AnthropicAPIKey:  getEnv("ANTHROPIC_API_KEY", ""),
 			TelegramBotToken: getEnv("TELEGRAM_BOT_TOKEN", ""),
+			APIKey:           getEnv("API_KEY", ""),
 			BackupPath:       getEnv("BACKUP_PATH", ""),
 			HomeServerHost:   getEnv("HOME_SERVER_HOST", ""),
 			HomeServerUser:   getEnv("HOME_SERVER_USER", ""),
@@ -207,6 +209,14 @@ func (c *Config) Validate() error {
 		errors = append(errors, ValidationError{
 			Field:   "SESSION_SECRET",
 			Message: "session secret is required in production",
+		})
+	}
+
+	// Dependency validation: API_KEY required in production
+	if c.IsProduction() && c.External.APIKey == "" {
+		errors = append(errors, ValidationError{
+			Field:   "API_KEY",
+			Message: "API key is required in production for API authentication",
 		})
 	}
 

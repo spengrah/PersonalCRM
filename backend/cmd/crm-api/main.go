@@ -33,6 +33,7 @@ import (
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
+	"personal-crm/backend/internal/auth"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/health"
@@ -119,6 +120,7 @@ func main() {
 
 	// API routes
 	v1 := router.Group("/api/v1")
+	v1.Use(auth.APIKeyMiddleware(cfg))
 	{
 		// Contact routes
 		contacts := v1.Group("/contacts")
