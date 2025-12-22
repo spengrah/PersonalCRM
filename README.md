@@ -6,7 +6,7 @@ A single-user, local-first customer relationship management system with AI-power
 
 1. **Clone and setup environment**:
    ```bash
-   cp env.example .env
+   cp .env.example .env
    # Edit .env with your configuration
    ```
 
@@ -67,16 +67,35 @@ Notes:
 
 ## Environment Variables
 
-Copy `env.example` to `.env` and configure the following variables:
+Create your `.env` file from the appropriate template (`.env.example` for development, `.env.example.production` for production) and configure the following variables:
 
-### Required
+### Required for Production
 - `DATABASE_URL`: PostgreSQL connection string
-- `SESSION_SECRET`: Secure random string for session encryption
+- `SESSION_SECRET`: Secure random string for session encryption (generate with `openssl rand -base64 32`)
+- `API_KEY`: API authentication key (generate with `openssl rand -hex 32`)
+- `POSTGRES_PASSWORD`: PostgreSQL database password
 
-### Optional
+### Server Configuration
+- `NODE_ENV`: Environment (`development`, `production`, `test`)
+- `PORT`: API server port (default: 8080)
+- `HOST`: Server bind address (default: 127.0.0.1)
+
+### CORS Configuration
+- `CORS_ALLOW_ALL`: Allow all origins (default: false, recommended for production)
+- `FRONTEND_URL`: Frontend URL for CORS (e.g., `http://localhost:3000`)
+
+### Logging
+- `LOG_LEVEL`: Log level (`trace`, `debug`, `info`, `warn`, `error`, `fatal`, `panic`)
+
+### Optional Features
 - `ANTHROPIC_API_KEY`: For AI features (Phase 2+)
 - `TELEGRAM_BOT_TOKEN`: For Telegram bot integration
-- `PORT`: API server port (default: 8080)
+- `ENABLE_VECTOR_SEARCH`: Enable vector search (default: false)
+- `ENABLE_TELEGRAM_BOT`: Enable Telegram bot (default: false)
+- `ENABLE_CALENDAR_SYNC`: Enable calendar sync (default: false)
+
+**Frontend** (create `frontend/.env.local`):
+- `NEXT_PUBLIC_API_KEY`: Must match backend `API_KEY` for authentication
 
 ## Development Commands
 
@@ -166,34 +185,93 @@ Deploy PersonalCRM as a systemd service on Raspberry Pi for automatic startup on
 
 ### Quick Installation
 
-1. **Clone and configure**:
+1. **Generate production secrets**:
+   ```bash
+   # Generate SESSION_SECRET
+   openssl rand -base64 32
+
+   # Generate API_KEY
+   openssl rand -hex 32
+
+   # Generate POSTGRES_PASSWORD
+   openssl rand -base64 24
+   ```
+
+   **⚠️ Save these securely!** You'll need them in the next step.
+
+2. **Clone and configure**:
    ```bash
    git clone https://github.com/spengrah/PersonalCRM.git
    cd PersonalCRM
-   cp env.example .env
-   nano .env  # Edit with your settings
+   cp .env.example.production .env
+   nano .env  # Edit with your production settings
    ```
 
-   **Required settings**:
-   - `DATABASE_URL`: PostgreSQL connection string
-   - `SESSION_SECRET`: Generate with `openssl rand -base64 32`
-   - `POSTGRES_PASSWORD`: Set a secure password
+   **Required production settings**:
+   ```bash
+   # Database
+   DATABASE_URL=postgres://crm_user:<POSTGRES_PASSWORD>@localhost:5432/personal_crm?sslmode=disable
+   POSTGRES_PASSWORD=<your-generated-password>
 
-2. **Run installation script**:
+   # Server
+   NODE_ENV=production
+   PORT=8080
+
+   # Authentication
+   SESSION_SECRET=<your-generated-secret>
+   API_KEY=<your-generated-key>
+
+   # CORS
+   CORS_ALLOW_ALL=false
+   FRONTEND_URL=http://localhost:3000
+
+   # Logging
+   LOG_LEVEL=info
+   ```
+
+3. **Configure frontend**:
+   ```bash
+   # Create frontend environment file
+   echo "NEXT_PUBLIC_API_KEY=<same-api-key-as-backend>" > frontend/.env.local
+   ```
+
+4. **Run installation script**:
    ```bash
    sudo chmod +x infra/install-systemd.sh
    sudo infra/install-systemd.sh
    ```
 
-3. **Start services**:
+   This will:
+   - Create service user and directories
+   - Build backend and frontend
+   - Copy files to `/opt/personalcrm`
+   - Install systemd service files
+   - Set proper permissions
+
+5. **Start services**:
    ```bash
+   # Enable auto-start on boot
+   sudo systemctl enable personalcrm.target
+
+   # Start all services
    sudo systemctl start personalcrm.target
    ```
 
-4. **Verify**:
+6. **Verify deployment**:
    ```bash
+   # Check service status
    sudo systemctl status personalcrm.target
+
+   # Test health endpoint
+   curl http://localhost:8080/health
+   # Should return: {"status":"healthy",...}
+
+   # Test API authentication
+   curl -H "X-API-Key: <your-api-key>" http://localhost:8080/api/v1/contacts
+   # Should return: {"success":true,"data":[],...}
    ```
+
+**📖 For detailed first-time deployment instructions**, see [`docs/FIRST_TIME_PI_DEPLOYMENT.md`](docs/FIRST_TIME_PI_DEPLOYMENT.md)
 
 ### Service Management
 

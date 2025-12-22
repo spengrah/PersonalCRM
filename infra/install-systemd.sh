@@ -78,8 +78,8 @@ if [ -f "$PROJECT_DIR/.env" ]; then
     echo "✓ Environment file copied"
 else
     echo "Warning: .env file not found"
-    echo "Creating from env.example..."
-    cp "$PROJECT_DIR/env.example" "$INSTALL_DIR/.env"
+    echo "Creating from .env.example..."
+    cp "$PROJECT_DIR/.env.example" "$INSTALL_DIR/.env"
     echo "⚠  Please edit /opt/personalcrm/.env with your configuration"
 fi
 echo ""
