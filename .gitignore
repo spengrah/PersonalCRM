@@ -96,7 +96,7 @@ backend/*.so
 backend/*.dylib
 
 # Go modules
-go.sum
+# Note: go.sum should be committed for applications (not ignored)
 
 # Test coverage
 backend/coverage.out
