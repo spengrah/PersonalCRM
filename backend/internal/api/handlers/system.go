@@ -8,6 +8,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/gin-gonic/gin"
@@ -16,12 +17,14 @@ import (
 type SystemHandler struct {
 	contactRepo  *repository.ContactRepository
 	reminderRepo *repository.ReminderRepository
+	runtimeCfg   config.RuntimeConfig
 }
 
-func NewSystemHandler(contactRepo *repository.ContactRepository, reminderRepo *repository.ReminderRepository) *SystemHandler {
+func NewSystemHandler(contactRepo *repository.ContactRepository, reminderRepo *repository.ReminderRepository, runtimeCfg config.RuntimeConfig) *SystemHandler {
 	return &SystemHandler{
 		contactRepo:  contactRepo,
 		reminderRepo: reminderRepo,
+		runtimeCfg:   runtimeCfg,
 	}
 }
 
@@ -54,7 +57,7 @@ func (h *SystemHandler) GetSystemTime(c *gin.Context) {
 		CurrentTime:        currentTime,
 		IsAccelerated:      isAccelerated,
 		AccelerationFactor: accelerationFactor,
-		Environment:        os.Getenv("CRM_ENV"),
+		Environment:        h.runtimeCfg.CRMEnvironment,
 	}
 
 	api.SendSuccess(c, http.StatusOK, response, nil)

@@ -3,7 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
-	"os"
+
+	"personal-crm/backend/internal/config"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -14,14 +15,10 @@ type Database struct {
 	Queries *Queries
 }
 
-// NewDatabase creates a new database connection
-func NewDatabase(ctx context.Context) (*Database, error) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		return nil, fmt.Errorf("DATABASE_URL environment variable is required")
-	}
-
-	pool, err := pgxpool.New(ctx, databaseURL)
+// NewDatabase creates a new database connection using the provided configuration
+func NewDatabase(ctx context.Context, cfg config.DatabaseConfig) (*Database, error) {
+	// No validation needed - already validated in config.Load()
+	pool, err := pgxpool.New(ctx, cfg.URL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create connection pool: %w", err)
 	}

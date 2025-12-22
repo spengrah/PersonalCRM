@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"personal-crm/backend/internal/health"
 
@@ -35,7 +36,7 @@ func TestHealthEndpoint_Healthy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	mockDB := &mockDatabaseChecker{shouldError: false}
-	healthChecker := health.NewHealthChecker(mockDB)
+	healthChecker := health.NewHealthChecker(mockDB, 5*time.Second)
 
 	router := gin.New()
 	router.GET("/health", healthChecker.Handler)
@@ -87,7 +88,7 @@ func TestHealthEndpoint_Degraded(t *testing.T) {
 		shouldError: true,
 		err:         errors.New("connection refused"),
 	}
-	healthChecker := health.NewHealthChecker(mockDB)
+	healthChecker := health.NewHealthChecker(mockDB, 5*time.Second)
 
 	router := gin.New()
 	router.GET("/health", healthChecker.Handler)
@@ -120,7 +121,7 @@ func TestHealthEndpoint_NoDatabaseConfigured(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	// Pass nil database
-	healthChecker := health.NewHealthChecker(nil)
+	healthChecker := health.NewHealthChecker(nil, 5*time.Second)
 
 	router := gin.New()
 	router.GET("/health", healthChecker.Handler)
@@ -182,7 +183,7 @@ func TestHealthResponse_JSONFormat(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	mockDB := &mockDatabaseChecker{shouldError: false}
-	healthChecker := health.NewHealthChecker(mockDB)
+	healthChecker := health.NewHealthChecker(mockDB, 5*time.Second)
 
 	router := gin.New()
 	router.GET("/health", healthChecker.Handler)

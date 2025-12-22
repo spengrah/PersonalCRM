@@ -2,18 +2,19 @@ package logger
 
 import (
 	"bytes"
-	"os"
 	"strings"
 	"testing"
+
+	"personal-crm/backend/internal/config"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestGetLogLevel(t *testing.T) {
+func TestParseLogLevel(t *testing.T) {
 	tests := []struct {
 		name     string
-		envValue string
+		level    string
 		expected zerolog.Level
 	}{
 		{"empty defaults to info", "", zerolog.InfoLevel},
@@ -32,31 +33,20 @@ func TestGetLogLevel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Save original and restore after test
-			original := os.Getenv("LOG_LEVEL")
-			defer os.Setenv("LOG_LEVEL", original)
-
-			os.Setenv("LOG_LEVEL", tt.envValue)
-			got := getLogLevel()
+			got := parseLogLevel(tt.level)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
 }
 
 func TestInit(t *testing.T) {
-	// Save original env vars
-	originalLevel := os.Getenv("LOG_LEVEL")
-	originalEnv := os.Getenv("NODE_ENV")
-	defer func() {
-		os.Setenv("LOG_LEVEL", originalLevel)
-		os.Setenv("NODE_ENV", originalEnv)
-	}()
-
 	t.Run("development mode uses console writer", func(t *testing.T) {
-		os.Setenv("LOG_LEVEL", "debug")
-		os.Setenv("NODE_ENV", "development")
+		cfg := config.LoggerConfig{
+			Level:       "debug",
+			Environment: "development",
+		}
 
-		Init()
+		Init(cfg)
 
 		// Logger should be initialized
 		logger := Get()
@@ -64,10 +54,12 @@ func TestInit(t *testing.T) {
 	})
 
 	t.Run("production mode uses JSON", func(t *testing.T) {
-		os.Setenv("LOG_LEVEL", "info")
-		os.Setenv("NODE_ENV", "production")
+		cfg := config.LoggerConfig{
+			Level:       "info",
+			Environment: "production",
+		}
 
-		Init()
+		Init(cfg)
 
 		logger := Get()
 		assert.NotNil(t, logger)

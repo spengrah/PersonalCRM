@@ -3,6 +3,7 @@ package api
 import (
 	"time"
 
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
@@ -70,13 +71,24 @@ func LoggingMiddleware() gin.HandlerFunc {
 	}
 }
 
-// CORSMiddleware adds CORS headers
-func CORSMiddleware() gin.HandlerFunc {
+// CORSMiddleware adds CORS headers based on configuration
+func CORSMiddleware(cfg config.CORSConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
+		origin := "*"
+		if !cfg.AllowAll {
+			// Use configured frontend URL
+			origin = cfg.FrontendURL
+		}
+
+		c.Header("Access-Control-Allow-Origin", origin)
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Request-ID")
 		c.Header("Access-Control-Expose-Headers", "X-Request-ID")
+
+		// Handle credentials if not allowing all
+		if !cfg.AllowAll {
+			c.Header("Access-Control-Allow-Credentials", "true")
+		}
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
