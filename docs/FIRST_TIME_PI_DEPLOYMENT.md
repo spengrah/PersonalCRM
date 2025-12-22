@@ -112,7 +112,7 @@ API_KEY=<API_KEY>
 
 # CORS (localhost only for Tailscale deployment)
 CORS_ALLOW_ALL=false
-FRONTEND_URL=http://localhost:3000
+FRONTEND_URL=http://localhost:3001
 
 # Logging
 LOG_LEVEL=info
@@ -211,7 +211,7 @@ ssh pi@personalcrm.local
 ### 2.5 Install Go 1.23
 
 ```bash
-# Download Go 1.23 for ARM64
+# Download Go 1.23.x for ARM64 (check https://go.dev/dl/ for latest 1.23.x)
 cd ~
 wget https://go.dev/dl/go1.23.4.linux-arm64.tar.gz
 
@@ -241,7 +241,7 @@ sudo ln -s ~/.bun/bin/bun /usr/local/bin/bun
 
 # Verify installation
 bun --version
-# Should output: 1.x.x
+# Should output: 1.2.x or newer
 ```
 
 ### 2.7 Verify All Prerequisites
@@ -283,7 +283,7 @@ cd ~
 git clone https://github.com/spengrah/PersonalCRM.git
 cd PersonalCRM
 
-# Checkout latest main (ensure you have PR #28 merged)
+# Checkout latest main
 git checkout main
 git pull origin main
 ```
@@ -550,7 +550,7 @@ curl -i -H "X-API-Key: $API_KEY" http://localhost:8080/api/v1/contacts
 
 ```bash
 # Check frontend is serving
-curl -I http://localhost:3000
+curl -I http://localhost:3001
 
 # Expected: HTTP/1.1 200 OK
 ```
@@ -563,7 +563,7 @@ ping personalcrm.local
 # Note the IP address (e.g., 192.168.1.50)
 ```
 
-Open browser and navigate to: `http://192.168.1.50:3000`
+Open browser and navigate to: `http://192.168.1.50:3001`
 
 **Expected**: PersonalCRM login or home page loads
 
@@ -574,7 +574,7 @@ Open browser and navigate to: `http://192.168.1.50:3000`
 
 ### 5.4 Create Test Contact
 
-**In your browser** (at `http://192.168.1.50:3000`):
+**In your browser** (at `http://192.168.1.50:3001`):
 
 1. Navigate to Contacts page
 2. Click "Add Contact"
@@ -638,7 +638,7 @@ sudo tailscale up
 ping personalcrm
 
 # Access the application
-open http://personalcrm:3000
+open http://personalcrm:3001
 ```
 
 **Expected**: PersonalCRM loads via Tailscale (secure, encrypted connection)
@@ -654,7 +654,7 @@ If accessing via Tailscale hostname, you may want to update CORS settings:
 sudo nano /opt/personalcrm/.env
 
 # Update FRONTEND_URL to Tailscale hostname
-FRONTEND_URL=http://personalcrm:3000
+FRONTEND_URL=http://personalcrm:3001
 
 # Save and restart backend
 sudo systemctl restart personalcrm-backend.service
@@ -737,7 +737,7 @@ docker ps | grep postgres
 sudo journalctl -u personalcrm-database -n 50
 
 # Try connecting to database manually
-docker exec -it personalcrm-db psql -U crm_user -d personal_crm
+docker exec -it crm-postgres psql -U crm_user -d personal_crm
 ```
 
 **Solutions**:
@@ -760,7 +760,7 @@ docker exec -it personalcrm-db psql -U crm_user -d personal_crm
 2. Check CORS settings in `.env`:
    ```bash
    CORS_ALLOW_ALL=false
-   FRONTEND_URL=http://localhost:3000
+   FRONTEND_URL=http://localhost:3001
    ```
 3. If accessing via Tailscale, update FRONTEND_URL to Tailscale hostname
 4. Restart backend after CORS changes
@@ -773,7 +773,7 @@ docker exec -it personalcrm-db psql -U crm_user -d personal_crm
 ```bash
 # On Pi, check what address services bind to
 sudo netstat -tlnp | grep :8080
-sudo netstat -tlnp | grep :3000
+sudo netstat -tlnp | grep :3001
 ```
 
 **Solutions**:
@@ -795,7 +795,7 @@ sudo netstat -tlnp | grep :3000
 
    # If active, allow ports
    sudo ufw allow 8080
-   sudo ufw allow 3000
+   sudo ufw allow 3001
    ```
 
 3. **Use Tailscale** (recommended):
