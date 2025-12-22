@@ -24,15 +24,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/health"
 	"personal-crm/backend/internal/logger"
@@ -48,28 +49,29 @@ import (
 )
 
 func main() {
-	// Initialize structured logger
-	logger.Init()
+	// Load and validate configuration first (before logger)
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// Initialize structured logger with configuration
+	logger.Init(cfg.Logger)
+
+	logger.Info().
+		Str("environment", cfg.Logger.Environment).
+		Str("log_level", cfg.Logger.Level).
+		Msg("configuration loaded successfully")
 
 	// Run migrations before connecting to database
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		logger.Fatal().Msg("DATABASE_URL environment variable is required")
-	}
-
-	migrationsPath := os.Getenv("MIGRATIONS_PATH")
-	if migrationsPath == "" {
-		migrationsPath = "migrations"
-	}
-
 	logger.Info().Msg("running database migrations")
-	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+	if err := db.RunMigrations(cfg.Database.URL, cfg.Database.MigrationsPath); err != nil {
 		logger.Fatal().Err(err).Msg("failed to run migrations")
 	}
 
 	// Initialize database
 	ctx := context.Background()
-	database, err := db.NewDatabase(ctx)
+	database, err := db.NewDatabase(ctx, cfg.Database)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to connect to database")
 	}
@@ -88,7 +90,7 @@ func main() {
 	// Initialize handlers
 	contactHandler := handlers.NewContactHandler(contactRepo)
 	reminderHandler := handlers.NewReminderHandler(reminderService)
-	systemHandler := handlers.NewSystemHandler(contactRepo, reminderRepo)
+	systemHandler := handlers.NewSystemHandler(contactRepo, reminderRepo, cfg.Runtime)
 	timeEntryHandler := handlers.NewTimeEntryHandler(timeEntryRepo)
 
 	// Initialize and start scheduler
@@ -99,7 +101,7 @@ func main() {
 	defer cronScheduler.Stop()
 
 	// Set up Gin router
-	if os.Getenv("NODE_ENV") == "production" {
+	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
@@ -108,11 +110,11 @@ func main() {
 	// Add middleware
 	router.Use(api.RequestIDMiddleware())
 	router.Use(api.LoggingMiddleware())
-	router.Use(api.CORSMiddleware())
+	router.Use(api.CORSMiddleware(cfg.CORS))
 	router.Use(api.ErrorHandlerMiddleware())
 
 	// Health check endpoint
-	healthChecker := health.NewHealthChecker(database)
+	healthChecker := health.NewHealthChecker(database, cfg.Database.HealthTimeout)
 	router.GET("/health", healthChecker.Handler)
 
 	// API routes
@@ -168,13 +170,8 @@ func main() {
 	// Swagger documentation
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	// Start server (bind to 127.0.0.1; support dynamic port when PORT=0)
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	addr := "127.0.0.1:" + port
+	// Start server with configured bind address
+	addr := cfg.GetBindAddress()
 	// Use a listener so we can discover the selected port when PORT=0
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -198,10 +195,10 @@ func main() {
 	go func() {
 		logger.Info().
 			Int("port", selectedPort).
-			Str("addr", "127.0.0.1").
+			Str("addr", cfg.Server.Host).
 			Msg("starting server")
 		logger.Info().
-			Str("url", fmt.Sprintf("http://127.0.0.1:%d/swagger/index.html", selectedPort)).
+			Str("url", fmt.Sprintf("http://%s:%d/swagger/index.html", cfg.Server.Host, selectedPort)).
 			Msg("API documentation available")
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			logger.Fatal().Err(err).Msg("failed to start server")
@@ -214,8 +211,8 @@ func main() {
 	<-quit
 	logger.Info().Msg("shutting down server")
 
-	// Give outstanding requests a 30 second timeout to complete
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Give outstanding requests a configured timeout to complete
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {

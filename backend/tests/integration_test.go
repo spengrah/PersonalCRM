@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"testing"
 
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
@@ -77,8 +78,14 @@ func TestContactRepository_Integration(t *testing.T) {
 
 	ctx := context.Background()
 
+	// Get test config and override DATABASE_URL if set in environment
+	cfg := config.TestConfig()
+	if databaseURL != "" {
+		cfg.Database.URL = databaseURL
+	}
+
 	// Connect to database
-	database, err := db.NewDatabase(ctx)
+	database, err := db.NewDatabase(ctx, cfg.Database)
 	if err != nil {
 		t.Skipf("Could not connect to database: %v", err)
 	}

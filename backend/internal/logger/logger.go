@@ -6,21 +6,22 @@ import (
 	"strings"
 	"time"
 
+	"personal-crm/backend/internal/config"
+
 	"github.com/rs/zerolog"
 )
 
 // Global logger instance
 var log zerolog.Logger
 
-// Init initializes the global logger with the specified configuration.
-// It reads LOG_LEVEL from environment variable and defaults to "info".
+// Init initializes the global logger with the provided configuration.
 // Supported levels: trace, debug, info, warn, error, fatal, panic
-func Init() {
-	logLevel := getLogLevel()
+func Init(cfg config.LoggerConfig) {
+	logLevel := parseLogLevel(cfg.Level)
 
 	// Use console writer for development, JSON for production
 	var output io.Writer
-	if os.Getenv("NODE_ENV") == "production" {
+	if cfg.Environment == "production" {
 		output = os.Stdout
 	} else {
 		output = zerolog.ConsoleWriter{
@@ -37,11 +38,9 @@ func Init() {
 		Logger()
 }
 
-// getLogLevel parses LOG_LEVEL environment variable
-func getLogLevel() zerolog.Level {
-	levelStr := strings.ToLower(os.Getenv("LOG_LEVEL"))
-
-	switch levelStr {
+// parseLogLevel converts string log level to zerolog.Level
+func parseLogLevel(level string) zerolog.Level {
+	switch strings.ToLower(level) {
 	case "trace":
 		return zerolog.TraceLevel
 	case "debug":

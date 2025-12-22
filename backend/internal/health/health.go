@@ -26,13 +26,15 @@ type DatabaseChecker interface {
 // HealthChecker handles health check requests
 type HealthChecker struct {
 	db        DatabaseChecker
+	timeout   time.Duration
 	startTime time.Time
 }
 
-// NewHealthChecker creates a new health checker with database reference
-func NewHealthChecker(db DatabaseChecker) *HealthChecker {
+// NewHealthChecker creates a new health checker with database reference and timeout
+func NewHealthChecker(db DatabaseChecker, timeout time.Duration) *HealthChecker {
 	return &HealthChecker{
 		db:        db,
+		timeout:   timeout,
 		startTime: accelerated.GetCurrentTime(),
 	}
 }
@@ -70,7 +72,7 @@ type HealthResponse struct {
 
 // Handler handles the health check request
 func (h *HealthChecker) Handler(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), h.timeout)
 	defer cancel()
 
 	now := accelerated.GetCurrentTime()
