@@ -208,12 +208,15 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_AllFieldsMaxLength", func(t *testing.T) {
+		// Use unique email to avoid conflicts in CI
+		uniqueEmail := strings.Repeat("a", 235) + uuid.New().String()[:10] + "@test.com" // Total ~255 chars
+
 		requestBody := handlers.CreateContactRequest{
 			FullName:     strings.Repeat("a", 255),                         // Max 255
-			Email:        stringPtr(strings.Repeat("a", 245) + "@test.com"), // Max 255
-			Phone:        stringPtr(strings.Repeat("1", 50)),                // Max 50
-			Location:     stringPtr(strings.Repeat("a", 255)),               // Max 255
-			HowMet:       stringPtr(strings.Repeat("a", 500)),               // Max 500
+			Email:        stringPtr(uniqueEmail),                           // Max 255
+			Phone:        stringPtr(strings.Repeat("1", 50)),               // Max 50
+			Location:     stringPtr(strings.Repeat("a", 255)),              // Max 255
+			HowMet:       stringPtr(strings.Repeat("a", 500)),              // Max 500
 			ProfilePhoto: stringPtr("https://example.com/" + strings.Repeat("a", 470) + ".jpg"), // Max 500
 		}
 
@@ -225,7 +228,10 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		// This should succeed - all at max valid length
-		assert.Equal(t, http.StatusCreated, w.Code)
+		if !assert.Equal(t, http.StatusCreated, w.Code) {
+			// Log response body for debugging
+			t.Logf("Response body: %s", w.Body.String())
+		}
 
 		var response api.APIResponse
 		err := json.Unmarshal(w.Body.Bytes(), &response)
@@ -233,12 +239,14 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 
 		assert.True(t, response.Success)
 
-		// Cleanup
-		contactData := response.Data.(map[string]interface{})
-		contactID := contactData["id"].(string)
-		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
-		deleteW := httptest.NewRecorder()
-		router.ServeHTTP(deleteW, deleteReq)
+		// Cleanup only if successful
+		if response.Success && response.Data != nil {
+			contactData := response.Data.(map[string]interface{})
+			contactID := contactData["id"].(string)
+			deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
+			deleteW := httptest.NewRecorder()
+			router.ServeHTTP(deleteW, deleteReq)
+		}
 	})
 }
 
