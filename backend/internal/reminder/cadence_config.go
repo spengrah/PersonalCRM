@@ -48,7 +48,13 @@ func GetCadenceConfig() CadenceConfig {
 		}
 	default:
 		// Default to production for safety
-		return GetCadenceConfig() // Will hit production case
+		return CadenceConfig{
+			Weekly:    7 * 24 * time.Hour,   // 1 week
+			Monthly:   30 * 24 * time.Hour,  // ~1 month
+			Quarterly: 90 * 24 * time.Hour,  // ~3 months
+			Biannual:  180 * 24 * time.Hour, // ~6 months
+			Annual:    365 * 24 * time.Hour, // 1 year
+		}
 	}
 }
 
