@@ -96,13 +96,13 @@ gh issue develop 123 --name "feat/auto-migrations"
 
 **Branch naming convention (Conventional Commits style):**
 
-- `feat/issue-123-short-description` - New features (from "feature" issues)
-- `fix/issue-45-bug-description` - Bug fixes (from "bug" issues)
-- `refactor/issue-67-refactor-name` - Code refactoring (from "refactor" issues)
-- `docs/issue-89-doc-update` - Documentation only changes
-- `test/issue-12-add-tests` - Adding or updating tests
-- `chore/issue-34-deps-update` - Maintenance (dependencies, config, tooling)
-- `perf/issue-56-optimize-query` - Performance improvements
+- `feat/short-description` - New features (from "feature" issues)
+- `fix/bug-description` - Bug fixes (from "bug" issues)
+- `refactor/refactor-name` - Code refactoring (from "refactor" issues)
+- `docs/doc-update` - Documentation only changes
+- `test/add-tests` - Adding or updating tests
+- `chore/deps-update` - Maintenance (dependencies, config, tooling)
+- `perf/optimize-query` - Performance improvements
 
 **Issue type → Branch prefix mapping:**
 - Feature issue → `feat/`
