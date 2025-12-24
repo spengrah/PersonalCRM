@@ -154,6 +154,9 @@ func timeToPgTimestamptz(t *time.Time) pgtype.Timestamptz {
 func (r *ContactRepository) GetContact(ctx context.Context, id uuid.UUID) (*Contact, error) {
 	dbContact, err := r.queries.GetContact(ctx, uuidToPgUUID(id))
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
 		return nil, err
 	}
 
