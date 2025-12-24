@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/reminder"
 	"personal-crm/backend/internal/repository"
@@ -19,7 +19,10 @@ import (
 
 func setupReminderGenerationTest(t *testing.T) (*service.ReminderService, *repository.ContactRepository, *repository.ReminderRepository, func()) {
 	ctx := context.Background()
-	database, err := db.NewDatabase(ctx)
+	dbConfig := config.DatabaseConfig{
+		URL: os.Getenv("DATABASE_URL"),
+	}
+	database, err := db.NewDatabase(ctx, dbConfig)
 	if err != nil {
 		t.Fatalf("Failed to connect to test database: %v", err)
 	}
@@ -58,13 +61,13 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		now := time.Now()
 		lastContacted := now.AddDate(0, 0, -14) // 14 days ago (overdue for weekly)
 
-		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactParams{
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName:      "Weekly Test Contact",
 			Cadence:       strPtr("weekly"),
 			LastContacted: &lastContacted,
 		})
 		require.NoError(t, err)
-		defer contactRepo.DeleteContact(ctx, contact.ID)
+		defer contactRepo.HardDeleteContact(ctx, contact.ID)
 
 		// Generate reminders
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -86,7 +89,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		assert.Equal(t, 9, reminder.DueDate.Hour(), "Reminder should be set for 9 AM")
 
 		// Cleanup reminder
-		_, err = reminderRepo.DeleteReminder(ctx, reminder.ID)
+		err = reminderRepo.HardDeleteReminder(ctx, reminder.ID)
 		require.NoError(t, err)
 	})
 
@@ -95,13 +98,13 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		now := time.Now()
 		lastContacted := now.AddDate(0, 0, -3) // 3 days ago (not overdue for weekly)
 
-		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactParams{
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName:      "Not Overdue Contact",
 			Cadence:       strPtr("weekly"),
 			LastContacted: &lastContacted,
 		})
 		require.NoError(t, err)
-		defer contactRepo.DeleteContact(ctx, contact.ID)
+		defer contactRepo.HardDeleteContact(ctx, contact.ID)
 
 		// Generate reminders
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -118,13 +121,13 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		now := time.Now()
 		lastContacted := now.AddDate(0, 0, -30) // 30 days ago but no cadence
 
-		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactParams{
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName:      "No Cadence Contact",
 			Cadence:       nil, // No cadence set
 			LastContacted: &lastContacted,
 		})
 		require.NoError(t, err)
-		defer contactRepo.DeleteContact(ctx, contact.ID)
+		defer contactRepo.HardDeleteContact(ctx, contact.ID)
 
 		// Generate reminders
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -141,13 +144,13 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		now := time.Now()
 		lastContacted := now.AddDate(0, 0, -14) // 14 days ago (overdue for weekly)
 
-		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactParams{
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName:      "Idempotency Test Contact",
 			Cadence:       strPtr("weekly"),
 			LastContacted: &lastContacted,
 		})
 		require.NoError(t, err)
-		defer contactRepo.DeleteContact(ctx, contact.ID)
+		defer contactRepo.HardDeleteContact(ctx, contact.ID)
 
 		// Generate reminders first time
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -169,7 +172,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		assert.Equal(t, reminders1[0].ID, reminders2[0].ID, "Should be the same reminder")
 
 		// Cleanup
-		_, err = reminderRepo.DeleteReminder(ctx, reminders1[0].ID)
+		err = reminderRepo.HardDeleteReminder(ctx, reminders1[0].ID)
 		require.NoError(t, err)
 	})
 
@@ -194,7 +197,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		createdContacts := []repository.Contact{}
 		for _, tc := range contacts {
 			lastContacted := now.AddDate(0, 0, -tc.daysAgo)
-			contact, err := contactRepo.CreateContact(ctx, repository.CreateContactParams{
+			contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 				FullName:      tc.name,
 				Cadence:       &tc.cadence,
 				LastContacted: &lastContacted,
@@ -206,7 +209,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		// Cleanup contacts at the end
 		defer func() {
 			for _, contact := range createdContacts {
-				contactRepo.DeleteContact(ctx, contact.ID)
+				contactRepo.HardDeleteContact(ctx, contact.ID)
 			}
 		}()
 
@@ -224,7 +227,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 				if len(reminders) > 0 {
 					assert.Contains(t, reminders[0].Title, contacts[i].cadence)
 					// Cleanup
-					reminderRepo.DeleteReminder(ctx, reminders[0].ID)
+					reminderRepo.HardDeleteReminder(ctx, reminders[0].ID)
 				}
 			}
 		}
@@ -241,13 +244,13 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		// 15 minutes ago should be overdue in staging (where weekly = 10 min)
 		lastContacted := now.Add(-15 * time.Minute)
 
-		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactParams{
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName:      "Staging Env Test",
 			Cadence:       strPtr("weekly"),
 			LastContacted: &lastContacted,
 		})
 		require.NoError(t, err)
-		defer contactRepo.DeleteContact(ctx, contact.ID)
+		defer contactRepo.HardDeleteContact(ctx, contact.ID)
 
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
 		require.NoError(t, err)
@@ -257,7 +260,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		assert.Len(t, reminders, 1, "Should create reminder using staging cadence")
 
 		if len(reminders) > 0 {
-			reminderRepo.DeleteReminder(ctx, reminders[0].ID)
+			reminderRepo.HardDeleteReminder(ctx, reminders[0].ID)
 		}
 	})
 }
@@ -281,13 +284,13 @@ func TestReminderGeneration_TitleAndDescription(t *testing.T) {
 	now := time.Now()
 	lastContacted := now.AddDate(0, 0, -14) // 14 days ago
 
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactParams{
+	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 		FullName:      "Title Test Contact",
 		Cadence:       strPtr("weekly"),
 		LastContacted: &lastContacted,
 	})
 	require.NoError(t, err)
-	defer contactRepo.DeleteContact(ctx, contact.ID)
+	defer contactRepo.HardDeleteContact(ctx, contact.ID)
 
 	err = reminderService.GenerateRemindersForOverdueContacts(ctx)
 	require.NoError(t, err)
@@ -297,7 +300,7 @@ func TestReminderGeneration_TitleAndDescription(t *testing.T) {
 	require.Len(t, reminders, 1)
 
 	reminder := reminders[0]
-	defer reminderRepo.DeleteReminder(ctx, reminder.ID)
+	defer reminderRepo.HardDeleteReminder(ctx, reminder.ID)
 
 	t.Run("VerifyReminderTitle", func(t *testing.T) {
 		expectedTitle := "Follow up with Title Test Contact (weekly cadence)"
@@ -356,13 +359,13 @@ func TestReminderGeneration_InvalidCadence(t *testing.T) {
 
 	// Manually insert a contact with invalid cadence (bypassing API validation)
 	// This tests robustness of the generation function
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactParams{
+	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 		FullName:      "Invalid Cadence Contact",
 		Cadence:       strPtr("weekly"), // Valid for creation
 		LastContacted: &lastContacted,
 	})
 	require.NoError(t, err)
-	defer contactRepo.DeleteContact(ctx, contact.ID)
+	defer contactRepo.HardDeleteContact(ctx, contact.ID)
 
 	// For this test, we'll just verify it handles the valid cadence correctly
 	err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -372,55 +375,12 @@ func TestReminderGeneration_InvalidCadence(t *testing.T) {
 	require.NoError(t, err)
 
 	if len(reminders) > 0 {
-		reminderRepo.DeleteReminder(ctx, reminders[0].ID)
+		reminderRepo.HardDeleteReminder(ctx, reminders[0].ID)
 	}
 }
 
-func TestReminderGeneration_WithAcceleratedTime(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	t.Setenv("CRM_ENV", "production")
-
-	reminderService, contactRepo, reminderRepo, cleanup := setupReminderGenerationTest(t)
-	defer cleanup()
-
-	ctx := context.Background()
-
-	// Set a specific time for testing
-	testTime := time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
-	accelerated.SetCurrentTime(testTime)
-	defer accelerated.ResetTime()
-
-	// Create contact with last contact 14 days before test time
-	lastContacted := testTime.AddDate(0, 0, -14)
-
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactParams{
-		FullName:      "Accelerated Time Test",
-		Cadence:       strPtr("weekly"),
-		LastContacted: &lastContacted,
-	})
-	require.NoError(t, err)
-	defer contactRepo.DeleteContact(ctx, contact.ID)
-
-	// Note: The service uses time.Now() internally, not accelerated.GetCurrentTime()
-	// This test verifies the service works with regular time
-	err = reminderService.GenerateRemindersForOverdueContacts(ctx)
-	require.NoError(t, err)
-
-	reminders, err := reminderRepo.ListRemindersByContact(ctx, contact.ID)
-	require.NoError(t, err)
-
-	if len(reminders) > 0 {
-		reminderRepo.DeleteReminder(ctx, reminders[0].ID)
-	}
-}
+// Note: Time mocking functions (SetCurrentTime/ResetTime) don't exist in accelerated package
+// Tests use time.Now() which is sufficient for integration testing
 
 // Helper to create scheduler for testing
 func TestScheduler_Integration(t *testing.T) {
@@ -436,7 +396,10 @@ func TestScheduler_Integration(t *testing.T) {
 	t.Setenv("CRM_ENV", "production")
 
 	ctx := context.Background()
-	database, err := db.NewDatabase(ctx)
+	dbConfig := config.DatabaseConfig{
+		URL: os.Getenv("DATABASE_URL"),
+	}
+	database, err := db.NewDatabase(ctx, dbConfig)
 	require.NoError(t, err)
 	defer database.Close()
 

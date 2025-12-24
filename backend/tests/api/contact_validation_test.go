@@ -12,6 +12,7 @@ import (
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
@@ -25,7 +26,10 @@ func setupContactValidationTestRouter() (*gin.Engine, func()) {
 	gin.SetMode(gin.TestMode)
 
 	ctx := context.Background()
-	database, err := db.NewDatabase(ctx)
+	dbConfig := config.DatabaseConfig{
+		URL: os.Getenv("DATABASE_URL"),
+	}
+	database, err := db.NewDatabase(ctx, dbConfig)
 	if err != nil {
 		panic("Failed to connect to test database: " + err.Error())
 	}
@@ -35,7 +39,8 @@ func setupContactValidationTestRouter() (*gin.Engine, func()) {
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
-	router.Use(api.CORSMiddleware())
+	corsConfig := config.CORSConfig{AllowAll: true}
+	router.Use(api.CORSMiddleware(corsConfig))
 
 	v1 := router.Group("/api/v1")
 	contacts := v1.Group("/contacts")
