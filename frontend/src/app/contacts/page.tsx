@@ -3,7 +3,18 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Plus, Search, MoreHorizontal, Mail, Phone, MapPin, CheckCircle, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
+import {
+  Plus,
+  Search,
+  MoreHorizontal,
+  Mail,
+  Phone,
+  MapPin,
+  CheckCircle,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+} from 'lucide-react'
 import { useContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
 import { Button } from '@/components/ui/button'
 import { Navigation } from '@/components/layout/navigation'
@@ -12,13 +23,13 @@ import type { Contact, ContactListParams } from '@/types/contact'
 
 type SortField = 'name' | 'location' | 'birthday' | 'last_contacted'
 
-function ContactsTable({ 
-  contacts, 
+function ContactsTable({
+  contacts,
   loading,
   sortBy,
   sortOrder,
-  onSort
-}: { 
+  onSort,
+}: {
   contacts: Contact[]
   loading: boolean
   sortBy?: SortField
@@ -28,14 +39,16 @@ function ContactsTable({
   const router = useRouter()
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const updateLastContacted = useUpdateLastContacted()
-  
+
   const getSortIcon = (field: SortField) => {
     if (sortBy !== field) {
       return <ArrowUpDown className="w-4 h-4 ml-1 text-gray-400" />
     }
-    return sortOrder === 'asc' 
-      ? <ArrowUp className="w-4 h-4 ml-1 text-blue-600" />
-      : <ArrowDown className="w-4 h-4 ml-1 text-blue-600" />
+    return sortOrder === 'asc' ? (
+      <ArrowUp className="w-4 h-4 ml-1 text-blue-600" />
+    ) : (
+      <ArrowDown className="w-4 h-4 ml-1 text-blue-600" />
+    )
   }
 
   const handleRowClick = (contactId: string) => {
@@ -61,7 +74,7 @@ function ContactsTable({
     const handleClickOutside = () => {
       setOpenDropdown(null)
     }
-    
+
     if (openDropdown) {
       document.addEventListener('click', handleClickOutside)
       return () => document.removeEventListener('click', handleClickOutside)
@@ -83,7 +96,12 @@ function ContactsTable({
       <div className="text-center py-12">
         <div className="mx-auto h-12 w-12 text-gray-400">
           <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
+            />
           </svg>
         </div>
         <h3 className="mt-2 text-sm font-medium text-gray-900">No contacts</h3>
@@ -105,7 +123,7 @@ function ContactsTable({
       <table className="min-w-full divide-y divide-gray-300">
         <thead className="bg-gray-50">
           <tr>
-            <th 
+            <th
               className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               onClick={() => onSort('name')}
             >
@@ -117,7 +135,7 @@ function ContactsTable({
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Contact Info
             </th>
-            <th 
+            <th
               className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               onClick={() => onSort('location')}
             >
@@ -126,7 +144,7 @@ function ContactsTable({
                 {getSortIcon('location')}
               </div>
             </th>
-            <th 
+            <th
               className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               onClick={() => onSort('birthday')}
             >
@@ -135,7 +153,7 @@ function ContactsTable({
                 {getSortIcon('birthday')}
               </div>
             </th>
-            <th 
+            <th
               className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               onClick={() => onSort('last_contacted')}
             >
@@ -150,9 +168,9 @@ function ContactsTable({
           </tr>
         </thead>
         <tbody className="bg-white divide-y divide-gray-200">
-          {contacts.map((contact) => (
-            <tr 
-              key={contact.id} 
+          {contacts.map(contact => (
+            <tr
+              key={contact.id}
               className="hover:bg-gray-50 cursor-pointer"
               onClick={() => handleRowClick(contact.id)}
             >
@@ -167,17 +185,12 @@ function ContactsTable({
                   </div>
                   <div className="ml-4">
                     <div className="text-sm font-medium text-gray-900">
-                      <Link
-                        href={`/contacts/${contact.id}`}
-                        className="hover:text-blue-600"
-                      >
+                      <Link href={`/contacts/${contact.id}`} className="hover:text-blue-600">
                         {contact.full_name}
                       </Link>
                     </div>
                     {contact.cadence && (
-                      <div className="text-sm text-gray-700">
-                        Cadence: {contact.cadence}
-                      </div>
+                      <div className="text-sm text-gray-700">Cadence: {contact.cadence}</div>
                     )}
                   </div>
                 </div>
@@ -211,34 +224,30 @@ function ContactsTable({
                 )}
               </td>
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                {contact.birthday 
-                  ? formatDateOnly(contact.birthday)
-                  : '-'
-                }
+                {contact.birthday ? formatDateOnly(contact.birthday) : '-'}
               </td>
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                {contact.last_contacted 
+                {contact.last_contacted
                   ? new Date(contact.last_contacted).toLocaleDateString()
-                  : 'Never'
-                }
+                  : 'Never'}
               </td>
               <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                 <div className="relative" onClick={handleDropdownClick}>
-                  <button 
+                  <button
                     className="text-gray-400 hover:text-gray-500"
-                    onClick={(e) => {
+                    onClick={e => {
                       e.stopPropagation()
                       setOpenDropdown(openDropdown === contact.id ? null : contact.id)
                     }}
                   >
                     <MoreHorizontal className="w-5 h-5" />
                   </button>
-                  
+
                   {openDropdown === contact.id && (
                     <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-10 ring-1 ring-black ring-opacity-5">
                       <div className="py-1">
                         <button
-                          onClick={(e) => handleMarkAsContacted(e, contact.id)}
+                          onClick={e => handleMarkAsContacted(e, contact.id)}
                           className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
                           disabled={updateLastContacted.isPending}
                         >
@@ -298,7 +307,7 @@ export default function ContactsPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
-      
+
       <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="md:flex md:items-center md:justify-between mb-6">
@@ -331,7 +340,7 @@ export default function ContactsPage() {
                 type="text"
                 placeholder="Search contacts..."
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={e => setSearchTerm(e.target.value)}
                 className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 text-gray-900 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
@@ -344,13 +353,15 @@ export default function ContactsPage() {
             <div className="flex">
               <div className="flex-shrink-0">
                 <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  <path
+                    fillRule="evenodd"
+                    d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
+                    clipRule="evenodd"
+                  />
                 </svg>
               </div>
               <div className="ml-3">
-                <h3 className="text-sm font-medium text-red-800">
-                  Error loading contacts
-                </h3>
+                <h3 className="text-sm font-medium text-red-800">Error loading contacts</h3>
                 <p className="mt-1 text-sm text-red-700">
                   {error instanceof Error ? error.message : 'An unexpected error occurred'}
                 </p>
@@ -361,8 +372,8 @@ export default function ContactsPage() {
 
         {/* Contacts Table */}
         <div className="bg-white shadow overflow-hidden sm:rounded-md">
-          <ContactsTable 
-            contacts={data?.contacts || []} 
+          <ContactsTable
+            contacts={data?.contacts || []}
             loading={isLoading}
             sortBy={params.sort}
             sortOrder={params.order}
@@ -400,4 +411,3 @@ export default function ContactsPage() {
     </div>
   )
 }
-

@@ -620,6 +620,26 @@ npx playwright test
 
 See [TEST_GUIDE.md](docs/TEST_GUIDE.md) for detailed testing information.
 
+## Code Quality
+
+This project uses automated git hooks to maintain code quality:
+
+```bash
+# Install git hooks (one-time setup)
+./scripts/install-git-hooks.sh
+# Or use the setup command:
+make setup
+
+# Manual linting
+make lint        # Check for issues
+make lint-fix    # Auto-fix some issues
+```
+
+**What's enforced:**
+- Pre-commit: Go formatting (`gofmt`) + frontend formatting (`prettier`)
+- Pre-push: Comprehensive linting (`golangci-lint` + `ESLint` + `Prettier`)
+- CI: Final verification before merge
+
 ## Smoke Testing
 
 **🚀 Idiot-Proof Smoke Test**

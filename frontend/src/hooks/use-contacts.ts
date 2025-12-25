@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { contactsApi } from '@/lib/contacts-api'
-import type { 
-  CreateContactRequest, 
-  UpdateContactRequest, 
+import type {
+  CreateContactRequest,
+  UpdateContactRequest,
   ContactListParams,
-  OverdueContact
+  OverdueContact,
 } from '@/types/contact'
 
 // Query keys
@@ -53,7 +53,7 @@ export function useOverdueContacts() {
     staleTime: 1000 * 60 * 5, // 5 minutes - match query client default
     refetchInterval: 1000 * 60 * 5, // Refetch every 5 minutes
     retry: 3, // Explicit retry count
-    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000), // Exponential backoff
+    retryDelay: attemptIndex => Math.min(1000 * 2 ** attemptIndex, 30000), // Exponential backoff
   })
 }
 
@@ -77,12 +77,9 @@ export function useUpdateContact() {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: UpdateContactRequest }) =>
       contactsApi.updateContact(id, data),
-    onSuccess: (updatedContact) => {
+    onSuccess: updatedContact => {
       // Update the contact in cache
-      queryClient.setQueryData(
-        contactKeys.detail(updatedContact.id),
-        updatedContact
-      )
+      queryClient.setQueryData(contactKeys.detail(updatedContact.id), updatedContact)
       // Invalidate lists to refresh
       queryClient.invalidateQueries({ queryKey: contactKeys.lists() })
     },
@@ -108,12 +105,9 @@ export function useUpdateLastContacted() {
 
   return useMutation({
     mutationFn: (id: string) => contactsApi.updateLastContacted(id),
-    onSuccess: (updatedContact) => {
+    onSuccess: updatedContact => {
       // Update the contact in cache
-      queryClient.setQueryData(
-        contactKeys.detail(updatedContact.id),
-        updatedContact
-      )
+      queryClient.setQueryData(contactKeys.detail(updatedContact.id), updatedContact)
       // Invalidate all related queries to refresh
       queryClient.invalidateQueries({ queryKey: contactKeys.lists() })
       queryClient.invalidateQueries({ queryKey: contactKeys.overdue() })

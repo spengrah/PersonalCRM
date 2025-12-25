@@ -37,16 +37,13 @@ class ApiClient {
     this.baseUrl = baseUrl
   }
 
-  private async request<T>(
-    endpoint: string,
-    options: RequestInit = {}
-  ): Promise<T> {
+  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`
-    
+
     // Add timeout to prevent hanging requests
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout
-    
+
     const config: RequestInit = {
       headers: {
         'Content-Type': 'application/json',
@@ -60,11 +57,11 @@ class ApiClient {
     try {
       const response = await fetch(url, config)
       clearTimeout(timeoutId) // Clear timeout on successful response
-      
+
       if (!response.ok) {
         let errorMessage = `HTTP ${response.status}: ${response.statusText}`
         let errorCode = 'UNKNOWN_ERROR'
-        
+
         try {
           const errorData: ApiResponse = await response.json()
           if (errorData.error) {
@@ -74,7 +71,7 @@ class ApiClient {
         } catch {
           // If we can't parse the error response, use the default message
         }
-        
+
         throw new ApiError(errorMessage, response.status, errorCode)
       }
 
@@ -84,24 +81,24 @@ class ApiClient {
       }
 
       const data: ApiResponse<T> = await response.json()
-      
+
       if (!data.success && data.error) {
         throw new ApiError(data.error.message, 400, data.error.code)
       }
-      
+
       return data.data as T
     } catch (error) {
       clearTimeout(timeoutId) // Clear timeout on error
-      
+
       if (error instanceof ApiError) {
         throw error
       }
-      
+
       // Handle timeout errors specifically
       if (error instanceof Error && error.name === 'AbortError') {
         throw new ApiError('Request timed out', 408, 'TIMEOUT_ERROR')
       }
-      
+
       // Network or other errors
       throw new ApiError(
         error instanceof Error ? error.message : 'An unexpected error occurred',
@@ -121,7 +118,7 @@ class ApiClient {
         }
       })
     }
-    
+
     return this.request<T>(url.pathname + url.search)
   }
 

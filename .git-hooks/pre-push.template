@@ -1,0 +1,37 @@
+#!/bin/bash
+# Pre-push hook: Run linting before pushing
+
+set -e
+
+echo "Pre-push: Running linters..."
+
+# Lint backend
+echo "  → Linting backend (golangci-lint)..."
+if ! make lint; then
+  echo ""
+  echo "❌ Backend linting failed."
+  echo ""
+  echo "To auto-fix: make lint-fix"
+  echo "To bypass: git push --no-verify"
+  echo ""
+  exit 1
+fi
+echo "  ✓ Backend linting passed"
+
+# Lint frontend
+echo "  → Linting frontend (ESLint + Prettier)..."
+cd frontend
+if ! bun run lint; then
+  echo ""
+  echo "❌ Frontend linting failed."
+  echo ""
+  echo "To auto-fix: cd frontend && bun run format"
+  echo "To bypass: git push --no-verify"
+  echo ""
+  exit 1
+fi
+cd ..
+echo "  ✓ Frontend linting passed"
+
+echo "✓ Pre-push linting complete"
+exit 0

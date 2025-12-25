@@ -1,10 +1,10 @@
 import { apiClient } from './api-client'
-import type { 
-  Contact, 
-  CreateContactRequest, 
-  UpdateContactRequest, 
+import type {
+  Contact,
+  CreateContactRequest,
+  UpdateContactRequest,
   ContactListParams,
-  OverdueContact
+  OverdueContact,
 } from '@/types/contact'
 
 export interface ContactsListResponse {
@@ -25,22 +25,25 @@ export const contactsApi = {
       ...(params.sort && { sort: params.sort }),
       ...(params.order && { order: params.order }),
     }
-    
+
     // We need to make a raw request to get both data and meta
-    const url = new URL('/api/v1/contacts', process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080')
+    const url = new URL(
+      '/api/v1/contacts',
+      process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080'
+    )
     Object.entries(queryParams).forEach(([key, value]) => {
       if (value !== undefined) {
         url.searchParams.append(key, String(value))
       }
     })
-    
+
     const response = await fetch(url.toString())
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
     }
-    
+
     const result = await response.json()
-    
+
     return {
       contacts: result.data || [],
       total: result.meta?.pagination?.total || 0,
@@ -80,4 +83,3 @@ export const contactsApi = {
     return apiClient.get<OverdueContact[]>('/api/v1/contacts/overdue')
   },
 }
-

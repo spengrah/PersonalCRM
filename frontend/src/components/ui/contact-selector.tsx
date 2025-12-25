@@ -23,9 +23,9 @@ export function ContactSelector({
   contacts,
   value,
   onChange,
-  placeholder = "Search contacts...",
+  placeholder = 'Search contacts...',
   disabled = false,
-  error
+  error,
 }: ContactSelectorProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -35,10 +35,13 @@ export function ContactSelector({
 
   const selectedContact = contacts.find(contact => contact.id === value)
 
-  const filteredContacts = contacts.filter(contact =>
-    contact.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (contact.email && contact.email.toLowerCase().includes(searchTerm.toLowerCase()))
-  ).slice(0, 10) // Limit to 10 results for performance
+  const filteredContacts = contacts
+    .filter(
+      contact =>
+        contact.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (contact.email && contact.email.toLowerCase().includes(searchTerm.toLowerCase()))
+    )
+    .slice(0, 10) // Limit to 10 results for performance
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -85,13 +88,11 @@ export function ContactSelector({
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault()
-        setHighlightedIndex(prev => 
-          prev < filteredContacts.length - 1 ? prev + 1 : prev
-        )
+        setHighlightedIndex(prev => (prev < filteredContacts.length - 1 ? prev + 1 : prev))
         break
       case 'ArrowUp':
         e.preventDefault()
-        setHighlightedIndex(prev => prev > 0 ? prev - 1 : -1)
+        setHighlightedIndex(prev => (prev > 0 ? prev - 1 : -1))
         break
       case 'Enter':
         e.preventDefault()
@@ -111,23 +112,23 @@ export function ContactSelector({
     <div ref={containerRef} className="relative">
       <div
         className={clsx(
-          "relative w-full cursor-pointer rounded-md border bg-white py-2 pl-3 pr-10 text-left shadow-sm",
-          "focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500",
-          disabled && "cursor-not-allowed bg-gray-50",
-          error && "border-red-300 focus-within:border-red-500 focus-within:ring-red-500",
-          !error && !disabled && "border-gray-300"
+          'relative w-full cursor-pointer rounded-md border bg-white py-2 pl-3 pr-10 text-left shadow-sm',
+          'focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500',
+          disabled && 'cursor-not-allowed bg-gray-50',
+          error && 'border-red-300 focus-within:border-red-500 focus-within:ring-red-500',
+          !error && !disabled && 'border-gray-300'
         )}
         onClick={handleInputClick}
       >
         <div className="flex items-center">
           <Search className="mr-2 h-4 w-4 text-gray-400" />
-          
+
           {isOpen ? (
             <input
               ref={inputRef}
               type="text"
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={e => setSearchTerm(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={placeholder}
               className="flex-1 border-none bg-transparent text-gray-900 placeholder-gray-500 focus:outline-none"
@@ -162,8 +163,8 @@ export function ContactSelector({
           {/* No contact option */}
           <div
             className={clsx(
-              "relative cursor-pointer select-none py-2 pl-10 pr-4",
-              highlightedIndex === -1 ? "bg-blue-600 text-white" : "text-gray-900 hover:bg-gray-100"
+              'relative cursor-pointer select-none py-2 pl-10 pr-4',
+              highlightedIndex === -1 ? 'bg-blue-600 text-white' : 'text-gray-900 hover:bg-gray-100'
             )}
             onClick={() => {
               onChange(undefined)
@@ -172,9 +173,7 @@ export function ContactSelector({
               setHighlightedIndex(-1)
             }}
           >
-            <span className="block truncate font-normal">
-              No contact (standalone reminder)
-            </span>
+            <span className="block truncate font-normal">No contact (standalone reminder)</span>
           </div>
 
           {filteredContacts.length === 0 && searchTerm ? (
@@ -186,19 +185,21 @@ export function ContactSelector({
               <div
                 key={contact.id}
                 className={clsx(
-                  "relative cursor-pointer select-none py-2 pl-10 pr-4",
-                  highlightedIndex === index ? "bg-blue-600 text-white" : "text-gray-900 hover:bg-gray-100"
+                  'relative cursor-pointer select-none py-2 pl-10 pr-4',
+                  highlightedIndex === index
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-900 hover:bg-gray-100'
                 )}
                 onClick={() => handleContactSelect(contact)}
               >
-                <span className="block truncate font-normal">
-                  {contact.full_name}
-                </span>
+                <span className="block truncate font-normal">{contact.full_name}</span>
                 {contact.email && (
-                  <span className={clsx(
-                    "block truncate text-sm",
-                    highlightedIndex === index ? "text-blue-200" : "text-gray-500"
-                  )}>
+                  <span
+                    className={clsx(
+                      'block truncate text-sm',
+                      highlightedIndex === index ? 'text-blue-200' : 'text-gray-500'
+                    )}
+                  >
                     {contact.email}
                   </span>
                 )}
@@ -213,9 +214,7 @@ export function ContactSelector({
         </div>
       )}
 
-      {error && (
-        <p className="mt-1 text-sm text-red-600">{error}</p>
-      )}
+      {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
     </div>
   )
 }

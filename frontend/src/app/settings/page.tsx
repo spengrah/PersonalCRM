@@ -30,10 +30,10 @@ export default function SettingsPage() {
       const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      
+
       const timestamp = new Date().toISOString().split('T')[0]
       link.download = `personal-crm-backup-${timestamp}.json`
-      
+
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
@@ -71,7 +71,9 @@ export default function SettingsPage() {
       }
 
       const result = await response.json()
-      alert(`Import validation successful! Found ${result.data?.metadata?.contacts_count || 0} contacts and ${result.data?.metadata?.reminders_count || 0} reminders.`)
+      alert(
+        `Import validation successful! Found ${result.data?.metadata?.contacts_count || 0} contacts and ${result.data?.metadata?.reminders_count || 0} reminders.`
+      )
     } catch (error) {
       console.error('Import error:', error)
       alert('Import failed. Please check the file format and try again.')
@@ -91,7 +93,7 @@ export default function SettingsPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
-      
+
       <div className="max-w-4xl mx-auto py-6 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="mb-8">
@@ -99,9 +101,7 @@ export default function SettingsPage() {
             <Settings className="w-8 h-8 text-blue-600" />
             <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
           </div>
-          <p className="text-lg text-gray-600">
-            Manage your Personal CRM configuration and data
-          </p>
+          <p className="text-lg text-gray-600">Manage your Personal CRM configuration and data</p>
         </div>
 
         <div className="space-y-6">
@@ -111,23 +111,27 @@ export default function SettingsPage() {
               <Clock className="w-6 h-6 text-blue-600" />
               <h2 className="text-xl font-semibold text-gray-900">Time Acceleration Status</h2>
             </div>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="p-4 bg-gray-50 rounded-lg">
                 <p className="text-sm text-gray-600 mb-1">Environment</p>
-                <p className="text-lg font-semibold text-gray-900 capitalize">{environment || 'Production'}</p>
+                <p className="text-lg font-semibold text-gray-900 capitalize">
+                  {environment || 'Production'}
+                </p>
               </div>
-              
+
               <div className="p-4 bg-gray-50 rounded-lg">
                 <p className="text-sm text-gray-600 mb-1">Acceleration</p>
                 <p className="text-lg font-semibold text-gray-900">
                   {isAccelerated ? `${accelerationFactor}x` : 'Normal (1x)'}
                 </p>
               </div>
-              
+
               <div className="p-4 bg-gray-50 rounded-lg">
                 <p className="text-sm text-gray-600 mb-1">Status</p>
-                <p className={`text-lg font-semibold ${isAccelerated ? 'text-blue-600' : 'text-gray-900'}`}>
+                <p
+                  className={`text-lg font-semibold ${isAccelerated ? 'text-blue-600' : 'text-gray-900'}`}
+                >
                   {isAccelerated ? 'Testing Mode' : 'Production Mode'}
                 </p>
               </div>
@@ -136,7 +140,7 @@ export default function SettingsPage() {
             {isAccelerated && (
               <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                 <p className="text-sm text-blue-800">
-                  <strong>Testing Mode Active:</strong> Time is accelerated for testing purposes. 
+                  <strong>Testing Mode Active:</strong> Time is accelerated for testing purposes.
                   Birthday calculations and contact reminders are running faster than normal.
                 </p>
               </div>
@@ -154,9 +158,10 @@ export default function SettingsPage() {
             <div className="mb-8">
               <h3 className="text-lg font-medium text-gray-900 mb-3">Export Data</h3>
               <p className="text-gray-600 mb-4">
-                Download a complete backup of your CRM data including contacts, reminders, notes, and settings.
+                Download a complete backup of your CRM data including contacts, reminders, notes,
+                and settings.
               </p>
-              
+
               <Button
                 onClick={handleExportData}
                 loading={isExporting}
@@ -165,7 +170,7 @@ export default function SettingsPage() {
                 <Download className="w-4 h-4" />
                 <span>{isExporting ? 'Exporting...' : 'Download Backup'}</span>
               </Button>
-              
+
               <div className="mt-3 text-sm text-gray-500">
                 <p>• Backup includes all contacts, reminders, interactions, and notes</p>
                 <p>• File format: JSON (human-readable)</p>
@@ -177,7 +182,8 @@ export default function SettingsPage() {
             <div className="border-t pt-6">
               <h3 className="text-lg font-medium text-gray-900 mb-3">Import Data</h3>
               <p className="text-gray-600 mb-4">
-                Restore your CRM data from a previous backup. This will validate the backup file format.
+                Restore your CRM data from a previous backup. This will validate the backup file
+                format.
               </p>
 
               <div className="space-y-4">
@@ -220,7 +226,8 @@ export default function SettingsPage() {
                   <div>
                     <p className="text-sm font-medium text-amber-800">Note:</p>
                     <p className="mt-1 text-sm text-amber-700">
-                      Currently in validation mode. The import will validate your backup file format and show a summary of the data without making changes.
+                      Currently in validation mode. The import will validate your backup file format
+                      and show a summary of the data without making changes.
                     </p>
                   </div>
                 </div>
@@ -234,26 +241,30 @@ export default function SettingsPage() {
               <Shield className="w-6 h-6 text-purple-600" />
               <h2 className="text-xl font-semibold text-gray-900">System Information</h2>
             </div>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
               <div>
                 <p className="text-gray-600">Version</p>
                 <p className="font-medium text-gray-900">Personal CRM v1.0</p>
               </div>
-              
+
               <div>
                 <p className="text-gray-600">Last Updated</p>
                 <p className="font-medium text-gray-900">{new Date().toLocaleDateString()}</p>
               </div>
-              
+
               <div>
                 <p className="text-gray-600">Environment</p>
-                <p className="font-medium text-gray-900">{environment === 'testing' ? 'Development' : 'Production'}</p>
+                <p className="font-medium text-gray-900">
+                  {environment === 'testing' ? 'Development' : 'Production'}
+                </p>
               </div>
-              
+
               <div>
                 <p className="text-gray-600">Features</p>
-                <p className="font-medium text-gray-900">Contacts • Reminders • Birthdays • Time Acceleration</p>
+                <p className="font-medium text-gray-900">
+                  Contacts • Reminders • Birthdays • Time Acceleration
+                </p>
               </div>
             </div>
           </section>
@@ -262,4 +273,3 @@ export default function SettingsPage() {
     </div>
   )
 }
-

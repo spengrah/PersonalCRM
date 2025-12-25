@@ -67,7 +67,7 @@ describe('formatDateOnly', () => {
     const result = formatDateOnly('2024-01-15', {
       year: 'numeric',
       month: 'long',
-      day: '2-digit'
+      day: '2-digit',
     })
     expect(result).toMatch(/January/)
     expect(result).toMatch(/15/)

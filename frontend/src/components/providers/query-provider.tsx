@@ -16,4 +16,3 @@ export function QueryProvider({ children }: QueryProviderProps) {
     </QueryClientProvider>
   )
 }
-

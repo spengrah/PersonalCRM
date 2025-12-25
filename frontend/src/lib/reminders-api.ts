@@ -1,10 +1,10 @@
 import { apiClient } from './api-client'
-import type { 
-  Reminder, 
+import type {
+  Reminder,
   DueReminder,
-  CreateReminderRequest, 
+  CreateReminderRequest,
   ReminderListParams,
-  ReminderStats
+  ReminderStats,
 } from '@/types/reminder'
 
 export interface RemindersListResponse {
@@ -23,7 +23,7 @@ export const remindersApi = {
       limit: params.limit || 20,
       ...(params.due_today !== undefined && { due_today: params.due_today }),
     }
-    
+
     return apiClient.get<DueReminder[]>('/api/v1/reminders', queryParams)
   },
 

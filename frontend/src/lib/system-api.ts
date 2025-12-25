@@ -10,7 +10,7 @@ export const systemApi = {
       throw new Error(`HTTP error! status: ${response.status}`)
     }
     const data = await response.json()
-    
+
     // Handle both wrapped ({"success": true, "data": {...}}) and direct formats
     return data.data || data
   },
@@ -20,4 +20,3 @@ export const systemApi = {
     return apiClient.post<void>('/api/v1/system/time/acceleration', settings)
   },
 }
-

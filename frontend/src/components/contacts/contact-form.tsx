@@ -5,7 +5,11 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { contactSchema, transformContactFormData, type ContactFormData } from '@/lib/validations/contact'
+import {
+  contactSchema,
+  transformContactFormData,
+  type ContactFormData,
+} from '@/lib/validations/contact'
 import type { Contact } from '@/types/contact'
 
 interface ContactFormProps {
@@ -25,7 +29,12 @@ const cadenceOptions = [
   { value: 'annual', label: 'Annual' },
 ]
 
-export function ContactForm({ contact, onSubmit, loading, submitText = 'Save Contact' }: ContactFormProps) {
+export function ContactForm({
+  contact,
+  onSubmit,
+  loading,
+  submitText = 'Save Contact',
+}: ContactFormProps) {
   const {
     register,
     handleSubmit,
@@ -33,23 +42,25 @@ export function ContactForm({ contact, onSubmit, loading, submitText = 'Save Con
     reset,
   } = useForm<ContactFormData>({
     resolver: zodResolver(contactSchema),
-    defaultValues: contact ? {
-      full_name: contact.full_name,
-      email: contact.email || '',
-      phone: contact.phone || '',
-      location: contact.location || '',
-      birthday: contact.birthday ? contact.birthday.split('T')[0] : '', // Format date for input
-      notes: contact.notes || '',
-      cadence: contact.cadence || '',
-    } : {
-      full_name: '',
-      email: '',
-      phone: '',
-      location: '',
-      birthday: '',
-      notes: '',
-      cadence: '',
-    },
+    defaultValues: contact
+      ? {
+          full_name: contact.full_name,
+          email: contact.email || '',
+          phone: contact.phone || '',
+          location: contact.location || '',
+          birthday: contact.birthday ? contact.birthday.split('T')[0] : '', // Format date for input
+          notes: contact.notes || '',
+          cadence: contact.cadence || '',
+        }
+      : {
+          full_name: '',
+          email: '',
+          phone: '',
+          location: '',
+          birthday: '',
+          notes: '',
+          cadence: '',
+        },
   })
 
   const handleFormSubmit = async (data: ContactFormData) => {
@@ -130,18 +141,14 @@ export function ContactForm({ contact, onSubmit, loading, submitText = 'Save Con
             className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-gray-900 disabled:bg-gray-50 disabled:text-gray-500"
             disabled={isLoading}
           >
-            {cadenceOptions.map((option) => (
+            {cadenceOptions.map(option => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
             ))}
           </select>
-          {errors.cadence && (
-            <p className="text-sm text-red-600">{errors.cadence.message}</p>
-          )}
-          <p className="text-sm text-gray-500">
-            How often you want to be reminded to reach out
-          </p>
+          {errors.cadence && <p className="text-sm text-red-600">{errors.cadence.message}</p>}
+          <p className="text-sm text-gray-500">How often you want to be reminded to reach out</p>
         </div>
 
         {/* Notes */}
@@ -166,15 +173,10 @@ export function ContactForm({ contact, onSubmit, loading, submitText = 'Save Con
         >
           Cancel
         </Button>
-        <Button
-          type="submit"
-          loading={isLoading}
-          disabled={isLoading}
-        >
+        <Button type="submit" loading={isLoading} disabled={isLoading}>
           {submitText}
         </Button>
       </div>
     </form>
   )
 }
-

@@ -84,12 +84,9 @@ export function useUpdateTimeEntry() {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: UpdateTimeEntryRequest }) =>
       updateTimeEntry(id, data),
-    onSuccess: (updatedEntry) => {
+    onSuccess: updatedEntry => {
       // Update the time entry in cache
-      queryClient.setQueryData(
-        timeEntryKeys.detail(updatedEntry.id),
-        updatedEntry
-      )
+      queryClient.setQueryData(timeEntryKeys.detail(updatedEntry.id), updatedEntry)
       // Invalidate lists to refresh
       queryClient.invalidateQueries({ queryKey: timeEntryKeys.lists() })
       queryClient.invalidateQueries({ queryKey: timeEntryKeys.running() })
@@ -111,4 +108,3 @@ export function useDeleteTimeEntry() {
     },
   })
 }
-
