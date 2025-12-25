@@ -131,37 +131,43 @@ func TestContactRepository_Integration(t *testing.T) {
 	})
 
 	t.Run("ListContacts", func(t *testing.T) {
-		// Get initial count
-		initialCount, err := repo.CountContacts(ctx)
-		require.NoError(t, err)
-
-		// Create test contacts
+		// Create test contacts with unique emails to avoid conflicts
 		contact1, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Test User 1",
-			Email:    stringPtr("test1@example.com"),
+			FullName: "Integration List Test User 1",
+			Email:    stringPtr("integration_list_test1@example.com"),
 		})
 		require.NoError(t, err)
+		require.NotNil(t, contact1)
 
 		contact2, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Test User 2",
-			Email:    stringPtr("test2@example.com"),
+			FullName: "Integration List Test User 2",
+			Email:    stringPtr("integration_list_test2@example.com"),
 		})
 		require.NoError(t, err)
+		require.NotNil(t, contact2)
 
 		// List contacts
 		contacts, err := repo.ListContacts(ctx, repository.ListContactsParams{
-			Limit:  10,
+			Limit:  100,
 			Offset: 0,
 		})
 		require.NoError(t, err)
 
-		// Verify count increased
-		finalCount, err := repo.CountContacts(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, initialCount+2, finalCount)
-
-		// Verify we have at least our test contacts
-		assert.GreaterOrEqual(t, len(contacts), 2)
+		// Verify our test contacts are in the list
+		foundContact1 := false
+		foundContact2 := false
+		for _, c := range contacts {
+			if c.ID == contact1.ID {
+				foundContact1 = true
+				assert.Equal(t, "Integration List Test User 1", c.FullName)
+			}
+			if c.ID == contact2.ID {
+				foundContact2 = true
+				assert.Equal(t, "Integration List Test User 2", c.FullName)
+			}
+		}
+		assert.True(t, foundContact1, "Contact 1 should be in the list")
+		assert.True(t, foundContact2, "Contact 2 should be in the list")
 
 		// Clean up
 		err = repo.HardDeleteContact(ctx, contact1.ID)

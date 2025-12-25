@@ -8,6 +8,7 @@ import (
 // CadenceConfig manages different cadence mappings for testing vs production
 type CadenceConfig struct {
 	Weekly    time.Duration
+	Biweekly  time.Duration
 	Monthly   time.Duration
 	Quarterly time.Duration
 	Biannual  time.Duration
@@ -23,6 +24,7 @@ func GetCadenceConfig() CadenceConfig {
 		// Ultra-fast testing: validate weeks in minutes
 		return CadenceConfig{
 			Weekly:    2 * time.Minute,  // Test weekly cadence every 2 minutes
+			Biweekly:  4 * time.Minute,  // Test biweekly cadence every 4 minutes
 			Monthly:   10 * time.Minute, // Test monthly cadence every 10 minutes
 			Quarterly: 30 * time.Minute, // Test quarterly every 30 minutes
 			Biannual:  1 * time.Hour,    // Test biannual every hour
@@ -32,6 +34,7 @@ func GetCadenceConfig() CadenceConfig {
 		// Fast staging: validate months in hours
 		return CadenceConfig{
 			Weekly:    10 * time.Minute, // 10 minutes = 1 week (test week in 10min)
+			Biweekly:  20 * time.Minute, // 20 minutes = 2 weeks
 			Monthly:   1 * time.Hour,    // 1 hour = 1 month (test month in 1hr)
 			Quarterly: 3 * time.Hour,    // 3 hours = 1 quarter (test quarter in 3hrs)
 			Biannual:  6 * time.Hour,    // 6 hours = 6 months
@@ -41,6 +44,7 @@ func GetCadenceConfig() CadenceConfig {
 		// Production: real-world cadences
 		return CadenceConfig{
 			Weekly:    7 * 24 * time.Hour,   // 1 week
+			Biweekly:  14 * 24 * time.Hour,  // 2 weeks
 			Monthly:   30 * 24 * time.Hour,  // ~1 month
 			Quarterly: 90 * 24 * time.Hour,  // ~3 months
 			Biannual:  180 * 24 * time.Hour, // ~6 months
@@ -48,7 +52,14 @@ func GetCadenceConfig() CadenceConfig {
 		}
 	default:
 		// Default to production for safety
-		return GetCadenceConfig() // Will hit production case
+		return CadenceConfig{
+			Weekly:    7 * 24 * time.Hour,   // 1 week
+			Biweekly:  14 * 24 * time.Hour,  // 2 weeks
+			Monthly:   30 * 24 * time.Hour,  // ~1 month
+			Quarterly: 90 * 24 * time.Hour,  // ~3 months
+			Biannual:  180 * 24 * time.Hour, // ~6 months
+			Annual:    365 * 24 * time.Hour, // 1 year
+		}
 	}
 }
 
@@ -59,6 +70,8 @@ func GetCadenceDuration(cadenceType CadenceType) time.Duration {
 	switch cadenceType {
 	case CadenceWeekly:
 		return config.Weekly
+	case CadenceBiweekly:
+		return config.Biweekly
 	case CadenceMonthly:
 		return config.Monthly
 	case CadenceQuarterly:
