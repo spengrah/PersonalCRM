@@ -1,4 +1,5 @@
 # golangci-lint configuration for Personal CRM
+version: "2"
 
 run:
   timeout: 5m
@@ -8,8 +9,6 @@ linters:
     - forbidigo  # Forbid specific function calls
     - govet      # Go vet
     - errcheck   # Check error handling
-    - gofmt      # Go formatting
-    - goimports  # Imports formatting
 
 linters-settings:
   forbidigo:

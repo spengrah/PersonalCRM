@@ -224,5 +224,5 @@ func main() {
 	logger.Info().Msg("server exited")
 
 	// Print the selected port on graceful exit for supervising processes
-	fmt.Printf("PORT=%d\n", selectedPort)
+	fmt.Printf("PORT=%d\n", selectedPort) //nolint:forbidigo // Intentional stdout output for supervisor
 }
