@@ -102,7 +102,7 @@ func convertDbDueReminder(dbReminder db.ListDueRemindersRow) DueReminder {
 
 	if dbReminder.ContactID.Valid {
 		contactID := uuid.UUID(dbReminder.ContactID.Bytes)
-		due.Reminder.ContactID = &contactID
+		due.ContactID = &contactID
 	}
 
 	if dbReminder.ContactName.Valid {
@@ -110,11 +110,11 @@ func convertDbDueReminder(dbReminder db.ListDueRemindersRow) DueReminder {
 	}
 
 	if dbReminder.Description.Valid {
-		due.Reminder.Description = &dbReminder.Description.String
+		due.Description = &dbReminder.Description.String
 	}
 
 	if dbReminder.DueDate.Valid {
-		due.Reminder.DueDate = dbReminder.DueDate.Time
+		due.DueDate = dbReminder.DueDate.Time
 	}
 
 	if dbReminder.CompletedAt.Valid {
