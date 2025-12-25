@@ -76,10 +76,10 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() {
-		if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
-			t.Errorf("Failed to cleanup contact: %v", err)
-		}
-	}()
+			if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+				t.Errorf("Failed to cleanup contact: %v", err)
+			}
+		}()
 
 		// Generate reminders
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -117,10 +117,10 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() {
-		if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
-			t.Errorf("Failed to cleanup contact: %v", err)
-		}
-	}()
+			if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+				t.Errorf("Failed to cleanup contact: %v", err)
+			}
+		}()
 
 		// Generate reminders
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -144,10 +144,10 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() {
-		if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
-			t.Errorf("Failed to cleanup contact: %v", err)
-		}
-	}()
+			if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+				t.Errorf("Failed to cleanup contact: %v", err)
+			}
+		}()
 
 		// Generate reminders
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -171,10 +171,10 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() {
-		if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
-			t.Errorf("Failed to cleanup contact: %v", err)
-		}
-	}()
+			if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+				t.Errorf("Failed to cleanup contact: %v", err)
+			}
+		}()
 
 		// Generate reminders first time
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -233,7 +233,9 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		// Cleanup contacts at the end
 		defer func() {
 			for _, contact := range createdContacts {
-				contactRepo.HardDeleteContact(ctx, contact.ID)
+				if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+					t.Errorf("Failed to cleanup contact: %v", err)
+				}
 			}
 		}()
 
@@ -252,8 +254,8 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 					assert.Contains(t, reminders[0].Title, contacts[i].cadence)
 					// Cleanup
 					if err := reminderRepo.HardDeleteReminder(ctx, reminders[0].ID); err != nil {
-				t.Errorf("Failed to delete reminder: %v", err)
-			}
+						t.Errorf("Failed to delete reminder: %v", err)
+					}
 				}
 			}
 		}
@@ -277,10 +279,10 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() {
-		if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
-			t.Errorf("Failed to cleanup contact: %v", err)
-		}
-	}()
+			if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+				t.Errorf("Failed to cleanup contact: %v", err)
+			}
+		}()
 
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
 		require.NoError(t, err)
@@ -419,7 +421,9 @@ func TestReminderGeneration_InvalidCadence(t *testing.T) {
 	require.NoError(t, err)
 
 	if len(reminders) > 0 {
-		reminderRepo.HardDeleteReminder(ctx, reminders[0].ID)
+		if err := reminderRepo.HardDeleteReminder(ctx, reminders[0].ID); err != nil {
+			t.Errorf("Failed to delete reminder: %v", err)
+		}
 	}
 }
 

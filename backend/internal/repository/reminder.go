@@ -118,11 +118,11 @@ func convertDbDueReminder(dbReminder db.ListDueRemindersRow) DueReminder {
 	}
 
 	if dbReminder.CompletedAt.Valid {
-		due.Reminder.CompletedAt = &dbReminder.CompletedAt.Time
+		due.CompletedAt = &dbReminder.CompletedAt.Time
 	}
 
 	if dbReminder.DeletedAt.Valid {
-		due.Reminder.DeletedAt = &dbReminder.DeletedAt.Time
+		due.DeletedAt = &dbReminder.DeletedAt.Time
 	}
 
 	if dbReminder.ContactEmail.Valid {
