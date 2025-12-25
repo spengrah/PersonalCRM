@@ -10,9 +10,12 @@ ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
 
 -- name: SearchNotes :many
-SELECT * FROM note 
-WHERE body ILIKE '%' || $1 || '%'
-ORDER BY created_at DESC
+SELECT * FROM note
+WHERE to_tsvector('english', body) @@ plainto_tsquery('english', $1)
+ORDER BY ts_rank(
+  to_tsvector('english', body),
+  plainto_tsquery('english', $1)
+) DESC, created_at DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CreateNote :one

@@ -182,23 +182,24 @@ func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*
 }
 
 const SearchContacts = `-- name: SearchContacts :many
-SELECT id, full_name, email, phone, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact 
-WHERE deleted_at IS NULL 
-  AND (
-    full_name ILIKE '%' || $1 || '%' 
-    OR email ILIKE '%' || $1 || '%'
-  )
+SELECT id, full_name, email, phone, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact
+WHERE deleted_at IS NULL
+  AND to_tsvector('english', full_name || ' ' || COALESCE(email, '')) @@ plainto_tsquery('english', $1)
+ORDER BY ts_rank(
+  to_tsvector('english', full_name || ' ' || COALESCE(email, '')),
+  plainto_tsquery('english', $1)
+) DESC
 LIMIT $2 OFFSET $3
 `
 
 type SearchContactsParams struct {
-	Column1 pgtype.Text `json:"column_1"`
-	Limit   int32       `json:"limit"`
-	Offset  int32       `json:"offset"`
+	PlaintoTsquery string `json:"plainto_tsquery"`
+	Limit          int32  `json:"limit"`
+	Offset         int32  `json:"offset"`
 }
 
 func (q *Queries) SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error) {
-	rows, err := q.db.Query(ctx, SearchContacts, arg.Column1, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, SearchContacts, arg.PlaintoTsquery, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
