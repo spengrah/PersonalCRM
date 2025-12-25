@@ -1,8 +1,8 @@
 # golangci-lint configuration for Personal CRM
+version: "2"
+
 run:
   timeout: 5m
-  tests: false  # Don't lint test files by default
-  modules-download-mode: readonly
 
 issues:
   exclude-dirs:
