@@ -86,6 +86,10 @@ jobs:
         working-directory: frontend
         run: bun run lint || echo "⚠️  Linting issues found - will be fixed in follow-up PR"
 
+      - name: Run frontend tests
+        working-directory: frontend
+        run: bun run test
+
       - name: Build frontend
         working-directory: frontend
         env:

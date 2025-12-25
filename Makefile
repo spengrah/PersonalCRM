@@ -20,7 +20,7 @@ help:
 	@echo "Development:"
 	@echo "  dev         - Start development servers (frontend and backend)"
 	@echo "  build       - Build both frontend and backend"
-	@echo "  test        - Run all tests"
+	@echo "  test        - Run all tests (backend + frontend)"
 	@echo "  clean       - Clean build artifacts"
 	@echo ""
 	@echo "Docker:"
@@ -111,25 +111,23 @@ build:
 	@cd frontend && bun run build
 
 # Tests
-test: test-unit test-integration
+test: test-unit test-integration test-frontend
 
 test-unit:
-	@echo "Running unit tests..."
+	@echo "Running backend unit tests..."
 	@cd backend && go test ./tests/... -v -short
 
 test-integration:
-	@echo "Running integration tests..."
+	@echo "Running backend integration tests..."
 	@cd backend && go test ./tests/... -v
+
+test-frontend:
+	@echo "Running frontend tests..."
+	@cd frontend && bun run test
 
 test-api:
 	@echo "Running API tests..."
 	@cd backend && go test ./tests/... -v
-
-test-all:
-	@echo "Running all backend tests..."
-	@cd backend && go test ./tests/... -v
-	@echo "Running frontend tests..."
-	@cd frontend && bun test
 
 # CI/CD targets
 ci-build-backend:
@@ -142,7 +140,7 @@ ci-build-frontend:
 
 ci-build: ci-build-backend ci-build-frontend
 
-ci-test: test-unit test-integration
+ci-test: test-unit test-integration test-frontend
 	@echo "✅ All CI tests passed"
 
 # API specific commands
