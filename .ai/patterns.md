@@ -571,6 +571,228 @@ func TestContactRepository_Integration(t *testing.T) {
 }
 ```
 
+### Frontend Unit Test Pattern (Vitest)
+
+**Testing utilities:**
+```typescript
+import { describe, it, expect } from 'vitest'
+
+describe('utilityFunction', () => {
+  it('handles valid input', () => {
+    const result = utilityFunction('valid input')
+    expect(result).toBe(expectedValue)
+  })
+
+  it('handles null input', () => {
+    const result = utilityFunction(null)
+    expect(result).toBeNull()
+  })
+
+  it('handles edge cases', () => {
+    const result = utilityFunction('')
+    expect(result).toBe('')
+  })
+})
+```
+
+**Testing API clients with mocks:**
+```typescript
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { apiClient, ApiError } from '../api-client'
+
+describe('ApiClient', () => {
+  beforeEach(() => {
+    global.fetch = vi.fn()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('makes successful GET request', async () => {
+    const mockData = { id: '123', name: 'Test' }
+    ;(global.fetch as any).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, data: mockData })
+    })
+
+    const result = await apiClient.get('/api/test')
+    expect(result).toEqual(mockData)
+  })
+
+  it('handles errors', async () => {
+    ;(global.fetch as any).mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: async () => ({
+        error: { code: 'NOT_FOUND', message: 'Not found' }
+      })
+    })
+
+    try {
+      await apiClient.get('/api/test')
+      expect.fail('Should have thrown')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApiError)
+      expect((error as ApiError).status).toBe(404)
+    }
+  })
+})
+```
+
+**Testing Zod schemas:**
+```typescript
+import { describe, it, expect } from 'vitest'
+import { contactSchema } from '../validations/contact'
+
+describe('contactSchema', () => {
+  it('validates correct data', () => {
+    const validData = {
+      full_name: 'John Doe',
+      email: 'john@example.com'
+    }
+
+    const result = contactSchema.safeParse(validData)
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects invalid data', () => {
+    const invalidData = {
+      full_name: '', // Required field empty
+      email: 'not-an-email'
+    }
+
+    const result = contactSchema.safeParse(invalidData)
+    expect(result.success).toBe(false)
+  })
+})
+```
+
+### Frontend Component Test Pattern (React Testing Library)
+
+**Basic component rendering:**
+```typescript
+import { describe, it, expect } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { MyComponent } from '../my-component'
+
+describe('MyComponent', () => {
+  it('renders with props', () => {
+    render(<MyComponent title="Test Title" />)
+    expect(screen.getByText('Test Title')).toBeInTheDocument()
+  })
+
+  it('renders children', () => {
+    render(
+      <MyComponent>
+        <div>Child content</div>
+      </MyComponent>
+    )
+    expect(screen.getByText('Child content')).toBeInTheDocument()
+  })
+})
+```
+
+**Testing user interactions:**
+```typescript
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { Button } from '../button'
+
+describe('Button', () => {
+  it('calls onClick handler when clicked', async () => {
+    const user = userEvent.setup()
+    const handleClick = vi.fn()
+
+    render(<Button onClick={handleClick}>Click me</Button>)
+
+    const button = screen.getByRole('button', { name: /click me/i })
+    await user.click(button)
+
+    expect(handleClick).toHaveBeenCalledOnce()
+  })
+
+  it('is disabled when disabled prop is true', () => {
+    render(<Button disabled>Disabled</Button>)
+
+    const button = screen.getByRole('button')
+    expect(button).toBeDisabled()
+  })
+})
+```
+
+**Testing error boundaries:**
+```typescript
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { ErrorBoundary } from '../error-boundary'
+
+// Helper component that throws errors
+const ThrowError = ({ shouldThrow }: { shouldThrow: boolean }) => {
+  if (shouldThrow) {
+    throw new Error('Test error')
+  }
+  return <div>No error</div>
+}
+
+describe('ErrorBoundary', () => {
+  const originalError = console.error
+  beforeEach(() => {
+    console.error = vi.fn() // Suppress error logs in tests
+  })
+
+  afterEach(() => {
+    console.error = originalError
+  })
+
+  it('renders children when no error', () => {
+    render(
+      <ErrorBoundary>
+        <div>Content</div>
+      </ErrorBoundary>
+    )
+    expect(screen.getByText('Content')).toBeInTheDocument()
+  })
+
+  it('displays error UI when error occurs', () => {
+    render(
+      <ErrorBoundary>
+        <ThrowError shouldThrow={true} />
+      </ErrorBoundary>
+    )
+    expect(screen.getByText(/something went wrong/i)).toBeInTheDocument()
+  })
+})
+```
+
+**Mocking environment variables:**
+```typescript
+describe('MyComponent', () => {
+  it('behaves differently in development', () => {
+    const originalEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'development'
+
+    // Test development behavior
+
+    process.env.NODE_ENV = originalEnv
+  })
+})
+```
+
+**Running tests:**
+```bash
+# Run all tests
+bun run test
+
+# Run tests in watch mode (development)
+bun run test:watch
+
+# Generate coverage report
+bun run test:coverage
+```
+
 ---
 
 ## SQL Patterns
