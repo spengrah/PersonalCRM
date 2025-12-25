@@ -4,11 +4,14 @@ version: "2"
 run:
   timeout: 5m
 
+formatters:
+  enable:
+    - gofmt      # Go formatting
+    - goimports  # Imports formatting
+
 linters:
   enable:
     - forbidigo  # Forbid specific function calls
-    - gofmt      # Go formatting
-    - goimports  # Imports formatting
     - govet      # Go vet
     - errcheck   # Check error handling
   settings:
