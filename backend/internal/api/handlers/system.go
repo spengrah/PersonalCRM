@@ -78,11 +78,26 @@ func (h *SystemHandler) SetTimeAcceleration(c *gin.Context) {
 	}
 
 	// Set environment variables (note: this only affects current process)
-	os.Setenv("TIME_ACCELERATION", strconv.Itoa(settings.Factor))
+	if err := os.Setenv("TIME_ACCELERATION", strconv.Itoa(settings.Factor)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to set TIME_ACCELERATION environment variable",
+		})
+		return
+	}
 	if settings.Factor > 1 {
-		os.Setenv("TIME_BASE", strconv.FormatInt(time.Now().Unix(), 10)) //nolint:forbidigo // Need wall-clock base for acceleration
+		if err := os.Setenv("TIME_BASE", strconv.FormatInt(time.Now().Unix(), 10)); err != nil { //nolint:forbidigo // Need wall-clock base for acceleration
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to set TIME_BASE environment variable",
+			})
+			return
+		}
 	} else {
-		os.Unsetenv("TIME_BASE")
+		if err := os.Unsetenv("TIME_BASE"); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to unset TIME_BASE environment variable",
+			})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{

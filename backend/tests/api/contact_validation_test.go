@@ -300,7 +300,8 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code)
 
 	var createResponse api.APIResponse
-	json.Unmarshal(w.Body.Bytes(), &createResponse)
+	err := json.Unmarshal(w.Body.Bytes(), &createResponse)
+	require.NoError(t, err)
 	contactData := createResponse.Data.(map[string]interface{})
 	contactID := contactData["id"].(string)
 
@@ -526,7 +527,8 @@ func TestContactAPI_EmailUniqueness(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code)
 
 	var createResponse api.APIResponse
-	json.Unmarshal(w.Body.Bytes(), &createResponse)
+	err := json.Unmarshal(w.Body.Bytes(), &createResponse)
+	require.NoError(t, err)
 	contactData := createResponse.Data.(map[string]interface{})
 	contactID := contactData["id"].(string)
 
