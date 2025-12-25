@@ -66,7 +66,7 @@ func TestContactValidation_Email(t *testing.T) {
 		{"Missing domain", strPtr("john@"), true},
 		{"Valid with subdomain", strPtr("john@mail.example.com"), false},
 		{"Valid with + sign", strPtr("john+test@example.com"), false},
-		{"Max length 255", strPtr(strings.Repeat("a", 244) + "@test.com"), false},   // 244 + 1 + 8 + 1 + 3 = 257, actually let's be more careful
+		{"Max length 255", strPtr(strings.Repeat("a", 244) + "@test.com"), false},    // 244 + 1 + 8 + 1 + 3 = 257, actually let's be more careful
 		{"Exceeds max length", strPtr(strings.Repeat("a", 247) + "@test.com"), true}, // Should exceed 255
 	}
 
@@ -231,7 +231,7 @@ func TestContactValidation_ProfilePhoto(t *testing.T) {
 		{"Nil photo valid", nil, false},
 		{"Invalid URL - no scheme", strPtr("example.com/photo.jpg"), true},
 		{"Invalid URL - malformed", strPtr("not a url"), true},
-		{"Max length 500", strPtr("https://example.com/" + strings.Repeat("a", 476) + ".jpg"), false},   // 19 + 476 + 4 = 499
+		{"Max length 500", strPtr("https://example.com/" + strings.Repeat("a", 476) + ".jpg"), false},    // 19 + 476 + 4 = 499
 		{"Exceeds max length", strPtr("https://example.com/" + strings.Repeat("a", 482) + ".jpg"), true}, // 19 + 482 + 4 = 505
 	}
 
