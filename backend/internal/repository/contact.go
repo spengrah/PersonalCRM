@@ -143,13 +143,6 @@ func timeToPgDate(t *time.Time) pgtype.Date {
 	return pgtype.Date{Time: *t, Valid: true}
 }
 
-func timeToPgTimestamptz(t *time.Time) pgtype.Timestamptz {
-	if t == nil {
-		return pgtype.Timestamptz{Valid: false}
-	}
-	return pgtype.Timestamptz{Time: *t, Valid: true}
-}
-
 // GetContact retrieves a contact by ID
 func (r *ContactRepository) GetContact(ctx context.Context, id uuid.UUID) (*Contact, error) {
 	dbContact, err := r.queries.GetContact(ctx, uuidToPgUUID(id))
