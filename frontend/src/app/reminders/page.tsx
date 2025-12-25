@@ -2,11 +2,25 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { Plus, Search, CheckCircle, AlertCircle, User, Calendar, MoreHorizontal, X } from 'lucide-react'
+import {
+  Plus,
+  Search,
+  CheckCircle,
+  AlertCircle,
+  User,
+  Calendar,
+  MoreHorizontal,
+  X,
+} from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
 import { ReminderForm } from '@/components/reminders/reminder-form'
-import { useReminders, useCompleteReminder, useDeleteReminder, useCreateReminder } from '@/hooks/use-reminders'
+import {
+  useReminders,
+  useCompleteReminder,
+  useDeleteReminder,
+  useCreateReminder,
+} from '@/hooks/use-reminders'
 import type { DueReminder, ReminderListParams, CreateReminderRequest } from '@/types/reminder'
 import { clsx } from 'clsx'
 
@@ -49,7 +63,9 @@ function RemindersTable({ reminders, loading }: { reminders: DueReminder[]; load
           <CheckCircle className="w-12 h-12" />
         </div>
         <h3 className="mt-2 text-sm font-medium text-gray-900">No reminders</h3>
-        <p className="mt-1 text-sm text-gray-500">You&apos;re all caught up! No reminders to show.</p>
+        <p className="mt-1 text-sm text-gray-500">
+          You&apos;re all caught up! No reminders to show.
+        </p>
       </div>
     )
   }
@@ -77,29 +93,27 @@ function RemindersTable({ reminders, loading }: { reminders: DueReminder[]; load
           </tr>
         </thead>
         <tbody className="bg-white divide-y divide-gray-200">
-          {reminders.map((reminder) => {
+          {reminders.map(reminder => {
             const isOverdue = new Date(reminder.due_date) < new Date() && !reminder.completed
-            
+
             return (
               <tr key={reminder.id} className="hover:bg-gray-50">
                 <td className="px-6 py-4">
                   <div className="flex items-start space-x-3">
-                    <div className={clsx(
-                      'w-2 h-2 rounded-full mt-2 flex-shrink-0',
-                      reminder.completed
-                        ? 'bg-green-500'
-                        : isOverdue
-                        ? 'bg-red-500'
-                        : 'bg-yellow-500'
-                    )} />
+                    <div
+                      className={clsx(
+                        'w-2 h-2 rounded-full mt-2 flex-shrink-0',
+                        reminder.completed
+                          ? 'bg-green-500'
+                          : isOverdue
+                            ? 'bg-red-500'
+                            : 'bg-yellow-500'
+                      )}
+                    />
                     <div>
-                      <div className="text-sm font-medium text-gray-900">
-                        {reminder.title}
-                      </div>
+                      <div className="text-sm font-medium text-gray-900">{reminder.title}</div>
                       {reminder.description && (
-                        <div className="text-sm text-gray-500 mt-1">
-                          {reminder.description}
-                        </div>
+                        <div className="text-sm text-gray-500 mt-1">{reminder.description}</div>
                       )}
                     </div>
                   </div>
@@ -117,9 +131,7 @@ function RemindersTable({ reminders, loading }: { reminders: DueReminder[]; load
                         </Link>
                       </div>
                       {reminder.contact_email && (
-                        <div className="text-sm text-gray-500">
-                          {reminder.contact_email}
-                        </div>
+                        <div className="text-sm text-gray-500">{reminder.contact_email}</div>
                       )}
                     </>
                   ) : (
@@ -142,14 +154,16 @@ function RemindersTable({ reminders, loading }: { reminders: DueReminder[]; load
                   )}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
-                  <span className={clsx(
-                    'inline-flex px-2 py-1 text-xs font-semibold rounded-full',
-                    reminder.completed
-                      ? 'bg-green-100 text-green-800'
-                      : isOverdue
-                      ? 'bg-red-100 text-red-800'
-                      : 'bg-yellow-100 text-yellow-800'
-                  )}>
+                  <span
+                    className={clsx(
+                      'inline-flex px-2 py-1 text-xs font-semibold rounded-full',
+                      reminder.completed
+                        ? 'bg-green-100 text-green-800'
+                        : isOverdue
+                          ? 'bg-red-100 text-red-800'
+                          : 'bg-yellow-100 text-yellow-800'
+                    )}
+                  >
                     {reminder.completed ? 'Completed' : isOverdue ? 'Overdue' : 'Due'}
                   </span>
                 </td>
@@ -188,30 +202,38 @@ export default function RemindersPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [filter, setFilter] = useState<'all' | 'due' | 'completed'>('all')
   const [showCreateForm, setShowCreateForm] = useState(false)
-  
+
   const params: ReminderListParams = {
     page: 1,
     limit: 50,
   }
 
-  const { data: reminders, isLoading, error } = useReminders({
+  const {
+    data: reminders,
+    isLoading,
+    error,
+  } = useReminders({
     ...params,
     ...(filter === 'due' && { due_today: true }),
   })
-  
+
   const createReminderMutation = useCreateReminder()
 
-  const filteredReminders = reminders?.filter(reminder => {
-    const matchesSearch = !searchTerm || 
-      reminder.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (reminder.contact_name && reminder.contact_name.toLowerCase().includes(searchTerm.toLowerCase()))
-    
-    const matchesFilter = filter === 'all' || 
-      (filter === 'completed' && reminder.completed) ||
-      (filter === 'due' && !reminder.completed)
-    
-    return matchesSearch && matchesFilter
-  }) || []
+  const filteredReminders =
+    reminders?.filter(reminder => {
+      const matchesSearch =
+        !searchTerm ||
+        reminder.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (reminder.contact_name &&
+          reminder.contact_name.toLowerCase().includes(searchTerm.toLowerCase()))
+
+      const matchesFilter =
+        filter === 'all' ||
+        (filter === 'completed' && reminder.completed) ||
+        (filter === 'due' && !reminder.completed)
+
+      return matchesSearch && matchesFilter
+    }) || []
 
   const handleCreateReminder = async (data: CreateReminderRequest) => {
     try {
@@ -230,7 +252,7 @@ export default function RemindersPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
-      
+
       <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="md:flex md:items-center md:justify-between mb-6">
@@ -243,9 +265,7 @@ export default function RemindersPage() {
             </p>
           </div>
           <div className="mt-4 flex space-x-3 md:mt-0 md:ml-4">
-            <Button
-              onClick={() => setShowCreateForm(true)}
-            >
+            <Button onClick={() => setShowCreateForm(true)}>
               <Plus className="w-4 h-4 mr-2" />
               New Reminder
             </Button>
@@ -264,7 +284,7 @@ export default function RemindersPage() {
                 type="text"
                 placeholder="Search reminders..."
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={e => setSearchTerm(e.target.value)}
                 className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 text-gray-900 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
@@ -276,9 +296,7 @@ export default function RemindersPage() {
               onClick={() => setFilter('all')}
               className={clsx(
                 'px-3 py-2 text-sm font-medium rounded-md',
-                filter === 'all'
-                  ? 'bg-blue-100 text-blue-700'
-                  : 'text-gray-500 hover:text-gray-700'
+                filter === 'all' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-700'
               )}
             >
               All
@@ -316,9 +334,7 @@ export default function RemindersPage() {
                 <AlertCircle className="h-5 w-5 text-red-400" />
               </div>
               <div className="ml-3">
-                <h3 className="text-sm font-medium text-red-800">
-                  Error loading reminders
-                </h3>
+                <h3 className="text-sm font-medium text-red-800">Error loading reminders</h3>
                 <p className="mt-1 text-sm text-red-700">
                   {error instanceof Error ? error.message : 'An unexpected error occurred'}
                 </p>
@@ -338,9 +354,7 @@ export default function RemindersPage() {
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
             <div className="flex items-start justify-between mb-6">
-              <h3 className="text-lg font-medium text-gray-900">
-                Create New Reminder
-              </h3>
+              <h3 className="text-lg font-medium text-gray-900">Create New Reminder</h3>
               <button
                 type="button"
                 className="text-gray-400 hover:text-gray-600"
@@ -349,21 +363,20 @@ export default function RemindersPage() {
                 <X className="w-6 h-6" />
               </button>
             </div>
-            
+
             <ReminderForm
               onSubmit={handleCreateReminder}
               onCancel={() => setShowCreateForm(false)}
               loading={createReminderMutation.isPending}
             />
-            
+
             {createReminderMutation.error && (
               <div className="mt-4 bg-red-50 border border-red-200 rounded-md p-4">
                 <h3 className="text-sm font-medium text-red-800">Error creating reminder</h3>
                 <p className="mt-1 text-sm text-red-700">
-                  {createReminderMutation.error instanceof Error 
-                    ? createReminderMutation.error.message 
-                    : 'An unexpected error occurred'
-                  }
+                  {createReminderMutation.error instanceof Error
+                    ? createReminderMutation.error.message
+                    : 'An unexpected error occurred'}
                 </p>
               </div>
             )}

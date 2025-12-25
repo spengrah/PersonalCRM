@@ -46,4 +46,3 @@ export interface ContactListParams {
   sort?: 'name' | 'email' | 'created_at' | 'last_contacted'
   order?: 'asc' | 'desc'
 }
-

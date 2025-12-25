@@ -81,6 +81,31 @@ gh issue create \
   --body "Add rate limiting to protect API endpoints"
 ```
 
+## Development Setup
+
+### Git Hooks
+
+This project uses git hooks to enforce code quality locally:
+
+1. **Install hooks:**
+   ```bash
+   ./scripts/install-git-hooks.sh
+   # Or use the setup command:
+   make setup
+   ```
+
+2. **What gets checked:**
+   - Pre-commit: `gofmt` (auto-formats Go files) + `prettier` (auto-formats frontend files)
+   - Pre-push: `make lint` (runs golangci-lint) + `bun run lint` (runs ESLint + Prettier)
+
+3. **Manual checks:**
+   ```bash
+   make lint        # Check for issues
+   make lint-fix    # Auto-fix some issues
+   ```
+
+**For AI Agents:** Run `./scripts/install-git-hooks.sh` or `make setup` as part of environment setup.
+
 ## Agent Workflow
 
 ### For Agents (AI)

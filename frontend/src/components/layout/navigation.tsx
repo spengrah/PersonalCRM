@@ -24,15 +24,13 @@ export function Navigation() {
         <div className="flex justify-between h-16">
           <div className="flex">
             <div className="flex-shrink-0 flex items-center">
-              <h1 className="text-xl font-semibold text-gray-900">
-                Personal CRM
-              </h1>
+              <h1 className="text-xl font-semibold text-gray-900">Personal CRM</h1>
             </div>
             <div className="hidden sm:ml-6 sm:flex sm:space-x-8">
-              {navigation.map((item) => {
+              {navigation.map(item => {
                 const isActive = pathname.startsWith(item.href)
                 const Icon = item.icon
-                
+
                 return (
                   <Link
                     key={item.name}
@@ -51,11 +49,11 @@ export function Navigation() {
               })}
             </div>
           </div>
-          
+
           <div className="flex items-center space-x-4">
             {/* Time Acceleration Widget */}
             <TimeAccelerationWidget position="top-right" className="relative" />
-            
+
             {/* Mobile menu button */}
             <div className="sm:hidden">
               <button
@@ -63,8 +61,18 @@ export function Navigation() {
                 className="inline-flex items-center justify-center p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100"
               >
                 <span className="sr-only">Open main menu</span>
-                <svg className="block h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                <svg
+                  className="block h-6 w-6"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 6h16M4 12h16M4 18h16"
+                  />
                 </svg>
               </button>
             </div>

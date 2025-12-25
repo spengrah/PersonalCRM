@@ -235,11 +235,11 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 		uniqueEmail := strings.Repeat("a", 235) + uuid.New().String()[:10] + "@test.com" // Total ~255 chars
 
 		requestBody := handlers.CreateContactRequest{
-			FullName:     strings.Repeat("a", 255),                         // Max 255
-			Email:        stringPtr(uniqueEmail),                           // Max 255
-			Phone:        stringPtr(strings.Repeat("1", 50)),               // Max 50
-			Location:     stringPtr(strings.Repeat("a", 255)),              // Max 255
-			HowMet:       stringPtr(strings.Repeat("a", 500)),              // Max 500
+			FullName:     strings.Repeat("a", 255),                                              // Max 255
+			Email:        stringPtr(uniqueEmail),                                                // Max 255
+			Phone:        stringPtr(strings.Repeat("1", 50)),                                    // Max 50
+			Location:     stringPtr(strings.Repeat("a", 255)),                                   // Max 255
+			HowMet:       stringPtr(strings.Repeat("a", 500)),                                   // Max 500
 			ProfilePhoto: stringPtr("https://example.com/" + strings.Repeat("a", 470) + ".jpg"), // Max 500
 		}
 
@@ -300,7 +300,8 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code)
 
 	var createResponse api.APIResponse
-	json.Unmarshal(w.Body.Bytes(), &createResponse)
+	err := json.Unmarshal(w.Body.Bytes(), &createResponse)
+	require.NoError(t, err)
 	contactData := createResponse.Data.(map[string]interface{})
 	contactID := contactData["id"].(string)
 
@@ -526,7 +527,8 @@ func TestContactAPI_EmailUniqueness(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code)
 
 	var createResponse api.APIResponse
-	json.Unmarshal(w.Body.Bytes(), &createResponse)
+	err := json.Unmarshal(w.Body.Bytes(), &createResponse)
+	require.NoError(t, err)
 	contactData := createResponse.Data.(map[string]interface{})
 	contactID := contactData["id"].(string)
 

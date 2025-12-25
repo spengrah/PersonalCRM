@@ -11,7 +11,7 @@ describe('contactSchema', () => {
         location: 'New York, NY',
         birthday: '1990-01-15',
         notes: 'Some notes here',
-        cadence: 'weekly'
+        cadence: 'weekly',
       }
 
       const result = contactSchema.safeParse(validData)
@@ -20,7 +20,7 @@ describe('contactSchema', () => {
 
     it('validates contact with only required field (full_name)', () => {
       const validData = {
-        full_name: 'Jane Smith'
+        full_name: 'Jane Smith',
       }
 
       const result = contactSchema.safeParse(validData)
@@ -31,7 +31,7 @@ describe('contactSchema', () => {
       const validData = {
         full_name: 'Bob Johnson',
         email: 'bob@example.com',
-        birthday: '1985-06-20'
+        birthday: '1985-06-20',
       }
 
       const result = contactSchema.safeParse(validData)
@@ -42,7 +42,7 @@ describe('contactSchema', () => {
   describe('required field validation', () => {
     it('rejects missing full_name', () => {
       const invalidData = {
-        email: 'test@example.com'
+        email: 'test@example.com',
       }
 
       const result = contactSchema.safeParse(invalidData)
@@ -51,7 +51,7 @@ describe('contactSchema', () => {
 
     it('rejects empty full_name', () => {
       const invalidData = {
-        full_name: ''
+        full_name: '',
       }
 
       const result = contactSchema.safeParse(invalidData)
@@ -63,7 +63,7 @@ describe('contactSchema', () => {
     it('accepts valid email', () => {
       const data = {
         full_name: 'Test User',
-        email: 'test@example.com'
+        email: 'test@example.com',
       }
 
       const result = contactSchema.safeParse(data)
@@ -73,7 +73,7 @@ describe('contactSchema', () => {
     it('rejects invalid email format', () => {
       const data = {
         full_name: 'Test User',
-        email: 'not-an-email'
+        email: 'not-an-email',
       }
 
       const result = contactSchema.safeParse(data)
@@ -83,7 +83,7 @@ describe('contactSchema', () => {
     it('accepts empty string for email (optional)', () => {
       const data = {
         full_name: 'Test User',
-        email: ''
+        email: '',
       }
 
       const result = contactSchema.safeParse(data)
@@ -92,7 +92,7 @@ describe('contactSchema', () => {
 
     it('accepts undefined email', () => {
       const data = {
-        full_name: 'Test User'
+        full_name: 'Test User',
         // email is undefined
       }
 
@@ -104,7 +104,7 @@ describe('contactSchema', () => {
   describe('length constraint validation', () => {
     it('rejects full_name longer than 255 characters', () => {
       const data = {
-        full_name: 'a'.repeat(256)
+        full_name: 'a'.repeat(256),
       }
 
       const result = contactSchema.safeParse(data)
@@ -114,7 +114,7 @@ describe('contactSchema', () => {
     it('rejects phone longer than 50 characters', () => {
       const data = {
         full_name: 'Test User',
-        phone: '1'.repeat(51)
+        phone: '1'.repeat(51),
       }
 
       const result = contactSchema.safeParse(data)
@@ -124,7 +124,7 @@ describe('contactSchema', () => {
     it('rejects notes longer than 2000 characters', () => {
       const data = {
         full_name: 'Test User',
-        notes: 'a'.repeat(2001)
+        notes: 'a'.repeat(2001),
       }
 
       const result = contactSchema.safeParse(data)
@@ -134,7 +134,7 @@ describe('contactSchema', () => {
     it('rejects location longer than 255 characters', () => {
       const data = {
         full_name: 'Test User',
-        location: 'a'.repeat(256)
+        location: 'a'.repeat(256),
       }
 
       const result = contactSchema.safeParse(data)
@@ -146,18 +146,18 @@ describe('contactSchema', () => {
     it('accepts valid past date', () => {
       const data = {
         full_name: 'Test User',
-        birthday: '1990-01-15'
+        birthday: '1990-01-15',
       }
 
       const result = contactSchema.safeParse(data)
       expect(result.success).toBe(true)
     })
 
-    it('accepts today\'s date', () => {
+    it("accepts today's date", () => {
       const today = new Date().toISOString().split('T')[0]
       const data = {
         full_name: 'Test User',
-        birthday: today
+        birthday: today,
       }
 
       const result = contactSchema.safeParse(data)
@@ -170,7 +170,7 @@ describe('contactSchema', () => {
 
       const data = {
         full_name: 'Test User',
-        birthday: tomorrow.toISOString().split('T')[0]
+        birthday: tomorrow.toISOString().split('T')[0],
       }
 
       const result = contactSchema.safeParse(data)
@@ -180,7 +180,7 @@ describe('contactSchema', () => {
     it('rejects invalid date format', () => {
       const data = {
         full_name: 'Test User',
-        birthday: 'not-a-date'
+        birthday: 'not-a-date',
       }
 
       const result = contactSchema.safeParse(data)
@@ -190,7 +190,7 @@ describe('contactSchema', () => {
     it('accepts empty string for birthday (optional)', () => {
       const data = {
         full_name: 'Test User',
-        birthday: ''
+        birthday: '',
       }
 
       const result = contactSchema.safeParse(data)
@@ -203,7 +203,7 @@ describe('transformContactFormData', () => {
   it('converts empty email to undefined', () => {
     const input: ContactFormData = {
       full_name: 'John Doe',
-      email: ''
+      email: '',
     }
 
     const result = transformContactFormData(input)
@@ -214,7 +214,7 @@ describe('transformContactFormData', () => {
   it('converts whitespace-only phone to undefined', () => {
     const input: ContactFormData = {
       full_name: 'John Doe',
-      phone: '   '
+      phone: '   ',
     }
 
     const result = transformContactFormData(input)
@@ -226,7 +226,7 @@ describe('transformContactFormData', () => {
       full_name: 'John Doe',
       email: 'john@example.com',
       phone: '555-1234',
-      location: 'New York'
+      location: 'New York',
     }
 
     const result = transformContactFormData(input)
@@ -237,7 +237,7 @@ describe('transformContactFormData', () => {
 
   it('always includes required full_name field', () => {
     const input: ContactFormData = {
-      full_name: 'John Doe'
+      full_name: 'John Doe',
     }
 
     const result = transformContactFormData(input)
@@ -252,7 +252,7 @@ describe('transformContactFormData', () => {
       location: '',
       birthday: '',
       notes: '   ',
-      cadence: ''
+      cadence: '',
     }
 
     const result = transformContactFormData(input)

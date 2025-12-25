@@ -351,4 +351,3 @@ func (h *TimeEntryHandler) GetTimeEntryStats(c *gin.Context) {
 
 	api.SendSuccess(c, http.StatusOK, stats, nil)
 }
-

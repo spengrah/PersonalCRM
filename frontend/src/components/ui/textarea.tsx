@@ -33,12 +33,8 @@ const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           )}
           {...props}
         />
-        {error && (
-          <p className="text-sm text-red-600">{error}</p>
-        )}
-        {helpText && !error && (
-          <p className="text-sm text-gray-500">{helpText}</p>
-        )}
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        {helpText && !error && <p className="text-sm text-gray-500">{helpText}</p>}
       </div>
     )
   }
@@ -47,4 +43,3 @@ const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
 Textarea.displayName = 'Textarea'
 
 export { Textarea }
-

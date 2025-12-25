@@ -12,16 +12,16 @@ import type { CreateReminderRequest } from '@/types/reminder'
 
 const reminderSchema = z.object({
   contact_id: z.string().optional().or(z.literal('')),
-  title: z.string()
-    .min(1, 'Title is required')
-    .max(255, 'Title must be less than 255 characters'),
-  description: z.string()
+  title: z.string().min(1, 'Title is required').max(255, 'Title must be less than 255 characters'),
+  description: z
+    .string()
     .max(1000, 'Description must be less than 1000 characters')
     .optional()
     .or(z.literal('')),
-  due_date: z.string()
+  due_date: z
+    .string()
     .min(1, 'Due date is required')
-    .refine((date) => {
+    .refine(date => {
       const parsedDate = new Date(date)
       return !isNaN(parsedDate.getTime())
     }, 'Please enter a valid date'),
@@ -37,7 +37,7 @@ interface ReminderFormProps {
 
 export function ReminderForm({ onSubmit, onCancel, loading }: ReminderFormProps) {
   const { data: contactsData } = useContacts({ limit: 1000 }) // Get all contacts for dropdown
-  
+
   const {
     register,
     handleSubmit,
@@ -63,7 +63,7 @@ export function ReminderForm({ onSubmit, onCancel, loading }: ReminderFormProps)
         due_date: new Date(data.due_date).toISOString(),
         ...(data.contact_id && { contact_id: data.contact_id }),
       }
-      
+
       await onSubmit(reminderData)
       reset()
     } catch (error) {
@@ -98,7 +98,7 @@ export function ReminderForm({ onSubmit, onCancel, loading }: ReminderFormProps)
               <ContactSelector
                 contacts={contactsData?.contacts || []}
                 value={value || undefined}
-                onChange={(contactId) => onChange(contactId || '')}
+                onChange={contactId => onChange(contactId || '')}
                 placeholder="Search contacts or leave blank for standalone reminder"
                 disabled={isLoading}
                 error={errors.contact_id?.message}
@@ -134,19 +134,10 @@ export function ReminderForm({ onSubmit, onCancel, loading }: ReminderFormProps)
 
       {/* Submit Buttons */}
       <div className="flex justify-end space-x-3">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onCancel}
-          disabled={isLoading}
-        >
+        <Button type="button" variant="outline" onClick={onCancel} disabled={isLoading}>
           Cancel
         </Button>
-        <Button
-          type="submit"
-          loading={isLoading}
-          disabled={isLoading}
-        >
+        <Button type="submit" loading={isLoading} disabled={isLoading}>
           Create Reminder
         </Button>
       </div>

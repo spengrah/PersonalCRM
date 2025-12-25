@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/reminder"
@@ -66,7 +67,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 
 	t.Run("GenerateReminders_OverdueWeeklyContact", func(t *testing.T) {
 		// Create a contact with weekly cadence that is overdue
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 		lastContacted := now.AddDate(0, 0, -14) // 14 days ago (overdue for weekly)
 
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -75,7 +76,11 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 			LastContacted: &lastContacted,
 		})
 		require.NoError(t, err)
-		defer contactRepo.HardDeleteContact(ctx, contact.ID)
+		defer func() {
+			if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+				t.Errorf("Failed to cleanup contact: %v", err)
+			}
+		}()
 
 		// Generate reminders
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -103,7 +108,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 
 	t.Run("GenerateReminders_NotOverdueContact", func(t *testing.T) {
 		// Create a contact with weekly cadence that is NOT overdue
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 		lastContacted := now.AddDate(0, 0, -3) // 3 days ago (not overdue for weekly)
 
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -112,7 +117,11 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 			LastContacted: &lastContacted,
 		})
 		require.NoError(t, err)
-		defer contactRepo.HardDeleteContact(ctx, contact.ID)
+		defer func() {
+			if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+				t.Errorf("Failed to cleanup contact: %v", err)
+			}
+		}()
 
 		// Generate reminders
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -126,7 +135,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 
 	t.Run("GenerateReminders_SkipContactWithoutCadence", func(t *testing.T) {
 		// Create a contact without cadence
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 		lastContacted := now.AddDate(0, 0, -30) // 30 days ago but no cadence
 
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -135,7 +144,11 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 			LastContacted: &lastContacted,
 		})
 		require.NoError(t, err)
-		defer contactRepo.HardDeleteContact(ctx, contact.ID)
+		defer func() {
+			if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+				t.Errorf("Failed to cleanup contact: %v", err)
+			}
+		}()
 
 		// Generate reminders
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -149,7 +162,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 
 	t.Run("GenerateReminders_Idempotency", func(t *testing.T) {
 		// Create an overdue contact
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 		lastContacted := now.AddDate(0, 0, -14) // 14 days ago (overdue for weekly)
 
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -158,7 +171,11 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 			LastContacted: &lastContacted,
 		})
 		require.NoError(t, err)
-		defer contactRepo.HardDeleteContact(ctx, contact.ID)
+		defer func() {
+			if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+				t.Errorf("Failed to cleanup contact: %v", err)
+			}
+		}()
 
 		// Generate reminders first time
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -185,7 +202,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 	})
 
 	t.Run("GenerateReminders_MultipleCadenceTypes", func(t *testing.T) {
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 
 		// Create contacts with different cadences
 		contacts := []struct {
@@ -217,7 +234,9 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		// Cleanup contacts at the end
 		defer func() {
 			for _, contact := range createdContacts {
-				contactRepo.HardDeleteContact(ctx, contact.ID)
+				if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+					t.Errorf("Failed to cleanup contact: %v", err)
+				}
 			}
 		}()
 
@@ -235,7 +254,9 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 				if len(reminders) > 0 {
 					assert.Contains(t, reminders[0].Title, contacts[i].cadence)
 					// Cleanup
-					reminderRepo.HardDeleteReminder(ctx, reminders[0].ID)
+					if err := reminderRepo.HardDeleteReminder(ctx, reminders[0].ID); err != nil {
+						t.Errorf("Failed to delete reminder: %v", err)
+					}
 				}
 			}
 		}
@@ -248,7 +269,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		reminderService, contactRepo, reminderRepo, cleanup := setupReminderGenerationTest(t)
 		defer cleanup()
 
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 		// 15 minutes ago should be overdue in staging (where weekly = 10 min)
 		lastContacted := now.Add(-15 * time.Minute)
 
@@ -258,7 +279,11 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 			LastContacted: &lastContacted,
 		})
 		require.NoError(t, err)
-		defer contactRepo.HardDeleteContact(ctx, contact.ID)
+		defer func() {
+			if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+				t.Errorf("Failed to cleanup contact: %v", err)
+			}
+		}()
 
 		err = reminderService.GenerateRemindersForOverdueContacts(ctx)
 		require.NoError(t, err)
@@ -268,7 +293,9 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		assert.Len(t, reminders, 1, "Should create reminder using staging cadence")
 
 		if len(reminders) > 0 {
-			reminderRepo.HardDeleteReminder(ctx, reminders[0].ID)
+			if err := reminderRepo.HardDeleteReminder(ctx, reminders[0].ID); err != nil {
+				t.Errorf("Failed to delete reminder: %v", err)
+			}
 		}
 	})
 }
@@ -289,7 +316,7 @@ func TestReminderGeneration_TitleAndDescription(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	lastContacted := now.AddDate(0, 0, -14) // 14 days ago
 
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -298,7 +325,11 @@ func TestReminderGeneration_TitleAndDescription(t *testing.T) {
 		LastContacted: &lastContacted,
 	})
 	require.NoError(t, err)
-	defer contactRepo.HardDeleteContact(ctx, contact.ID)
+	defer func() {
+		if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+			t.Errorf("Failed to cleanup contact: %v", err)
+		}
+	}()
 
 	err = reminderService.GenerateRemindersForOverdueContacts(ctx)
 	require.NoError(t, err)
@@ -308,7 +339,11 @@ func TestReminderGeneration_TitleAndDescription(t *testing.T) {
 	require.Len(t, reminders, 1)
 
 	reminder := reminders[0]
-	defer reminderRepo.HardDeleteReminder(ctx, reminder.ID)
+	defer func() {
+		if err := reminderRepo.HardDeleteReminder(ctx, reminder.ID); err != nil {
+			t.Errorf("Failed to cleanup reminder: %v", err)
+		}
+	}()
 
 	t.Run("VerifyReminderTitle", func(t *testing.T) {
 		expectedTitle := "Follow up with Title Test Contact (weekly cadence)"
@@ -362,7 +397,7 @@ func TestReminderGeneration_InvalidCadence(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	lastContacted := now.AddDate(0, 0, -30)
 
 	// Manually insert a contact with invalid cadence (bypassing API validation)
@@ -373,7 +408,11 @@ func TestReminderGeneration_InvalidCadence(t *testing.T) {
 		LastContacted: &lastContacted,
 	})
 	require.NoError(t, err)
-	defer contactRepo.HardDeleteContact(ctx, contact.ID)
+	defer func() {
+		if err := contactRepo.HardDeleteContact(ctx, contact.ID); err != nil {
+			t.Errorf("Failed to cleanup contact: %v", err)
+		}
+	}()
 
 	// For this test, we'll just verify it handles the valid cadence correctly
 	err = reminderService.GenerateRemindersForOverdueContacts(ctx)
@@ -383,12 +422,14 @@ func TestReminderGeneration_InvalidCadence(t *testing.T) {
 	require.NoError(t, err)
 
 	if len(reminders) > 0 {
-		reminderRepo.HardDeleteReminder(ctx, reminders[0].ID)
+		if err := reminderRepo.HardDeleteReminder(ctx, reminders[0].ID); err != nil {
+			t.Errorf("Failed to delete reminder: %v", err)
+		}
 	}
 }
 
 // Note: Time mocking functions (SetCurrentTime/ResetTime) don't exist in accelerated package
-// Tests use time.Now() which is sufficient for integration testing
+// Tests use accelerated.GetCurrentTime() which is sufficient for integration testing
 
 // Helper to create scheduler for testing
 func TestScheduler_Integration(t *testing.T) {

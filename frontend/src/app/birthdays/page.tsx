@@ -22,8 +22,7 @@ interface BirthdayInfo {
 // Calculate age turning this year
 function calculateAgeThisYear(birthday: Date, currentTime: Date): number {
   const currentYear = currentTime.getFullYear()
-  const birthdayThisYear = new Date(currentYear, birthday.getMonth(), birthday.getDate())
-  
+
   // Age they turn this calendar year
   return currentYear - birthday.getFullYear()
 }
@@ -31,15 +30,15 @@ function calculateAgeThisYear(birthday: Date, currentTime: Date): number {
 // Calculate days until next birthday
 function calculateDaysUntilBirthday(birthday: Date, currentTime: Date): number {
   const currentYear = currentTime.getFullYear()
-  
+
   // Birthday this year
   let nextBirthday = new Date(currentYear, birthday.getMonth(), birthday.getDate())
-  
+
   // If birthday already passed this year, calculate for next year
   if (nextBirthday < currentTime) {
     nextBirthday = new Date(currentYear + 1, birthday.getMonth(), birthday.getDate())
   }
-  
+
   // Calculate difference in days
   const diffTime = nextBirthday.getTime() - currentTime.getTime()
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24))
@@ -48,8 +47,7 @@ function calculateDaysUntilBirthday(birthday: Date, currentTime: Date): number {
 // Check if we should show next year's early birthdays (for gift planning)
 function shouldShowNextYearBirthdays(currentTime: Date): boolean {
   const month = currentTime.getMonth() + 1 // getMonth() is 0-based
-  const day = currentTime.getDate()
-  
+
   // Show next year's Jan-Mar birthdays if we're in November or December
   return month >= 11 // November (11) or December (12)
 }
@@ -59,22 +57,24 @@ function getNextYearEarlyBirthdays(contacts: Contact[], currentTime: Date): Birt
   if (!shouldShowNextYearBirthdays(currentTime)) {
     return []
   }
-  
+
   return contacts
     .filter(contact => contact.birthday)
     .map(contact => {
       const birthday = parseDateOnly(contact.birthday)
       if (!birthday) return null
-      
+
       const birthdayMonth = birthday.getMonth() + 1
-      
+
       // Only include Jan-Mar birthdays from next year
       if (birthdayMonth > 3) return null
-      
+
       const nextYear = currentTime.getFullYear() + 1
       const nextYearBirthday = new Date(nextYear, birthday.getMonth(), birthday.getDate())
-      const daysUntil = Math.ceil((nextYearBirthday.getTime() - currentTime.getTime()) / (1000 * 60 * 60 * 24))
-      
+      const daysUntil = Math.ceil(
+        (nextYearBirthday.getTime() - currentTime.getTime()) / (1000 * 60 * 60 * 24)
+      )
+
       return {
         contact,
         birthday: nextYearBirthday,
@@ -83,7 +83,7 @@ function getNextYearEarlyBirthdays(contacts: Contact[], currentTime: Date): Birt
         ageThisYear: nextYear - birthday.getFullYear(),
         daysUntil,
         isPastThisYear: false,
-        isNextYear: true
+        isNextYear: true,
       }
     })
     .filter(info => info !== null) as (BirthdayInfo & { isNextYear: boolean })[]
@@ -93,7 +93,7 @@ function getNextYearEarlyBirthdays(contacts: Contact[], currentTime: Date): Birt
 function isBirthdayPastThisYear(birthday: Date, currentTime: Date): boolean {
   const currentYear = currentTime.getFullYear()
   const birthdayThisYear = new Date(currentYear, birthday.getMonth(), birthday.getDate())
-  
+
   return birthdayThisYear < currentTime
 }
 
@@ -104,9 +104,9 @@ function processBirthdayContacts(contacts: Contact[], currentTime: Date): Birthd
     .map(contact => {
       const birthday = parseDateOnly(contact.birthday)
       if (!birthday) return null
-      
+
       const daysUntil = calculateDaysUntilBirthday(birthday, currentTime)
-      
+
       return {
         contact,
         birthday,
@@ -114,7 +114,7 @@ function processBirthdayContacts(contacts: Contact[], currentTime: Date): Birthd
         monthDay: birthday.toLocaleDateString('en-US', { month: 'long', day: 'numeric' }),
         ageThisYear: calculateAgeThisYear(birthday, currentTime),
         daysUntil,
-        isPastThisYear: isBirthdayPastThisYear(birthday, currentTime)
+        isPastThisYear: isBirthdayPastThisYear(birthday, currentTime),
       }
     })
     .filter(info => info !== null)
@@ -129,64 +129,81 @@ function processBirthdayContacts(contacts: Contact[], currentTime: Date): Birthd
 
 // Birthday card component
 function BirthdayCard({ birthdayInfo }: { birthdayInfo: BirthdayInfo }) {
-  const { contact, dayOfWeek, monthDay, ageThisYear, daysUntil, isPastThisYear, isNextYear } = birthdayInfo
-  
+  const { contact, dayOfWeek, monthDay, ageThisYear, daysUntil, isPastThisYear, isNextYear } =
+    birthdayInfo
+
   // Special styling for birthdays that are today or very soon
   const isToday = daysUntil === 0
   const isThisWeek = daysUntil <= 7 && daysUntil > 0
   const isPastDue = isPastThisYear
   const isGiftPlanningTime = isNextYear // Next year's early birthdays for gift planning
-  
+
   return (
-    <div className={`
+    <div
+      className={`
       bg-white rounded-lg shadow-sm border p-4 hover:shadow-md transition-shadow
       ${isToday ? 'border-pink-300 bg-pink-50' : ''}
       ${isThisWeek ? 'border-yellow-300 bg-yellow-50' : ''}
       ${isPastDue ? 'border-gray-200 bg-gray-50' : ''}
       ${isGiftPlanningTime ? 'border-purple-300 bg-purple-50' : ''}
-    `}>
+    `}
+    >
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-3">
-          <div className={`
+          <div
+            className={`
             p-2 rounded-full 
             ${isToday ? 'bg-pink-100 text-pink-600' : ''}
             ${isThisWeek ? 'bg-yellow-100 text-yellow-600' : ''}
             ${isPastDue ? 'bg-gray-100 text-gray-500' : ''}
             ${isGiftPlanningTime ? 'bg-purple-100 text-purple-600' : ''}
             ${!isToday && !isThisWeek && !isPastDue && !isGiftPlanningTime ? 'bg-blue-100 text-blue-600' : ''}
-          `}>
-            {isToday ? <Gift className="w-5 h-5" /> : isGiftPlanningTime ? <Gift className="w-5 h-5" /> : <Cake className="w-5 h-5" />}
+          `}
+          >
+            {isToday ? (
+              <Gift className="w-5 h-5" />
+            ) : isGiftPlanningTime ? (
+              <Gift className="w-5 h-5" />
+            ) : (
+              <Cake className="w-5 h-5" />
+            )}
           </div>
-          
+
           <div>
-            <h3 className="font-medium text-gray-900">
-              {contact.full_name}
-            </h3>
+            <h3 className="font-medium text-gray-900">{contact.full_name}</h3>
             <p className="text-sm text-gray-600">
               {dayOfWeek}, {monthDay}
             </p>
           </div>
         </div>
-        
+
         <div className="text-right">
           <p className="text-lg font-semibold text-gray-900">
             {isPastDue ? `Turned ${ageThisYear}` : `Turning ${ageThisYear}`}
-            {isGiftPlanningTime && <span className="text-xs text-purple-600 ml-1">(next year)</span>}
+            {isGiftPlanningTime && (
+              <span className="text-xs text-purple-600 ml-1">(next year)</span>
+            )}
           </p>
-          <p className={`text-sm ${
-            isToday ? 'text-pink-600 font-semibold' : 
-            isThisWeek ? 'text-yellow-600' : 
-            isPastDue ? 'text-gray-500' : 
-            isGiftPlanningTime ? 'text-purple-600' : 'text-gray-600'
-          }`}>
-            {isToday 
-              ? '🎉 Today!' 
-              : isPastDue 
+          <p
+            className={`text-sm ${
+              isToday
+                ? 'text-pink-600 font-semibold'
+                : isThisWeek
+                  ? 'text-yellow-600'
+                  : isPastDue
+                    ? 'text-gray-500'
+                    : isGiftPlanningTime
+                      ? 'text-purple-600'
+                      : 'text-gray-600'
+            }`}
+          >
+            {isToday
+              ? '🎉 Today!'
+              : isPastDue
                 ? `${365 - Math.abs(daysUntil)} days ago`
                 : isGiftPlanningTime
                   ? `🎁 ${daysUntil} day${daysUntil === 1 ? '' : 's'} (gift planning)`
-                  : `${daysUntil} day${daysUntil === 1 ? '' : 's'}`
-            }
+                  : `${daysUntil} day${daysUntil === 1 ? '' : 's'}`}
           </p>
         </div>
       </div>
@@ -197,23 +214,27 @@ function BirthdayCard({ birthdayInfo }: { birthdayInfo: BirthdayInfo }) {
 export default function BirthdaysPage() {
   const { currentTime } = useAcceleratedTime()
   const { data: contactsData, isLoading, error } = useContacts({ limit: 1000 })
-  
+
   // Note: currentTime from useAcceleratedTime automatically updates and handles focus/blur
   // No need for manual time management anymore
-  
+
   // Process birthday data with accelerated time
-  const birthdayInfos = contactsData ? processBirthdayContacts(contactsData.contacts, currentTime) : []
-  const nextYearEarlyBirthdays = contactsData ? getNextYearEarlyBirthdays(contactsData.contacts, currentTime) : []
-  
+  const birthdayInfos = contactsData
+    ? processBirthdayContacts(contactsData.contacts, currentTime)
+    : []
+  const nextYearEarlyBirthdays = contactsData
+    ? getNextYearEarlyBirthdays(contactsData.contacts, currentTime)
+    : []
+
   const todaysBirthdays = birthdayInfos.filter(info => info.daysUntil === 0)
   const upcomingBirthdays = birthdayInfos.filter(info => info.daysUntil > 0 && !info.isPastThisYear)
   const pastBirthdays = birthdayInfos.filter(info => info.isPastThisYear)
   const giftPlanningBirthdays = nextYearEarlyBirthdays
-  
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
-      
+
       <div className="max-w-4xl mx-auto py-6 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="mb-8">
@@ -221,32 +242,30 @@ export default function BirthdaysPage() {
             <Calendar className="w-8 h-8 text-blue-600" />
             <h1 className="text-3xl font-bold text-gray-900">Birthday Tracker</h1>
           </div>
-          
+
           {/* Current Date */}
           <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-lg font-semibold text-gray-900">
-                  {currentTime.toLocaleDateString('en-US', { 
-                    weekday: 'long', 
-                    year: 'numeric', 
-                    month: 'long', 
-                    day: 'numeric' 
+                  {currentTime.toLocaleDateString('en-US', {
+                    weekday: 'long',
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
                   })}
                 </p>
                 <p className="text-sm text-gray-600">
-                  {currentTime.toLocaleTimeString('en-US', { 
-                    hour: 'numeric', 
+                  {currentTime.toLocaleTimeString('en-US', {
+                    hour: 'numeric',
                     minute: '2-digit',
-                    hour12: true 
+                    hour12: true,
                   })}
                 </p>
               </div>
               <div className="text-right">
                 <p className="text-sm text-gray-600">Total Contacts</p>
-                <p className="text-2xl font-bold text-blue-600">
-                  {birthdayInfos.length}
-                </p>
+                <p className="text-2xl font-bold text-blue-600">{birthdayInfos.length}</p>
                 <p className="text-xs text-gray-500">with birthdays</p>
               </div>
             </div>
@@ -276,7 +295,7 @@ export default function BirthdaysPage() {
               <section>
                 <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
                   <Gift className="w-5 h-5 text-pink-600 mr-2" />
-                  Today's Birthdays ({todaysBirthdays.length})
+                  Today&apos;s Birthdays ({todaysBirthdays.length})
                 </h2>
                 <div className="space-y-3">
                   {todaysBirthdays.map(birthdayInfo => (
@@ -291,16 +310,21 @@ export default function BirthdaysPage() {
               <section>
                 <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
                   <Gift className="w-5 h-5 text-purple-600 mr-2" />
-                  Gift Planning - Early {currentTime.getFullYear() + 1} Birthdays ({giftPlanningBirthdays.length})
+                  Gift Planning - Early {currentTime.getFullYear() + 1} Birthdays (
+                  {giftPlanningBirthdays.length})
                 </h2>
                 <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 mb-4">
                   <p className="text-sm text-purple-700">
-                    🎁 These Jan-Mar birthdays are coming up next year. Plan ahead for gifts during holiday shopping!
+                    🎁 These Jan-Mar birthdays are coming up next year. Plan ahead for gifts during
+                    holiday shopping!
                   </p>
                 </div>
                 <div className="space-y-3">
                   {giftPlanningBirthdays.map(birthdayInfo => (
-                    <BirthdayCard key={`next-year-${birthdayInfo.contact.id}`} birthdayInfo={birthdayInfo} />
+                    <BirthdayCard
+                      key={`next-year-${birthdayInfo.contact.id}`}
+                      birthdayInfo={birthdayInfo}
+                    />
                   ))}
                 </div>
               </section>
@@ -341,9 +365,7 @@ export default function BirthdaysPage() {
               <div className="text-center py-12">
                 <Cake className="w-16 h-16 text-gray-400 mx-auto mb-4" />
                 <h3 className="text-lg font-medium text-gray-900 mb-2">No Birthday Information</h3>
-                <p className="text-gray-600 mb-4">
-                  No contacts have birthday information yet.
-                </p>
+                <p className="text-gray-600 mb-4">No contacts have birthday information yet.</p>
                 <p className="text-sm text-gray-500">
                   Add birthdays to your contacts to see them here!
                 </p>

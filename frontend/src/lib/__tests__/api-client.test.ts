@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { apiClient, ApiError } from '../api-client'
 
@@ -16,7 +17,7 @@ describe('ApiClient', () => {
       ;(global.fetch as any).mockResolvedValueOnce({
         ok: true,
         status: 200,
-        json: async () => ({ success: true, data: mockData })
+        json: async () => ({ success: true, data: mockData }),
       })
 
       const result = await apiClient.get('/api/test')
@@ -29,7 +30,7 @@ describe('ApiClient', () => {
       ;(global.fetch as any).mockResolvedValueOnce({
         ok: true,
         status: 201,
-        json: async () => ({ success: true, data: mockData })
+        json: async () => ({ success: true, data: mockData }),
       })
 
       const result = await apiClient.post('/api/test', postData)
@@ -42,7 +43,7 @@ describe('ApiClient', () => {
       ;(global.fetch as any).mockResolvedValueOnce({
         ok: true,
         status: 200,
-        json: async () => ({ success: true, data: mockData })
+        json: async () => ({ success: true, data: mockData }),
       })
 
       const result = await apiClient.put('/api/test/789', putData)
@@ -55,7 +56,7 @@ describe('ApiClient', () => {
       ;(global.fetch as any).mockResolvedValueOnce({
         ok: true,
         status: 200,
-        json: async () => ({ success: true, data: mockData })
+        json: async () => ({ success: true, data: mockData }),
       })
 
       const result = await apiClient.patch('/api/test/101', patchData)
@@ -65,7 +66,7 @@ describe('ApiClient', () => {
     it('handles DELETE request with 204 No Content', async () => {
       ;(global.fetch as any).mockResolvedValueOnce({
         ok: true,
-        status: 204
+        status: 204,
       })
 
       const result = await apiClient.delete('/api/test/123')
@@ -77,7 +78,7 @@ describe('ApiClient', () => {
       ;(global.fetch as any).mockResolvedValueOnce({
         ok: true,
         status: 200,
-        json: async () => ({ success: true, data: mockData })
+        json: async () => ({ success: true, data: mockData }),
       })
 
       await apiClient.get('/api/test', { page: 1, limit: 10 })
@@ -97,9 +98,9 @@ describe('ApiClient', () => {
         json: async () => ({
           error: {
             code: 'NOT_FOUND',
-            message: 'Resource not found'
-          }
-        })
+            message: 'Resource not found',
+          },
+        }),
       })
 
       try {
@@ -121,9 +122,9 @@ describe('ApiClient', () => {
         json: async () => ({
           error: {
             code: 'INTERNAL_ERROR',
-            message: 'Something went wrong'
-          }
-        })
+            message: 'Something went wrong',
+          },
+        }),
       })
 
       try {
@@ -141,7 +142,9 @@ describe('ApiClient', () => {
         ok: false,
         status: 503,
         statusText: 'Service Unavailable',
-        json: async () => { throw new Error('Invalid JSON') }
+        json: async () => {
+          throw new Error('Invalid JSON')
+        },
       })
 
       try {

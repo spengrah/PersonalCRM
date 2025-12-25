@@ -101,7 +101,7 @@ describe('ErrorBoundary', () => {
       // Mock window.location.reload
       Object.defineProperty(window, 'location', {
         value: { reload: reloadMock },
-        writable: true
+        writable: true,
       })
 
       render(

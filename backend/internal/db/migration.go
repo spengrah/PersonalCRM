@@ -20,7 +20,14 @@ func RunMigrations(databaseURL string, migrationsPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create migration instance: %w", err)
 	}
-	defer m.Close()
+	defer func() {
+		if srcErr, dbErr := m.Close(); srcErr != nil || dbErr != nil {
+			logger.Error().
+				Err(srcErr).
+				Err(dbErr).
+				Msg("error closing migration instance")
+		}
+	}()
 
 	err = m.Up()
 	if err != nil && err != migrate.ErrNoChange {

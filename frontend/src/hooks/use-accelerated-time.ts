@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { systemApi } from '@/lib/system-api'
-import type { SystemTimeResponse, SetAccelerationRequest } from '@/types/system'
+import type { SetAccelerationRequest } from '@/types/system'
 
 // Query keys
 export const systemKeys = {
@@ -17,7 +17,11 @@ export function useAcceleratedTime() {
   const [localTime, setLocalTime] = useState(new Date())
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
 
-  const { data: systemTime, isLoading, error } = useQuery({
+  const {
+    data: systemTime,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: systemKeys.time(),
     queryFn: systemApi.getSystemTime,
     refetchInterval: 30000, // Refetch every 30 seconds
@@ -35,10 +39,9 @@ export function useAcceleratedTime() {
 
     if (systemTime.is_accelerated) {
       // For accelerated time, calculate the offset and update frequently
-      const serverTime = new Date(systemTime.current_time)
       const baseTime = new Date(systemTime.base_time)
       const localBaseTime = Date.now()
-      
+
       const updateAcceleratedTime = () => {
         const elapsed = Date.now() - localBaseTime
         const acceleratedElapsed = elapsed * systemTime.acceleration_factor
@@ -91,8 +94,7 @@ export function useTimeAcceleration() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (settings: SetAccelerationRequest) => 
-      systemApi.setTimeAcceleration(settings),
+    mutationFn: (settings: SetAccelerationRequest) => systemApi.setTimeAcceleration(settings),
     onSuccess: () => {
       // Invalidate system time to refetch with new acceleration
       queryClient.invalidateQueries({ queryKey: systemKeys.time() })
@@ -105,8 +107,8 @@ export function useTimeAcceleration() {
  */
 export const ACCELERATION_PRESETS = {
   NORMAL: 1,
-  FAST: 60,          // 1 minute = 1 hour
-  VERY_FAST: 1440,   // 1 minute = 1 day  
+  FAST: 60, // 1 minute = 1 hour
+  VERY_FAST: 1440, // 1 minute = 1 day
   ULTRA_FAST: 43200, // 1 minute = 30 days
 } as const
 
@@ -114,7 +116,7 @@ export const ACCELERATION_PRESETS = {
  * Helper to create acceleration settings with current time as base
  */
 export function createAccelerationSettings(
-  factor: number, 
+  factor: number,
   enabled: boolean = true
 ): SetAccelerationRequest {
   return {
@@ -123,4 +125,3 @@ export function createAccelerationSettings(
     base_time: new Date().toISOString(),
   }
 }
-

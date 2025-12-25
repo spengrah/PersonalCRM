@@ -13,8 +13,8 @@ import {
   timeEntryKeys,
 } from '@/hooks/use-time-entries'
 import { useQueryClient } from '@tanstack/react-query'
-import { Play, Square, Trash2, Edit, Clock as ClockIcon, ChevronLeft, ChevronRight } from 'lucide-react'
-import type { CreateTimeEntryRequest } from '@/types/time-entry'
+import { Play, Square, Trash2, Clock as ClockIcon, ChevronLeft, ChevronRight } from 'lucide-react'
+import type { CreateTimeEntryRequest, TimeEntry } from '@/types/time-entry'
 
 function formatDuration(minutes: number): string {
   if (minutes === 0) {
@@ -37,36 +37,39 @@ function formatHours(minutes: number): string {
 }
 
 function formatDate(date: Date): string {
-  return date.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+  return date.toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  })
 }
 
 function getDateKey(date: Date): string {
   return date.toISOString().split('T')[0]
 }
 
-function groupEntriesByDay(entries: any[]) {
-  const grouped: Record<string, any[]> = {}
-  
-  entries.forEach((entry) => {
+function groupEntriesByDay(entries: TimeEntry[]) {
+  const grouped: Record<string, TimeEntry[]> = {}
+
+  entries.forEach(entry => {
     // Check end_time exists and duration_minutes is a number (including 0)
     if (entry.end_time && entry.duration_minutes !== undefined && entry.duration_minutes !== null) {
       const date = new Date(entry.start_time)
       const dateKey = getDateKey(date)
-      
+
       if (!grouped[dateKey]) {
         grouped[dateKey] = []
       }
       grouped[dateKey].push(entry)
     }
   })
-  
+
   // Sort entries within each day by start time
-  Object.keys(grouped).forEach((key) => {
-    grouped[key].sort((a, b) => 
-      new Date(b.start_time).getTime() - new Date(a.start_time).getTime()
-    )
+  Object.keys(grouped).forEach(key => {
+    grouped[key].sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime())
   })
-  
+
   return grouped
 }
 
@@ -78,7 +81,7 @@ function formatElapsedTime(startTime: string): string {
   const hours = Math.floor(totalSeconds / 3600)
   const minutes = Math.floor((totalSeconds % 3600) / 60)
   const seconds = totalSeconds % 60
-  
+
   if (hours > 0) {
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
   }
@@ -128,7 +131,7 @@ function TimerForm({
           type="text"
           id="timer-description"
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={e => setDescription(e.target.value)}
           className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500"
           placeholder="What are you working on?"
           required
@@ -142,7 +145,7 @@ function TimerForm({
           type="text"
           id="timer-project"
           value={project}
-          onChange={(e) => setProject(e.target.value)}
+          onChange={e => setProject(e.target.value)}
           className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
           placeholder="Project name"
         />
@@ -183,7 +186,6 @@ function ManualEntryForm({
       return
     }
 
-    let startTimeISO: string
     let endTimeISO: string | undefined
     let durationMinutes: number | undefined
 
@@ -192,7 +194,7 @@ function ManualEntryForm({
       alert('Start date and time are required')
       return
     }
-    startTimeISO = new Date(`${startDate}T${startTime}`).toISOString()
+    const startTimeISO = new Date(`${startDate}T${startTime}`).toISOString()
 
     // Parse end time or duration
     if (useDuration) {
@@ -242,7 +244,7 @@ function ManualEntryForm({
     const now = new Date()
     const dateStr = now.toISOString().split('T')[0]
     const timeStr = now.toTimeString().slice(0, 5)
-    
+
     if (!startDate) setStartDate(dateStr)
     if (!startTime) setStartTime(timeStr)
     if (!endDate) setEndDate(dateStr)
@@ -253,14 +255,17 @@ function ManualEntryForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label htmlFor="manual-description" className="block text-sm font-medium text-gray-900 mb-1">
+        <label
+          htmlFor="manual-description"
+          className="block text-sm font-medium text-gray-900 mb-1"
+        >
           Description *
         </label>
         <input
           type="text"
           id="manual-description"
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={e => setDescription(e.target.value)}
           className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500"
           placeholder="What did you work on?"
           required
@@ -274,12 +279,12 @@ function ManualEntryForm({
           type="text"
           id="manual-project"
           value={project}
-          onChange={(e) => setProject(e.target.value)}
+          onChange={e => setProject(e.target.value)}
           className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500"
           placeholder="Project name"
         />
       </div>
-      
+
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label htmlFor="start-date" className="block text-sm font-medium text-gray-900 mb-1">
@@ -289,7 +294,7 @@ function ManualEntryForm({
             type="date"
             id="start-date"
             value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
+            onChange={e => setStartDate(e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900"
             required
           />
@@ -302,7 +307,7 @@ function ManualEntryForm({
             type="time"
             id="start-time"
             value={startTime}
-            onChange={(e) => setStartTime(e.target.value)}
+            onChange={e => setStartTime(e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900"
             required
           />
@@ -314,7 +319,7 @@ function ManualEntryForm({
           type="checkbox"
           id="use-duration"
           checked={useDuration}
-          onChange={(e) => setUseDuration(e.target.checked)}
+          onChange={e => setUseDuration(e.target.checked)}
           className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
         />
         <label htmlFor="use-duration" className="text-sm font-medium text-gray-900">
@@ -325,7 +330,10 @@ function ManualEntryForm({
       {useDuration ? (
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label htmlFor="duration-hours" className="block text-sm font-medium text-gray-900 mb-1">
+            <label
+              htmlFor="duration-hours"
+              className="block text-sm font-medium text-gray-900 mb-1"
+            >
               Hours
             </label>
             <input
@@ -333,13 +341,16 @@ function ManualEntryForm({
               id="duration-hours"
               min="0"
               value={durationHours}
-              onChange={(e) => setDurationHours(e.target.value)}
+              onChange={e => setDurationHours(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500"
               placeholder="0"
             />
           </div>
           <div>
-            <label htmlFor="duration-minutes" className="block text-sm font-medium text-gray-900 mb-1">
+            <label
+              htmlFor="duration-minutes"
+              className="block text-sm font-medium text-gray-900 mb-1"
+            >
               Minutes
             </label>
             <input
@@ -348,7 +359,7 @@ function ManualEntryForm({
               min="0"
               max="59"
               value={durationMinutes}
-              onChange={(e) => setDurationMinutes(e.target.value)}
+              onChange={e => setDurationMinutes(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500"
               placeholder="0"
             />
@@ -364,9 +375,9 @@ function ManualEntryForm({
               type="date"
               id="end-date"
               value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900"
-            required={!useDuration}
+              onChange={e => setEndDate(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+              required={!useDuration}
             />
           </div>
           <div>
@@ -377,9 +388,9 @@ function ManualEntryForm({
               type="time"
               id="end-time"
               value={endTime}
-              onChange={(e) => setEndTime(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900"
-            required={!useDuration}
+              onChange={e => setEndTime(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+              required={!useDuration}
             />
           </div>
         </div>
@@ -411,7 +422,7 @@ export default function TimeTrackingPage() {
   const [showManualForm, setShowManualForm] = useState(false)
   const [selectedDate, setSelectedDate] = useState(new Date())
   const queryClient = useQueryClient()
-  const { data: runningEntry, isLoading: isLoadingRunning } = useRunningTimeEntry()
+  const { data: runningEntry } = useRunningTimeEntry()
   const { data: entries, isLoading: isLoadingEntries } = useTimeEntries({ limit: 100 })
   const { data: stats, isLoading: isLoadingStats } = useTimeEntryStats()
   const createMutation = useCreateTimeEntry()
@@ -476,34 +487,34 @@ export default function TimeTrackingPage() {
   // Group entries by day
   const entriesByDay = entries ? groupEntriesByDay(entries) : {}
   const dayKeys = Object.keys(entriesByDay).sort().reverse() // Most recent first
-  
+
   // Get entries for selected day
   const selectedDateKey = getDateKey(selectedDate)
   const dayEntries = entriesByDay[selectedDateKey] || []
-  
+
   // Calculate total hours for the day
   const dayTotalMinutes = dayEntries.reduce((sum, entry) => sum + (entry.duration_minutes || 0), 0)
   const dayTotalHours = (dayTotalMinutes / 60).toFixed(2)
-  
+
   // Navigate to previous/next day with entries
   // dayKeys is sorted reverse (most recent first): [2024-11-14, 2024-11-13, 2024-11-12, ...]
   // So index 0 = most recent, higher index = older days
   const navigateDay = (direction: 'prev' | 'next') => {
     if (dayKeys.length === 0) return
-    
+
     const currentIndex = dayKeys.indexOf(selectedDateKey)
-    
+
     if (currentIndex === -1) {
       // Current day has no entries, find the closest day with entries
       const today = new Date(selectedDate)
       today.setHours(0, 0, 0, 0)
       const todayKey = getDateKey(today)
-      
+
       // Find where today would fit in the sorted array
       // dayKeys is reverse sorted, so we need to find the first key that's older than today
       let insertIndex = dayKeys.findIndex(key => key < todayKey)
       if (insertIndex === -1) insertIndex = dayKeys.length
-      
+
       if (direction === 'prev') {
         // Go to older day (higher index in reverse-sorted array)
         if (insertIndex < dayKeys.length) {
@@ -530,7 +541,7 @@ export default function TimeTrackingPage() {
       }
     }
   }
-  
+
   // Check if we can navigate in each direction
   const canNavigatePrev = () => {
     if (dayKeys.length === 0) return false
@@ -544,7 +555,7 @@ export default function TimeTrackingPage() {
     }
     return currentIndex < dayKeys.length - 1
   }
-  
+
   const canNavigateNext = () => {
     if (dayKeys.length === 0) return false
     const currentIndex = dayKeys.indexOf(selectedDateKey)
@@ -557,28 +568,28 @@ export default function TimeTrackingPage() {
     }
     return currentIndex > 0
   }
-  
+
   // Navigate to today
   const navigateToToday = () => {
     const today = new Date()
     today.setHours(0, 0, 0, 0)
     setSelectedDate(today)
   }
-  
+
   // Check if selected date is today
   const isToday = () => {
     const today = new Date()
     today.setHours(0, 0, 0, 0)
     return getDateKey(today) === selectedDateKey
   }
-  
+
   // Initialize to most recent day with entries if current day has none
   useEffect(() => {
     if (dayKeys.length > 0 && dayEntries.length === 0) {
       const today = new Date()
       today.setHours(0, 0, 0, 0)
       const todayKey = getDateKey(today)
-      
+
       // If selected date is today and today has no entries, go to most recent day with entries
       if (selectedDateKey === todayKey) {
         const mostRecentDay = dayKeys[0] // First key is most recent
@@ -628,9 +639,9 @@ export default function TimeTrackingPage() {
                 <div className="text-right">
                   <TimerDisplay startTime={runningEntry.start_time} />
                   <div className="mt-2">
-                    <Button 
-                      onClick={handleStopTimer} 
-                      variant="danger" 
+                    <Button
+                      onClick={handleStopTimer}
+                      variant="danger"
                       size="sm"
                       disabled={updateMutation.isPending}
                       loading={updateMutation.isPending}
@@ -645,10 +656,7 @@ export default function TimeTrackingPage() {
           ) : (
             <div className="bg-white rounded-lg shadow p-6 mb-6">
               {showTimerForm ? (
-                <TimerForm
-                  onSubmit={handleStartTimer}
-                  onCancel={() => setShowTimerForm(false)}
-                />
+                <TimerForm onSubmit={handleStartTimer} onCancel={() => setShowTimerForm(false)} />
               ) : showManualForm ? (
                 <ManualEntryForm
                   onSubmit={handleAddManualEntry}
@@ -660,7 +668,11 @@ export default function TimeTrackingPage() {
                     <Play className="w-4 h-4 mr-2" />
                     Start New Timer
                   </Button>
-                  <Button onClick={() => setShowManualForm(true)} variant="outline" className="w-full">
+                  <Button
+                    onClick={() => setShowManualForm(true)}
+                    variant="outline"
+                    className="w-full"
+                  >
                     <ClockIcon className="w-4 h-4 mr-2" />
                     Add Manual Entry
                   </Button>
@@ -720,7 +732,9 @@ export default function TimeTrackingPage() {
               <div className="p-6 text-center text-gray-900">
                 <ClockIcon className="w-12 h-12 mx-auto mb-4 text-gray-400" />
                 <p className="text-gray-900">No entries for {formatDate(selectedDate)}.</p>
-                <p className="text-sm text-gray-600 mt-2">Use the arrows to navigate to days with entries.</p>
+                <p className="text-sm text-gray-600 mt-2">
+                  Use the arrows to navigate to days with entries.
+                </p>
               </div>
             ) : (
               <>
@@ -743,7 +757,7 @@ export default function TimeTrackingPage() {
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {dayEntries.map((entry) => (
+                      {dayEntries.map(entry => (
                         <tr key={entry.id} className="hover:bg-gray-50">
                           <td className="px-4 md:px-6 py-4">
                             <span className="text-sm text-gray-900">
@@ -755,16 +769,17 @@ export default function TimeTrackingPage() {
                               {entry.description}
                             </div>
                             <div className="text-xs text-gray-500 mt-1">
-                              {new Date(entry.start_time).toLocaleTimeString('en-US', { 
-                                hour: 'numeric', 
+                              {new Date(entry.start_time).toLocaleTimeString('en-US', {
+                                hour: 'numeric',
                                 minute: '2-digit',
-                                hour12: true 
+                                hour12: true,
                               })}
-                              {entry.end_time && ` - ${new Date(entry.end_time).toLocaleTimeString('en-US', { 
-                                hour: 'numeric', 
-                                minute: '2-digit',
-                                hour12: true 
-                              })}`}
+                              {entry.end_time &&
+                                ` - ${new Date(entry.end_time).toLocaleTimeString('en-US', {
+                                  hour: 'numeric',
+                                  minute: '2-digit',
+                                  hour12: true,
+                                })}`}
                             </div>
                           </td>
                           <td className="px-4 md:px-6 py-4 whitespace-nowrap text-right">
@@ -787,7 +802,10 @@ export default function TimeTrackingPage() {
                     </tbody>
                     <tfoot className="bg-gray-100 border-t-2 border-gray-300">
                       <tr>
-                        <td colSpan={2} className="px-4 md:px-6 py-4 text-sm font-bold text-gray-900">
+                        <td
+                          colSpan={2}
+                          className="px-4 md:px-6 py-4 text-sm font-bold text-gray-900"
+                        >
                           Total for {formatDate(selectedDate)}
                         </td>
                         <td className="px-4 md:px-6 py-4 whitespace-nowrap text-right">
@@ -808,4 +826,3 @@ export default function TimeTrackingPage() {
     </div>
   )
 }
-

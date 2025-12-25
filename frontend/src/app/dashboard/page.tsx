@@ -2,7 +2,16 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { CheckCircle, Clock, AlertCircle, User, Calendar, MessageCircle, Plus, Phone } from 'lucide-react'
+import {
+  CheckCircle,
+  Clock,
+  AlertCircle,
+  User,
+  Calendar,
+  MessageCircle,
+  Plus,
+  Phone,
+} from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
 import { useOverdueContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
@@ -40,7 +49,7 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
     const now = currentTime // Use accelerated time instead of new Date()
     const diffTime = Math.abs(now.getTime() - date.getTime())
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-    
+
     if (diffDays === 1) return 'Yesterday'
     if (diffDays <= 7) return `${diffDays} days ago`
     if (diffDays <= 30) return `${Math.floor(diffDays / 7)} weeks ago`
@@ -48,52 +57,44 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
   }
 
   return (
-    <div className={clsx(
-      'bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow',
-      getUrgencyColor(contact.days_overdue)
-    )}>
+    <div
+      className={clsx(
+        'bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow',
+        getUrgencyColor(contact.days_overdue)
+      )}
+    >
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <div className="flex items-center space-x-3 mb-3">
-            <div className={clsx(
-              'w-3 h-3 rounded-full',
-              getUrgencyIndicator(contact.days_overdue)
-            )} />
-            <h3 className="text-lg font-semibold text-gray-900">
-              {contact.full_name}
-            </h3>
-            <span className="text-sm font-medium text-gray-500">
-              ({contact.cadence} cadence)
-            </span>
+            <div
+              className={clsx('w-3 h-3 rounded-full', getUrgencyIndicator(contact.days_overdue))}
+            />
+            <h3 className="text-lg font-semibold text-gray-900">{contact.full_name}</h3>
+            <span className="text-sm font-medium text-gray-500">({contact.cadence} cadence)</span>
           </div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
             <div className="flex items-center space-x-2 text-sm text-gray-600">
               <Clock className="w-4 h-4" />
               <span>
-                <strong>{contact.days_overdue} days overdue</strong> - Last contacted {formatLastContacted(contact.last_contacted)}
+                <strong>{contact.days_overdue} days overdue</strong> - Last contacted{' '}
+                {formatLastContacted(contact.last_contacted)}
               </span>
             </div>
-            
+
             {contact.email && (
               <div className="flex items-center space-x-2 text-sm text-gray-600">
                 <MessageCircle className="w-4 h-4" />
-                <a 
-                  href={`mailto:${contact.email}`}
-                  className="hover:text-blue-600 underline"
-                >
+                <a href={`mailto:${contact.email}`} className="hover:text-blue-600 underline">
                   {contact.email}
                 </a>
               </div>
             )}
-            
+
             {contact.phone && (
               <div className="flex items-center space-x-2 text-sm text-gray-600">
                 <Phone className="w-4 h-4" />
-                <a 
-                  href={`tel:${contact.phone}`}
-                  className="hover:text-blue-600 underline"
-                >
+                <a href={`tel:${contact.phone}`} className="hover:text-blue-600 underline">
                   {contact.phone}
                 </a>
               </div>
@@ -101,19 +102,14 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
 
             <div className="flex items-center space-x-2 text-sm text-gray-600">
               <User className="w-4 h-4" />
-              <Link 
-                href={`/contacts/${contact.id}`}
-                className="hover:text-blue-600 underline"
-              >
+              <Link href={`/contacts/${contact.id}`} className="hover:text-blue-600 underline">
                 View details
               </Link>
             </div>
           </div>
 
           <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-4">
-            <p className="text-sm font-medium text-blue-800">
-              💡 {contact.suggested_action}
-            </p>
+            <p className="text-sm font-medium text-blue-800">💡 {contact.suggested_action}</p>
           </div>
         </div>
 
@@ -137,11 +133,10 @@ function EmptyState() {
   return (
     <div className="text-center py-16 bg-white rounded-lg shadow-sm border">
       <CheckCircle className="mx-auto h-16 w-16 text-green-500 mb-6" />
-      <h3 className="text-xl font-semibold text-gray-900 mb-3">
-        All caught up! 🎉
-      </h3>
+      <h3 className="text-xl font-semibold text-gray-900 mb-3">All caught up! 🎉</h3>
       <p className="text-gray-600 mb-8 max-w-md mx-auto">
-        You don't have any overdue contacts right now. You're doing a great job staying connected with your network!
+        You don&apos;t have any overdue contacts right now. You&apos;re doing a great job staying
+        connected with your network!
       </p>
       <div className="flex items-center justify-center space-x-4">
         <Link href="/contacts">
@@ -163,29 +158,30 @@ function EmptyState() {
 
 export default function DashboardPage() {
   const { data: overdueContacts, isLoading, error } = useOverdueContacts()
-  
+
   const [sortBy, setSortBy] = useState<'urgency' | 'name' | 'lastContacted'>('urgency')
 
-  const sortedContacts = overdueContacts?.slice().sort((a, b) => {
-    switch (sortBy) {
-      case 'urgency':
-        return b.days_overdue - a.days_overdue
-      case 'name':
-        return a.full_name.localeCompare(b.full_name)
-      case 'lastContacted':
-        if (!a.last_contacted && !b.last_contacted) return 0
-        if (!a.last_contacted) return 1
-        if (!b.last_contacted) return -1
-        return new Date(a.last_contacted).getTime() - new Date(b.last_contacted).getTime()
-      default:
-        return 0
-    }
-  }) || []
+  const sortedContacts =
+    overdueContacts?.slice().sort((a, b) => {
+      switch (sortBy) {
+        case 'urgency':
+          return b.days_overdue - a.days_overdue
+        case 'name':
+          return a.full_name.localeCompare(b.full_name)
+        case 'lastContacted':
+          if (!a.last_contacted && !b.last_contacted) return 0
+          if (!a.last_contacted) return 1
+          if (!b.last_contacted) return -1
+          return new Date(a.last_contacted).getTime() - new Date(b.last_contacted).getTime()
+        default:
+          return 0
+      }
+    }) || []
 
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
-      
+
       <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="md:flex md:items-center md:justify-between mb-8">
@@ -194,10 +190,9 @@ export default function DashboardPage() {
               Action Required
             </h2>
             <p className="mt-2 text-lg text-gray-600">
-              {overdueContacts?.length === 0 
+              {overdueContacts?.length === 0
                 ? "You're all caught up! No contacts need attention right now."
-                : `${overdueContacts?.length || 0} contacts need your attention`
-              }
+                : `${overdueContacts?.length || 0} contacts need your attention`}
             </p>
           </div>
           <div className="mt-6 flex space-x-3 md:mt-0 md:ml-4">
@@ -291,13 +286,11 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {!isLoading && !error && (overdueContacts?.length === 0) && (
-            <EmptyState />
-          )}
+          {!isLoading && !error && overdueContacts?.length === 0 && <EmptyState />}
 
           {!isLoading && !error && sortedContacts.length > 0 && (
             <>
-              {sortedContacts.map((contact) => (
+              {sortedContacts.map(contact => (
                 <OverdueContactCard key={contact.id} contact={contact} />
               ))}
             </>

@@ -1,9 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { remindersApi } from '@/lib/reminders-api'
-import type { 
-  CreateReminderRequest, 
-  ReminderListParams 
-} from '@/types/reminder'
+import type { CreateReminderRequest, ReminderListParams } from '@/types/reminder'
 
 // Query keys
 export const reminderKeys = {
@@ -90,4 +87,3 @@ export function useDeleteReminder() {
     },
   })
 }
-

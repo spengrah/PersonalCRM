@@ -1,10 +1,13 @@
 # Personal CRM Makefile
 
-.PHONY: help dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start stop restart status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start stop restart status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test
 
 # Default target
 help:
 	@echo "Available targets:"
+	@echo ""
+	@echo "🔧 Setup:"
+	@echo "  setup       - Setup development environment (install deps + git hooks)"
 	@echo ""
 	@echo "🚀 Production Commands:"
 	@echo "  start       - Start Personal CRM (production mode on port 3001)"
@@ -31,6 +34,24 @@ help:
 	@echo "Cadence Testing:"
 	@echo "  test-cadence-ultra - Test all cadences in minutes (testing env)"
 	@echo "  test-cadence-fast  - Test all cadences in hours (staging env)"
+
+# Setup development environment
+setup:
+	@echo "Setting up development environment..."
+	@echo ""
+	@echo "→ Installing frontend dependencies..."
+	@cd frontend && bun install
+	@echo "✓ Frontend dependencies installed"
+	@echo ""
+	@echo "→ Installing git hooks..."
+	@./scripts/install-git-hooks.sh
+	@echo ""
+	@echo "✓ Development environment setup complete!"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Copy .env.example to .env and configure"
+	@echo "  2. Start database: make docker-up"
+	@echo "  3. Start dev server: make dev"
 
 # Create logs directory
 logs:
@@ -140,7 +161,18 @@ ci-build-frontend:
 
 ci-build: ci-build-backend ci-build-frontend
 
-ci-test: test-unit test-integration test-frontend
+# Linting
+GOLANGCI_LINT := $(shell which golangci-lint 2>/dev/null || echo $$(go env GOPATH)/bin/golangci-lint)
+
+lint:
+	@echo "Running golangci-lint..."
+	@cd backend && $(GOLANGCI_LINT) run ./...
+
+lint-fix:
+	@echo "Running golangci-lint with auto-fix..."
+	@cd backend && $(GOLANGCI_LINT) run --fix ./...
+
+ci-test: lint test-unit test-integration test-frontend
 	@echo "✅ All CI tests passed"
 
 # API specific commands

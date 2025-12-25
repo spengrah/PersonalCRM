@@ -1,13 +1,13 @@
 'use client'
 
 import { useState } from 'react'
-import { Clock, Zap, Play, Pause, RotateCcw } from 'lucide-react'
+import { Clock, Zap, Play } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { 
-  useAcceleratedTime, 
-  useTimeAcceleration, 
+import {
+  useAcceleratedTime,
+  useTimeAcceleration,
   ACCELERATION_PRESETS,
-  createAccelerationSettings 
+  createAccelerationSettings,
 } from '@/hooks/use-accelerated-time'
 import { clsx } from 'clsx'
 
@@ -16,19 +16,13 @@ interface TimeAccelerationWidgetProps {
   position?: 'top-right' | 'bottom-right' | 'bottom-left' | 'top-left'
 }
 
-export function TimeAccelerationWidget({ 
-  className, 
-  position = 'top-right' 
+export function TimeAccelerationWidget({
+  className,
+  position = 'top-right',
 }: TimeAccelerationWidgetProps) {
   const [isExpanded, setIsExpanded] = useState(false)
-  const { 
-    currentTime, 
-    isAccelerated, 
-    accelerationFactor, 
-    environment,
-    isLoading 
-  } = useAcceleratedTime()
-  
+  const { currentTime, isAccelerated, accelerationFactor, environment } = useAcceleratedTime()
+
   const setAcceleration = useTimeAcceleration()
 
   // Only show in testing environments
@@ -38,9 +32,7 @@ export function TimeAccelerationWidget({
 
   const handleSetAcceleration = async (factor: number) => {
     try {
-      await setAcceleration.mutateAsync(
-        createAccelerationSettings(factor, factor > 1)
-      )
+      await setAcceleration.mutateAsync(createAccelerationSettings(factor, factor > 1))
       if (factor === 1) {
         setIsExpanded(false)
       }
@@ -59,14 +51,6 @@ export function TimeAccelerationWidget({
     })
   }
 
-  const getAccelerationLabel = (factor: number) => {
-    if (factor === 1) return 'Normal'
-    if (factor === 60) return 'Fast (1min = 1hr)'
-    if (factor === 1440) return 'Very Fast (1min = 1day)'
-    if (factor === 43200) return 'Ultra Fast (1min = 30days)'
-    return `${factor}x`
-  }
-
   const positionClasses = {
     'top-right': 'top-4 right-4',
     'bottom-right': 'bottom-4 right-4',
@@ -75,32 +59,30 @@ export function TimeAccelerationWidget({
   }
 
   return (
-    <div className={clsx(
-      'fixed z-50 transition-all duration-300',
-      positionClasses[position],
-      className
-    )}>
+    <div
+      className={clsx(
+        'fixed z-50 transition-all duration-300',
+        positionClasses[position],
+        className
+      )}
+    >
       {/* Collapsed State */}
       {!isExpanded && (
         <Button
           onClick={() => setIsExpanded(true)}
-          variant={isAccelerated ? "default" : "outline"}
+          variant={isAccelerated ? 'default' : 'outline'}
           size="sm"
           className={clsx(
             'shadow-lg border-2',
-            isAccelerated 
-              ? 'bg-blue-600 hover:bg-blue-700 border-blue-400 text-white' 
+            isAccelerated
+              ? 'bg-blue-600 hover:bg-blue-700 border-blue-400 text-white'
               : 'bg-white hover:bg-gray-50 border-gray-200'
           )}
         >
           <Clock className="w-4 h-4 mr-2" />
           {isAccelerated && <Zap className="w-3 h-3 mr-1 text-yellow-300" />}
           {formatTime(currentTime)}
-          {isAccelerated && (
-            <span className="ml-1 text-xs opacity-90">
-              {accelerationFactor}x
-            </span>
-          )}
+          {isAccelerated && <span className="ml-1 text-xs opacity-90">{accelerationFactor}x</span>}
         </Button>
       )}
 
@@ -130,23 +112,20 @@ export function TimeAccelerationWidget({
               {formatTime(currentTime)}
             </div>
             <div className="text-xs text-gray-500 mt-1">
-              {isAccelerated 
+              {isAccelerated
                 ? `Accelerated ${accelerationFactor}x (${environment})`
-                : `Normal Speed (${environment})`
-              }
+                : `Normal Speed (${environment})`}
             </div>
           </div>
 
           {/* Acceleration Controls */}
           <div className="space-y-2">
-            <div className="text-sm font-medium text-gray-700 mb-2">
-              Speed Control
-            </div>
-            
+            <div className="text-sm font-medium text-gray-700 mb-2">Speed Control</div>
+
             <div className="grid grid-cols-2 gap-2">
               <Button
                 onClick={() => handleSetAcceleration(ACCELERATION_PRESETS.NORMAL)}
-                variant={accelerationFactor === ACCELERATION_PRESETS.NORMAL ? "default" : "outline"}
+                variant={accelerationFactor === ACCELERATION_PRESETS.NORMAL ? 'default' : 'outline'}
                 size="sm"
                 disabled={setAcceleration.isPending}
                 className="justify-start"
@@ -157,7 +136,7 @@ export function TimeAccelerationWidget({
 
               <Button
                 onClick={() => handleSetAcceleration(ACCELERATION_PRESETS.FAST)}
-                variant={accelerationFactor === ACCELERATION_PRESETS.FAST ? "default" : "outline"}
+                variant={accelerationFactor === ACCELERATION_PRESETS.FAST ? 'default' : 'outline'}
                 size="sm"
                 disabled={setAcceleration.isPending}
                 className="justify-start"
@@ -168,7 +147,9 @@ export function TimeAccelerationWidget({
 
               <Button
                 onClick={() => handleSetAcceleration(ACCELERATION_PRESETS.VERY_FAST)}
-                variant={accelerationFactor === ACCELERATION_PRESETS.VERY_FAST ? "default" : "outline"}
+                variant={
+                  accelerationFactor === ACCELERATION_PRESETS.VERY_FAST ? 'default' : 'outline'
+                }
                 size="sm"
                 disabled={setAcceleration.isPending}
                 className="justify-start"
@@ -179,7 +160,9 @@ export function TimeAccelerationWidget({
 
               <Button
                 onClick={() => handleSetAcceleration(ACCELERATION_PRESETS.ULTRA_FAST)}
-                variant={accelerationFactor === ACCELERATION_PRESETS.ULTRA_FAST ? "default" : "outline"}
+                variant={
+                  accelerationFactor === ACCELERATION_PRESETS.ULTRA_FAST ? 'default' : 'outline'
+                }
                 size="sm"
                 disabled={setAcceleration.isPending}
                 className="justify-start"
@@ -199,8 +182,8 @@ export function TimeAccelerationWidget({
 
           {isAccelerated && (
             <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
-              <strong>Testing Mode:</strong> Time is running {accelerationFactor}x faster than normal. 
-              Perfect for testing birthday calculations and reminder cadences!
+              <strong>Testing Mode:</strong> Time is running {accelerationFactor}x faster than
+              normal. Perfect for testing birthday calculations and reminder cadences!
             </div>
           )}
         </div>
@@ -208,4 +191,3 @@ export function TimeAccelerationWidget({
     </div>
   )
 }
-

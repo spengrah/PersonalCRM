@@ -27,7 +27,7 @@ func RequestIDMiddleware() gin.HandlerFunc {
 // LoggingMiddleware logs HTTP requests with structured logging
 func LoggingMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		start := time.Now()
+		start := time.Now() //nolint:forbidigo // Use wall-clock time for request latency measurement
 		path := c.Request.URL.Path
 		raw := c.Request.URL.RawQuery
 
@@ -35,7 +35,7 @@ func LoggingMiddleware() gin.HandlerFunc {
 		c.Next()
 
 		// Calculate latency
-		latency := time.Since(start)
+		latency := time.Since(start) //nolint:forbidigo // Use wall-clock time for request latency measurement
 
 		// Get request ID from context (safe type assertion with fallback)
 		requestID := "unknown"

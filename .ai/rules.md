@@ -118,6 +118,30 @@ gh issue develop 123 --name "feat/auto-migrations"
 5. Create PR: `gh pr create --fill`
 6. PR automatically links to issue and closes it on merge. If there are multiple commits, they will be squashed into a single commit on merge.
 
+### Git Hooks (Automated Enforcement)
+
+**Pre-commit hook (auto-format):**
+- Automatically runs `gofmt` on staged Go files
+- Automatically runs `prettier` on staged frontend files
+- Auto-fixes formatting issues
+- Re-stages formatted files
+- Never blocks commits
+
+**Pre-push hook (linting):**
+- Runs `make lint` (backend: golangci-lint)
+- Runs `bun run lint` (frontend: ESLint + Prettier)
+- Blocks push if linting fails
+- Can be bypassed with `--no-verify` (not recommended)
+
+**Installation:**
+```bash
+./scripts/install-git-hooks.sh
+# Or use the setup command:
+make setup
+```
+
+**Critical:** AI agents should ensure hooks are installed when setting up the development environment.
+
 ### 3. Before Starting Any Work
 
 1. **Read the context:**
@@ -183,11 +207,12 @@ make prod                   # Real-world timing
    ```go
    // ❌ WRONG
    now := time.Now()
-   
+
    // ✅ CORRECT
    now := accelerated.GetCurrentTime()
    ```
    *Reason:* Breaks time acceleration feature for testing
+   *Linter:* Enforced by golangci-lint forbidigo rule
 
 2. **Never write raw SQL in Go code**
    ```go

@@ -1,0 +1,32 @@
+#!/bin/bash
+# Pre-commit hook: Auto-format Go and frontend files
+
+set -e
+
+echo "Pre-commit: Formatting staged files..."
+
+# Format Go files with gofmt
+STAGED_GO_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)
+if [ -n "$STAGED_GO_FILES" ]; then
+  echo "  → Formatting Go files with gofmt..."
+  echo "$STAGED_GO_FILES" | xargs gofmt -w
+  echo "$STAGED_GO_FILES" | xargs git add
+  echo "  ✓ Go files formatted"
+fi
+
+# Format frontend files with Prettier
+STAGED_FRONTEND_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|js|jsx|css|json)$' | grep '^frontend/' || true)
+if [ -n "$STAGED_FRONTEND_FILES" ]; then
+  echo "  → Formatting frontend files with Prettier..."
+  cd frontend && echo "$STAGED_FRONTEND_FILES" | sed 's|^frontend/||' | xargs npx prettier --write
+  cd ..
+  echo "$STAGED_FRONTEND_FILES" | xargs git add
+  echo "  ✓ Frontend files formatted"
+fi
+
+if [ -z "$STAGED_GO_FILES" ] && [ -z "$STAGED_FRONTEND_FILES" ]; then
+  echo "  → No Go or frontend files to format"
+fi
+
+echo "✓ Pre-commit formatting complete"
+exit 0

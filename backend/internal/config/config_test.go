@@ -10,12 +10,18 @@ import (
 func WithEnv(t *testing.T, key, value string) {
 	t.Helper()
 	original := os.Getenv(key)
-	os.Setenv(key, value)
+	if err := os.Setenv(key, value); err != nil {
+		t.Fatalf("Failed to set environment variable %s: %v", key, err)
+	}
 	t.Cleanup(func() {
 		if original == "" {
-			os.Unsetenv(key)
+			if err := os.Unsetenv(key); err != nil {
+				t.Errorf("Failed to unset environment variable %s: %v", key, err)
+			}
 		} else {
-			os.Setenv(key, original)
+			if err := os.Setenv(key, original); err != nil {
+				t.Errorf("Failed to restore environment variable %s: %v", key, err)
+			}
 		}
 	})
 }

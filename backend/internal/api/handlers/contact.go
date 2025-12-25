@@ -54,7 +54,7 @@ func (d DateOnly) MarshalJSON() ([]byte, error) {
 	if d.Time == nil {
 		return []byte("null"), nil
 	}
-	return json.Marshal(d.Time.Format("2006-01-02"))
+	return json.Marshal(d.Format("2006-01-02"))
 }
 
 // ContactHandler handles contact-related HTTP requests
@@ -158,7 +158,7 @@ func createRequestToRepo(req CreateContactRequest) repository.CreateContactReque
 	}
 
 	// Set last_contacted to current date when creating a contact
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 
 	return repository.CreateContactRequest{
 		FullName:      req.FullName,
