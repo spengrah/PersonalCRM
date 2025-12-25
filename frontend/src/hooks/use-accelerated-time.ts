@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { systemApi } from '@/lib/system-api'
-import type { SystemTimeResponse, SetAccelerationRequest } from '@/types/system'
+import type { SetAccelerationRequest } from '@/types/system'
 
 // Query keys
 export const systemKeys = {
@@ -39,7 +39,6 @@ export function useAcceleratedTime() {
 
     if (systemTime.is_accelerated) {
       // For accelerated time, calculate the offset and update frequently
-      const serverTime = new Date(systemTime.current_time)
       const baseTime = new Date(systemTime.base_time)
       const localBaseTime = Date.now()
 

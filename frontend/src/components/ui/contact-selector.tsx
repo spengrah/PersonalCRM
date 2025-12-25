@@ -178,7 +178,7 @@ export function ContactSelector({
 
           {filteredContacts.length === 0 && searchTerm ? (
             <div className="relative cursor-default select-none py-2 pl-10 pr-4 text-gray-700">
-              No contacts found for "{searchTerm}"
+              No contacts found for &ldquo;{searchTerm}&rdquo;
             </div>
           ) : (
             filteredContacts.map((contact, index) => (

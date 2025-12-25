@@ -135,8 +135,8 @@ function EmptyState() {
       <CheckCircle className="mx-auto h-16 w-16 text-green-500 mb-6" />
       <h3 className="text-xl font-semibold text-gray-900 mb-3">All caught up! 🎉</h3>
       <p className="text-gray-600 mb-8 max-w-md mx-auto">
-        You don't have any overdue contacts right now. You're doing a great job staying connected
-        with your network!
+        You don&apos;t have any overdue contacts right now. You&apos;re doing a great job staying
+        connected with your network!
       </p>
       <div className="flex items-center justify-center space-x-4">
         <Link href="/contacts">

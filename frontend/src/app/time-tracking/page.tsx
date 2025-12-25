@@ -13,16 +13,8 @@ import {
   timeEntryKeys,
 } from '@/hooks/use-time-entries'
 import { useQueryClient } from '@tanstack/react-query'
-import {
-  Play,
-  Square,
-  Trash2,
-  Edit,
-  Clock as ClockIcon,
-  ChevronLeft,
-  ChevronRight,
-} from 'lucide-react'
-import type { CreateTimeEntryRequest } from '@/types/time-entry'
+import { Play, Square, Trash2, Clock as ClockIcon, ChevronLeft, ChevronRight } from 'lucide-react'
+import type { CreateTimeEntryRequest, TimeEntry } from '@/types/time-entry'
 
 function formatDuration(minutes: number): string {
   if (minutes === 0) {
@@ -57,8 +49,8 @@ function getDateKey(date: Date): string {
   return date.toISOString().split('T')[0]
 }
 
-function groupEntriesByDay(entries: any[]) {
-  const grouped: Record<string, any[]> = {}
+function groupEntriesByDay(entries: TimeEntry[]) {
+  const grouped: Record<string, TimeEntry[]> = {}
 
   entries.forEach(entry => {
     // Check end_time exists and duration_minutes is a number (including 0)
@@ -194,7 +186,6 @@ function ManualEntryForm({
       return
     }
 
-    let startTimeISO: string
     let endTimeISO: string | undefined
     let durationMinutes: number | undefined
 
@@ -203,7 +194,7 @@ function ManualEntryForm({
       alert('Start date and time are required')
       return
     }
-    startTimeISO = new Date(`${startDate}T${startTime}`).toISOString()
+    const startTimeISO = new Date(`${startDate}T${startTime}`).toISOString()
 
     // Parse end time or duration
     if (useDuration) {
@@ -431,7 +422,7 @@ export default function TimeTrackingPage() {
   const [showManualForm, setShowManualForm] = useState(false)
   const [selectedDate, setSelectedDate] = useState(new Date())
   const queryClient = useQueryClient()
-  const { data: runningEntry, isLoading: isLoadingRunning } = useRunningTimeEntry()
+  const { data: runningEntry } = useRunningTimeEntry()
   const { data: entries, isLoading: isLoadingEntries } = useTimeEntries({ limit: 100 })
   const { data: stats, isLoading: isLoadingStats } = useTimeEntryStats()
   const createMutation = useCreateTimeEntry()

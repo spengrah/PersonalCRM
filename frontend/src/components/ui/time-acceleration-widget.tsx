@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Clock, Zap, Play, Pause, RotateCcw } from 'lucide-react'
+import { Clock, Zap, Play } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   useAcceleratedTime,
@@ -21,8 +21,7 @@ export function TimeAccelerationWidget({
   position = 'top-right',
 }: TimeAccelerationWidgetProps) {
   const [isExpanded, setIsExpanded] = useState(false)
-  const { currentTime, isAccelerated, accelerationFactor, environment, isLoading } =
-    useAcceleratedTime()
+  const { currentTime, isAccelerated, accelerationFactor, environment } = useAcceleratedTime()
 
   const setAcceleration = useTimeAcceleration()
 
@@ -50,14 +49,6 @@ export function TimeAccelerationWidget({
       minute: '2-digit',
       second: '2-digit',
     })
-  }
-
-  const getAccelerationLabel = (factor: number) => {
-    if (factor === 1) return 'Normal'
-    if (factor === 60) return 'Fast (1min = 1hr)'
-    if (factor === 1440) return 'Very Fast (1min = 1day)'
-    if (factor === 43200) return 'Ultra Fast (1min = 30days)'
-    return `${factor}x`
   }
 
   const positionClasses = {

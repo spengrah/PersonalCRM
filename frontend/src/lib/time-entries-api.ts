@@ -29,8 +29,8 @@ export async function listTimeEntries(params?: ListTimeEntriesParams): Promise<T
 export async function getRunningTimeEntry(): Promise<TimeEntry | null> {
   try {
     return await apiClient.get<TimeEntry>('/api/v1/time-entries/running')
-  } catch (error: any) {
-    if (error.status === 404) {
+  } catch (error: unknown) {
+    if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
       return null
     }
     throw error

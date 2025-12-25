@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 
 export default function TestApiPage() {
   const [status, setStatus] = useState('Testing...')
-  const [result, setResult] = useState<any>(null)
+  const [result, setResult] = useState<unknown>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -28,9 +28,9 @@ export default function TestApiPage() {
         const data = await response.json()
         setStatus('✅ Success')
         setResult(data)
-      } catch (err: any) {
+      } catch (err: unknown) {
         setStatus('❌ Failed')
-        setError(err.message)
+        setError(err instanceof Error ? err.message : 'Unknown error')
       }
     }
 

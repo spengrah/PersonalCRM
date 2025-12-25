@@ -22,7 +22,6 @@ interface BirthdayInfo {
 // Calculate age turning this year
 function calculateAgeThisYear(birthday: Date, currentTime: Date): number {
   const currentYear = currentTime.getFullYear()
-  const birthdayThisYear = new Date(currentYear, birthday.getMonth(), birthday.getDate())
 
   // Age they turn this calendar year
   return currentYear - birthday.getFullYear()
@@ -48,7 +47,6 @@ function calculateDaysUntilBirthday(birthday: Date, currentTime: Date): number {
 // Check if we should show next year's early birthdays (for gift planning)
 function shouldShowNextYearBirthdays(currentTime: Date): boolean {
   const month = currentTime.getMonth() + 1 // getMonth() is 0-based
-  const day = currentTime.getDate()
 
   // Show next year's Jan-Mar birthdays if we're in November or December
   return month >= 11 // November (11) or December (12)
@@ -297,7 +295,7 @@ export default function BirthdaysPage() {
               <section>
                 <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
                   <Gift className="w-5 h-5 text-pink-600 mr-2" />
-                  Today's Birthdays ({todaysBirthdays.length})
+                  Today&apos;s Birthdays ({todaysBirthdays.length})
                 </h2>
                 <div className="space-y-3">
                   {todaysBirthdays.map(birthdayInfo => (

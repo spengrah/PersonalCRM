@@ -1,11 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { contactsApi } from '@/lib/contacts-api'
-import type {
-  CreateContactRequest,
-  UpdateContactRequest,
-  ContactListParams,
-  OverdueContact,
-} from '@/types/contact'
+import type { CreateContactRequest, UpdateContactRequest, ContactListParams } from '@/types/contact'
 
 // Query keys
 export const contactKeys = {
