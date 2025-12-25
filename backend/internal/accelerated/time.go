@@ -8,7 +8,7 @@ import (
 
 // GetCurrentTime returns the current time, potentially accelerated for testing
 func GetCurrentTime() time.Time {
-	now := time.Now()
+	now := time.Now() //nolint:forbidigo // This is the wrapper implementation
 
 	// Check for acceleration settings
 	accelerationStr := os.Getenv("TIME_ACCELERATION")

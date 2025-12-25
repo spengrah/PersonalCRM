@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/reminder"
@@ -66,7 +67,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 
 	t.Run("GenerateReminders_OverdueWeeklyContact", func(t *testing.T) {
 		// Create a contact with weekly cadence that is overdue
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 		lastContacted := now.AddDate(0, 0, -14) // 14 days ago (overdue for weekly)
 
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -107,7 +108,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 
 	t.Run("GenerateReminders_NotOverdueContact", func(t *testing.T) {
 		// Create a contact with weekly cadence that is NOT overdue
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 		lastContacted := now.AddDate(0, 0, -3) // 3 days ago (not overdue for weekly)
 
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -134,7 +135,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 
 	t.Run("GenerateReminders_SkipContactWithoutCadence", func(t *testing.T) {
 		// Create a contact without cadence
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 		lastContacted := now.AddDate(0, 0, -30) // 30 days ago but no cadence
 
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -161,7 +162,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 
 	t.Run("GenerateReminders_Idempotency", func(t *testing.T) {
 		// Create an overdue contact
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 		lastContacted := now.AddDate(0, 0, -14) // 14 days ago (overdue for weekly)
 
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -201,7 +202,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 	})
 
 	t.Run("GenerateReminders_MultipleCadenceTypes", func(t *testing.T) {
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 
 		// Create contacts with different cadences
 		contacts := []struct {
@@ -268,7 +269,7 @@ func TestReminderGeneration_GenerateForOverdueContacts(t *testing.T) {
 		reminderService, contactRepo, reminderRepo, cleanup := setupReminderGenerationTest(t)
 		defer cleanup()
 
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 		// 15 minutes ago should be overdue in staging (where weekly = 10 min)
 		lastContacted := now.Add(-15 * time.Minute)
 
@@ -315,7 +316,7 @@ func TestReminderGeneration_TitleAndDescription(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	lastContacted := now.AddDate(0, 0, -14) // 14 days ago
 
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -396,7 +397,7 @@ func TestReminderGeneration_InvalidCadence(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	lastContacted := now.AddDate(0, 0, -30)
 
 	// Manually insert a contact with invalid cadence (bypassing API validation)
@@ -428,7 +429,7 @@ func TestReminderGeneration_InvalidCadence(t *testing.T) {
 }
 
 // Note: Time mocking functions (SetCurrentTime/ResetTime) don't exist in accelerated package
-// Tests use time.Now() which is sufficient for integration testing
+// Tests use accelerated.GetCurrentTime() which is sufficient for integration testing
 
 // Helper to create scheduler for testing
 func TestScheduler_Integration(t *testing.T) {

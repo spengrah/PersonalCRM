@@ -1,25 +1,22 @@
 # golangci-lint configuration for Personal CRM
-version: "2"
 
 run:
   timeout: 5m
-
-formatters:
-  enable:
-    - gofmt      # Go formatting
-    - goimports  # Imports formatting
 
 linters:
   enable:
     - forbidigo  # Forbid specific function calls
     - govet      # Go vet
     - errcheck   # Check error handling
-  settings:
-    forbidigo:
-      forbid:
-        - pattern: 'time\.Now\(\)'
-          msg: 'use accelerated.GetCurrentTime() instead of time.Now() for time acceleration support'
-      # Legitimate exceptions use inline //nolint:forbidigo comments:
-      # - backend/internal/accelerated/time.go (wrapper implementation)
-      # - backend/internal/api/middleware.go (latency measurement)
-      # - backend/internal/api/handlers/system.go:83 (TIME_BASE setting)
+    - gofmt      # Go formatting
+    - goimports  # Imports formatting
+
+linters-settings:
+  forbidigo:
+    forbid:
+      - p: 'time\.Now'
+        msg: 'use accelerated.GetCurrentTime() instead of time.Now() for time acceleration support'
+    # Legitimate exceptions use inline //nolint:forbidigo comments:
+    # - backend/internal/accelerated/time.go (wrapper implementation)
+    # - backend/internal/api/middleware.go (latency measurement)
+    # - backend/internal/api/handlers/system.go:83 (TIME_BASE setting)
