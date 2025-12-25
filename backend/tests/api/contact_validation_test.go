@@ -235,11 +235,11 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 		uniqueEmail := strings.Repeat("a", 235) + uuid.New().String()[:10] + "@test.com" // Total ~255 chars
 
 		requestBody := handlers.CreateContactRequest{
-			FullName:     strings.Repeat("a", 255),                         // Max 255
-			Email:        stringPtr(uniqueEmail),                           // Max 255
-			Phone:        stringPtr(strings.Repeat("1", 50)),               // Max 50
-			Location:     stringPtr(strings.Repeat("a", 255)),              // Max 255
-			HowMet:       stringPtr(strings.Repeat("a", 500)),              // Max 500
+			FullName:     strings.Repeat("a", 255),                                              // Max 255
+			Email:        stringPtr(uniqueEmail),                                                // Max 255
+			Phone:        stringPtr(strings.Repeat("1", 50)),                                    // Max 50
+			Location:     stringPtr(strings.Repeat("a", 255)),                                   // Max 255
+			HowMet:       stringPtr(strings.Repeat("a", 500)),                                   // Max 500
 			ProfilePhoto: stringPtr("https://example.com/" + strings.Repeat("a", 470) + ".jpg"), // Max 500
 		}
 

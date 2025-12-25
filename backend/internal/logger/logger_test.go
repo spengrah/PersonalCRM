@@ -175,4 +175,3 @@ func TestLogLevelFiltering(t *testing.T) {
 		assert.Contains(t, output, "warn message")
 	})
 }
-
