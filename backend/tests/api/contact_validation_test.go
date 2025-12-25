@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -22,12 +24,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// getMigrationsPath returns the absolute path to the migrations directory
+func getMigrationsPath() string {
+	// If MIGRATIONS_PATH is set as absolute path, use it
+	if path := os.Getenv("MIGRATIONS_PATH"); path != "" && filepath.IsAbs(path) {
+		return path
+	}
+
+	// Otherwise, compute path relative to this test file
+	_, filename, _, _ := runtime.Caller(0)
+	testDir := filepath.Dir(filename)
+	return filepath.Join(testDir, "..", "..", "migrations")
+}
+
 func setupContactValidationTestRouter() (*gin.Engine, func()) {
 	gin.SetMode(gin.TestMode)
 
 	ctx := context.Background()
+	databaseURL := os.Getenv("DATABASE_URL")
+
+	// Run migrations before connecting to database
+	migrationsPath := getMigrationsPath()
+	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+		panic("Failed to run migrations: " + err.Error())
+	}
+
 	dbConfig := config.DatabaseConfig{
-		URL: os.Getenv("DATABASE_URL"),
+		URL: databaseURL,
 	}
 	database, err := db.NewDatabase(ctx, dbConfig)
 	if err != nil {

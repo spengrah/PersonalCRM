@@ -19,8 +19,16 @@ import (
 
 func setupReminderGenerationTest(t *testing.T) (*service.ReminderService, *repository.ContactRepository, *repository.ReminderRepository, func()) {
 	ctx := context.Background()
+	databaseURL := os.Getenv("DATABASE_URL")
+
+	// Run migrations before connecting to database
+	migrationsPath := getMigrationsPath()
+	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+		t.Fatalf("Failed to run migrations: %v", err)
+	}
+
 	dbConfig := config.DatabaseConfig{
-		URL: os.Getenv("DATABASE_URL"),
+		URL: databaseURL,
 	}
 	database, err := db.NewDatabase(ctx, dbConfig)
 	if err != nil {
