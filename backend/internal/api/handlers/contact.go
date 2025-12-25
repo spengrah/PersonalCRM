@@ -158,7 +158,7 @@ func createRequestToRepo(req CreateContactRequest) repository.CreateContactReque
 	}
 
 	// Set last_contacted to current date when creating a contact
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 
 	return repository.CreateContactRequest{
 		FullName:      req.FullName,

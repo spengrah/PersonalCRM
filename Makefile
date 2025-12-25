@@ -140,7 +140,18 @@ ci-build-frontend:
 
 ci-build: ci-build-backend ci-build-frontend
 
-ci-test: test-unit test-integration test-frontend
+# Linting
+GOLANGCI_LINT := $(shell which golangci-lint 2>/dev/null || echo $$(go env GOPATH)/bin/golangci-lint)
+
+lint:
+	@echo "Running golangci-lint..."
+	@cd backend && $(GOLANGCI_LINT) run ./...
+
+lint-fix:
+	@echo "Running golangci-lint with auto-fix..."
+	@cd backend && $(GOLANGCI_LINT) run --fix ./...
+
+ci-test: lint test-unit test-integration test-frontend
 	@echo "✅ All CI tests passed"
 
 # API specific commands

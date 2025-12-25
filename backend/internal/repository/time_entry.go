@@ -38,7 +38,7 @@ type CreateTimeEntryRequest struct {
 	ContactID       *uuid.UUID `json:"contact_id,omitempty"`
 	StartTime       time.Time  `json:"start_time" validate:"required"`
 	EndTime         *time.Time `json:"end_time,omitempty"`
-	DurationMinutes *int32    `json:"duration_minutes,omitempty"`
+	DurationMinutes *int32     `json:"duration_minutes,omitempty"`
 }
 
 type UpdateTimeEntryRequest struct {
@@ -46,7 +46,7 @@ type UpdateTimeEntryRequest struct {
 	Project         *string    `json:"project,omitempty" validate:"omitempty,max=100"`
 	ContactID       *uuid.UUID `json:"contact_id,omitempty"`
 	EndTime         *time.Time `json:"end_time,omitempty"`
-	DurationMinutes *int32    `json:"duration_minutes,omitempty"`
+	DurationMinutes *int32     `json:"duration_minutes,omitempty"`
 }
 
 type ListTimeEntriesParams struct {
@@ -281,4 +281,3 @@ func (r *TimeEntryRepository) GetTimeEntryStats(ctx context.Context) (*TimeEntry
 		MonthMinutes: monthMinutes,
 	}, nil
 }
-

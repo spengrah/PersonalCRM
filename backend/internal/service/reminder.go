@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/reminder"
 	"personal-crm/backend/internal/repository"
@@ -38,7 +39,7 @@ func (s *ReminderService) GenerateRemindersForOverdueContacts(ctx context.Contex
 		return err
 	}
 
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, now.Location()) // Set reminder for 9 AM
 
 	remindersCreated := 0
@@ -136,7 +137,7 @@ func (s *ReminderService) GetDueReminders(ctx context.Context, dueBy time.Time) 
 
 // GetTodayReminders returns all reminders due today
 func (s *ReminderService) GetTodayReminders(ctx context.Context) ([]repository.DueReminder, error) {
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	endOfDay := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, now.Location())
 	return s.GetDueReminders(ctx, endOfDay)
 }
@@ -168,7 +169,7 @@ func (s *ReminderService) DeleteReminder(ctx context.Context, reminderID uuid.UU
 
 // GetReminderStats returns statistics about reminders
 func (s *ReminderService) GetReminderStats(ctx context.Context) (map[string]interface{}, error) {
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	endOfDay := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, now.Location())
 
 	totalReminders, err := s.reminderRepo.CountReminders(ctx)
@@ -192,4 +193,3 @@ func (s *ReminderService) GetReminderStats(ctx context.Context) (map[string]inte
 		"overdue":         overdue,
 	}, nil
 }
-

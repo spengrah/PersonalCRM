@@ -37,4 +37,3 @@ func GetCurrentTime() time.Time {
 	acceleratedElapsed := time.Duration(int64(elapsed) * int64(acceleration))
 	return baseTime.Add(acceleratedElapsed)
 }
-

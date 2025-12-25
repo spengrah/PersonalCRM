@@ -109,4 +109,3 @@ func GenerateReminderDescription(contactName string, cadence CadenceType, daysSi
 	}
 	return fmt.Sprintf("Time to reach out to %s as part of your %s follow-up schedule. It's been %d days since your last contact.", contactName, string(cadence), daysSinceLastContact)
 }
-

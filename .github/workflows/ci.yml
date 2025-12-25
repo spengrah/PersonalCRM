@@ -41,6 +41,13 @@ jobs:
         working-directory: backend
         run: go mod download
 
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          working-directory: backend
+          args: --timeout=5m
+
       - name: Run unit tests
         working-directory: backend
         run: go test -short -v ./...

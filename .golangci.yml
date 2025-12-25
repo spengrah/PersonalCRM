@@ -1,0 +1,28 @@
+# golangci-lint configuration for Personal CRM
+run:
+  timeout: 5m
+  tests: false  # Don't lint test files by default
+  modules-download-mode: readonly
+
+issues:
+  exclude-dirs:
+    - vendor
+    - node_modules
+
+linters:
+  enable:
+    - forbidigo  # Forbid specific function calls
+    - gofmt      # Go formatting
+    - goimports  # Imports formatting
+    - govet      # Go vet
+    - errcheck   # Check error handling
+
+linters-settings:
+  forbidigo:
+    forbid:
+      - p: 'time\.Now\(\)'
+        msg: 'use accelerated.GetCurrentTime() instead of time.Now() for time acceleration support'
+    # Legitimate exceptions use inline //nolint:forbidigo comments:
+    # - backend/internal/accelerated/time.go (wrapper implementation)
+    # - backend/internal/api/middleware.go (latency measurement)
+    # - backend/internal/api/handlers/system.go:83 (TIME_BASE setting)

@@ -183,11 +183,12 @@ make prod                   # Real-world timing
    ```go
    // ❌ WRONG
    now := time.Now()
-   
+
    // ✅ CORRECT
    now := accelerated.GetCurrentTime()
    ```
    *Reason:* Breaks time acceleration feature for testing
+   *Linter:* Enforced by golangci-lint forbidigo rule
 
 2. **Never write raw SQL in Go code**
    ```go

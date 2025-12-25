@@ -80,7 +80,7 @@ func (h *SystemHandler) SetTimeAcceleration(c *gin.Context) {
 	// Set environment variables (note: this only affects current process)
 	os.Setenv("TIME_ACCELERATION", strconv.Itoa(settings.Factor))
 	if settings.Factor > 1 {
-		os.Setenv("TIME_BASE", strconv.FormatInt(time.Now().Unix(), 10))
+		os.Setenv("TIME_BASE", strconv.FormatInt(time.Now().Unix(), 10)) //nolint:forbidigo // Need wall-clock base for acceleration
 	} else {
 		os.Unsetenv("TIME_BASE")
 	}
@@ -89,7 +89,7 @@ func (h *SystemHandler) SetTimeAcceleration(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"acceleration_factor": settings.Factor,
-			"applied_at":          time.Now(),
+			"applied_at":          accelerated.GetCurrentTime(),
 		},
 	})
 }
@@ -129,7 +129,7 @@ func (h *SystemHandler) ExportData(c *gin.Context) {
 	}
 
 	exportData := gin.H{
-		"exported_at": time.Now(),
+		"exported_at": accelerated.GetCurrentTime(),
 		"version":     "1.0",
 		"data": gin.H{
 			"contacts":  contacts,
