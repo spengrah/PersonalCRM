@@ -14,12 +14,13 @@ WHERE deleted_at IS NULL
 LIMIT $1 OFFSET $2;
 
 -- name: SearchContacts :many
-SELECT * FROM contact 
-WHERE deleted_at IS NULL 
-  AND (
-    full_name ILIKE '%' || $1 || '%' 
-    OR email ILIKE '%' || $1 || '%'
-  )
+SELECT * FROM contact
+WHERE deleted_at IS NULL
+  AND to_tsvector('english', full_name || ' ' || COALESCE(email, '')) @@ plainto_tsquery('english', $1)
+ORDER BY ts_rank(
+  to_tsvector('english', full_name || ' ' || COALESCE(email, '')),
+  plainto_tsquery('english', $1)
+) DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CreateContact :one

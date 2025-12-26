@@ -192,9 +192,9 @@ func (r *ContactRepository) ListContacts(ctx context.Context, params ListContact
 // SearchContacts searches for contacts by query
 func (r *ContactRepository) SearchContacts(ctx context.Context, params SearchContactsParams) ([]Contact, error) {
 	dbContacts, err := r.queries.SearchContacts(ctx, db.SearchContactsParams{
-		Column1: pgtype.Text{String: params.Query, Valid: true},
-		Limit:   params.Limit,
-		Offset:  params.Offset,
+		PlaintoTsquery: params.Query,
+		Limit:          params.Limit,
+		Offset:         params.Offset,
 	})
 	if err != nil {
 		return nil, err
