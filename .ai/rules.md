@@ -168,7 +168,9 @@ See [README.md](../README.md#development-commands) for full command reference.
 
 **Most used:**
 ```bash
-make dev                    # Start everything
+make dev                    # Start dev environment (hot reload)
+make start-local            # Start production mode locally
+make reload                 # ⚠️ Rebuild + restart (use after code changes in prod mode)
 make test-unit              # Unit tests
 make test-integration       # Integration tests
 ./smoke-test.sh            # Full system test
@@ -177,6 +179,34 @@ make testing                # Ultra-fast cadences (testing)
 make staging                # Fast cadences (hours)
 make prod                   # Real-world timing
 ```
+
+### 5. Process Management (Critical)
+
+**⚠️ Always use `make reload` after code changes when running in production mode.**
+
+The start scripts kill existing processes before starting new ones, but `make build` alone does NOT restart services.
+
+| Command | What it does | When to use |
+|---------|--------------|-------------|
+| `make build` | Builds only, no restart | ❌ Avoid when services running |
+| `make reload` | Build + restart apps | ✅ After code changes |
+| `make restart` | Full stop + start | When DB needs restart |
+| `make start-local` | Start from scratch | First time / cold start |
+
+**Why this matters:**
+- Next.js embeds environment variables at build time
+- Go binaries must be rebuilt to pick up code changes
+- Old processes continue serving stale code if not restarted
+
+**Symptoms of stale processes:**
+- Code changes don't appear in browser
+- API returns old behavior
+- "It works on my machine" issues
+
+**The start scripts now:**
+1. Kill any existing process on the port
+2. Verify the new process starts successfully
+3. Check BUILD_ID matches (frontend) or health check passes (backend)
 
 ### 4. Code Style
 

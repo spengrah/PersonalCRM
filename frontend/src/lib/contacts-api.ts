@@ -26,18 +26,21 @@ export const contactsApi = {
       ...(params.order && { order: params.order }),
     }
 
-    // We need to make a raw request to get both data and meta
-    const url = new URL(
-      '/api/v1/contacts',
-      process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080'
-    )
+    // Use apiClient with proper headers, but we need to handle the pagination meta
+    const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080'
+    const url = new URL('/api/v1/contacts', API_BASE_URL)
     Object.entries(queryParams).forEach(([key, value]) => {
       if (value !== undefined) {
         url.searchParams.append(key, String(value))
       }
     })
 
-    const response = await fetch(url.toString())
+    const response = await fetch(url.toString(), {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': process.env.NEXT_PUBLIC_API_KEY || '',
+      },
+    })
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
     }
