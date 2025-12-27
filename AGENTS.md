@@ -50,10 +50,23 @@ See [README.md](README.md#development-commands) for full command reference.
 
 **Most used:**
 ```bash
-make dev                    # Start everything
+make dev                    # Start dev environment
+make reload                 # ⚠️ IMPORTANT: Rebuild + restart (use after code changes)
 make test-unit              # Unit tests
 make test-integration       # Integration tests
 ./smoke-test.sh            # Full system test
+```
+
+### ⚠️ Critical: Use `make reload` After Code Changes
+
+**Never use `make build` alone** when services are running. The old processes will keep running with stale code.
+
+```bash
+# ❌ WRONG - old processes keep running
+make build                  # Builds but doesn't restart!
+
+# ✅ CORRECT - rebuilds AND restarts
+make reload                 # Builds and restarts apps (keeps DB)
 ```
 
 ---

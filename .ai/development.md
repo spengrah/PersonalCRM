@@ -4,6 +4,51 @@ Complete step-by-step guide for implementing new features in the Personal CRM.
 
 ---
 
+## Development Workflow
+
+### Starting Development
+
+```bash
+# First time setup
+make setup                  # Install dependencies and git hooks
+make start-local            # Start all services in production mode
+```
+
+### Development Cycle
+
+```bash
+# Make code changes, then:
+make reload                 # ⚠️ ALWAYS use this after code changes
+
+# NOT just `make build` - that doesn't restart services!
+```
+
+### Why `make reload` is Critical
+
+When running in production mode (`make start-local`), the frontend and backend run as detached processes. Unlike `make dev` which has hot-reload:
+
+- **Frontend**: Next.js embeds `NEXT_PUBLIC_*` env vars at build time
+- **Backend**: Go binaries must be rebuilt to pick up changes
+- **Old processes**: Keep running with stale code if not killed
+
+`make reload` does:
+1. Rebuilds both frontend and backend
+2. Kills existing processes on ports 3001 and 8080
+3. Starts new processes with the fresh build
+4. Verifies startup success and BUILD_ID
+
+### Quick Reference
+
+| Scenario | Command |
+|----------|---------|
+| Start fresh | `make start-local` |
+| After code changes | `make reload` |
+| Full restart (inc. DB) | `make restart` |
+| Check status | `make status` |
+| Stop everything | `make stop` |
+
+---
+
 ## Feature Development Process
 
 Follow this order when implementing new features:

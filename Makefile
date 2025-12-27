@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start stop restart status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test
 
 # Default target
 help:
@@ -11,8 +11,10 @@ help:
 	@echo ""
 	@echo "🚀 Production Commands:"
 	@echo "  start       - Start Personal CRM (production mode on port 3001)"
+	@echo "  start-local - Start with .env.local (preserves your production secrets)"
 	@echo "  stop        - Stop Personal CRM"
-	@echo "  restart     - Restart Personal CRM"
+	@echo "  restart     - Restart Personal CRM (full stop/start)"
+	@echo "  reload      - Rebuild and restart apps (keeps database running)"
 	@echo "  status      - Check CRM status"
 	@echo ""
 	@echo "Environment Management:"
@@ -61,6 +63,7 @@ logs:
 dev:
 	@echo "Starting development environment..."
 	@make docker-up
+	@bash scripts/sync-postgres-auth.sh
 	@make logs
 	@echo "Starting backend server..."
 	@bash scripts/start-backend.sh
@@ -229,6 +232,7 @@ test-cadence-ultra:
 	@echo ""
 	@make testing
 	@make docker-up
+	@bash scripts/sync-postgres-auth.sh
 	@make logs
 	@echo "Starting backend with ultra-fast cadences..."
 	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && nohup go run cmd/crm-api/main.go > ../logs/backend-testing.log 2>&1 & echo $$! > ../logs/backend-testing.pid && cd ../.. && bash -c "disown %1" 2>/dev/null || true
@@ -249,6 +253,7 @@ test-cadence-fast:
 	@echo ""
 	@make staging
 	@make docker-up
+	@bash scripts/sync-postgres-auth.sh
 	@make logs
 	@echo "Starting backend with fast cadences..."
 	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && nohup go run cmd/crm-api/main.go > ../logs/backend-staging.log 2>&1 & echo $$! > ../logs/backend-staging.pid && cd ../.. && bash -c "disown %1" 2>/dev/null || true
@@ -294,6 +299,7 @@ start:
 	@make prod
 	@make build
 	@make docker-up
+	@bash scripts/sync-postgres-auth.sh
 	@make logs
 	@echo "Starting CRM backend on port 8080..."
 	@bash scripts/start-backend-prod.sh
@@ -302,6 +308,41 @@ start:
 	@sleep 3
 	@echo ""
 	@echo "✅ Personal CRM is running!"
+	@echo "🌐 Frontend: http://localhost:3001"
+	@echo "🔧 Backend:  http://localhost:8080"
+	@echo "📖 API Docs: http://localhost:8080/swagger/index.html"
+	@echo ""
+	@echo "📋 Logs:"
+	@echo "   Backend:  logs/backend.log"
+	@echo "   Frontend: logs/frontend.log"
+	@echo ""
+	@echo "💡 Processes will continue running after you close this terminal"
+	@echo "   Use 'make stop' to stop the CRM"
+
+start-local:
+	@echo "🚀 Starting Personal CRM with local production config..."
+	@if [ ! -f .env.local ]; then \
+		echo "❌ Error: .env.local not found!"; \
+		echo ""; \
+		echo "Create .env.local with your production secrets first:"; \
+		echo "  1. Generate secrets: openssl rand -base64 32"; \
+		echo "  2. Copy template: cp .env.example.production .env.local"; \
+		echo "  3. Edit .env.local with your secrets"; \
+		exit 1; \
+	fi
+	@echo "📋 Using configuration from .env.local"
+	@cp .env.local .env
+	@make build
+	@make docker-up
+	@bash scripts/sync-postgres-auth.sh
+	@make logs
+	@echo "Starting CRM backend on port 8080..."
+	@bash scripts/start-backend-prod.sh
+	@echo "Starting CRM frontend on port 3001..."
+	@bash scripts/start-frontend-prod.sh
+	@sleep 3
+	@echo ""
+	@echo "✅ Personal CRM is running with local production config!"
 	@echo "🌐 Frontend: http://localhost:3001"
 	@echo "🔧 Backend:  http://localhost:8080"
 	@echo "📖 API Docs: http://localhost:8080/swagger/index.html"
@@ -325,6 +366,19 @@ restart:
 	@make stop
 	@sleep 2
 	@make start
+
+reload:
+	@echo "🔄 Rebuilding and reloading Personal CRM..."
+	@echo "Building..."
+	@make build
+	@echo "Restarting backend..."
+	@bash scripts/start-backend-prod.sh
+	@echo "Restarting frontend..."
+	@bash scripts/start-frontend-prod.sh
+	@echo ""
+	@echo "✅ Personal CRM reloaded!"
+	@echo "🌐 Frontend: http://localhost:3001"
+	@echo "🔧 Backend:  http://localhost:8080"
 
 status:
 	@echo "📊 Personal CRM Status:"

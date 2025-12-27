@@ -102,23 +102,33 @@ Create your `.env` file from the appropriate template (`.env.example` for develo
 ## Development Commands
 
 ```bash
-# Start all services
-make dev
+# Development mode (hot reload)
+make dev                # Start with hot reload (recommended for active development)
 
-# Build project
-make build
+# Production mode (local)
+make start-local        # Start production build locally
+make reload             # ⚠️ Rebuild + restart after code changes
+make stop               # Stop all services
+make status             # Check service status
+
+# Build only (use with caution)
+make build              # Build without restart (⚠️ won't update running services)
 
 # Run tests
 make test
 
 # Docker operations
-make docker-up      # Start database
-make docker-down    # Stop database
-make docker-reset   # Reset database with fresh data
+make docker-up          # Start database
+make docker-down        # Stop database
+make docker-reset       # Reset database with fresh data
 
 # Clean build artifacts
 make clean
 ```
+
+### Important: Use `make reload` After Code Changes
+
+When running in production mode (`make start-local`), always use `make reload` after making code changes. This rebuilds AND restarts the services. Using `make build` alone will NOT restart running processes, causing stale code to be served.
 
 ## Authentication & Security
 
