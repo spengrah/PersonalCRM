@@ -12,9 +12,14 @@ export const systemKeys = {
 /**
  * Hook for getting the current accelerated time from the backend
  * This ensures all components use the same accelerated time for testing
+ *
+ * Performance optimization: Only runs intervals when time acceleration is enabled.
+ * When not accelerated, returns new Date() on each render (no polling).
+ * Also pauses intervals when the browser tab is hidden.
  */
 export function useAcceleratedTime() {
   const [localTime, setLocalTime] = useState(new Date())
+  const [isPageVisible, setIsPageVisible] = useState(true)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
 
   const {
@@ -28,17 +33,28 @@ export function useAcceleratedTime() {
     staleTime: 25000, // Consider stale after 25 seconds
   })
 
+  // Track page visibility to pause intervals when tab is hidden
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsPageVisible(!document.hidden)
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [])
+
   // Update local time based on system time and acceleration
   useEffect(() => {
-    if (!systemTime) return
-
     // Clear any existing interval
     if (intervalRef.current) {
       clearInterval(intervalRef.current)
+      intervalRef.current = null
     }
 
-    if (systemTime.is_accelerated) {
-      // For accelerated time, calculate the offset and update frequently
+    // Only run intervals when acceleration is enabled AND page is visible
+    if (systemTime?.is_accelerated && isPageVisible) {
       const baseTime = new Date(systemTime.base_time)
       const localBaseTime = Date.now()
 
@@ -52,20 +68,21 @@ export function useAcceleratedTime() {
       // Update immediately
       updateAcceleratedTime()
 
-      // Update every second for smooth time progression
+      // Update every second for smooth time progression (only when accelerated)
       intervalRef.current = setInterval(updateAcceleratedTime, 1000)
-    } else {
-      // For normal time, just use regular Date
+    } else if (!systemTime?.is_accelerated) {
+      // For normal time, just set current date once (no interval needed)
+      // Components will get fresh time on re-render
       setLocalTime(new Date())
-      intervalRef.current = setInterval(() => setLocalTime(new Date()), 1000)
     }
 
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current)
+        intervalRef.current = null
       }
     }
-  }, [systemTime])
+  }, [systemTime, isPageVisible])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -76,8 +93,11 @@ export function useAcceleratedTime() {
     }
   }, [])
 
+  // When not accelerated, return fresh Date() each time for accurate time
+  const currentTime = systemTime?.is_accelerated ? localTime : new Date()
+
   return {
-    currentTime: localTime,
+    currentTime,
     systemTime,
     isAccelerated: systemTime?.is_accelerated || false,
     accelerationFactor: systemTime?.acceleration_factor || 1,
