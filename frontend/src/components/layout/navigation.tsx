@@ -52,7 +52,7 @@ export function Navigation() {
 
           <div className="flex items-center space-x-4">
             {/* Time Acceleration Widget */}
-            <TimeAccelerationWidget position="top-right" className="relative" />
+            <TimeAccelerationWidget position="top-right" />
 
             {/* Mobile menu button */}
             <div className="sm:hidden">

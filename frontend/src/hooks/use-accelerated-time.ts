@@ -133,15 +133,8 @@ export const ACCELERATION_PRESETS = {
 } as const
 
 /**
- * Helper to create acceleration settings with current time as base
+ * Helper to create acceleration settings
  */
-export function createAccelerationSettings(
-  factor: number,
-  enabled: boolean = true
-): SetAccelerationRequest {
-  return {
-    enabled,
-    acceleration_factor: factor,
-    base_time: new Date().toISOString(),
-  }
+export function createAccelerationSettings(factor: number): SetAccelerationRequest {
+  return { factor }
 }

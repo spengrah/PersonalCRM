@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Clock, Zap, Play } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -21,9 +21,19 @@ export function TimeAccelerationWidget({
   position = 'top-right',
 }: TimeAccelerationWidgetProps) {
   const [isExpanded, setIsExpanded] = useState(false)
+  const [, forceUpdate] = useState(0)
   const { currentTime, isAccelerated, accelerationFactor, environment } = useAcceleratedTime()
 
   const setAcceleration = useTimeAcceleration()
+
+  // Widget-specific interval to update the clock when not accelerated
+  // When accelerated, the hook already handles ticking
+  useEffect(() => {
+    if (!isAccelerated) {
+      const interval = setInterval(() => forceUpdate(n => n + 1), 30000)
+      return () => clearInterval(interval)
+    }
+  }, [isAccelerated])
 
   // Only show in testing environments
   if (environment !== 'testing' && environment !== 'test' && environment !== 'staging') {
@@ -32,7 +42,7 @@ export function TimeAccelerationWidget({
 
   const handleSetAcceleration = async (factor: number) => {
     try {
-      await setAcceleration.mutateAsync(createAccelerationSettings(factor, factor > 1))
+      await setAcceleration.mutateAsync(createAccelerationSettings(factor))
       if (factor === 1) {
         setIsExpanded(false)
       }

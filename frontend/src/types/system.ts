@@ -13,7 +13,5 @@ export interface AccelerationSettings {
 }
 
 export interface SetAccelerationRequest {
-  enabled: boolean
-  acceleration_factor: number
-  base_time: string
+  factor: number
 }

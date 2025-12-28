@@ -33,6 +33,7 @@ type TimeResponse struct {
 	IsAccelerated      bool      `json:"is_accelerated"`
 	AccelerationFactor int       `json:"acceleration_factor"`
 	Environment        string    `json:"environment"`
+	BaseTime           string    `json:"base_time"`
 }
 
 type AccelerationSettings struct {
@@ -53,11 +54,22 @@ func (h *SystemHandler) GetSystemTime(c *gin.Context) {
 		}
 	}
 
+	// Get base_time for client-side acceleration calculation
+	baseTime := ""
+	if isAccelerated {
+		if baseUnix := os.Getenv("TIME_BASE"); baseUnix != "" {
+			if unixSec, err := strconv.ParseInt(baseUnix, 10, 64); err == nil {
+				baseTime = time.Unix(unixSec, 0).Format(time.RFC3339) //nolint:forbidigo // Need wall-clock conversion
+			}
+		}
+	}
+
 	response := TimeResponse{
 		CurrentTime:        currentTime,
 		IsAccelerated:      isAccelerated,
 		AccelerationFactor: accelerationFactor,
 		Environment:        h.runtimeCfg.CRMEnvironment,
+		BaseTime:           baseTime,
 	}
 
 	api.SendSuccess(c, http.StatusOK, response, nil)
