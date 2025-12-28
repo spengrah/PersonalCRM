@@ -88,7 +88,8 @@ dev:
 # Development helpers
 dev-stop:
 	@echo "Stopping development servers (backend and frontend dev)..."
-	@pkill -f crm-api || true
+	@# Kill backend by port (go run creates binary named 'main', not 'crm-api')
+	@lsof -ti:8080 | xargs kill -9 2>/dev/null || true
 	@pkill -f "next dev" || true
 	@pkill -f "node.*next" || true
 	@if [ -f logs/frontend-dev.pid ]; then kill $$(cat logs/frontend-dev.pid) 2>/dev/null || true; fi
@@ -356,8 +357,11 @@ start-local:
 
 stop:
 	@echo "🛑 Stopping Personal CRM..."
+	@# Kill backend by port and name (prod uses compiled crm-api binary)
+	@lsof -ti:8080 | xargs kill -9 2>/dev/null || true
 	@pkill -f crm-api || true
-	@pkill -f "next start" || true
+	@# Kill frontend by port (process is 'next-server', not 'next start')
+	@lsof -ti:3001 | xargs kill -9 2>/dev/null || true
 	@make docker-down
 	@echo "✅ Personal CRM stopped"
 
