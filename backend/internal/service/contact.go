@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type ContactMethodInput struct {
@@ -79,14 +81,16 @@ func (s *ContactService) SearchContacts(ctx context.Context, params repository.S
 	return contacts, nil
 }
 
-func (s *ContactService) CreateContact(ctx context.Context, req repository.CreateContactRequest, methods []ContactMethodInput) (*repository.Contact, error) {
+func (s *ContactService) CreateContact(ctx context.Context, req repository.CreateContactRequest, methods []ContactMethodInput) (contact *repository.Contact, err error) {
 	tx, err := s.database.Pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
-		if err := tx.Rollback(ctx); err != nil {
-			// Ignore rollback errors when the transaction is already closed.
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			if err == nil {
+				err = rollbackErr
+			}
 		}
 	}()
 
@@ -94,7 +98,7 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 	contactRepo := repository.NewContactRepository(txQueries)
 	contactMethodRepo := repository.NewContactMethodRepository(txQueries)
 
-	contact, err := contactRepo.CreateContact(ctx, req)
+	contact, err = contactRepo.CreateContact(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +108,7 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 		return nil, err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 
@@ -112,14 +116,16 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 	return contact, nil
 }
 
-func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest, methods []ContactMethodInput, replaceMethods bool) (*repository.Contact, error) {
+func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest, methods []ContactMethodInput, replaceMethods bool) (contact *repository.Contact, err error) {
 	tx, err := s.database.Pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
-		if err := tx.Rollback(ctx); err != nil {
-			// Ignore rollback errors when the transaction is already closed.
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			if err == nil {
+				err = rollbackErr
+			}
 		}
 	}()
 
@@ -132,7 +138,7 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 		return nil, err
 	}
 
-	contact, err := contactRepo.UpdateContact(ctx, id, req)
+	contact, err = contactRepo.UpdateContact(ctx, id, req)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +161,7 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 		sortContactMethods(updatedMethods)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 
