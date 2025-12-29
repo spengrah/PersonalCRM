@@ -1,6 +1,6 @@
 'use client'
 
-import { useForm } from 'react-hook-form'
+import { useForm, useFieldArray } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,6 +10,11 @@ import {
   transformContactFormData,
   type ContactFormData,
 } from '@/lib/validations/contact'
+import {
+  CONTACT_METHOD_OPTIONS,
+  formatContactMethodValue,
+  sortContactMethods,
+} from '@/lib/contact-methods'
 import type { Contact } from '@/types/contact'
 
 interface ContactFormProps {
@@ -35,18 +40,28 @@ export function ContactForm({
   loading,
   submitText = 'Save Contact',
 }: ContactFormProps) {
+  const defaultMethods = contact?.methods?.length
+    ? sortContactMethods(contact.methods).map(method => ({
+        type: method.type,
+        value: formatContactMethodValue(method.type, method.value),
+        is_primary: method.is_primary,
+      }))
+    : [{ type: '', value: '', is_primary: false }]
+
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
     reset,
+    control,
+    setValue,
+    watch,
   } = useForm<ContactFormData>({
     resolver: zodResolver(contactSchema),
     defaultValues: contact
       ? {
           full_name: contact.full_name,
-          email: contact.email || '',
-          phone: contact.phone || '',
+          methods: defaultMethods,
           location: contact.location || '',
           birthday: contact.birthday ? contact.birthday.split('T')[0] : '', // Format date for input
           notes: contact.notes || '',
@@ -54,14 +69,36 @@ export function ContactForm({
         }
       : {
           full_name: '',
-          email: '',
-          phone: '',
+          methods: defaultMethods,
           location: '',
           birthday: '',
           notes: '',
           cadence: '',
         },
   })
+
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: 'methods',
+  })
+
+  const watchedMethods = watch('methods')
+
+  const handlePrimaryToggle = (index: number) => {
+    const currentValue = watchedMethods?.[index]?.is_primary
+    const nextValue = !currentValue
+
+    fields.forEach((_, fieldIndex) => {
+      setValue(`methods.${fieldIndex}.is_primary`, fieldIndex === index ? nextValue : false, {
+        shouldDirty: true,
+        shouldValidate: true,
+      })
+    })
+  }
+
+  const handleAddMethod = () => {
+    append({ type: '', value: '', is_primary: false })
+  }
 
   const handleFormSubmit = async (data: ContactFormData) => {
     try {
@@ -77,6 +114,9 @@ export function ContactForm({
   }
 
   const isLoading = loading || isSubmitting
+  const methodsError =
+    (errors.methods as { message?: string; root?: { message?: string } } | undefined)?.message ??
+    (errors.methods as { message?: string; root?: { message?: string } } | undefined)?.root?.message
 
   return (
     <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
@@ -91,24 +131,127 @@ export function ContactForm({
           disabled={isLoading}
         />
 
-        {/* Email and Phone */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <Input
-            {...register('email')}
-            label="Email"
-            type="email"
-            placeholder="Enter email address"
-            error={errors.email?.message}
-            disabled={isLoading}
-          />
-          <Input
-            {...register('phone')}
-            label="Phone"
-            type="tel"
-            placeholder="Enter phone number"
-            error={errors.phone?.message}
-            disabled={isLoading}
-          />
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Contact methods</label>
+              <p className="text-sm text-gray-500">Add one or more ways to reach this contact.</p>
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={handleAddMethod}>
+              Add method
+            </Button>
+          </div>
+
+          {methodsError && <p className="text-sm text-red-600">{methodsError}</p>}
+
+          <div className="space-y-3">
+            {fields.map((field, index) => {
+              const selectedType = watchedMethods?.[index]?.type
+              const usedTypes = new Set(
+                watchedMethods
+                  ?.map((method, methodIndex) =>
+                    methodIndex === index
+                      ? undefined
+                      : method?.value?.trim()
+                        ? method?.type?.trim()
+                        : undefined
+                  )
+                  .filter(type => type)
+              )
+              const option = CONTACT_METHOD_OPTIONS.find(opt => opt.value === selectedType)
+
+              return (
+                <div
+                  key={field.id}
+                  className={`rounded-md border px-4 py-3 ${
+                    watchedMethods?.[index]?.is_primary
+                      ? 'border-blue-200 bg-blue-50'
+                      : 'border-gray-200 bg-white'
+                  }`}
+                >
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-[180px_1fr_110px_auto]">
+                    <div>
+                      <label
+                        htmlFor={`methods.${index}.type`}
+                        className="block text-sm font-medium text-gray-700"
+                      >
+                        Type
+                      </label>
+                      <select
+                        id={`methods.${index}.type`}
+                        {...register(`methods.${index}.type`)}
+                        className="mt-1 block w-full rounded-md border-gray-300 text-gray-900 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                        disabled={isLoading}
+                      >
+                        <option value="">Select type</option>
+                        {CONTACT_METHOD_OPTIONS.map(option => (
+                          <option
+                            key={option.value}
+                            value={option.value}
+                            disabled={usedTypes.has(option.value)}
+                          >
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      {errors.methods?.[index]?.type && (
+                        <p className="mt-1 text-sm text-red-600">
+                          {errors.methods?.[index]?.type?.message}
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor={`methods.${index}.value`}
+                        className="block text-sm font-medium text-gray-700"
+                      >
+                        Value
+                      </label>
+                      <input
+                        id={`methods.${index}.value`}
+                        {...register(`methods.${index}.value`)}
+                        type={option?.inputType ?? 'text'}
+                        placeholder={option?.placeholder ?? 'Enter value'}
+                        className="mt-1 block w-full rounded-md border-gray-300 text-gray-900 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                        disabled={isLoading}
+                      />
+                      {errors.methods?.[index]?.value && (
+                        <p className="mt-1 text-sm text-red-600">
+                          {errors.methods?.[index]?.value?.message}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex items-center">
+                      <label className="mt-6 inline-flex items-center space-x-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          checked={Boolean(watchedMethods?.[index]?.is_primary)}
+                          onChange={() => handlePrimaryToggle(index)}
+                          disabled={isLoading}
+                        />
+                        <span>Primary</span>
+                      </label>
+                    </div>
+
+                    <div className="flex items-center md:justify-end">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => remove(index)}
+                        disabled={isLoading || fields.length === 1}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </div>
 
         {/* Location and Birthday */}

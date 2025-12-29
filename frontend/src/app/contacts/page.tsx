@@ -7,8 +7,6 @@ import {
   Plus,
   Search,
   MoreHorizontal,
-  Mail,
-  Phone,
   MapPin,
   CheckCircle,
   ArrowUpDown,
@@ -16,10 +14,17 @@ import {
   ArrowDown,
 } from 'lucide-react'
 import { useContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
+import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
 import { Button } from '@/components/ui/button'
 import { Navigation } from '@/components/layout/navigation'
+import {
+  formatContactMethodValue,
+  getContactMethodHref,
+  getContactMethodLabel,
+  getPrimaryAndSecondaryMethods,
+} from '@/lib/contact-methods'
 import { formatDateOnly } from '@/lib/utils'
-import type { Contact, ContactListParams } from '@/types/contact'
+import type { Contact, ContactListParams, ContactMethod } from '@/types/contact'
 
 type SortField = 'name' | 'location' | 'birthday' | 'last_contacted'
 
@@ -196,24 +201,47 @@ function ContactsTable({
                 </div>
               </td>
               <td className="px-6 py-4 whitespace-nowrap">
-                <div className="space-y-1">
-                  {contact.email && (
-                    <div className="flex items-center text-sm text-gray-900">
-                      <Mail className="w-4 h-4 mr-2 text-gray-400" />
-                      <a href={`mailto:${contact.email}`} className="hover:text-blue-600">
-                        {contact.email}
-                      </a>
+                {(() => {
+                  const { primary, secondary } = getPrimaryAndSecondaryMethods(
+                    contact.methods,
+                    contact.primary_method
+                  )
+                  const methods = [primary, secondary].filter(Boolean) as ContactMethod[]
+
+                  if (methods.length === 0) {
+                    return <span className="text-sm text-gray-500">-</span>
+                  }
+
+                  return (
+                    <div className="space-y-1">
+                      {methods.map((method, index) => {
+                        const value = formatContactMethodValue(method.type, method.value)
+                        const href = getContactMethodHref(method.type, method.value)
+                        const label = getContactMethodLabel(method.type)
+                        const key = method.id ?? `${method.type}-${method.value}`
+                        const valueClassName =
+                          index === 0 ? 'font-medium text-gray-900' : 'text-gray-700'
+
+                        return (
+                          <div key={key} className={`flex items-center text-sm ${valueClassName}`}>
+                            <ContactMethodIcon
+                              type={method.type}
+                              className="w-4 h-4 mr-2 text-gray-400"
+                            />
+                            {href ? (
+                              <a href={href} className="hover:text-blue-600">
+                                {value}
+                              </a>
+                            ) : (
+                              <span>{value}</span>
+                            )}
+                            <span className="ml-2 text-xs text-gray-500">{label}</span>
+                          </div>
+                        )
+                      })}
                     </div>
-                  )}
-                  {contact.phone && (
-                    <div className="flex items-center text-sm text-gray-900">
-                      <Phone className="w-4 h-4 mr-2 text-gray-400" />
-                      <a href={`tel:${contact.phone}`} className="hover:text-blue-600">
-                        {contact.phone}
-                      </a>
-                    </div>
-                  )}
-                </div>
+                  )
+                })()}
               </td>
               <td className="px-6 py-4 whitespace-nowrap">
                 {contact.location && (

@@ -2,26 +2,29 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import {
-  CheckCircle,
-  Clock,
-  AlertCircle,
-  User,
-  Calendar,
-  MessageCircle,
-  Plus,
-  Phone,
-} from 'lucide-react'
+import { CheckCircle, Clock, AlertCircle, User, Calendar, Plus } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
+import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
 import { useOverdueContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
-import type { OverdueContact } from '@/types/contact'
+import {
+  formatContactMethodValue,
+  getContactMethodHref,
+  getContactMethodLabel,
+  getPrimaryAndSecondaryMethods,
+} from '@/lib/contact-methods'
+import type { ContactMethod, OverdueContact } from '@/types/contact'
 import { clsx } from 'clsx'
 
 function OverdueContactCard({ contact }: { contact: OverdueContact }) {
   const updateLastContactedMutation = useUpdateLastContacted()
   const { currentTime } = useAcceleratedTime()
+  const { primary, secondary } = getPrimaryAndSecondaryMethods(
+    contact.methods,
+    contact.primary_method
+  )
+  const methods = [primary, secondary].filter((method): method is ContactMethod => Boolean(method))
 
   const handleMarkContacted = async () => {
     try {
@@ -82,23 +85,27 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
               </span>
             </div>
 
-            {contact.email && (
-              <div className="flex items-center space-x-2 text-sm text-gray-600">
-                <MessageCircle className="w-4 h-4" />
-                <a href={`mailto:${contact.email}`} className="hover:text-blue-600 underline">
-                  {contact.email}
-                </a>
-              </div>
-            )}
+            {methods.map((method, index) => {
+              const value = formatContactMethodValue(method.type, method.value)
+              const href = getContactMethodHref(method.type, method.value)
+              const label = getContactMethodLabel(method.type)
+              const key = method.id ?? `${method.type}-${method.value}`
+              const valueClassName = index === 0 ? 'font-medium text-gray-700' : 'text-gray-600'
 
-            {contact.phone && (
-              <div className="flex items-center space-x-2 text-sm text-gray-600">
-                <Phone className="w-4 h-4" />
-                <a href={`tel:${contact.phone}`} className="hover:text-blue-600 underline">
-                  {contact.phone}
-                </a>
-              </div>
-            )}
+              return (
+                <div key={key} className={`flex items-center space-x-2 text-sm ${valueClassName}`}>
+                  <ContactMethodIcon type={method.type} />
+                  {href ? (
+                    <a href={href} className="hover:text-blue-600 underline">
+                      {value}
+                    </a>
+                  ) : (
+                    <span>{value}</span>
+                  )}
+                  <span className="text-xs text-gray-500">{label}</span>
+                </div>
+              )
+            })}
 
             <div className="flex items-center space-x-2 text-sm text-gray-600">
               <User className="w-4 h-4" />
