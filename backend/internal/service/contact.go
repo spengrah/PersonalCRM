@@ -84,7 +84,11 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			// Ignore rollback errors when the transaction is already closed.
+		}
+	}()
 
 	txQueries := db.New(tx)
 	contactRepo := repository.NewContactRepository(txQueries)
@@ -113,7 +117,11 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			// Ignore rollback errors when the transaction is already closed.
+		}
+	}()
 
 	txQueries := db.New(tx)
 	contactRepo := repository.NewContactRepository(txQueries)
