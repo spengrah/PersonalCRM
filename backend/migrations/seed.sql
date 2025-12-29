@@ -21,7 +21,8 @@ WITH contact_data AS (
         'San Francisco, CA' as location,
         '1985-03-15'::date as birthday,
         'Met at a tech conference' as how_met,
-        'quarterly' as cadence
+        'quarterly' as cadence,
+        NOW() - INTERVAL '1 day' * (RANDOM() * 30)::int as last_contacted  -- Random last contact within 30 days
     UNION ALL
     SELECT 
         uuid_generate_v4(),
@@ -31,7 +32,8 @@ WITH contact_data AS (
         'New York, NY',
         '1990-07-22'::date,
         'Former colleague',
-        'monthly'
+        'monthly',
+        NOW() - INTERVAL '1 day' * (RANDOM() * 30)::int
     UNION ALL
     SELECT 
         uuid_generate_v4(),
@@ -41,7 +43,8 @@ WITH contact_data AS (
         'Austin, TX',
         '1988-11-08'::date,
         'University friend',
-        'biannual'
+        'biannual',
+        NOW() - INTERVAL '1 day' * (RANDOM() * 30)::int
     UNION ALL
     SELECT 
         uuid_generate_v4(),
@@ -51,7 +54,8 @@ WITH contact_data AS (
         'Seattle, WA',
         NULL,
         'Neighbor',
-        'monthly'
+        'monthly',
+        NOW() - INTERVAL '1 day' * (RANDOM() * 30)::int
     UNION ALL
     SELECT 
         uuid_generate_v4(),
@@ -61,13 +65,23 @@ WITH contact_data AS (
         'Boston, MA',
         '1982-05-30'::date,
         'Client introduction',
-        'weekly'
+        'weekly',
+        NOW() - INTERVAL '1 day' * (RANDOM() * 30)::int
 )
-INSERT INTO contact (id, full_name, email, phone, location, birthday, how_met, cadence, last_contacted)
+INSERT INTO contact (id, full_name, location, birthday, how_met, cadence, last_contacted)
 SELECT 
-    id, full_name, email, phone, location, birthday, how_met, cadence,
-    NOW() - INTERVAL '1 day' * (RANDOM() * 30)::int  -- Random last contact within 30 days
+    id, full_name, location, birthday, how_met, cadence, last_contacted
 FROM contact_data;
+
+INSERT INTO contact_method (contact_id, type, value, is_primary)
+SELECT id, 'email_personal', email, TRUE
+FROM contact_data
+WHERE email IS NOT NULL AND btrim(email) <> '';
+
+INSERT INTO contact_method (contact_id, type, value, is_primary)
+SELECT id, 'phone', phone, CASE WHEN email IS NULL OR btrim(email) = '' THEN TRUE ELSE FALSE END
+FROM contact_data
+WHERE phone IS NOT NULL AND btrim(phone) <> '';
 
 -- Get contact and tag IDs for relationships
 WITH contact_ids AS (

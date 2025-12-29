@@ -134,9 +134,31 @@ func (q *Queries) HardDeleteReminder(ctx context.Context, id pgtype.UUID) error 
 }
 
 const ListDueReminders = `-- name: ListDueReminders :many
-SELECT r.id, r.contact_id, r.title, r.description, r.due_date, r.completed, r.completed_at, r.created_at, r.deleted_at, c.full_name as contact_name, c.email as contact_email
+SELECT r.id, r.contact_id, r.title, r.description, r.due_date, r.completed, r.completed_at, r.created_at, r.deleted_at,
+       c.full_name as contact_name,
+       cm.type as contact_primary_method_type,
+       cm.value as contact_primary_method_value
 FROM reminder r
 LEFT JOIN contact c ON r.contact_id = c.id
+LEFT JOIN LATERAL (
+    SELECT type, value
+    FROM contact_method
+    WHERE contact_id = c.id
+    ORDER BY
+        CASE WHEN is_primary THEN 0 ELSE 1 END,
+        CASE type
+            WHEN 'email_personal' THEN 1
+            WHEN 'email_work' THEN 2
+            WHEN 'phone' THEN 3
+            WHEN 'telegram' THEN 4
+            WHEN 'signal' THEN 5
+            WHEN 'discord' THEN 6
+            WHEN 'twitter' THEN 7
+            ELSE 8
+        END,
+        created_at ASC
+    LIMIT 1
+) cm ON TRUE
 WHERE r.due_date <= $1 
   AND r.completed = FALSE 
   AND r.deleted_at IS NULL
@@ -145,17 +167,18 @@ ORDER BY r.due_date ASC
 `
 
 type ListDueRemindersRow struct {
-	ID           pgtype.UUID        `json:"id"`
-	ContactID    pgtype.UUID        `json:"contact_id"`
-	Title        string             `json:"title"`
-	Description  pgtype.Text        `json:"description"`
-	DueDate      pgtype.Timestamptz `json:"due_date"`
-	Completed    pgtype.Bool        `json:"completed"`
-	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	DeletedAt    pgtype.Timestamptz `json:"deleted_at"`
-	ContactName  pgtype.Text        `json:"contact_name"`
-	ContactEmail pgtype.Text        `json:"contact_email"`
+	ID                        pgtype.UUID        `json:"id"`
+	ContactID                 pgtype.UUID        `json:"contact_id"`
+	Title                     string             `json:"title"`
+	Description               pgtype.Text        `json:"description"`
+	DueDate                   pgtype.Timestamptz `json:"due_date"`
+	Completed                 pgtype.Bool        `json:"completed"`
+	CompletedAt               pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
+	DeletedAt                 pgtype.Timestamptz `json:"deleted_at"`
+	ContactName               pgtype.Text        `json:"contact_name"`
+	ContactPrimaryMethodType  string             `json:"contact_primary_method_type"`
+	ContactPrimaryMethodValue string             `json:"contact_primary_method_value"`
 }
 
 func (q *Queries) ListDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) ([]*ListDueRemindersRow, error) {
@@ -178,7 +201,8 @@ func (q *Queries) ListDueReminders(ctx context.Context, dueDate pgtype.Timestamp
 			&i.CreatedAt,
 			&i.DeletedAt,
 			&i.ContactName,
-			&i.ContactEmail,
+			&i.ContactPrimaryMethodType,
+			&i.ContactPrimaryMethodValue,
 		); err != nil {
 			return nil, err
 		}

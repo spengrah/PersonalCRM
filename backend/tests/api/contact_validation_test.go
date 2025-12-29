@@ -17,6 +17,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -58,7 +59,9 @@ func setupContactValidationTestRouter() (*gin.Engine, func()) {
 	}
 
 	contactRepo := repository.NewContactRepository(database.Queries)
-	contactHandler := handlers.NewContactHandler(contactRepo)
+	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo)
+	contactHandler := handlers.NewContactHandler(contactService)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
@@ -98,7 +101,6 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	t.Run("CreateContact_MissingRequiredField", func(t *testing.T) {
 		requestBody := handlers.CreateContactRequest{
 			FullName: "", // Required field empty
-			Email:    stringPtr("test@example.com"),
 		}
 
 		jsonBody, _ := json.Marshal(requestBody)
@@ -122,7 +124,12 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	t.Run("CreateContact_InvalidEmailFormat", func(t *testing.T) {
 		requestBody := handlers.CreateContactRequest{
 			FullName: "Test User",
-			Email:    stringPtr("not-an-email"), // Invalid email format
+			Methods: []handlers.ContactMethodRequest{
+				{
+					Type:  "email_personal",
+					Value: "not-an-email",
+				},
+			},
 		}
 
 		jsonBody, _ := json.Marshal(requestBody)
@@ -235,9 +242,17 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 		uniqueEmail := strings.Repeat("a", 235) + uuid.New().String()[:10] + "@test.com" // Total ~255 chars
 
 		requestBody := handlers.CreateContactRequest{
-			FullName:     strings.Repeat("a", 255),                                              // Max 255
-			Email:        stringPtr(uniqueEmail),                                                // Max 255
-			Phone:        stringPtr(strings.Repeat("1", 50)),                                    // Max 50
+			FullName: strings.Repeat("a", 255), // Max 255
+			Methods: []handlers.ContactMethodRequest{
+				{
+					Type:  "email_personal",
+					Value: uniqueEmail,
+				},
+				{
+					Type:  "phone",
+					Value: strings.Repeat("1", 50),
+				},
+			},
 			Location:     stringPtr(strings.Repeat("a", 255)),                                   // Max 255
 			HowMet:       stringPtr(strings.Repeat("a", 500)),                                   // Max 500
 			ProfilePhoto: stringPtr("https://example.com/" + strings.Repeat("a", 470) + ".jpg"), // Max 500
@@ -289,7 +304,12 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	// Create a test contact first
 	createReq := handlers.CreateContactRequest{
 		FullName: "Update Test User",
-		Email:    stringPtr("updatetest@example.com"),
+		Methods: []handlers.ContactMethodRequest{
+			{
+				Type:  "email_personal",
+				Value: "updatetest@example.com",
+			},
+		},
 	}
 	jsonBody, _ := json.Marshal(createReq)
 	req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
@@ -337,7 +357,12 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	t.Run("UpdateContact_InvalidEmail", func(t *testing.T) {
 		updateReq := handlers.UpdateContactRequest{
 			FullName: "Updated Name",
-			Email:    stringPtr("invalid-email"),
+			Methods: []handlers.ContactMethodRequest{
+				{
+					Type:  "email_personal",
+					Value: "invalid-email",
+				},
+			},
 		}
 
 		jsonBody, _ := json.Marshal(updateReq)
@@ -498,7 +523,7 @@ func TestContactAPI_GetContactValidation(t *testing.T) {
 	})
 }
 
-func TestContactAPI_EmailUniqueness(t *testing.T) {
+func TestContactAPI_DuplicateMethodTypes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -511,11 +536,19 @@ func TestContactAPI_EmailUniqueness(t *testing.T) {
 	router, cleanup := setupContactValidationTestRouter()
 	defer cleanup()
 
-	// Create first contact
-	email := "uniqueness" + uuid.New().String()[:8] + "@example.com"
+	// Create contact with a duplicate method type
 	createReq := handlers.CreateContactRequest{
 		FullName: "First User",
-		Email:    stringPtr(email),
+		Methods: []handlers.ContactMethodRequest{
+			{
+				Type:  "email_personal",
+				Value: "dup1@example.com",
+			},
+			{
+				Type:  "email_personal",
+				Value: "dup2@example.com",
+			},
+		},
 	}
 
 	jsonBody, _ := json.Marshal(createReq)
@@ -524,44 +557,14 @@ func TestContactAPI_EmailUniqueness(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code)
+	require.Equal(t, http.StatusBadRequest, w.Code)
 
-	var createResponse api.APIResponse
-	err := json.Unmarshal(w.Body.Bytes(), &createResponse)
+	var response api.APIResponse
+	err := json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
-	contactData := createResponse.Data.(map[string]interface{})
-	contactID := contactData["id"].(string)
 
-	defer func() {
-		// Cleanup
-		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
-		deleteW := httptest.NewRecorder()
-		router.ServeHTTP(deleteW, deleteReq)
-	}()
-
-	// Try to create second contact with same email
-	t.Run("CreateContact_DuplicateEmail", func(t *testing.T) {
-		duplicateReq := handlers.CreateContactRequest{
-			FullName: "Second User",
-			Email:    stringPtr(email), // Same email
-		}
-
-		jsonBody, _ := json.Marshal(duplicateReq)
-		req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
-		req.Header.Set("Content-Type", "application/json")
-
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusConflict, w.Code)
-
-		var response api.APIResponse
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
-
-		assert.False(t, response.Success)
-		assert.Equal(t, "CONFLICT", response.Error.Code)
-	})
+	assert.False(t, response.Success)
+	assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 }
 
 // Helper function to create string pointers

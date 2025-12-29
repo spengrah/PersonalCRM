@@ -22,25 +22,23 @@ func NewContactRepository(queries db.Querier) *ContactRepository {
 
 // Contact represents a contact entity
 type Contact struct {
-	ID            uuid.UUID  `json:"id"`
-	FullName      string     `json:"full_name"`
-	Email         *string    `json:"email,omitempty"`
-	Phone         *string    `json:"phone,omitempty"`
-	Location      *string    `json:"location,omitempty"`
-	Birthday      *time.Time `json:"birthday,omitempty"`
-	HowMet        *string    `json:"how_met,omitempty"`
-	Cadence       *string    `json:"cadence,omitempty"`
-	LastContacted *time.Time `json:"last_contacted,omitempty"`
-	ProfilePhoto  *string    `json:"profile_photo,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID            uuid.UUID       `json:"id"`
+	FullName      string          `json:"full_name"`
+	Methods       []ContactMethod `json:"methods,omitempty"`
+	PrimaryMethod *ContactMethod  `json:"primary_method,omitempty"`
+	Location      *string         `json:"location,omitempty"`
+	Birthday      *time.Time      `json:"birthday,omitempty"`
+	HowMet        *string         `json:"how_met,omitempty"`
+	Cadence       *string         `json:"cadence,omitempty"`
+	LastContacted *time.Time      `json:"last_contacted,omitempty"`
+	ProfilePhoto  *string         `json:"profile_photo,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 // CreateContactRequest represents the request to create a contact
 type CreateContactRequest struct {
 	FullName      string     `json:"full_name"`
-	Email         *string    `json:"email,omitempty"`
-	Phone         *string    `json:"phone,omitempty"`
 	Location      *string    `json:"location,omitempty"`
 	Birthday      *time.Time `json:"birthday,omitempty"`
 	HowMet        *string    `json:"how_met,omitempty"`
@@ -52,8 +50,6 @@ type CreateContactRequest struct {
 // UpdateContactRequest represents the request to update a contact
 type UpdateContactRequest struct {
 	FullName     string     `json:"full_name"`
-	Email        *string    `json:"email,omitempty"`
-	Phone        *string    `json:"phone,omitempty"`
 	Location     *string    `json:"location,omitempty"`
 	Birthday     *time.Time `json:"birthday,omitempty"`
 	HowMet       *string    `json:"how_met,omitempty"`
@@ -94,12 +90,6 @@ func convertDbContact(dbContact *db.Contact) Contact {
 	}
 
 	// Convert nullable fields
-	if dbContact.Email.Valid {
-		contact.Email = &dbContact.Email.String
-	}
-	if dbContact.Phone.Valid {
-		contact.Phone = &dbContact.Phone.String
-	}
 	if dbContact.Location.Valid {
 		contact.Location = &dbContact.Location.String
 	}
@@ -124,42 +114,9 @@ func convertDbContact(dbContact *db.Contact) Contact {
 	return contact
 }
 
-// Helper functions to convert between types
-func uuidToPgUUID(id uuid.UUID) pgtype.UUID {
-	return pgtype.UUID{Bytes: id, Valid: true}
-}
-
-func stringToPgText(s *string) pgtype.Text {
-	if s == nil {
-		return pgtype.Text{Valid: false}
-	}
-	return pgtype.Text{String: *s, Valid: true}
-}
-
-func timeToPgDate(t *time.Time) pgtype.Date {
-	if t == nil {
-		return pgtype.Date{Valid: false}
-	}
-	return pgtype.Date{Time: *t, Valid: true}
-}
-
 // GetContact retrieves a contact by ID
 func (r *ContactRepository) GetContact(ctx context.Context, id uuid.UUID) (*Contact, error) {
 	dbContact, err := r.queries.GetContact(ctx, uuidToPgUUID(id))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, db.ErrNotFound
-		}
-		return nil, err
-	}
-
-	contact := convertDbContact(dbContact)
-	return &contact, nil
-}
-
-// GetContactByEmail retrieves a contact by email
-func (r *ContactRepository) GetContactByEmail(ctx context.Context, email string) (*Contact, error) {
-	dbContact, err := r.queries.GetContactByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -212,8 +169,6 @@ func (r *ContactRepository) SearchContacts(ctx context.Context, params SearchCon
 func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContactRequest) (*Contact, error) {
 	dbContact, err := r.queries.CreateContact(ctx, db.CreateContactParams{
 		FullName:      req.FullName,
-		Email:         stringToPgText(req.Email),
-		Phone:         stringToPgText(req.Phone),
 		Location:      stringToPgText(req.Location),
 		Birthday:      timeToPgDate(req.Birthday),
 		HowMet:        stringToPgText(req.HowMet),
@@ -234,8 +189,6 @@ func (r *ContactRepository) UpdateContact(ctx context.Context, id uuid.UUID, req
 	dbContact, err := r.queries.UpdateContact(ctx, db.UpdateContactParams{
 		ID:           uuidToPgUUID(id),
 		FullName:     req.FullName,
-		Email:        stringToPgText(req.Email),
-		Phone:        stringToPgText(req.Phone),
 		Location:     stringToPgText(req.Location),
 		Birthday:     timeToPgDate(req.Birthday),
 		HowMet:       stringToPgText(req.HowMet),

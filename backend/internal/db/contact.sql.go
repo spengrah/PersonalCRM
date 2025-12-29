@@ -24,16 +24,14 @@ func (q *Queries) CountContacts(ctx context.Context) (int64, error) {
 
 const CreateContact = `-- name: CreateContact :one
 INSERT INTO contact (
-  full_name, email, phone, location, birthday, how_met, cadence, last_contacted, profile_photo
+  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9
-) RETURNING id, full_name, email, phone, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at
+  $1, $2, $3, $4, $5, $6, $7
+) RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at
 `
 
 type CreateContactParams struct {
 	FullName      string      `json:"full_name"`
-	Email         pgtype.Text `json:"email"`
-	Phone         pgtype.Text `json:"phone"`
 	Location      pgtype.Text `json:"location"`
 	Birthday      pgtype.Date `json:"birthday"`
 	HowMet        pgtype.Text `json:"how_met"`
@@ -45,8 +43,6 @@ type CreateContactParams struct {
 func (q *Queries) CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error) {
 	row := q.db.QueryRow(ctx, CreateContact,
 		arg.FullName,
-		arg.Email,
-		arg.Phone,
 		arg.Location,
 		arg.Birthday,
 		arg.HowMet,
@@ -58,8 +54,6 @@ func (q *Queries) CreateContact(ctx context.Context, arg CreateContactParams) (*
 	err := row.Scan(
 		&i.ID,
 		&i.FullName,
-		&i.Email,
-		&i.Phone,
 		&i.Location,
 		&i.Birthday,
 		&i.HowMet,
@@ -75,7 +69,7 @@ func (q *Queries) CreateContact(ctx context.Context, arg CreateContactParams) (*
 
 const GetContact = `-- name: GetContact :one
 
-SELECT id, full_name, email, phone, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact 
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact 
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -86,34 +80,6 @@ func (q *Queries) GetContact(ctx context.Context, id pgtype.UUID) (*Contact, err
 	err := row.Scan(
 		&i.ID,
 		&i.FullName,
-		&i.Email,
-		&i.Phone,
-		&i.Location,
-		&i.Birthday,
-		&i.HowMet,
-		&i.Cadence,
-		&i.LastContacted,
-		&i.ProfilePhoto,
-		&i.DeletedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return &i, err
-}
-
-const GetContactByEmail = `-- name: GetContactByEmail :one
-SELECT id, full_name, email, phone, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact 
-WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL
-`
-
-func (q *Queries) GetContactByEmail(ctx context.Context, lower string) (*Contact, error) {
-	row := q.db.QueryRow(ctx, GetContactByEmail, lower)
-	var i Contact
-	err := row.Scan(
-		&i.ID,
-		&i.FullName,
-		&i.Email,
-		&i.Phone,
 		&i.Location,
 		&i.Birthday,
 		&i.HowMet,
@@ -137,7 +103,7 @@ func (q *Queries) HardDeleteContact(ctx context.Context, id pgtype.UUID) error {
 }
 
 const ListContacts = `-- name: ListContacts :many
-SELECT id, full_name, email, phone, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact 
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact 
 WHERE deleted_at IS NULL
 LIMIT $1 OFFSET $2
 `
@@ -159,8 +125,6 @@ func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*
 		if err := rows.Scan(
 			&i.ID,
 			&i.FullName,
-			&i.Email,
-			&i.Phone,
 			&i.Location,
 			&i.Birthday,
 			&i.HowMet,
@@ -182,11 +146,16 @@ func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*
 }
 
 const SearchContacts = `-- name: SearchContacts :many
-SELECT id, full_name, email, phone, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact
-WHERE deleted_at IS NULL
-  AND to_tsvector('english', full_name || ' ' || COALESCE(email, '')) @@ plainto_tsquery('english', $1)
+SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at FROM contact c
+LEFT JOIN (
+  SELECT contact_id, string_agg(value, ' ') AS method_values
+  FROM contact_method
+  GROUP BY contact_id
+) cm ON cm.contact_id = c.id
+WHERE c.deleted_at IS NULL
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
 ORDER BY ts_rank(
-  to_tsvector('english', full_name || ' ' || COALESCE(email, '')),
+  to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
   plainto_tsquery('english', $1)
 ) DESC
 LIMIT $2 OFFSET $3
@@ -210,8 +179,6 @@ func (q *Queries) SearchContacts(ctx context.Context, arg SearchContactsParams) 
 		if err := rows.Scan(
 			&i.ID,
 			&i.FullName,
-			&i.Email,
-			&i.Phone,
 			&i.Location,
 			&i.Birthday,
 			&i.HowMet,
@@ -247,23 +214,19 @@ func (q *Queries) SoftDeleteContact(ctx context.Context, id pgtype.UUID) error {
 const UpdateContact = `-- name: UpdateContact :one
 UPDATE contact SET
   full_name = $2,
-  email = $3,
-  phone = $4,
-  location = $5,
-  birthday = $6,
-  how_met = $7,
-  cadence = $8,
-  profile_photo = $9,
+  location = $3,
+  birthday = $4,
+  how_met = $5,
+  cadence = $6,
+  profile_photo = $7,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, full_name, email, phone, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at
+RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at
 `
 
 type UpdateContactParams struct {
 	ID           pgtype.UUID `json:"id"`
 	FullName     string      `json:"full_name"`
-	Email        pgtype.Text `json:"email"`
-	Phone        pgtype.Text `json:"phone"`
 	Location     pgtype.Text `json:"location"`
 	Birthday     pgtype.Date `json:"birthday"`
 	HowMet       pgtype.Text `json:"how_met"`
@@ -275,8 +238,6 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 	row := q.db.QueryRow(ctx, UpdateContact,
 		arg.ID,
 		arg.FullName,
-		arg.Email,
-		arg.Phone,
 		arg.Location,
 		arg.Birthday,
 		arg.HowMet,
@@ -287,8 +248,6 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 	err := row.Scan(
 		&i.ID,
 		&i.FullName,
-		&i.Email,
-		&i.Phone,
 		&i.Location,
 		&i.Birthday,
 		&i.HowMet,

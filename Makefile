@@ -2,6 +2,10 @@
 
 .PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test
 
+# Go build cache (workspace-local by default; override via env).
+GOCACHE ?= $(CURDIR)/.gocache
+export GOCACHE
+
 # Default target
 help:
 	@echo "Available targets:"
