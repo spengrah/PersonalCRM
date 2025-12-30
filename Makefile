@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e
 
 # Go build cache (workspace-local by default; override via env).
 GOCACHE ?= $(CURDIR)/.gocache
@@ -131,6 +131,19 @@ dev-api-restart:
 	@make dev-api-stop
 	@sleep 1
 	@make dev-api-start
+
+test-e2e: docker-up
+	@echo "Running Playwright E2E tests..."
+	@ENV_FILE=$${ENV_FILE:-.env.example.testing}; \
+	set -a; . "$$ENV_FILE"; set +a; \
+	bash scripts/sync-postgres-auth.sh && \
+	if [ -f frontend/.env.local ]; then mv frontend/.env.local frontend/.env.local.bak; fi; \
+	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > frontend/.env.local; \
+	cd frontend && bunx playwright test --project=chromium; \
+	EXIT_CODE=$$?; \
+	rm -f frontend/.env.local; \
+	if [ -f frontend/.env.local.bak ]; then mv frontend/.env.local.bak frontend/.env.local; fi; \
+	exit $$EXIT_CODE
 
 # Build
 build:

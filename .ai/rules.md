@@ -390,7 +390,7 @@ backend/tests/
   ├── integration/    # Database tests
   └── api/            # HTTP endpoint tests
 
-tests/e2e/            # Playwright browser tests
+frontend/tests/e2e/   # Playwright browser tests
 ```
 
 ---
@@ -472,8 +472,7 @@ frontend/
   │   ├── components/                  # React components
   │   ├── hooks/                       # Custom hooks
   │   └── lib/                         # API clients, utils
-
-tests/e2e/                             # Playwright E2E tests
+  └── tests/e2e/                       # Playwright E2E tests
 ```
 
 ### Important Files

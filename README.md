@@ -597,12 +597,11 @@ Deploy updates automatically via GitHub Actions when you push to main.
 
 ```
 personal-crm/
-├── frontend/           # Next.js React application
-├── backend/            # Go API server
+├── frontend/           # Next.js React application (includes E2E tests)
+├── backend/            # Go API server (includes unit & integration tests)
 ├── desktop-ui/         # Vite + React desktop UI
 ├── desktop/            # Tauri app (Rust)
 ├── infra/              # Docker Compose & infrastructure
-├── tests/              # E2E and integration tests
 └── docs/               # Documentation
 ```
 
@@ -622,10 +621,10 @@ make test-all
 make test-api
 
 # Frontend tests (when implemented)
-cd frontend && npm test
+cd frontend && bun run test
 
 # E2E tests
-npx playwright test
+make test-e2e # uses .env (fallback: .env.example.testing)
 ```
 
 See [TEST_GUIDE.md](docs/TEST_GUIDE.md) for detailed testing information.

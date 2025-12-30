@@ -352,19 +352,26 @@ func TestContactRepository_Integration(t *testing.T) {
 ### Setup
 
 **Framework**: Playwright
-**Location**: `tests/e2e/`
+**Location**: `frontend/tests/e2e/`
+**Config**: `frontend/playwright.config.ts`
+
+The tests run from the frontend directory to resolve `@playwright/test` from `frontend/node_modules`. The Makefile handles this automatically.
 
 ### Running E2E Tests
 
 ```bash
-# Run all E2E tests
-cd tests/e2e && npm test
+# Run all E2E tests (recommended)
+make test-e2e  # Uses .env.example.testing, starts Docker, syncs DB password
 
 # Run in headed mode (see browser)
-npm test -- --headed
+cd frontend && bunx playwright test --headed
 
 # Run specific test file
-npm test dashboard.spec.ts
+cd frontend && bunx playwright test tests/e2e/dashboard.spec.ts
+
+# Run specific browser only
+make test-e2e  # Default: chromium only (faster)
+cd frontend && bunx playwright test --project=firefox  # Run Firefox
 ```
 
 ### What to Test
