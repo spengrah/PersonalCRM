@@ -627,6 +627,59 @@ func TestNewTableRepository_Integration(t *testing.T) {
 
 ## 8. Add Frontend Components
 
+### UI Design Preview (Before Implementation)
+
+**When creating new UI elements**, generate a standalone HTML preview file to explore design options before writing React code. This allows rapid iteration on visual design without build cycles.
+
+**When to use this approach:**
+- New form layouts or complex input patterns
+- Dashboard widgets or data displays
+- Any UI where multiple design approaches are valid
+- When the user needs to approve visual direction
+
+**How to create a preview:**
+1. Create a standalone HTML file in `/temp` (e.g., `temp/contact-form-preview.html`) - this directory is gitignored
+2. Use Tailwind CSS via CDN for styling
+3. Match the app's existing visual style (colors, spacing, borders)
+4. Show multiple design options side-by-side with labels
+5. Include interactive elements (dropdowns, buttons) so UX can be evaluated
+6. Add a recommendation section explaining trade-offs
+
+**Example structure:**
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-8">
+  <h1>Component Name - Design Options</h1>
+
+  <!-- Option 1 -->
+  <section class="bg-white rounded-lg shadow p-6 mb-8">
+    <span class="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded">Option 1</span>
+    <h2>Option Name</h2>
+    <p class="text-gray-500">Description of this approach</p>
+    <!-- Interactive mockup -->
+  </section>
+
+  <!-- Option 2, 3, etc. -->
+
+  <!-- Recommendation -->
+  <div class="bg-blue-50 rounded-lg p-4">
+    <h3>Recommendation</h3>
+    <p>Explain which option works best and why</p>
+  </div>
+</body>
+</html>
+```
+
+**After approval:**
+- Implement the chosen design in React
+- Preview files in `/temp` are already gitignored, so no cleanup needed
+
+---
+
 ### API Client
 
 ```typescript
