@@ -132,7 +132,7 @@ function TimerForm({
           id="timer-description"
           value={description}
           onChange={e => setDescription(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500 sm:text-sm"
           placeholder="What are you working on?"
           required
         />
@@ -266,7 +266,7 @@ function ManualEntryForm({
           id="manual-description"
           value={description}
           onChange={e => setDescription(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500 sm:text-sm"
           placeholder="What did you work on?"
           required
         />
@@ -280,7 +280,7 @@ function ManualEntryForm({
           id="manual-project"
           value={project}
           onChange={e => setProject(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500 sm:text-sm"
           placeholder="Project name"
         />
       </div>
@@ -295,7 +295,7 @@ function ManualEntryForm({
             id="start-date"
             value={startDate}
             onChange={e => setStartDate(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-gray-900 sm:text-sm"
             required
           />
         </div>
@@ -308,7 +308,7 @@ function ManualEntryForm({
             id="start-time"
             value={startTime}
             onChange={e => setStartTime(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-gray-900 sm:text-sm"
             required
           />
         </div>
@@ -320,7 +320,7 @@ function ManualEntryForm({
           id="use-duration"
           checked={useDuration}
           onChange={e => setUseDuration(e.target.checked)}
-          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+          className="h-4 w-4 text-blue-600 border-gray-300 rounded transition-colors focus:ring-1 focus:ring-blue-500"
         />
         <label htmlFor="use-duration" className="text-sm font-medium text-gray-900">
           Use duration instead of end time
@@ -342,7 +342,7 @@ function ManualEntryForm({
               min="0"
               value={durationHours}
               onChange={e => setDurationHours(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500 sm:text-sm"
               placeholder="0"
             />
           </div>
@@ -360,7 +360,7 @@ function ManualEntryForm({
               max="59"
               value={durationMinutes}
               onChange={e => setDurationMinutes(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder:text-gray-500 sm:text-sm"
               placeholder="0"
             />
           </div>
@@ -376,7 +376,7 @@ function ManualEntryForm({
               id="end-date"
               value={endDate}
               onChange={e => setEndDate(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-gray-900 sm:text-sm"
               required={!useDuration}
             />
           </div>
@@ -389,7 +389,7 @@ function ManualEntryForm({
               id="end-time"
               value={endTime}
               onChange={e => setEndTime(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-gray-900 sm:text-sm"
               required={!useDuration}
             />
           </div>

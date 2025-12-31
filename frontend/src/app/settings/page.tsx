@@ -195,7 +195,7 @@ export default function SettingsPage() {
                     type="file"
                     accept=".json"
                     onChange={handleFileSelect}
-                    className="block w-full text-sm text-gray-900 border border-gray-300 rounded-md cursor-pointer bg-gray-50 focus:outline-none focus:border-blue-500"
+                    className="block w-full text-sm text-gray-900 border border-gray-300 rounded-md shadow-sm cursor-pointer bg-gray-50 px-3 py-2 transition-colors focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
 
