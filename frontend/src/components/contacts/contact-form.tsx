@@ -131,20 +131,15 @@ export function ContactForm({
           disabled={isLoading}
         />
 
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Contact methods</label>
-              <p className="text-sm text-gray-500">Add one or more ways to reach this contact.</p>
-            </div>
-            <Button type="button" variant="outline" size="sm" onClick={handleAddMethod}>
-              Add method
-            </Button>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Contact methods</label>
+            <p className="text-sm text-gray-500">Add one or more ways to reach this contact.</p>
           </div>
 
           {methodsError && <p className="text-sm text-red-600">{methodsError}</p>}
 
-          <div className="space-y-3">
+          <div className="divide-y divide-gray-200">
             {fields.map((field, index) => {
               const selectedType = watchedMethods?.[index]?.type
               const usedTypes = new Set(
@@ -159,99 +154,127 @@ export function ContactForm({
                   .filter(type => type)
               )
               const option = CONTACT_METHOD_OPTIONS.find(opt => opt.value === selectedType)
+              const isPrimary = Boolean(watchedMethods?.[index]?.is_primary)
 
               return (
-                <div
-                  key={field.id}
-                  className={`rounded-md border px-4 py-3 ${
-                    watchedMethods?.[index]?.is_primary
-                      ? 'border-blue-200 bg-blue-50'
-                      : 'border-gray-200 bg-white'
-                  }`}
-                >
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-[180px_1fr_110px_auto]">
-                    <div>
-                      <label
-                        htmlFor={`methods.${index}.type`}
-                        className="block text-sm font-medium text-gray-700"
-                      >
-                        Type
-                      </label>
+                <div key={field.id} className="group py-3 first:pt-0">
+                  <div className="flex items-center gap-3">
+                    {/* Type selector - styled as rounded rectangle tag */}
+                    <div className="relative">
                       <select
                         id={`methods.${index}.type`}
                         {...register(`methods.${index}.type`)}
-                        className="mt-1 block w-full rounded-md border-gray-300 text-gray-900 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                        className={`appearance-none rounded-md text-xs font-medium px-3 py-1.5 pr-7 border-0 cursor-pointer focus:ring-2 focus:ring-blue-500 ${
+                          isPrimary ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'
+                        }`}
                         disabled={isLoading}
                       >
-                        <option value="">Select type</option>
-                        {CONTACT_METHOD_OPTIONS.map(option => (
+                        <option value="">Select</option>
+                        {CONTACT_METHOD_OPTIONS.map(opt => (
                           <option
-                            key={option.value}
-                            value={option.value}
-                            disabled={usedTypes.has(option.value)}
+                            key={opt.value}
+                            value={opt.value}
+                            disabled={usedTypes.has(opt.value)}
                           >
-                            {option.label}
+                            {opt.label}
                           </option>
                         ))}
                       </select>
-                      {errors.methods?.[index]?.type && (
-                        <p className="mt-1 text-sm text-red-600">
-                          {errors.methods?.[index]?.type?.message}
-                        </p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label
-                        htmlFor={`methods.${index}.value`}
-                        className="block text-sm font-medium text-gray-700"
+                      <svg
+                        className={`absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 pointer-events-none ${
+                          isPrimary ? 'text-blue-500' : 'text-gray-500'
+                        }`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
                       >
-                        Value
-                      </label>
-                      <input
-                        id={`methods.${index}.value`}
-                        {...register(`methods.${index}.value`)}
-                        type={option?.inputType ?? 'text'}
-                        placeholder={option?.placeholder ?? 'Enter value'}
-                        className="mt-1 block w-full rounded-md border-gray-300 text-gray-900 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                        disabled={isLoading}
-                      />
-                      {errors.methods?.[index]?.value && (
-                        <p className="mt-1 text-sm text-red-600">
-                          {errors.methods?.[index]?.value?.message}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="flex items-center">
-                      <label className="mt-6 inline-flex items-center space-x-2 text-sm text-gray-700">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                          checked={Boolean(watchedMethods?.[index]?.is_primary)}
-                          onChange={() => handlePrimaryToggle(index)}
-                          disabled={isLoading}
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M19 9l-7 7-7-7"
                         />
-                        <span>Primary</span>
-                      </label>
+                      </svg>
                     </div>
 
-                    <div className="flex items-center md:justify-end">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => remove(index)}
-                        disabled={isLoading || fields.length === 1}
+                    {/* Value input - borderless with underline on focus */}
+                    <input
+                      id={`methods.${index}.value`}
+                      {...register(`methods.${index}.value`)}
+                      type={option?.inputType ?? 'text'}
+                      placeholder={option?.placeholder ?? 'Enter value'}
+                      className="flex-1 border-0 border-b border-transparent focus:border-blue-500 focus:ring-0 px-1 py-1 bg-transparent text-sm text-gray-900"
+                      disabled={isLoading}
+                    />
+
+                    {/* Primary toggle - star icon */}
+                    <button
+                      type="button"
+                      onClick={() => handlePrimaryToggle(index)}
+                      disabled={isLoading}
+                      className={`p-1.5 transition-colors ${
+                        isPrimary ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-500'
+                      }`}
+                      title={isPrimary ? 'Primary contact method' : 'Set as primary'}
+                    >
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                      </svg>
+                    </button>
+
+                    {/* Remove button - X icon, visible on hover */}
+                    <button
+                      type="button"
+                      onClick={() => remove(index)}
+                      disabled={isLoading || fields.length === 1}
+                      className="p-1.5 text-gray-300 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all disabled:opacity-0"
+                      title="Remove"
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
                       >
-                        Remove
-                      </Button>
-                    </div>
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M6 18L18 6M6 6l12 12"
+                        />
+                      </svg>
+                    </button>
                   </div>
+
+                  {/* Error messages */}
+                  {(errors.methods?.[index]?.type || errors.methods?.[index]?.value) && (
+                    <div className="mt-1 text-sm text-red-600">
+                      {errors.methods?.[index]?.type?.message ||
+                        errors.methods?.[index]?.value?.message}
+                    </div>
+                  )}
                 </div>
               )
             })}
           </div>
+
+          {/* Add method - text link at bottom */}
+          <button
+            type="button"
+            onClick={handleAddMethod}
+            disabled={isLoading}
+            className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1 disabled:opacity-50"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 4v16m8-8H4"
+              />
+            </svg>
+            Add method
+          </button>
         </div>
 
         {/* Location and Birthday */}

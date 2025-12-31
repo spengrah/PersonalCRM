@@ -27,20 +27,25 @@ test.describe('Contacts', () => {
     await page.goto('/contacts/new')
     await page.getByLabel('Full Name').fill(fullName)
 
+    // Add method buttons (styled as text link but still a button element)
     const addMethodButton = page.getByRole('button', { name: 'Add method' })
     for (let i = 1; i < methods.length; i += 1) {
       await addMethodButton.click()
     }
 
-    await expect(page.getByLabel('Type')).toHaveCount(methods.length)
+    // Contact method type selects have IDs like "methods.0.type"
+    const typeSelects = page.locator('select[id^="methods"]')
+    await expect(typeSelects).toHaveCount(methods.length)
 
     for (const [index, method] of methods.entries()) {
-      await page.getByLabel('Type').nth(index).selectOption(method.type)
-      await page.getByLabel('Value').nth(index).fill(method.value)
+      // Type selector and value input are identified by their IDs
+      await page.locator(`#methods\\.${index}\\.type`).selectOption(method.type)
+      await page.locator(`#methods\\.${index}\\.value`).fill(method.value)
     }
 
+    // Primary toggle is now a star icon button with title attribute
     const primaryIndex = methods.findIndex(method => method.type === 'telegram')
-    await page.getByRole('checkbox', { name: 'Primary' }).nth(primaryIndex).check()
+    await page.getByTitle('Set as primary').nth(primaryIndex).click()
 
     await Promise.all([
       page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
