@@ -7,19 +7,21 @@ test.describe('Error Boundary', () => {
 
     // Inject a React error by throwing in console
     // This simulates a component error that ErrorBoundary should catch
-    await page.evaluate(() => {
-      // Trigger an unhandled error in React
-      const event = new ErrorEvent('error', {
-        error: new Error('Test error for ErrorBoundary'),
-        message: 'Test error for ErrorBoundary',
-      })
-      window.dispatchEvent(event)
+    await page
+      .evaluate(() => {
+        // Trigger an unhandled error in React
+        const event = new ErrorEvent('error', {
+          error: new Error('Test error for ErrorBoundary'),
+          message: 'Test error for ErrorBoundary',
+        })
+        window.dispatchEvent(event)
 
-      // Force a React re-render with error
-      throw new Error('Simulated component error')
-    }).catch(() => {
-      // Expected to throw, we're testing error handling
-    })
+        // Force a React re-render with error
+        throw new Error('Simulated component error')
+      })
+      .catch(() => {
+        // Expected to throw, we're testing error handling
+      })
 
     // Note: The above might not trigger ErrorBoundary perfectly in E2E
     // Manual testing is recommended for full verification
