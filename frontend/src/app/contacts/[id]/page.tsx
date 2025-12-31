@@ -13,17 +13,14 @@ import {
 } from '@/hooks/use-contacts'
 import { useRemindersByContact } from '@/hooks/use-reminders'
 import { formatDateOnly } from '@/lib/utils'
+import { Edit, Trash2, MessageCircle, MapPin, Calendar, Bell, Clock } from 'lucide-react'
+import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
 import {
-  Edit,
-  Trash2,
-  MessageCircle,
-  Mail,
-  Phone,
-  MapPin,
-  Calendar,
-  Bell,
-  Clock,
-} from 'lucide-react'
+  formatContactMethodValue,
+  getContactMethodHref,
+  getContactMethodLabel,
+  sortContactMethods,
+} from '@/lib/contact-methods'
 import type { ContactFormData } from '@/lib/validations/contact'
 
 export default function ContactDetailPage() {
@@ -149,6 +146,12 @@ export default function ContactDetailPage() {
     )
   }
 
+  const sortedMethods = contact.methods?.length
+    ? sortContactMethods(contact.methods)
+    : contact.primary_method
+      ? [contact.primary_method]
+      : []
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
@@ -205,39 +208,45 @@ export default function ContactDetailPage() {
                 </dd>
               </div>
 
-              {contact.email && (
-                <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                  <dt className="text-sm font-medium text-gray-500">Email</dt>
-                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                    <div className="flex items-center">
-                      <Mail className="w-4 h-4 mr-2 text-gray-400" />
-                      <a
-                        href={`mailto:${contact.email}`}
-                        className="text-blue-600 hover:text-blue-500"
-                      >
-                        {contact.email}
-                      </a>
-                    </div>
-                  </dd>
-                </div>
-              )}
+              <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt className="text-sm font-medium text-gray-500">Contact methods</dt>
+                <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                  {sortedMethods.length === 0 ? (
+                    <span className="text-sm text-gray-500">-</span>
+                  ) : (
+                    <div className="space-y-2">
+                      {sortedMethods.map(method => {
+                        const value = formatContactMethodValue(method.type, method.value)
+                        const href = getContactMethodHref(method.type, method.value)
+                        const label = getContactMethodLabel(method.type)
+                        const key = method.id ?? `${method.type}-${method.value}`
 
-              {contact.phone && (
-                <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                  <dt className="text-sm font-medium text-gray-500">Phone</dt>
-                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                    <div className="flex items-center">
-                      <Phone className="w-4 h-4 mr-2 text-gray-400" />
-                      <a
-                        href={`tel:${contact.phone}`}
-                        className="text-blue-600 hover:text-blue-500"
-                      >
-                        {contact.phone}
-                      </a>
+                        return (
+                          <div key={key} className="flex items-center text-sm text-gray-900">
+                            <ContactMethodIcon
+                              type={method.type}
+                              className="w-4 h-4 mr-2 text-gray-400"
+                            />
+                            {href ? (
+                              <a href={href} className="text-blue-600 hover:text-blue-500">
+                                {value}
+                              </a>
+                            ) : (
+                              <span>{value}</span>
+                            )}
+                            <span className="ml-2 text-xs text-gray-500">{label}</span>
+                            {method.is_primary && (
+                              <span className="ml-2 text-xs font-medium text-blue-700">
+                                Primary
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })}
                     </div>
-                  </dd>
-                </div>
-              )}
+                  )}
+                </dd>
+              </div>
 
               {contact.location && (
                 <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">

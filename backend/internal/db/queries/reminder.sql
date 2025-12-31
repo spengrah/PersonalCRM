@@ -19,9 +19,31 @@ ORDER BY due_date ASC
 LIMIT $1 OFFSET $2;
 
 -- name: ListDueReminders :many
-SELECT r.*, c.full_name as contact_name, c.email as contact_email
+SELECT r.*,
+       c.full_name as contact_name,
+       cm.type as contact_primary_method_type,
+       cm.value as contact_primary_method_value
 FROM reminder r
 LEFT JOIN contact c ON r.contact_id = c.id
+LEFT JOIN LATERAL (
+    SELECT type, value
+    FROM contact_method
+    WHERE contact_id = c.id
+    ORDER BY
+        CASE WHEN is_primary THEN 0 ELSE 1 END,
+        CASE type
+            WHEN 'email_personal' THEN 1
+            WHEN 'email_work' THEN 2
+            WHEN 'phone' THEN 3
+            WHEN 'telegram' THEN 4
+            WHEN 'signal' THEN 5
+            WHEN 'discord' THEN 6
+            WHEN 'twitter' THEN 7
+            ELSE 8
+        END,
+        created_at ASC
+    LIMIT 1
+) cm ON TRUE
 WHERE r.due_date <= $1 
   AND r.completed = FALSE 
   AND r.deleted_at IS NULL

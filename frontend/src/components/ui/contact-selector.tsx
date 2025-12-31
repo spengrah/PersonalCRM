@@ -3,11 +3,18 @@
 import { useState, useRef, useEffect } from 'react'
 import { Search, User, X } from 'lucide-react'
 import { clsx } from 'clsx'
+import {
+  formatContactMethodValue,
+  getContactMethodLabel,
+  getPrimaryAndSecondaryMethods,
+} from '@/lib/contact-methods'
+import type { ContactMethod } from '@/types/contact'
 
 interface Contact {
   id: string
   full_name: string
-  email?: string
+  methods?: ContactMethod[]
+  primary_method?: ContactMethod
 }
 
 interface ContactSelectorProps {
@@ -34,13 +41,25 @@ export function ContactSelector({
   const inputRef = useRef<HTMLInputElement>(null)
 
   const selectedContact = contacts.find(contact => contact.id === value)
+  const normalizedSearch = searchTerm.toLowerCase()
+  const handleSearch = normalizedSearch.startsWith('@')
+    ? normalizedSearch.slice(1)
+    : normalizedSearch
 
   const filteredContacts = contacts
-    .filter(
-      contact =>
-        contact.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (contact.email && contact.email.toLowerCase().includes(searchTerm.toLowerCase()))
-    )
+    .filter(contact => {
+      if (contact.full_name.toLowerCase().includes(normalizedSearch)) {
+        return true
+      }
+
+      const methodsToSearch = contact.methods?.length
+        ? contact.methods
+        : contact.primary_method
+          ? [contact.primary_method]
+          : []
+
+      return methodsToSearch.some(method => method.value.toLowerCase().includes(handleSearch))
+    })
     .slice(0, 10) // Limit to 10 results for performance
 
   useEffect(() => {
@@ -139,9 +158,17 @@ export function ContactSelector({
               <div className="flex items-center">
                 <User className="mr-2 h-4 w-4 text-gray-400" />
                 <span className="text-gray-900">{selectedContact.full_name}</span>
-                {selectedContact.email && (
-                  <span className="ml-2 text-sm text-gray-500">({selectedContact.email})</span>
-                )}
+                {(() => {
+                  const { primary } = getPrimaryAndSecondaryMethods(
+                    selectedContact.methods,
+                    selectedContact.primary_method
+                  )
+                  if (!primary) {
+                    return null
+                  }
+                  const value = formatContactMethodValue(primary.type, primary.value)
+                  return <span className="ml-2 text-sm text-gray-500">({value})</span>
+                })()}
               </div>
               <button
                 type="button"
@@ -193,16 +220,28 @@ export function ContactSelector({
                 onClick={() => handleContactSelect(contact)}
               >
                 <span className="block truncate font-normal">{contact.full_name}</span>
-                {contact.email && (
-                  <span
-                    className={clsx(
-                      'block truncate text-sm',
-                      highlightedIndex === index ? 'text-blue-200' : 'text-gray-500'
-                    )}
-                  >
-                    {contact.email}
-                  </span>
-                )}
+                {(() => {
+                  const { primary } = getPrimaryAndSecondaryMethods(
+                    contact.methods,
+                    contact.primary_method
+                  )
+                  if (!primary) {
+                    return null
+                  }
+                  const value = formatContactMethodValue(primary.type, primary.value)
+                  const label = getContactMethodLabel(primary.type)
+
+                  return (
+                    <span
+                      className={clsx(
+                        'block truncate text-sm',
+                        highlightedIndex === index ? 'text-blue-200' : 'text-gray-500'
+                      )}
+                    >
+                      {value} · {label}
+                    </span>
+                  )
+                })()}
                 {value === contact.id && (
                   <span className="absolute inset-y-0 left-0 flex items-center pl-3">
                     <User className="h-4 w-4" />

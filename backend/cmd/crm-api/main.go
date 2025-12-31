@@ -82,14 +82,16 @@ func main() {
 
 	// Initialize repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
+	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	reminderRepo := repository.NewReminderRepository(database.Queries)
 	timeEntryRepo := repository.NewTimeEntryRepository(database.Queries)
 
 	// Initialize services
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo)
 	reminderService := service.NewReminderService(reminderRepo, contactRepo)
 
 	// Initialize handlers
-	contactHandler := handlers.NewContactHandler(contactRepo)
+	contactHandler := handlers.NewContactHandler(contactService)
 	reminderHandler := handlers.NewReminderHandler(reminderService)
 	systemHandler := handlers.NewSystemHandler(contactRepo, reminderRepo, cfg.Runtime)
 	timeEntryHandler := handlers.NewTimeEntryHandler(timeEntryRepo)

@@ -98,8 +98,6 @@ func TestContactRepository_Integration(t *testing.T) {
 		// Create a contact
 		req := repository.CreateContactRequest{
 			FullName: "Integration Test User",
-			Email:    stringPtr("integration@example.com"),
-			Phone:    stringPtr("+1234567890"),
 			Location: stringPtr("Test City"),
 			Cadence:  stringPtr("monthly"),
 		}
@@ -110,8 +108,6 @@ func TestContactRepository_Integration(t *testing.T) {
 
 		// Verify the created contact
 		assert.Equal(t, "Integration Test User", createdContact.FullName)
-		assert.Equal(t, "integration@example.com", *createdContact.Email)
-		assert.Equal(t, "+1234567890", *createdContact.Phone)
 		assert.Equal(t, "Test City", *createdContact.Location)
 		assert.Equal(t, "monthly", *createdContact.Cadence)
 		assert.NotEqual(t, uuid.Nil, createdContact.ID)
@@ -123,7 +119,6 @@ func TestContactRepository_Integration(t *testing.T) {
 
 		assert.Equal(t, createdContact.ID, foundContact.ID)
 		assert.Equal(t, createdContact.FullName, foundContact.FullName)
-		assert.Equal(t, *createdContact.Email, *foundContact.Email)
 
 		// Clean up - delete the test contact
 		err = repo.HardDeleteContact(ctx, createdContact.ID)
@@ -134,14 +129,12 @@ func TestContactRepository_Integration(t *testing.T) {
 		// Create test contacts with unique emails to avoid conflicts
 		contact1, err := repo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName: "Integration List Test User 1",
-			Email:    stringPtr("integration_list_test1@example.com"),
 		})
 		require.NoError(t, err)
 		require.NotNil(t, contact1)
 
 		contact2, err := repo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName: "Integration List Test User 2",
-			Email:    stringPtr("integration_list_test2@example.com"),
 		})
 		require.NoError(t, err)
 		require.NotNil(t, contact2)
@@ -175,6 +168,70 @@ func TestContactRepository_Integration(t *testing.T) {
 		err = repo.HardDeleteContact(ctx, contact2.ID)
 		require.NoError(t, err)
 	})
+}
+
+// TestContactMethodRepository_Integration tests contact method CRUD
+func TestContactMethodRepository_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	if databaseURL != "" {
+		cfg.Database.URL = databaseURL
+	}
+
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	if err != nil {
+		t.Skipf("Could not connect to database: %v", err)
+	}
+	defer database.Close()
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	methodRepo := repository.NewContactMethodRepository(database.Queries)
+
+	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: "Contact Method Test",
+	})
+	require.NoError(t, err)
+	defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
+
+	method1, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+		ContactID: contact.ID,
+		Type:      string(repository.ContactMethodEmailPersonal),
+		Value:     "method.test@example.com",
+		IsPrimary: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, method1)
+
+	method2, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+		ContactID: contact.ID,
+		Type:      string(repository.ContactMethodPhone),
+		Value:     "+1-555-0100",
+		IsPrimary: false,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, method2)
+
+	methods, err := methodRepo.ListContactMethodsByContact(ctx, contact.ID)
+	require.NoError(t, err)
+	assert.Len(t, methods, 2)
+	assert.True(t, methods[0].IsPrimary)
+	assert.Equal(t, string(repository.ContactMethodEmailPersonal), methods[0].Type)
+
+	err = methodRepo.DeleteContactMethodsByContact(ctx, contact.ID)
+	require.NoError(t, err)
+
+	afterDelete, err := methodRepo.ListContactMethodsByContact(ctx, contact.ID)
+	require.NoError(t, err)
+	assert.Len(t, afterDelete, 0)
 }
 
 // Helper function to create string pointers

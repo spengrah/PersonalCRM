@@ -4,42 +4,41 @@
 SELECT * FROM contact 
 WHERE id = $1 AND deleted_at IS NULL;
 
--- name: GetContactByEmail :one
-SELECT * FROM contact 
-WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL;
-
 -- name: ListContacts :many
 SELECT * FROM contact 
 WHERE deleted_at IS NULL
 LIMIT $1 OFFSET $2;
 
 -- name: SearchContacts :many
-SELECT * FROM contact
-WHERE deleted_at IS NULL
-  AND to_tsvector('english', full_name || ' ' || COALESCE(email, '')) @@ plainto_tsquery('english', $1)
+SELECT c.* FROM contact c
+LEFT JOIN (
+  SELECT contact_id, string_agg(value, ' ') AS method_values
+  FROM contact_method
+  GROUP BY contact_id
+) cm ON cm.contact_id = c.id
+WHERE c.deleted_at IS NULL
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
 ORDER BY ts_rank(
-  to_tsvector('english', full_name || ' ' || COALESCE(email, '')),
+  to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
   plainto_tsquery('english', $1)
 ) DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CreateContact :one
 INSERT INTO contact (
-  full_name, email, phone, location, birthday, how_met, cadence, last_contacted, profile_photo
+  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9
+  $1, $2, $3, $4, $5, $6, $7
 ) RETURNING *;
 
 -- name: UpdateContact :one
 UPDATE contact SET
   full_name = $2,
-  email = $3,
-  phone = $4,
-  location = $5,
-  birthday = $6,
-  how_met = $7,
-  cadence = $8,
-  profile_photo = $9,
+  location = $3,
+  birthday = $4,
+  how_met = $5,
+  cadence = $6,
+  profile_photo = $7,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;

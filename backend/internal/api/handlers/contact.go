@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -11,8 +12,8 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/db"
-	"personal-crm/backend/internal/reminder"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
@@ -59,33 +60,41 @@ func (d DateOnly) MarshalJSON() ([]byte, error) {
 
 // ContactHandler handles contact-related HTTP requests
 type ContactHandler struct {
-	contactRepo *repository.ContactRepository
-	validator   *validator.Validate
+	contactService *service.ContactService
+	validator      *validator.Validate
 }
 
 // NewContactHandler creates a new contact handler
-func NewContactHandler(contactRepo *repository.ContactRepository) *ContactHandler {
+func NewContactHandler(contactService *service.ContactService) *ContactHandler {
 	return &ContactHandler{
-		contactRepo: contactRepo,
-		validator:   validator.New(),
+		contactService: contactService,
+		validator:      validator.New(),
 	}
 }
 
 // Contact response model
 // @Description Contact information
 type ContactResponse struct {
-	ID            string     `json:"id" example:"550e8400-e29b-41d4-a716-446655440000"`
-	FullName      string     `json:"full_name" example:"John Doe"`
-	Email         *string    `json:"email,omitempty" example:"john.doe@example.com"`
-	Phone         *string    `json:"phone,omitempty" example:"+1-555-0123"`
-	Location      *string    `json:"location,omitempty" example:"San Francisco, CA"`
-	Birthday      *time.Time `json:"birthday,omitempty" example:"1990-01-15T00:00:00Z"`
-	HowMet        *string    `json:"how_met,omitempty" example:"Met at tech conference"`
-	Cadence       *string    `json:"cadence,omitempty" example:"monthly" enums:"weekly,monthly,quarterly,biannual,annual"`
-	LastContacted *time.Time `json:"last_contacted,omitempty" example:"2024-01-15T10:30:00Z"`
-	ProfilePhoto  *string    `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
-	CreatedAt     time.Time  `json:"created_at" example:"2024-01-01T00:00:00Z"`
-	UpdatedAt     time.Time  `json:"updated_at" example:"2024-01-15T10:30:00Z"`
+	ID            string                  `json:"id" example:"550e8400-e29b-41d4-a716-446655440000"`
+	FullName      string                  `json:"full_name" example:"John Doe"`
+	Methods       []ContactMethodResponse `json:"methods,omitempty"`
+	PrimaryMethod *ContactMethodResponse  `json:"primary_method,omitempty"`
+	Location      *string                 `json:"location,omitempty" example:"San Francisco, CA"`
+	Birthday      *time.Time              `json:"birthday,omitempty" example:"1990-01-15T00:00:00Z"`
+	HowMet        *string                 `json:"how_met,omitempty" example:"Met at tech conference"`
+	Cadence       *string                 `json:"cadence,omitempty" example:"monthly" enums:"weekly,monthly,quarterly,biannual,annual"`
+	LastContacted *time.Time              `json:"last_contacted,omitempty" example:"2024-01-15T10:30:00Z"`
+	ProfilePhoto  *string                 `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
+	CreatedAt     time.Time               `json:"created_at" example:"2024-01-01T00:00:00Z"`
+	UpdatedAt     time.Time               `json:"updated_at" example:"2024-01-15T10:30:00Z"`
+}
+
+// ContactMethodResponse represents a contact method in responses
+type ContactMethodResponse struct {
+	ID        string `json:"id" example:"550e8400-e29b-41d4-a716-446655440000"`
+	Type      string `json:"type" example:"email_personal"`
+	Value     string `json:"value" example:"john.doe@example.com"`
+	IsPrimary bool   `json:"is_primary" example:"true"`
 }
 
 // OverdueContactResponse represents an overdue contact with additional metadata
@@ -100,27 +109,25 @@ type OverdueContactResponse struct {
 // CreateContactRequest represents the request to create a contact
 // @Description Create contact request
 type CreateContactRequest struct {
-	FullName     string    `json:"full_name" validate:"required,min=1,max=255" example:"John Doe"`
-	Email        *string   `json:"email,omitempty" validate:"omitempty,email,max=255" example:"john.doe@example.com"`
-	Phone        *string   `json:"phone,omitempty" validate:"omitempty,max=50" example:"+1-555-0123"`
-	Location     *string   `json:"location,omitempty" validate:"omitempty,max=255" example:"San Francisco, CA"`
-	Birthday     *DateOnly `json:"birthday,omitempty" example:"1990-01-15"`
-	HowMet       *string   `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
-	Cadence      *string   `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual" example:"monthly"`
-	ProfilePhoto *string   `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
+	FullName     string                 `json:"full_name" validate:"required,min=1,max=255" example:"John Doe"`
+	Methods      []ContactMethodRequest `json:"methods,omitempty" validate:"omitempty,dive"`
+	Location     *string                `json:"location,omitempty" validate:"omitempty,max=255" example:"San Francisco, CA"`
+	Birthday     *DateOnly              `json:"birthday,omitempty" example:"1990-01-15"`
+	HowMet       *string                `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
+	Cadence      *string                `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual" example:"monthly"`
+	ProfilePhoto *string                `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
 }
 
 // UpdateContactRequest represents the request to update a contact
 // @Description Update contact request
 type UpdateContactRequest struct {
-	FullName     string    `json:"full_name" validate:"required,min=1,max=255" example:"John Doe"`
-	Email        *string   `json:"email,omitempty" validate:"omitempty,email,max=255" example:"john.doe@example.com"`
-	Phone        *string   `json:"phone,omitempty" validate:"omitempty,max=50" example:"+1-555-0123"`
-	Location     *string   `json:"location,omitempty" validate:"omitempty,max=255" example:"San Francisco, CA"`
-	Birthday     *DateOnly `json:"birthday,omitempty" example:"1990-01-15"`
-	HowMet       *string   `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
-	Cadence      *string   `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual" example:"monthly"`
-	ProfilePhoto *string   `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
+	FullName     string                 `json:"full_name" validate:"required,min=1,max=255" example:"John Doe"`
+	Methods      []ContactMethodRequest `json:"methods,omitempty" validate:"omitempty,dive"`
+	Location     *string                `json:"location,omitempty" validate:"omitempty,max=255" example:"San Francisco, CA"`
+	Birthday     *DateOnly              `json:"birthday,omitempty" example:"1990-01-15"`
+	HowMet       *string                `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
+	Cadence      *string                `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual" example:"monthly"`
+	ProfilePhoto *string                `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
 }
 
 // ListContactsQuery represents query parameters for listing contacts
@@ -132,13 +139,31 @@ type ListContactsQuery struct {
 	Order  string `form:"order" validate:"omitempty,oneof=asc desc" example:"asc"`
 }
 
+// ContactMethodRequest represents a single contact method in requests
+type ContactMethodRequest struct {
+	Type      string `json:"type" validate:"required,oneof=email_personal email_work phone telegram discord twitter signal gchat" example:"email_personal"`
+	Value     string `json:"value" validate:"required,max=255" example:"john.doe@example.com"`
+	IsPrimary bool   `json:"is_primary" example:"true"`
+}
+
 // Helper function to convert repository contact to response
 func contactToResponse(contact *repository.Contact) ContactResponse {
+	methods := make([]ContactMethodResponse, len(contact.Methods))
+	for i, method := range contact.Methods {
+		methods[i] = contactMethodToResponse(method)
+	}
+
+	var primaryMethod *ContactMethodResponse
+	if contact.PrimaryMethod != nil {
+		primary := contactMethodToResponse(*contact.PrimaryMethod)
+		primaryMethod = &primary
+	}
+
 	return ContactResponse{
 		ID:            contact.ID.String(),
 		FullName:      contact.FullName,
-		Email:         contact.Email,
-		Phone:         contact.Phone,
+		Methods:       methods,
+		PrimaryMethod: primaryMethod,
 		Location:      contact.Location,
 		Birthday:      contact.Birthday,
 		HowMet:        contact.HowMet,
@@ -147,6 +172,15 @@ func contactToResponse(contact *repository.Contact) ContactResponse {
 		ProfilePhoto:  contact.ProfilePhoto,
 		CreatedAt:     contact.CreatedAt,
 		UpdatedAt:     contact.UpdatedAt,
+	}
+}
+
+func contactMethodToResponse(method repository.ContactMethod) ContactMethodResponse {
+	return ContactMethodResponse{
+		ID:        method.ID.String(),
+		Type:      method.Type,
+		Value:     method.Value,
+		IsPrimary: method.IsPrimary,
 	}
 }
 
@@ -162,8 +196,6 @@ func createRequestToRepo(req CreateContactRequest) repository.CreateContactReque
 
 	return repository.CreateContactRequest{
 		FullName:      req.FullName,
-		Email:         req.Email,
-		Phone:         req.Phone,
 		Location:      req.Location,
 		Birthday:      birthday,
 		HowMet:        req.HowMet,
@@ -182,8 +214,6 @@ func updateRequestToRepo(req UpdateContactRequest) repository.UpdateContactReque
 
 	return repository.UpdateContactRequest{
 		FullName:     req.FullName,
-		Email:        req.Email,
-		Phone:        req.Phone,
 		Location:     req.Location,
 		Birthday:     birthday,
 		HowMet:       req.HowMet,
@@ -201,7 +231,6 @@ func updateRequestToRepo(req UpdateContactRequest) repository.UpdateContactReque
 // @Param contact body CreateContactRequest true "Contact information"
 // @Success 201 {object} api.APIResponse{data=ContactResponse} "Contact created successfully"
 // @Failure 400 {object} api.APIResponse{error=api.APIError} "Invalid request"
-// @Failure 409 {object} api.APIResponse{error=api.APIError} "Contact already exists"
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts [post]
 func (h *ContactHandler) CreateContact(c *gin.Context) {
@@ -211,25 +240,28 @@ func (h *ContactHandler) CreateContact(c *gin.Context) {
 		return
 	}
 
+	normalizedMethods, err := normalizeContactMethodRequests(req.Methods)
+	if err != nil {
+		api.SendValidationError(c, "Validation failed", err.Error())
+		return
+	}
+	req.Methods = normalizedMethods
+
 	if err := h.validator.Struct(req); err != nil {
 		api.SendValidationError(c, "Validation failed", err.Error())
 		return
 	}
 
-	// Check if email already exists
-	if req.Email != nil {
-		existing, err := h.contactRepo.GetContactByEmail(c.Request.Context(), *req.Email)
-		if err != nil && !errors.Is(err, db.ErrNotFound) {
-			api.SendInternalError(c, "Failed to check existing contact")
-			return
-		}
-		if existing != nil {
-			api.SendConflict(c, "Contact with this email already exists")
-			return
-		}
+	if err := validateContactMethods(h.validator, req.Methods); err != nil {
+		api.SendValidationError(c, "Validation failed", err.Error())
+		return
 	}
 
-	contact, err := h.contactRepo.CreateContact(c.Request.Context(), createRequestToRepo(req))
+	contact, err := h.contactService.CreateContact(
+		c.Request.Context(),
+		createRequestToRepo(req),
+		buildContactMethodInputs(req.Methods),
+	)
 	if err != nil {
 		api.SendInternalError(c, "Failed to create contact")
 		return
@@ -258,7 +290,7 @@ func (h *ContactHandler) GetContact(c *gin.Context) {
 		return
 	}
 
-	contact, err := h.contactRepo.GetContact(c.Request.Context(), id)
+	contact, err := h.contactService.GetContact(c.Request.Context(), id)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			api.SendNotFound(c, "Contact")
@@ -284,7 +316,7 @@ func (h *ContactHandler) GetContact(c *gin.Context) {
 // @Produce json
 // @Param page query int false "Page number" default(1) minimum(1)
 // @Param limit query int false "Items per page" default(20) minimum(1) maximum(100)
-// @Param search query string false "Search term (name or email)" maxlength(255)
+// @Param search query string false "Search term (name or contact methods)" maxlength(255)
 // @Param sort query string false "Sort by field" Enums(name, location, birthday, last_contacted) default("")
 // @Param order query string false "Sort order" Enums(asc, desc) default("asc")
 // @Success 200 {object} api.APIResponse{data=[]ContactResponse,meta=api.Meta} "Contacts retrieved successfully"
@@ -320,14 +352,14 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 	// Fetch all contacts (we'll sort and paginate in memory)
 	if query.Search != "" {
 		// Search contacts - fetch all to allow sorting
-		contacts, err = h.contactRepo.SearchContacts(c.Request.Context(), repository.SearchContactsParams{
+		contacts, err = h.contactService.SearchContacts(c.Request.Context(), repository.SearchContactsParams{
 			Query:  query.Search,
 			Limit:  10000, // Large limit to get all search results
 			Offset: 0,
 		})
 	} else {
 		// List all contacts
-		contacts, err = h.contactRepo.ListContacts(c.Request.Context(), repository.ListContactsParams{
+		contacts, err = h.contactService.ListContacts(c.Request.Context(), repository.ListContactsParams{
 			Limit:  10000, // Large limit to get all contacts
 			Offset: 0,
 		})
@@ -436,7 +468,6 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 // @Success 200 {object} api.APIResponse{data=ContactResponse} "Contact updated successfully"
 // @Failure 400 {object} api.APIResponse{error=api.APIError} "Invalid request"
 // @Failure 404 {object} api.APIResponse{error=api.APIError} "Contact not found"
-// @Failure 409 {object} api.APIResponse{error=api.APIError} "Email already exists"
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts/{id} [put]
 func (h *ContactHandler) UpdateContact(c *gin.Context) {
@@ -453,42 +484,36 @@ func (h *ContactHandler) UpdateContact(c *gin.Context) {
 		return
 	}
 
+	methodsProvided := req.Methods != nil
+	normalizedMethods, err := normalizeContactMethodRequests(req.Methods)
+	if err != nil {
+		api.SendValidationError(c, "Validation failed", err.Error())
+		return
+	}
+	req.Methods = normalizedMethods
+
 	if err := h.validator.Struct(req); err != nil {
 		api.SendValidationError(c, "Validation failed", err.Error())
 		return
 	}
 
-	// Check if contact exists
-	existing, err := h.contactRepo.GetContact(c.Request.Context(), id)
+	if err := validateContactMethods(h.validator, req.Methods); err != nil {
+		api.SendValidationError(c, "Validation failed", err.Error())
+		return
+	}
+
+	contact, err := h.contactService.UpdateContact(
+		c.Request.Context(),
+		id,
+		updateRequestToRepo(req),
+		buildContactMethodInputs(req.Methods),
+		methodsProvided,
+	)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			api.SendNotFound(c, "Contact")
 			return
 		}
-		api.SendInternalError(c, "Failed to retrieve contact")
-		return
-	}
-
-	if existing == nil {
-		api.SendNotFound(c, "Contact")
-		return
-	}
-
-	// Check email uniqueness if email is being changed
-	if req.Email != nil && (existing.Email == nil || *req.Email != *existing.Email) {
-		emailExists, err := h.contactRepo.GetContactByEmail(c.Request.Context(), *req.Email)
-		if err != nil && !errors.Is(err, db.ErrNotFound) {
-			api.SendInternalError(c, "Failed to check existing email")
-			return
-		}
-		if emailExists != nil {
-			api.SendConflict(c, "Contact with this email already exists")
-			return
-		}
-	}
-
-	contact, err := h.contactRepo.UpdateContact(c.Request.Context(), id, updateRequestToRepo(req))
-	if err != nil {
 		api.SendInternalError(c, "Failed to update contact")
 		return
 	}
@@ -516,24 +541,12 @@ func (h *ContactHandler) DeleteContact(c *gin.Context) {
 		return
 	}
 
-	// Check if contact exists
-	existing, err := h.contactRepo.GetContact(c.Request.Context(), id)
+	err = h.contactService.DeleteContact(c.Request.Context(), id)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			api.SendNotFound(c, "Contact")
 			return
 		}
-		api.SendInternalError(c, "Failed to retrieve contact")
-		return
-	}
-
-	if existing == nil {
-		api.SendNotFound(c, "Contact")
-		return
-	}
-
-	err = h.contactRepo.SoftDeleteContact(c.Request.Context(), id)
-	if err != nil {
 		api.SendInternalError(c, "Failed to delete contact")
 		return
 	}
@@ -561,32 +574,13 @@ func (h *ContactHandler) UpdateContactLastContacted(c *gin.Context) {
 		return
 	}
 
-	// Check if contact exists
-	existing, err := h.contactRepo.GetContact(c.Request.Context(), id)
+	updatedContact, err := h.contactService.UpdateContactLastContacted(c.Request.Context(), id)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			api.SendNotFound(c, "Contact")
 			return
 		}
-		api.SendInternalError(c, "Failed to retrieve contact")
-		return
-	}
-
-	if existing == nil {
-		api.SendNotFound(c, "Contact")
-		return
-	}
-
-	err = h.contactRepo.UpdateContactLastContacted(c.Request.Context(), id, accelerated.GetCurrentTime())
-	if err != nil {
 		api.SendInternalError(c, "Failed to update last contacted date")
-		return
-	}
-
-	// Get the updated contact to return
-	updatedContact, err := h.contactRepo.GetContact(c.Request.Context(), id)
-	if err != nil {
-		api.SendInternalError(c, "Failed to retrieve updated contact")
 		return
 	}
 
@@ -603,60 +597,107 @@ func (h *ContactHandler) UpdateContactLastContacted(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts/overdue [get]
 func (h *ContactHandler) ListOverdueContacts(c *gin.Context) {
-	contacts, err := h.contactRepo.ListContacts(c.Request.Context(), repository.ListContactsParams{
-		Limit:  1000, // Get all contacts to check cadence
-		Offset: 0,
-	})
+	overdueContacts, err := h.contactService.ListOverdueContacts(c.Request.Context())
 	if err != nil {
 		api.SendInternalError(c, "Failed to retrieve contacts")
 		return
 	}
 
-	now := accelerated.GetCurrentTime()
-	var overdueContacts []OverdueContactResponse
-
-	for _, contact := range contacts {
-		// Skip contacts without cadence
-		if contact.Cadence == nil {
-			continue
-		}
-
-		cadence, err := reminder.ParseCadence(*contact.Cadence)
-		if err != nil {
-			continue // Skip invalid cadence
-		}
-
-		// Check if contact is overdue using environment-aware calculation
-		if reminder.IsOverdueWithConfig(cadence, contact.LastContacted, contact.CreatedAt, now) {
-			daysOverdue := reminder.GetOverdueDaysWithConfig(cadence, contact.LastContacted, contact.CreatedAt, now)
-			nextDue := reminder.CalculateNextDueDate(cadence, contact.LastContacted, contact.CreatedAt)
-
-			// Generate suggested action based on days overdue
-			var suggestedAction string
-			if daysOverdue <= 2 {
-				suggestedAction = "Send a quick check-in message"
-			} else if daysOverdue <= 7 {
-				suggestedAction = "Schedule a call or coffee"
-			} else if daysOverdue <= 30 {
-				suggestedAction = "Send a meaningful update about your life"
-			} else {
-				suggestedAction = "Reconnect with something specific and personal"
-			}
-
-			overdueContact := OverdueContactResponse{
-				ContactResponse: contactToResponse(&contact),
-				DaysOverdue:     daysOverdue,
-				NextDueDate:     nextDue,
-				SuggestedAction: suggestedAction,
-			}
-			overdueContacts = append(overdueContacts, overdueContact)
+	responses := make([]OverdueContactResponse, len(overdueContacts))
+	for i, contact := range overdueContacts {
+		responses[i] = OverdueContactResponse{
+			ContactResponse: contactToResponse(&contact.Contact),
+			DaysOverdue:     contact.DaysOverdue,
+			NextDueDate:     contact.NextDueDate,
+			SuggestedAction: contact.SuggestedAction,
 		}
 	}
 
-	// Sort by days overdue (most overdue first)
-	sort.Slice(overdueContacts, func(i, j int) bool {
-		return overdueContacts[i].DaysOverdue > overdueContacts[j].DaysOverdue
-	})
+	api.SendSuccess(c, http.StatusOK, responses, nil)
+}
 
-	api.SendSuccess(c, http.StatusOK, overdueContacts, nil)
+func normalizeContactMethodRequests(methods []ContactMethodRequest) ([]ContactMethodRequest, error) {
+	if methods == nil {
+		return nil, nil
+	}
+
+	normalized := make([]ContactMethodRequest, 0, len(methods))
+	for _, method := range methods {
+		method.Type = strings.TrimSpace(method.Type)
+		rawValue := strings.TrimSpace(method.Value)
+		if rawValue == "" {
+			continue
+		}
+
+		value := rawValue
+		if method.Type == string(repository.ContactMethodTelegram) || method.Type == string(repository.ContactMethodTwitter) {
+			value = strings.TrimLeft(value, "@")
+			value = strings.TrimSpace(value)
+		}
+
+		if value == "" {
+			continue
+		}
+
+		method.Value = value
+		normalized = append(normalized, method)
+	}
+
+	return normalized, nil
+}
+
+func validateContactMethods(validate *validator.Validate, methods []ContactMethodRequest) error {
+	if len(methods) == 0 {
+		return nil
+	}
+
+	types := make(map[string]struct{}, len(methods))
+	primaryCount := 0
+
+	for _, method := range methods {
+		if _, exists := types[method.Type]; exists {
+			return fmt.Errorf("duplicate contact method type: %s", method.Type)
+		}
+		types[method.Type] = struct{}{}
+
+		if method.IsPrimary {
+			primaryCount++
+			if primaryCount > 1 {
+				return errors.New("only one contact method can be primary")
+			}
+		}
+
+		switch method.Type {
+		case string(repository.ContactMethodEmailPersonal),
+			string(repository.ContactMethodEmailWork),
+			string(repository.ContactMethodGChat):
+			if err := validate.Var(method.Value, "email"); err != nil {
+				return fmt.Errorf("invalid email for contact method %s", method.Type)
+			}
+		case string(repository.ContactMethodPhone),
+			string(repository.ContactMethodSignal):
+			if len(method.Value) > 50 {
+				return fmt.Errorf("contact method %s must be less than 50 characters", method.Type)
+			}
+		}
+	}
+
+	return nil
+}
+
+func buildContactMethodInputs(methods []ContactMethodRequest) []service.ContactMethodInput {
+	if len(methods) == 0 {
+		return nil
+	}
+
+	inputs := make([]service.ContactMethodInput, len(methods))
+	for i, method := range methods {
+		inputs[i] = service.ContactMethodInput{
+			Type:      method.Type,
+			Value:     method.Value,
+			IsPrimary: method.IsPrimary,
+		}
+	}
+
+	return inputs
 }

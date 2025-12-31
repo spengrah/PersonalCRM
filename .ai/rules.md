@@ -220,6 +220,7 @@ The start scripts kill existing processes before starting new ones, but `make bu
 - Prefer `'use client'` directive only when needed
 - Use TanStack Query for all API calls
 - Keep components small and focused
+- **For new UI elements:** Create an HTML preview file first to explore design options before implementing in React (see [development.md](./development.md#ui-design-preview-before-implementation))
 
 **SQL:**
 - All queries in `backend/internal/db/queries/*.sql`
@@ -390,7 +391,7 @@ backend/tests/
   ├── integration/    # Database tests
   └── api/            # HTTP endpoint tests
 
-tests/e2e/            # Playwright browser tests
+frontend/tests/e2e/   # Playwright browser tests
 ```
 
 ---
@@ -472,8 +473,7 @@ frontend/
   │   ├── components/                  # React components
   │   ├── hooks/                       # Custom hooks
   │   └── lib/                         # API clients, utils
-
-tests/e2e/                             # Playwright E2E tests
+  └── tests/e2e/                       # Playwright E2E tests
 ```
 
 ### Important Files

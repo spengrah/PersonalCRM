@@ -98,6 +98,9 @@ backend/*.dylib
 # Go modules
 # Note: go.sum should be committed for applications (not ignored)
 
+# Go build cache (workspace-local)
+.gocache/
+
 # Test coverage
 backend/coverage.out
 backend/coverage.html
@@ -335,4 +338,3 @@ desktop-ui/node_modules
 desktop-ui/dist
 desktop/src-tauri/target
 desktop/src-tauri/target/release/bundle
-

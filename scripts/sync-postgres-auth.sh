@@ -12,19 +12,20 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Load environment variables from .env
-if [ ! -f "$PROJECT_ROOT/.env" ]; then
-    echo "⚠️  .env file not found. Skipping password sync."
-    exit 0
+# Load environment variables from .env only if not already set
+if [ -z "$POSTGRES_USER" ] || [ -z "$POSTGRES_PASSWORD" ] || [ -z "$POSTGRES_DB" ]; then
+    if [ ! -f "$PROJECT_ROOT/.env" ]; then
+        echo "⚠️  .env file not found and POSTGRES variables not set. Skipping password sync."
+        exit 0
+    fi
+    set -a
+    source "$PROJECT_ROOT/.env"
+    set +a
 fi
-
-set -a
-source "$PROJECT_ROOT/.env"
-set +a
 
 # Validate required variables
 if [ -z "$POSTGRES_USER" ] || [ -z "$POSTGRES_PASSWORD" ] || [ -z "$POSTGRES_DB" ]; then
-    echo "❌ Missing required POSTGRES variables in .env"
+    echo "❌ Missing required POSTGRES variables"
     exit 1
 fi
 

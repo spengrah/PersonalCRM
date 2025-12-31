@@ -24,8 +24,8 @@ type Reminder struct {
 
 type DueReminder struct {
 	Reminder
-	ContactName  *string `json:"contact_name"`
-	ContactEmail *string `json:"contact_email"`
+	ContactName          *string               `json:"contact_name"`
+	ContactPrimaryMethod *ContactMethodSummary `json:"contact_primary_method,omitempty"`
 }
 
 type CreateReminderRequest struct {
@@ -125,8 +125,11 @@ func convertDbDueReminder(dbReminder db.ListDueRemindersRow) DueReminder {
 		due.DeletedAt = &dbReminder.DeletedAt.Time
 	}
 
-	if dbReminder.ContactEmail.Valid {
-		due.ContactEmail = &dbReminder.ContactEmail.String
+	if dbReminder.ContactPrimaryMethodType != "" && dbReminder.ContactPrimaryMethodValue != "" {
+		due.ContactPrimaryMethod = &ContactMethodSummary{
+			Type:  dbReminder.ContactPrimaryMethodType,
+			Value: dbReminder.ContactPrimaryMethodValue,
+		}
 	}
 
 	return due

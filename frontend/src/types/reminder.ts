@@ -1,3 +1,5 @@
+import type { ContactMethodType } from './contact'
+
 export interface Reminder {
   id: string
   contact_id?: string
@@ -12,7 +14,10 @@ export interface Reminder {
 
 export interface DueReminder extends Reminder {
   contact_name?: string
-  contact_email?: string
+  contact_primary_method?: {
+    type: ContactMethodType
+    value: string
+  }
 }
 
 export interface CreateReminderRequest {

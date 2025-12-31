@@ -6,8 +6,10 @@ describe('contactSchema', () => {
     it('validates contact with all fields', () => {
       const validData = {
         full_name: 'John Doe',
-        email: 'john@example.com',
-        phone: '555-1234',
+        methods: [
+          { type: 'email_personal', value: 'john@example.com', is_primary: true },
+          { type: 'phone', value: '555-1234', is_primary: false },
+        ],
         location: 'New York, NY',
         birthday: '1990-01-15',
         notes: 'Some notes here',
@@ -30,7 +32,7 @@ describe('contactSchema', () => {
     it('validates contact with some optional fields', () => {
       const validData = {
         full_name: 'Bob Johnson',
-        email: 'bob@example.com',
+        methods: [{ type: 'email_personal', value: 'bob@example.com', is_primary: true }],
         birthday: '1985-06-20',
       }
 
@@ -42,7 +44,7 @@ describe('contactSchema', () => {
   describe('required field validation', () => {
     it('rejects missing full_name', () => {
       const invalidData = {
-        email: 'test@example.com',
+        methods: [{ type: 'email_personal', value: 'test@example.com', is_primary: true }],
       }
 
       const result = contactSchema.safeParse(invalidData)
@@ -59,11 +61,11 @@ describe('contactSchema', () => {
     })
   })
 
-  describe('email validation', () => {
-    it('accepts valid email', () => {
+  describe('contact method validation', () => {
+    it('accepts valid email method', () => {
       const data = {
         full_name: 'Test User',
-        email: 'test@example.com',
+        methods: [{ type: 'email_personal', value: 'test@example.com', is_primary: true }],
       }
 
       const result = contactSchema.safeParse(data)
@@ -73,27 +75,63 @@ describe('contactSchema', () => {
     it('rejects invalid email format', () => {
       const data = {
         full_name: 'Test User',
-        email: 'not-an-email',
+        methods: [{ type: 'email_personal', value: 'not-an-email', is_primary: true }],
       }
 
       const result = contactSchema.safeParse(data)
       expect(result.success).toBe(false)
     })
 
-    it('accepts empty string for email (optional)', () => {
+    it('rejects duplicate method types', () => {
       const data = {
         full_name: 'Test User',
-        email: '',
+        methods: [
+          { type: 'email_personal', value: 'test@example.com', is_primary: true },
+          { type: 'email_personal', value: 'another@example.com', is_primary: false },
+        ],
       }
 
       const result = contactSchema.safeParse(data)
-      expect(result.success).toBe(true)
+      expect(result.success).toBe(false)
     })
 
-    it('accepts undefined email', () => {
+    it('rejects multiple primary methods', () => {
       const data = {
         full_name: 'Test User',
-        // email is undefined
+        methods: [
+          { type: 'email_personal', value: 'test@example.com', is_primary: true },
+          { type: 'phone', value: '555-1234', is_primary: true },
+        ],
+      }
+
+      const result = contactSchema.safeParse(data)
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects value without type', () => {
+      const data = {
+        full_name: 'Test User',
+        methods: [{ type: '', value: 'test@example.com', is_primary: false }],
+      }
+
+      const result = contactSchema.safeParse(data)
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects phone longer than 50 characters', () => {
+      const data = {
+        full_name: 'Test User',
+        methods: [{ type: 'phone', value: '1'.repeat(51), is_primary: false }],
+      }
+
+      const result = contactSchema.safeParse(data)
+      expect(result.success).toBe(false)
+    })
+
+    it('allows empty method rows', () => {
+      const data = {
+        full_name: 'Test User',
+        methods: [{ type: '', value: '', is_primary: false }],
       }
 
       const result = contactSchema.safeParse(data)
@@ -105,16 +143,6 @@ describe('contactSchema', () => {
     it('rejects full_name longer than 255 characters', () => {
       const data = {
         full_name: 'a'.repeat(256),
-      }
-
-      const result = contactSchema.safeParse(data)
-      expect(result.success).toBe(false)
-    })
-
-    it('rejects phone longer than 50 characters', () => {
-      const data = {
-        full_name: 'Test User',
-        phone: '1'.repeat(51),
       }
 
       const result = contactSchema.safeParse(data)
@@ -200,55 +228,58 @@ describe('contactSchema', () => {
 })
 
 describe('transformContactFormData', () => {
-  it('converts empty email to undefined', () => {
+  it('drops empty method rows', () => {
     const input: ContactFormData = {
       full_name: 'John Doe',
-      email: '',
+      methods: [{ type: '', value: '  ', is_primary: false }],
     }
 
     const result = transformContactFormData(input)
-    expect(result.email).toBeUndefined()
-    expect(result.full_name).toBe('John Doe')
+    expect(result.methods).toEqual([])
   })
 
-  it('converts whitespace-only phone to undefined', () => {
+  it('normalizes handle values', () => {
     const input: ContactFormData = {
       full_name: 'John Doe',
-      phone: '   ',
+      methods: [{ type: 'twitter', value: ' @handle ', is_primary: true }],
     }
 
     const result = transformContactFormData(input)
-    expect(result.phone).toBeUndefined()
+    expect(result.methods).toEqual([{ type: 'twitter', value: 'handle', is_primary: true }])
   })
 
   it('preserves non-empty strings', () => {
     const input: ContactFormData = {
       full_name: 'John Doe',
-      email: 'john@example.com',
-      phone: '555-1234',
+      methods: [
+        { type: 'email_personal', value: 'john@example.com', is_primary: true },
+        { type: 'phone', value: '555-1234', is_primary: false },
+      ],
       location: 'New York',
     }
 
     const result = transformContactFormData(input)
-    expect(result.email).toBe('john@example.com')
-    expect(result.phone).toBe('555-1234')
+    expect(result.methods).toEqual([
+      { type: 'email_personal', value: 'john@example.com', is_primary: true },
+      { type: 'phone', value: '555-1234', is_primary: false },
+    ])
     expect(result.location).toBe('New York')
   })
 
   it('always includes required full_name field', () => {
     const input: ContactFormData = {
       full_name: 'John Doe',
+      methods: [],
     }
 
     const result = transformContactFormData(input)
     expect(result.full_name).toBe('John Doe')
   })
 
-  it('converts all empty optional fields to undefined', () => {
+  it('converts empty optional fields to undefined', () => {
     const input: ContactFormData = {
       full_name: 'John Doe',
-      email: '',
-      phone: '  ',
+      methods: [],
       location: '',
       birthday: '',
       notes: '   ',
@@ -257,8 +288,6 @@ describe('transformContactFormData', () => {
 
     const result = transformContactFormData(input)
     expect(result.full_name).toBe('John Doe')
-    expect(result.email).toBeUndefined()
-    expect(result.phone).toBeUndefined()
     expect(result.location).toBeUndefined()
     expect(result.birthday).toBeUndefined()
     expect(result.notes).toBeUndefined()

@@ -1,6 +1,6 @@
 'use client'
 
-import { useForm } from 'react-hook-form'
+import { useForm, useFieldArray } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,6 +10,11 @@ import {
   transformContactFormData,
   type ContactFormData,
 } from '@/lib/validations/contact'
+import {
+  CONTACT_METHOD_OPTIONS,
+  formatContactMethodValue,
+  sortContactMethods,
+} from '@/lib/contact-methods'
 import type { Contact } from '@/types/contact'
 
 interface ContactFormProps {
@@ -35,18 +40,28 @@ export function ContactForm({
   loading,
   submitText = 'Save Contact',
 }: ContactFormProps) {
+  const defaultMethods = contact?.methods?.length
+    ? sortContactMethods(contact.methods).map(method => ({
+        type: method.type,
+        value: formatContactMethodValue(method.type, method.value),
+        is_primary: method.is_primary,
+      }))
+    : [{ type: '', value: '', is_primary: false }]
+
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
     reset,
+    control,
+    setValue,
+    watch,
   } = useForm<ContactFormData>({
     resolver: zodResolver(contactSchema),
     defaultValues: contact
       ? {
           full_name: contact.full_name,
-          email: contact.email || '',
-          phone: contact.phone || '',
+          methods: defaultMethods,
           location: contact.location || '',
           birthday: contact.birthday ? contact.birthday.split('T')[0] : '', // Format date for input
           notes: contact.notes || '',
@@ -54,14 +69,36 @@ export function ContactForm({
         }
       : {
           full_name: '',
-          email: '',
-          phone: '',
+          methods: defaultMethods,
           location: '',
           birthday: '',
           notes: '',
           cadence: '',
         },
   })
+
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: 'methods',
+  })
+
+  const watchedMethods = watch('methods')
+
+  const handlePrimaryToggle = (index: number) => {
+    const currentValue = watchedMethods?.[index]?.is_primary
+    const nextValue = !currentValue
+
+    fields.forEach((_, fieldIndex) => {
+      setValue(`methods.${fieldIndex}.is_primary`, fieldIndex === index ? nextValue : false, {
+        shouldDirty: true,
+        shouldValidate: true,
+      })
+    })
+  }
+
+  const handleAddMethod = () => {
+    append({ type: '', value: '', is_primary: false })
+  }
 
   const handleFormSubmit = async (data: ContactFormData) => {
     try {
@@ -77,6 +114,9 @@ export function ContactForm({
   }
 
   const isLoading = loading || isSubmitting
+  const methodsError =
+    (errors.methods as { message?: string; root?: { message?: string } } | undefined)?.message ??
+    (errors.methods as { message?: string; root?: { message?: string } } | undefined)?.root?.message
 
   return (
     <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
@@ -91,24 +131,150 @@ export function ContactForm({
           disabled={isLoading}
         />
 
-        {/* Email and Phone */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <Input
-            {...register('email')}
-            label="Email"
-            type="email"
-            placeholder="Enter email address"
-            error={errors.email?.message}
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Contact methods</label>
+            <p className="text-sm text-gray-500">Add one or more ways to reach this contact.</p>
+          </div>
+
+          {methodsError && <p className="text-sm text-red-600">{methodsError}</p>}
+
+          <div className="divide-y divide-gray-200">
+            {fields.map((field, index) => {
+              const selectedType = watchedMethods?.[index]?.type
+              const usedTypes = new Set(
+                watchedMethods
+                  ?.map((method, methodIndex) =>
+                    methodIndex === index
+                      ? undefined
+                      : method?.value?.trim()
+                        ? method?.type?.trim()
+                        : undefined
+                  )
+                  .filter(type => type)
+              )
+              const option = CONTACT_METHOD_OPTIONS.find(opt => opt.value === selectedType)
+              const isPrimary = Boolean(watchedMethods?.[index]?.is_primary)
+
+              return (
+                <div key={field.id} className="group py-3 first:pt-0">
+                  <div className="flex items-center gap-3">
+                    {/* Type selector - styled as rounded rectangle tag */}
+                    <div className="relative">
+                      <select
+                        id={`methods.${index}.type`}
+                        {...register(`methods.${index}.type`)}
+                        className={`appearance-none rounded-md text-xs font-medium px-3 py-1.5 pr-7 border-0 cursor-pointer focus:ring-2 focus:ring-blue-500 ${
+                          isPrimary ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'
+                        }`}
+                        disabled={isLoading}
+                      >
+                        <option value="">Select</option>
+                        {CONTACT_METHOD_OPTIONS.map(opt => (
+                          <option
+                            key={opt.value}
+                            value={opt.value}
+                            disabled={usedTypes.has(opt.value)}
+                          >
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                      <svg
+                        className={`absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 pointer-events-none ${
+                          isPrimary ? 'text-blue-500' : 'text-gray-500'
+                        }`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M19 9l-7 7-7-7"
+                        />
+                      </svg>
+                    </div>
+
+                    {/* Value input - borderless with underline on focus */}
+                    <input
+                      id={`methods.${index}.value`}
+                      {...register(`methods.${index}.value`)}
+                      type={option?.inputType ?? 'text'}
+                      placeholder={option?.placeholder ?? 'Enter value'}
+                      className="flex-1 border-0 border-b border-transparent focus:border-blue-500 focus:ring-0 px-1 py-1 bg-transparent text-sm text-gray-900"
+                      disabled={isLoading}
+                    />
+
+                    {/* Primary toggle - star icon */}
+                    <button
+                      type="button"
+                      onClick={() => handlePrimaryToggle(index)}
+                      disabled={isLoading}
+                      className={`p-1.5 transition-colors ${
+                        isPrimary ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-500'
+                      }`}
+                      title={isPrimary ? 'Primary contact method' : 'Set as primary'}
+                    >
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                      </svg>
+                    </button>
+
+                    {/* Remove button - X icon, visible on hover */}
+                    <button
+                      type="button"
+                      onClick={() => remove(index)}
+                      disabled={isLoading || fields.length === 1}
+                      className="p-1.5 text-gray-300 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all disabled:opacity-0"
+                      title="Remove"
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M6 18L18 6M6 6l12 12"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+
+                  {/* Error messages */}
+                  {(errors.methods?.[index]?.type || errors.methods?.[index]?.value) && (
+                    <div className="mt-1 text-sm text-red-600">
+                      {errors.methods?.[index]?.type?.message ||
+                        errors.methods?.[index]?.value?.message}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Add method - text link at bottom */}
+          <button
+            type="button"
+            onClick={handleAddMethod}
             disabled={isLoading}
-          />
-          <Input
-            {...register('phone')}
-            label="Phone"
-            type="tel"
-            placeholder="Enter phone number"
-            error={errors.phone?.message}
-            disabled={isLoading}
-          />
+            className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1 disabled:opacity-50"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 4v16m8-8H4"
+              />
+            </svg>
+            Add method
+          </button>
         </div>
 
         {/* Location and Birthday */}

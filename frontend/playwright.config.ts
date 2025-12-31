@@ -1,4 +1,4 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -8,6 +8,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
   use: {
+    baseURL: 'http://localhost:3000',
     trace: 'on-first-retry',
   },
 
@@ -31,14 +32,27 @@ export default defineConfig({
   /* Run your local dev server before starting the tests */
   webServer: [
     {
-      command: 'cd frontend && npm run dev',
+      command: 'bun run dev -- --hostname 127.0.0.1',
       url: 'http://localhost:3000',
       reuseExistingServer: !process.env.CI,
+      timeout: 120000,
+      stdout: 'pipe',
+      env: {
+        ...process.env,
+        NODE_ENV: 'development',
+        PORT: '3000',
+      },
     },
     {
-      command: 'cd backend && go run cmd/crm-api/main.go',
+      command: 'cd ../backend && go run cmd/crm-api/main.go',
       url: 'http://localhost:8080/health',
       reuseExistingServer: !process.env.CI,
+      timeout: 120000,
+      stdout: 'pipe',
+      env: {
+        ...process.env,
+        MIGRATIONS_PATH: 'migrations',
+      },
     },
   ],
-});
+})

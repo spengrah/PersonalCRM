@@ -19,18 +19,19 @@ type Querier interface {
 	CountDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) (int64, error)
 	CountReminders(ctx context.Context) (int64, error)
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
+	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
 	CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error)
 	CreateReminder(ctx context.Context, arg CreateReminderParams) (*Reminder, error)
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)
 	CreateTimeEntry(ctx context.Context, arg CreateTimeEntryParams) (*TimeEntry, error)
+	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
 	DeleteInteraction(ctx context.Context, id pgtype.UUID) error
 	DeleteNote(ctx context.Context, id pgtype.UUID) error
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
 	DeleteTimeEntry(ctx context.Context, id pgtype.UUID) error
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
-	GetContactByEmail(ctx context.Context, lower string) (*Contact, error)
 	GetContactTags(ctx context.Context, contactID pgtype.UUID) ([]*Tag, error)
 	// Interaction queries
 	GetInteraction(ctx context.Context, id pgtype.UUID) (*Interaction, error)
@@ -46,6 +47,8 @@ type Querier interface {
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	HardDeleteReminder(ctx context.Context, id pgtype.UUID) error
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
+	// Contact method queries
+	ListContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactMethod, error)
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error)
 	ListDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) ([]*ListDueRemindersRow, error)

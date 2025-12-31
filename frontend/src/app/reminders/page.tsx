@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
+import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
 import { ReminderForm } from '@/components/reminders/reminder-form'
 import {
   useReminders,
@@ -21,6 +22,11 @@ import {
   useDeleteReminder,
   useCreateReminder,
 } from '@/hooks/use-reminders'
+import {
+  formatContactMethodValue,
+  getContactMethodHref,
+  getContactMethodLabel,
+} from '@/lib/contact-methods'
 import type { DueReminder, ReminderListParams, CreateReminderRequest } from '@/types/reminder'
 import { clsx } from 'clsx'
 
@@ -130,9 +136,30 @@ function RemindersTable({ reminders, loading }: { reminders: DueReminder[]; load
                           {reminder.contact_name}
                         </Link>
                       </div>
-                      {reminder.contact_email && (
-                        <div className="text-sm text-gray-500">{reminder.contact_email}</div>
-                      )}
+                      {reminder.contact_primary_method &&
+                        (() => {
+                          const { type, value } = reminder.contact_primary_method
+                          const formattedValue = formatContactMethodValue(type, value)
+                          const href = getContactMethodHref(type, value)
+                          const label = getContactMethodLabel(type)
+
+                          return (
+                            <div className="flex items-center text-sm text-gray-500">
+                              <ContactMethodIcon
+                                type={type}
+                                className="w-3 h-3 mr-1 text-gray-400"
+                              />
+                              {href ? (
+                                <a href={href} className="hover:text-blue-600">
+                                  {formattedValue}
+                                </a>
+                              ) : (
+                                <span>{formattedValue}</span>
+                              )}
+                              <span className="ml-2 text-xs text-gray-400">{label}</span>
+                            </div>
+                          )
+                        })()}
                     </>
                   ) : (
                     <div className="flex items-center text-sm text-gray-500">

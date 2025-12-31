@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"personal-crm/backend/internal/api/handlers"
+
 	"github.com/go-playground/validator/v10"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,32 +50,22 @@ func TestContactValidation_FullName(t *testing.T) {
 	}
 }
 
-// TestContactValidation_Email tests Email validation
-func TestContactValidation_Email(t *testing.T) {
-	type Contact struct {
-		Email *string `validate:"omitempty,email,max=255"`
-	}
-
+// TestContactMethodValidation_Type tests method type validation
+func TestContactMethodValidation_Type(t *testing.T) {
 	tests := []struct {
 		name      string
-		email     *string
+		method    handlers.ContactMethodRequest
 		wantError bool
 	}{
-		{"Valid email", strPtr("john@example.com"), false},
-		{"Nil email valid (omitempty)", nil, false},
-		{"Invalid email format", strPtr("not-an-email"), true},
-		{"Missing @ symbol", strPtr("john.example.com"), true},
-		{"Missing domain", strPtr("john@"), true},
-		{"Valid with subdomain", strPtr("john@mail.example.com"), false},
-		{"Valid with + sign", strPtr("john+test@example.com"), false},
-		{"Max length 255", strPtr(strings.Repeat("a", 244) + "@test.com"), false},    // 244 + 1 + 8 + 1 + 3 = 257, actually let's be more careful
-		{"Exceeds max length", strPtr(strings.Repeat("a", 247) + "@test.com"), true}, // Should exceed 255
+		{"Valid email personal", handlers.ContactMethodRequest{Type: "email_personal", Value: "john@example.com"}, false},
+		{"Valid phone", handlers.ContactMethodRequest{Type: "phone", Value: "+1-555-0123"}, false},
+		{"Missing type", handlers.ContactMethodRequest{Type: "", Value: "john@example.com"}, true},
+		{"Invalid type", handlers.ContactMethodRequest{Type: "fax", Value: "123"}, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			contact := Contact{Email: tt.email}
-			err := validate.Struct(contact)
+			err := validate.Struct(tt.method)
 
 			if tt.wantError {
 				assert.Error(t, err)
@@ -84,28 +76,22 @@ func TestContactValidation_Email(t *testing.T) {
 	}
 }
 
-// TestContactValidation_Phone tests Phone validation
-func TestContactValidation_Phone(t *testing.T) {
-	type Contact struct {
-		Phone *string `validate:"omitempty,max=50"`
-	}
-
+// TestContactMethodValidation_Value tests method value validation
+func TestContactMethodValidation_Value(t *testing.T) {
 	tests := []struct {
 		name      string
-		phone     *string
+		method    handlers.ContactMethodRequest
 		wantError bool
 	}{
-		{"Valid phone", strPtr("+1-555-0123"), false},
-		{"Nil phone valid (omitempty)", nil, false},
-		{"Max length 50", strPtr(strings.Repeat("1", 50)), false},
-		{"Exceeds max length", strPtr(strings.Repeat("1", 51)), true},
-		{"Various formats allowed", strPtr("(555) 123-4567"), false},
+		{"Valid value", handlers.ContactMethodRequest{Type: "email_personal", Value: "john@example.com"}, false},
+		{"Empty value", handlers.ContactMethodRequest{Type: "email_personal", Value: ""}, true},
+		{"Max length 255", handlers.ContactMethodRequest{Type: "phone", Value: strings.Repeat("1", 255)}, false},
+		{"Exceeds max length", handlers.ContactMethodRequest{Type: "phone", Value: strings.Repeat("1", 256)}, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			contact := Contact{Phone: tt.phone}
-			err := validate.Struct(contact)
+			err := validate.Struct(tt.method)
 
 			if tt.wantError {
 				assert.Error(t, err)
@@ -537,9 +523,9 @@ func TestTimeEntryValidation_Project(t *testing.T) {
 // TestComplexValidation_MultipleFields tests validation with multiple fields
 func TestComplexValidation_MultipleFields(t *testing.T) {
 	type Contact struct {
-		FullName string  `validate:"required,min=1,max=255"`
-		Email    *string `validate:"omitempty,email,max=255"`
-		Cadence  *string `validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual"`
+		FullName     string  `validate:"required,min=1,max=255"`
+		Cadence      *string `validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual"`
+		ProfilePhoto *string `validate:"omitempty,url,max=500"`
 	}
 
 	tests := []struct {
@@ -551,9 +537,9 @@ func TestComplexValidation_MultipleFields(t *testing.T) {
 		{
 			name: "All valid",
 			contact: Contact{
-				FullName: "John Doe",
-				Email:    strPtr("john@example.com"),
-				Cadence:  strPtr("monthly"),
+				FullName:     "John Doe",
+				Cadence:      strPtr("monthly"),
+				ProfilePhoto: strPtr("https://example.com/photo.jpg"),
 			},
 			wantError:  false,
 			errorCount: 0,
@@ -561,9 +547,9 @@ func TestComplexValidation_MultipleFields(t *testing.T) {
 		{
 			name: "Missing required field",
 			contact: Contact{
-				FullName: "",
-				Email:    strPtr("john@example.com"),
-				Cadence:  strPtr("monthly"),
+				FullName:     "",
+				Cadence:      strPtr("monthly"),
+				ProfilePhoto: strPtr("https://example.com/photo.jpg"),
 			},
 			wantError:  true,
 			errorCount: 1,
@@ -571,12 +557,12 @@ func TestComplexValidation_MultipleFields(t *testing.T) {
 		{
 			name: "Multiple invalid fields",
 			contact: Contact{
-				FullName: "",
-				Email:    strPtr("not-an-email"),
-				Cadence:  strPtr("daily"),
+				FullName:     "",
+				Cadence:      strPtr("daily"),
+				ProfilePhoto: strPtr("not-a-url"),
 			},
 			wantError:  true,
-			errorCount: 3, // FullName required, Email invalid format, Cadence invalid value
+			errorCount: 3, // FullName required, Cadence invalid value, ProfilePhoto invalid URL
 		},
 	}
 

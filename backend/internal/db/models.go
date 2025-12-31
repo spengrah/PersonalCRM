@@ -21,8 +21,6 @@ type Connection struct {
 type Contact struct {
 	ID            pgtype.UUID        `json:"id"`
 	FullName      string             `json:"full_name"`
-	Email         pgtype.Text        `json:"email"`
-	Phone         pgtype.Text        `json:"phone"`
 	Location      pgtype.Text        `json:"location"`
 	Birthday      pgtype.Date        `json:"birthday"`
 	HowMet        pgtype.Text        `json:"how_met"`
@@ -32,6 +30,16 @@ type Contact struct {
 	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ContactMethod struct {
+	ID        pgtype.UUID        `json:"id"`
+	ContactID pgtype.UUID        `json:"contact_id"`
+	Type      string             `json:"type"`
+	Value     string             `json:"value"`
+	IsPrimary pgtype.Bool        `json:"is_primary"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type ContactSummary struct {

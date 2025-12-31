@@ -1,8 +1,25 @@
+export type ContactMethodType =
+  | 'email_personal'
+  | 'email_work'
+  | 'phone'
+  | 'telegram'
+  | 'signal'
+  | 'discord'
+  | 'twitter'
+  | 'gchat'
+
+export interface ContactMethod {
+  id?: string
+  type: ContactMethodType
+  value: string
+  is_primary: boolean
+}
+
 export interface Contact {
   id: string
   full_name: string
-  email?: string
-  phone?: string
+  methods?: ContactMethod[]
+  primary_method?: ContactMethod
   location?: string
   birthday?: string
   notes?: string
@@ -21,8 +38,7 @@ export interface OverdueContact extends Contact {
 
 export interface CreateContactRequest {
   full_name: string
-  email?: string
-  phone?: string
+  methods?: ContactMethod[]
   location?: string
   birthday?: string
   notes?: string
@@ -31,8 +47,7 @@ export interface CreateContactRequest {
 
 export interface UpdateContactRequest {
   full_name?: string
-  email?: string
-  phone?: string
+  methods?: ContactMethod[]
   location?: string
   birthday?: string
   notes?: string
@@ -43,6 +58,6 @@ export interface ContactListParams {
   page?: number
   limit?: number
   search?: string
-  sort?: 'name' | 'email' | 'created_at' | 'last_contacted'
+  sort?: 'name' | 'location' | 'birthday' | 'last_contacted'
   order?: 'asc' | 'desc'
 }
