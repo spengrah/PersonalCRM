@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Search, User, X } from 'lucide-react'
 import { clsx } from 'clsx'
+import { FORM_CONTROL_BASE } from '@/lib/form-classes'
 import {
   formatContactMethodValue,
   getContactMethodLabel,
@@ -131,12 +132,11 @@ export function ContactSelector({
     <div ref={containerRef} className="relative">
       <div
         className={clsx(
-          'relative w-full cursor-pointer rounded-md border bg-white py-2 pl-3 pr-10 text-left shadow-sm',
-          'transition-colors',
+          FORM_CONTROL_BASE,
+          'relative w-full cursor-pointer text-left pr-10',
           'focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500',
           disabled && 'cursor-not-allowed bg-gray-50',
-          error && 'border-red-300 focus-within:border-red-500 focus-within:ring-red-500',
-          !error && !disabled && 'border-gray-300'
+          error && 'border-red-300 focus-within:border-red-500 focus-within:ring-red-500'
         )}
         onClick={handleInputClick}
       >
