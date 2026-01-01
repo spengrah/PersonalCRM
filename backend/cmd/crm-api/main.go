@@ -154,16 +154,18 @@ func main() {
 			system.POST("/time/acceleration", systemHandler.SetTimeAcceleration)
 		}
 
-		// Time entry routes
-		timeEntries := v1.Group("/time-entries")
-		{
-			timeEntries.POST("", timeEntryHandler.CreateTimeEntry)
-			timeEntries.GET("", timeEntryHandler.ListTimeEntries)
-			timeEntries.GET("/running", timeEntryHandler.GetRunningTimeEntry)
-			timeEntries.GET("/stats", timeEntryHandler.GetTimeEntryStats)
-			timeEntries.GET("/:id", timeEntryHandler.GetTimeEntry)
-			timeEntries.PUT("/:id", timeEntryHandler.UpdateTimeEntry)
-			timeEntries.DELETE("/:id", timeEntryHandler.DeleteTimeEntry)
+		// Time entry routes (feature-flagged)
+		if cfg.Features.EnableTimeTracking {
+			timeEntries := v1.Group("/time-entries")
+			{
+				timeEntries.POST("", timeEntryHandler.CreateTimeEntry)
+				timeEntries.GET("", timeEntryHandler.ListTimeEntries)
+				timeEntries.GET("/running", timeEntryHandler.GetRunningTimeEntry)
+				timeEntries.GET("/stats", timeEntryHandler.GetTimeEntryStats)
+				timeEntries.GET("/:id", timeEntryHandler.GetTimeEntry)
+				timeEntries.PUT("/:id", timeEntryHandler.UpdateTimeEntry)
+				timeEntries.DELETE("/:id", timeEntryHandler.DeleteTimeEntry)
+			}
 		}
 
 		// Export/Import routes

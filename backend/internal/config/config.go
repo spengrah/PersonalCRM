@@ -50,6 +50,7 @@ type FeatureFlags struct {
 	EnableVectorSearch bool // Default: false
 	EnableTelegramBot  bool // Default: false
 	EnableCalendarSync bool // Default: false
+	EnableTimeTracking bool // Default: false
 }
 
 // RuntimeConfig holds runtime-only settings (not validated at startup)
@@ -132,6 +133,7 @@ func Load() (*Config, error) {
 			EnableVectorSearch: getEnvAsBool("ENABLE_VECTOR_SEARCH", false),
 			EnableTelegramBot:  getEnvAsBool("ENABLE_TELEGRAM_BOT", false),
 			EnableCalendarSync: getEnvAsBool("ENABLE_CALENDAR_SYNC", false),
+			EnableTimeTracking: getEnvAsBool("ENABLE_TIME_TRACKING", false),
 		},
 		Runtime: RuntimeConfig{
 			CRMEnvironment:   getEnv("CRM_ENV", DefaultCRMEnvironment),
@@ -325,6 +327,7 @@ func TestConfig() *Config {
 			EnableVectorSearch: false,
 			EnableTelegramBot:  false,
 			EnableCalendarSync: false,
+			EnableTimeTracking: false,
 		},
 		Runtime: RuntimeConfig{
 			CRMEnvironment:   "test",
