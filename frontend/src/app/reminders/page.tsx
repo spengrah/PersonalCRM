@@ -228,7 +228,7 @@ function RemindersTable({ reminders, loading }: { reminders: DueReminder[]; load
 
 export default function RemindersPage() {
   const [searchTerm, setSearchTerm] = useState('')
-  const [filter, setFilter] = useState<'all' | 'due' | 'completed'>('all')
+  const [filter, setFilter] = useState<'all' | 'due' | 'upcoming' | 'completed'>('all')
   const [showCreateForm, setShowCreateForm] = useState(false)
 
   const params: ReminderListParams = {
@@ -255,10 +255,15 @@ export default function RemindersPage() {
         (reminder.contact_name &&
           reminder.contact_name.toLowerCase().includes(searchTerm.toLowerCase()))
 
+      const dueDate = new Date(reminder.due_date)
+      const now = new Date()
+      const isUpcoming = dueDate > now
+
       const matchesFilter =
         filter === 'all' ||
         (filter === 'completed' && reminder.completed) ||
-        (filter === 'due' && !reminder.completed)
+        (filter === 'due' && !reminder.completed && !isUpcoming) ||
+        (filter === 'upcoming' && !reminder.completed && isUpcoming)
 
       return matchesSearch && matchesFilter
     }) || []
@@ -339,6 +344,17 @@ export default function RemindersPage() {
               )}
             >
               Due
+            </button>
+            <button
+              onClick={() => setFilter('upcoming')}
+              className={clsx(
+                'px-3 py-2 text-sm font-medium rounded-md',
+                filter === 'upcoming'
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'text-gray-500 hover:text-gray-700'
+              )}
+            >
+              Upcoming
             </button>
             <button
               onClick={() => setFilter('completed')}

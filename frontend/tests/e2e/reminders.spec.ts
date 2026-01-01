@@ -18,6 +18,7 @@ test.describe('Reminders Page', () => {
     // Check filter tabs are visible
     await expect(page.getByRole('button', { name: 'All' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Due' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Upcoming' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Completed' })).toBeVisible()
   })
 
