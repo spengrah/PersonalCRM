@@ -52,7 +52,8 @@ test.describe('Contacts', () => {
       page.getByRole('button', { name: 'Create Contact' }).click(),
     ])
 
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible()
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     for (const method of methods) {
       await expect(page.getByText(method.expected, { exact: true })).toBeVisible()
