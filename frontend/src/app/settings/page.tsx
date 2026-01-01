@@ -5,6 +5,8 @@ import { Download, Upload, Settings, Database, Shield, Clock } from 'lucide-reac
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
+import { FORM_CONTROL_BASE } from '@/lib/form-classes'
+import { clsx } from 'clsx'
 
 export default function SettingsPage() {
   const [isExporting, setIsExporting] = useState(false)
@@ -195,7 +197,7 @@ export default function SettingsPage() {
                     type="file"
                     accept=".json"
                     onChange={handleFileSelect}
-                    className="block w-full text-sm text-gray-900 border border-gray-300 rounded-md cursor-pointer bg-gray-50 focus:outline-none focus:border-blue-500"
+                    className={clsx(FORM_CONTROL_BASE, 'cursor-pointer bg-gray-50')}
                   />
                 </div>
 

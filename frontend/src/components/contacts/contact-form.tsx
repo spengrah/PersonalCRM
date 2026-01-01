@@ -4,7 +4,9 @@ import { useForm, useFieldArray } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { FORM_CONTROL_BASE } from '@/lib/form-classes'
 import {
   contactSchema,
   transformContactFormData,
@@ -16,6 +18,7 @@ import {
   sortContactMethods,
 } from '@/lib/contact-methods'
 import type { Contact } from '@/types/contact'
+import { clsx } from 'clsx'
 
 interface ContactFormProps {
   contact?: Contact
@@ -161,12 +164,14 @@ export function ContactForm({
                   <div className="flex items-center gap-3">
                     {/* Type selector - styled as rounded rectangle tag */}
                     <div className="relative">
-                      <select
+                      <Select
                         id={`methods.${index}.type`}
                         {...register(`methods.${index}.type`)}
-                        className={`appearance-none rounded-md text-xs font-medium px-3 py-1.5 pr-7 border-0 cursor-pointer focus:ring-2 focus:ring-blue-500 ${
+                        className={clsx(
+                          'font-medium',
                           isPrimary ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'
-                        }`}
+                        )}
+                        caretClassName={isPrimary ? 'text-blue-500' : 'text-gray-500'}
                         disabled={isLoading}
                       >
                         <option value="">Select</option>
@@ -179,31 +184,16 @@ export function ContactForm({
                             {opt.label}
                           </option>
                         ))}
-                      </select>
-                      <svg
-                        className={`absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 pointer-events-none ${
-                          isPrimary ? 'text-blue-500' : 'text-gray-500'
-                        }`}
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19 9l-7 7-7-7"
-                        />
-                      </svg>
+                      </Select>
                     </div>
 
-                    {/* Value input - borderless with underline on focus */}
+                    {/* Value input */}
                     <input
                       id={`methods.${index}.value`}
                       {...register(`methods.${index}.value`)}
                       type={option?.inputType ?? 'text'}
                       placeholder={option?.placeholder ?? 'Enter value'}
-                      className="flex-1 border-0 border-b border-transparent focus:border-blue-500 focus:ring-0 px-1 py-1 bg-transparent text-sm text-gray-900"
+                      className={clsx(FORM_CONTROL_BASE, 'flex-1')}
                       disabled={isLoading}
                     />
 
@@ -297,25 +287,20 @@ export function ContactForm({
         </div>
 
         {/* Cadence */}
-        <div className="space-y-1">
-          <label htmlFor="cadence" className="block text-sm font-medium text-gray-700">
-            Contact Cadence
-          </label>
-          <select
-            {...register('cadence')}
-            id="cadence"
-            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-gray-900 disabled:bg-gray-50 disabled:text-gray-500"
-            disabled={isLoading}
-          >
-            {cadenceOptions.map(option => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          {errors.cadence && <p className="text-sm text-red-600">{errors.cadence.message}</p>}
-          <p className="text-sm text-gray-500">How often you want to be reminded to reach out</p>
-        </div>
+        <Select
+          {...register('cadence')}
+          id="cadence"
+          label="Contact Cadence"
+          error={errors.cadence?.message}
+          helpText="How often you want to be reminded to reach out"
+          disabled={isLoading}
+        >
+          {cadenceOptions.map(option => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </Select>
 
         {/* Notes */}
         <Textarea
