@@ -58,7 +58,8 @@ export function useCreateContact() {
 
   return useMutation({
     mutationFn: (data: CreateContactRequest) => contactsApi.createContact(data),
-    onSuccess: () => {
+    onSuccess: newContact => {
+      queryClient.setQueryData(contactKeys.detail(newContact.id), newContact)
       // Invalidate and refetch contacts list
       queryClient.invalidateQueries({ queryKey: contactKeys.lists() })
     },
