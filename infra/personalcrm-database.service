@@ -8,12 +8,12 @@ PartOf=personalcrm.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/opt/personalcrm/infra
+WorkingDirectory=/srv/personalcrm/infra
 User=crm
 Group=crm
 
 # Environment
-EnvironmentFile=/opt/personalcrm/.env
+EnvironmentFile=/srv/personalcrm/.env
 
 # Start: docker compose up -d
 ExecStart=/usr/bin/docker compose up -d

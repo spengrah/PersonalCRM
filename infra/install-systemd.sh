@@ -4,7 +4,7 @@
 
 set -e
 
-INSTALL_DIR="/opt/personalcrm"
+INSTALL_DIR="/srv/personalcrm"
 SERVICE_USER="crm"
 SERVICE_GROUP="crm"
 SYSTEMD_DIR="/etc/systemd/system"
@@ -80,7 +80,7 @@ else
     echo "Warning: .env file not found"
     echo "Creating from .env.example..."
     cp "$PROJECT_DIR/.env.example" "$INSTALL_DIR/.env"
-    echo "⚠  Please edit /opt/personalcrm/.env with your configuration"
+    echo "⚠  Please edit /srv/personalcrm/.env with your configuration"
 fi
 echo ""
 
