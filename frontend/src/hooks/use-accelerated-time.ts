@@ -29,8 +29,8 @@ export function useAcceleratedTime() {
   } = useQuery({
     queryKey: systemKeys.time(),
     queryFn: systemApi.getSystemTime,
-    refetchInterval: 30000, // Refetch every 30 seconds
-    staleTime: 25000, // Consider stale after 25 seconds
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    refetchOnWindowFocus: true,
   })
 
   // Track page visibility to pause intervals when tab is hidden
