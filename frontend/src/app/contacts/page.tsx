@@ -427,7 +427,7 @@ export default function ContactsPage() {
         )}
 
         {/* Contacts Table */}
-        <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+        <div className="bg-white shadow sm:rounded-lg">
           <ContactsTable
             contacts={data?.contacts || []}
             loading={isLoading}
