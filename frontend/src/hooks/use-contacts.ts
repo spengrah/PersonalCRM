@@ -34,21 +34,9 @@ export function useContact(id: string) {
 export function useOverdueContacts() {
   return useQuery({
     queryKey: contactKeys.overdue(),
-    queryFn: async () => {
-      console.log('🔄 Fetching overdue contacts...')
-      try {
-        const result = await contactsApi.getOverdueContacts()
-        console.log('✅ Overdue contacts fetched:', result?.length || 0, 'contacts')
-        return result
-      } catch (error) {
-        console.error('❌ Failed to fetch overdue contacts:', error)
-        throw error
-      }
-    },
-    staleTime: 1000 * 60 * 5, // 5 minutes - match query client default
-    refetchInterval: 1000 * 60 * 5, // Refetch every 5 minutes
-    retry: 3, // Explicit retry count
-    retryDelay: attemptIndex => Math.min(1000 * 2 ** attemptIndex, 30000), // Exponential backoff
+    queryFn: () => contactsApi.getOverdueContacts(),
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    refetchOnWindowFocus: true,
   })
 }
 
