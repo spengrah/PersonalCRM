@@ -29,7 +29,12 @@ func setupReminderGenerationTest(t *testing.T) (*service.ReminderService, *repos
 	}
 
 	dbConfig := config.DatabaseConfig{
-		URL: databaseURL,
+		URL:               databaseURL,
+		MaxConns:          config.DefaultDBMaxConns,
+		MinConns:          config.DefaultDBMinConns,
+		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
+		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
+		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
 	}
 	database, err := db.NewDatabase(ctx, dbConfig)
 	if err != nil {
@@ -446,7 +451,12 @@ func TestScheduler_Integration(t *testing.T) {
 
 	ctx := context.Background()
 	dbConfig := config.DatabaseConfig{
-		URL: os.Getenv("DATABASE_URL"),
+		URL:               os.Getenv("DATABASE_URL"),
+		MaxConns:          config.DefaultDBMaxConns,
+		MinConns:          config.DefaultDBMinConns,
+		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
+		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
+		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
 	}
 	database, err := db.NewDatabase(ctx, dbConfig)
 	require.NoError(t, err)

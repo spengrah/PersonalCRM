@@ -51,7 +51,12 @@ func setupContactValidationTestRouter() (*gin.Engine, func()) {
 	}
 
 	dbConfig := config.DatabaseConfig{
-		URL: databaseURL,
+		URL:               databaseURL,
+		MaxConns:          config.DefaultDBMaxConns,
+		MinConns:          config.DefaultDBMinConns,
+		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
+		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
+		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
 	}
 	database, err := db.NewDatabase(ctx, dbConfig)
 	if err != nil {

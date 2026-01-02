@@ -17,8 +17,26 @@ type Database struct {
 
 // NewDatabase creates a new database connection using the provided configuration
 func NewDatabase(ctx context.Context, cfg config.DatabaseConfig) (*Database, error) {
-	// No validation needed - already validated in config.Load()
-	pool, err := pgxpool.New(ctx, cfg.URL)
+	// Parse connection string to get base config
+	poolConfig, err := pgxpool.ParseConfig(cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse database URL: %w", err)
+	}
+
+	// Apply Pi-optimized pool configuration
+	// These settings are optimized for Raspberry Pi's limited resources:
+	// - MaxConns: Limit concurrent connections to avoid memory pressure
+	// - MinConns: Keep connections warm for faster response times
+	// - MaxConnIdleTime: Recycle idle connections faster than default
+	// - MaxConnLifetime: Limit connection lifetime to prevent stale connections
+	// - HealthCheckPeriod: Frequent health checks for reliability
+	poolConfig.MaxConns = cfg.MaxConns
+	poolConfig.MinConns = cfg.MinConns
+	poolConfig.MaxConnIdleTime = cfg.MaxConnIdleTime
+	poolConfig.MaxConnLifetime = cfg.MaxConnLifetime
+	poolConfig.HealthCheckPeriod = cfg.HealthCheckPeriod
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create connection pool: %w", err)
 	}
