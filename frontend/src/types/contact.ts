@@ -7,6 +7,7 @@ export type ContactMethodType =
   | 'discord'
   | 'twitter'
   | 'gchat'
+  | 'whatsapp'
 
 export interface ContactMethod {
   id?: string

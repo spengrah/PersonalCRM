@@ -9,6 +9,7 @@ export const CONTACT_METHOD_TYPE_VALUES: ContactMethodType[] = [
   'discord',
   'twitter',
   'gchat',
+  'whatsapp',
 ]
 
 export const CONTACT_METHOD_OPTIONS = [
@@ -60,6 +61,12 @@ export const CONTACT_METHOD_OPTIONS = [
     placeholder: 'name@gmail.com',
     inputType: 'email',
   },
+  {
+    value: 'whatsapp',
+    label: 'WhatsApp',
+    placeholder: '+1 (555) 555-1234',
+    inputType: 'tel',
+  },
 ]
 
 const HANDLE_METHOD_TYPES = new Set<ContactMethodType>(['telegram', 'discord', 'twitter'])
@@ -69,11 +76,12 @@ const CONTACT_METHOD_PRIORITY: Record<ContactMethodType, number> = {
   email_personal: 1,
   email_work: 2,
   phone: 3,
-  telegram: 4,
-  signal: 5,
-  discord: 6,
-  twitter: 7,
-  gchat: 8,
+  whatsapp: 4,
+  telegram: 5,
+  signal: 6,
+  discord: 7,
+  twitter: 8,
+  gchat: 9,
 }
 
 export function normalizeContactMethodValue(type: ContactMethodType, value: string) {
@@ -125,6 +133,11 @@ export function getContactMethodHref(type: ContactMethodType, value: string) {
 
   if (type === 'twitter') {
     return `https://twitter.com/${value}`
+  }
+
+  if (type === 'whatsapp') {
+    const numbersOnly = value.replace(/\D/g, '')
+    return `https://wa.me/${numbersOnly}`
   }
 
   return undefined

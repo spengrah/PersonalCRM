@@ -141,7 +141,7 @@ type ListContactsQuery struct {
 
 // ContactMethodRequest represents a single contact method in requests
 type ContactMethodRequest struct {
-	Type      string `json:"type" validate:"required,oneof=email_personal email_work phone telegram discord twitter signal gchat" example:"email_personal"`
+	Type      string `json:"type" validate:"required,oneof=email_personal email_work phone telegram discord twitter signal gchat whatsapp" example:"email_personal"`
 	Value     string `json:"value" validate:"required,max=255" example:"john.doe@example.com"`
 	IsPrimary bool   `json:"is_primary" example:"true"`
 }
@@ -675,7 +675,8 @@ func validateContactMethods(validate *validator.Validate, methods []ContactMetho
 				return fmt.Errorf("invalid email for contact method %s", method.Type)
 			}
 		case string(repository.ContactMethodPhone),
-			string(repository.ContactMethodSignal):
+			string(repository.ContactMethodSignal),
+			string(repository.ContactMethodWhatsApp):
 			if len(method.Value) > 50 {
 				return fmt.Errorf("contact method %s must be less than 50 characters", method.Type)
 			}

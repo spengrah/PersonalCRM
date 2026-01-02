@@ -23,6 +23,7 @@ const (
 	ContactMethodTwitter       ContactMethodType = "twitter"
 	ContactMethodSignal        ContactMethodType = "signal"
 	ContactMethodGChat         ContactMethodType = "gchat"
+	ContactMethodWhatsApp      ContactMethodType = "whatsapp"
 )
 
 var ContactMethodTypes = []ContactMethodType{
@@ -34,6 +35,7 @@ var ContactMethodTypes = []ContactMethodType{
 	ContactMethodDiscord,
 	ContactMethodTwitter,
 	ContactMethodGChat,
+	ContactMethodWhatsApp,
 }
 
 type ContactMethod struct {

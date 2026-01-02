@@ -128,6 +128,26 @@ describe('contactSchema', () => {
       expect(result.success).toBe(false)
     })
 
+    it('accepts valid whatsapp method', () => {
+      const data = {
+        full_name: 'Test User',
+        methods: [{ type: 'whatsapp', value: '+1-555-123-4567', is_primary: true }],
+      }
+
+      const result = contactSchema.safeParse(data)
+      expect(result.success).toBe(true)
+    })
+
+    it('rejects whatsapp longer than 50 characters', () => {
+      const data = {
+        full_name: 'Test User',
+        methods: [{ type: 'whatsapp', value: '1'.repeat(51), is_primary: false }],
+      }
+
+      const result = contactSchema.safeParse(data)
+      expect(result.success).toBe(false)
+    })
+
     it('allows empty method rows', () => {
       const data = {
         full_name: 'Test User',
