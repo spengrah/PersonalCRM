@@ -59,8 +59,9 @@ if [ "$SKIP_BUILD" = false ]; then
     fi
 
     # Build with production values injected
+    # NEXT_PUBLIC_API_URL defaults to empty for same-origin requests (works with Tailscale Serve)
     NEXT_PUBLIC_API_KEY="$API_KEY" \
-    NEXT_PUBLIC_API_URL="${API_URL:-http://$PI_HOST:8080}" \
+    NEXT_PUBLIC_API_URL="${API_URL:-}" \
     NEXT_PUBLIC_ENABLE_TIME_TRACKING="${TIME_TRACKING:-false}" \
     make ci-build
     echo ""

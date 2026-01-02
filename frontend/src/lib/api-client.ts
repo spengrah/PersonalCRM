@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || ''
 
 class ApiError extends Error {
   status: number
@@ -110,7 +110,8 @@ class ApiClient {
 
   // GET request
   async get<T>(endpoint: string, params?: Record<string, unknown>): Promise<T> {
-    const url = new URL(endpoint, this.baseUrl)
+    const base = this.baseUrl || (typeof window !== 'undefined' ? window.location.origin : '')
+    const url = new URL(endpoint, base)
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
         if (value !== undefined && value !== null) {

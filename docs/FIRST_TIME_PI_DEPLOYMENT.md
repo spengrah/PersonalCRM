@@ -18,8 +18,9 @@ This guide walks you through deploying PersonalCRM to your Raspberry Pi for the 
 6. [Part 4: Deploy](#part-4-deploy)
 7. [Part 5: Verification](#part-5-verification)
 8. [Part 6: Tailscale Setup (Optional)](#part-6-tailscale-setup-optional)
-9. [Regular Deploys](#regular-deploys)
-10. [Troubleshooting](#troubleshooting)
+9. [Part 7: HTTPS via Tailscale Serve (Optional)](#part-7-https-via-tailscale-serve-optional)
+10. [Regular Deploys](#regular-deploys)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -340,6 +341,105 @@ tailscale up
 1. Go to [Tailscale admin console](https://login.tailscale.com/admin/dns)
 2. Enable **MagicDNS**
 3. Access your Pi as `raspberet` (or your chosen hostname)
+
+---
+
+## Part 7: HTTPS via Tailscale Serve (Optional)
+
+This enables secure HTTPS access via `https://raspberet.<tailnet>.ts.net` from any device on your Tailnet (Mac, iPhone, etc.).
+
+### Why This Setup?
+
+- **HTTPS everywhere**: Automatic TLS certificates from Tailscale
+- **Single URL**: No port numbers needed
+- **Same-origin requests**: Frontend and API share the same origin, avoiding CORS/mixed-content issues
+- **Works on mobile**: Access from iPhone/iPad on your Tailnet
+
+### Architecture
+
+```
+https://raspberet.<tailnet>.ts.net/
+    │
+    ▼
+Tailscale Serve (HTTPS termination)
+    │
+    ▼
+Caddy (:80) - Path-based routing
+    ├── /api/*  → http://127.0.0.1:8080  (backend)
+    └── /*      → http://127.0.0.1:3001  (frontend)
+```
+
+### 7.1 Install Caddy
+
+SSH to your Pi:
+
+```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update
+sudo apt install caddy
+```
+
+### 7.2 Configure Caddy
+
+```bash
+sudo nano /etc/caddy/Caddyfile
+```
+
+Replace contents with:
+
+```
+:80 {
+    handle /api/* {
+        reverse_proxy localhost:8080
+    }
+
+    handle {
+        reverse_proxy localhost:3001
+    }
+}
+```
+
+Restart Caddy:
+
+```bash
+sudo systemctl restart caddy
+sudo systemctl enable caddy
+```
+
+### 7.3 Configure Tailscale Serve
+
+```bash
+# Clear any existing config
+sudo tailscale serve reset
+
+# Proxy HTTPS to Caddy
+sudo tailscale serve --bg https / http://127.0.0.1:80
+```
+
+Verify the configuration:
+
+```bash
+sudo tailscale serve status
+```
+
+### 7.4 Verify HTTPS Access
+
+From any device on your Tailnet:
+
+```
+https://raspberet.<tailnet>.ts.net
+```
+
+Replace `<tailnet>` with your actual Tailnet name (e.g., `tail3df4a6`).
+
+### Notes
+
+- **Direct HTTP still works**: `http://raspberet:3001` continues to function
+- **No code changes needed**: The frontend uses same-origin requests by default
+- **Caddy is lightweight**: ~40MB RAM, minimal CPU usage
+- **Rollback**: Run `sudo tailscale serve reset` to disable HTTPS access
 
 ---
 
