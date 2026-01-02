@@ -2,6 +2,9 @@
 
 This document describes the deployment architecture and workflow for PersonalCRM.
 
+> **Note:** This guide uses `<pi-hostname>` as a placeholder for your Pi's hostname.
+> Replace it with your actual hostname. The deploy scripts use `PI_HOST` env var (default: `raspberry-pi`).
+
 ## Overview
 
 PersonalCRM uses a **build-on-Mac, deploy-to-Pi** workflow:
@@ -19,7 +22,7 @@ This approach provides:
 ## Architecture
 
 ```
-Local (Mac)                          Pi (raspberet)
+Local (Mac)                          Pi (<pi-hostname>)
 -----------------                    -----------------
 .env (gitignored)                    /srv/personalcrm/.env (production secrets)
 .env.example.testing (git)
@@ -49,7 +52,7 @@ Next.js `output: 'standalone'` creates a self-contained build that:
 make setup-pi
 
 # 2. SSH to Pi and create secrets
-ssh raspberet 'sudo nano /srv/personalcrm/.env'
+ssh <pi-hostname> 'sudo nano /srv/personalcrm/.env'
 
 # 3. Deploy
 make deploy
@@ -114,20 +117,20 @@ The deployment uses four systemd units:
 
 ```bash
 # Start all services
-ssh raspberet 'sudo systemctl start personalcrm.target'
+ssh <pi-hostname> 'sudo systemctl start personalcrm.target'
 
 # Stop all services
-ssh raspberet 'sudo systemctl stop personalcrm.target'
+ssh <pi-hostname> 'sudo systemctl stop personalcrm.target'
 
 # Restart all services
-ssh raspberet 'sudo systemctl restart personalcrm.target'
+ssh <pi-hostname> 'sudo systemctl restart personalcrm.target'
 
 # Check status
-ssh raspberet 'sudo systemctl status personalcrm.target'
+ssh <pi-hostname> 'sudo systemctl status personalcrm.target'
 
 # View logs
-ssh raspberet 'sudo journalctl -u personalcrm-backend -f'
-ssh raspberet 'sudo journalctl -u personalcrm-frontend -f'
+ssh <pi-hostname> 'sudo journalctl -u personalcrm-backend -f'
+ssh <pi-hostname> 'sudo journalctl -u personalcrm-frontend -f'
 ```
 
 ## Environment Separation
@@ -191,7 +194,7 @@ See [FIRST_TIME_PI_DEPLOYMENT.md Part 7](./FIRST_TIME_PI_DEPLOYMENT.md#part-7-ht
 
 ```bash
 # Test SSH connection
-ssh raspberet 'echo OK'
+ssh <pi-hostname> 'echo OK'
 
 # Check Tailscale
 tailscale status
@@ -204,14 +207,14 @@ PI_HOST=100.x.x.x make deploy
 
 ```bash
 # Check logs
-ssh raspberet 'sudo journalctl -u personalcrm-backend -n 50'
-ssh raspberet 'sudo journalctl -u personalcrm-frontend -n 50'
+ssh <pi-hostname> 'sudo journalctl -u personalcrm-backend -n 50'
+ssh <pi-hostname> 'sudo journalctl -u personalcrm-frontend -n 50'
 
 # Check .env exists
-ssh raspberet 'ls -la /srv/personalcrm/.env'
+ssh <pi-hostname> 'ls -la /srv/personalcrm/.env'
 
 # Check permissions
-ssh raspberet 'sudo stat /srv/personalcrm/.env'
+ssh <pi-hostname> 'sudo stat /srv/personalcrm/.env'
 ```
 
 ### Frontend Module Error
@@ -220,7 +223,7 @@ The standalone build must include server.js:
 
 ```bash
 # Verify deployment
-ssh raspberet 'ls -la /srv/personalcrm/frontend/server.js'
+ssh <pi-hostname> 'ls -la /srv/personalcrm/frontend/server.js'
 
 # Rebuild and redeploy if missing
 make deploy
@@ -230,13 +233,13 @@ make deploy
 
 ```bash
 # Check database container
-ssh raspberet 'docker ps | grep postgres'
+ssh <pi-hostname> 'docker ps | grep postgres'
 
 # Check database service
-ssh raspberet 'sudo systemctl status personalcrm-database'
+ssh <pi-hostname> 'sudo systemctl status personalcrm-database'
 
 # View database logs
-ssh raspberet 'sudo journalctl -u personalcrm-database -n 50'
+ssh <pi-hostname> 'sudo journalctl -u personalcrm-database -n 50'
 ```
 
 ## Related Documentation

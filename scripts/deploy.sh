@@ -10,7 +10,7 @@
 
 set -e
 
-PI_HOST="${PI_HOST:-raspberet}"
+PI_HOST="${PI_HOST:-raspberry-pi}"
 PI_DIR="/srv/personalcrm"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"

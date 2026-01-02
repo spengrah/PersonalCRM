@@ -15,7 +15,7 @@
 
 set -e
 
-PI_HOST="${PI_HOST:-raspberet}"
+PI_HOST="${PI_HOST:-raspberry-pi}"
 PI_DIR="/srv/personalcrm"
 
 echo "=== PersonalCRM Pi Setup ==="

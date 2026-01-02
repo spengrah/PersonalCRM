@@ -6,6 +6,10 @@
 
 This guide walks you through deploying PersonalCRM to your Raspberry Pi for the first time. The workflow builds on your Mac and deploys to the Pi via rsync, keeping production secrets isolated on the Pi.
 
+> **Note:** This guide uses `<pi-hostname>` as a placeholder for your Pi's hostname.
+> Replace it with your actual hostname (e.g., `mypi`, `raspberrypi`).
+> The deploy scripts use the `PI_HOST` environment variable (default: `raspberry-pi`).
+
 ---
 
 ## Table of Contents
@@ -38,14 +42,14 @@ This guide walks you through deploying PersonalCRM to your Raspberry Pi for the 
 - Pi accessible via Tailscale (recommended) or local network
 
 ### Pi on Tailscale
-The deploy script expects your Pi to be accessible as `raspberet` on your Tailnet. You can customize this with the `PI_HOST` environment variable.
+The deploy script expects your Pi to be accessible as `<pi-hostname>` on your Tailnet. You can customize this with the `PI_HOST` environment variable.
 
 ---
 
 ## Architecture Overview
 
 ```
-Local (Mac)                          Pi (raspberet)
+Local (Mac)                          Pi (<pi-hostname>)
 -----------------                    -----------------
 .env (gitignored, dev)               /srv/personalcrm/.env (prod secrets)
 backend/bin/crm-api (x86)            /srv/personalcrm/backend/bin/crm-api (ARM64)
@@ -138,10 +142,10 @@ Ensure you can SSH to your Pi without a password:
 
 ```bash
 # Test connection (adjust hostname if not using Tailscale)
-ssh raspberet 'echo "Connection OK"'
+ssh <pi-hostname> 'echo "Connection OK"'
 
 # If this prompts for a password, set up SSH keys:
-ssh-copy-id raspberet
+ssh-copy-id <pi-hostname>
 ```
 
 ### 2.2 Run Pi Setup Script
@@ -176,7 +180,7 @@ echo "POSTGRES_PASSWORD: $(openssl rand -base64 32 | tr -d '/+=')"
 SSH to your Pi and create the production environment file:
 
 ```bash
-ssh raspberet
+ssh <pi-hostname>
 sudo nano /srv/personalcrm/.env
 ```
 
@@ -199,7 +203,7 @@ API_KEY=<GENERATED_API_KEY>
 
 # CORS (use your Pi's hostname or IP)
 CORS_ALLOW_ALL=false
-FRONTEND_URL=http://raspberet:3001
+FRONTEND_URL=http://<pi-hostname>:3001
 
 # Logging
 LOG_LEVEL=info
@@ -253,17 +257,17 @@ This will:
 
 ```
 === PersonalCRM Deploy ===
-Target: raspberet:/srv/personalcrm
+Target: <pi-hostname>:/srv/personalcrm
 
-Checking connectivity to raspberet...
+Checking connectivity to <pi-hostname>...
 OK
 
 === Building for ARM64 ===
-Fetching production config from raspberet...
+Fetching production config from <pi-hostname>...
 Building backend for ARM64...
 Building frontend...
 
-=== Deploying to raspberet ===
+=== Deploying to <pi-hostname> ===
 Deploying backend binary...
 Deploying migrations...
 Deploying frontend (standalone)...
@@ -277,7 +281,7 @@ Backend:  OK
 Frontend: OK
 
 === Deploy complete ===
-Access your CRM at: http://raspberet:3001
+Access your CRM at: http://<pi-hostname>:3001
 ```
 
 ---
@@ -287,7 +291,7 @@ Access your CRM at: http://raspberet:3001
 ### 5.1 Check Service Status
 
 ```bash
-ssh raspberet 'sudo systemctl status personalcrm.target'
+ssh <pi-hostname> 'sudo systemctl status personalcrm.target'
 ```
 
 All services should show `active (running)`.
@@ -295,7 +299,7 @@ All services should show `active (running)`.
 ### 5.2 Health Check
 
 ```bash
-ssh raspberet 'curl -s http://localhost:8080/health | jq'
+ssh <pi-hostname> 'curl -s http://localhost:8080/health | jq'
 ```
 
 Should return status "healthy".
@@ -304,20 +308,20 @@ Should return status "healthy".
 
 ```bash
 # Get API key from Pi
-API_KEY=$(ssh raspberet 'grep "^API_KEY=" /srv/personalcrm/.env | cut -d= -f2')
+API_KEY=$(ssh <pi-hostname> 'grep "^API_KEY=" /srv/personalcrm/.env | cut -d= -f2')
 
 # Test without auth (should fail)
-ssh raspberet 'curl -s http://localhost:8080/api/v1/contacts'
+ssh <pi-hostname> 'curl -s http://localhost:8080/api/v1/contacts'
 # Expected: {"success":false,"error":{"code":"MISSING_API_KEY"...}}
 
 # Test with auth (should succeed)
-ssh raspberet "curl -s -H 'X-API-Key: $API_KEY' http://localhost:8080/api/v1/contacts"
+ssh <pi-hostname> "curl -s -H 'X-API-Key: $API_KEY' http://localhost:8080/api/v1/contacts"
 # Expected: {"success":true,"data":[],...}
 ```
 
 ### 5.4 Access Frontend
 
-Open in browser: `http://raspberet:3001`
+Open in browser: `http://<pi-hostname>:3001`
 
 ---
 
@@ -340,13 +344,13 @@ tailscale up
 ### Enable MagicDNS
 1. Go to [Tailscale admin console](https://login.tailscale.com/admin/dns)
 2. Enable **MagicDNS**
-3. Access your Pi as `raspberet` (or your chosen hostname)
+3. Access your Pi as `<pi-hostname>` (or your chosen hostname)
 
 ---
 
 ## Part 7: HTTPS via Tailscale Serve (Optional)
 
-This enables secure HTTPS access via `https://raspberet.<tailnet>.ts.net` from any device on your Tailnet (Mac, iPhone, etc.).
+This enables secure HTTPS access via `https://<pi-hostname>.<tailnet>.ts.net` from any device on your Tailnet (Mac, iPhone, etc.).
 
 ### Why This Setup?
 
@@ -358,7 +362,7 @@ This enables secure HTTPS access via `https://raspberet.<tailnet>.ts.net` from a
 ### Architecture
 
 ```
-https://raspberet.<tailnet>.ts.net/
+https://<pi-hostname>.<tailnet>.ts.net/
     │
     ▼
 Tailscale Serve (HTTPS termination)
@@ -429,14 +433,14 @@ sudo tailscale serve status
 From any device on your Tailnet:
 
 ```
-https://raspberet.<tailnet>.ts.net
+https://<pi-hostname>.<tailnet>.ts.net
 ```
 
 Replace `<tailnet>` with your actual Tailnet name (e.g., `tail3df4a6`).
 
 ### Notes
 
-- **Direct HTTP still works**: `http://raspberet:3001` continues to function
+- **Direct HTTP still works**: `http://<pi-hostname>:3001` continues to function
 - **No code changes needed**: The frontend uses same-origin requests by default
 - **Caddy is lightweight**: ~40MB RAM, minimal CPU usage
 - **Rollback**: Run `sudo tailscale serve reset` to disable HTTPS access
@@ -464,8 +468,8 @@ The deploy script is idempotent and handles:
 ### Check Status Remotely
 
 ```bash
-ssh raspberet 'sudo systemctl status personalcrm.target'
-ssh raspberet 'sudo journalctl -u personalcrm-backend -f'  # Follow logs
+ssh <pi-hostname> 'sudo systemctl status personalcrm.target'
+ssh <pi-hostname> 'sudo journalctl -u personalcrm-backend -f'  # Follow logs
 ```
 
 ---
@@ -476,11 +480,11 @@ ssh raspberet 'sudo journalctl -u personalcrm-backend -f'  # Follow logs
 
 ```bash
 # Check logs
-ssh raspberet 'sudo journalctl -u personalcrm-backend -n 50'
-ssh raspberet 'sudo journalctl -u personalcrm-frontend -n 50'
+ssh <pi-hostname> 'sudo journalctl -u personalcrm-backend -n 50'
+ssh <pi-hostname> 'sudo journalctl -u personalcrm-frontend -n 50'
 
 # Check .env file exists and is readable
-ssh raspberet 'sudo ls -la /srv/personalcrm/.env'
+ssh <pi-hostname> 'sudo ls -la /srv/personalcrm/.env'
 ```
 
 ### Frontend "Cannot find module" Error
@@ -488,7 +492,7 @@ ssh raspberet 'sudo ls -la /srv/personalcrm/.env'
 Ensure the standalone build was deployed correctly:
 
 ```bash
-ssh raspberet 'ls -la /srv/personalcrm/frontend/server.js'
+ssh <pi-hostname> 'ls -la /srv/personalcrm/frontend/server.js'
 ```
 
 If missing, rebuild and redeploy:
@@ -500,27 +504,27 @@ make deploy
 
 ```bash
 # Check database service
-ssh raspberet 'sudo systemctl status personalcrm-database'
-ssh raspberet 'docker ps | grep postgres'
+ssh <pi-hostname> 'sudo systemctl status personalcrm-database'
+ssh <pi-hostname> 'docker ps | grep postgres'
 
 # Check DATABASE_URL matches POSTGRES_PASSWORD
-ssh raspberet 'grep -E "(DATABASE_URL|POSTGRES_PASSWORD)" /srv/personalcrm/.env'
+ssh <pi-hostname> 'grep -E "(DATABASE_URL|POSTGRES_PASSWORD)" /srv/personalcrm/.env'
 ```
 
 ### Permission Denied Errors
 
 ```bash
 # Fix ownership
-ssh raspberet 'sudo chown -R crm:crm /srv/personalcrm'
-ssh raspberet 'sudo chmod 750 /srv/personalcrm'
-ssh raspberet 'sudo chmod 600 /srv/personalcrm/.env'
+ssh <pi-hostname> 'sudo chown -R crm:crm /srv/personalcrm'
+ssh <pi-hostname> 'sudo chmod 750 /srv/personalcrm'
+ssh <pi-hostname> 'sudo chmod 600 /srv/personalcrm/.env'
 ```
 
 ### Deploy Script Can't Connect
 
 ```bash
 # Test SSH connection
-ssh raspberet 'echo OK'
+ssh <pi-hostname> 'echo OK'
 
 # Check Tailscale status
 tailscale status
@@ -550,7 +554,7 @@ PI_HOST=100.x.x.x make deploy
 - [ ] Secrets file permissions set (600, owned by crm)
 - [ ] `make deploy` completed successfully
 - [ ] Health check returns "healthy"
-- [ ] Frontend accessible at http://raspberet:3001
+- [ ] Frontend accessible at http://<pi-hostname>:3001
 - [ ] API authentication working
 
 ---
