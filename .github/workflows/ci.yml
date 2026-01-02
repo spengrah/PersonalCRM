@@ -102,3 +102,92 @@ jobs:
         env:
           NEXT_PUBLIC_API_KEY: test-api-key-for-ci-build
         run: bun run build
+
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: personal_crm
+          POSTGRES_USER: crm_user
+          POSTGRES_PASSWORD: crm_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: backend/go.sum
+
+      - name: Download Go modules
+        working-directory: backend
+        run: go mod download
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.2
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: bun install
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/bun.lock') }}
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: bunx playwright install chromium --with-deps
+
+      - name: Wait for PostgreSQL
+        run: |
+          timeout 30 bash -c 'until pg_isready -h localhost -p 5432; do sleep 1; done'
+
+      - name: Run E2E tests
+        working-directory: frontend
+        env:
+          CI: true
+          DATABASE_URL: postgres://crm_user:crm_password@localhost:5432/personal_crm?sslmode=disable
+          SESSION_SECRET: test-session-secret-for-ci
+          API_KEY: test-api-key-for-ci
+          NEXT_PUBLIC_API_KEY: test-api-key-for-ci
+          NEXT_PUBLIC_API_URL: http://localhost:8080
+          MIGRATIONS_PATH: migrations
+          NODE_ENV: test
+          GIN_MODE: test
+          CORS_ALLOW_ALL: true
+          FRONTEND_URL: http://localhost:3000
+        run: bunx playwright test --project=chromium
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+      - name: Upload test traces
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: frontend/test-results/
+          retention-days: 7
