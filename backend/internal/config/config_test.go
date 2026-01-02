@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // WithEnv is a test helper that sets environment variables for the duration of a test
@@ -371,5 +372,79 @@ func TestConfig_Validate_APIKeyOptionalInDevelopment(t *testing.T) {
 
 	if cfg.External.APIKey != "" {
 		t.Error("Expected empty API_KEY in development")
+	}
+}
+
+func TestConfig_DatabasePoolDefaults(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Verify Pi-optimized defaults
+	if cfg.Database.MaxConns != DefaultDBMaxConns {
+		t.Errorf("Expected MaxConns=%d, got %d", DefaultDBMaxConns, cfg.Database.MaxConns)
+	}
+	if cfg.Database.MinConns != DefaultDBMinConns {
+		t.Errorf("Expected MinConns=%d, got %d", DefaultDBMinConns, cfg.Database.MinConns)
+	}
+	if cfg.Database.MaxConnIdleTime != DefaultDBMaxConnIdleTime {
+		t.Errorf("Expected MaxConnIdleTime=%v, got %v", DefaultDBMaxConnIdleTime, cfg.Database.MaxConnIdleTime)
+	}
+	if cfg.Database.MaxConnLifetime != DefaultDBMaxConnLifetime {
+		t.Errorf("Expected MaxConnLifetime=%v, got %v", DefaultDBMaxConnLifetime, cfg.Database.MaxConnLifetime)
+	}
+	if cfg.Database.HealthCheckPeriod != DefaultDBHealthCheckPeriod {
+		t.Errorf("Expected HealthCheckPeriod=%v, got %v", DefaultDBHealthCheckPeriod, cfg.Database.HealthCheckPeriod)
+	}
+}
+
+func TestConfig_DatabasePoolFromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "DB_MAX_CONNS", "10")
+	WithEnv(t, "DB_MIN_CONNS", "3")
+	WithEnv(t, "DB_MAX_CONN_IDLE_TIME", "10m")
+	WithEnv(t, "DB_MAX_CONN_LIFETIME", "1h")
+	WithEnv(t, "DB_HEALTH_CHECK_PERIOD", "1m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.Database.MaxConns != 10 {
+		t.Errorf("Expected MaxConns=10, got %d", cfg.Database.MaxConns)
+	}
+	if cfg.Database.MinConns != 3 {
+		t.Errorf("Expected MinConns=3, got %d", cfg.Database.MinConns)
+	}
+	if cfg.Database.MaxConnIdleTime != 10*time.Minute {
+		t.Errorf("Expected MaxConnIdleTime=10m, got %v", cfg.Database.MaxConnIdleTime)
+	}
+	if cfg.Database.MaxConnLifetime != 1*time.Hour {
+		t.Errorf("Expected MaxConnLifetime=1h, got %v", cfg.Database.MaxConnLifetime)
+	}
+	if cfg.Database.HealthCheckPeriod != 1*time.Minute {
+		t.Errorf("Expected HealthCheckPeriod=1m, got %v", cfg.Database.HealthCheckPeriod)
+	}
+}
+
+func TestConfig_DatabasePoolInvalidDuration(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "DB_MAX_CONN_IDLE_TIME", "invalid")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Invalid duration should fall back to default
+	if cfg.Database.MaxConnIdleTime != DefaultDBMaxConnIdleTime {
+		t.Errorf("Expected fallback to default MaxConnIdleTime=%v, got %v", DefaultDBMaxConnIdleTime, cfg.Database.MaxConnIdleTime)
 	}
 }

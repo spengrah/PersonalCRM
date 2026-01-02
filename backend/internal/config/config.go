@@ -24,6 +24,12 @@ type DatabaseConfig struct {
 	URL            string        // Required
 	MigrationsPath string        // Default: "migrations"
 	HealthTimeout  time.Duration // Default: 5s
+	// Connection pool settings (Pi-optimized defaults)
+	MaxConns          int32         // Default: 5 (limit connections for Pi memory)
+	MinConns          int32         // Default: 2 (keep connections warm)
+	MaxConnIdleTime   time.Duration // Default: 5m (recycle idle faster)
+	MaxConnLifetime   time.Duration // Default: 30m (limit connection age)
+	HealthCheckPeriod time.Duration // Default: 30s (frequent health checks)
 }
 
 // ServerConfig holds HTTP server settings
@@ -106,15 +112,26 @@ const (
 	DefaultLogLevel           = "info"
 	DefaultEnvironment        = "development"
 	DefaultCRMEnvironment     = "production"
+	// Pi-optimized connection pool defaults
+	DefaultDBMaxConns          = 5
+	DefaultDBMinConns          = 2
+	DefaultDBMaxConnIdleTime   = 5 * time.Minute
+	DefaultDBMaxConnLifetime   = 30 * time.Minute
+	DefaultDBHealthCheckPeriod = 30 * time.Second
 )
 
 // Load reads configuration from environment variables
 func Load() (*Config, error) {
 	cfg := &Config{
 		Database: DatabaseConfig{
-			URL:            getEnv("DATABASE_URL", ""),
-			MigrationsPath: getEnv("MIGRATIONS_PATH", DefaultMigrationsPath),
-			HealthTimeout:  DefaultHealthCheckTimeout,
+			URL:               getEnv("DATABASE_URL", ""),
+			MigrationsPath:    getEnv("MIGRATIONS_PATH", DefaultMigrationsPath),
+			HealthTimeout:     DefaultHealthCheckTimeout,
+			MaxConns:          int32(getEnvAsInt("DB_MAX_CONNS", DefaultDBMaxConns)),
+			MinConns:          int32(getEnvAsInt("DB_MIN_CONNS", DefaultDBMinConns)),
+			MaxConnIdleTime:   getEnvAsDuration("DB_MAX_CONN_IDLE_TIME", DefaultDBMaxConnIdleTime),
+			MaxConnLifetime:   getEnvAsDuration("DB_MAX_CONN_LIFETIME", DefaultDBMaxConnLifetime),
+			HealthCheckPeriod: getEnvAsDuration("DB_HEALTH_CHECK_PERIOD", DefaultDBHealthCheckPeriod),
 		},
 		Server: ServerConfig{
 			Host:            getEnv("HOST", DefaultServerHost),
@@ -293,6 +310,18 @@ func getEnvAsBool(key string, defaultValue bool) bool {
 	return value
 }
 
+func getEnvAsDuration(key string, defaultValue time.Duration) time.Duration {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := time.ParseDuration(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
 func contains(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {
@@ -306,9 +335,14 @@ func contains(slice []string, item string) bool {
 func TestConfig() *Config {
 	return &Config{
 		Database: DatabaseConfig{
-			URL:            "postgres://test:test@localhost:5432/test?sslmode=disable",
-			MigrationsPath: "../../migrations",
-			HealthTimeout:  DefaultHealthCheckTimeout,
+			URL:               "postgres://test:test@localhost:5432/test?sslmode=disable",
+			MigrationsPath:    "../../migrations",
+			HealthTimeout:     DefaultHealthCheckTimeout,
+			MaxConns:          DefaultDBMaxConns,
+			MinConns:          DefaultDBMinConns,
+			MaxConnIdleTime:   DefaultDBMaxConnIdleTime,
+			MaxConnLifetime:   DefaultDBMaxConnLifetime,
+			HealthCheckPeriod: DefaultDBHealthCheckPeriod,
 		},
 		Server: ServerConfig{
 			Host:            DefaultServerHost,
