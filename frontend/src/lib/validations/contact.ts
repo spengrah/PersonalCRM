@@ -113,7 +113,7 @@ export const contactSchema = z
         }
       }
 
-      if (rawType === 'phone' || rawType === 'signal') {
+      if (rawType === 'phone' || rawType === 'signal' || rawType === 'whatsapp') {
         if (normalizedValue.length > 50) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

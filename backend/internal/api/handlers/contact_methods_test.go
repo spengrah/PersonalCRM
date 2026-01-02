@@ -55,3 +55,19 @@ func TestValidateContactMethods_PhoneLength(t *testing.T) {
 	})
 	assert.Error(t, err)
 }
+
+func TestValidateContactMethods_WhatsAppValid(t *testing.T) {
+	validate := validator.New()
+	err := validateContactMethods(validate, []ContactMethodRequest{
+		{Type: "whatsapp", Value: "+1-555-123-4567"},
+	})
+	assert.NoError(t, err)
+}
+
+func TestValidateContactMethods_WhatsAppLength(t *testing.T) {
+	validate := validator.New()
+	err := validateContactMethods(validate, []ContactMethodRequest{
+		{Type: "whatsapp", Value: strings.Repeat("1", 51)},
+	})
+	assert.Error(t, err)
+}

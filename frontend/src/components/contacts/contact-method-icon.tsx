@@ -13,6 +13,7 @@ const iconMap: Record<ContactMethodType, ComponentType<{ className?: string }>> 
   discord: MessageCircle,
   twitter: AtSign,
   gchat: MessageCircle,
+  whatsapp: MessageCircle,
 }
 
 export function ContactMethodIcon({
