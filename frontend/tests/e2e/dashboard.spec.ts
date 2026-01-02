@@ -1,5 +1,15 @@
 import { test, expect } from '@playwright/test'
 
+// TEMPORARY: Deliberate failure to verify CI artifact uploads work
+// DELETE THIS TEST AFTER VERIFICATION
+test('CI artifact upload verification - DELIBERATE FAILURE', async ({ page }) => {
+  await page.goto('/dashboard')
+  // This will fail and trigger trace/screenshot uploads
+  await expect(page.getByText('THIS TEXT DOES NOT EXIST ON PURPOSE')).toBeVisible({
+    timeout: 5000,
+  })
+})
+
 test.describe('Dashboard', () => {
   test('should display dashboard with navigation', async ({ page }) => {
     await page.goto('/')
