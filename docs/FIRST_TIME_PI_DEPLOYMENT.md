@@ -165,7 +165,7 @@ On your Mac, generate secure secrets:
 ```bash
 echo "SESSION_SECRET: $(openssl rand -base64 32)"
 echo "API_KEY: $(openssl rand -hex 32)"
-echo "POSTGRES_PASSWORD: $(openssl rand -base64 24)"
+echo "POSTGRES_PASSWORD: $(openssl rand -base64 32 | tr -d '/+=')"
 ```
 
 **Save these securely** (password manager recommended).
@@ -189,22 +189,16 @@ POSTGRES_DB=personal_crm
 POSTGRES_PORT=5432
 DATABASE_URL=postgres://crm_user:<GENERATED_POSTGRES_PASSWORD>@localhost:5432/personal_crm?sslmode=disable
 
-# Server
-PORT=8080
+# Server (ports are defined in systemd service files)
 NODE_ENV=production
-HOST=127.0.0.1
 
 # Authentication
 SESSION_SECRET=<GENERATED_SESSION_SECRET>
 API_KEY=<GENERATED_API_KEY>
 
-# Frontend
-NEXT_PUBLIC_API_KEY=<GENERATED_API_KEY>
-NEXT_PUBLIC_API_URL=http://localhost:8080
-
-# CORS
+# CORS (use your Pi's hostname or IP)
 CORS_ALLOW_ALL=false
-FRONTEND_URL=http://localhost:3001
+FRONTEND_URL=http://raspberet:3001
 
 # Logging
 LOG_LEVEL=info
@@ -216,6 +210,12 @@ CRM_ENV=production
 ENABLE_VECTOR_SEARCH=false
 ENABLE_TELEGRAM_BOT=false
 ENABLE_CALENDAR_SYNC=false
+ENABLE_TIME_TRACKING=false
+NEXT_PUBLIC_ENABLE_TIME_TRACKING=false
+
+# Scheduler (for reminder notifications)
+SCHEDULER_ENABLED=false
+SCHEDULER_CRON="0 8 * * *"
 ```
 
 ### 3.3 Secure the Secrets File
@@ -238,12 +238,15 @@ make deploy
 ```
 
 This will:
-1. Build backend for ARM64
-2. Build frontend (standalone mode)
-3. rsync files to Pi
-4. Install systemd services
-5. Restart services
-6. Verify health checks
+1. Fetch `API_KEY` and `NEXT_PUBLIC_ENABLE_TIME_TRACKING` from Pi (for frontend build)
+2. Build backend for ARM64
+3. Build frontend (standalone mode, with production env vars injected)
+4. rsync files to Pi
+5. Install systemd services
+6. Restart services
+7. Verify health checks
+
+> **Note:** Frontend `NEXT_PUBLIC_*` variables are fetched from the Pi and injected at build time. This keeps production secrets on the Pi only—no need to configure them on your Mac.
 
 ### 4.2 Expected Output
 
@@ -251,7 +254,11 @@ This will:
 === PersonalCRM Deploy ===
 Target: raspberet:/srv/personalcrm
 
+Checking connectivity to raspberet...
+OK
+
 === Building for ARM64 ===
+Fetching production config from raspberet...
 Building backend for ARM64...
 Building frontend...
 

@@ -45,29 +45,49 @@ echo ""
 # Build for ARM64
 if [ "$SKIP_BUILD" = false ]; then
     echo "=== Building for ARM64 ==="
+
+    # Fetch production env vars from Pi for frontend build
+    echo "Fetching production config from $PI_HOST..."
+    API_KEY=$(ssh "$PI_HOST" 'sudo grep "^API_KEY=" /srv/personalcrm/.env | cut -d= -f2')
+    API_URL=$(ssh "$PI_HOST" 'sudo grep "^NEXT_PUBLIC_API_URL=" /srv/personalcrm/.env | cut -d= -f2')
+    TIME_TRACKING=$(ssh "$PI_HOST" 'sudo grep "^NEXT_PUBLIC_ENABLE_TIME_TRACKING=" /srv/personalcrm/.env | cut -d= -f2')
+
+    if [ -z "$API_KEY" ]; then
+        echo "Error: Could not fetch API_KEY from $PI_HOST"
+        echo "Ensure /srv/personalcrm/.env exists and contains API_KEY"
+        exit 1
+    fi
+
+    # Build with production values injected
+    NEXT_PUBLIC_API_KEY="$API_KEY" \
+    NEXT_PUBLIC_API_URL="${API_URL:-http://$PI_HOST:8080}" \
+    NEXT_PUBLIC_ENABLE_TIME_TRACKING="${TIME_TRACKING:-false}" \
     make ci-build
     echo ""
 fi
 
 echo "=== Deploying to $PI_HOST ==="
 
+# rsync flags: -rltz (recursive, links, times, compress) + --no-perms to avoid permission errors
+RSYNC_OPTS="-rltvz --omit-dir-times --no-perms"
+
 # Backend binary
 echo "Deploying backend binary..."
-rsync -avz --progress backend/bin/crm-api "$PI_HOST:$PI_DIR/backend/bin/"
+rsync $RSYNC_OPTS --progress backend/bin/crm-api "$PI_HOST:$PI_DIR/backend/bin/"
 
 # Migrations
 echo "Deploying migrations..."
-rsync -avz --delete backend/migrations/ "$PI_HOST:$PI_DIR/backend/migrations/"
+rsync $RSYNC_OPTS --delete backend/migrations/ "$PI_HOST:$PI_DIR/backend/migrations/"
 
 # Frontend (standalone build - no node_modules needed)
 echo "Deploying frontend (standalone)..."
-rsync -avz --delete frontend/.next/standalone/ "$PI_HOST:$PI_DIR/frontend/"
-rsync -avz --delete frontend/.next/static/ "$PI_HOST:$PI_DIR/frontend/.next/static/"
-rsync -avz --delete frontend/public/ "$PI_HOST:$PI_DIR/frontend/public/"
+rsync $RSYNC_OPTS --delete frontend/.next/standalone/ "$PI_HOST:$PI_DIR/frontend/"
+rsync $RSYNC_OPTS --delete frontend/.next/static/ "$PI_HOST:$PI_DIR/frontend/.next/static/"
+rsync $RSYNC_OPTS --delete frontend/public/ "$PI_HOST:$PI_DIR/frontend/public/"
 
 # Infrastructure
 echo "Deploying infrastructure files..."
-rsync -avz infra/docker-compose.yml infra/init-db.sql "$PI_HOST:$PI_DIR/infra/"
+rsync $RSYNC_OPTS infra/docker-compose.yml infra/init-db.sql "$PI_HOST:$PI_DIR/infra/"
 
 # Systemd services (copy to temp, then sudo install)
 echo "Deploying systemd service files..."

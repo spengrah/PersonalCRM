@@ -56,8 +56,13 @@ echo ""
 echo "Creating directory structure at $PI_DIR..."
 sudo mkdir -p "$PI_DIR"/{backend/bin,backend/migrations,frontend/.next/static,frontend/public,infra,logs}
 sudo chown -R crm:crm "$PI_DIR"
-sudo chmod 750 "$PI_DIR"
+sudo chmod -R 775 "$PI_DIR"
 echo "Directory structure created"
+
+echo ""
+echo "Adding $USER to crm group for deploy access..."
+sudo usermod -aG crm "$USER"
+echo "Added $USER to crm group (re-login required for group to take effect)"
 
 echo ""
 echo "Verifying Node.js installation..."
