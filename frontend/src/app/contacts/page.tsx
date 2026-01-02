@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
@@ -44,7 +44,17 @@ function ContactsTable({
 }) {
   const router = useRouter()
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
+  const [dropdownPosition, setDropdownPosition] = useState<'below' | 'above'>('below')
+  const buttonRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
   const updateLastContacted = useUpdateLastContacted()
+
+  const setButtonRef = useCallback((id: string, el: HTMLButtonElement | null) => {
+    if (el) {
+      buttonRefs.current.set(id, el)
+    } else {
+      buttonRefs.current.delete(id)
+    }
+  }, [])
 
   const getSortIcon = (field: SortField) => {
     if (sortBy !== field) {
@@ -125,7 +135,7 @@ function ContactsTable({
   }
 
   return (
-    <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
+    <div className="shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
       <table className="min-w-full divide-y divide-gray-300">
         <thead className="bg-gray-50">
           <tr>
@@ -263,17 +273,34 @@ function ContactsTable({
               <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                 <div className="relative" onClick={handleDropdownClick}>
                   <button
+                    ref={el => setButtonRef(contact.id, el)}
                     className="text-gray-400 hover:text-gray-500"
                     onClick={e => {
                       e.stopPropagation()
-                      setOpenDropdown(openDropdown === contact.id ? null : contact.id)
+                      if (openDropdown === contact.id) {
+                        setOpenDropdown(null)
+                      } else {
+                        // Calculate if dropdown should open above or below
+                        const button = buttonRefs.current.get(contact.id)
+                        if (button) {
+                          const rect = button.getBoundingClientRect()
+                          const spaceBelow = window.innerHeight - rect.bottom
+                          const dropdownHeight = 50 // approximate height of dropdown
+                          setDropdownPosition(spaceBelow < dropdownHeight ? 'above' : 'below')
+                        }
+                        setOpenDropdown(contact.id)
+                      }
                     }}
                   >
                     <MoreHorizontal className="w-5 h-5" />
                   </button>
 
                   {openDropdown === contact.id && (
-                    <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-10 ring-1 ring-black ring-opacity-5">
+                    <div
+                      className={`absolute right-0 w-48 bg-white rounded-md shadow-lg z-10 ring-1 ring-black ring-opacity-5 ${
+                        dropdownPosition === 'above' ? 'bottom-full mb-2' : 'top-full mt-2'
+                      }`}
+                    >
                       <div className="py-1">
                         <button
                           onClick={e => handleMarkAsContacted(e, contact.id)}
@@ -400,7 +427,7 @@ export default function ContactsPage() {
         )}
 
         {/* Contacts Table */}
-        <div className="bg-white shadow overflow-hidden sm:rounded-md">
+        <div className="bg-white shadow sm:rounded-md">
           <ContactsTable
             contacts={data?.contacts || []}
             loading={isLoading}
