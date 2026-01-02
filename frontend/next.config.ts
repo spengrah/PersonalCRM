@@ -1,6 +1,7 @@
 import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
+  output: 'standalone',
   eslint: {
     // Disable ESLint during production builds to avoid blocking deployment
     ignoreDuringBuilds: true,

@@ -27,7 +27,9 @@ export const contactsApi = {
     }
 
     // Use apiClient with proper headers, but we need to handle the pagination meta
-    const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8080'
+    const API_BASE_URL =
+      process.env.NEXT_PUBLIC_API_URL ||
+      (typeof window !== 'undefined' ? window.location.origin : '')
     const url = new URL('/api/v1/contacts', API_BASE_URL)
     Object.entries(queryParams).forEach(([key, value]) => {
       if (value !== undefined) {

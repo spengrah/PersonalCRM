@@ -414,8 +414,11 @@ class APIClient {
   }
 }
 
+// Empty string default enables same-origin requests in production
+// (works with Tailscale Serve + Caddy reverse proxy)
+// For local development, set NEXT_PUBLIC_API_URL=http://localhost:8080 in frontend/.env.local
 export const apiClient = new APIClient(
-  process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+  process.env.NEXT_PUBLIC_API_URL || ''
 )
 ```
 

@@ -7,27 +7,27 @@ PartOf=personalcrm.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/personalcrm
+WorkingDirectory=/srv/personalcrm
 User=crm
 Group=crm
 
 # Environment configuration
-EnvironmentFile=/opt/personalcrm/.env
-Environment="MIGRATIONS_PATH=/opt/personalcrm/backend/migrations"
+EnvironmentFile=/srv/personalcrm/.env
+Environment="MIGRATIONS_PATH=/srv/personalcrm/backend/migrations"
 Environment="PORT=8080"
 Environment="NODE_ENV=production"
 Environment="LOG_LEVEL=info"
 
 # IMPORTANT: Network binding configuration
-# Option 1 (default): Bind to localhost only (secure, requires reverse proxy)
-Environment="BIND_ADDR=127.0.0.1"
+# Option 1 (default): Bind to all interfaces (allows direct network access)
+# WARNING: Ensure firewall is properly configured
+Environment="HOST=0.0.0.0"
 
-# Option 2: Uncomment to bind to all interfaces (allows direct network access)
-# WARNING: Ensure firewall is properly configured before using 0.0.0.0
-# Environment="BIND_ADDR=0.0.0.0"
+# Option 2: Uncomment to bind to localhost only (secure, requires reverse proxy)
+# Environment="HOST=127.0.0.1"
 
 # Executable
-ExecStart=/opt/personalcrm/backend/bin/crm-api
+ExecStart=/srv/personalcrm/backend/bin/crm-api
 
 # Logging
 StandardOutput=journal
@@ -50,7 +50,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/personalcrm/logs
+ReadWritePaths=/srv/personalcrm/logs
 
 # Resource limits (adjust for Raspberry Pi)
 MemoryLimit=512M

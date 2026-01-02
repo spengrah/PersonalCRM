@@ -12,10 +12,12 @@ export default function TestApiPage() {
       try {
         setStatus('Making fetch request...')
 
-        const response = await fetch('http://localhost:8080/api/v1/contacts/overdue', {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || ''
+        const response = await fetch(`${apiUrl}/api/v1/contacts/overdue`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
+            'X-API-Key': process.env.NEXT_PUBLIC_API_KEY || '',
           },
         })
 

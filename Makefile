@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e deploy setup-pi
 
 # Go build cache (workspace-local by default; override via env).
 GOCACHE ?= $(CURDIR)/.gocache
@@ -40,6 +40,10 @@ help:
 	@echo "Cadence Testing:"
 	@echo "  test-cadence-ultra - Test all cadences in minutes (testing env)"
 	@echo "  test-cadence-fast  - Test all cadences in hours (staging env)"
+	@echo ""
+	@echo "Raspberry Pi Deployment:"
+	@echo "  setup-pi - One-time Pi setup (create user, directories)"
+	@echo "  deploy   - Build and deploy to Pi (requires setup-pi first)"
 
 # Setup development environment
 setup:
@@ -420,3 +424,10 @@ status:
 		echo "📋 Recent Log Files:"; \
 		ls -lh logs/*.log 2>/dev/null | tail -5 || echo "  No log files found"; \
 	fi
+
+# Raspberry Pi Deployment
+deploy:
+	@./scripts/deploy.sh
+
+setup-pi:
+	@./scripts/setup-pi.sh

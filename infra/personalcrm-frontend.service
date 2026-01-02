@@ -1,5 +1,5 @@
 [Unit]
-Description=PersonalCRM Frontend (Next.js)
+Description=PersonalCRM Frontend (Next.js Standalone)
 Documentation=https://github.com/spengrah/PersonalCRM
 After=personalcrm-backend.service
 Requires=personalcrm-backend.service
@@ -7,21 +7,19 @@ PartOf=personalcrm.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/personalcrm/frontend
+WorkingDirectory=/srv/personalcrm/frontend
 User=crm
 Group=crm
 
 # Environment configuration
-EnvironmentFile=/opt/personalcrm/.env
+EnvironmentFile=/srv/personalcrm/.env
+Environment="HOSTNAME=0.0.0.0"
 Environment="PORT=3001"
 Environment="NODE_ENV=production"
 Environment="NEXT_TELEMETRY_DISABLED=1"
 
-# Backend API URL (for frontend to connect to backend)
-Environment="NEXT_PUBLIC_API_URL=http://localhost:8080"
-
-# Executable (using bun for production)
-ExecStart=/usr/local/bin/bun run start
+# Executable (standalone Next.js server - no bun/npm needed)
+ExecStart=/usr/bin/node /srv/personalcrm/frontend/server.js
 
 # Logging
 StandardOutput=journal
@@ -44,8 +42,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/personalcrm/logs
-ReadWritePaths=/opt/personalcrm/frontend/.next/cache
+ReadWritePaths=/srv/personalcrm/logs
 
 # Resource limits (adjust for Raspberry Pi)
 MemoryLimit=512M
