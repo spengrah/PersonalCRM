@@ -17,10 +17,12 @@ export default function SettingsPage() {
   const handleExportData = async () => {
     setIsExporting(true)
     try {
-      const response = await fetch('http://localhost:8080/api/v1/export', {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || ''
+      const response = await fetch(`${apiUrl}/api/v1/export`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'X-API-Key': process.env.NEXT_PUBLIC_API_KEY || '',
         },
       })
 
@@ -63,8 +65,12 @@ export default function SettingsPage() {
       const formData = new FormData()
       formData.append('backup', importFile)
 
-      const response = await fetch('http://localhost:8080/api/v1/import', {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || ''
+      const response = await fetch(`${apiUrl}/api/v1/import`, {
         method: 'POST',
+        headers: {
+          'X-API-Key': process.env.NEXT_PUBLIC_API_KEY || '',
+        },
         body: formData,
       })
 

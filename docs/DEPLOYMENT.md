@@ -171,10 +171,19 @@ Production secrets are:
 
 ### Network Security
 
-- Backend binds to `127.0.0.1` by default (localhost only)
+- Backend binds to `0.0.0.0:8080` (needed for Caddy reverse proxy)
 - Frontend binds to `0.0.0.0:3001` (accessible via Tailscale)
 - Access is via Tailscale (encrypted, authenticated)
 - No ports exposed to public internet
+
+### Same-Origin Requests (Optional HTTPS)
+
+For HTTPS access via Tailscale Serve, the frontend can use same-origin (relative) API requests:
+- Frontend calls `/api/v1/...` instead of `http://host:8080/api/v1/...`
+- Caddy reverse proxy routes `/api/*` to backend, `/*` to frontend
+- Eliminates CORS and mixed-content issues
+
+See [FIRST_TIME_PI_DEPLOYMENT.md Part 7](./FIRST_TIME_PI_DEPLOYMENT.md#part-7-https-via-tailscale-serve-optional) for setup instructions.
 
 ## Troubleshooting
 
