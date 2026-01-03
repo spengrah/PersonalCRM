@@ -21,16 +21,18 @@ func GetCurrentTime() time.Time {
 		return now
 	}
 
-	// Get base time from environment
+	// Get base time from environment (stored as Unix timestamp)
 	baseTimeStr := os.Getenv("TIME_BASE")
 	if baseTimeStr == "" {
 		return now
 	}
 
-	baseTime, err := time.Parse(time.RFC3339, baseTimeStr)
+	// Parse as Unix timestamp (set by SetTimeAcceleration in system handler)
+	baseUnix, err := strconv.ParseInt(baseTimeStr, 10, 64)
 	if err != nil {
 		return now
 	}
+	baseTime := time.Unix(baseUnix, 0)
 
 	// Calculate accelerated time
 	elapsed := now.Sub(baseTime)

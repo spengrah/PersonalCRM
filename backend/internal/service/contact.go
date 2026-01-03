@@ -224,7 +224,7 @@ func (s *ContactService) ListOverdueContacts(ctx context.Context) ([]OverdueCont
 
 		if reminder.IsOverdueWithConfig(cadence, contact.LastContacted, contact.CreatedAt, now) {
 			daysOverdue := reminder.GetOverdueDaysWithConfig(cadence, contact.LastContacted, contact.CreatedAt, now)
-			nextDue := reminder.CalculateNextDueDate(cadence, contact.LastContacted, contact.CreatedAt)
+			nextDue := reminder.CalculateNextDueDateWithConfig(cadence, contact.LastContacted, contact.CreatedAt)
 
 			suggestedAction := suggestedActionForOverdueDays(daysOverdue)
 
