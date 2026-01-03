@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/db"
 
 	"github.com/google/uuid"
@@ -167,6 +168,9 @@ func (r *ContactRepository) SearchContacts(ctx context.Context, params SearchCon
 
 // CreateContact creates a new contact
 func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContactRequest) (*Contact, error) {
+	// Use accelerated time for created_at to ensure consistency with time acceleration
+	createdAt := accelerated.GetCurrentTime()
+
 	dbContact, err := r.queries.CreateContact(ctx, db.CreateContactParams{
 		FullName:      req.FullName,
 		Location:      stringToPgText(req.Location),
@@ -175,6 +179,7 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 		Cadence:       stringToPgText(req.Cadence),
 		LastContacted: timeToPgDate(req.LastContacted),
 		ProfilePhoto:  stringToPgText(req.ProfilePhoto),
+		CreatedAt:     pgtype.Timestamptz{Time: createdAt, Valid: true},
 	})
 	if err != nil {
 		return nil, err

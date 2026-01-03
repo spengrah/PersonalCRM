@@ -135,7 +135,9 @@ func GetSchedulerCronSpec() string {
 	}
 }
 
-// GetOverdueDaysWithConfig returns how many "days" overdue (scaled only when acceleration is active)
+// GetOverdueDaysWithConfig returns how many "days" overdue
+// When acceleration is ON: use real 24-hour days (overdueTime is already in accelerated time)
+// When acceleration is OFF: use scaled days based on environment (for testing compressed cadences)
 func GetOverdueDaysWithConfig(cadenceType CadenceType, lastContacted *time.Time, createdAt time.Time, checkTime time.Time) int {
 	duration := GetCadenceDuration(cadenceType)
 
@@ -153,13 +155,14 @@ func GetOverdueDaysWithConfig(cadenceType CadenceType, lastContacted *time.Time,
 
 	overdueTime := checkTime.Sub(nextContactDue)
 
-	// Only scale days when time acceleration is actually active
-	// This prevents showing huge numbers like "4582 days overdue" when acceleration is OFF
-	if !isAccelerationActive() {
+	// When acceleration is ON, overdueTime is already in accelerated (display) time,
+	// so use real 24-hour days to show meaningful numbers like "5 days overdue"
+	if isAccelerationActive() {
 		return int(overdueTime / (24 * time.Hour))
 	}
 
-	// Scale overdue calculation based on environment when acceleration is active
+	// When acceleration is OFF but in testing/staging env, use scaled days
+	// This allows testing "X days overdue" scenarios in minutes without acceleration
 	env := os.Getenv("CRM_ENV")
 	switch env {
 	case "test", "testing":

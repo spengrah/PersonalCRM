@@ -24,20 +24,21 @@ func (q *Queries) CountContacts(ctx context.Context) (int64, error) {
 
 const CreateContact = `-- name: CreateContact :one
 INSERT INTO contact (
-  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo
+  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, created_at
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7
+  $1, $2, $3, $4, $5, $6, $7, $8
 ) RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at
 `
 
 type CreateContactParams struct {
-	FullName      string      `json:"full_name"`
-	Location      pgtype.Text `json:"location"`
-	Birthday      pgtype.Date `json:"birthday"`
-	HowMet        pgtype.Text `json:"how_met"`
-	Cadence       pgtype.Text `json:"cadence"`
-	LastContacted pgtype.Date `json:"last_contacted"`
-	ProfilePhoto  pgtype.Text `json:"profile_photo"`
+	FullName      string             `json:"full_name"`
+	Location      pgtype.Text        `json:"location"`
+	Birthday      pgtype.Date        `json:"birthday"`
+	HowMet        pgtype.Text        `json:"how_met"`
+	Cadence       pgtype.Text        `json:"cadence"`
+	LastContacted pgtype.Date        `json:"last_contacted"`
+	ProfilePhoto  pgtype.Text        `json:"profile_photo"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
 func (q *Queries) CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error) {
@@ -49,6 +50,7 @@ func (q *Queries) CreateContact(ctx context.Context, arg CreateContactParams) (*
 		arg.Cadence,
 		arg.LastContacted,
 		arg.ProfilePhoto,
+		arg.CreatedAt,
 	)
 	var i Contact
 	err := row.Scan(
