@@ -1,15 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { remindersApi } from '@/lib/reminders-api'
+import { reminderKeys, invalidateFor } from '@/lib/query-invalidation'
 import type { CreateReminderRequest, ReminderListParams } from '@/types/reminder'
 
-// Query keys
-export const reminderKeys = {
-  all: ['reminders'] as const,
-  lists: () => [...reminderKeys.all, 'list'] as const,
-  list: (params: ReminderListParams) => [...reminderKeys.lists(), params] as const,
-  stats: () => [...reminderKeys.all, 'stats'] as const,
-  byContact: (contactId: string) => [...reminderKeys.all, 'contact', contactId] as const,
-}
+// Re-export reminderKeys for backward compatibility
+export { reminderKeys }
 
 // Get reminders list
 export function useReminders(params: ReminderListParams = {}) {
@@ -25,8 +20,8 @@ export function useTodayReminders() {
   return useQuery({
     queryKey: reminderKeys.list({ due_today: true }),
     queryFn: () => remindersApi.getReminders({ due_today: true }),
-    staleTime: 1000 * 30, // 30 seconds for today's reminders
-    refetchInterval: 1000 * 60, // Refetch every minute
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    refetchOnWindowFocus: true,
   })
 }
 
@@ -44,46 +39,37 @@ export function useReminderStats() {
   return useQuery({
     queryKey: reminderKeys.stats(),
     queryFn: () => remindersApi.getStats(),
-    staleTime: 1000 * 60 * 2, // 2 minutes
-    refetchInterval: 1000 * 60 * 5, // Refetch every 5 minutes
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    refetchOnWindowFocus: true,
   })
 }
 
 // Create reminder mutation
 export function useCreateReminder() {
-  const queryClient = useQueryClient()
-
   return useMutation({
     mutationFn: (data: CreateReminderRequest) => remindersApi.createReminder(data),
     onSuccess: () => {
-      // Invalidate and refetch reminders
-      queryClient.invalidateQueries({ queryKey: reminderKeys.all })
+      invalidateFor('reminder:created')
     },
   })
 }
 
 // Complete reminder mutation
 export function useCompleteReminder() {
-  const queryClient = useQueryClient()
-
   return useMutation({
     mutationFn: (id: string) => remindersApi.completeReminder(id),
     onSuccess: () => {
-      // Invalidate and refetch reminders
-      queryClient.invalidateQueries({ queryKey: reminderKeys.all })
+      invalidateFor('reminder:completed')
     },
   })
 }
 
 // Delete reminder mutation
 export function useDeleteReminder() {
-  const queryClient = useQueryClient()
-
   return useMutation({
     mutationFn: (id: string) => remindersApi.deleteReminder(id),
     onSuccess: () => {
-      // Invalidate and refetch reminders
-      queryClient.invalidateQueries({ queryKey: reminderKeys.all })
+      invalidateFor('reminder:deleted')
     },
   })
 }
