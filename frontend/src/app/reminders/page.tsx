@@ -11,6 +11,7 @@ import {
   Calendar,
   MoreHorizontal,
   X,
+  Zap,
 } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
@@ -118,7 +119,15 @@ function RemindersTable({ reminders, loading }: { reminders: DueReminder[]; load
                       )}
                     />
                     <div>
-                      <div className="text-sm font-medium text-gray-900">{reminder.title}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-gray-900">{reminder.title}</span>
+                        {reminder.source === 'auto' && (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-xs font-medium rounded bg-purple-100 text-purple-700">
+                            <Zap className="w-3 h-3" />
+                            Auto
+                          </span>
+                        )}
+                      </div>
                       {reminder.description && (
                         <div className="text-sm text-gray-500 mt-1">{reminder.description}</div>
                       )}

@@ -87,7 +87,7 @@ func main() {
 	timeEntryRepo := repository.NewTimeEntryRepository(database.Queries)
 
 	// Initialize services
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, reminderRepo)
 	reminderService := service.NewReminderService(reminderRepo, contactRepo)
 
 	// Initialize handlers

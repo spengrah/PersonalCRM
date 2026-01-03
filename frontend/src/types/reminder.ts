@@ -1,5 +1,7 @@
 import type { ContactMethodType } from './contact'
 
+export type ReminderSource = 'auto' | 'manual'
+
 export interface Reminder {
   id: string
   contact_id?: string
@@ -10,6 +12,7 @@ export interface Reminder {
   completed_at?: string
   created_at: string
   deleted_at?: string
+  source?: ReminderSource
 }
 
 export interface DueReminder extends Reminder {

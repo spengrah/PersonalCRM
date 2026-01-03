@@ -99,15 +99,17 @@ func (s *ReminderService) GenerateRemindersForOverdueContacts(ctx context.Contex
 			daysSinceLastContact = int(duration.Hours() / 24)
 		}
 
-		// Create reminder
+		// Create reminder with source='auto' since it's auto-generated
 		title := reminder.GenerateReminderTitle(contact.FullName, cadenceType)
 		description := reminder.GenerateReminderDescription(contact.FullName, cadenceType, daysSinceLastContact)
+		source := repository.ReminderSourceAuto
 
 		_, err = s.reminderRepo.CreateReminder(ctx, repository.CreateReminderRequest{
 			ContactID:   &contact.ID,
 			Title:       title,
 			Description: &description,
 			DueDate:     today,
+			Source:      &source,
 		})
 
 		if err != nil {
