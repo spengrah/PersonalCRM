@@ -50,9 +50,16 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
     if (!lastContacted) return 'Never contacted'
     const date = new Date(lastContacted)
     const now = currentTime // Use accelerated time instead of new Date()
-    const diffTime = Math.abs(now.getTime() - date.getTime())
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+    const diffTime = now.getTime() - date.getTime()
+    const diffDays = Math.ceil(Math.abs(diffTime) / (1000 * 60 * 60 * 24))
 
+    // Handle future dates (data anomaly from time acceleration)
+    if (diffTime < 0) {
+      if (diffDays === 1) return 'in 1 day'
+      return `in ${diffDays} days`
+    }
+
+    if (diffDays === 0) return 'Today'
     if (diffDays === 1) return 'Yesterday'
     if (diffDays <= 7) return `${diffDays} days ago`
     if (diffDays <= 30) return `${Math.floor(diffDays / 7)} weeks ago`

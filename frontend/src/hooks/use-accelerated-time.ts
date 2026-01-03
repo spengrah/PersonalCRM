@@ -56,10 +56,11 @@ export function useAcceleratedTime() {
     // Only run intervals when acceleration is enabled AND page is visible
     if (systemTime?.is_accelerated && isPageVisible) {
       const baseTime = new Date(systemTime.base_time)
-      const localBaseTime = Date.now()
 
       const updateAcceleratedTime = () => {
-        const elapsed = Date.now() - localBaseTime
+        // Calculate elapsed from baseTime (when acceleration started), not from when effect ran
+        // This ensures time doesn't reset when navigating between pages
+        const elapsed = Date.now() - baseTime.getTime()
         const acceleratedElapsed = elapsed * systemTime.acceleration_factor
         const acceleratedTime = new Date(baseTime.getTime() + acceleratedElapsed)
         setLocalTime(acceleratedTime)

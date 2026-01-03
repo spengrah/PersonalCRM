@@ -2,6 +2,7 @@ package reminder
 
 import (
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -85,6 +86,20 @@ func GetCadenceDuration(cadenceType CadenceType) time.Duration {
 	}
 }
 
+// CalculateNextDueDateWithConfig calculates the next due date using environment-specific cadences
+func CalculateNextDueDateWithConfig(cadenceType CadenceType, lastContacted *time.Time, createdAt time.Time) time.Time {
+	duration := GetCadenceDuration(cadenceType)
+
+	var baseDate time.Time
+	if lastContacted != nil {
+		baseDate = *lastContacted
+	} else {
+		baseDate = createdAt
+	}
+
+	return baseDate.Add(duration)
+}
+
 // IsOverdueWithConfig checks if contact is overdue using environment-specific cadences
 func IsOverdueWithConfig(cadenceType CadenceType, lastContacted *time.Time, createdAt time.Time, checkTime time.Time) bool {
 	duration := GetCadenceDuration(cadenceType)
@@ -120,7 +135,9 @@ func GetSchedulerCronSpec() string {
 	}
 }
 
-// GetOverdueDaysWithConfig returns how many "days" overdue (scaled for environment)
+// GetOverdueDaysWithConfig returns how many "days" overdue
+// When acceleration is ON: use real 24-hour days (overdueTime is already in accelerated time)
+// When acceleration is OFF: use scaled days based on environment (for testing compressed cadences)
 func GetOverdueDaysWithConfig(cadenceType CadenceType, lastContacted *time.Time, createdAt time.Time, checkTime time.Time) int {
 	duration := GetCadenceDuration(cadenceType)
 
@@ -138,8 +155,14 @@ func GetOverdueDaysWithConfig(cadenceType CadenceType, lastContacted *time.Time,
 
 	overdueTime := checkTime.Sub(nextContactDue)
 
-	// Scale overdue calculation based on environment
-	// In accelerated mode, "days" are proportionally shorter
+	// When acceleration is ON, overdueTime is already in accelerated (display) time,
+	// so use real 24-hour days to show meaningful numbers like "5 days overdue"
+	if isAccelerationActive() {
+		return int(overdueTime / (24 * time.Hour))
+	}
+
+	// When acceleration is OFF but in testing/staging env, use scaled days
+	// This allows testing "X days overdue" scenarios in minutes without acceleration
 	env := os.Getenv("CRM_ENV")
 	switch env {
 	case "test", "testing":
@@ -154,4 +177,14 @@ func GetOverdueDaysWithConfig(cadenceType CadenceType, lastContacted *time.Time,
 		// Production: normal days
 		return int(overdueTime / (24 * time.Hour))
 	}
+}
+
+// isAccelerationActive checks if time acceleration is currently enabled
+func isAccelerationActive() bool {
+	accelerationStr := os.Getenv("TIME_ACCELERATION")
+	if accelerationStr == "" {
+		return false
+	}
+	acceleration, err := strconv.Atoi(accelerationStr)
+	return err == nil && acceleration > 1
 }
