@@ -45,7 +45,7 @@ test.describe('Reminder Lifecycle', () => {
 
     // Go to contacts page and delete the contact
     await page.goto(`/contacts/${contactId}`)
-    await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
+    await expect(page.getByRole('heading', { name: contactName }).first()).toBeVisible()
 
     // Accept the confirmation dialog and delete
     page.once('dialog', dialog => dialog.accept())
@@ -117,7 +117,7 @@ test.describe('Reminder Lifecycle', () => {
 
     // Go to contact page and mark as contacted
     await page.goto(`/contacts/${contactId}`)
-    await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
+    await expect(page.getByRole('heading', { name: contactName }).first()).toBeVisible()
 
     // Click the "Mark as Contacted" button
     await page.getByRole('button', { name: /Mark as Contacted/i }).click()
