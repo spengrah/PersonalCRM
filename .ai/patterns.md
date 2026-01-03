@@ -320,21 +320,21 @@ export function ContactForm({ initialData, onSuccess }: Props) {
 ```typescript
 export function useUpdateContact() {
   const queryClient = useQueryClient()
-  
+
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: UpdateContactData }) =>
       contactApi.update(id, data),
     onMutate: async (variables) => {
       // Optimistic update (optional)
       await queryClient.cancelQueries({ queryKey: ['contacts', variables.id] })
-      
+
       const previousContact = queryClient.getQueryData(['contacts', variables.id])
-      
+
       queryClient.setQueryData(['contacts', variables.id], (old: any) => ({
         ...old,
         ...variables.data,
       }))
-      
+
       return { previousContact }
     },
     onError: (err, variables, context) => {
@@ -351,6 +351,49 @@ export function useUpdateContact() {
   })
 }
 ```
+
+### Centralized Query Invalidation Pattern
+
+Use the centralized invalidation registry for all mutations. This ensures cross-domain effects are handled correctly (e.g., marking a contact as contacted also refreshes reminders).
+
+**Using domain events (preferred):**
+```typescript
+import { invalidateFor } from '@/lib/query-invalidation'
+import { contactKeys } from '@/lib/query-keys'
+
+export function useUpdateLastContacted() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: string) => contactsApi.updateLastContacted(id),
+    onSuccess: updatedContact => {
+      // Optimistic update for the specific contact
+      queryClient.setQueryData(contactKeys.detail(updatedContact.id), updatedContact)
+
+      // Invalidate all affected queries via domain event
+      invalidateFor('contact:touched')
+    },
+  })
+}
+```
+
+**Available domain events:**
+
+| Event | Use When | Invalidates |
+|-------|----------|-------------|
+| `contact:created` | New contact added | Contact lists |
+| `contact:updated` | Contact details changed | Contact lists |
+| `contact:deleted` | Contact removed | Contacts + Reminders |
+| `contact:touched` | Marked as contacted | Contacts + Reminders |
+| `reminder:created` | New reminder | All reminders |
+| `reminder:completed` | Reminder done | All reminders |
+| `reminder:deleted` | Reminder removed | All reminders |
+
+**Why use this pattern:**
+- Single source of truth for invalidation logic
+- Cross-domain effects are explicit and auditable
+- Can't forget to invalidate related queries
+- See `docs/FRONTEND_STATE.md` for full documentation
 
 ### API Client Pattern
 
