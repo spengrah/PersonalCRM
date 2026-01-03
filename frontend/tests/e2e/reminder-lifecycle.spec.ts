@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 
-// API key for E2E tests - matches CI environment
+// API configuration for E2E tests
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
 const API_HEADERS = {
   'X-API-Key': API_KEY,
@@ -16,8 +17,8 @@ test.describe('Reminder Lifecycle', () => {
     const contactName = `E2E Delete Contact ${suffix}`
     const reminderTitle = `Reminder for ${contactName}`
 
-    // Create a contact via API
-    const contactResponse = await request.post('/api/v1/contacts', {
+    // Create a contact via API (using backend URL directly)
+    const contactResponse = await request.post(`${API_BASE_URL}/api/v1/contacts`, {
       headers: API_HEADERS,
       data: {
         full_name: contactName,
@@ -28,7 +29,7 @@ test.describe('Reminder Lifecycle', () => {
     const contactId = contactData.data.id
 
     // Create a reminder for this contact via API
-    const reminderResponse = await request.post('/api/v1/reminders', {
+    const reminderResponse = await request.post(`${API_BASE_URL}/api/v1/reminders`, {
       headers: API_HEADERS,
       data: {
         contact_id: contactId,
@@ -74,7 +75,7 @@ test.describe('Reminder Lifecycle', () => {
     const manualReminderTitle = `Manual reminder for ${contactName}`
 
     // Create a contact via API with a cadence
-    const contactResponse = await request.post('/api/v1/contacts', {
+    const contactResponse = await request.post(`${API_BASE_URL}/api/v1/contacts`, {
       headers: API_HEADERS,
       data: {
         full_name: contactName,
@@ -88,7 +89,7 @@ test.describe('Reminder Lifecycle', () => {
     // Create an "auto" reminder directly via the backend
     // Note: In real usage, the scheduler would create these, but we simulate it here
     // The key is that source='auto' reminders should be completed when marking as contacted
-    const autoReminderResponse = await request.post('/api/v1/reminders', {
+    const autoReminderResponse = await request.post(`${API_BASE_URL}/api/v1/reminders`, {
       headers: API_HEADERS,
       data: {
         contact_id: contactId,
@@ -99,7 +100,7 @@ test.describe('Reminder Lifecycle', () => {
     expect(autoReminderResponse.ok()).toBeTruthy()
 
     // Create a manual reminder for comparison
-    const manualReminderResponse = await request.post('/api/v1/reminders', {
+    const manualReminderResponse = await request.post(`${API_BASE_URL}/api/v1/reminders`, {
       headers: API_HEADERS,
       data: {
         contact_id: contactId,
