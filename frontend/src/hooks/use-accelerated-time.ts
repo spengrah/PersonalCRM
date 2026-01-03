@@ -30,6 +30,7 @@ export function useAcceleratedTime() {
     queryKey: systemKeys.time(),
     queryFn: systemApi.getSystemTime,
     staleTime: 1000 * 60 * 5, // 5 minutes
+    refetchOnMount: 'always',
     refetchOnWindowFocus: true,
   })
 

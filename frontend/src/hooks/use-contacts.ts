@@ -36,6 +36,7 @@ export function useOverdueContacts() {
     queryKey: contactKeys.overdue(),
     queryFn: () => contactsApi.getOverdueContacts(),
     staleTime: 1000 * 60 * 5, // 5 minutes
+    refetchOnMount: 'always',
     refetchOnWindowFocus: true,
   })
 }
