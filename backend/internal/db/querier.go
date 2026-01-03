@@ -12,6 +12,7 @@ import (
 
 type Querier interface {
 	AddContactTag(ctx context.Context, arg AddContactTagParams) error
+	CompleteAutoRemindersForContact(ctx context.Context, contactID pgtype.UUID) error
 	CompleteReminder(ctx context.Context, id pgtype.UUID) (*Reminder, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
@@ -64,6 +65,7 @@ type Querier interface {
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteReminder(ctx context.Context, id pgtype.UUID) error
+	SoftDeleteRemindersForContact(ctx context.Context, contactID pgtype.UUID) error
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
 	UpdateInteraction(ctx context.Context, arg UpdateInteractionParams) (*Interaction, error)

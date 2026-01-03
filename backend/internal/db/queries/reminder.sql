@@ -3,9 +3,10 @@ INSERT INTO reminder (
     contact_id,
     title,
     description,
-    due_date
+    due_date,
+    source
 ) VALUES (
-    $1, $2, $3, $4
+    @contact_id, @title, @description, @due_date, COALESCE(@source, 'manual')
 ) RETURNING *;
 
 -- name: GetReminder :one
@@ -84,6 +85,20 @@ WHERE deleted_at IS NULL;
 
 -- name: CountDueReminders :one
 SELECT COUNT(*) FROM reminder
-WHERE due_date <= $1 
-  AND completed = FALSE 
+WHERE due_date <= $1
+  AND completed = FALSE
+  AND deleted_at IS NULL;
+
+-- name: CompleteAutoRemindersForContact :exec
+UPDATE reminder
+SET completed = TRUE, completed_at = NOW()
+WHERE contact_id = $1
+  AND source = 'auto'
+  AND completed = FALSE
+  AND deleted_at IS NULL;
+
+-- name: SoftDeleteRemindersForContact :exec
+UPDATE reminder
+SET deleted_at = NOW()
+WHERE contact_id = $1
   AND deleted_at IS NULL;

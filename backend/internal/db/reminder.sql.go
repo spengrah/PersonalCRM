@@ -11,11 +11,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const CompleteAutoRemindersForContact = `-- name: CompleteAutoRemindersForContact :exec
+UPDATE reminder
+SET completed = TRUE, completed_at = NOW()
+WHERE contact_id = $1
+  AND source = 'auto'
+  AND completed = FALSE
+  AND deleted_at IS NULL
+`
+
+func (q *Queries) CompleteAutoRemindersForContact(ctx context.Context, contactID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, CompleteAutoRemindersForContact, contactID)
+	return err
+}
+
 const CompleteReminder = `-- name: CompleteReminder :one
 UPDATE reminder
 SET completed = TRUE, completed_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, contact_id, title, description, due_date, completed, completed_at, created_at, deleted_at
+RETURNING id, contact_id, title, description, due_date, completed, completed_at, created_at, deleted_at, source
 `
 
 func (q *Queries) CompleteReminder(ctx context.Context, id pgtype.UUID) (*Reminder, error) {
@@ -31,14 +45,15 @@ func (q *Queries) CompleteReminder(ctx context.Context, id pgtype.UUID) (*Remind
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.DeletedAt,
+		&i.Source,
 	)
 	return &i, err
 }
 
 const CountDueReminders = `-- name: CountDueReminders :one
 SELECT COUNT(*) FROM reminder
-WHERE due_date <= $1 
-  AND completed = FALSE 
+WHERE due_date <= $1
+  AND completed = FALSE
   AND deleted_at IS NULL
 `
 
@@ -66,10 +81,11 @@ INSERT INTO reminder (
     contact_id,
     title,
     description,
-    due_date
+    due_date,
+    source
 ) VALUES (
-    $1, $2, $3, $4
-) RETURNING id, contact_id, title, description, due_date, completed, completed_at, created_at, deleted_at
+    $1, $2, $3, $4, COALESCE($5, 'manual')
+) RETURNING id, contact_id, title, description, due_date, completed, completed_at, created_at, deleted_at, source
 `
 
 type CreateReminderParams struct {
@@ -77,6 +93,7 @@ type CreateReminderParams struct {
 	Title       string             `json:"title"`
 	Description pgtype.Text        `json:"description"`
 	DueDate     pgtype.Timestamptz `json:"due_date"`
+	Source      interface{}        `json:"source"`
 }
 
 func (q *Queries) CreateReminder(ctx context.Context, arg CreateReminderParams) (*Reminder, error) {
@@ -85,6 +102,7 @@ func (q *Queries) CreateReminder(ctx context.Context, arg CreateReminderParams) 
 		arg.Title,
 		arg.Description,
 		arg.DueDate,
+		arg.Source,
 	)
 	var i Reminder
 	err := row.Scan(
@@ -97,12 +115,13 @@ func (q *Queries) CreateReminder(ctx context.Context, arg CreateReminderParams) 
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.DeletedAt,
+		&i.Source,
 	)
 	return &i, err
 }
 
 const GetReminder = `-- name: GetReminder :one
-SELECT id, contact_id, title, description, due_date, completed, completed_at, created_at, deleted_at FROM reminder
+SELECT id, contact_id, title, description, due_date, completed, completed_at, created_at, deleted_at, source FROM reminder
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -119,6 +138,7 @@ func (q *Queries) GetReminder(ctx context.Context, id pgtype.UUID) (*Reminder, e
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.DeletedAt,
+		&i.Source,
 	)
 	return &i, err
 }
@@ -134,7 +154,7 @@ func (q *Queries) HardDeleteReminder(ctx context.Context, id pgtype.UUID) error 
 }
 
 const ListDueReminders = `-- name: ListDueReminders :many
-SELECT r.id, r.contact_id, r.title, r.description, r.due_date, r.completed, r.completed_at, r.created_at, r.deleted_at,
+SELECT r.id, r.contact_id, r.title, r.description, r.due_date, r.completed, r.completed_at, r.created_at, r.deleted_at, r.source,
        c.full_name as contact_name,
        cm.type as contact_primary_method_type,
        cm.value as contact_primary_method_value
@@ -176,6 +196,7 @@ type ListDueRemindersRow struct {
 	CompletedAt               pgtype.Timestamptz `json:"completed_at"`
 	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
 	DeletedAt                 pgtype.Timestamptz `json:"deleted_at"`
+	Source                    pgtype.Text        `json:"source"`
 	ContactName               pgtype.Text        `json:"contact_name"`
 	ContactPrimaryMethodType  string             `json:"contact_primary_method_type"`
 	ContactPrimaryMethodValue string             `json:"contact_primary_method_value"`
@@ -200,6 +221,7 @@ func (q *Queries) ListDueReminders(ctx context.Context, dueDate pgtype.Timestamp
 			&i.CompletedAt,
 			&i.CreatedAt,
 			&i.DeletedAt,
+			&i.Source,
 			&i.ContactName,
 			&i.ContactPrimaryMethodType,
 			&i.ContactPrimaryMethodValue,
@@ -215,7 +237,7 @@ func (q *Queries) ListDueReminders(ctx context.Context, dueDate pgtype.Timestamp
 }
 
 const ListReminders = `-- name: ListReminders :many
-SELECT id, contact_id, title, description, due_date, completed, completed_at, created_at, deleted_at FROM reminder
+SELECT id, contact_id, title, description, due_date, completed, completed_at, created_at, deleted_at, source FROM reminder
 WHERE deleted_at IS NULL
 ORDER BY due_date ASC
 LIMIT $1 OFFSET $2
@@ -245,6 +267,7 @@ func (q *Queries) ListReminders(ctx context.Context, arg ListRemindersParams) ([
 			&i.CompletedAt,
 			&i.CreatedAt,
 			&i.DeletedAt,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}
@@ -257,7 +280,7 @@ func (q *Queries) ListReminders(ctx context.Context, arg ListRemindersParams) ([
 }
 
 const ListRemindersByContact = `-- name: ListRemindersByContact :many
-SELECT id, contact_id, title, description, due_date, completed, completed_at, created_at, deleted_at FROM reminder
+SELECT id, contact_id, title, description, due_date, completed, completed_at, created_at, deleted_at, source FROM reminder
 WHERE contact_id = $1 AND deleted_at IS NULL
 ORDER BY due_date DESC
 `
@@ -281,6 +304,7 @@ func (q *Queries) ListRemindersByContact(ctx context.Context, contactID pgtype.U
 			&i.CompletedAt,
 			&i.CreatedAt,
 			&i.DeletedAt,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}
@@ -303,13 +327,25 @@ func (q *Queries) SoftDeleteReminder(ctx context.Context, id pgtype.UUID) error 
 	return err
 }
 
+const SoftDeleteRemindersForContact = `-- name: SoftDeleteRemindersForContact :exec
+UPDATE reminder
+SET deleted_at = NOW()
+WHERE contact_id = $1
+  AND deleted_at IS NULL
+`
+
+func (q *Queries) SoftDeleteRemindersForContact(ctx context.Context, contactID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, SoftDeleteRemindersForContact, contactID)
+	return err
+}
+
 const UpdateReminder = `-- name: UpdateReminder :one
 UPDATE reminder
 SET title = COALESCE($2, title),
     description = COALESCE($3, description),
     due_date = COALESCE($4, due_date)
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, contact_id, title, description, due_date, completed, completed_at, created_at, deleted_at
+RETURNING id, contact_id, title, description, due_date, completed, completed_at, created_at, deleted_at, source
 `
 
 type UpdateReminderParams struct {
@@ -337,6 +373,7 @@ func (q *Queries) UpdateReminder(ctx context.Context, arg UpdateReminderParams) 
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.DeletedAt,
+		&i.Source,
 	)
 	return &i, err
 }

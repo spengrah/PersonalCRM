@@ -65,7 +65,8 @@ func setupContactValidationTestRouter() (*gin.Engine, func()) {
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo)
+	reminderRepo := repository.NewReminderRepository(database.Queries)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, reminderRepo)
 	contactHandler := handlers.NewContactHandler(contactService)
 
 	router := gin.New()

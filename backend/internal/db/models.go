@@ -104,6 +104,7 @@ type Reminder struct {
 	CompletedAt pgtype.Timestamptz `json:"completed_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
+	Source      pgtype.Text        `json:"source"`
 }
 
 type Tag struct {

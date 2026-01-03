@@ -32,13 +32,15 @@ type ContactService struct {
 	database          *db.Database
 	contactRepo       *repository.ContactRepository
 	contactMethodRepo *repository.ContactMethodRepository
+	reminderRepo      *repository.ReminderRepository
 }
 
-func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository) *ContactService {
+func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository, reminderRepo *repository.ReminderRepository) *ContactService {
 	return &ContactService{
 		database:          database,
 		contactRepo:       contactRepo,
 		contactMethodRepo: contactMethodRepo,
+		reminderRepo:      reminderRepo,
 	}
 }
 
@@ -175,6 +177,11 @@ func (s *ContactService) DeleteContact(ctx context.Context, id uuid.UUID) error 
 		return err
 	}
 
+	// Soft-delete all reminders for this contact before deleting the contact
+	if err := s.reminderRepo.SoftDeleteRemindersForContact(ctx, id); err != nil {
+		return err
+	}
+
 	return s.contactRepo.SoftDeleteContact(ctx, id)
 }
 
@@ -185,6 +192,12 @@ func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid
 	}
 
 	if err := s.contactRepo.UpdateContactLastContacted(ctx, id, accelerated.GetCurrentTime()); err != nil {
+		return nil, err
+	}
+
+	// Complete auto-generated reminders for this contact when marked as contacted
+	// Manual reminders are preserved since they may be unrelated to the contact cadence
+	if err := s.reminderRepo.CompleteAutoRemindersForContact(ctx, id); err != nil {
 		return nil, err
 	}
 

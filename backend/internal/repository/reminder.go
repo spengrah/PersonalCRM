@@ -10,16 +10,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// ReminderSource indicates whether a reminder was auto-generated or manually created
+type ReminderSource string
+
+const (
+	ReminderSourceAuto   ReminderSource = "auto"
+	ReminderSourceManual ReminderSource = "manual"
+)
+
 type Reminder struct {
-	ID          uuid.UUID  `json:"id"`
-	ContactID   *uuid.UUID `json:"contact_id"`
-	Title       string     `json:"title"`
-	Description *string    `json:"description"`
-	DueDate     time.Time  `json:"due_date"`
-	Completed   bool       `json:"completed"`
-	CompletedAt *time.Time `json:"completed_at"`
-	CreatedAt   time.Time  `json:"created_at"`
-	DeletedAt   *time.Time `json:"deleted_at"`
+	ID          uuid.UUID       `json:"id"`
+	ContactID   *uuid.UUID      `json:"contact_id"`
+	Title       string          `json:"title"`
+	Description *string         `json:"description"`
+	DueDate     time.Time       `json:"due_date"`
+	Completed   bool            `json:"completed"`
+	CompletedAt *time.Time      `json:"completed_at"`
+	CreatedAt   time.Time       `json:"created_at"`
+	DeletedAt   *time.Time      `json:"deleted_at"`
+	Source      *ReminderSource `json:"source"`
 }
 
 type DueReminder struct {
@@ -29,10 +38,11 @@ type DueReminder struct {
 }
 
 type CreateReminderRequest struct {
-	ContactID   *uuid.UUID `json:"contact_id" validate:"omitempty"`
-	Title       string     `json:"title" validate:"required,max=255"`
-	Description *string    `json:"description" validate:"omitempty,max=1000"`
-	DueDate     time.Time  `json:"due_date" validate:"required"`
+	ContactID   *uuid.UUID      `json:"contact_id" validate:"omitempty"`
+	Title       string          `json:"title" validate:"required,max=255"`
+	Description *string         `json:"description" validate:"omitempty,max=1000"`
+	DueDate     time.Time       `json:"due_date" validate:"required"`
+	Source      *ReminderSource `json:"source" validate:"omitempty,oneof=auto manual"`
 }
 
 type UpdateReminderRequest struct {
@@ -86,6 +96,11 @@ func convertDbReminder(dbReminder *db.Reminder) Reminder {
 		reminder.DeletedAt = &dbReminder.DeletedAt.Time
 	}
 
+	if dbReminder.Source.Valid {
+		source := ReminderSource(dbReminder.Source.String)
+		reminder.Source = &source
+	}
+
 	return reminder
 }
 
@@ -125,6 +140,11 @@ func convertDbDueReminder(dbReminder db.ListDueRemindersRow) DueReminder {
 		due.DeletedAt = &dbReminder.DeletedAt.Time
 	}
 
+	if dbReminder.Source.Valid {
+		source := ReminderSource(dbReminder.Source.String)
+		due.Source = &source
+	}
+
 	if dbReminder.ContactPrimaryMethodType != "" && dbReminder.ContactPrimaryMethodValue != "" {
 		due.ContactPrimaryMethod = &ContactMethodSummary{
 			Type:  dbReminder.ContactPrimaryMethodType,
@@ -146,11 +166,17 @@ func (r *ReminderRepository) CreateReminder(ctx context.Context, req CreateRemin
 		contactID = pgtype.UUID{Bytes: *req.ContactID, Valid: true}
 	}
 
+	var source interface{}
+	if req.Source != nil {
+		source = string(*req.Source)
+	}
+
 	dbReminder, err := r.queries.CreateReminder(ctx, db.CreateReminderParams{
 		ContactID:   contactID,
 		Title:       req.Title,
 		Description: description,
 		DueDate:     pgtype.Timestamptz{Time: req.DueDate, Valid: true},
+		Source:      source,
 	})
 	if err != nil {
 		return nil, err
@@ -269,4 +295,14 @@ func (r *ReminderRepository) CountReminders(ctx context.Context) (int64, error) 
 
 func (r *ReminderRepository) CountDueReminders(ctx context.Context, dueBy time.Time) (int64, error) {
 	return r.queries.CountDueReminders(ctx, pgtype.Timestamptz{Time: dueBy, Valid: true})
+}
+
+// CompleteAutoRemindersForContact marks all auto-generated reminders for a contact as completed
+func (r *ReminderRepository) CompleteAutoRemindersForContact(ctx context.Context, contactID uuid.UUID) error {
+	return r.queries.CompleteAutoRemindersForContact(ctx, pgtype.UUID{Bytes: contactID, Valid: true})
+}
+
+// SoftDeleteRemindersForContact soft-deletes all reminders for a contact
+func (r *ReminderRepository) SoftDeleteRemindersForContact(ctx context.Context, contactID uuid.UUID) error {
+	return r.queries.SoftDeleteRemindersForContact(ctx, pgtype.UUID{Bytes: contactID, Valid: true})
 }
