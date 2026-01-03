@@ -1,5 +1,12 @@
 import { test, expect } from '@playwright/test'
 
+// API key for E2E tests - matches CI environment
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
+const API_HEADERS = {
+  'X-API-Key': API_KEY,
+  'Content-Type': 'application/json',
+}
+
 test.describe('Reminder Lifecycle', () => {
   test('deleting a contact should remove its reminders from the reminders list', async ({
     page,
@@ -11,6 +18,7 @@ test.describe('Reminder Lifecycle', () => {
 
     // Create a contact via API
     const contactResponse = await request.post('/api/v1/contacts', {
+      headers: API_HEADERS,
       data: {
         full_name: contactName,
       },
@@ -21,6 +29,7 @@ test.describe('Reminder Lifecycle', () => {
 
     // Create a reminder for this contact via API
     const reminderResponse = await request.post('/api/v1/reminders', {
+      headers: API_HEADERS,
       data: {
         contact_id: contactId,
         title: reminderTitle,
@@ -66,6 +75,7 @@ test.describe('Reminder Lifecycle', () => {
 
     // Create a contact via API with a cadence
     const contactResponse = await request.post('/api/v1/contacts', {
+      headers: API_HEADERS,
       data: {
         full_name: contactName,
         cadence: 'weekly',
@@ -79,6 +89,7 @@ test.describe('Reminder Lifecycle', () => {
     // Note: In real usage, the scheduler would create these, but we simulate it here
     // The key is that source='auto' reminders should be completed when marking as contacted
     const autoReminderResponse = await request.post('/api/v1/reminders', {
+      headers: API_HEADERS,
       data: {
         contact_id: contactId,
         title: autoReminderTitle,
@@ -89,6 +100,7 @@ test.describe('Reminder Lifecycle', () => {
 
     // Create a manual reminder for comparison
     const manualReminderResponse = await request.post('/api/v1/reminders', {
+      headers: API_HEADERS,
       data: {
         contact_id: contactId,
         title: manualReminderTitle,
