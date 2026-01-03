@@ -3,7 +3,8 @@
 
 cd frontend
 # Use nohup in a subshell that exits immediately
-(nohup bun run dev > ../logs/frontend-dev.log 2>&1 &)
+# Explicitly set PORT=3000 to avoid conflict with backend's PORT=8080 in .env
+(PORT=3000 nohup bun run dev > ../logs/frontend-dev.log 2>&1 &)
 sleep 3
 # Get the actual PID of next/node process
 ACTUAL_PID=$(pgrep -f "next dev" | head -1)

@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e deploy setup-pi
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e deploy setup-pi dev-native postgres-native
 
 # Go build cache (workspace-local by default; override via env).
 GOCACHE ?= $(CURDIR)/.gocache
@@ -27,7 +27,8 @@ help:
 	@echo "  prod        - Switch to production environment (real cadences)"
 	@echo ""
 	@echo "Development:"
-	@echo "  dev         - Start development servers (frontend and backend)"
+	@echo "  dev         - Start development servers (uses Docker for PostgreSQL)"
+	@echo "  dev-native  - Start dev servers with native PostgreSQL (no Docker)"
 	@echo "  build       - Build both frontend and backend"
 	@echo "  test        - Run all tests (backend + frontend)"
 	@echo "  clean       - Clean build artifacts"
@@ -135,6 +136,35 @@ dev-api-restart:
 	@make dev-api-stop
 	@sleep 1
 	@make dev-api-start
+
+# Native PostgreSQL (for containerized development without Docker-in-Docker)
+postgres-native:
+	@bash scripts/start-postgres-native.sh
+
+# Development with native PostgreSQL (no Docker required)
+# Use this when running inside a container where Docker is not available
+dev-native: postgres-native
+	@echo "Starting development environment (native PostgreSQL)..."
+	@make logs
+	@echo "Starting backend server..."
+	@bash scripts/start-backend.sh
+	@echo "✅ Backend server started (logs: logs/backend-dev.log, PID: $$(cat logs/backend-dev.pid 2>/dev/null || echo 'unknown'))"
+	@echo "Starting frontend development server..."
+	@bash scripts/start-frontend-dev.sh
+	@echo "✅ Frontend dev server started (logs: logs/frontend-dev.log, PID: $$(cat logs/frontend-dev.pid 2>/dev/null || echo 'unknown'))"
+	@echo ""
+	@echo "🌐 Frontend: http://localhost:3000"
+	@echo "🔧 Backend:  http://localhost:8080"
+	@echo ""
+	@echo "💡 Both servers are running detached and will continue after you close this terminal"
+	@echo "   Use 'make dev-stop' to stop both servers"
+	@echo ""
+	@echo "📋 To view logs:"
+	@echo "   tail -f logs/backend-dev.log"
+	@echo "   tail -f logs/frontend-dev.log"
+	@echo ""
+	@echo "Press Ctrl+C to exit (servers will keep running)"
+	@tail -f logs/frontend-dev.log logs/backend-dev.log 2>/dev/null || sleep infinity
 
 test-e2e: docker-up
 	@echo "Running Playwright E2E tests..."

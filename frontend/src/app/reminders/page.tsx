@@ -122,7 +122,7 @@ function RemindersTable({ reminders, loading }: { reminders: DueReminder[]; load
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-gray-900">{reminder.title}</span>
                         {reminder.source === 'auto' && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-gray-100 text-gray-600">
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-xs font-medium rounded bg-purple-100 text-purple-700">
                             <Zap className="w-3 h-3" />
                             Auto
                           </span>

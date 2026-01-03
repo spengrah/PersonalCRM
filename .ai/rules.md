@@ -168,7 +168,8 @@ See [README.md](../README.md#development-commands) for full command reference.
 
 **Most used:**
 ```bash
-make dev                    # Start dev environment (hot reload)
+make dev                    # Start dev environment (uses Docker for PostgreSQL)
+make dev-native             # Start dev without Docker (for containerized development)
 make start-local            # Start production mode locally
 make reload                 # ⚠️ Rebuild + restart (use after code changes in prod mode)
 make test-unit              # Unit tests
@@ -180,7 +181,33 @@ make staging                # Fast cadences (hours)
 make prod                   # Real-world timing
 ```
 
-### 5. Process Management (Critical)
+### 5. Native Development Mode (No Docker)
+
+When developing inside a container (e.g., Claude Code, devcontainers, Codespaces), Docker may not be available. Use native PostgreSQL instead:
+
+```bash
+make dev-native             # Starts PostgreSQL natively + backend + frontend
+make postgres-native        # Just start PostgreSQL (no app servers)
+```
+
+**Requirements for native mode:**
+- PostgreSQL 16 installed: `sudo apt install postgresql postgresql-16-pgvector`
+- pgvector extension for AI features
+
+**How it works:**
+1. `scripts/start-postgres-native.sh` starts the PostgreSQL cluster
+2. Creates the application user and database if needed
+3. Installs required extensions (uuid-ossp, vector)
+4. Backend and frontend start normally
+
+**When to use which mode:**
+| Environment | Command | Notes |
+|-------------|---------|-------|
+| Local machine with Docker | `make dev` | Uses Docker for PostgreSQL |
+| Inside container (Claude Code, etc.) | `make dev-native` | Uses native PostgreSQL |
+| Raspberry Pi | `make start-local` | Production mode |
+
+### 6. Process Management (Critical)
 
 **⚠️ Always use `make reload` after code changes when running in production mode.**
 
@@ -208,7 +235,7 @@ The start scripts kill existing processes before starting new ones, but `make bu
 2. Verify the new process starts successfully
 3. Check BUILD_ID matches (frontend) or health check passes (backend)
 
-### 4. Code Style
+### 7. Code Style
 
 **Go:**
 - Follow standard Go formatting (`gofmt`, `goimports`)
