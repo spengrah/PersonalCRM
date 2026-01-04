@@ -17,7 +17,7 @@ import (
 
 // OAuthHandler handles OAuth-related HTTP requests
 type OAuthHandler struct {
-	googleOAuth *google.OAuthService
+	googleOAuth google.OAuthServiceInterface
 	// State store for CSRF protection (in-memory, expires after 10 minutes)
 	stateStore   map[string]time.Time
 	stateStoreMu sync.RWMutex
@@ -25,7 +25,7 @@ type OAuthHandler struct {
 }
 
 // NewOAuthHandler creates a new OAuth handler
-func NewOAuthHandler(googleOAuth *google.OAuthService, frontendURL string) *OAuthHandler {
+func NewOAuthHandler(googleOAuth google.OAuthServiceInterface, frontendURL string) *OAuthHandler {
 	h := &OAuthHandler{
 		googleOAuth: googleOAuth,
 		stateStore:  make(map[string]time.Time),

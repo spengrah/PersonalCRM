@@ -32,6 +32,19 @@ var Scopes = []string{
 // ProviderName is the identifier for Google OAuth credentials
 const ProviderName = "google"
 
+// OAuthServiceInterface defines the interface for OAuth operations
+// This interface allows for mocking in tests
+type OAuthServiceInterface interface {
+	GetAuthURL(state string) string
+	ExchangeCode(ctx context.Context, code string) (*repository.OAuthCredentialStatus, error)
+	ListAccounts(ctx context.Context) ([]repository.OAuthCredentialStatus, error)
+	GetAccountStatus(ctx context.Context, id uuid.UUID) (*repository.OAuthCredentialStatus, error)
+	RevokeAccount(ctx context.Context, id uuid.UUID) error
+}
+
+// Ensure OAuthService implements OAuthServiceInterface
+var _ OAuthServiceInterface = (*OAuthService)(nil)
+
 // OAuthService handles Google OAuth2 authentication
 type OAuthService struct {
 	config    *oauth2.Config
