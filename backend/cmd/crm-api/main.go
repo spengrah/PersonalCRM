@@ -36,7 +36,6 @@ import (
 	"personal-crm/backend/internal/auth"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
-	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/health"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
@@ -96,28 +95,11 @@ func main() {
 	var syncService *service.SyncService
 	var syncHandler *handlers.SyncHandler
 	var identityHandler *handlers.IdentityHandler
-	var oauthHandler *handlers.OAuthHandler
-	var googleOAuthService *google.OAuthService
 
 	if cfg.Features.EnableExternalSync {
 		syncRepo := repository.NewSyncRepository(database.Queries)
 		identityRepo := repository.NewIdentityRepository(database.Queries)
-		oauthRepo := repository.NewOAuthRepository(database.Queries)
 		providerRegistry := sync.NewProviderRegistry()
-
-		// Initialize Google OAuth service if configured
-		if cfg.Google.ClientID != "" && cfg.Google.ClientSecret != "" {
-			var err error
-			googleOAuthService, err = google.NewOAuthService(cfg, oauthRepo)
-			if err != nil {
-				logger.Warn().Err(err).Msg("failed to initialize Google OAuth service")
-			} else {
-				oauthHandler = handlers.NewOAuthHandler(googleOAuthService, cfg.CORS.FrontendURL)
-				logger.Info().Msg("Google OAuth service initialized")
-			}
-		} else {
-			logger.Info().Msg("Google OAuth not configured (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET required)")
-		}
 
 		// Register sync providers here (will be done in future issues)
 		// providerRegistry.Register(gmail.NewProvider(...))
@@ -162,11 +144,6 @@ func main() {
 	healthChecker := health.NewHealthChecker(database, cfg.Database.HealthTimeout)
 	router.GET("/health", healthChecker.Handler)
 
-	// OAuth callback route (no auth - called by Google redirect)
-	if oauthHandler != nil {
-		router.GET("/api/v1/auth/google/callback", oauthHandler.GoogleCallback)
-	}
-
 	// API routes
 	v1 := router.Group("/api/v1")
 	v1.Use(auth.APIKeyMiddleware(cfg))
@@ -201,18 +178,6 @@ func main() {
 			system.POST("/time/acceleration", systemHandler.SetTimeAcceleration)
 		}
 
-		// OAuth routes (feature-flagged with external sync)
-		if oauthHandler != nil {
-			authRoutes := v1.Group("/auth")
-			{
-				// Google OAuth
-				authRoutes.GET("/google", oauthHandler.GetGoogleAuthURL)
-				authRoutes.GET("/google/accounts", oauthHandler.ListGoogleAccounts)
-				authRoutes.GET("/google/accounts/:id/status", oauthHandler.GetGoogleAccountStatus)
-				authRoutes.POST("/google/accounts/:id/revoke", oauthHandler.RevokeGoogleAccount)
-			}
-		}
-
 		// Time entry routes (feature-flagged)
 		if cfg.Features.EnableTimeTracking {
 			timeEntries := v1.Group("/time-entries")
@@ -234,12 +199,10 @@ func main() {
 				syncRoutes.GET("/status", syncHandler.GetSyncStatus)
 				syncRoutes.GET("/providers", syncHandler.GetAvailableProviders)
 				syncRoutes.GET("/logs", syncHandler.GetRecentSyncLogs)
-				// Source-based routes (by source name like "gmail", "calendar")
-				syncRoutes.GET("/sources/:source/status", syncHandler.GetSyncState)
-				syncRoutes.POST("/sources/:source/trigger", syncHandler.TriggerSync)
-				// State-based routes (by sync state UUID)
-				syncRoutes.PATCH("/states/:id/enable", syncHandler.EnableSync)
-				syncRoutes.GET("/states/:id/logs", syncHandler.GetSyncLogs)
+				syncRoutes.GET("/:source/status", syncHandler.GetSyncState)
+				syncRoutes.POST("/:source/trigger", syncHandler.TriggerSync)
+				syncRoutes.PATCH("/:id/enable", syncHandler.EnableSync)
+				syncRoutes.GET("/:id/logs", syncHandler.GetSyncLogs)
 			}
 
 			// Identity matching routes
