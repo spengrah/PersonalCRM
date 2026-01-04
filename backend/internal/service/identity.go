@@ -19,6 +19,12 @@ type MatchRequest struct {
 	Source        string
 	SourceID      *string
 	DisplayName   *string
+
+	// KnownContactID allows contact-driven sync sources to skip the matching search.
+	// When set, the identity is directly linked to this contact without searching
+	// the contact_method table. Use this when the sync provider already knows the
+	// contact (e.g., Gmail sync querying for a specific contact's emails).
+	KnownContactID *uuid.UUID
 }
 
 // MatchResult represents the result of a match attempt
@@ -43,6 +49,12 @@ func NewIdentityService(identityRepo *repository.IdentityRepository) *IdentitySe
 
 // MatchOrCreate finds a matching contact or creates an unmatched identity record.
 // This is the main entry point for identity matching during sync operations.
+//
+// Two modes of operation:
+//   - Discovery mode (KnownContactID is nil): Searches contact_method table for matches.
+//     Used by sources like Google Contacts that sync everything and need to find matches.
+//   - Contact-driven mode (KnownContactID is set): Skips search and directly links to the
+//     known contact. Used by sources like Gmail that query for specific contacts' data.
 func (s *IdentityService) MatchOrCreate(ctx context.Context, req MatchRequest) (*MatchResult, error) {
 	// 1. Normalize the identifier
 	normalized := identity.Normalize(req.RawIdentifier, req.Type)
@@ -50,7 +62,12 @@ func (s *IdentityService) MatchOrCreate(ctx context.Context, req MatchRequest) (
 		return nil, fmt.Errorf("empty identifier after normalization")
 	}
 
-	// 2. Check if we already have this identity mapped
+	// 2. Fast path: caller already knows the contact (contact-driven sync)
+	if req.KnownContactID != nil {
+		return s.recordKnownMatch(ctx, normalized, req)
+	}
+
+	// 3. Discovery path: check cache first
 	existing, err := s.identityRepo.GetByIdentifier(ctx, req.Type, normalized, req.Source)
 	if err == nil && existing.ContactID != nil {
 		logger.Debug().
@@ -66,10 +83,10 @@ func (s *IdentityService) MatchOrCreate(ctx context.Context, req MatchRequest) (
 		}, nil
 	}
 
-	// 3. Try to match against contact_method table
+	// 4. Discovery path: search contact_method table for matches
 	contactID, matchType := s.findContactByMethod(ctx, normalized, req.Type)
 
-	// 4. Store/update the identity record
+	// 5. Store/update the identity record
 	now := accelerated.GetCurrentTime()
 	upsertReq := repository.UpsertIdentityRequest{
 		Identifier:     normalized,
@@ -104,6 +121,45 @@ func (s *IdentityService) MatchOrCreate(ctx context.Context, req MatchRequest) (
 		Identity:  ident,
 		ContactID: contactID,
 		MatchType: matchType,
+		Cached:    false,
+	}, nil
+}
+
+// recordKnownMatch handles the fast path for contact-driven sync sources.
+// It records the identity mapping without searching for matches.
+func (s *IdentityService) recordKnownMatch(ctx context.Context, normalized string, req MatchRequest) (*MatchResult, error) {
+	now := accelerated.GetCurrentTime()
+	confidence := 1.0
+
+	upsertReq := repository.UpsertIdentityRequest{
+		Identifier:      normalized,
+		IdentifierType:  req.Type,
+		RawIdentifier:   &req.RawIdentifier,
+		Source:          req.Source,
+		SourceID:        req.SourceID,
+		ContactID:       req.KnownContactID,
+		MatchType:       repository.MatchTypeExact,
+		MatchConfidence: &confidence,
+		DisplayName:     req.DisplayName,
+		LastSeenAt:      &now,
+		MessageCount:    1,
+	}
+
+	ident, err := s.identityRepo.Upsert(ctx, upsertReq)
+	if err != nil {
+		return nil, fmt.Errorf("upsert known identity: %w", err)
+	}
+
+	logger.Debug().
+		Str("identifier", normalized).
+		Str("source", req.Source).
+		Str("contact_id", req.KnownContactID.String()).
+		Msg("recorded known identity match")
+
+	return &MatchResult{
+		Identity:  ident,
+		ContactID: req.KnownContactID,
+		MatchType: repository.MatchTypeExact,
 		Cached:    false,
 	}, nil
 }
