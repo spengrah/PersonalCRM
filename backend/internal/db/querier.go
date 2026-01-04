@@ -12,6 +12,7 @@ import (
 
 type Querier interface {
 	AddContactTag(ctx context.Context, arg AddContactTagParams) error
+	BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error
 	CompleteAutoRemindersForContact(ctx context.Context, contactID pgtype.UUID) error
 	CompleteReminder(ctx context.Context, id pgtype.UUID) (*Reminder, error)
 	CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error)
@@ -19,8 +20,10 @@ type Querier interface {
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContacts(ctx context.Context) (int64, error)
 	CountDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) (int64, error)
+	CountIdentitiesBySource(ctx context.Context, source string) (int64, error)
 	CountReminders(ctx context.Context) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
+	CountUnmatchedIdentities(ctx context.Context) (int64, error)
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
 	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
@@ -32,15 +35,22 @@ type Querier interface {
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)
 	CreateTimeEntry(ctx context.Context, arg CreateTimeEntryParams) (*TimeEntry, error)
 	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
+	DeleteIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) error
+	DeleteIdentity(ctx context.Context, id pgtype.UUID) error
 	DeleteInteraction(ctx context.Context, id pgtype.UUID) error
 	DeleteNote(ctx context.Context, id pgtype.UUID) error
 	DeleteOldSyncLogs(ctx context.Context, createdAt pgtype.Timestamptz) error
 	DeleteSyncState(ctx context.Context, id pgtype.UUID) error
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
 	DeleteTimeEntry(ctx context.Context, id pgtype.UUID) error
+	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
+	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
 	GetContactTags(ctx context.Context, contactID pgtype.UUID) ([]*Tag, error)
+	// External identity queries for cross-platform contact identity matching
+	GetIdentityByID(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
+	GetIdentityByIdentifier(ctx context.Context, arg GetIdentityByIdentifierParams) (*ExternalIdentity, error)
 	// Interaction queries
 	GetInteraction(ctx context.Context, id pgtype.UUID) (*Interaction, error)
 	// Note queries
@@ -58,6 +68,7 @@ type Querier interface {
 	GetTimeEntryStats(ctx context.Context) (*GetTimeEntryStatsRow, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	HardDeleteReminder(ctx context.Context, id pgtype.UUID) error
+	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
 	// Contact method queries
 	ListContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactMethod, error)
@@ -66,6 +77,8 @@ type Querier interface {
 	ListDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) ([]*ListDueRemindersRow, error)
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
+	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
+	ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error)
 	ListRecentInteractions(ctx context.Context, limit int32) ([]*ListRecentInteractionsRow, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
 	ListReminders(ctx context.Context, arg ListRemindersParams) ([]*Reminder, error)
@@ -76,14 +89,17 @@ type Querier interface {
 	ListTimeEntries(ctx context.Context, arg ListTimeEntriesParams) ([]*TimeEntry, error)
 	ListTimeEntriesByContact(ctx context.Context, contactID pgtype.UUID) ([]*TimeEntry, error)
 	ListTimeEntriesByDateRange(ctx context.Context, arg ListTimeEntriesByDateRangeParams) ([]*TimeEntry, error)
+	ListUnmatchedIdentities(ctx context.Context, arg ListUnmatchedIdentitiesParams) ([]*ExternalIdentity, error)
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error)
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteReminder(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteRemindersForContact(ctx context.Context, contactID pgtype.UUID) error
+	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
+	UpdateIdentityMessageCount(ctx context.Context, arg UpdateIdentityMessageCountParams) (*ExternalIdentity, error)
 	UpdateInteraction(ctx context.Context, arg UpdateInteractionParams) (*Interaction, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
 	UpdateReminder(ctx context.Context, arg UpdateReminderParams) (*Reminder, error)
@@ -95,6 +111,7 @@ type Querier interface {
 	UpdateSyncStateSuccess(ctx context.Context, arg UpdateSyncStateSuccessParams) (*ExternalSyncState, error)
 	UpdateTag(ctx context.Context, arg UpdateTagParams) (*Tag, error)
 	UpdateTimeEntry(ctx context.Context, arg UpdateTimeEntryParams) (*TimeEntry, error)
+	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
 }
 
 var _ Querier = (*Queries)(nil)

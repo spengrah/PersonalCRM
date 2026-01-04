@@ -18,3 +18,11 @@ INSERT INTO contact_method (
 -- name: DeleteContactMethodsByContact :exec
 DELETE FROM contact_method
 WHERE contact_id = $1;
+
+-- name: FindMethodsByNormalizedValue :many
+SELECT cm.*, c.full_name as contact_name
+FROM contact_method cm
+JOIN contact c ON c.id = cm.contact_id
+WHERE cm.type = ANY($1::text[])
+  AND LOWER(TRIM(cm.value)) = $2
+  AND c.deleted_at IS NULL;
