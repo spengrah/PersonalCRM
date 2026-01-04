@@ -2,10 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Must use vi.hoisted for variables used in vi.mock
 const mockInvalidateQueries = vi.hoisted(() => vi.fn())
+const mockGetQueryCache = vi.hoisted(() =>
+  vi.fn(() => ({
+    getAll: () => [],
+  }))
+)
 
 vi.mock('../query-client', () => ({
   queryClient: {
     invalidateQueries: mockInvalidateQueries,
+    getQueryCache: mockGetQueryCache,
   },
 }))
 
