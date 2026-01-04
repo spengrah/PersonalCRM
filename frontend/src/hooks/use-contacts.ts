@@ -28,8 +28,12 @@ export function useContact(id: string) {
 export function useOverdueContacts() {
   return useQuery({
     queryKey: contactKeys.overdue(),
-    queryFn: () => contactsApi.getOverdueContacts(),
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    queryFn: () => {
+      console.log('🔄 useOverdueContacts: fetching overdue contacts...')
+      return contactsApi.getOverdueContacts()
+    },
+    staleTime: 1000 * 60 * 2, // 2 minutes
+    refetchInterval: 1000 * 60 * 2, // Refetch every 2 minutes to keep dashboard fresh
     refetchOnWindowFocus: true,
   })
 }
@@ -76,10 +80,17 @@ export function useUpdateLastContacted() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (id: string) => contactsApi.updateLastContacted(id),
+    mutationFn: (id: string) => {
+      console.log('🔄 useUpdateLastContacted: mutationFn called with id:', id)
+      return contactsApi.updateLastContacted(id)
+    },
     onSuccess: updatedContact => {
+      console.log('✅ useUpdateLastContacted: onSuccess called with:', updatedContact)
       queryClient.setQueryData(contactKeys.detail(updatedContact.id), updatedContact)
       invalidateFor('contact:touched')
+    },
+    onError: error => {
+      console.error('❌ useUpdateLastContacted: onError:', error)
     },
   })
 }
