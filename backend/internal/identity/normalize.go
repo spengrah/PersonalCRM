@@ -23,10 +23,11 @@ const (
 type ContactMethodType string
 
 const (
-	ContactMethodTypeEmail    ContactMethodType = "email"
-	ContactMethodTypePhone    ContactMethodType = "phone"
-	ContactMethodTypeTelegram ContactMethodType = "telegram"
-	ContactMethodTypeWhatsApp ContactMethodType = "whatsapp"
+	ContactMethodTypeEmailPersonal ContactMethodType = "email_personal"
+	ContactMethodTypeEmailWork     ContactMethodType = "email_work"
+	ContactMethodTypePhone         ContactMethodType = "phone"
+	ContactMethodTypeTelegram      ContactMethodType = "telegram"
+	ContactMethodTypeWhatsApp      ContactMethodType = "whatsapp"
 )
 
 // nonDigitRegex matches any non-digit character
@@ -103,16 +104,17 @@ func normalizeTelegram(handle string) string {
 
 // MapIdentifierTypeToContactMethodTypes maps an external identifier type
 // to the corresponding contact method types for matching.
+// For email identifiers, we search both email_personal and email_work.
 func MapIdentifierTypeToContactMethodTypes(idType IdentifierType) []ContactMethodType {
 	switch idType {
 	case IdentifierTypeEmail:
-		return []ContactMethodType{ContactMethodTypeEmail}
+		return []ContactMethodType{ContactMethodTypeEmailPersonal, ContactMethodTypeEmailWork}
 	case IdentifierTypePhone:
 		return []ContactMethodType{ContactMethodTypePhone}
 	case IdentifierTypeTelegram:
 		return []ContactMethodType{ContactMethodTypeTelegram}
 	case IdentifierTypeIMessageEmail:
-		return []ContactMethodType{ContactMethodTypeEmail}
+		return []ContactMethodType{ContactMethodTypeEmailPersonal, ContactMethodTypeEmailWork}
 	case IdentifierTypeIMessagePhone:
 		return []ContactMethodType{ContactMethodTypePhone}
 	case IdentifierTypeWhatsApp:

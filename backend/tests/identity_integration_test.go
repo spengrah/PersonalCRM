@@ -352,7 +352,7 @@ func TestIdentityService_Integration(t *testing.T) {
 		// Add contact method
 		_, err = methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
-			Type:      "email",
+			Type:      string(repository.ContactMethodEmailPersonal),
 			Value:     "discovery.match@example.com",
 			IsPrimary: true,
 		})
@@ -390,7 +390,7 @@ func TestIdentityService_Integration(t *testing.T) {
 		// Add contact method
 		_, err = methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
-			Type:      "email",
+			Type:      string(repository.ContactMethodEmailPersonal),
 			Value:     "cache.test@example.com",
 			IsPrimary: true,
 		})

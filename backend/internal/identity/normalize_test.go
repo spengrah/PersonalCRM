@@ -186,9 +186,9 @@ func TestMapIdentifierTypeToContactMethodTypes(t *testing.T) {
 		expected []ContactMethodType
 	}{
 		{
-			name:     "email",
+			name:     "email maps to both email_personal and email_work",
 			idType:   IdentifierTypeEmail,
-			expected: []ContactMethodType{ContactMethodTypeEmail},
+			expected: []ContactMethodType{ContactMethodTypeEmailPersonal, ContactMethodTypeEmailWork},
 		},
 		{
 			name:     "phone",
@@ -201,9 +201,9 @@ func TestMapIdentifierTypeToContactMethodTypes(t *testing.T) {
 			expected: []ContactMethodType{ContactMethodTypeTelegram},
 		},
 		{
-			name:     "imessage email",
+			name:     "imessage email maps to both email types",
 			idType:   IdentifierTypeIMessageEmail,
-			expected: []ContactMethodType{ContactMethodTypeEmail},
+			expected: []ContactMethodType{ContactMethodTypeEmailPersonal, ContactMethodTypeEmailWork},
 		},
 		{
 			name:     "imessage phone",
