@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write  # Needed for inline review comments via gh api
       issues: read
       id-token: write
 
@@ -30,7 +30,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0  # Need full history for commit comparison
 
       - name: Run Claude Code Review
         id: claude-review
@@ -40,19 +40,51 @@ jobs:
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
+            EVENT: ${{ github.event.action }}
 
-            Please review this pull request and provide feedback on:
+            ${{ github.event.action == 'opened' && '## NEW PR - Full Review
+
+            This is a newly opened pull request. Please conduct a comprehensive review of all changes.' || '## INCREMENTAL REVIEW - New Commits Only
+
+            New commits were pushed to this PR. Focus your review ONLY on the incremental changes.
+
+            Use `git diff ${{ github.event.before }}..${{ github.event.after }}` to see what changed in this push.
+
+            IMPORTANT: First check for previous review comments using `gh pr view ${{ github.event.pull_request.number }} --comments`. If you previously left a review, reference it in your new comment (e.g., "Following up on my previous review..." or "Addressing the changes since my last review...")' }}
+
+            ## Review Guidelines
+
+            Please review for:
             - Code quality and best practices
             - Potential bugs or issues
             - Performance considerations
             - Security concerns
             - Test coverage
 
-            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
+            Use the repository's CLAUDE.md for guidance on style and conventions.
 
-            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
+            ## How to Leave Comments
+
+            You have two options:
+
+            ### Option 1: Inline Review Comments (Preferred)
+            Use `gh api` to create inline comments on specific lines:
+
+            ```bash
+            gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+              -f event=COMMENT \
+              -f body="Overall review summary" \
+              -f 'comments[][path]=path/to/file.go' \
+              -f 'comments[][line]=42' \
+              -f 'comments[][body]=Specific feedback for this line'
+            ```
+
+            ### Option 2: General PR Comment
+            Use `gh pr comment ${{ github.event.pull_request.number }} -b "Your review"` for general feedback.
+
+            Choose inline comments when you can point to specific lines. Use general comments for architectural or high-level feedback.
 
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
+          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*)"'
 
