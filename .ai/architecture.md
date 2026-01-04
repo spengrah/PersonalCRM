@@ -419,6 +419,75 @@ max_connections = 20
 
 ---
 
+## External Sync Architecture
+
+### Overview
+
+External sync connects the CRM to external data sources (Gmail, iMessage, Google Calendar, Google Contacts, etc.) to:
+- Automatically update `last_contacted` when you communicate with contacts
+- Track interactions across platforms
+- Import contact data from external sources
+
+### Two Sync Strategies
+
+**Contact-Driven Sync (Gmail, iMessage, Calendar):**
+- Query external sources only for known CRM contacts
+- Avoids noise from spam, newsletters, unknown senders
+- Sync provider passes `KnownContactID` to skip identity search
+
+**Discovery Sync (Google Contacts, iCloud Contacts):**
+- Fetch all data from external source
+- Use identity matching to find CRM contact matches
+- Surface unmatched entries for manual review/import
+
+### Identity Matching System
+
+Connects external identifiers (emails, phones, handles) to CRM contacts:
+
+```
+External Identifier → Normalize → Search/Cache → Match Result
+     │                    │            │              │
+     │                    │            │              └─ ContactID (or nil)
+     │                    │            └─ external_identity table
+     │                    └─ E.164 phones, lowercase emails
+     └─ "John Doe <john@example.com>"
+```
+
+**Key Design Decisions:**
+
+1. **Normalization first:** All identifiers normalized before matching (E.164 for phones, lowercase for emails)
+
+2. **Cache in database:** `external_identity` table caches matches for O(1) subsequent lookups
+
+3. **Two modes:**
+   - `KnownContactID` set → Skip search, just record mapping (contact-driven)
+   - `KnownContactID` nil → Search `contact_method` table (discovery)
+
+4. **Unmatched review:** Identities without matches stored for manual linking via API
+
+**Files:**
+- `backend/internal/identity/normalize.go` — Normalization logic
+- `backend/internal/service/identity.go` — Matching service
+- `backend/internal/repository/identity.go` — Data access
+- `backend/migrations/012_external_identity.up.sql` — Schema
+
+**Full documentation:** See `docs/IDENTITY_MATCHING.md`
+
+### Sync Provider Interface
+
+All sync providers implement:
+
+```go
+type SyncProvider interface {
+    Name() string
+    Sync(ctx context.Context, state *SyncState) (*SyncResult, error)
+}
+```
+
+Providers are registered with the sync service and can be triggered via API or scheduler.
+
+---
+
 ## AI/LLM Architecture (Future)
 
 ### Hybrid Compute Model
