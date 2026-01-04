@@ -3,12 +3,24 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+    paths:
+      # Backend Go code (business logic)
+      - "backend/internal/**/*.go"
+      - "backend/cmd/**/*.go"
+      # Frontend TypeScript/React
+      - "frontend/src/**/*.ts"
+      - "frontend/src/**/*.tsx"
+    paths-ignore:
+      # Generated files
+      - "backend/internal/db/*.sql.go"
+      - "backend/docs/docs.go"
+      # Documentation
+      - "docs/**"
+      - "**/*.md"
+      # Infrastructure & scripts
+      - ".github/**"
+      - "infra/**"
+      - "scripts/**"
 
 jobs:
   claude-review:
