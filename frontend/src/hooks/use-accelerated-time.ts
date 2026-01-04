@@ -27,7 +27,8 @@ export function useAcceleratedTime() {
   } = useQuery({
     queryKey: systemKeys.time(),
     queryFn: systemApi.getSystemTime,
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    staleTime: 1000 * 25, // 25 seconds
+    refetchInterval: 1000 * 30, // Refetch every 30 seconds to keep accelerated time in sync
     refetchOnWindowFocus: true,
   })
 
