@@ -10,17 +10,6 @@ on:
       # Frontend TypeScript/React
       - "frontend/src/**/*.ts"
       - "frontend/src/**/*.tsx"
-    paths-ignore:
-      # Generated files
-      - "backend/internal/db/*.sql.go"
-      - "backend/docs/docs.go"
-      # Documentation
-      - "docs/**"
-      - "**/*.md"
-      # Infrastructure & scripts
-      - ".github/**"
-      - "infra/**"
-      - "scripts/**"
 
 jobs:
   claude-review:
