@@ -21,6 +21,8 @@ type Querier interface {
 	CountContacts(ctx context.Context) (int64, error)
 	CountDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) (int64, error)
 	CountIdentitiesBySource(ctx context.Context, source string) (int64, error)
+	// Count OAuth credentials for a provider
+	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	CountReminders(ctx context.Context) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
@@ -39,6 +41,10 @@ type Querier interface {
 	DeleteIdentity(ctx context.Context, id pgtype.UUID) error
 	DeleteInteraction(ctx context.Context, id pgtype.UUID) error
 	DeleteNote(ctx context.Context, id pgtype.UUID) error
+	// Delete an OAuth credential by ID
+	DeleteOAuthCredential(ctx context.Context, id pgtype.UUID) error
+	// Delete all OAuth credentials for a provider
+	DeleteOAuthCredentialByProvider(ctx context.Context, provider string) error
 	DeleteOldSyncLogs(ctx context.Context, createdAt pgtype.Timestamptz) error
 	DeleteSyncState(ctx context.Context, id pgtype.UUID) error
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
@@ -55,6 +61,13 @@ type Querier interface {
 	GetInteraction(ctx context.Context, id pgtype.UUID) (*Interaction, error)
 	// Note queries
 	GetNote(ctx context.Context, id pgtype.UUID) (*Note, error)
+	// OAuth Credential Queries
+	// Get a specific OAuth credential by provider and account ID
+	GetOAuthCredential(ctx context.Context, arg GetOAuthCredentialParams) (*OauthCredential, error)
+	// Get a specific OAuth credential by UUID
+	GetOAuthCredentialByID(ctx context.Context, id pgtype.UUID) (*OauthCredential, error)
+	// Get non-sensitive credential info for display
+	GetOAuthCredentialStatus(ctx context.Context, id pgtype.UUID) (*GetOAuthCredentialStatusRow, error)
 	GetReminder(ctx context.Context, id pgtype.UUID) (*Reminder, error)
 	GetRunningTimeEntry(ctx context.Context) (*TimeEntry, error)
 	GetSyncLog(ctx context.Context, id pgtype.UUID) (*ExternalSyncLog, error)
@@ -69,6 +82,8 @@ type Querier interface {
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	HardDeleteReminder(ctx context.Context, id pgtype.UUID) error
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
+	// List all OAuth credentials
+	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
 	// Contact method queries
 	ListContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactMethod, error)
@@ -79,6 +94,10 @@ type Querier interface {
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
 	ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error)
+	// List non-sensitive credential info for all credentials of a provider
+	ListOAuthCredentialStatuses(ctx context.Context, provider string) ([]*ListOAuthCredentialStatusesRow, error)
+	// List all OAuth credentials for a provider
+	ListOAuthCredentials(ctx context.Context, provider string) ([]*OauthCredential, error)
 	ListRecentInteractions(ctx context.Context, limit int32) ([]*ListRecentInteractionsRow, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
 	ListReminders(ctx context.Context, arg ListRemindersParams) ([]*Reminder, error)
@@ -102,6 +121,8 @@ type Querier interface {
 	UpdateIdentityMessageCount(ctx context.Context, arg UpdateIdentityMessageCountParams) (*ExternalIdentity, error)
 	UpdateInteraction(ctx context.Context, arg UpdateInteractionParams) (*Interaction, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
+	// Update only the token data (for token refresh)
+	UpdateOAuthCredentialTokens(ctx context.Context, arg UpdateOAuthCredentialTokensParams) (*OauthCredential, error)
 	UpdateReminder(ctx context.Context, arg UpdateReminderParams) (*Reminder, error)
 	UpdateSyncStateCursor(ctx context.Context, arg UpdateSyncStateCursorParams) error
 	UpdateSyncStateEnabled(ctx context.Context, arg UpdateSyncStateEnabledParams) (*ExternalSyncState, error)
@@ -112,6 +133,8 @@ type Querier interface {
 	UpdateTag(ctx context.Context, arg UpdateTagParams) (*Tag, error)
 	UpdateTimeEntry(ctx context.Context, arg UpdateTimeEntryParams) (*TimeEntry, error)
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
+	// Insert or update an OAuth credential
+	UpsertOAuthCredential(ctx context.Context, arg UpsertOAuthCredentialParams) (*OauthCredential, error)
 }
 
 var _ Querier = (*Queries)(nil)

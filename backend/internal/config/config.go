@@ -17,6 +17,7 @@ type Config struct {
 	Features FeatureFlags
 	Runtime  RuntimeConfig
 	External ExternalConfig
+	Google   GoogleConfig
 }
 
 // DatabaseConfig holds database connection settings
@@ -69,13 +70,21 @@ type RuntimeConfig struct {
 
 // ExternalConfig holds external service credentials
 type ExternalConfig struct {
-	SessionSecret    string // Required in production
-	AnthropicAPIKey  string // Optional (future use)
-	TelegramBotToken string // Optional (if EnableTelegramBot)
-	APIKey           string // Required in production (API authentication)
-	BackupPath       string // Optional
-	HomeServerHost   string // Optional
-	HomeServerUser   string // Optional
+	SessionSecret      string // Required in production
+	AnthropicAPIKey    string // Optional (future use)
+	TelegramBotToken   string // Optional (if EnableTelegramBot)
+	APIKey             string // Required in production (API authentication)
+	BackupPath         string // Optional
+	HomeServerHost     string // Optional
+	HomeServerUser     string // Optional
+	TokenEncryptionKey string // Required for OAuth token encryption (32-byte hex)
+}
+
+// GoogleConfig holds Google OAuth2 configuration
+type GoogleConfig struct {
+	ClientID     string // GOOGLE_CLIENT_ID
+	ClientSecret string // GOOGLE_CLIENT_SECRET
+	RedirectURL  string // GOOGLE_REDIRECT_URL (default: http://localhost:8080/api/v1/auth/google/callback)
 }
 
 // ValidationError represents a configuration validation error
@@ -160,13 +169,19 @@ func Load() (*Config, error) {
 			TimeBase:         getEnv("TIME_BASE", ""),
 		},
 		External: ExternalConfig{
-			SessionSecret:    getEnv("SESSION_SECRET", ""),
-			AnthropicAPIKey:  getEnv("ANTHROPIC_API_KEY", ""),
-			TelegramBotToken: getEnv("TELEGRAM_BOT_TOKEN", ""),
-			APIKey:           getEnv("API_KEY", ""),
-			BackupPath:       getEnv("BACKUP_PATH", ""),
-			HomeServerHost:   getEnv("HOME_SERVER_HOST", ""),
-			HomeServerUser:   getEnv("HOME_SERVER_USER", ""),
+			SessionSecret:      getEnv("SESSION_SECRET", ""),
+			AnthropicAPIKey:    getEnv("ANTHROPIC_API_KEY", ""),
+			TelegramBotToken:   getEnv("TELEGRAM_BOT_TOKEN", ""),
+			APIKey:             getEnv("API_KEY", ""),
+			BackupPath:         getEnv("BACKUP_PATH", ""),
+			HomeServerHost:     getEnv("HOME_SERVER_HOST", ""),
+			HomeServerUser:     getEnv("HOME_SERVER_USER", ""),
+			TokenEncryptionKey: getEnv("TOKEN_ENCRYPTION_KEY", ""),
+		},
+		Google: GoogleConfig{
+			ClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
+			ClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
+			RedirectURL:  getEnv("GOOGLE_REDIRECT_URL", "http://localhost:8080/api/v1/auth/google/callback"),
 		},
 	}
 
@@ -372,7 +387,13 @@ func TestConfig() *Config {
 			TimeBase:         "",
 		},
 		External: ExternalConfig{
-			SessionSecret: "test-secret",
+			SessionSecret:      "test-secret",
+			TokenEncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		},
+		Google: GoogleConfig{
+			ClientID:     "test-client-id",
+			ClientSecret: "test-client-secret",
+			RedirectURL:  "http://localhost:8080/api/v1/auth/google/callback",
 		},
 	}
 }
