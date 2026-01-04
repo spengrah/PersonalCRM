@@ -52,39 +52,85 @@ jobs:
 
             IMPORTANT: First check for previous review comments using `gh pr view ${{ github.event.pull_request.number }} --comments`. If you previously left a review, reference it in your new comment (e.g., "Following up on my previous review..." or "Addressing the changes since my last review...")' }}
 
-            ## Review Guidelines
+            ## Review Philosophy: STRICT MODE
 
-            Please review for:
-            - Code quality and best practices
-            - Potential bugs or issues
-            - Performance considerations
-            - Security concerns
-            - Test coverage
+            **"If Claude Code can fix it, don't merge it."**
 
-            Use the repository's CLAUDE.md for guidance on style and conventions.
+            Since implementation cost is low with Claude Code, maintain a HIGH bar for approval.
+            Request changes for anything that could be improved.
 
-            ## How to Leave Comments
+            ## Approval Criteria (ALL must be true)
 
-            You have two options:
+            AUTO-APPROVE only if the code meets ALL of these criteria:
+            ✓ No security concerns (SQL injection, XSS, auth issues, secrets, etc.)
+            ✓ No bugs or unhandled edge cases
+            ✓ Comprehensive test coverage for new/changed code
+            ✓ Clear, well-documented code (comments where needed)
+            ✓ Follows repository conventions (check @.ai/rules.md, @CLAUDE.md)
+            ✓ Proper error handling and validation
+            ✓ Good performance (no obvious inefficiencies)
+            ✓ No TODOs or technical debt introduced
+            ✓ No code style inconsistencies
 
-            ### Option 1: Inline Review Comments (Preferred)
-            Use `gh api` to create inline comments on specific lines:
+            ## Request Changes (DEFAULT)
 
+            REQUEST CHANGES if ANY of these apply:
+            - Security concerns (even potential/minor ones)
+            - Bugs, race conditions, or edge cases not handled
+            - Missing or insufficient tests
+            - Unclear code needing comments/documentation
+            - Doesn't follow repo conventions or best practices
+            - Performance concerns or inefficiencies
+            - Poor/missing error handling or validation
+            - Code style inconsistencies
+            - Opportunities for refactoring
+            - TODOs or unfinished work
+            - Missing documentation
+
+            Use the repository's CLAUDE.md and .ai/rules.md for guidance on conventions.
+
+            ## How to Submit Review
+
+            After reviewing, you MUST submit an actual GitHub review (not just a comment):
+
+            ### If Code is Excellent (rare):
             ```bash
-            gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
-              -f event=COMMENT \
-              -f body="Overall review summary" \
-              -f 'comments[][path]=path/to/file.go' \
-              -f 'comments[][line]=42' \
-              -f 'comments[][body]=Specific feedback for this line'
+            gh pr review ${{ github.event.pull_request.number }} --approve -b "✅ LGTM - Code meets all quality criteria:
+            - Security: No concerns
+            - Tests: Comprehensive coverage
+            - Documentation: Clear and complete
+            - Performance: Efficient implementation
+            - Conventions: Follows repo standards"
             ```
 
-            ### Option 2: General PR Comment
-            Use `gh pr comment ${{ github.event.pull_request.number }} -b "Your review"` for general feedback.
+            ### If Any Issues Found (default):
+            ```bash
+            gh pr review ${{ github.event.pull_request.number }} --request-changes -b "Found issues that should be addressed:
 
-            Choose inline comments when you can point to specific lines. Use general comments for architectural or high-level feedback.
+            **Security:**
+            - [List any security concerns]
+
+            **Code Quality:**
+            - [List bugs, edge cases, refactoring needs]
+
+            **Testing:**
+            - [List missing or insufficient tests]
+
+            **Documentation:**
+            - [List unclear code or missing docs]
+
+            **Performance:**
+            - [List inefficiencies]
+
+            **Style/Conventions:**
+            - [List style issues or convention violations]
+
+            Since these can be quickly fixed with Claude Code, please address before merging."
+            ```
+
+            IMPORTANT: You can also add inline comments using gh api for specific line-by-line feedback, but you MUST also submit a final review with --approve or --request-changes.
 
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*)"'
+          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr review:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*)"'
 
