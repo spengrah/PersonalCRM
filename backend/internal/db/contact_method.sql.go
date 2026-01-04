@@ -59,6 +59,60 @@ func (q *Queries) DeleteContactMethodsByContact(ctx context.Context, contactID p
 	return err
 }
 
+const FindMethodsByNormalizedValue = `-- name: FindMethodsByNormalizedValue :many
+SELECT cm.id, cm.contact_id, cm.type, cm.value, cm.is_primary, cm.created_at, cm.updated_at, c.full_name as contact_name
+FROM contact_method cm
+JOIN contact c ON c.id = cm.contact_id
+WHERE cm.type = ANY($1::text[])
+  AND LOWER(TRIM(cm.value)) = $2
+  AND c.deleted_at IS NULL
+`
+
+type FindMethodsByNormalizedValueParams struct {
+	Column1 []string `json:"column_1"`
+	Value   string   `json:"value"`
+}
+
+type FindMethodsByNormalizedValueRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	ContactID   pgtype.UUID        `json:"contact_id"`
+	Type        string             `json:"type"`
+	Value       string             `json:"value"`
+	IsPrimary   pgtype.Bool        `json:"is_primary"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ContactName string             `json:"contact_name"`
+}
+
+func (q *Queries) FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error) {
+	rows, err := q.db.Query(ctx, FindMethodsByNormalizedValue, arg.Column1, arg.Value)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*FindMethodsByNormalizedValueRow{}
+	for rows.Next() {
+		var i FindMethodsByNormalizedValueRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ContactID,
+			&i.Type,
+			&i.Value,
+			&i.IsPrimary,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ContactName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListContactMethodsByContact = `-- name: ListContactMethodsByContact :many
 
 SELECT id, contact_id, type, value, is_primary, created_at, updated_at FROM contact_method

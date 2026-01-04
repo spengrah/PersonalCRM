@@ -94,9 +94,11 @@ func main() {
 	// Initialize external sync components (feature-flagged)
 	var syncService *service.SyncService
 	var syncHandler *handlers.SyncHandler
+	var identityHandler *handlers.IdentityHandler
 
 	if cfg.Features.EnableExternalSync {
 		syncRepo := repository.NewSyncRepository(database.Queries)
+		identityRepo := repository.NewIdentityRepository(database.Queries)
 		providerRegistry := sync.NewProviderRegistry()
 
 		// Register sync providers here (will be done in future issues)
@@ -104,7 +106,10 @@ func main() {
 		// providerRegistry.Register(imessage.NewProvider(...))
 
 		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
+		identityService := service.NewIdentityService(identityRepo)
+
 		syncHandler = handlers.NewSyncHandler(syncService)
+		identityHandler = handlers.NewIdentityHandler(identityService)
 
 		logger.Info().Msg("external sync infrastructure enabled")
 	}
@@ -199,6 +204,19 @@ func main() {
 				syncRoutes.PATCH("/:id/enable", syncHandler.EnableSync)
 				syncRoutes.GET("/:id/logs", syncHandler.GetSyncLogs)
 			}
+
+			// Identity matching routes
+			identities := v1.Group("/identities")
+			{
+				identities.GET("/unmatched", identityHandler.ListUnmatchedIdentities)
+				identities.GET("/:id", identityHandler.GetIdentity)
+				identities.POST("/:id/link", identityHandler.LinkIdentity)
+				identities.POST("/:id/unlink", identityHandler.UnlinkIdentity)
+				identities.DELETE("/:id", identityHandler.DeleteIdentity)
+			}
+
+			// Add identity route to contacts
+			contacts.GET("/:id/identities", identityHandler.ListIdentitiesForContact)
 		}
 
 		// Export/Import routes

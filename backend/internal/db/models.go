@@ -56,6 +56,23 @@ type ContactTag struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type ExternalIdentity struct {
+	ID              pgtype.UUID        `json:"id"`
+	Identifier      string             `json:"identifier"`
+	IdentifierType  string             `json:"identifier_type"`
+	RawIdentifier   pgtype.Text        `json:"raw_identifier"`
+	Source          string             `json:"source"`
+	SourceID        pgtype.Text        `json:"source_id"`
+	ContactID       pgtype.UUID        `json:"contact_id"`
+	MatchType       pgtype.Text        `json:"match_type"`
+	MatchConfidence pgtype.Float8      `json:"match_confidence"`
+	DisplayName     pgtype.Text        `json:"display_name"`
+	LastSeenAt      pgtype.Timestamptz `json:"last_seen_at"`
+	MessageCount    pgtype.Int4        `json:"message_count"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ExternalSyncLog struct {
 	ID             pgtype.UUID        `json:"id"`
 	SyncStateID    pgtype.UUID        `json:"sync_state_id"`
