@@ -103,7 +103,7 @@ PostgreSQL
 
 **Trade-off:**
 - More verbose (write SQL manually)
-- Need to run `sqlc generate` after SQL changes
+- Need to run `make sqlc` after SQL changes
 - But: Know exactly what queries run, when
 
 ### Frontend: Next.js 15 + React 19

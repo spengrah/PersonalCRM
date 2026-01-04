@@ -186,8 +186,7 @@ WHERE id = $1 AND deleted_at IS NULL;
 
 **Then regenerate sqlc code:**
 ```bash
-cd backend
-sqlc generate
+make sqlc
 ```
 
 ---
