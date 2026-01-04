@@ -487,13 +487,13 @@ go test -v -run TestSpecificTest
 
 ```bash
 # Headed mode (see browser)
-npm test -- --headed
+cd frontend && bunx playwright test --headed
 
 # Debug mode (pause on failure)
-npm test -- --debug
+cd frontend && bunx playwright test --debug
 
 # Trace viewer (after failure)
-npx playwright show-trace trace.zip
+cd frontend && bunx playwright show-trace trace.zip
 ```
 
 ## Resources
