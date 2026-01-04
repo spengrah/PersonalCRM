@@ -137,6 +137,21 @@ type NoteEmbedding struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type OauthCredential struct {
+	ID                    pgtype.UUID        `json:"id"`
+	Provider              string             `json:"provider"`
+	AccountID             string             `json:"account_id"`
+	AccountName           pgtype.Text        `json:"account_name"`
+	AccessTokenEncrypted  []byte             `json:"access_token_encrypted"`
+	RefreshTokenEncrypted []byte             `json:"refresh_token_encrypted"`
+	EncryptionNonce       []byte             `json:"encryption_nonce"`
+	TokenType             pgtype.Text        `json:"token_type"`
+	ExpiresAt             pgtype.Timestamptz `json:"expires_at"`
+	Scopes                []string           `json:"scopes"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
 type PromptQuery struct {
 	ID          pgtype.UUID        `json:"id"`
 	Query       string             `json:"query"`
