@@ -20,9 +20,9 @@ export function useTodayReminders() {
   return useQuery({
     queryKey: reminderKeys.list({ due_today: true }),
     queryFn: () => remindersApi.getReminders({ due_today: true }),
-    staleTime: 1000 * 60 * 1, // 1 minute for today's reminders
-    refetchInterval: 1000 * 60 * 2, // Refetch every 2 minutes
+    staleTime: 1000 * 60 * 5, // 5 minutes
     refetchOnWindowFocus: true,
+    // No refetchInterval needed - invalidation handles updates after mutations
   })
 }
 
@@ -40,9 +40,9 @@ export function useReminderStats() {
   return useQuery({
     queryKey: reminderKeys.stats(),
     queryFn: () => remindersApi.getStats(),
-    staleTime: 1000 * 60 * 2, // 2 minutes
-    refetchInterval: 1000 * 60 * 2, // Refetch every 2 minutes
+    staleTime: 1000 * 60 * 5, // 5 minutes
     refetchOnWindowFocus: true,
+    // No refetchInterval needed - invalidation handles updates after mutations
   })
 }
 

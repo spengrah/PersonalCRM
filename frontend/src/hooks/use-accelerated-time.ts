@@ -27,8 +27,13 @@ export function useAcceleratedTime() {
   } = useQuery({
     queryKey: systemKeys.time(),
     queryFn: systemApi.getSystemTime,
-    staleTime: 1000 * 25, // 25 seconds
-    refetchInterval: 1000 * 30, // Refetch every 30 seconds to keep accelerated time in sync
+    staleTime: 1000 * 60 * 5, // 5 minutes when not accelerated
+    // Only poll when time is accelerated (for dev/testing)
+    // In production on Pi, time won't be accelerated, so no polling
+    refetchInterval: query => {
+      const data = query.state.data
+      return data?.is_accelerated ? 1000 * 30 : false // 30s when accelerated, never otherwise
+    },
     refetchOnWindowFocus: true,
   })
 

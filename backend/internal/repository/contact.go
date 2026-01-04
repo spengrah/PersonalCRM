@@ -177,7 +177,7 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 		Birthday:      timeToPgDate(req.Birthday),
 		HowMet:        stringToPgText(req.HowMet),
 		Cadence:       stringToPgText(req.Cadence),
-		LastContacted: timeToPgDate(req.LastContacted),
+		LastContacted: timeToPgTimestamptz(req.LastContacted),
 		ProfilePhoto:  stringToPgText(req.ProfilePhoto),
 		CreatedAt:     pgtype.Timestamptz{Time: createdAt, Valid: true},
 	})
@@ -212,7 +212,7 @@ func (r *ContactRepository) UpdateContact(ctx context.Context, id uuid.UUID, req
 func (r *ContactRepository) UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted time.Time) error {
 	return r.queries.UpdateContactLastContacted(ctx, db.UpdateContactLastContactedParams{
 		ID:            uuidToPgUUID(id),
-		LastContacted: pgtype.Date{Time: lastContacted, Valid: true},
+		LastContacted: pgtype.Timestamptz{Time: lastContacted, Valid: true},
 	})
 }
 

@@ -27,10 +27,8 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
   const methods = [primary, secondary].filter((method): method is ContactMethod => Boolean(method))
 
   const handleMarkContacted = async () => {
-    console.log('🖱️ handleMarkContacted clicked for contact:', contact.id, contact.full_name)
     try {
       await updateLastContactedMutation.mutateAsync(contact.id)
-      console.log('✅ handleMarkContacted completed successfully')
     } catch (error) {
       console.error('Error marking as contacted:', error)
     }

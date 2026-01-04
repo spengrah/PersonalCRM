@@ -36,7 +36,7 @@ type CreateContactParams struct {
 	Birthday      pgtype.Date        `json:"birthday"`
 	HowMet        pgtype.Text        `json:"how_met"`
 	Cadence       pgtype.Text        `json:"cadence"`
-	LastContacted pgtype.Date        `json:"last_contacted"`
+	LastContacted pgtype.Timestamptz `json:"last_contacted"`
 	ProfilePhoto  pgtype.Text        `json:"profile_photo"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
@@ -271,8 +271,8 @@ WHERE id = $1 AND deleted_at IS NULL
 `
 
 type UpdateContactLastContactedParams struct {
-	ID            pgtype.UUID `json:"id"`
-	LastContacted pgtype.Date `json:"last_contacted"`
+	ID            pgtype.UUID        `json:"id"`
+	LastContacted pgtype.Timestamptz `json:"last_contacted"`
 }
 
 func (q *Queries) UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error {

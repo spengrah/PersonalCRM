@@ -79,21 +79,10 @@ const invalidationRules: Record<DomainEvent, readonly unknown[][]> = {
  * ```
  */
 export function invalidateFor(event: DomainEvent): void {
-  console.log(`🔄 invalidateFor called with event: ${event}`)
   const keys = invalidationRules[event]
-  console.log(`🔑 Invalidating ${keys.length} query keys:`, JSON.stringify(keys))
   keys.forEach(queryKey => {
-    console.log(`  → Invalidating:`, JSON.stringify(queryKey))
-    const result = queryClient.invalidateQueries({ queryKey })
-    console.log(`  → Invalidation result (promise):`, result)
+    queryClient.invalidateQueries({ queryKey })
   })
-  console.log(`✅ Invalidation complete for: ${event}`)
-  // Log current query cache state
-  const cache = queryClient.getQueryCache().getAll()
-  console.log(
-    `📊 Current cache state (${cache.length} queries):`,
-    cache.map(q => ({ key: q.queryKey, state: q.state.status }))
-  )
 }
 
 // Re-export keys for convenience (avoids needing two imports)

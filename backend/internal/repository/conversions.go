@@ -24,3 +24,10 @@ func timeToPgDate(t *time.Time) pgtype.Date {
 	}
 	return pgtype.Date{Time: *t, Valid: true}
 }
+
+func timeToPgTimestamptz(t *time.Time) pgtype.Timestamptz {
+	if t == nil {
+		return pgtype.Timestamptz{Valid: false}
+	}
+	return pgtype.Timestamptz{Time: *t, Valid: true}
+}
