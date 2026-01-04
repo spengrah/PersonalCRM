@@ -8,27 +8,20 @@ import {
   deleteTimeEntry,
   getTimeEntryStats,
 } from '@/lib/time-entries-api'
+import { timeEntryKeys, invalidateFor } from '@/lib/query-invalidation'
 import type {
   CreateTimeEntryRequest,
   UpdateTimeEntryRequest,
   ListTimeEntriesParams,
 } from '@/types/time-entry'
 
-// Query keys
-export const timeEntryKeys = {
-  all: ['time-entries'] as const,
-  lists: () => [...timeEntryKeys.all, 'list'] as const,
-  list: (params?: ListTimeEntriesParams) => [...timeEntryKeys.lists(), params] as const,
-  details: () => [...timeEntryKeys.all, 'detail'] as const,
-  detail: (id: string) => [...timeEntryKeys.details(), id] as const,
-  running: () => [...timeEntryKeys.all, 'running'] as const,
-  stats: () => [...timeEntryKeys.all, 'stats'] as const,
-}
+// Re-export timeEntryKeys for backward compatibility
+export { timeEntryKeys }
 
 // Get time entries list
 export function useTimeEntries(params?: ListTimeEntriesParams) {
   return useQuery({
-    queryKey: timeEntryKeys.list(params),
+    queryKey: timeEntryKeys.list(params || {}),
     queryFn: () => listTimeEntries(params),
     staleTime: 1000 * 60 * 1, // 1 minute
   })
@@ -64,15 +57,10 @@ export function useTimeEntryStats() {
 
 // Create time entry mutation
 export function useCreateTimeEntry() {
-  const queryClient = useQueryClient()
-
   return useMutation({
     mutationFn: (data: CreateTimeEntryRequest) => createTimeEntry(data),
     onSuccess: () => {
-      // Invalidate and refetch time entries list
-      queryClient.invalidateQueries({ queryKey: timeEntryKeys.lists() })
-      queryClient.invalidateQueries({ queryKey: timeEntryKeys.running() })
-      queryClient.invalidateQueries({ queryKey: timeEntryKeys.stats() })
+      invalidateFor('time-entry:created')
     },
   })
 }
@@ -85,26 +73,18 @@ export function useUpdateTimeEntry() {
     mutationFn: ({ id, data }: { id: string; data: UpdateTimeEntryRequest }) =>
       updateTimeEntry(id, data),
     onSuccess: updatedEntry => {
-      // Update the time entry in cache
       queryClient.setQueryData(timeEntryKeys.detail(updatedEntry.id), updatedEntry)
-      // Invalidate lists to refresh
-      queryClient.invalidateQueries({ queryKey: timeEntryKeys.lists() })
-      queryClient.invalidateQueries({ queryKey: timeEntryKeys.running() })
-      queryClient.invalidateQueries({ queryKey: timeEntryKeys.stats() })
+      invalidateFor('time-entry:updated')
     },
   })
 }
 
 // Delete time entry mutation
 export function useDeleteTimeEntry() {
-  const queryClient = useQueryClient()
-
   return useMutation({
     mutationFn: (id: string) => deleteTimeEntry(id),
     onSuccess: () => {
-      // Invalidate and refetch time entries list
-      queryClient.invalidateQueries({ queryKey: timeEntryKeys.lists() })
-      queryClient.invalidateQueries({ queryKey: timeEntryKeys.stats() })
+      invalidateFor('time-entry:deleted')
     },
   })
 }

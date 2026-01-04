@@ -1,13 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { systemApi } from '@/lib/system-api'
+import { systemKeys } from '@/lib/query-keys'
 import type { SetAccelerationRequest } from '@/types/system'
 
-// Query keys
-export const systemKeys = {
-  all: ['system'] as const,
-  time: () => [...systemKeys.all, 'time'] as const,
-}
+// Re-export systemKeys for backward compatibility
+export { systemKeys }
 
 /**
  * Hook for getting the current accelerated time from the backend
@@ -29,8 +27,14 @@ export function useAcceleratedTime() {
   } = useQuery({
     queryKey: systemKeys.time(),
     queryFn: systemApi.getSystemTime,
-    refetchInterval: 30000, // Refetch every 30 seconds
-    staleTime: 25000, // Consider stale after 25 seconds
+    staleTime: 1000 * 60 * 5, // 5 minutes when not accelerated
+    // Only poll when time is accelerated (for dev/testing)
+    // In production on Pi, time won't be accelerated, so no polling
+    refetchInterval: query => {
+      const data = query.state.data
+      return data?.is_accelerated ? 1000 * 30 : false // 30s when accelerated, never otherwise
+    },
+    refetchOnWindowFocus: true,
   })
 
   // Track page visibility to pause intervals when tab is hidden

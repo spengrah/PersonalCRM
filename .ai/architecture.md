@@ -122,6 +122,11 @@ PostgreSQL
 - Stale-while-revalidate
 - No complex state management needed
 
+**State Management via Centralized Invalidation:**
+- Domain events trigger query invalidations
+- Single source of truth for cross-domain effects
+- See "Frontend State Management" section below
+
 **Pi Deployment Consideration:**
 - Next.js SSR mode uses ~100MB RAM
 - Can export static site (~5MB) with nginx
@@ -264,6 +269,90 @@ type Contact struct {
 - Rust build toolchain required
 - More complex build process
 - But: optional (can use browser)
+
+---
+
+## Frontend State Management
+
+### Problem: Cross-Domain Data Consistency
+
+Some backend operations affect multiple data domains:
+
+| Action | Backend Effect |
+|--------|----------------|
+| Mark contact as contacted | Updates contact AND completes auto-reminders |
+| Delete contact | Soft-deletes contact AND its reminders |
+
+If the frontend only invalidates contact queries, reminder data becomes stale.
+
+### Solution: Centralized Invalidation Registry
+
+Instead of scattering `queryClient.invalidateQueries()` calls across hooks, we use a centralized registry:
+
+```
+frontend/src/lib/
+├── query-keys.ts         # Centralized query key definitions
+└── query-invalidation.ts # Domain event → query key mapping
+```
+
+**Domain Events:**
+```typescript
+type DomainEvent =
+  | 'contact:created'
+  | 'contact:updated'
+  | 'contact:deleted'
+  | 'contact:touched'   // marked as contacted
+  | 'reminder:created'
+  | 'reminder:completed'
+  | 'reminder:deleted'
+```
+
+**Invalidation Rules:**
+```typescript
+const invalidationRules = {
+  'contact:touched': [
+    contactKeys.lists(),
+    contactKeys.overdue(),
+    reminderKeys.all,  // Cross-domain: backend completes reminders
+  ],
+  'contact:deleted': [
+    contactKeys.lists(),
+    reminderKeys.all,  // Cross-domain: backend deletes reminders
+  ],
+  // ...
+}
+```
+
+**Usage in Mutations:**
+```typescript
+onSuccess: (data) => {
+  queryClient.setQueryData(contactKeys.detail(data.id), data)
+  invalidateFor('contact:touched')  // Single call handles all effects
+}
+```
+
+### Why This Approach?
+
+**Considered alternatives:**
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| Direct invalidation in each hook | Simple | Easy to forget cross-domain effects |
+| Server-Sent Events (SSE) | Real-time, server-driven | More infrastructure, Pi resource usage |
+| Polling | Simple | Battery/CPU drain, not event-driven |
+
+**Centralized registry chosen because:**
+- Single source of truth for invalidation logic
+- Cross-domain effects are explicit and auditable
+- Easy to extend when adding new features
+- No additional infrastructure (SSE/WebSocket)
+- Works well with `refetchOnWindowFocus` for edge cases
+
+**Trade-offs:**
+- Slightly more indirection than direct calls
+- Must keep registry in sync with backend behavior
+
+**Full documentation:** See `docs/FRONTEND_STATE.md`
 
 ---
 

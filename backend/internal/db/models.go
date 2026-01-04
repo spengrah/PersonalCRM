@@ -25,7 +25,7 @@ type Contact struct {
 	Birthday      pgtype.Date        `json:"birthday"`
 	HowMet        pgtype.Text        `json:"how_met"`
 	Cadence       pgtype.Text        `json:"cadence"`
-	LastContacted pgtype.Date        `json:"last_contacted"`
+	LastContacted pgtype.Timestamptz `json:"last_contacted"`
 	ProfilePhoto  pgtype.Text        `json:"profile_photo"`
 	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`

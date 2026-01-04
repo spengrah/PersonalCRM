@@ -338,3 +338,5 @@ desktop-ui/node_modules
 desktop-ui/dist
 desktop/src-tauri/target
 desktop/src-tauri/target/release/bundle
+core
+core
