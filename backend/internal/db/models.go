@@ -32,6 +32,17 @@ type Contact struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ContactEnrichment struct {
+	ID                pgtype.UUID        `json:"id"`
+	ContactID         pgtype.UUID        `json:"contact_id"`
+	Source            string             `json:"source"`
+	AccountID         pgtype.Text        `json:"account_id"`
+	Field             string             `json:"field"`
+	ExternalContactID pgtype.UUID        `json:"external_contact_id"`
+	OriginalValue     pgtype.Text        `json:"original_value"`
+	EnrichedAt        pgtype.Timestamptz `json:"enriched_at"`
+}
+
 type ContactMethod struct {
 	ID        pgtype.UUID        `json:"id"`
 	ContactID pgtype.UUID        `json:"contact_id"`
@@ -54,6 +65,31 @@ type ContactTag struct {
 	ContactID pgtype.UUID        `json:"contact_id"`
 	TagID     pgtype.UUID        `json:"tag_id"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type ExternalContact struct {
+	ID            pgtype.UUID        `json:"id"`
+	Source        string             `json:"source"`
+	SourceID      string             `json:"source_id"`
+	AccountID     pgtype.Text        `json:"account_id"`
+	DisplayName   pgtype.Text        `json:"display_name"`
+	FirstName     pgtype.Text        `json:"first_name"`
+	LastName      pgtype.Text        `json:"last_name"`
+	Emails        []byte             `json:"emails"`
+	Phones        []byte             `json:"phones"`
+	Addresses     []byte             `json:"addresses"`
+	Organization  pgtype.Text        `json:"organization"`
+	JobTitle      pgtype.Text        `json:"job_title"`
+	Birthday      pgtype.Date        `json:"birthday"`
+	PhotoUrl      pgtype.Text        `json:"photo_url"`
+	CrmContactID  pgtype.UUID        `json:"crm_contact_id"`
+	MatchStatus   pgtype.Text        `json:"match_status"`
+	DuplicateOfID pgtype.UUID        `json:"duplicate_of_id"`
+	Etag          pgtype.Text        `json:"etag"`
+	Metadata      []byte             `json:"metadata"`
+	SyncedAt      pgtype.Timestamptz `json:"synced_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type ExternalIdentity struct {
