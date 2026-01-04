@@ -14,21 +14,28 @@ type Querier interface {
 	AddContactTag(ctx context.Context, arg AddContactTagParams) error
 	CompleteAutoRemindersForContact(ctx context.Context, contactID pgtype.UUID) error
 	CompleteReminder(ctx context.Context, id pgtype.UUID) (*Reminder, error)
+	CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContacts(ctx context.Context) (int64, error)
 	CountDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) (int64, error)
 	CountReminders(ctx context.Context) (int64, error)
+	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
 	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
 	CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error)
 	CreateReminder(ctx context.Context, arg CreateReminderParams) (*Reminder, error)
+	// External Sync Log Queries
+	CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error)
+	CreateSyncState(ctx context.Context, arg CreateSyncStateParams) (*ExternalSyncState, error)
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)
 	CreateTimeEntry(ctx context.Context, arg CreateTimeEntryParams) (*TimeEntry, error)
 	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
 	DeleteInteraction(ctx context.Context, id pgtype.UUID) error
 	DeleteNote(ctx context.Context, id pgtype.UUID) error
+	DeleteOldSyncLogs(ctx context.Context, createdAt pgtype.Timestamptz) error
+	DeleteSyncState(ctx context.Context, id pgtype.UUID) error
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
 	DeleteTimeEntry(ctx context.Context, id pgtype.UUID) error
 	// Contact queries
@@ -40,6 +47,10 @@ type Querier interface {
 	GetNote(ctx context.Context, id pgtype.UUID) (*Note, error)
 	GetReminder(ctx context.Context, id pgtype.UUID) (*Reminder, error)
 	GetRunningTimeEntry(ctx context.Context) (*TimeEntry, error)
+	GetSyncLog(ctx context.Context, id pgtype.UUID) (*ExternalSyncLog, error)
+	// External Sync State Queries
+	GetSyncState(ctx context.Context, id pgtype.UUID) (*ExternalSyncState, error)
+	GetSyncStateBySource(ctx context.Context, arg GetSyncStateBySourceParams) (*ExternalSyncState, error)
 	// Tag queries
 	GetTag(ctx context.Context, id pgtype.UUID) (*Tag, error)
 	GetTagByName(ctx context.Context, name string) (*Tag, error)
@@ -53,9 +64,14 @@ type Querier interface {
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error)
 	ListDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) ([]*ListDueRemindersRow, error)
+	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
+	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListRecentInteractions(ctx context.Context, limit int32) ([]*ListRecentInteractionsRow, error)
+	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
 	ListReminders(ctx context.Context, arg ListRemindersParams) ([]*Reminder, error)
 	ListRemindersByContact(ctx context.Context, contactID pgtype.UUID) ([]*Reminder, error)
+	ListSyncLogsByState(ctx context.Context, arg ListSyncLogsByStateParams) ([]*ExternalSyncLog, error)
+	ListSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListTags(ctx context.Context) ([]*Tag, error)
 	ListTimeEntries(ctx context.Context, arg ListTimeEntriesParams) ([]*TimeEntry, error)
 	ListTimeEntriesByContact(ctx context.Context, contactID pgtype.UUID) ([]*TimeEntry, error)
@@ -71,6 +87,12 @@ type Querier interface {
 	UpdateInteraction(ctx context.Context, arg UpdateInteractionParams) (*Interaction, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
 	UpdateReminder(ctx context.Context, arg UpdateReminderParams) (*Reminder, error)
+	UpdateSyncStateCursor(ctx context.Context, arg UpdateSyncStateCursorParams) error
+	UpdateSyncStateEnabled(ctx context.Context, arg UpdateSyncStateEnabledParams) (*ExternalSyncState, error)
+	UpdateSyncStateMetadata(ctx context.Context, arg UpdateSyncStateMetadataParams) (*ExternalSyncState, error)
+	UpdateSyncStateNextSync(ctx context.Context, arg UpdateSyncStateNextSyncParams) error
+	UpdateSyncStateStatus(ctx context.Context, arg UpdateSyncStateStatusParams) (*ExternalSyncState, error)
+	UpdateSyncStateSuccess(ctx context.Context, arg UpdateSyncStateSuccessParams) (*ExternalSyncState, error)
 	UpdateTag(ctx context.Context, arg UpdateTagParams) (*Tag, error)
 	UpdateTimeEntry(ctx context.Context, arg UpdateTimeEntryParams) (*TimeEntry, error)
 }

@@ -56,6 +56,40 @@ type ContactTag struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type ExternalSyncLog struct {
+	ID             pgtype.UUID        `json:"id"`
+	SyncStateID    pgtype.UUID        `json:"sync_state_id"`
+	Source         string             `json:"source"`
+	AccountID      pgtype.Text        `json:"account_id"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
+	Status         string             `json:"status"`
+	ItemsProcessed pgtype.Int4        `json:"items_processed"`
+	ItemsMatched   pgtype.Int4        `json:"items_matched"`
+	ItemsCreated   pgtype.Int4        `json:"items_created"`
+	ErrorMessage   pgtype.Text        `json:"error_message"`
+	Metadata       []byte             `json:"metadata"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type ExternalSyncState struct {
+	ID                   pgtype.UUID        `json:"id"`
+	Source               string             `json:"source"`
+	AccountID            pgtype.Text        `json:"account_id"`
+	Enabled              bool               `json:"enabled"`
+	Status               string             `json:"status"`
+	Strategy             string             `json:"strategy"`
+	LastSyncAt           pgtype.Timestamptz `json:"last_sync_at"`
+	LastSuccessfulSyncAt pgtype.Timestamptz `json:"last_successful_sync_at"`
+	NextSyncAt           pgtype.Timestamptz `json:"next_sync_at"`
+	SyncCursor           pgtype.Text        `json:"sync_cursor"`
+	ErrorMessage         pgtype.Text        `json:"error_message"`
+	ErrorCount           int32              `json:"error_count"`
+	Metadata             []byte             `json:"metadata"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Interaction struct {
 	ID              pgtype.UUID        `json:"id"`
 	ContactID       pgtype.UUID        `json:"contact_id"`

@@ -13,6 +13,8 @@ import (
 type Scheduler struct {
 	cron            *cron.Cron
 	reminderService *service.ReminderService
+	syncService     *service.SyncService
+	syncEnabled     bool
 }
 
 // zerologCronAdapter adapts zerolog to cron.Logger interface
@@ -38,7 +40,11 @@ func (z zerologCronAdapter) Error(err error, msg string, keysAndValues ...interf
 	event.Msg(msg)
 }
 
-func NewScheduler(reminderService *service.ReminderService) *Scheduler {
+func NewScheduler(
+	reminderService *service.ReminderService,
+	syncService *service.SyncService,
+	syncEnabled bool,
+) *Scheduler {
 	// Create cron with second precision and structured logging
 	c := cron.New(
 		cron.WithSeconds(),
@@ -48,6 +54,8 @@ func NewScheduler(reminderService *service.ReminderService) *Scheduler {
 	return &Scheduler{
 		cron:            c,
 		reminderService: reminderService,
+		syncService:     syncService,
+		syncEnabled:     syncEnabled,
 	}
 }
 
@@ -74,6 +82,22 @@ func (s *Scheduler) Start() error {
 	// Optional: Schedule a cleanup job (only in production to avoid noise in testing)
 	// Skip cleanup job in testing environments
 	// In testing mode, we want to see all activity and avoid confusion
+
+	// Schedule external sync check job (every 5 minutes)
+	if s.syncEnabled && s.syncService != nil {
+		_, err := s.cron.AddFunc("0 */5 * * * *", func() {
+			ctx := context.Background()
+			logger.Debug().Msg("checking for due external syncs")
+
+			if err := s.syncService.RunDueSyncs(ctx); err != nil {
+				logger.Error().Err(err).Msg("error running due syncs")
+			}
+		})
+		if err != nil {
+			return err
+		}
+		logger.Info().Msg("external sync scheduler enabled (runs every 5 minutes)")
+	}
 
 	// Start the cron scheduler
 	s.cron.Start()
