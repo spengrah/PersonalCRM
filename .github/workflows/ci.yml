@@ -7,9 +7,33 @@ on:
     branches: [ main ]
 
 jobs:
+  # Detect which paths changed to conditionally run jobs
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'tests/**'
+              - 'go.mod'
+            frontend:
+              - 'frontend/**'
+
   backend-tests:
     name: Backend Tests
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
 
     services:
       postgres:
@@ -75,6 +99,8 @@ jobs:
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
 
     steps:
       - name: Checkout code
@@ -91,7 +117,7 @@ jobs:
 
       - name: Run linter (non-blocking)
         working-directory: frontend
-        run: bun run lint || echo "⚠️  Linting issues found - will be fixed in follow-up PR"
+        run: bun run lint || echo "Linting issues found - will be fixed in follow-up PR"
 
       - name: Run frontend tests
         working-directory: frontend
@@ -106,6 +132,8 @@ jobs:
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' }}
 
     services:
       postgres:
