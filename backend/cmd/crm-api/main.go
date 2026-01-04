@@ -97,6 +97,7 @@ func main() {
 	var syncHandler *handlers.SyncHandler
 	var identityHandler *handlers.IdentityHandler
 	var oauthHandler *handlers.OAuthHandler
+	var importHandler *handlers.ImportHandler
 	var googleOAuthService *google.OAuthService
 
 	if cfg.Features.EnableExternalSync {
@@ -119,15 +120,33 @@ func main() {
 			logger.Info().Msg("Google OAuth not configured (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET required)")
 		}
 
-		// Register sync providers here (will be done in future issues)
-		// providerRegistry.Register(gmail.NewProvider(...))
-		// providerRegistry.Register(imessage.NewProvider(...))
+		// Initialize external contact and enrichment repositories
+		externalContactRepo := repository.NewExternalContactRepository(database.Queries)
+		enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+
+		// Initialize identity and enrichment services
+		identityService := service.NewIdentityService(identityRepo)
+		enrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
+
+		// Register Google Contacts provider if OAuth is configured
+		if googleOAuthService != nil {
+			gcontactsProvider := google.NewContactsProvider(
+				googleOAuthService,
+				externalContactRepo,
+				enrichmentService,
+				identityService,
+			)
+			providerRegistry.Register(gcontactsProvider)
+			logger.Info().Msg("Google Contacts sync provider registered")
+		}
 
 		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
-		identityService := service.NewIdentityService(identityRepo)
 
 		syncHandler = handlers.NewSyncHandler(syncService)
 		identityHandler = handlers.NewIdentityHandler(identityService)
+
+		// Initialize import handler
+		importHandler = handlers.NewImportHandler(externalContactRepo, contactService, enrichmentService)
 
 		logger.Info().Msg("external sync infrastructure enabled")
 	}
@@ -254,6 +273,18 @@ func main() {
 
 			// Add identity route to contacts
 			contacts.GET("/:id/identities", identityHandler.ListIdentitiesForContact)
+
+			// Import candidates routes
+			if importHandler != nil {
+				imports := v1.Group("/imports")
+				{
+					imports.GET("/candidates", importHandler.ListImportCandidates)
+					imports.GET("/:id", importHandler.GetImportCandidate)
+					imports.POST("/:id/import", importHandler.ImportContact)
+					imports.POST("/:id/link", importHandler.LinkContact)
+					imports.POST("/:id/ignore", importHandler.IgnoreContact)
+				}
+			}
 		}
 
 		// Export/Import routes

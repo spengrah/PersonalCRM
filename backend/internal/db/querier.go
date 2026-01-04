@@ -16,6 +16,7 @@ type Querier interface {
 	CompleteAutoRemindersForContact(ctx context.Context, contactID pgtype.UUID) error
 	CompleteReminder(ctx context.Context, id pgtype.UUID) (*Reminder, error)
 	CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error)
+	CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContacts(ctx context.Context) (int64, error)
@@ -25,9 +26,11 @@ type Querier interface {
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	CountReminders(ctx context.Context) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
+	CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error)
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
 	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
+	CreateEnrichment(ctx context.Context, arg CreateEnrichmentParams) (*ContactEnrichment, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
 	CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error)
 	CreateReminder(ctx context.Context, arg CreateReminderParams) (*Reminder, error)
@@ -37,6 +40,10 @@ type Querier interface {
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)
 	CreateTimeEntry(ctx context.Context, arg CreateTimeEntryParams) (*TimeEntry, error)
 	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
+	DeleteEnrichment(ctx context.Context, id pgtype.UUID) error
+	DeleteEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) error
+	DeleteExternalContact(ctx context.Context, id pgtype.UUID) error
+	DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error
 	DeleteIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) error
 	DeleteIdentity(ctx context.Context, id pgtype.UUID) error
 	DeleteInteraction(ctx context.Context, id pgtype.UUID) error
@@ -49,11 +56,19 @@ type Querier interface {
 	DeleteSyncState(ctx context.Context, id pgtype.UUID) error
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
 	DeleteTimeEntry(ctx context.Context, id pgtype.UUID) error
+	FindExternalContactsByEmail(ctx context.Context, dollar_1 []byte) ([]*ExternalContact, error)
+	FindExternalContactsByNormalizedEmail(ctx context.Context, lower string) ([]*ExternalContact, error)
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
 	GetContactTags(ctx context.Context, contactID pgtype.UUID) ([]*Tag, error)
+	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
+	// Contact Enrichment queries
+	GetEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactEnrichment, error)
+	// External Contact queries
+	GetExternalContact(ctx context.Context, id pgtype.UUID) (*ExternalContact, error)
+	GetExternalContactBySource(ctx context.Context, arg GetExternalContactBySourceParams) (*ExternalContact, error)
 	// External identity queries for cross-platform contact identity matching
 	GetIdentityByID(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
 	GetIdentityByIdentifier(ctx context.Context, arg GetIdentityByIdentifierParams) (*ExternalIdentity, error)
@@ -81,9 +96,12 @@ type Querier interface {
 	GetTimeEntryStats(ctx context.Context) (*GetTimeEntryStatsRow, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	HardDeleteReminder(ctx context.Context, id pgtype.UUID) error
+	HasEnrichmentForField(ctx context.Context, arg HasEnrichmentForFieldParams) (bool, error)
+	IgnoreExternalContact(ctx context.Context, id pgtype.UUID) error
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
+	ListAllUnmatchedExternalContacts(ctx context.Context, arg ListAllUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
 	// Contact method queries
 	ListContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactMethod, error)
@@ -92,6 +110,9 @@ type Querier interface {
 	ListDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) ([]*ListDueRemindersRow, error)
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
+	ListEnrichmentsBySource(ctx context.Context, arg ListEnrichmentsBySourceParams) ([]*ContactEnrichment, error)
+	ListExternalContactsBySource(ctx context.Context, arg ListExternalContactsBySourceParams) ([]*ExternalContact, error)
+	ListExternalContactsForCRMContact(ctx context.Context, crmContactID pgtype.UUID) ([]*ExternalContact, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
 	ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error)
 	// List non-sensitive credential info for all credentials of a provider
@@ -108,6 +129,7 @@ type Querier interface {
 	ListTimeEntries(ctx context.Context, arg ListTimeEntriesParams) ([]*TimeEntry, error)
 	ListTimeEntriesByContact(ctx context.Context, contactID pgtype.UUID) ([]*TimeEntry, error)
 	ListTimeEntriesByDateRange(ctx context.Context, arg ListTimeEntriesByDateRangeParams) ([]*TimeEntry, error)
+	ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	ListUnmatchedIdentities(ctx context.Context, arg ListUnmatchedIdentitiesParams) ([]*ExternalIdentity, error)
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error)
@@ -118,6 +140,8 @@ type Querier interface {
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
+	UpdateExternalContactDuplicate(ctx context.Context, arg UpdateExternalContactDuplicateParams) error
+	UpdateExternalContactMatch(ctx context.Context, arg UpdateExternalContactMatchParams) (*ExternalContact, error)
 	UpdateIdentityMessageCount(ctx context.Context, arg UpdateIdentityMessageCountParams) (*ExternalIdentity, error)
 	UpdateInteraction(ctx context.Context, arg UpdateInteractionParams) (*Interaction, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
@@ -132,6 +156,7 @@ type Querier interface {
 	UpdateSyncStateSuccess(ctx context.Context, arg UpdateSyncStateSuccessParams) (*ExternalSyncState, error)
 	UpdateTag(ctx context.Context, arg UpdateTagParams) (*Tag, error)
 	UpdateTimeEntry(ctx context.Context, arg UpdateTimeEntryParams) (*TimeEntry, error)
+	UpsertExternalContact(ctx context.Context, arg UpsertExternalContactParams) (*ExternalContact, error)
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
 	// Insert or update an OAuth credential
 	UpsertOAuthCredential(ctx context.Context, arg UpsertOAuthCredentialParams) (*OauthCredential, error)
