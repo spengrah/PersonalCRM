@@ -41,6 +41,7 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/sync"
 
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
@@ -90,6 +91,24 @@ func main() {
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, reminderRepo)
 	reminderService := service.NewReminderService(reminderRepo, contactRepo)
 
+	// Initialize external sync components (feature-flagged)
+	var syncService *service.SyncService
+	var syncHandler *handlers.SyncHandler
+
+	if cfg.Features.EnableExternalSync {
+		syncRepo := repository.NewSyncRepository(database.Queries)
+		providerRegistry := sync.NewProviderRegistry()
+
+		// Register sync providers here (will be done in future issues)
+		// providerRegistry.Register(gmail.NewProvider(...))
+		// providerRegistry.Register(imessage.NewProvider(...))
+
+		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
+		syncHandler = handlers.NewSyncHandler(syncService)
+
+		logger.Info().Msg("external sync infrastructure enabled")
+	}
+
 	// Initialize handlers
 	contactHandler := handlers.NewContactHandler(contactService)
 	reminderHandler := handlers.NewReminderHandler(reminderService)
@@ -97,7 +116,7 @@ func main() {
 	timeEntryHandler := handlers.NewTimeEntryHandler(timeEntryRepo)
 
 	// Initialize and start scheduler
-	cronScheduler := scheduler.NewScheduler(reminderService)
+	cronScheduler := scheduler.NewScheduler(reminderService, syncService, cfg.Features.EnableExternalSync)
 	if err := cronScheduler.Start(); err != nil {
 		logger.Fatal().Err(err).Msg("failed to start scheduler")
 	}
@@ -165,6 +184,20 @@ func main() {
 				timeEntries.GET("/:id", timeEntryHandler.GetTimeEntry)
 				timeEntries.PUT("/:id", timeEntryHandler.UpdateTimeEntry)
 				timeEntries.DELETE("/:id", timeEntryHandler.DeleteTimeEntry)
+			}
+		}
+
+		// External sync routes (feature-flagged)
+		if cfg.Features.EnableExternalSync && syncHandler != nil {
+			syncRoutes := v1.Group("/sync")
+			{
+				syncRoutes.GET("/status", syncHandler.GetSyncStatus)
+				syncRoutes.GET("/providers", syncHandler.GetAvailableProviders)
+				syncRoutes.GET("/logs", syncHandler.GetRecentSyncLogs)
+				syncRoutes.GET("/:source/status", syncHandler.GetSyncState)
+				syncRoutes.POST("/:source/trigger", syncHandler.TriggerSync)
+				syncRoutes.PATCH("/:id/enable", syncHandler.EnableSync)
+				syncRoutes.GET("/:id/logs", syncHandler.GetSyncLogs)
 			}
 		}
 

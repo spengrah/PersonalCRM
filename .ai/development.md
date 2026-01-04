@@ -186,8 +186,7 @@ WHERE id = $1 AND deleted_at IS NULL;
 
 **Then regenerate sqlc code:**
 ```bash
-cd backend
-sqlc generate
+make sqlc
 ```
 
 ---
@@ -864,7 +863,7 @@ export function NewTableForm() {
 - Use `staleTime` to reduce unnecessary refetches
 - Lazy load heavy components
 - Optimize images (Next.js does this automatically)
-- Keep bundle size small (check with `npm run build`)
+- Keep bundle size small (check with `bun run build`)
 
 ### Database
 - PostgreSQL is tuned for 4-8GB RAM environments

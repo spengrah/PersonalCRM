@@ -466,8 +466,8 @@ func TestScheduler_Integration(t *testing.T) {
 	reminderRepo := repository.NewReminderRepository(database.Queries)
 	reminderService := service.NewReminderService(reminderRepo, contactRepo)
 
-	// Create scheduler
-	schedulerInstance := scheduler.NewScheduler(reminderService)
+	// Create scheduler (no sync service for this test)
+	schedulerInstance := scheduler.NewScheduler(reminderService, nil, false)
 	require.NotNil(t, schedulerInstance)
 
 	// Test that scheduler has the correct cron spec

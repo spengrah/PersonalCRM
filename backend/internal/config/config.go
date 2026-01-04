@@ -57,6 +57,7 @@ type FeatureFlags struct {
 	EnableTelegramBot  bool // Default: false
 	EnableCalendarSync bool // Default: false
 	EnableTimeTracking bool // Default: false
+	EnableExternalSync bool // Default: false
 }
 
 // RuntimeConfig holds runtime-only settings (not validated at startup)
@@ -151,6 +152,7 @@ func Load() (*Config, error) {
 			EnableTelegramBot:  getEnvAsBool("ENABLE_TELEGRAM_BOT", false),
 			EnableCalendarSync: getEnvAsBool("ENABLE_CALENDAR_SYNC", false),
 			EnableTimeTracking: getEnvAsBool("ENABLE_TIME_TRACKING", false),
+			EnableExternalSync: getEnvAsBool("ENABLE_EXTERNAL_SYNC", false),
 		},
 		Runtime: RuntimeConfig{
 			CRMEnvironment:   getEnv("CRM_ENV", DefaultCRMEnvironment),
@@ -362,6 +364,7 @@ func TestConfig() *Config {
 			EnableTelegramBot:  false,
 			EnableCalendarSync: false,
 			EnableTimeTracking: false,
+			EnableExternalSync: false,
 		},
 		Runtime: RuntimeConfig{
 			CRMEnvironment:   "test",

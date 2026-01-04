@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e deploy setup-pi dev-native postgres-native
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e deploy setup-pi dev-native postgres-native sqlc
 
 # Go build cache (workspace-local by default; override via env).
 GOCACHE ?= $(CURDIR)/.gocache
@@ -30,6 +30,7 @@ help:
 	@echo "  dev         - Start development servers (uses Docker for PostgreSQL)"
 	@echo "  dev-native  - Start dev servers with native PostgreSQL (no Docker)"
 	@echo "  build       - Build both frontend and backend"
+	@echo "  sqlc        - Regenerate sqlc code from SQL queries"
 	@echo "  test        - Run all tests (backend + frontend)"
 	@echo "  clean       - Clean build artifacts"
 	@echo ""
@@ -229,6 +230,12 @@ lint-fix:
 
 ci-test: lint test-unit test-integration test-frontend
 	@echo "✅ All CI tests passed"
+
+# Code generation
+sqlc:
+	@echo "Generating sqlc code from SQL queries..."
+	@cd backend && ~/go/bin/sqlc generate
+	@echo "✅ sqlc code generated"
 
 # API specific commands
 api-docs:

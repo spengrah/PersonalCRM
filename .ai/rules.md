@@ -73,6 +73,23 @@ PostgreSQL
 - Go's `testing` package, Playwright for E2E
 - Tauri (Rust wrapper, optional)
 
+### 4. Required Go Tools
+
+Install these tools before development:
+
+```bash
+# sqlc - SQL to type-safe Go code (required)
+go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+
+# golangci-lint - Go linter (required)
+go install github.com/golangci-lint/golangci-lint/cmd/golangci-lint@latest
+
+# swag - Swagger doc generator (optional, for make api-docs)
+go install github.com/swaggo/swag/cmd/swag@latest
+```
+
+**Note:** Tools install to `~/go/bin/`. The Makefile commands (`make sqlc`, `make lint`, `make api-docs`) use full paths, so you don't need to add `~/go/bin` to your PATH.
+
 ---
 
 ## Issue-Driven Development Workflow
@@ -471,7 +488,43 @@ SELECT * FROM contact LIMIT 5;
 - Run migrations: They should auto-run on startup (if implemented)
 
 **"Frontend won't start"**
-- Install dependencies: `cd frontend && npm install`
+- Install dependencies: `cd frontend && bun install`
+
+### Common Gotchas for Agents
+
+**Running Go commands:**
+```bash
+# ❌ WRONG - go test from project root won't find tests
+go test -v ./backend/tests/...
+
+# ✅ CORRECT - run from backend directory
+cd backend && go test -v ./tests/...
+
+# ✅ OR use make targets
+make test-unit
+make test-integration
+```
+
+**Package manager:**
+- This project uses **bun**, not npm
+- Use `bun install`, `bun run test`, `bunx playwright`
+- Never use `npm` or `npx`
+
+**Go tools:**
+- Use `make sqlc` not `sqlc generate` (sqlc is in ~/go/bin)
+- Use `make lint` not `golangci-lint run`
+- Use `make api-docs` not `swag init`
+
+**Integration tests require DATABASE_URL:**
+```bash
+# Tests will skip if DATABASE_URL is not set
+# The make targets handle this automatically
+make test-integration
+```
+
+**sqlc.yaml location:**
+- Located in `backend/` directory, not project root
+- `make sqlc` handles this correctly
 
 ---
 
