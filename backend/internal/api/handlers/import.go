@@ -463,11 +463,12 @@ func (h *ImportHandler) findBestMatch(ctx context.Context, external *repository.
 
 		for _, method := range match.Contact.Methods {
 			totalMethods++
-			if method.Type == "email_personal" || method.Type == "email_work" {
+			switch method.Type {
+			case "email_personal", "email_work":
 				if candidateEmails[strings.ToLower(method.Value)] {
 					methodMatches++
 				}
-			} else if method.Type == "phone" {
+			case "phone":
 				normalized := strings.ReplaceAll(strings.ReplaceAll(method.Value, " ", ""), "-", "")
 				if candidatePhones[normalized] {
 					methodMatches++
