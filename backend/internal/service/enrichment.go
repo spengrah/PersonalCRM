@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"personal-crm/backend/internal/identity"
@@ -104,14 +105,17 @@ func (s *EnrichmentService) enrichContactMethods(
 		return err
 	}
 
-	// Build set of normalized existing values
+	// Build set of normalized existing values and types
 	existingSet := make(map[string]bool)
+	existingTypes := make(map[string]bool)
 	for _, m := range existingMethods {
 		normalized := identity.Normalize(m.Value, mapMethodTypeToIdentifier(m.Type))
 		existingSet[normalized] = true
+		existingTypes[m.Type] = true
 	}
 
 	// Add missing emails
+	var conflicts []string
 	for _, email := range external.Emails {
 		normalized := identity.Normalize(email.Value, identity.IdentifierTypeEmail)
 		if existingSet[normalized] {
@@ -122,6 +126,12 @@ func (s *EnrichmentService) enrichContactMethods(
 		methodType := string(repository.ContactMethodEmailPersonal)
 		if strings.Contains(strings.ToLower(email.Type), "work") {
 			methodType = string(repository.ContactMethodEmailWork)
+		}
+
+		// Check if this type is already taken
+		if existingTypes[methodType] {
+			conflicts = append(conflicts, email.Value+" (type "+methodType+" already exists)")
+			continue
 		}
 
 		_, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
@@ -137,6 +147,7 @@ func (s *EnrichmentService) enrichContactMethods(
 
 		s.recordEnrichment(ctx, contact.ID, external, "method:"+methodType+":"+normalized, email.Value)
 		existingSet[normalized] = true // Mark as added
+		existingTypes[methodType] = true
 	}
 
 	// Add missing phones
@@ -146,9 +157,17 @@ func (s *EnrichmentService) enrichContactMethods(
 			continue // Already have this phone
 		}
 
+		methodType := string(repository.ContactMethodPhone)
+
+		// Check if phone type is already taken
+		if existingTypes[methodType] {
+			conflicts = append(conflicts, phone.Value+" (phone already exists)")
+			continue
+		}
+
 		_, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
-			Type:      string(repository.ContactMethodPhone),
+			Type:      methodType,
 			Value:     phone.Value,
 			IsPrimary: false,
 		})
@@ -159,6 +178,12 @@ func (s *EnrichmentService) enrichContactMethods(
 
 		s.recordEnrichment(ctx, contact.ID, external, "method:phone:"+normalized, phone.Value)
 		existingSet[normalized] = true
+		existingTypes[methodType] = true
+	}
+
+	// Return error if there were conflicts
+	if len(conflicts) > 0 {
+		return fmt.Errorf("contact method conflicts: %s", strings.Join(conflicts, "; "))
 	}
 
 	return nil

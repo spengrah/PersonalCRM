@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/logger"
@@ -349,6 +350,11 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 
 	// Enrich the CRM contact
 	if err := h.enricher.EnrichContactFromExternal(ctx, crmContactID, updated); err != nil {
+		// If there are contact method conflicts, return as user-facing error
+		if strings.Contains(err.Error(), "contact method conflicts") {
+			api.SendError(c, http.StatusConflict, api.ErrCodeValidation, "Cannot link: "+err.Error(), "")
+			return
+		}
 		logger.Warn().Err(err).Str("external_id", id.String()).Msg("enrichment failed during link")
 	}
 
