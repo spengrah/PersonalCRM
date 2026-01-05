@@ -328,8 +328,4 @@ func toLower(s string) string {
 	return strings.ToLower(s)
 }
 
-func normalizePhone(s string) string {
-	s = strings.ReplaceAll(s, " ", "")
-	s = strings.ReplaceAll(s, "-", "")
-	return s
-}
+// normalizePhone is now defined in import.go and used by both production code and tests

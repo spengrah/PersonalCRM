@@ -265,7 +265,7 @@ function CandidateCard({
           >
             <Link2 className="w-4 h-4 mr-1" />
             {candidate.suggested_match
-              ? `Link to ${candidate.suggested_match.contact_name}`
+              ? `Link to ${candidate.suggested_match.contact_name} (${Math.round(candidate.suggested_match.confidence * 100)}%)`
               : 'Link (select)'}
           </Button>
           <Button
