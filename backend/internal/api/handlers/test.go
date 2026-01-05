@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
@@ -287,7 +288,10 @@ func (h *TestHandler) Cleanup(c *gin.Context) {
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	queries := db.New(tx)
-	prefix := pgtype.Text{String: req.Prefix, Valid: true}
+	// Escape SQL LIKE wildcards to prevent injection
+	// This ensures % and _ in prefixes are treated literally
+	escapedPrefix := escapeSQLLikeWildcards(req.Prefix)
+	prefix := pgtype.Text{String: escapedPrefix, Valid: true}
 
 	// Delete contacts by name prefix (will cascade to contact_method via FK)
 	deletedContacts, err := queries.DeleteContactsByNamePrefix(ctx, prefix)
@@ -355,4 +359,17 @@ func (h *TestHandler) TriggerError(c *gin.Context) {
 	default:
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Test error triggered", message)
 	}
+}
+
+// escapeSQLLikeWildcards escapes SQL LIKE pattern wildcards (% and _)
+// to prevent them from being interpreted as wildcards in LIKE queries.
+// This prevents SQL wildcard injection attacks.
+func escapeSQLLikeWildcards(s string) string {
+	// Escape backslash first (since it's the escape character)
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	// Escape percentage sign
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	// Escape underscore
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }
