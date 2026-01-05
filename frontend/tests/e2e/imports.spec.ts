@@ -196,8 +196,7 @@ test.describe('Imports - Ignore Action', () => {
     await expect(page.getByText(/ignored/i)).toBeVisible({ timeout: 10000 })
 
     // Verify the candidate card is removed from the list
-    // Use a more specific selector for the card, not just the text (which also appears in notification)
-    const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: displayName })
+    // Use existing candidateCard selector to check Import button is gone
     await expect(candidateCard.getByRole('button', { name: /Import/i })).not.toBeVisible({
       timeout: 5000,
     })
