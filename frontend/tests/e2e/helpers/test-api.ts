@@ -79,17 +79,23 @@ export interface TriggerErrorRequest {
  * These endpoints are only available when CRM_ENV=testing.
  */
 export class TestAPI {
+  private _prefix: string
+
   constructor(
     private request: APIRequestContext,
     private testInfo: TestInfo
-  ) {}
+  ) {
+    // Generate prefix once at construction time to ensure stability
+    this._prefix = `w${testInfo.workerIndex}-${Date.now()}`
+  }
 
   /**
    * Gets the test prefix for this test worker.
    * Use this prefix for all test data to ensure cleanup works correctly.
+   * The prefix is generated once at construction time and remains stable.
    */
   get prefix(): string {
-    return getTestPrefix(this.testInfo)
+    return this._prefix
   }
 
   /**

@@ -20,8 +20,8 @@ test.describe('Imports Page', () => {
     // Verify page header
     await expect(page.getByRole('heading', { name: 'Import Contacts' })).toBeVisible()
 
-    // Verify sync button exists
-    await expect(page.getByRole('button', { name: /Sync Google Contacts/i })).toBeVisible()
+    // Verify sync button exists (use first() as there may be multiple sync buttons)
+    await expect(page.getByRole('button', { name: /Sync Google Contacts/i }).first()).toBeVisible()
   })
 
   test('should show imports in navigation', async ({ page }) => {
@@ -271,8 +271,11 @@ test.describe('Imports - Sync', () => {
     await page.goto('/imports')
     await page.waitForLoadState('networkidle')
 
-    // Click the sync button
-    await page.getByRole('button', { name: /Sync Google Contacts/i }).click()
+    // Click the sync button (use first() as there may be multiple sync buttons)
+    await page
+      .getByRole('button', { name: /Sync Google Contacts/i })
+      .first()
+      .click()
 
     // The button should show loading state or we should see a notification
     // Note: The actual sync might fail if Google OAuth isn't configured,
