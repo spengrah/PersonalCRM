@@ -55,3 +55,7 @@ CREATE INDEX idx_calendar_event_account ON calendar_event(google_account_id);
 -- Index for finding past events that need last_contacted updates
 CREATE INDEX idx_calendar_event_needs_update ON calendar_event(end_time)
     WHERE last_contacted_updated = FALSE AND status = 'confirmed';
+
+-- Trigger for updated_at (uses existing function from migration 001)
+CREATE TRIGGER update_calendar_event_updated_at BEFORE UPDATE ON calendar_event
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

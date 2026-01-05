@@ -504,6 +504,9 @@ type UpsertCalendarEventParams struct {
 }
 
 // Insert or update a calendar event from Google Calendar
+// Note: last_contacted_updated is intentionally NOT included in the ON CONFLICT UPDATE clause.
+// Once an event has been processed (last_contacted_updated = TRUE), we preserve that state
+// even if the event is re-synced with updated details. This prevents duplicate last_contacted updates.
 func (q *Queries) UpsertCalendarEvent(ctx context.Context, arg UpsertCalendarEventParams) (*CalendarEvent, error) {
 	row := q.db.QueryRow(ctx, UpsertCalendarEvent,
 		arg.GcalEventID,

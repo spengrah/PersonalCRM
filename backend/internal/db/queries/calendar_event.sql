@@ -1,5 +1,8 @@
 -- name: UpsertCalendarEvent :one
 -- Insert or update a calendar event from Google Calendar
+-- Note: last_contacted_updated is intentionally NOT included in the ON CONFLICT UPDATE clause.
+-- Once an event has been processed (last_contacted_updated = TRUE), we preserve that state
+-- even if the event is re-synced with updated details. This prevents duplicate last_contacted updates.
 INSERT INTO calendar_event (
     gcal_event_id,
     gcal_calendar_id,

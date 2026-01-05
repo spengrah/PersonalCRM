@@ -24,6 +24,35 @@ func NewCalendarHandler(calendarRepo *repository.CalendarEventRepository) *Calen
 	}
 }
 
+// Pagination bounds
+const (
+	maxLimit     = 100
+	defaultLimit = 20
+)
+
+// parsePagination parses and validates pagination parameters
+func parsePagination(c *gin.Context, defaultLimitOverride int) (limit, offset int32) {
+	defLimit := defaultLimit
+	if defaultLimitOverride > 0 {
+		defLimit = defaultLimitOverride
+	}
+
+	limit32, err := strconv.Atoi(c.DefaultQuery("limit", strconv.Itoa(defLimit)))
+	if err != nil || limit32 < 0 {
+		limit32 = defLimit
+	}
+	if limit32 > maxLimit {
+		limit32 = maxLimit
+	}
+
+	offset32, err := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if err != nil || offset32 < 0 {
+		offset32 = 0
+	}
+
+	return int32(limit32), int32(offset32)
+}
+
 // CalendarEventResponse represents a calendar event in API responses
 type CalendarEventResponse struct {
 	ID            string  `json:"id"`
@@ -76,12 +105,11 @@ func (h *CalendarHandler) ListEventsForContact(c *gin.Context) {
 		return
 	}
 
-	// Parse pagination
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	// Parse and validate pagination
+	limit, offset := parsePagination(c, 0)
 
 	// Fetch events
-	events, err := h.calendarRepo.ListEventsForContact(c.Request.Context(), contactID, int32(limit), int32(offset))
+	events, err := h.calendarRepo.ListEventsForContact(c.Request.Context(), contactID, limit, offset)
 	if err != nil {
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to fetch events", err.Error())
 		return
@@ -116,12 +144,12 @@ func (h *CalendarHandler) ListUpcomingEventsForContact(c *gin.Context) {
 		return
 	}
 
-	// Parse limit
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	// Parse and validate limit (no offset for upcoming)
+	limit, _ := parsePagination(c, 10)
 
 	// Fetch upcoming events
 	now := accelerated.GetCurrentTime()
-	events, err := h.calendarRepo.ListUpcomingEventsForContact(c.Request.Context(), contactID, now, int32(limit))
+	events, err := h.calendarRepo.ListUpcomingEventsForContact(c.Request.Context(), contactID, now, limit)
 	if err != nil {
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to fetch events", err.Error())
 		return
@@ -147,13 +175,12 @@ func (h *CalendarHandler) ListUpcomingEventsForContact(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /events/upcoming [get]
 func (h *CalendarHandler) ListUpcomingEvents(c *gin.Context) {
-	// Parse pagination
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	// Parse and validate pagination
+	limit, offset := parsePagination(c, 0)
 
 	// Fetch upcoming events
 	now := accelerated.GetCurrentTime()
-	events, err := h.calendarRepo.ListUpcomingEventsWithContacts(c.Request.Context(), now, int32(limit), int32(offset))
+	events, err := h.calendarRepo.ListUpcomingEventsWithContacts(c.Request.Context(), now, limit, offset)
 	if err != nil {
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to fetch events", err.Error())
 		return
