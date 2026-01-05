@@ -17,6 +17,26 @@ import (
 	"github.com/google/uuid"
 )
 
+// Fuzzy matching constants
+const (
+	// MinSimilarityThreshold is the minimum similarity score for pg_trgm queries (0.0-1.0)
+	// Lower values cast a wider net for potential matches
+	MinSimilarityThreshold = 0.3
+
+	// MatchConfidenceThreshold is the minimum weighted score to suggest a match (0.0-1.0)
+	// Scores below this won't be shown to users as suggested matches
+	MatchConfidenceThreshold = 0.5
+
+	// NameSimilarityWeight is the weight given to name similarity in the final score
+	// Range: 0.0-1.0, typically 0.6 (60% of final score)
+	NameSimilarityWeight = 0.6
+
+	// ContactMethodWeight is the weight given to contact method overlap in the final score
+	// Range: 0.0-1.0, typically 0.4 (40% of final score)
+	// Must satisfy: NameSimilarityWeight + ContactMethodWeight = 1.0
+	ContactMethodWeight = 0.4
+)
+
 // ImportHandler handles import candidate HTTP requests
 type ImportHandler struct {
 	externalRepo *repository.ExternalContactRepository
@@ -128,14 +148,11 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 	}
 
 	// Sort candidates: those with suggested matches first
-	sort.SliceStable(candidates, func(i, j int) bool {
+	sort.Slice(candidates, func(i, j int) bool {
 		hasMatchI := candidates[i].SuggestedMatch != nil
 		hasMatchJ := candidates[j].SuggestedMatch != nil
-		if hasMatchI != hasMatchJ {
-			return hasMatchI // Items with matches come first
-		}
-		// If both have matches or both don't, maintain original order (stable sort)
-		return false
+		// Items with matches come first
+		return hasMatchI && !hasMatchJ
 	})
 
 	api.SendSuccess(c, http.StatusOK, candidates, &api.Meta{
@@ -415,7 +432,7 @@ func (h *ImportHandler) IgnoreContact(c *gin.Context) {
 }
 
 // findBestMatch finds the best matching CRM contact for an external contact
-// Returns a suggested match if confidence >= 0.5, otherwise nil
+// Returns a suggested match if confidence >= MatchConfidenceThreshold, otherwise nil
 func (h *ImportHandler) findBestMatch(ctx context.Context, external *repository.ExternalContact) *SuggestedMatch {
 	// Extract candidate name
 	candidateName := ""
@@ -431,8 +448,8 @@ func (h *ImportHandler) findBestMatch(ctx context.Context, external *repository.
 		return nil
 	}
 
-	// Find similar contacts by name (0.3 threshold for name similarity alone)
-	matches, err := h.contactRepo.FindSimilarContacts(ctx, candidateName, 0.3, 5)
+	// Find similar contacts by name using MinSimilarityThreshold
+	matches, err := h.contactRepo.FindSimilarContacts(ctx, candidateName, MinSimilarityThreshold, 5)
 	if err != nil {
 		logger.Warn().Err(err).Str("name", candidateName).Msg("failed to find similar contacts")
 		return nil
@@ -445,8 +462,7 @@ func (h *ImportHandler) findBestMatch(ctx context.Context, external *repository.
 	}
 	candidatePhones := make(map[string]bool)
 	for _, phone := range external.Phones {
-		// Normalize phone by removing spaces and dashes
-		normalized := strings.ReplaceAll(strings.ReplaceAll(phone.Value, " ", ""), "-", "")
+		normalized := normalizePhone(phone.Value)
 		candidatePhones[normalized] = true
 	}
 
@@ -454,8 +470,8 @@ func (h *ImportHandler) findBestMatch(ctx context.Context, external *repository.
 	var bestScore float64
 
 	for _, match := range matches {
-		// Start with name similarity (60% weight)
-		score := match.Similarity * 0.6
+		// Start with name similarity weighted score
+		score := match.Similarity * NameSimilarityWeight
 
 		// Check for contact method overlap (40% weight)
 		var methodMatches int
@@ -469,8 +485,7 @@ func (h *ImportHandler) findBestMatch(ctx context.Context, external *repository.
 					methodMatches++
 				}
 			case "phone":
-				normalized := strings.ReplaceAll(strings.ReplaceAll(method.Value, " ", ""), "-", "")
-				if candidatePhones[normalized] {
+				if candidatePhones[normalizePhone(method.Value)] {
 					methodMatches++
 				}
 			}
@@ -478,11 +493,11 @@ func (h *ImportHandler) findBestMatch(ctx context.Context, external *repository.
 
 		if totalMethods > 0 {
 			methodScore := float64(methodMatches) / float64(totalMethods)
-			score += methodScore * 0.4
+			score += methodScore * ContactMethodWeight
 		}
 
-		// Update best match if this score is higher
-		if score >= 0.5 && score > bestScore {
+		// Update best match if this score meets threshold and is higher than current best
+		if score >= MatchConfidenceThreshold && score > bestScore {
 			bestScore = score
 			bestMatch = &SuggestedMatch{
 				ContactID:   match.Contact.ID.String(),
@@ -493,6 +508,29 @@ func (h *ImportHandler) findBestMatch(ctx context.Context, external *repository.
 	}
 
 	return bestMatch
+}
+
+// normalizePhone strips all formatting from phone numbers except leading + for country code
+// Removes spaces, dashes, parentheses, dots, and other non-digit characters
+func normalizePhone(phone string) string {
+	if phone == "" {
+		return ""
+	}
+
+	var normalized strings.Builder
+	hasLeadingPlus := strings.HasPrefix(phone, "+")
+
+	for i, r := range phone {
+		// Keep leading + for international numbers
+		if r == '+' && i == 0 && hasLeadingPlus {
+			normalized.WriteRune(r)
+		} else if r >= '0' && r <= '9' {
+			normalized.WriteRune(r)
+		}
+		// Skip all other characters (spaces, dashes, parens, dots, etc.)
+	}
+
+	return normalized.String()
 }
 
 // toImportCandidateResponse converts an external contact to the API response format
