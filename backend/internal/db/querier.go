@@ -60,6 +60,7 @@ type Querier interface {
 	FindExternalContactsByNormalizedEmail(ctx context.Context, lower string) ([]*ExternalContact, error)
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
+	FindSimilarContacts(ctx context.Context, arg FindSimilarContactsParams) ([]*FindSimilarContactsRow, error)
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
 	GetContactTags(ctx context.Context, contactID pgtype.UUID) ([]*Tag, error)

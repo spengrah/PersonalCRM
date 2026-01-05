@@ -94,7 +94,9 @@ function LinkContactModal({
   onCancel: () => void
   loading: boolean
 }) {
-  const [selectedContactId, setSelectedContactId] = useState<string | undefined>()
+  const [selectedContactId, setSelectedContactId] = useState<string | undefined>(
+    candidate.suggested_match?.contact_id
+  )
   const { data: contactsData } = useContacts({ limit: CONTACT_SELECTOR_LIMIT })
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -262,7 +264,9 @@ function CandidateCard({
             disabled={importLoading || ignoreLoading}
           >
             <Link2 className="w-4 h-4 mr-1" />
-            Link
+            {candidate.suggested_match
+              ? `Link to ${candidate.suggested_match.contact_name}`
+              : 'Link (select)'}
           </Button>
           <Button
             size="sm"

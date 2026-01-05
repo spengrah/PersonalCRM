@@ -2,6 +2,12 @@
  * Types for import candidates from external sources (Google Contacts, iCloud, etc.)
  */
 
+export interface SuggestedMatch {
+  contact_id: string
+  contact_name: string
+  confidence: number
+}
+
 export interface ImportCandidate {
   id: string
   source: string
@@ -14,6 +20,7 @@ export interface ImportCandidate {
   photo_url?: string
   emails: string[]
   phones: string[]
+  suggested_match?: SuggestedMatch
 }
 
 export interface ImportCandidatesListParams {

@@ -146,7 +146,7 @@ func main() {
 		identityHandler = handlers.NewIdentityHandler(identityService)
 
 		// Initialize import handler
-		importHandler = handlers.NewImportHandler(externalContactRepo, contactService, enrichmentService)
+		importHandler = handlers.NewImportHandler(externalContactRepo, contactRepo, contactService, enrichmentService)
 
 		logger.Info().Msg("external sync infrastructure enabled")
 	}
