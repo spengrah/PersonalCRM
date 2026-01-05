@@ -1,11 +1,15 @@
 package google
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/api/calendar/v3"
 )
@@ -506,4 +510,196 @@ func TestPtrToStr(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+// =============================================================================
+// Integration tests with mocked dependencies
+// =============================================================================
+
+// TestMatchAttendees_WithMockedIdentityService tests contact matching with mocked identity service
+func TestMatchAttendees_WithMockedIdentityService(t *testing.T) {
+	ctx := context.Background()
+
+	contactID1 := uuid.New()
+	contactID2 := uuid.New()
+
+	mockIdentity := &mockIdentityService{
+		matchOrCreateResults: map[string]*service.MatchResult{
+			"alice@example.com": {ContactID: &contactID1},
+			"bob@example.com":   {ContactID: &contactID2},
+		},
+	}
+
+	provider := newTestableProvider(nil, nil, mockIdentity)
+
+	attendees := []repository.Attendee{
+		{Email: "user@example.com", Self: true, DisplayName: "User"},        // Should be skipped (self)
+		{Email: "alice@example.com", Self: false, DisplayName: "Alice"},     // Should match
+		{Email: "bob@example.com", Self: false, DisplayName: "Bob"},         // Should match
+		{Email: "unknown@example.com", Self: false, DisplayName: "Unknown"}, // No match
+		{Email: "", Self: false, DisplayName: "No Email"},                   // Should be skipped (empty)
+	}
+
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+
+	assert.True(t, mockIdentity.matchOrCreateCalled)
+	assert.Len(t, mockIdentity.matchOrCreateRequests, 3) // alice, bob, unknown (skipped self and empty)
+	assert.Len(t, matchedIDs, 2)                         // Only alice and bob matched
+	assert.Contains(t, matchedIDs, contactID1)
+	assert.Contains(t, matchedIDs, contactID2)
+}
+
+// TestMatchAttendees_DeduplicatesContacts tests that duplicate contact matches are deduplicated
+func TestMatchAttendees_DeduplicatesContacts(t *testing.T) {
+	ctx := context.Background()
+
+	contactID := uuid.New()
+
+	mockIdentity := &mockIdentityService{
+		matchOrCreateResults: map[string]*service.MatchResult{
+			"alice@example.com":  {ContactID: &contactID},
+			"alice2@example.com": {ContactID: &contactID}, // Same contact, different email
+		},
+	}
+
+	provider := newTestableProvider(nil, nil, mockIdentity)
+
+	attendees := []repository.Attendee{
+		{Email: "alice@example.com", Self: false, DisplayName: "Alice"},
+		{Email: "alice2@example.com", Self: false, DisplayName: "Alice Alt"},
+	}
+
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+
+	assert.Len(t, matchedIDs, 1) // Only one unique contact
+	assert.Equal(t, contactID, matchedIDs[0])
+}
+
+// TestMatchAttendees_HandlesIdentityServiceError tests error handling
+func TestMatchAttendees_HandlesIdentityServiceError(t *testing.T) {
+	ctx := context.Background()
+
+	contactID := uuid.New()
+
+	mockIdentity := &mockIdentityService{
+		matchOrCreateResults: map[string]*service.MatchResult{
+			"bob@example.com": {ContactID: &contactID},
+		},
+		matchOrCreateError: nil, // Will return error for alice (not in results)
+	}
+
+	provider := newTestableProvider(nil, nil, mockIdentity)
+
+	attendees := []repository.Attendee{
+		{Email: "alice@example.com", Self: false, DisplayName: "Alice"}, // No match
+		{Email: "bob@example.com", Self: false, DisplayName: "Bob"},     // Match
+	}
+
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+
+	assert.True(t, mockIdentity.matchOrCreateCalled)
+	assert.Len(t, matchedIDs, 1)
+	assert.Equal(t, contactID, matchedIDs[0])
+}
+
+// TestUpdateLastContactedForPastEvents_UpdatesContactsAndMarksEvents tests the full update flow
+func TestUpdateLastContactedForPastEvents_UpdatesContactsAndMarksEvents(t *testing.T) {
+	ctx := context.Background()
+
+	eventID := uuid.New()
+	contactID1 := uuid.New()
+	contactID2 := uuid.New()
+	eventEndTime := accelerated.GetCurrentTime().Add(-1 * time.Hour)
+
+	mockCalRepo := &mockCalendarRepo{
+		listPastResult: []repository.CalendarEvent{
+			{
+				ID:                eventID,
+				EndTime:           eventEndTime,
+				MatchedContactIDs: []uuid.UUID{contactID1, contactID2},
+			},
+		},
+	}
+
+	mockContactRepo := &mockContactRepo{}
+
+	provider := newTestableProvider(mockCalRepo, mockContactRepo, nil)
+
+	err := provider.updateLastContactedForPastEvents(ctx, accelerated.GetCurrentTime())
+
+	assert.NoError(t, err)
+
+	// Verify calendar repo was called to list past events
+	assert.True(t, mockCalRepo.listPastCalled)
+
+	// Verify contacts were updated
+	assert.True(t, mockContactRepo.updateLastContactedCalled)
+	assert.Len(t, mockContactRepo.updateLastContactedIDs, 2)
+	assert.Contains(t, mockContactRepo.updateLastContactedIDs, contactID1)
+	assert.Contains(t, mockContactRepo.updateLastContactedIDs, contactID2)
+
+	// Verify correct times were used
+	for _, contactedTime := range mockContactRepo.updateLastContactedTimes {
+		assert.Equal(t, eventEndTime, contactedTime)
+	}
+
+	// Verify event was marked as updated
+	assert.True(t, mockCalRepo.markUpdatedCalled)
+	assert.Len(t, mockCalRepo.markUpdatedIDs, 1)
+	assert.Equal(t, eventID, mockCalRepo.markUpdatedIDs[0])
+}
+
+// TestUpdateLastContactedForPastEvents_HandlesMultipleEvents tests processing multiple events
+func TestUpdateLastContactedForPastEvents_HandlesMultipleEvents(t *testing.T) {
+	ctx := context.Background()
+
+	event1ID := uuid.New()
+	event2ID := uuid.New()
+	contact1 := uuid.New()
+	contact2 := uuid.New()
+
+	mockCalRepo := &mockCalendarRepo{
+		listPastResult: []repository.CalendarEvent{
+			{
+				ID:                event1ID,
+				EndTime:           accelerated.GetCurrentTime().Add(-2 * time.Hour),
+				MatchedContactIDs: []uuid.UUID{contact1},
+			},
+			{
+				ID:                event2ID,
+				EndTime:           accelerated.GetCurrentTime().Add(-1 * time.Hour),
+				MatchedContactIDs: []uuid.UUID{contact2},
+			},
+		},
+	}
+
+	mockContactRepo := &mockContactRepo{}
+
+	provider := newTestableProvider(mockCalRepo, mockContactRepo, nil)
+
+	err := provider.updateLastContactedForPastEvents(ctx, accelerated.GetCurrentTime())
+
+	assert.NoError(t, err)
+	assert.Len(t, mockCalRepo.markUpdatedIDs, 2)
+	assert.Len(t, mockContactRepo.updateLastContactedIDs, 2)
+}
+
+// TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate tests the empty case
+func TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate(t *testing.T) {
+	ctx := context.Background()
+
+	mockCalRepo := &mockCalendarRepo{
+		listPastResult: []repository.CalendarEvent{}, // No events
+	}
+
+	mockContactRepo := &mockContactRepo{}
+
+	provider := newTestableProvider(mockCalRepo, mockContactRepo, nil)
+
+	err := provider.updateLastContactedForPastEvents(ctx, accelerated.GetCurrentTime())
+
+	assert.NoError(t, err)
+	assert.True(t, mockCalRepo.listPastCalled)
+	assert.False(t, mockContactRepo.updateLastContactedCalled) // No contacts to update
+	assert.False(t, mockCalRepo.markUpdatedCalled)             // No events to mark
 }
