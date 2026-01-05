@@ -336,5 +336,17 @@ describe('use-imports hooks', () => {
 
       expect(mockedImportsApi.triggerSync).toHaveBeenCalledWith('icloud', undefined)
     })
+
+    it('triggers sync with accountId', async () => {
+      mockedImportsApi.triggerSync.mockResolvedValueOnce(undefined)
+
+      const { result } = renderHook(() => useTriggerSync(), {
+        wrapper: createWrapper(queryClient),
+      })
+
+      await result.current.mutateAsync({ source: 'gcontacts', accountId: 'account-123' })
+
+      expect(mockedImportsApi.triggerSync).toHaveBeenCalledWith('gcontacts', 'account-123')
+    })
   })
 })

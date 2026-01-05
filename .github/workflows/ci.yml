@@ -202,6 +202,8 @@ jobs:
           GIN_MODE: test
           CORS_ALLOW_ALL: true
           FRONTEND_URL: http://localhost:3000
+          CRM_ENV: testing
+          ENABLE_EXTERNAL_SYNC: true
         run: bunx playwright test --project=chromium
 
       - name: Upload Playwright report

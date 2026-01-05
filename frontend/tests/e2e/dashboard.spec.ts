@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { createTestAPI, TestAPI } from './helpers/test-api'
 
 test.describe('Dashboard', () => {
   test('should display dashboard with navigation', async ({ page }) => {
@@ -51,47 +52,61 @@ test.describe('Dashboard', () => {
 
     expect(hasOverdue || hasCaughtUp).toBeTruthy()
   })
+})
+
+test.describe('Dashboard - With Seeded Data', () => {
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+
+    // Seed an overdue contact for dashboard testing
+    await testApi.seedOverdueContacts([
+      {
+        full_name: 'Dashboard Test Contact',
+        cadence: 'weekly',
+        days_overdue: 3,
+        email: 'dashboard-test@example.com',
+      },
+    ])
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
 
   test('marking contact as contacted updates dashboard immediately without navigation', async ({
     page,
   }) => {
+    const contactName = `${testApi.prefix}-Dashboard Test Contact`
+
     // Navigate to dashboard
     await page.goto('/dashboard')
     await page.waitForLoadState('networkidle')
 
-    // Check if there are any overdue contacts
-    const hasOverdueContacts = await page
-      .getByText(/contacts need your attention/)
-      .isVisible()
-      .catch(() => false)
-
-    // Skip test if no overdue contacts exist (nothing to test)
-    test.skip(!hasOverdueContacts, 'No overdue contacts available to test')
+    // Verify our seeded contact is visible
+    await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
 
     // Get the initial overdue count
     const statusText = page.getByText(/contacts need your attention/)
     const initialText = await statusText.textContent()
     const initialCount = parseInt(initialText?.match(/(\d+)/)?.[1] || '0', 10)
 
-    // Find the first "Mark as Contacted" button on the dashboard
-    const markContactedButton = page.getByRole('button', { name: /Mark as Contacted/i }).first()
+    // Find the "Mark as Contacted" button for our contact
+    const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
+    const markContactedButton = contactCard.getByRole('button', { name: /Mark as Contacted/i })
     await expect(markContactedButton).toBeVisible()
-
-    // Get the contact name from the card (for verification later)
-    const contactCard = page.locator('div.rounded-lg.shadow-sm.border').first()
-    const contactNameElement = contactCard.locator('h3').first()
-    const contactName = await contactNameElement.textContent()
 
     // Click "Mark as Contacted"
     await markContactedButton.click()
 
-    // Wait for the mutation to complete and the card to disappear
+    // Wait for the mutation to complete
+    await page.waitForTimeout(2000)
+
     // The contact should no longer be overdue, so it should vanish from the dashboard
-    if (contactName) {
-      await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
-        timeout: 5000,
-      })
-    }
+    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
+      timeout: 5000,
+    })
 
     // Verify the dashboard updated (count decreased or showing "all caught up")
     const hasAllCaughtUp = await page

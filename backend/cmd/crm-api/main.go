@@ -99,6 +99,7 @@ func main() {
 	var oauthHandler *handlers.OAuthHandler
 	var importHandler *handlers.ImportHandler
 	var googleOAuthService *google.OAuthService
+	var externalContactRepo *repository.ExternalContactRepository
 
 	if cfg.Features.EnableExternalSync {
 		syncRepo := repository.NewSyncRepository(database.Queries)
@@ -121,7 +122,7 @@ func main() {
 		}
 
 		// Initialize external contact and enrichment repositories
-		externalContactRepo := repository.NewExternalContactRepository(database.Queries)
+		externalContactRepo = repository.NewExternalContactRepository(database.Queries)
 		enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 
 		// Initialize identity and enrichment services
@@ -290,6 +291,25 @@ func main() {
 		// Export/Import routes
 		v1.POST("/export", systemHandler.ExportData)
 		v1.POST("/import", systemHandler.ImportData)
+
+		// Test routes (gated by CRM_ENV=testing or CRM_ENV=test)
+		if cfg.Runtime.CRMEnvironment == "testing" || cfg.Runtime.CRMEnvironment == "test" {
+			// Initialize external contact repo if not already done (for non-sync environments)
+			testExternalRepo := externalContactRepo
+			if testExternalRepo == nil {
+				testExternalRepo = repository.NewExternalContactRepository(database.Queries)
+			}
+
+			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService)
+			testRoutes := v1.Group("/test")
+			{
+				testRoutes.POST("/seed/external-contacts", testHandler.SeedExternalContacts)
+				testRoutes.POST("/seed/overdue-contacts", testHandler.SeedOverdueContacts)
+				testRoutes.POST("/cleanup", testHandler.Cleanup)
+				testRoutes.POST("/trigger-error", testHandler.TriggerError)
+			}
+			logger.Info().Msg("test API endpoints enabled (CRM_ENV=testing)")
+		}
 	}
 
 	// Swagger documentation

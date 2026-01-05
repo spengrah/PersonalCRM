@@ -52,6 +52,8 @@ export default defineConfig({
       env: {
         ...process.env,
         MIGRATIONS_PATH: 'migrations',
+        CRM_ENV: 'testing',
+        ENABLE_EXTERNAL_SYNC: 'true',
       },
     },
   ],
