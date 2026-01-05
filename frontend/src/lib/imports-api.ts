@@ -53,12 +53,16 @@ export const importsApi = {
 
     const result = await response.json()
 
+    const total = result.meta?.pagination?.total || 0
+    const limit = result.meta?.pagination?.limit || 20
+    const pages = Math.ceil(total / limit)
+
     return {
       candidates: result.data || [],
-      total: result.meta?.pagination?.total || 0,
+      total,
       page: result.meta?.pagination?.page || 1,
-      limit: result.meta?.pagination?.limit || 20,
-      pages: result.meta?.pagination?.pages || 0,
+      limit,
+      pages,
     }
   },
 
