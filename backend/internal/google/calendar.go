@@ -27,12 +27,29 @@ const (
 	CalendarSyncWindowDays = 30
 )
 
+// calendarRepoInterface defines the methods needed from calendar repository (for testability)
+type calendarRepoInterface interface {
+	Upsert(ctx context.Context, req repository.UpsertCalendarEventRequest) (*repository.CalendarEvent, error)
+	ListPastEventsNeedingUpdate(ctx context.Context, before time.Time, limit int32) ([]repository.CalendarEvent, error)
+	MarkLastContactedUpdated(ctx context.Context, id uuid.UUID) error
+}
+
+// contactRepoInterface defines the methods needed from contact repository (for testability)
+type contactRepoInterface interface {
+	UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted time.Time) error
+}
+
+// identityServiceInterface defines the methods needed from identity service (for testability)
+type identityServiceInterface interface {
+	MatchOrCreate(ctx context.Context, req service.MatchRequest) (*service.MatchResult, error)
+}
+
 // CalendarSyncProvider implements SyncProvider for Google Calendar
 type CalendarSyncProvider struct {
 	oauthService    *OAuthService
-	calendarRepo    *repository.CalendarEventRepository
-	contactRepo     *repository.ContactRepository
-	identityService *service.IdentityService
+	calendarRepo    calendarRepoInterface
+	contactRepo     contactRepoInterface
+	identityService identityServiceInterface
 }
 
 // NewCalendarSyncProvider creates a new Google Calendar sync provider

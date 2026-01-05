@@ -517,6 +517,7 @@ func TestPtrToStr(t *testing.T) {
 // =============================================================================
 
 // TestMatchAttendees_WithMockedIdentityService tests contact matching with mocked identity service
+// This tests the ACTUAL CalendarSyncProvider.matchAttendees() method with mocked dependencies
 func TestMatchAttendees_WithMockedIdentityService(t *testing.T) {
 	ctx := context.Background()
 
@@ -530,7 +531,8 @@ func TestMatchAttendees_WithMockedIdentityService(t *testing.T) {
 		},
 	}
 
-	provider := newTestableProvider(nil, nil, mockIdentity)
+	// Use newTestProvider to create the REAL CalendarSyncProvider with mocked deps
+	provider := newTestProvider(nil, nil, mockIdentity)
 
 	attendees := []repository.Attendee{
 		{Email: "user@example.com", Self: true, DisplayName: "User"},        // Should be skipped (self)
@@ -540,6 +542,7 @@ func TestMatchAttendees_WithMockedIdentityService(t *testing.T) {
 		{Email: "", Self: false, DisplayName: "No Email"},                   // Should be skipped (empty)
 	}
 
+	// Call the REAL matchAttendees method on the REAL CalendarSyncProvider
 	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
 
 	assert.True(t, mockIdentity.matchOrCreateCalled)
@@ -562,7 +565,7 @@ func TestMatchAttendees_DeduplicatesContacts(t *testing.T) {
 		},
 	}
 
-	provider := newTestableProvider(nil, nil, mockIdentity)
+	provider := newTestProvider(nil, nil, mockIdentity)
 
 	attendees := []repository.Attendee{
 		{Email: "alice@example.com", Self: false, DisplayName: "Alice"},
@@ -588,7 +591,7 @@ func TestMatchAttendees_HandlesIdentityServiceError(t *testing.T) {
 		matchOrCreateError: nil, // Will return error for alice (not in results)
 	}
 
-	provider := newTestableProvider(nil, nil, mockIdentity)
+	provider := newTestProvider(nil, nil, mockIdentity)
 
 	attendees := []repository.Attendee{
 		{Email: "alice@example.com", Self: false, DisplayName: "Alice"}, // No match
@@ -603,6 +606,7 @@ func TestMatchAttendees_HandlesIdentityServiceError(t *testing.T) {
 }
 
 // TestUpdateLastContactedForPastEvents_UpdatesContactsAndMarksEvents tests the full update flow
+// This tests the ACTUAL CalendarSyncProvider.updateLastContactedForPastEvents() method
 func TestUpdateLastContactedForPastEvents_UpdatesContactsAndMarksEvents(t *testing.T) {
 	ctx := context.Background()
 
@@ -623,9 +627,11 @@ func TestUpdateLastContactedForPastEvents_UpdatesContactsAndMarksEvents(t *testi
 
 	mockContactRepo := &mockContactRepo{}
 
-	provider := newTestableProvider(mockCalRepo, mockContactRepo, nil)
+	// Use newTestProvider to create the REAL CalendarSyncProvider with mocked deps
+	provider := newTestProvider(mockCalRepo, mockContactRepo, nil)
 
-	err := provider.updateLastContactedForPastEvents(ctx, accelerated.GetCurrentTime())
+	// Call the REAL updateLastContactedForPastEvents method
+	err := provider.updateLastContactedForPastEvents(ctx)
 
 	assert.NoError(t, err)
 
@@ -675,9 +681,9 @@ func TestUpdateLastContactedForPastEvents_HandlesMultipleEvents(t *testing.T) {
 
 	mockContactRepo := &mockContactRepo{}
 
-	provider := newTestableProvider(mockCalRepo, mockContactRepo, nil)
+	provider := newTestProvider(mockCalRepo, mockContactRepo, nil)
 
-	err := provider.updateLastContactedForPastEvents(ctx, accelerated.GetCurrentTime())
+	err := provider.updateLastContactedForPastEvents(ctx)
 
 	assert.NoError(t, err)
 	assert.Len(t, mockCalRepo.markUpdatedIDs, 2)
@@ -694,9 +700,9 @@ func TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate(t *testing.T) {
 
 	mockContactRepo := &mockContactRepo{}
 
-	provider := newTestableProvider(mockCalRepo, mockContactRepo, nil)
+	provider := newTestProvider(mockCalRepo, mockContactRepo, nil)
 
-	err := provider.updateLastContactedForPastEvents(ctx, accelerated.GetCurrentTime())
+	err := provider.updateLastContactedForPastEvents(ctx)
 
 	assert.NoError(t, err)
 	assert.True(t, mockCalRepo.listPastCalled)
