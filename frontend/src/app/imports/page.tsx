@@ -25,6 +25,7 @@ import {
   useIgnoreCandidate,
   useTriggerSync,
 } from '@/hooks/use-imports'
+import { useGoogleAccounts } from '@/hooks/use-google-accounts'
 import type { ImportCandidate, ImportCandidatesListParams } from '@/types/import'
 
 // Constants
@@ -138,6 +139,7 @@ function LinkContactModal({
               onChange={setSelectedContactId}
               placeholder="Search for a contact..."
               disabled={loading}
+              showNoContactOption={false}
             />
           </div>
 
@@ -292,6 +294,7 @@ export default function ImportsPage() {
   const [actionInProgress, setActionInProgress] = useState<string | null>(null)
 
   const { data, isLoading, error } = useImportCandidates(params)
+  const { data: googleAccounts } = useGoogleAccounts()
   const importMutation = useImportAsContact()
   const linkMutation = useLinkCandidate()
   const ignoreMutation = useIgnoreCandidate()
@@ -310,10 +313,12 @@ export default function ImportsPage() {
         type: 'success',
         message: `${displayName} imported successfully!`,
       })
-    } catch {
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : `Failed to import ${displayName}`
       setNotification({
         type: 'error',
-        message: `Failed to import ${displayName}`,
+        message: errorMessage,
       })
     } finally {
       setActionInProgress(null)
@@ -329,10 +334,11 @@ export default function ImportsPage() {
         message: 'Contact linked successfully!',
       })
       setLinkModalCandidate(null)
-    } catch {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to link contact'
       setNotification({
         type: 'error',
-        message: 'Failed to link contact',
+        message: errorMessage,
       })
     } finally {
       setActionInProgress(null)
@@ -352,10 +358,12 @@ export default function ImportsPage() {
         type: 'success',
         message: `${displayName} ignored`,
       })
-    } catch {
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : `Failed to ignore ${displayName}`
       setNotification({
         type: 'error',
-        message: `Failed to ignore ${displayName}`,
+        message: errorMessage,
       })
     } finally {
       setActionInProgress(null)
@@ -363,16 +371,45 @@ export default function ImportsPage() {
   }
 
   const handleSync = async () => {
-    try {
-      await syncMutation.mutateAsync('gcontacts')
-      setNotification({
-        type: 'success',
-        message: 'Sync started! New contacts will appear shortly.',
-      })
-    } catch {
+    // Check if there are any Google accounts connected
+    if (!googleAccounts || googleAccounts.length === 0) {
       setNotification({
         type: 'error',
-        message: 'Failed to start sync. Please try again.',
+        message: 'No Google accounts connected. Please connect a Google account in Settings.',
+      })
+      return
+    }
+
+    try {
+      // Sync all connected Google accounts
+      for (const account of googleAccounts) {
+        await syncMutation.mutateAsync({ source: 'gcontacts', accountId: account.account_id })
+      }
+      setNotification({
+        type: 'success',
+        message: `Sync started for ${googleAccounts.length} account${googleAccounts.length > 1 ? 's' : ''}! New contacts will appear shortly.`,
+      })
+    } catch (error) {
+      // Extract error message from API response
+      let errorMessage = 'Failed to start sync. Please try again.'
+      if (error instanceof Error) {
+        errorMessage = error.message
+      }
+
+      // Provide more specific guidance for common errors
+      if (errorMessage.includes('decrypt') || errorMessage.includes('authentication failed')) {
+        errorMessage =
+          'Your Google account connection has expired. Please reconnect your account in Settings.'
+      } else if (errorMessage.includes('refresh token')) {
+        errorMessage =
+          'Unable to refresh your Google account. Please reconnect your account in Settings.'
+      } else if (errorMessage.includes('OAuth')) {
+        errorMessage = 'Authentication error. Please reconnect your Google account in Settings.'
+      }
+
+      setNotification({
+        type: 'error',
+        message: errorMessage,
       })
     }
   }

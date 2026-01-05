@@ -62,7 +62,8 @@ export function useIgnoreCandidate() {
 // Trigger manual sync
 export function useTriggerSync() {
   return useMutation({
-    mutationFn: (source: string = 'gcontacts') => importsApi.triggerSync(source),
+    mutationFn: ({ source = 'gcontacts', accountId }: { source?: string; accountId?: string }) =>
+      importsApi.triggerSync(source, accountId),
     onSuccess: () => {
       invalidateFor('import:synced')
     },

@@ -38,7 +38,9 @@ class ApiClient {
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`
+    // Handle empty baseUrl by falling back to window.location.origin
+    const base = this.baseUrl || (typeof window !== 'undefined' ? window.location.origin : '')
+    const url = `${base}${endpoint}`
 
     // Add timeout to prevent hanging requests
     const controller = new AbortController()

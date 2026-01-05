@@ -85,7 +85,9 @@ export const importsApi = {
   },
 
   // Trigger manual sync for a source
-  triggerSync: async (source: string = 'gcontacts'): Promise<void> => {
-    return apiClient.post<void>(`/api/v1/sync/${source}/trigger`)
+  triggerSync: async (source: string = 'gcontacts', accountId?: string): Promise<void> => {
+    return apiClient.post<void>(`/api/v1/sync/${source}/trigger`, {
+      account_id: accountId,
+    })
   },
 }

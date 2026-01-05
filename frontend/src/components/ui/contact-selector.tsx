@@ -25,6 +25,8 @@ interface ContactSelectorProps {
   placeholder?: string
   disabled?: boolean
   error?: string
+  noContactLabel?: string
+  showNoContactOption?: boolean
 }
 
 export function ContactSelector({
@@ -34,6 +36,8 @@ export function ContactSelector({
   placeholder = 'Search contacts...',
   disabled = false,
   error,
+  noContactLabel = 'No contact (standalone reminder)',
+  showNoContactOption = true,
 }: ContactSelectorProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -189,20 +193,24 @@ export function ContactSelector({
       {isOpen && !disabled && (
         <div className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm">
           {/* No contact option */}
-          <div
-            className={clsx(
-              'relative cursor-pointer select-none py-2 pl-10 pr-4',
-              highlightedIndex === -1 ? 'bg-blue-600 text-white' : 'text-gray-900 hover:bg-gray-100'
-            )}
-            onClick={() => {
-              onChange(undefined)
-              setIsOpen(false)
-              setSearchTerm('')
-              setHighlightedIndex(-1)
-            }}
-          >
-            <span className="block truncate font-normal">No contact (standalone reminder)</span>
-          </div>
+          {showNoContactOption && (
+            <div
+              className={clsx(
+                'relative cursor-pointer select-none py-2 pl-10 pr-4',
+                highlightedIndex === -1
+                  ? 'bg-blue-600 text-white'
+                  : 'text-gray-900 hover:bg-gray-100'
+              )}
+              onClick={() => {
+                onChange(undefined)
+                setIsOpen(false)
+                setSearchTerm('')
+                setHighlightedIndex(-1)
+              }}
+            >
+              <span className="block truncate font-normal">{noContactLabel}</span>
+            </div>
+          )}
 
           {filteredContacts.length === 0 && searchTerm ? (
             <div className="relative cursor-default select-none py-2 pl-10 pr-4 text-gray-700">

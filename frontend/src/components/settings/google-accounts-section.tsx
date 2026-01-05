@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { Mail, Plus, Trash2, CheckCircle, AlertCircle, Info } from 'lucide-react'
+import { Mail, Plus, Trash2, CheckCircle, AlertCircle, Info, Clock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useGoogleAccounts, useRevokeGoogleAccount } from '@/hooks/use-google-accounts'
 import { startGoogleOAuthFlow, GoogleAccount } from '@/lib/oauth-api'
@@ -24,6 +24,66 @@ function formatDate(dateString: string): string {
     month: 'short',
     day: 'numeric',
   })
+}
+
+// Calculate account status based on expiration
+function getAccountStatus(expiresAt: string | undefined): {
+  status: 'connected' | 'expiring' | 'expired'
+  label: string
+  timeLabel: string
+  color: string
+  bgColor: string
+  icon: typeof CheckCircle
+} {
+  if (!expiresAt) {
+    return {
+      status: 'connected',
+      label: 'Connected',
+      timeLabel: '',
+      color: 'text-green-800',
+      bgColor: 'bg-green-100',
+      icon: CheckCircle,
+    }
+  }
+
+  const now = new Date()
+  const expires = new Date(expiresAt)
+  const diffMs = expires.getTime() - now.getTime()
+  const diffMinutes = Math.floor(diffMs / (1000 * 60))
+
+  // Expired
+  if (diffMs < 0) {
+    return {
+      status: 'expired',
+      label: 'Expired - Reconnect',
+      timeLabel: '',
+      color: 'text-red-800',
+      bgColor: 'bg-red-100',
+      icon: AlertCircle,
+    }
+  }
+
+  // Expiring soon (less than 15 minutes)
+  if (diffMinutes < 15) {
+    return {
+      status: 'expiring',
+      label: 'Expiring Soon',
+      timeLabel: '',
+      color: 'text-amber-800',
+      bgColor: 'bg-amber-100',
+      icon: Clock,
+    }
+  }
+
+  // Connected - don't show expiration time since token auto-refreshes
+  return {
+    status: 'connected',
+    label: 'Connected',
+    timeLabel: '',
+    color: 'text-green-800',
+    bgColor: 'bg-green-100',
+    icon: CheckCircle,
+  }
 }
 
 export function GoogleAccountsSection() {
@@ -194,54 +254,62 @@ export function GoogleAccountsSection() {
       {/* Accounts list */}
       {hasAccounts && (
         <div className="space-y-4">
-          {accounts.map(account => (
-            <div key={account.id} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-              <div className="flex items-start justify-between">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center space-x-2 mb-1">
-                    <p className="font-medium text-gray-900 truncate">{account.account_id}</p>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
-                      Connected
-                    </span>
-                  </div>
-                  {account.account_name && (
-                    <p className="text-sm text-gray-600">{account.account_name}</p>
-                  )}
-                  <p className="text-xs text-gray-400 mt-1">
-                    Connected {formatDate(account.created_at)}
-                  </p>
-                </div>
-                <Button
-                  onClick={() => handleDisconnect(account)}
-                  loading={revokeMutation.isPending}
-                  variant="ghost"
-                  size="sm"
-                  className="text-red-600 hover:text-red-700 hover:bg-red-50 -mr-2"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
+          {accounts.map(account => {
+            const statusInfo = getAccountStatus(account.expires_at)
+            const StatusIcon = statusInfo.icon
 
-              {/* Scopes */}
-              {account.scopes && account.scopes.length > 0 && (
-                <div className="mt-4 pt-4 border-t border-gray-200">
-                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
-                    Permissions
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {account.scopes.map(scope => (
+            return (
+              <div key={account.id} className="p-4 rounded-lg border bg-gray-50 border-gray-200">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center space-x-2 mb-1">
+                      <p className="font-medium text-gray-900 truncate">{account.account_id}</p>
                       <span
-                        key={scope}
-                        className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-white border border-gray-200 text-gray-700"
+                        className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-semibold ${statusInfo.bgColor} ${statusInfo.color}`}
                       >
-                        {formatScope(scope)}
+                        <StatusIcon className="w-3.5 h-3.5 mr-1.5" />
+                        {statusInfo.label}
                       </span>
-                    ))}
+                      <span className="text-xs text-gray-400">
+                        {formatDate(account.created_at)}
+                      </span>
+                    </div>
+                    {account.account_name && (
+                      <p className="text-sm text-gray-600">{account.account_name}</p>
+                    )}
                   </div>
+                  <Button
+                    onClick={() => handleDisconnect(account)}
+                    loading={revokeMutation.isPending}
+                    variant="ghost"
+                    size="sm"
+                    className="text-red-600 hover:text-red-700 hover:bg-red-50 -mr-2"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
                 </div>
-              )}
-            </div>
-          ))}
+
+                {/* Scopes */}
+                {account.scopes && account.scopes.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                      Permissions
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {account.scopes.map(scope => (
+                        <span
+                          key={scope}
+                          className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-white border border-gray-200 text-gray-700"
+                        >
+                          {formatScope(scope)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 
