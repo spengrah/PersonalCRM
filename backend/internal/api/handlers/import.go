@@ -207,16 +207,63 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 
 	// Build methods list
 	methods := make([]service.ContactMethodInput, 0)
+
+	// Handle emails - we can only store 2 emails (email_personal and email_work)
+	// Strategy: Use Google's type hints if available, otherwise assign first as personal, second as work
+	var hasPersonalEmail, hasWorkEmail bool
 	for _, email := range external.Emails {
+		// Determine the type based on Google's type hint
+		emailType := "email_personal"
+		if email.Type == "work" || email.Type == "other" {
+			emailType = "email_work"
+		}
+
+		// Skip if we already have this type
+		if emailType == "email_personal" && hasPersonalEmail {
+			// If we don't have work email yet, assign this as work instead
+			if !hasWorkEmail {
+				emailType = "email_work"
+				hasWorkEmail = true
+			} else {
+				continue // Skip - we already have both email types
+			}
+		} else if emailType == "email_work" && hasWorkEmail {
+			// If we don't have personal email yet, assign this as personal instead
+			if !hasPersonalEmail {
+				emailType = "email_personal"
+				hasPersonalEmail = true
+			} else {
+				continue // Skip - we already have both email types
+			}
+		}
+
 		methods = append(methods, service.ContactMethodInput{
-			Type:  "email_personal",
+			Type:  emailType,
 			Value: email.Value,
 		})
+
+		if emailType == "email_personal" {
+			hasPersonalEmail = true
+		} else {
+			hasWorkEmail = true
+		}
 	}
-	for _, phone := range external.Phones {
+
+	// Handle phones - we can only store 1 phone due to UNIQUE(contact_id, type) constraint
+	// Take the first phone, preferring one marked as primary
+	if len(external.Phones) > 0 {
+		// Try to find primary phone first
+		phoneToUse := external.Phones[0]
+		for _, phone := range external.Phones {
+			if phone.Primary {
+				phoneToUse = phone
+				break
+			}
+		}
+
 		methods = append(methods, service.ContactMethodInput{
 			Type:  "phone",
-			Value: phone.Value,
+			Value: phoneToUse.Value,
 		})
 	}
 
