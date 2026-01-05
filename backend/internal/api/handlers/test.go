@@ -201,8 +201,11 @@ func (h *TestHandler) SeedOverdueContacts(c *gin.Context) {
 
 		// Calculate backdated last_contacted time
 		// It should be: now - cadence_duration - days_overdue
+		// Use scaled days based on environment (in testing mode, 1 "day" = weekly_cadence / 7)
 		cadenceDuration := reminder.GetCadenceDuration(cadenceType)
-		daysOverdueDuration := time.Duration(input.DaysOverdue) * 24 * time.Hour
+		weeklyDuration := reminder.GetCadenceDuration(reminder.CadenceWeekly)
+		scaledDayDuration := weeklyDuration / 7 // 1 "day" in current environment
+		daysOverdueDuration := time.Duration(input.DaysOverdue) * scaledDayDuration
 		lastContacted := now.Add(-cadenceDuration).Add(-daysOverdueDuration)
 
 		// Build contact methods
