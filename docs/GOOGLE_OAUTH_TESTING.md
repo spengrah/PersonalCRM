@@ -58,6 +58,9 @@ For local testing, you'll create a separate Google Cloud project so you can safe
    - **Developer contact email**: Your email
 4. Click **Save and Continue**
 5. On the **Scopes** page, click **Add or Remove Scopes** and add:
+   - `openid` (**Required** - OpenID Connect authentication)
+   - `.../auth/userinfo.email` (**Required** - to get user email address)
+   - `.../auth/userinfo.profile` (**Required** - to get user profile info)
    - `https://www.googleapis.com/auth/gmail.readonly`
    - `https://www.googleapis.com/auth/calendar.readonly`
    - `https://www.googleapis.com/auth/contacts.readonly`
@@ -66,6 +69,8 @@ For local testing, you'll create a separate Google Cloud project so you can safe
 8. Click **Save and Continue**
 
 > **Note**: While in "Testing" status, only the test users you add can authorize the app.
+
+> **Google Workspace Users**: If you selected "Internal" for your OAuth app, all users in your Workspace organization can connect automatically. If you selected "External", you must add each account as a test user.
 
 ---
 
@@ -135,7 +140,11 @@ You should see all four variables set.
 make docker-up
 ```
 
-### 4.2 Run Migrations
+### 4.2 Run Migrations (Optional)
+
+**Note**: `make dev` (step 4.3) automatically runs migrations on backend startup, so you can skip this step if using `make dev`.
+
+If you want to run migrations manually:
 
 ```bash
 make db-migrate
@@ -157,7 +166,7 @@ cd frontend && bun dev
 
 ### 4.4 Verify Services
 
-- Backend: http://localhost:8080/api/v1/health
+- Backend: http://localhost:8080/health (not /api/v1/health)
 - Frontend: http://localhost:3000
 
 ---
