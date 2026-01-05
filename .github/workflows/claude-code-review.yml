@@ -91,7 +91,9 @@ jobs:
 
             ## How to Submit Review
 
-            After reviewing, you MUST submit an actual GitHub review (not just a comment):
+            After reviewing, you MUST submit exactly ONE GitHub review using `gh pr review`.
+
+            CRITICAL: Do NOT submit multiple reviews or use both `gh api` and `gh pr review`. Submit ONE review only.
 
             ### If Code is Excellent (rare):
             ```bash
@@ -128,7 +130,7 @@ jobs:
             Since these can be quickly fixed with Claude Code, please address before merging."
             ```
 
-            IMPORTANT: You can also add inline comments using gh api for specific line-by-line feedback, but you MUST also submit a final review with --approve or --request-changes.
+            Note: For specific line-by-line feedback, include file paths and line numbers in your review body using markdown formatting. Do not use gh api to create separate inline comments.
 
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
