@@ -21,7 +21,7 @@ const (
 	// ContactsSourceName is the source identifier for Google Contacts
 	ContactsSourceName = "gcontacts"
 	// ContactsDefaultInterval is the default sync interval for contacts
-	ContactsDefaultInterval = 1 * time.Hour
+	ContactsDefaultInterval = 24 * time.Hour
 	// ContactsPersonFields specifies which fields to fetch from the People API
 	ContactsPersonFields = "names,emailAddresses,phoneNumbers,addresses,organizations,birthdays,photos"
 )
