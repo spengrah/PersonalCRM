@@ -255,10 +255,10 @@ func (s *OAuthService) storeToken(ctx context.Context, token *oauth2.Token, user
 		return nil, fmt.Errorf("encrypt access token: %w", err)
 	}
 
-	// Encrypt refresh token if present
+	// Encrypt refresh token if present (reuse nonce from access token)
 	var refreshCiphertext []byte
 	if token.RefreshToken != "" {
-		refreshCiphertext, _, err = s.encryptor.Encrypt(token.RefreshToken)
+		refreshCiphertext, err = s.encryptor.EncryptWithNonce(token.RefreshToken, nonce)
 		if err != nil {
 			return nil, fmt.Errorf("encrypt refresh token: %w", err)
 		}
@@ -295,10 +295,10 @@ func (s *OAuthService) updateToken(ctx context.Context, id uuid.UUID, token *oau
 		return fmt.Errorf("encrypt access token: %w", err)
 	}
 
-	// Encrypt refresh token if present (refresh tokens are sometimes rotated)
+	// Encrypt refresh token if present (refresh tokens are sometimes rotated, reuse nonce from access token)
 	var refreshCiphertext []byte
 	if token.RefreshToken != "" {
-		refreshCiphertext, _, err = s.encryptor.Encrypt(token.RefreshToken)
+		refreshCiphertext, err = s.encryptor.EncryptWithNonce(token.RefreshToken, nonce)
 		if err != nil {
 			return fmt.Errorf("encrypt refresh token: %w", err)
 		}

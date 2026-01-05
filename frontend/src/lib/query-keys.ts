@@ -10,6 +10,7 @@
  */
 
 import type { ContactListParams } from '@/types/contact'
+import type { ImportCandidatesListParams } from '@/types/import'
 import type { ReminderListParams } from '@/types/reminder'
 import type { ListTimeEntriesParams } from '@/types/time-entry'
 
@@ -21,6 +22,15 @@ export const contactKeys = {
   details: () => [...contactKeys.all, 'detail'] as const,
   detail: (id: string) => [...contactKeys.details(), id] as const,
   overdue: () => [...contactKeys.all, 'overdue'] as const,
+}
+
+// Import candidate query keys
+export const importKeys = {
+  all: ['imports'] as const,
+  lists: () => [...importKeys.all, 'list'] as const,
+  list: (params: ImportCandidatesListParams) => [...importKeys.lists(), params] as const,
+  details: () => [...importKeys.all, 'detail'] as const,
+  detail: (id: string) => [...importKeys.details(), id] as const,
 }
 
 // Reminder query keys

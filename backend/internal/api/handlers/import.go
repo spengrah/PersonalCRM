@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/logger"
@@ -14,9 +17,30 @@ import (
 	"github.com/google/uuid"
 )
 
+// Fuzzy matching constants
+const (
+	// MinSimilarityThreshold is the minimum similarity score for pg_trgm queries (0.0-1.0)
+	// Lower values cast a wider net for potential matches
+	MinSimilarityThreshold = 0.3
+
+	// MatchConfidenceThreshold is the minimum weighted score to suggest a match (0.0-1.0)
+	// Scores below this won't be shown to users as suggested matches
+	MatchConfidenceThreshold = 0.5
+
+	// NameSimilarityWeight is the weight given to name similarity in the final score
+	// Range: 0.0-1.0, typically 0.6 (60% of final score)
+	NameSimilarityWeight = 0.6
+
+	// ContactMethodWeight is the weight given to contact method overlap in the final score
+	// Range: 0.0-1.0, typically 0.4 (40% of final score)
+	// Must satisfy: NameSimilarityWeight + ContactMethodWeight = 1.0
+	ContactMethodWeight = 0.4
+)
+
 // ImportHandler handles import candidate HTTP requests
 type ImportHandler struct {
 	externalRepo *repository.ExternalContactRepository
+	contactRepo  *repository.ContactRepository
 	contactSvc   *service.ContactService
 	enricher     *service.EnrichmentService
 	validator    *validator.Validate
@@ -25,11 +49,13 @@ type ImportHandler struct {
 // NewImportHandler creates a new import handler
 func NewImportHandler(
 	externalRepo *repository.ExternalContactRepository,
+	contactRepo *repository.ContactRepository,
 	contactSvc *service.ContactService,
 	enricher *service.EnrichmentService,
 ) *ImportHandler {
 	return &ImportHandler{
 		externalRepo: externalRepo,
+		contactRepo:  contactRepo,
 		contactSvc:   contactSvc,
 		enricher:     enricher,
 		validator:    validator.New(),
@@ -38,17 +64,25 @@ func NewImportHandler(
 
 // ImportCandidateResponse represents an import candidate for the API
 type ImportCandidateResponse struct {
-	ID           string   `json:"id"`
-	Source       string   `json:"source"`
-	AccountID    *string  `json:"account_id,omitempty"`
-	DisplayName  *string  `json:"display_name,omitempty"`
-	FirstName    *string  `json:"first_name,omitempty"`
-	LastName     *string  `json:"last_name,omitempty"`
-	Organization *string  `json:"organization,omitempty"`
-	JobTitle     *string  `json:"job_title,omitempty"`
-	PhotoURL     *string  `json:"photo_url,omitempty"`
-	Emails       []string `json:"emails"`
-	Phones       []string `json:"phones"`
+	ID             string          `json:"id"`
+	Source         string          `json:"source"`
+	AccountID      *string         `json:"account_id,omitempty"`
+	DisplayName    *string         `json:"display_name,omitempty"`
+	FirstName      *string         `json:"first_name,omitempty"`
+	LastName       *string         `json:"last_name,omitempty"`
+	Organization   *string         `json:"organization,omitempty"`
+	JobTitle       *string         `json:"job_title,omitempty"`
+	PhotoURL       *string         `json:"photo_url,omitempty"`
+	Emails         []string        `json:"emails"`
+	Phones         []string        `json:"phones"`
+	SuggestedMatch *SuggestedMatch `json:"suggested_match,omitempty"`
+}
+
+// SuggestedMatch represents a suggested CRM contact match for an import candidate
+type SuggestedMatch struct {
+	ContactID   string  `json:"contact_id"`
+	ContactName string  `json:"contact_name"`
+	Confidence  float64 `json:"confidence"`
 }
 
 // LinkRequest represents a request to link an external contact to a CRM contact
@@ -104,12 +138,22 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 		total, _ = h.externalRepo.CountAllUnmatched(ctx)
 	}
 
-	// Convert to response format
+	// Convert to response format with suggested matches
 	candidates := make([]ImportCandidateResponse, 0, len(contacts))
 	for _, contact := range contacts {
-		candidate := h.toImportCandidateResponse(&contact)
+		// Find potential matching CRM contact
+		suggestedMatch := h.findBestMatch(ctx, &contact)
+		candidate := h.toImportCandidateResponse(&contact, suggestedMatch)
 		candidates = append(candidates, candidate)
 	}
+
+	// Sort candidates: those with suggested matches first
+	sort.Slice(candidates, func(i, j int) bool {
+		hasMatchI := candidates[i].SuggestedMatch != nil
+		hasMatchJ := candidates[j].SuggestedMatch != nil
+		// Items with matches come first
+		return hasMatchI && !hasMatchJ
+	})
 
 	api.SendSuccess(c, http.StatusOK, candidates, &api.Meta{
 		Pagination: &api.PaginationMeta{
@@ -207,16 +251,49 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 
 	// Build methods list
 	methods := make([]service.ContactMethodInput, 0)
+
+	// Handle emails - we can only store 2 emails (email_personal and email_work)
+	// Strategy: Separate by type, then take first of each type
+	var personalEmails, workEmails []string
 	for _, email := range external.Emails {
+		if email.Type == "work" || email.Type == "other" {
+			workEmails = append(workEmails, email.Value)
+		} else {
+			personalEmails = append(personalEmails, email.Value)
+		}
+	}
+
+	// Add first personal email if available
+	if len(personalEmails) > 0 {
 		methods = append(methods, service.ContactMethodInput{
 			Type:  "email_personal",
-			Value: email.Value,
+			Value: personalEmails[0],
 		})
 	}
-	for _, phone := range external.Phones {
+
+	// Add first work email if available
+	if len(workEmails) > 0 {
+		methods = append(methods, service.ContactMethodInput{
+			Type:  "email_work",
+			Value: workEmails[0],
+		})
+	}
+
+	// Handle phones - we can only store 1 phone due to UNIQUE(contact_id, type) constraint
+	// Take the first phone, preferring one marked as primary
+	if len(external.Phones) > 0 {
+		// Try to find primary phone first
+		phoneToUse := external.Phones[0]
+		for _, phone := range external.Phones {
+			if phone.Primary {
+				phoneToUse = phone
+				break
+			}
+		}
+
 		methods = append(methods, service.ContactMethodInput{
 			Type:  "phone",
-			Value: phone.Value,
+			Value: phoneToUse.Value,
 		})
 	}
 
@@ -302,6 +379,11 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 
 	// Enrich the CRM contact
 	if err := h.enricher.EnrichContactFromExternal(ctx, crmContactID, updated); err != nil {
+		// If there are contact method conflicts, return as user-facing error
+		if strings.Contains(err.Error(), "contact method conflicts") {
+			api.SendError(c, http.StatusConflict, api.ErrCodeValidation, "Cannot link: "+err.Error(), "")
+			return
+		}
 		logger.Warn().Err(err).Str("external_id", id.String()).Msg("enrichment failed during link")
 	}
 
@@ -335,20 +417,123 @@ func (h *ImportHandler) IgnoreContact(c *gin.Context) {
 	api.SendSuccess(c, http.StatusOK, "Contact ignored", nil)
 }
 
+// findBestMatch finds the best matching CRM contact for an external contact
+// Returns a suggested match if confidence >= MatchConfidenceThreshold, otherwise nil
+func (h *ImportHandler) findBestMatch(ctx context.Context, external *repository.ExternalContact) *SuggestedMatch {
+	// Extract candidate name
+	candidateName := ""
+	if external.DisplayName != nil {
+		candidateName = *external.DisplayName
+	} else if external.FirstName != nil && external.LastName != nil {
+		candidateName = *external.FirstName + " " + *external.LastName
+	} else if external.FirstName != nil {
+		candidateName = *external.FirstName
+	}
+
+	if candidateName == "" {
+		return nil
+	}
+
+	// Find similar contacts by name using MinSimilarityThreshold
+	matches, err := h.contactRepo.FindSimilarContacts(ctx, candidateName, MinSimilarityThreshold, 5)
+	if err != nil {
+		logger.Warn().Err(err).Str("name", candidateName).Msg("failed to find similar contacts")
+		return nil
+	}
+
+	// Build sets of candidate emails and phones for quick lookup
+	candidateEmails := make(map[string]bool)
+	for _, email := range external.Emails {
+		candidateEmails[strings.ToLower(email.Value)] = true
+	}
+	candidatePhones := make(map[string]bool)
+	for _, phone := range external.Phones {
+		normalized := normalizePhone(phone.Value)
+		candidatePhones[normalized] = true
+	}
+
+	var bestMatch *SuggestedMatch
+	var bestScore float64
+
+	for _, match := range matches {
+		// Start with name similarity weighted score
+		score := match.Similarity * NameSimilarityWeight
+
+		// Check for contact method overlap (40% weight)
+		var methodMatches int
+		var totalMethods int
+
+		for _, method := range match.Contact.Methods {
+			totalMethods++
+			switch method.Type {
+			case "email_personal", "email_work":
+				if candidateEmails[strings.ToLower(method.Value)] {
+					methodMatches++
+				}
+			case "phone":
+				if candidatePhones[normalizePhone(method.Value)] {
+					methodMatches++
+				}
+			}
+		}
+
+		if totalMethods > 0 {
+			methodScore := float64(methodMatches) / float64(totalMethods)
+			score += methodScore * ContactMethodWeight
+		}
+
+		// Update best match if this score meets threshold and is higher than current best
+		if score >= MatchConfidenceThreshold && score > bestScore {
+			bestScore = score
+			bestMatch = &SuggestedMatch{
+				ContactID:   match.Contact.ID.String(),
+				ContactName: match.Contact.FullName,
+				Confidence:  score,
+			}
+		}
+	}
+
+	return bestMatch
+}
+
+// normalizePhone strips all formatting from phone numbers except leading + for country code
+// Removes spaces, dashes, parentheses, dots, and other non-digit characters
+func normalizePhone(phone string) string {
+	if phone == "" {
+		return ""
+	}
+
+	var normalized strings.Builder
+	hasLeadingPlus := strings.HasPrefix(phone, "+")
+
+	for i, r := range phone {
+		// Keep leading + for international numbers
+		if r == '+' && i == 0 && hasLeadingPlus {
+			normalized.WriteRune(r)
+		} else if r >= '0' && r <= '9' {
+			normalized.WriteRune(r)
+		}
+		// Skip all other characters (spaces, dashes, parens, dots, etc.)
+	}
+
+	return normalized.String()
+}
+
 // toImportCandidateResponse converts an external contact to the API response format
-func (h *ImportHandler) toImportCandidateResponse(contact *repository.ExternalContact) ImportCandidateResponse {
+func (h *ImportHandler) toImportCandidateResponse(contact *repository.ExternalContact, suggestedMatch *SuggestedMatch) ImportCandidateResponse {
 	response := ImportCandidateResponse{
-		ID:           contact.ID.String(),
-		Source:       contact.Source,
-		AccountID:    contact.AccountID,
-		DisplayName:  contact.DisplayName,
-		FirstName:    contact.FirstName,
-		LastName:     contact.LastName,
-		Organization: contact.Organization,
-		JobTitle:     contact.JobTitle,
-		PhotoURL:     contact.PhotoURL,
-		Emails:       make([]string, 0, len(contact.Emails)),
-		Phones:       make([]string, 0, len(contact.Phones)),
+		ID:             contact.ID.String(),
+		Source:         contact.Source,
+		AccountID:      contact.AccountID,
+		DisplayName:    contact.DisplayName,
+		FirstName:      contact.FirstName,
+		LastName:       contact.LastName,
+		Organization:   contact.Organization,
+		JobTitle:       contact.JobTitle,
+		PhotoURL:       contact.PhotoURL,
+		Emails:         make([]string, 0, len(contact.Emails)),
+		Phones:         make([]string, 0, len(contact.Phones)),
+		SuggestedMatch: suggestedMatch,
 	}
 
 	for _, email := range contact.Emails {

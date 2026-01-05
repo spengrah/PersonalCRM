@@ -17,7 +17,7 @@ vi.mock('../query-client', () => ({
 
 // Import after mocking
 import { invalidateFor, type DomainEvent } from '../query-invalidation'
-import { contactKeys, reminderKeys, timeEntryKeys } from '../query-keys'
+import { contactKeys, importKeys, reminderKeys, timeEntryKeys } from '../query-keys'
 
 describe('query-invalidation', () => {
   beforeEach(() => {
@@ -154,6 +154,52 @@ describe('query-invalidation', () => {
       })
     })
 
+    describe('import events', () => {
+      it('invalidates import and contact lists on import:imported', () => {
+        invalidateFor('import:imported')
+
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.lists(),
+        })
+        // Cross-domain: importing creates a new contact
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: contactKeys.lists(),
+        })
+      })
+
+      it('invalidates import and contact lists on import:linked', () => {
+        invalidateFor('import:linked')
+
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.lists(),
+        })
+        // Cross-domain: linking enriches an existing contact
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: contactKeys.lists(),
+        })
+      })
+
+      it('invalidates only import lists on import:ignored', () => {
+        invalidateFor('import:ignored')
+
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(1)
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.lists(),
+        })
+      })
+
+      it('invalidates import lists on import:synced', () => {
+        invalidateFor('import:synced')
+
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(1)
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.lists(),
+        })
+      })
+    })
+
     describe('cross-domain invalidation', () => {
       it('contact:touched invalidates reminder queries (backend completes auto-reminders)', () => {
         invalidateFor('contact:touched')
@@ -178,6 +224,10 @@ describe('query-invalidation', () => {
         'contact:updated',
         'contact:deleted',
         'contact:touched',
+        'import:imported',
+        'import:linked',
+        'import:ignored',
+        'import:synced',
         'reminder:created',
         'reminder:completed',
         'reminder:deleted',
