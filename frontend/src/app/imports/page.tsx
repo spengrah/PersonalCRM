@@ -27,6 +27,22 @@ import {
 } from '@/hooks/use-imports'
 import type { ImportCandidate, ImportCandidatesListParams } from '@/types/import'
 
+// Constants
+const DEFAULT_PAGE_SIZE = 20
+const CONTACT_SELECTOR_LIMIT = 500
+
+// Trusted domains for photo URLs (Google profile photos)
+const TRUSTED_PHOTO_DOMAINS = ['googleusercontent.com', 'google.com', 'gstatic.com']
+
+function isPhotoUrlTrusted(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname
+    return TRUSTED_PHOTO_DOMAINS.some(domain => hostname.endsWith(domain))
+  } catch {
+    return false
+  }
+}
+
 // Inline notification component
 function Notification({
   type,
@@ -78,7 +94,7 @@ function LinkContactModal({
   loading: boolean
 }) {
   const [selectedContactId, setSelectedContactId] = useState<string | undefined>()
-  const { data: contactsData } = useContacts({ limit: 100 })
+  const { data: contactsData } = useContacts({ limit: CONTACT_SELECTOR_LIMIT })
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -166,7 +182,7 @@ function CandidateCard({
         {/* Left side: Avatar and info */}
         <div className="flex items-start space-x-4">
           {/* Avatar */}
-          {candidate.photo_url ? (
+          {candidate.photo_url && isPhotoUrlTrusted(candidate.photo_url) ? (
             <img
               src={candidate.photo_url}
               alt={displayName}
@@ -210,7 +226,7 @@ function CandidateCard({
               {candidate.emails.slice(0, 2).map((email, idx) => (
                 <a
                   key={idx}
-                  href={`mailto:${email}`}
+                  href={`mailto:${encodeURIComponent(email)}`}
                   className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
                 >
                   <Mail className="w-3.5 h-3.5 mr-1.5 text-gray-400" />
@@ -220,7 +236,7 @@ function CandidateCard({
               {candidate.phones.slice(0, 2).map((phone, idx) => (
                 <a
                   key={idx}
-                  href={`tel:${phone}`}
+                  href={`tel:${encodeURIComponent(phone)}`}
                   className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
                 >
                   <Phone className="w-3.5 h-3.5 mr-1.5 text-gray-400" />
@@ -253,6 +269,7 @@ function CandidateCard({
             loading={ignoreLoading}
             disabled={importLoading}
             className="text-gray-500 hover:text-gray-700"
+            aria-label="Ignore candidate"
           >
             <X className="w-4 h-4" />
           </Button>
@@ -265,7 +282,7 @@ function CandidateCard({
 export default function ImportsPage() {
   const [params, setParams] = useState<ImportCandidatesListParams>({
     page: 1,
-    limit: 20,
+    limit: DEFAULT_PAGE_SIZE,
   })
   const [notification, setNotification] = useState<{
     type: 'success' | 'error'
