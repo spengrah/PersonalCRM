@@ -232,10 +232,7 @@ test.describe('Imports - Link Action', () => {
     await testApi.cleanup()
   })
 
-  // TODO: This test needs adjustment based on how the Link modal fetches contacts.
-  // The seeded overdue contact doesn't appear in the contact selector dropdown.
-  // Needs investigation into the modal's contact query implementation.
-  test.skip('should link candidate to existing contact', async ({ page }) => {
+  test('should link candidate to existing contact', async ({ page }) => {
     await page.goto('/imports')
     await page.waitForLoadState('networkidle')
 
@@ -245,22 +242,26 @@ test.describe('Imports - Link Action', () => {
     // Verify candidate is visible
     await expect(page.getByText(candidateName)).toBeVisible()
 
-    // Click Link on the candidate
-    await page.getByRole('button', { name: /Link/i }).first().click()
+    // Find the candidate card and click its Link button
+    const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: candidateName })
+    await candidateCard.getByRole('button', { name: /Link/i }).click()
 
     // Wait for modal to open
     await expect(page.getByText('Link to Existing Contact')).toBeVisible()
 
-    // Search for and select the contact we created
-    // The contact selector is a combobox/searchable dropdown
-    const contactSelector = page.getByRole('combobox')
-    if (await contactSelector.isVisible()) {
-      await contactSelector.click()
-      await page.getByText(targetName).click()
-    } else {
-      // Fallback: try clicking on the contact in a list
-      await page.getByText(targetName).click()
-    }
+    // The ContactSelector is a custom searchable dropdown
+    // Click on the selector area (contains placeholder text) to open it
+    const contactSelector = page.getByText('Search for a contact...')
+    await contactSelector.click()
+
+    // Type to search for the seeded contact
+    const searchInput = page.locator('input[placeholder="Search for a contact..."]')
+    await searchInput.fill(testApi.prefix)
+
+    // Wait for the dropdown to show the contact and click it
+    const contactOption = page.locator('[class*="cursor-pointer"]').filter({ hasText: targetName })
+    await expect(contactOption).toBeVisible({ timeout: 5000 })
+    await contactOption.click()
 
     // Click Link Contact button
     await page.getByRole('button', { name: /Link Contact/i }).click()
@@ -272,8 +273,6 @@ test.describe('Imports - Link Action', () => {
     await expect(page.getByText(/linked successfully/i)).toBeVisible({ timeout: 10000 })
 
     // Verify the candidate card is removed from the list
-    // Use a more specific selector for the card, not just the text (which also appears in notification)
-    const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: candidateName })
     await expect(candidateCard.getByRole('button', { name: /Import/i })).not.toBeVisible({
       timeout: 5000,
     })
@@ -332,107 +331,110 @@ test.describe('Imports - Pagination', () => {
 })
 
 test.describe('Imports - Suggested Matches', () => {
-  // Note: These tests check for suggested matches functionality that was added in PR #93.
-  // Since suggested matches require the backend's fuzzy matching algorithm to run during sync,
-  // we can only test with whatever candidates happen to exist with suggested matches.
+  // These tests verify the suggested matches functionality from PR #93.
+  // We seed deterministic data to ensure consistent test results.
 
-  test('should show "Link (select)" when no suggested match', async ({ page, request }) => {
-    await page.goto('/imports')
-    await page.waitForLoadState('networkidle')
+  let testApi: TestAPI
 
-    // Check for candidates without suggested matches
-    const candidatesResponse = await request.get(`${API_BASE_URL}/api/v1/imports/candidates`, {
-      headers: API_HEADERS,
-    })
-
-    if (!candidatesResponse.ok()) {
-      test.skip()
-      return
-    }
-
-    const candidatesData = await candidatesResponse.json()
-    const candidates = candidatesData.data || []
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const candidateWithoutMatch = candidates.find((c: any) => !c.suggested_match)
-
-    if (candidateWithoutMatch) {
-      // Verify Link button shows generic text for candidates without matches
-      await expect(page.getByRole('button', { name: 'Link (select)' }).first()).toBeVisible()
-    } else {
-      test.skip()
-    }
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
   })
 
-  test('should show suggested match with confidence percentage when present', async ({
-    page,
-    request,
-  }) => {
-    await page.goto('/imports')
-    await page.waitForLoadState('networkidle')
-
-    // Check if there are candidates with suggested matches in the API response
-    const candidatesResponse = await request.get(`${API_BASE_URL}/api/v1/imports/candidates`, {
-      headers: API_HEADERS,
-    })
-
-    if (!candidatesResponse.ok()) {
-      test.skip()
-      return
-    }
-
-    const candidatesData = await candidatesResponse.json()
-    const candidates = candidatesData.data || []
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const candidateWithMatch = candidates.find((c: any) => c.suggested_match)
-
-    if (candidateWithMatch) {
-      const matchName = candidateWithMatch.suggested_match.contact_name
-      const confidence = Math.round(candidateWithMatch.suggested_match.confidence * 100)
-
-      // Verify Link button shows matched contact name with confidence
-      await expect(
-        page.getByRole('button', { name: `Link to ${matchName} (${confidence}%)` }).first()
-      ).toBeVisible()
-    } else {
-      // No candidates with suggested matches exist - skip this test
-      test.skip()
-    }
+  test.afterEach(async () => {
+    await testApi.cleanup()
   })
 
-  test('should pre-select suggested contact in link modal', async ({ page, request }) => {
+  test('should show "Link (select)" when no suggested match', async ({ page }) => {
+    // Seed an external contact with a unique name that won't match any CRM contact
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Unique Nomatch Person',
+        emails: ['unique-nomatch@example.com'],
+      },
+    ])
+
     await page.goto('/imports')
     await page.waitForLoadState('networkidle')
 
-    // Check if there are candidates with suggested matches
-    const candidatesResponse = await request.get(`${API_BASE_URL}/api/v1/imports/candidates`, {
-      headers: API_HEADERS,
-    })
+    // The seeded candidate should show "Link (select)" since there's no matching CRM contact
+    const candidateCard = page
+      .locator('[class*="rounded-lg"]')
+      .filter({ hasText: `${testApi.prefix}-Unique Nomatch Person` })
+    await expect(candidateCard.getByRole('button', { name: 'Link (select)' })).toBeVisible()
+  })
 
-    if (!candidatesResponse.ok()) {
-      test.skip()
-      return
-    }
+  test('should show suggested match with confidence percentage when present', async ({ page }) => {
+    // First seed a CRM contact
+    await testApi.seedOverdueContacts([
+      {
+        full_name: 'Matching Contact Person',
+        email: 'matching-contact@example.com',
+        cadence: 'monthly',
+        days_overdue: 1,
+      },
+    ])
 
-    const candidatesData = await candidatesResponse.json()
-    const candidates = candidatesData.data || []
+    // Then seed an external contact with the SAME name and email
+    // This will trigger the fuzzy matching algorithm to find a suggested match
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Matching Contact Person',
+        emails: ['matching-contact@example.com'],
+      },
+    ])
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const candidateWithMatch = candidates.find((c: any) => c.suggested_match)
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
 
-    if (!candidateWithMatch) {
-      test.skip()
-      return
-    }
+    // The external contact should have a suggested match with the CRM contact
+    // The button should show "Link to [Name] (XX%)"
+    const candidateCard = page
+      .locator('[class*="rounded-lg"]')
+      .filter({ hasText: `${testApi.prefix}-Matching Contact Person` })
 
-    const matchName = candidateWithMatch.suggested_match.contact_name
+    // Wait for the card to be visible
+    await expect(candidateCard).toBeVisible()
 
-    // Click the Link button that shows the suggested match
-    await page
-      .getByRole('button', { name: `Link to ${matchName}` })
-      .first()
-      .click()
+    // The Link button should show the matched contact name with confidence
+    // Since name and email match exactly, confidence should be high (100%)
+    const linkButton = candidateCard.getByRole('button', { name: /Link to/ })
+    await expect(linkButton).toBeVisible()
+
+    // Verify it shows the prefixed contact name and a percentage
+    await expect(linkButton).toContainText(`${testApi.prefix}-Matching Contact Person`)
+    await expect(linkButton).toContainText('%')
+  })
+
+  test('should pre-select suggested contact in link modal', async ({ page }) => {
+    // Seed matching CRM contact and external contact
+    await testApi.seedOverdueContacts([
+      {
+        full_name: 'Preselect Test Contact',
+        email: 'preselect-test@example.com',
+        cadence: 'monthly',
+        days_overdue: 1,
+      },
+    ])
+
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Preselect Test Contact',
+        emails: ['preselect-test@example.com'],
+      },
+    ])
+
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Find the candidate card and click the Link button
+    const candidateCard = page
+      .locator('[class*="rounded-lg"]')
+      .filter({ hasText: `${testApi.prefix}-Preselect Test Contact` })
+
+    await expect(candidateCard).toBeVisible()
+
+    // Click the Link button (which should show "Link to [Name] (XX%)")
+    await candidateCard.getByRole('button', { name: /Link to/ }).click()
 
     // Verify modal opens
     await expect(page.getByText('Link to Existing Contact')).toBeVisible()
