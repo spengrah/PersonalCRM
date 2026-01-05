@@ -172,6 +172,13 @@ To rotate the API key:
 - **Public Endpoints**: `/health` and `/swagger/*` remain public for monitoring and documentation
 - **Defense in Depth**: When deployed via Tailscale, combines network-layer (VPN) + application-layer (API key) security
 
+### Google OAuth Setup
+
+To enable Gmail, Calendar, and Contacts sync:
+
+- **Local Development**: See [docs/GOOGLE_OAUTH_TESTING.md](docs/GOOGLE_OAUTH_TESTING.md)
+- **Production (Pi)**: See [docs/GOOGLE_OAUTH_PRODUCTION.md](docs/GOOGLE_OAUTH_PRODUCTION.md)
+
 ## Raspberry Pi Deployment with Systemd
 
 Deploy PersonalCRM as a systemd service on Raspberry Pi for automatic startup on boot.

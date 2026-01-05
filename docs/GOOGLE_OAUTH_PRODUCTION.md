@@ -241,7 +241,10 @@ OAuth tokens are encrypted using AES-256-GCM before storage:
 
 ### 6.3 Scope Limitations
 
-The app requests read-only scopes only:
+The app requests these read-only scopes:
+- `openid` - OpenID Connect authentication
+- `email` - User email address (for account identification)
+- `profile` - User profile information
 - `gmail.readonly` - Read emails, no send/delete
 - `calendar.readonly` - Read events, no create/modify
 - `contacts.readonly` - Read contacts, no modify

@@ -24,6 +24,9 @@ import (
 
 // Scopes defines the OAuth scopes requested for Google APIs
 var Scopes = []string{
+	"openid",
+	"email",
+	"profile",
 	gmail.GmailReadonlyScope,
 	calendar.CalendarReadonlyScope,
 	people.ContactsReadonlyScope,
@@ -95,7 +98,11 @@ func GenerateState() (string, error) {
 
 // GetAuthURL returns the URL to redirect user for authorization
 func (s *OAuthService) GetAuthURL(state string) string {
-	return s.config.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce)
+	return s.config.AuthCodeURL(
+		state,
+		oauth2.AccessTypeOffline,
+		oauth2.SetAuthURLParam("prompt", "consent"),
+	)
 }
 
 // ExchangeCode exchanges an authorization code for tokens and stores them
