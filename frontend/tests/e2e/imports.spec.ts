@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { createTestAPI, TestAPI } from './helpers/test-api'
 
 // API configuration for E2E tests
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
@@ -6,31 +7,6 @@ const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
 const API_HEADERS = {
   'X-API-Key': API_KEY,
   'Content-Type': 'application/json',
-}
-
-// Helper to create a test import candidate directly in the database
-async function createTestCandidate(
-  request: Parameters<Parameters<typeof test>[1]>[0]['request'],
-  data: {
-    source?: string
-    external_id: string
-    display_name?: string
-    first_name?: string
-    last_name?: string
-    organization?: string
-    job_title?: string
-    emails?: string[]
-    phones?: string[]
-  }
-) {
-  // We need to insert directly into external_contact table
-  // This requires a special test endpoint or direct DB access
-  // For now, we'll use the sync infrastructure to simulate this
-  // by checking if candidates exist after the page loads
-
-  // Note: In a real setup, you'd have a test seeding endpoint
-  // For this test, we'll work with whatever candidates exist
-  return data
 }
 
 test.describe('Imports Page', () => {
@@ -68,57 +44,50 @@ test.describe('Imports Page', () => {
       }
     }
   })
+})
 
-  test('should display candidate cards with correct information', async ({ page, request }) => {
-    // Check if there are any candidates
-    const response = await request.get(`${API_BASE_URL}/api/v1/imports/candidates`, {
-      headers: API_HEADERS,
-    })
+test.describe('Imports - With Seeded Data', () => {
+  let testApi: TestAPI
 
-    if (!response.ok()) {
-      test.skip()
-      return
-    }
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
 
-    const data = await response.json()
-    const candidates = data.data || []
+    // Seed external contacts for this test
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Test Import User',
+        emails: ['test-import@example.com'],
+        phones: ['+1234567890'],
+        organization: 'Test Org',
+        job_title: 'Engineer',
+      },
+      {
+        display_name: 'Second Import User',
+        emails: ['second-import@example.com'],
+      },
+    ])
+  })
 
-    if (candidates.length === 0) {
-      // Skip if no candidates to test
-      test.skip()
-      return
-    }
+  test.afterEach(async () => {
+    // Clean up all test data created with our prefix
+    await testApi.cleanup()
+  })
 
-    const firstCandidate = candidates[0]
-    const displayName =
-      firstCandidate.display_name ||
-      [firstCandidate.first_name, firstCandidate.last_name].filter(Boolean).join(' ') ||
-      'Unknown'
+  test('should display candidate cards with correct information', async ({ page }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
 
-    // Verify the candidate name is visible
-    await expect(page.getByText(displayName)).toBeVisible()
+    // Verify seeded candidates are visible (with prefix)
+    await expect(page.getByText(`${testApi.prefix}-Test Import User`)).toBeVisible()
 
     // Verify action buttons are present
     await expect(page.getByRole('button', { name: /Import/i }).first()).toBeVisible()
     await expect(page.getByRole('button', { name: /Link/i }).first()).toBeVisible()
   })
 
-  test('should open link modal when clicking Link button', async ({ page, request }) => {
-    // Check if there are any candidates
-    const response = await request.get(`${API_BASE_URL}/api/v1/imports/candidates`, {
-      headers: API_HEADERS,
-    })
-
-    if (!response.ok()) {
-      test.skip()
-      return
-    }
-
-    const data = await response.json()
-    if (!data.data || data.data.length === 0) {
-      test.skip()
-      return
-    }
+  test('should open link modal when clicking Link button', async ({ page }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
 
     // Click the Link button on the first candidate
     await page.getByRole('button', { name: /Link/i }).first().click()
@@ -134,36 +103,34 @@ test.describe('Imports Page', () => {
 })
 
 test.describe('Imports - Import Action', () => {
-  test('should import candidate and show success notification', async ({ page, request }) => {
-    // First check if there are candidates
-    const response = await request.get(`${API_BASE_URL}/api/v1/imports/candidates`, {
-      headers: API_HEADERS,
-    })
+  let testApi: TestAPI
 
-    if (!response.ok()) {
-      test.skip()
-      return
-    }
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
 
-    const data = await response.json()
-    if (!data.data || data.data.length === 0) {
-      test.skip()
-      return
-    }
+    // Seed a candidate for import testing
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Import Test Contact',
+        emails: ['import-test@example.com'],
+      },
+    ])
+  })
 
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  test('should import candidate and show success notification', async ({ page }) => {
     await page.goto('/imports')
     await page.waitForLoadState('networkidle')
 
-    const firstCandidate = data.data[0]
-    const displayName =
-      firstCandidate.display_name ||
-      [firstCandidate.first_name, firstCandidate.last_name].filter(Boolean).join(' ') ||
-      'contact'
+    const displayName = `${testApi.prefix}-Import Test Contact`
 
-    // Get initial count of candidates
-    const initialCandidates = data.data.length
+    // Verify candidate is visible
+    await expect(page.getByText(displayName)).toBeVisible()
 
-    // Click Import on the first candidate
+    // Click Import on the candidate
     await page
       .getByRole('button', { name: /Import/i })
       .first()
@@ -175,56 +142,42 @@ test.describe('Imports - Import Action', () => {
     // Verify success notification appears
     await expect(page.getByText(/imported successfully/i)).toBeVisible({ timeout: 10000 })
 
-    // Verify the candidate is removed from the list (or list is shorter)
-    if (initialCandidates === 1) {
-      // If there was only one candidate, empty state should show
-      await expect(page.getByText(/No import candidates/i)).toBeVisible({ timeout: 10000 })
-    }
-
-    // Clean up: delete the imported contact
-    // Go to contacts page and find the newly created contact
-    await page.goto('/contacts')
-    await page.waitForLoadState('networkidle')
-
-    // Find and delete the contact we just imported
-    const contactLink = page.getByRole('link', { name: displayName })
-    if (await contactLink.isVisible()) {
-      await contactLink.click()
-      await page.waitForLoadState('networkidle')
-
-      page.once('dialog', dialog => dialog.accept())
-      await Promise.all([
-        page.waitForURL('/contacts'),
-        page.getByRole('button', { name: 'Delete' }).click(),
-      ])
-    }
+    // Verify the candidate is removed from the list
+    await expect(page.getByText(displayName)).not.toBeVisible({ timeout: 5000 })
   })
 })
 
 test.describe('Imports - Ignore Action', () => {
-  test('should ignore candidate and show notification', async ({ page, request }) => {
-    // First check if there are candidates
-    const response = await request.get(`${API_BASE_URL}/api/v1/imports/candidates`, {
-      headers: API_HEADERS,
-    })
+  let testApi: TestAPI
 
-    if (!response.ok()) {
-      test.skip()
-      return
-    }
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
 
-    const data = await response.json()
-    if (!data.data || data.data.length === 0) {
-      test.skip()
-      return
-    }
+    // Seed a candidate for ignore testing
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Ignore Test Contact',
+        emails: ['ignore-test@example.com'],
+      },
+    ])
+  })
 
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  test('should ignore candidate and show notification', async ({ page }) => {
     await page.goto('/imports')
     await page.waitForLoadState('networkidle')
 
-    // Click the X (ignore) button on the first candidate
+    const displayName = `${testApi.prefix}-Ignore Test Contact`
+
+    // Verify candidate is visible
+    await expect(page.getByText(displayName)).toBeVisible()
+
+    // Click the X (ignore) button on the candidate
     // The ignore button is a ghost button with just an X icon
-    const candidateCard = page.locator('[class*="rounded-lg"]').first()
+    const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: displayName })
     const ignoreButton = candidateCard
       .getByRole('button')
       .filter({ has: page.locator('svg') })
@@ -237,86 +190,79 @@ test.describe('Imports - Ignore Action', () => {
 
     // Verify notification appears
     await expect(page.getByText(/ignored/i)).toBeVisible({ timeout: 10000 })
+
+    // Verify the candidate is removed from the list
+    await expect(page.getByText(displayName)).not.toBeVisible({ timeout: 5000 })
   })
 })
 
 test.describe('Imports - Link Action', () => {
-  test('should link candidate to existing contact', async ({ page, request }) => {
-    // First, we need both a candidate and a contact to link to
-    const candidatesResponse = await request.get(`${API_BASE_URL}/api/v1/imports/candidates`, {
-      headers: API_HEADERS,
-    })
+  let testApi: TestAPI
 
-    if (!candidatesResponse.ok()) {
-      test.skip()
-      return
-    }
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
 
-    const candidatesData = await candidatesResponse.json()
-    if (!candidatesData.data || candidatesData.data.length === 0) {
-      test.skip()
-      return
-    }
-
-    // Create a test contact to link to
-    const suffix = Date.now()
-    const contactName = `E2E Link Target ${suffix}`
-
-    const contactResponse = await request.post(`${API_BASE_URL}/api/v1/contacts`, {
-      headers: API_HEADERS,
-      data: {
-        full_name: contactName,
+    // Seed a candidate for link testing
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Link Test Contact',
+        emails: ['link-test@example.com'],
       },
-    })
+    ])
 
-    if (!contactResponse.ok()) {
-      test.skip()
-      return
+    // Seed a contact to link to
+    await testApi.seedOverdueContacts([
+      {
+        full_name: 'Link Target Contact',
+        cadence: 'monthly',
+        days_overdue: 1,
+        email: 'link-target@example.com',
+      },
+    ])
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  test('should link candidate to existing contact', async ({ page }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    const candidateName = `${testApi.prefix}-Link Test Contact`
+    const targetName = `${testApi.prefix}-Link Target Contact`
+
+    // Verify candidate is visible
+    await expect(page.getByText(candidateName)).toBeVisible()
+
+    // Click Link on the candidate
+    await page.getByRole('button', { name: /Link/i }).first().click()
+
+    // Wait for modal to open
+    await expect(page.getByText('Link to Existing Contact')).toBeVisible()
+
+    // Search for and select the contact we created
+    // The contact selector is a combobox/searchable dropdown
+    const contactSelector = page.getByRole('combobox')
+    if (await contactSelector.isVisible()) {
+      await contactSelector.click()
+      await page.getByText(targetName).click()
+    } else {
+      // Fallback: try clicking on the contact in a list
+      await page.getByText(targetName).click()
     }
 
-    const contactData = await contactResponse.json()
-    const contactId = contactData.data.id
+    // Click Link Contact button
+    await page.getByRole('button', { name: /Link Contact/i }).click()
 
-    try {
-      await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+    // Wait for action to complete
+    await page.waitForLoadState('networkidle')
 
-      // Click Link on the first candidate
-      await page.getByRole('button', { name: /Link/i }).first().click()
+    // Verify success notification
+    await expect(page.getByText(/linked successfully/i)).toBeVisible({ timeout: 10000 })
 
-      // Wait for modal to open
-      await expect(page.getByText('Link to Existing Contact')).toBeVisible()
-
-      // Search for and select the contact we created
-      // The contact selector is a combobox/searchable dropdown
-      const contactSelector = page.getByRole('combobox')
-      if (await contactSelector.isVisible()) {
-        await contactSelector.click()
-        await page.getByText(contactName).click()
-      } else {
-        // Fallback: try clicking on the contact in a list
-        await page.getByText(contactName).click()
-      }
-
-      // Click Link Contact button
-      await page.getByRole('button', { name: /Link Contact/i }).click()
-
-      // Wait for action to complete
-      await page.waitForLoadState('networkidle')
-
-      // Verify success notification
-      await expect(page.getByText(/linked successfully/i)).toBeVisible({ timeout: 10000 })
-    } finally {
-      // Clean up: delete the test contact
-      await page.goto(`/contacts/${contactId}`)
-      await page.waitForLoadState('networkidle')
-
-      page.once('dialog', dialog => dialog.accept())
-      await Promise.all([
-        page.waitForURL('/contacts'),
-        page.getByRole('button', { name: 'Delete' }).click(),
-      ])
-    }
+    // Verify the candidate is removed from the list
+    await expect(page.getByText(candidateName)).not.toBeVisible({ timeout: 5000 })
   })
 })
 
@@ -333,10 +279,6 @@ test.describe('Imports - Sync', () => {
     // but we're testing the UI interaction works
     await page.waitForLoadState('networkidle')
 
-    // Either we get a success or error notification
-    const notification = page.locator('[class*="rounded-lg"]').filter({
-      has: page.locator('svg'),
-    })
     // Just verify the page doesn't crash
     await expect(page.getByRole('heading', { name: 'Import Contacts' })).toBeVisible()
   })

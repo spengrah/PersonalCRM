@@ -20,7 +20,9 @@ type Querier interface {
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContacts(ctx context.Context) (int64, error)
+	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	CountDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) (int64, error)
+	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	CountIdentitiesBySource(ctx context.Context, source string) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
@@ -40,10 +42,15 @@ type Querier interface {
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)
 	CreateTimeEntry(ctx context.Context, arg CreateTimeEntryParams) (*TimeEntry, error)
 	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
+	// Test data management queries
+	// These queries are used by the test API endpoints to seed and cleanup test data
+	DeleteContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteEnrichment(ctx context.Context, id pgtype.UUID) error
 	DeleteEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) error
 	DeleteExternalContact(ctx context.Context, id pgtype.UUID) error
+	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error
+	DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) error
 	DeleteIdentity(ctx context.Context, id pgtype.UUID) error
 	DeleteInteraction(ctx context.Context, id pgtype.UUID) error
