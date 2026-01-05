@@ -330,3 +330,119 @@ test.describe('Imports - Pagination', () => {
     }
   })
 })
+
+test.describe('Imports - Suggested Matches', () => {
+  // Note: These tests check for suggested matches functionality that was added in PR #93.
+  // Since suggested matches require the backend's fuzzy matching algorithm to run during sync,
+  // we can only test with whatever candidates happen to exist with suggested matches.
+
+  test('should show "Link (select)" when no suggested match', async ({ page, request }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Check for candidates without suggested matches
+    const candidatesResponse = await request.get(`${API_BASE_URL}/api/v1/imports/candidates`, {
+      headers: API_HEADERS,
+    })
+
+    if (!candidatesResponse.ok()) {
+      test.skip()
+      return
+    }
+
+    const candidatesData = await candidatesResponse.json()
+    const candidates = candidatesData.data || []
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const candidateWithoutMatch = candidates.find((c: any) => !c.suggested_match)
+
+    if (candidateWithoutMatch) {
+      // Verify Link button shows generic text for candidates without matches
+      await expect(page.getByRole('button', { name: 'Link (select)' }).first()).toBeVisible()
+    } else {
+      test.skip()
+    }
+  })
+
+  test('should show suggested match with confidence percentage when present', async ({
+    page,
+    request,
+  }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Check if there are candidates with suggested matches in the API response
+    const candidatesResponse = await request.get(`${API_BASE_URL}/api/v1/imports/candidates`, {
+      headers: API_HEADERS,
+    })
+
+    if (!candidatesResponse.ok()) {
+      test.skip()
+      return
+    }
+
+    const candidatesData = await candidatesResponse.json()
+    const candidates = candidatesData.data || []
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const candidateWithMatch = candidates.find((c: any) => c.suggested_match)
+
+    if (candidateWithMatch) {
+      const matchName = candidateWithMatch.suggested_match.contact_name
+      const confidence = Math.round(candidateWithMatch.suggested_match.confidence * 100)
+
+      // Verify Link button shows matched contact name with confidence
+      await expect(
+        page.getByRole('button', { name: `Link to ${matchName} (${confidence}%)` }).first()
+      ).toBeVisible()
+    } else {
+      // No candidates with suggested matches exist - skip this test
+      test.skip()
+    }
+  })
+
+  test('should pre-select suggested contact in link modal', async ({ page, request }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Check if there are candidates with suggested matches
+    const candidatesResponse = await request.get(`${API_BASE_URL}/api/v1/imports/candidates`, {
+      headers: API_HEADERS,
+    })
+
+    if (!candidatesResponse.ok()) {
+      test.skip()
+      return
+    }
+
+    const candidatesData = await candidatesResponse.json()
+    const candidates = candidatesData.data || []
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const candidateWithMatch = candidates.find((c: any) => c.suggested_match)
+
+    if (!candidateWithMatch) {
+      test.skip()
+      return
+    }
+
+    const matchName = candidateWithMatch.suggested_match.contact_name
+
+    // Click the Link button that shows the suggested match
+    await page
+      .getByRole('button', { name: `Link to ${matchName}` })
+      .first()
+      .click()
+
+    // Verify modal opens
+    await expect(page.getByText('Link to Existing Contact')).toBeVisible()
+
+    // The suggested contact should be pre-selected - verify by checking the Link Contact
+    // button is enabled (it's disabled when no contact is selected)
+    await expect(page.getByRole('button', { name: /Link Contact/i })).toBeEnabled()
+
+    // Close modal
+    await page.getByRole('button', { name: /Cancel/i }).click()
+    await expect(page.getByText('Link to Existing Contact')).not.toBeVisible()
+  })
+})

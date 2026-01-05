@@ -147,7 +147,7 @@ func main() {
 		identityHandler = handlers.NewIdentityHandler(identityService)
 
 		// Initialize import handler
-		importHandler = handlers.NewImportHandler(externalContactRepo, contactService, enrichmentService)
+		importHandler = handlers.NewImportHandler(externalContactRepo, contactRepo, contactService, enrichmentService)
 
 		logger.Info().Msg("external sync infrastructure enabled")
 	}
@@ -255,8 +255,8 @@ func main() {
 				syncRoutes.GET("/providers", syncHandler.GetAvailableProviders)
 				syncRoutes.GET("/logs", syncHandler.GetRecentSyncLogs)
 				// Source-based routes (by source name like "gmail", "calendar")
-				syncRoutes.GET("/sources/:source/status", syncHandler.GetSyncState)
-				syncRoutes.POST("/sources/:source/trigger", syncHandler.TriggerSync)
+				syncRoutes.GET("/:source/status", syncHandler.GetSyncState)
+				syncRoutes.POST("/:source/trigger", syncHandler.TriggerSync)
 				// State-based routes (by sync state UUID)
 				syncRoutes.PATCH("/states/:id/enable", syncHandler.EnableSync)
 				syncRoutes.GET("/states/:id/logs", syncHandler.GetSyncLogs)

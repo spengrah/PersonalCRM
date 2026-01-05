@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -229,4 +230,62 @@ func (r *ContactRepository) HardDeleteContact(ctx context.Context, id uuid.UUID)
 // CountContacts returns the total number of active contacts
 func (r *ContactRepository) CountContacts(ctx context.Context) (int64, error) {
 	return r.queries.CountContacts(ctx)
+}
+
+// ContactMatch represents a potential contact match with similarity score
+type ContactMatch struct {
+	Contact    Contact
+	Similarity float64
+}
+
+// FindSimilarContacts finds contacts with similar names using fuzzy matching
+// Returns contacts with similarity above the threshold, ordered by similarity (highest first)
+func (r *ContactRepository) FindSimilarContacts(ctx context.Context, name string, threshold float64, limit int32) ([]ContactMatch, error) {
+	rows, err := r.queries.FindSimilarContacts(ctx, db.FindSimilarContactsParams{
+		FullName:  name,
+		Threshold: threshold,
+		Limit:     limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	matches := make([]ContactMatch, 0, len(rows))
+	for _, row := range rows {
+		// Convert UUID
+		var contactID uuid.UUID
+		if row.ID.Valid {
+			contactID = uuid.UUID(row.ID.Bytes)
+		}
+
+		// Parse contact methods from JSON
+		var methods []ContactMethod
+		if len(row.MethodsJson) > 0 {
+			// Unmarshal JSON into temporary struct
+			var methodData []struct {
+				Type  string `json:"type"`
+				Value string `json:"value"`
+			}
+			if err := json.Unmarshal(row.MethodsJson, &methodData); err == nil {
+				methods = make([]ContactMethod, len(methodData))
+				for i, m := range methodData {
+					methods[i] = ContactMethod{
+						Type:  m.Type,
+						Value: m.Value,
+					}
+				}
+			}
+		}
+
+		matches = append(matches, ContactMatch{
+			Contact: Contact{
+				ID:       contactID,
+				FullName: row.FullName,
+				Methods:  methods,
+			},
+			Similarity: row.NameSimilarity,
+		})
+	}
+
+	return matches, nil
 }

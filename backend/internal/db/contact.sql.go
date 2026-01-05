@@ -279,3 +279,64 @@ func (q *Queries) UpdateContactLastContacted(ctx context.Context, arg UpdateCont
 	_, err := q.db.Exec(ctx, UpdateContactLastContacted, arg.ID, arg.LastContacted)
 	return err
 }
+
+const FindSimilarContacts = `-- name: FindSimilarContacts :many
+SELECT
+  c.id,
+  c.full_name,
+  similarity(c.full_name, $1) as name_similarity,
+  COALESCE(
+    json_agg(
+      json_build_object(
+        'type', cm.type,
+        'value', cm.value
+      )
+    ) FILTER (WHERE cm.id IS NOT NULL),
+    '[]'
+  ) as methods_json
+FROM contact c
+LEFT JOIN contact_method cm ON c.id = cm.contact_id
+WHERE c.deleted_at IS NULL
+  AND similarity(c.full_name, $1) > $2
+GROUP BY c.id, c.full_name
+ORDER BY similarity(c.full_name, $1) DESC
+LIMIT $3
+`
+
+type FindSimilarContactsParams struct {
+	FullName  string  `json:"full_name"`
+	Threshold float64 `json:"threshold"`
+	Limit     int32   `json:"limit"`
+}
+
+type FindSimilarContactsRow struct {
+	ID             pgtype.UUID `json:"id"`
+	FullName       string      `json:"full_name"`
+	NameSimilarity float64     `json:"name_similarity"`
+	MethodsJson    []byte      `json:"methods_json"`
+}
+
+func (q *Queries) FindSimilarContacts(ctx context.Context, arg FindSimilarContactsParams) ([]*FindSimilarContactsRow, error) {
+	rows, err := q.db.Query(ctx, FindSimilarContacts, arg.FullName, arg.Threshold, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*FindSimilarContactsRow{}
+	for rows.Next() {
+		var i FindSimilarContactsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.FullName,
+			&i.NameSimilarity,
+			&i.MethodsJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

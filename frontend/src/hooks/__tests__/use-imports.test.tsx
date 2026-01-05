@@ -131,6 +131,94 @@ describe('use-imports hooks', () => {
 
       expect(mockedImportsApi.getCandidates).toHaveBeenCalledWith({ page: 2, limit: 10 })
     })
+
+    it('correctly parses candidates with suggested_match field', async () => {
+      const mockData = {
+        candidates: [
+          {
+            id: 'ext-1',
+            display_name: 'John Doe',
+            emails: ['john@example.com'],
+            phones: [],
+            suggested_match: {
+              contact_id: 'crm-123',
+              contact_name: 'John Smith',
+              confidence: 0.85,
+            },
+          },
+          {
+            id: 'ext-2',
+            display_name: 'Jane Doe',
+            emails: [],
+            phones: [],
+            // No suggested match
+          },
+        ],
+        total: 2,
+        page: 1,
+        limit: 20,
+        pages: 1,
+      }
+      mockedImportsApi.getCandidates.mockResolvedValueOnce(mockData)
+
+      const { result } = renderHook(() => useImportCandidates(), {
+        wrapper: createWrapper(queryClient),
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(result.current.data).toEqual(mockData)
+      expect(result.current.data?.candidates[0].suggested_match).toBeDefined()
+      expect(result.current.data?.candidates[0].suggested_match?.contact_id).toBe('crm-123')
+      expect(result.current.data?.candidates[0].suggested_match?.contact_name).toBe('John Smith')
+      expect(result.current.data?.candidates[0].suggested_match?.confidence).toBe(0.85)
+      expect(result.current.data?.candidates[1].suggested_match).toBeUndefined()
+    })
+
+    it('handles suggested_match with different confidence levels', async () => {
+      const mockData = {
+        candidates: [
+          {
+            id: 'ext-1',
+            display_name: 'High Confidence Match',
+            emails: [],
+            phones: [],
+            suggested_match: {
+              contact_id: 'crm-1',
+              contact_name: 'Contact 1',
+              confidence: 0.95,
+            },
+          },
+          {
+            id: 'ext-2',
+            display_name: 'Low Confidence Match',
+            emails: [],
+            phones: [],
+            suggested_match: {
+              contact_id: 'crm-2',
+              contact_name: 'Contact 2',
+              confidence: 0.51,
+            },
+          },
+        ],
+        total: 2,
+        page: 1,
+        limit: 20,
+        pages: 1,
+      }
+      mockedImportsApi.getCandidates.mockResolvedValueOnce(mockData)
+
+      const { result } = renderHook(() => useImportCandidates(), {
+        wrapper: createWrapper(queryClient),
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const candidates = result.current.data?.candidates
+      expect(candidates?.[0].suggested_match?.confidence).toBeGreaterThan(0.9)
+      expect(candidates?.[1].suggested_match?.confidence).toBeGreaterThan(0.5)
+      expect(candidates?.[1].suggested_match?.confidence).toBeLessThan(0.6)
+    })
   })
 
   describe('useImportCandidate', () => {
@@ -231,9 +319,9 @@ describe('use-imports hooks', () => {
         wrapper: createWrapper(queryClient),
       })
 
-      await result.current.mutateAsync('gcontacts')
+      await result.current.mutateAsync({ source: 'gcontacts' })
 
-      expect(mockedImportsApi.triggerSync).toHaveBeenCalledWith('gcontacts')
+      expect(mockedImportsApi.triggerSync).toHaveBeenCalledWith('gcontacts', undefined)
       expect(mockedInvalidateFor).toHaveBeenCalledWith('import:synced')
     })
 
@@ -244,9 +332,21 @@ describe('use-imports hooks', () => {
         wrapper: createWrapper(queryClient),
       })
 
-      await result.current.mutateAsync('icloud')
+      await result.current.mutateAsync({ source: 'icloud' })
 
-      expect(mockedImportsApi.triggerSync).toHaveBeenCalledWith('icloud')
+      expect(mockedImportsApi.triggerSync).toHaveBeenCalledWith('icloud', undefined)
+    })
+
+    it('triggers sync with accountId', async () => {
+      mockedImportsApi.triggerSync.mockResolvedValueOnce(undefined)
+
+      const { result } = renderHook(() => useTriggerSync(), {
+        wrapper: createWrapper(queryClient),
+      })
+
+      await result.current.mutateAsync({ source: 'gcontacts', accountId: 'account-123' })
+
+      expect(mockedImportsApi.triggerSync).toHaveBeenCalledWith('gcontacts', 'account-123')
     })
   })
 })

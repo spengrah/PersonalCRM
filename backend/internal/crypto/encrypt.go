@@ -61,6 +61,38 @@ func (e *TokenEncryptor) Encrypt(plaintext string) (ciphertext, nonce []byte, er
 	return ciphertext, nonce, nil
 }
 
+// EncryptWithNonce encrypts plaintext using AES-256-GCM with a provided nonce
+// This is useful when you need to encrypt multiple values with the same nonce
+// WARNING: Using the same nonce with the same key is a security risk in GCM
+// Only use this when you're sure the nonce is unique for this key
+func (e *TokenEncryptor) EncryptWithNonce(plaintext string, nonce []byte) (ciphertext []byte, err error) {
+	if plaintext == "" {
+		return nil, errors.New("plaintext cannot be empty")
+	}
+	if len(nonce) == 0 {
+		return nil, errors.New("nonce cannot be empty")
+	}
+
+	block, err := aes.NewCipher(e.key)
+	if err != nil {
+		return nil, fmt.Errorf("create cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("create GCM: %w", err)
+	}
+
+	if len(nonce) != gcm.NonceSize() {
+		return nil, fmt.Errorf("invalid nonce size: expected %d, got %d", gcm.NonceSize(), len(nonce))
+	}
+
+	// Encrypt the plaintext
+	ciphertext = gcm.Seal(nil, nonce, []byte(plaintext), nil)
+
+	return ciphertext, nil
+}
+
 // Decrypt decrypts ciphertext using AES-256-GCM
 func (e *TokenEncryptor) Decrypt(ciphertext, nonce []byte) (string, error) {
 	if len(ciphertext) == 0 {
