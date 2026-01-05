@@ -126,9 +126,9 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('networkidle')
 
-    // Last contacted should show today's date
+    // Last contacted should show today's date (use first() as date may appear multiple times)
     const today = new Date().toLocaleDateString()
-    await expect(page.getByText(today)).toBeVisible()
+    await expect(page.getByText(today).first()).toBeVisible()
   })
 
   test('should update last_contacted and remove from dashboard when marked from Contact Detail', async ({
@@ -148,9 +148,9 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     await page.getByRole('button', { name: /Mark as Contacted/i }).click()
     await page.waitForTimeout(2000)
 
-    // Last contacted should update to today
+    // Last contacted should update to today (use first() as date may appear multiple times)
     const today = new Date().toLocaleDateString()
-    await expect(page.getByText(today)).toBeVisible()
+    await expect(page.getByText(today).first()).toBeVisible()
 
     // Navigate back to dashboard
     await page.goto('/dashboard')
@@ -181,11 +181,11 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     // 1. Dashboard: contact should be gone
     await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible()
 
-    // 2. Contact Detail: should show today's date
+    // 2. Contact Detail: should show today's date (use first() as date may appear multiple times)
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('networkidle')
     const today = new Date().toLocaleDateString()
-    await expect(page.getByText(today)).toBeVisible()
+    await expect(page.getByText(today).first()).toBeVisible()
 
     // 3. Contacts List: should show today's date in the row
     await page.goto('/contacts')

@@ -142,8 +142,12 @@ test.describe('Imports - Import Action', () => {
     // Verify success notification appears
     await expect(page.getByText(/imported successfully/i)).toBeVisible({ timeout: 10000 })
 
-    // Verify the candidate is removed from the list
-    await expect(page.getByText(displayName)).not.toBeVisible({ timeout: 5000 })
+    // Verify the candidate card is removed from the list
+    // Use a more specific selector for the card, not just the text (which also appears in notification)
+    const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: displayName })
+    await expect(candidateCard.getByRole('button', { name: /Import/i })).not.toBeVisible({
+      timeout: 5000,
+    })
   })
 })
 
@@ -191,8 +195,12 @@ test.describe('Imports - Ignore Action', () => {
     // Verify notification appears
     await expect(page.getByText(/ignored/i)).toBeVisible({ timeout: 10000 })
 
-    // Verify the candidate is removed from the list
-    await expect(page.getByText(displayName)).not.toBeVisible({ timeout: 5000 })
+    // Verify the candidate card is removed from the list
+    // Use a more specific selector for the card, not just the text (which also appears in notification)
+    const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: displayName })
+    await expect(candidateCard.getByRole('button', { name: /Import/i })).not.toBeVisible({
+      timeout: 5000,
+    })
   })
 })
 
@@ -261,8 +269,12 @@ test.describe('Imports - Link Action', () => {
     // Verify success notification
     await expect(page.getByText(/linked successfully/i)).toBeVisible({ timeout: 10000 })
 
-    // Verify the candidate is removed from the list
-    await expect(page.getByText(candidateName)).not.toBeVisible({ timeout: 5000 })
+    // Verify the candidate card is removed from the list
+    // Use a more specific selector for the card, not just the text (which also appears in notification)
+    const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: candidateName })
+    await expect(candidateCard.getByRole('button', { name: /Import/i })).not.toBeVisible({
+      timeout: 5000,
+    })
   })
 })
 
