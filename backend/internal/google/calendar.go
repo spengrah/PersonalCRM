@@ -106,7 +106,7 @@ func (p *CalendarSyncProvider) ValidateCredentials(ctx context.Context, accountI
 		// Check if any accounts exist
 		accounts, err := p.oauthService.ListAccounts(ctx)
 		if err != nil {
-			return err
+			return fmt.Errorf("list accounts: %w", err)
 		}
 		if len(accounts) == 0 {
 			return fmt.Errorf("no Google accounts connected")
@@ -116,7 +116,10 @@ func (p *CalendarSyncProvider) ValidateCredentials(ctx context.Context, accountI
 
 	// Validate specific account
 	_, err := p.oauthService.GetClientForAccount(ctx, *accountID)
-	return err
+	if err != nil {
+		return fmt.Errorf("get OAuth client for account: %w", err)
+	}
+	return nil
 }
 
 // initialSync fetches events ±30 days from now and gets a sync token
@@ -319,7 +322,10 @@ func (p *CalendarSyncProvider) processEvent(
 	}
 
 	_, err = p.calendarRepo.Upsert(ctx, req)
-	return err
+	if err != nil {
+		return fmt.Errorf("upsert calendar event: %w", err)
+	}
+	return nil
 }
 
 // getUserResponse extracts the user's response status from an event
