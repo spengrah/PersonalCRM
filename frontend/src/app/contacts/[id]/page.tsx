@@ -15,6 +15,7 @@ import { useRemindersByContact } from '@/hooks/use-reminders'
 import { formatDateOnly } from '@/lib/utils'
 import { Edit, Trash2, MessageCircle, MapPin, Calendar, Bell, Clock } from 'lucide-react'
 import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
+import { UpcomingMeetings } from '@/components/contacts/upcoming-meetings'
 import {
   formatContactMethodValue,
   getContactMethodHref,
@@ -310,6 +311,11 @@ export default function ContactDetailPage() {
               )}
             </dl>
           </div>
+        </div>
+
+        {/* Upcoming Meetings Section */}
+        <div className="mt-8">
+          <UpcomingMeetings contactId={contactId} />
         </div>
 
         {/* Reminders Section */}

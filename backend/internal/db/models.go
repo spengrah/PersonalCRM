@@ -9,6 +9,28 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
+type CalendarEvent struct {
+	ID                   pgtype.UUID        `json:"id"`
+	GcalEventID          string             `json:"gcal_event_id"`
+	GcalCalendarID       string             `json:"gcal_calendar_id"`
+	GoogleAccountID      string             `json:"google_account_id"`
+	Title                pgtype.Text        `json:"title"`
+	Description          pgtype.Text        `json:"description"`
+	Location             pgtype.Text        `json:"location"`
+	StartTime            pgtype.Timestamptz `json:"start_time"`
+	EndTime              pgtype.Timestamptz `json:"end_time"`
+	AllDay               pgtype.Bool        `json:"all_day"`
+	Status               pgtype.Text        `json:"status"`
+	UserResponse         pgtype.Text        `json:"user_response"`
+	OrganizerEmail       pgtype.Text        `json:"organizer_email"`
+	Attendees            []byte             `json:"attendees"`
+	MatchedContactIds    []pgtype.UUID      `json:"matched_contact_ids"`
+	SyncedAt             pgtype.Timestamptz `json:"synced_at"`
+	LastContactedUpdated pgtype.Bool        `json:"last_contacted_updated"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Connection struct {
 	ID           pgtype.UUID        `json:"id"`
 	ContactAID   pgtype.UUID        `json:"contact_a_id"`
