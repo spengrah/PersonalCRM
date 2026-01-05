@@ -122,7 +122,7 @@ describe('ImportsPage - Suggested Matches', () => {
 
     render(<ImportsPage />, { wrapper: createWrapper() })
 
-    expect(screen.getByRole('button', { name: 'Link to John Smith' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Link to John Smith (85%)' })).toBeInTheDocument()
   })
 
   it('shows "Link (select)" when candidate has no suggested match', () => {
@@ -191,7 +191,7 @@ describe('ImportsPage - Suggested Matches', () => {
     const linkButtons = screen.getAllByRole('button', { name: /Link/i })
 
     // First button should be for the candidate with match
-    expect(linkButtons[0]).toHaveTextContent('Link to John Smith')
+    expect(linkButtons[0]).toHaveTextContent('Link to John Smith (85%)')
     // Second button should be for the candidate without match
     expect(linkButtons[1]).toHaveTextContent('Link (select)')
   })
@@ -227,7 +227,7 @@ describe('ImportsPage - Suggested Matches', () => {
     render(<ImportsPage />, { wrapper: createWrapper() })
 
     // Click the Link button
-    const linkButton = screen.getByRole('button', { name: 'Link to John Smith' })
+    const linkButton = screen.getByRole('button', { name: 'Link to John Smith (85%)' })
     await user.click(linkButton)
 
     // Modal should open
@@ -267,8 +267,8 @@ describe('ImportsPage - Suggested Matches', () => {
 
     render(<ImportsPage />, { wrapper: createWrapper() })
 
-    // Button should show the suggested contact name
-    expect(screen.getByRole('button', { name: 'Link to John Smith' })).toBeInTheDocument()
+    // Button should show the suggested contact name with confidence percentage
+    expect(screen.getByRole('button', { name: 'Link to John Smith (95%)' })).toBeInTheDocument()
   })
 
   it('handles multiple candidates with different match states', () => {
@@ -325,8 +325,8 @@ describe('ImportsPage - Suggested Matches', () => {
     expect(screen.getByText('Bob Wilson')).toBeInTheDocument()
 
     // Should have correct button texts
-    expect(screen.getByRole('button', { name: 'Link to John Smith' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Link to Jane Johnson' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Link to John Smith (85%)' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Link to Jane Johnson (75%)' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Link (select)' })).toBeInTheDocument()
   })
 
@@ -361,7 +361,7 @@ describe('ImportsPage - Suggested Matches', () => {
     render(<ImportsPage />, { wrapper: createWrapper() })
 
     // Open modal
-    const linkButton = screen.getByRole('button', { name: 'Link to John Smith' })
+    const linkButton = screen.getByRole('button', { name: 'Link to John Smith (85%)' })
     await user.click(linkButton)
 
     await waitFor(() => {
