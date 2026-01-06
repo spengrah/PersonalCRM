@@ -531,14 +531,19 @@ func TestMatchAttendees_WithMockedIdentityService(t *testing.T) {
 		},
 	}
 
+	// Empty contact repo for fuzzy matching fallback (no fuzzy matches available)
+	mockContactRepo := &mockContactRepo{
+		findSimilarResults: []repository.ContactMatch{},
+	}
+
 	// Use newTestProvider to create the REAL CalendarSyncProvider with mocked deps
-	provider := newTestProvider(nil, nil, mockIdentity)
+	provider := newTestProvider(nil, mockContactRepo, mockIdentity)
 
 	attendees := []repository.Attendee{
 		{Email: "user@example.com", Self: true, DisplayName: "User"},        // Should be skipped (self)
 		{Email: "alice@example.com", Self: false, DisplayName: "Alice"},     // Should match
 		{Email: "bob@example.com", Self: false, DisplayName: "Bob"},         // Should match
-		{Email: "unknown@example.com", Self: false, DisplayName: "Unknown"}, // No match
+		{Email: "unknown@example.com", Self: false, DisplayName: "Unknown"}, // No match (fuzzy attempted but no results)
 		{Email: "", Self: false, DisplayName: "No Email"},                   // Should be skipped (empty)
 	}
 
@@ -565,7 +570,9 @@ func TestMatchAttendees_DeduplicatesContacts(t *testing.T) {
 		},
 	}
 
-	provider := newTestProvider(nil, nil, mockIdentity)
+	mockContactRepo := &mockContactRepo{}
+
+	provider := newTestProvider(nil, mockContactRepo, mockIdentity)
 
 	attendees := []repository.Attendee{
 		{Email: "alice@example.com", Self: false, DisplayName: "Alice"},
@@ -591,7 +598,11 @@ func TestMatchAttendees_HandlesIdentityServiceError(t *testing.T) {
 		matchOrCreateError: nil, // Will return error for alice (not in results)
 	}
 
-	provider := newTestProvider(nil, nil, mockIdentity)
+	mockContactRepo := &mockContactRepo{
+		findSimilarResults: []repository.ContactMatch{}, // No fuzzy matches
+	}
+
+	provider := newTestProvider(nil, mockContactRepo, mockIdentity)
 
 	attendees := []repository.Attendee{
 		{Email: "alice@example.com", Self: false, DisplayName: "Alice"}, // No match
@@ -708,4 +719,338 @@ func TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate(t *testing.T) {
 	assert.True(t, mockCalRepo.listPastCalled)
 	assert.False(t, mockContactRepo.updateLastContactedCalled) // No contacts to update
 	assert.False(t, mockCalRepo.markUpdatedCalled)             // No events to mark
+}
+
+// ========================================
+// Fuzzy Matching Tests
+// ========================================
+
+// TestMatchAttendees_FuzzyMatchFallback tests that fuzzy matching is attempted when exact match fails
+func TestMatchAttendees_FuzzyMatchFallback(t *testing.T) {
+	ctx := context.Background()
+
+	contactID := uuid.New()
+
+	// Identity service returns no match (email not found)
+	mockIdentity := &mockIdentityService{
+		matchOrCreateResults: map[string]*service.MatchResult{}, // No exact matches
+	}
+
+	// Contact repo returns a similar contact with high name similarity
+	mockContactRepo := &mockContactRepo{
+		findSimilarResults: []repository.ContactMatch{
+			{
+				Contact: repository.Contact{
+					ID:       contactID,
+					FullName: "Jon Smith", // Similar to "John Smith"
+					Methods: []repository.ContactMethod{
+						{Type: "email_personal", Value: "jon@example.com"},
+					},
+				},
+				Similarity: 0.85, // High name similarity
+			},
+		},
+	}
+
+	provider := newTestProvider(nil, mockContactRepo, mockIdentity)
+
+	attendees := []repository.Attendee{
+		{
+			Email:       "john.smith@work.com", // Different from contact's email
+			DisplayName: "John Smith",
+			Self:        false,
+		},
+	}
+
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+
+	// Verify identity service was called first
+	assert.True(t, mockIdentity.matchOrCreateCalled)
+
+	// Verify fuzzy matching was attempted
+	assert.True(t, mockContactRepo.findSimilarCalled)
+	assert.Equal(t, "John Smith", mockContactRepo.findSimilarName)
+
+	// With 85% name similarity and no method overlap:
+	// Score = 0.6 * 0.85 + 0.4 * 0 = 0.51 (below 0.7 threshold)
+	// So no fuzzy match should be returned
+	assert.Len(t, matchedIDs, 0)
+}
+
+// TestMatchAttendees_FuzzyMatchWithMethodOverlap tests fuzzy matching with contact method overlap
+func TestMatchAttendees_FuzzyMatchWithMethodOverlap(t *testing.T) {
+	ctx := context.Background()
+
+	contactID := uuid.New()
+
+	// Identity service returns no match (email not in contact_method table but matches contact)
+	mockIdentity := &mockIdentityService{
+		matchOrCreateResults: map[string]*service.MatchResult{}, // No exact matches
+	}
+
+	// Contact repo returns a similar contact whose email matches the attendee
+	mockContactRepo := &mockContactRepo{
+		findSimilarResults: []repository.ContactMatch{
+			{
+				Contact: repository.Contact{
+					ID:       contactID,
+					FullName: "Jon Smith",
+					Methods: []repository.ContactMethod{
+						{Type: "email_work", Value: "john.smith@work.com"}, // Same as attendee!
+					},
+				},
+				Similarity: 0.80, // Good name similarity
+			},
+		},
+	}
+
+	provider := newTestProvider(nil, mockContactRepo, mockIdentity)
+
+	attendees := []repository.Attendee{
+		{
+			Email:       "john.smith@work.com",
+			DisplayName: "John Smith",
+			Self:        false,
+		},
+	}
+
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+
+	// Verify fuzzy matching was attempted
+	assert.True(t, mockContactRepo.findSimilarCalled)
+
+	// With 80% name similarity and 100% method overlap (1/1 methods match):
+	// Score = 0.6 * 0.80 + 0.4 * 1.0 = 0.48 + 0.40 = 0.88 (above 0.7 threshold)
+	// Fuzzy match should succeed
+	assert.Len(t, matchedIDs, 1)
+	assert.Equal(t, contactID, matchedIDs[0])
+}
+
+// TestMatchAttendees_ExactMatchTakesPrecedence tests that exact matches are preferred over fuzzy
+func TestMatchAttendees_ExactMatchTakesPrecedence(t *testing.T) {
+	ctx := context.Background()
+
+	exactContactID := uuid.New()
+	fuzzyContactID := uuid.New()
+
+	// Identity service returns an exact match
+	mockIdentity := &mockIdentityService{
+		matchOrCreateResults: map[string]*service.MatchResult{
+			"john.smith@work.com": {
+				ContactID: &exactContactID,
+			},
+		},
+	}
+
+	// Contact repo would return a different fuzzy match
+	mockContactRepo := &mockContactRepo{
+		findSimilarResults: []repository.ContactMatch{
+			{
+				Contact: repository.Contact{
+					ID:       fuzzyContactID,
+					FullName: "John Smith Jr",
+					Methods:  []repository.ContactMethod{},
+				},
+				Similarity: 0.95, // Very high similarity
+			},
+		},
+	}
+
+	provider := newTestProvider(nil, mockContactRepo, mockIdentity)
+
+	attendees := []repository.Attendee{
+		{
+			Email:       "john.smith@work.com",
+			DisplayName: "John Smith",
+			Self:        false,
+		},
+	}
+
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+
+	// Exact match found, so fuzzy matching should NOT be attempted
+	assert.False(t, mockContactRepo.findSimilarCalled)
+
+	// Should return exact match, not fuzzy
+	assert.Len(t, matchedIDs, 1)
+	assert.Equal(t, exactContactID, matchedIDs[0])
+}
+
+// TestMatchAttendees_NoDisplayName_SkipsFuzzyMatch tests that fuzzy matching is skipped without display name
+func TestMatchAttendees_NoDisplayName_SkipsFuzzyMatch(t *testing.T) {
+	ctx := context.Background()
+
+	// Identity service returns no match
+	mockIdentity := &mockIdentityService{
+		matchOrCreateResults: map[string]*service.MatchResult{},
+	}
+
+	mockContactRepo := &mockContactRepo{}
+
+	provider := newTestProvider(nil, mockContactRepo, mockIdentity)
+
+	attendees := []repository.Attendee{
+		{
+			Email:       "john.smith@work.com",
+			DisplayName: "", // No display name
+			Self:        false,
+		},
+	}
+
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+
+	// Without display name, fuzzy matching should not be attempted
+	assert.False(t, mockContactRepo.findSimilarCalled)
+	assert.Len(t, matchedIDs, 0)
+}
+
+// TestFindFuzzyMatch_NoMatches tests findFuzzyMatch when no similar contacts exist
+func TestFindFuzzyMatch_NoMatches(t *testing.T) {
+	ctx := context.Background()
+
+	mockContactRepo := &mockContactRepo{
+		findSimilarResults: []repository.ContactMatch{}, // No matches
+	}
+
+	provider := newTestProvider(nil, mockContactRepo, nil)
+
+	result := provider.findFuzzyMatch(ctx, "Unknown Person", "unknown@example.com")
+
+	assert.True(t, mockContactRepo.findSimilarCalled)
+	assert.Nil(t, result)
+}
+
+// TestFindFuzzyMatch_BelowThreshold tests that matches below confidence threshold are rejected
+func TestFindFuzzyMatch_BelowThreshold(t *testing.T) {
+	ctx := context.Background()
+
+	contactID := uuid.New()
+
+	mockContactRepo := &mockContactRepo{
+		findSimilarResults: []repository.ContactMatch{
+			{
+				Contact: repository.Contact{
+					ID:       contactID,
+					FullName: "John",
+					Methods:  []repository.ContactMethod{}, // No methods
+				},
+				Similarity: 0.5, // Only 50% name similarity
+			},
+		},
+	}
+
+	provider := newTestProvider(nil, mockContactRepo, nil)
+
+	result := provider.findFuzzyMatch(ctx, "Jonathan", "jonathan@example.com")
+
+	// Score = 0.6 * 0.5 + 0.4 * 0 = 0.30 (below 0.7 threshold)
+	assert.True(t, mockContactRepo.findSimilarCalled)
+	assert.Nil(t, result)
+}
+
+// TestFindFuzzyMatch_SelectsBestMatch tests that the highest scoring match is selected
+func TestFindFuzzyMatch_SelectsBestMatch(t *testing.T) {
+	ctx := context.Background()
+
+	contact1ID := uuid.New()
+	contact2ID := uuid.New()
+
+	mockContactRepo := &mockContactRepo{
+		findSimilarResults: []repository.ContactMatch{
+			{
+				Contact: repository.Contact{
+					ID:       contact1ID,
+					FullName: "Jon Smith",
+					Methods:  []repository.ContactMethod{}, // No overlap
+				},
+				Similarity: 0.85,
+			},
+			{
+				Contact: repository.Contact{
+					ID:       contact2ID,
+					FullName: "John Smyth",
+					Methods: []repository.ContactMethod{
+						{Type: "email_work", Value: "john.smith@work.com"}, // Email matches!
+					},
+				},
+				Similarity: 0.75, // Lower name similarity but has email match
+			},
+		},
+	}
+
+	provider := newTestProvider(nil, mockContactRepo, nil)
+
+	result := provider.findFuzzyMatch(ctx, "John Smith", "john.smith@work.com")
+
+	// Contact 1: 0.6 * 0.85 + 0.4 * 0 = 0.51 (below threshold)
+	// Contact 2: 0.6 * 0.75 + 0.4 * 1.0 = 0.45 + 0.40 = 0.85 (above threshold!)
+	assert.NotNil(t, result)
+	assert.Equal(t, contact2ID, *result)
+}
+
+// TestFindFuzzyMatch_EmailNormalization tests that email comparison is case-insensitive
+func TestFindFuzzyMatch_EmailNormalization(t *testing.T) {
+	ctx := context.Background()
+
+	contactID := uuid.New()
+
+	mockContactRepo := &mockContactRepo{
+		findSimilarResults: []repository.ContactMatch{
+			{
+				Contact: repository.Contact{
+					ID:       contactID,
+					FullName: "John Smith",
+					Methods: []repository.ContactMethod{
+						{Type: "email_personal", Value: "John.Smith@EXAMPLE.COM"}, // Different case
+					},
+				},
+				Similarity: 0.90,
+			},
+		},
+	}
+
+	provider := newTestProvider(nil, mockContactRepo, nil)
+
+	result := provider.findFuzzyMatch(ctx, "John Smith", "john.smith@example.com")
+
+	// Emails should match despite case difference
+	// Score = 0.6 * 0.90 + 0.4 * 1.0 = 0.54 + 0.40 = 0.94 (above threshold)
+	assert.NotNil(t, result)
+	assert.Equal(t, contactID, *result)
+}
+
+// TestFindFuzzyMatch_IgnoresNonEmailMethods tests that only emails are counted for overlap
+func TestFindFuzzyMatch_IgnoresNonEmailMethods(t *testing.T) {
+	ctx := context.Background()
+
+	contactID := uuid.New()
+
+	// Contact has 1 email (matching) and 2 phones (should be ignored in scoring)
+	mockContactRepo := &mockContactRepo{
+		findSimilarResults: []repository.ContactMatch{
+			{
+				Contact: repository.Contact{
+					ID:       contactID,
+					FullName: "John Smith",
+					Methods: []repository.ContactMethod{
+						{Type: "email_work", Value: "john.smith@work.com"}, // Matches attendee email
+						{Type: "phone", Value: "+1234567890"},              // Should be ignored
+						{Type: "phone", Value: "+0987654321"},              // Should be ignored
+					},
+				},
+				Similarity: 0.80,
+			},
+		},
+	}
+
+	provider := newTestProvider(nil, mockContactRepo, nil)
+
+	result := provider.findFuzzyMatch(ctx, "John Smith", "john.smith@work.com")
+
+	// Should count only email methods (1/1 match = 100% overlap)
+	// Score = 0.6 * 0.80 + 0.4 * 1.0 = 0.48 + 0.40 = 0.88 (above 0.7 threshold)
+	// Without the fix, it would count all methods: 1/3 = 0.33 overlap
+	// Wrong score would be: 0.6 * 0.80 + 0.4 * 0.33 = 0.48 + 0.13 = 0.61 (below threshold!)
+	assert.NotNil(t, result)
+	assert.Equal(t, contactID, *result)
 }

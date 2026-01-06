@@ -68,6 +68,11 @@ type mockContactRepo struct {
 	updateLastContactedIDs    []uuid.UUID
 	updateLastContactedTimes  []time.Time
 	updateLastContactedError  error
+
+	findSimilarCalled  bool
+	findSimilarName    string
+	findSimilarResults []repository.ContactMatch
+	findSimilarError   error
 }
 
 func (m *mockContactRepo) UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted time.Time) error {
@@ -75,6 +80,15 @@ func (m *mockContactRepo) UpdateContactLastContacted(ctx context.Context, id uui
 	m.updateLastContactedIDs = append(m.updateLastContactedIDs, id)
 	m.updateLastContactedTimes = append(m.updateLastContactedTimes, lastContacted)
 	return m.updateLastContactedError
+}
+
+func (m *mockContactRepo) FindSimilarContacts(ctx context.Context, name string, threshold float64, limit int32) ([]repository.ContactMatch, error) {
+	m.findSimilarCalled = true
+	m.findSimilarName = name
+	if m.findSimilarError != nil {
+		return nil, m.findSimilarError
+	}
+	return m.findSimilarResults, nil
 }
 
 // mockIdentityService is a mock implementation of identityServiceInterface

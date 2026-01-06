@@ -25,6 +25,17 @@ const (
 	CalendarDefaultInterval = 15 * time.Minute
 	// CalendarSyncWindowDays is the number of days to sync in each direction
 	CalendarSyncWindowDays = 30
+
+	// Fuzzy matching constants for calendar attendee matching
+	// CalendarMinSimilarityThreshold is the minimum similarity score for pg_trgm queries
+	CalendarMinSimilarityThreshold = 0.3
+	// CalendarFuzzyConfidenceThreshold is the minimum weighted score to accept a fuzzy match
+	// Higher than imports (0.5) since we auto-link without user confirmation
+	CalendarFuzzyConfidenceThreshold = 0.7
+	// CalendarNameSimilarityWeight is the weight given to name similarity (60%)
+	CalendarNameSimilarityWeight = 0.6
+	// CalendarMethodOverlapWeight is the weight given to contact method overlap (40%)
+	CalendarMethodOverlapWeight = 0.4
 )
 
 // calendarRepoInterface defines the methods needed from calendar repository (for testability)
@@ -37,6 +48,7 @@ type calendarRepoInterface interface {
 // contactRepoInterface defines the methods needed from contact repository (for testability)
 type contactRepoInterface interface {
 	UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted time.Time) error
+	FindSimilarContacts(ctx context.Context, name string, threshold float64, limit int32) ([]repository.ContactMatch, error)
 }
 
 // identityServiceInterface defines the methods needed from identity service (for testability)
@@ -381,6 +393,8 @@ func (p *CalendarSyncProvider) buildAttendeeList(event *calendar.Event, accountI
 }
 
 // matchAttendees matches attendee emails to CRM contacts
+// First attempts exact email matching via identity service, then falls back to
+// fuzzy name matching with weighted scoring (60% name + 40% method overlap)
 func (p *CalendarSyncProvider) matchAttendees(
 	ctx context.Context,
 	attendees []repository.Attendee,
@@ -400,7 +414,7 @@ func (p *CalendarSyncProvider) matchAttendees(
 			continue
 		}
 
-		// Use identity service to match (discovery mode - no KnownContactID)
+		// Step 1: Try exact email matching via identity service
 		displayName := attendee.DisplayName
 		result, err := p.identityService.MatchOrCreate(ctx, service.MatchRequest{
 			RawIdentifier: attendee.Email,
@@ -413,19 +427,101 @@ func (p *CalendarSyncProvider) matchAttendees(
 			logger.Debug().
 				Err(err).
 				Str("email", attendee.Email).
-				Msg("failed to match attendee")
-			continue
+				Msg("failed to match attendee via identity service")
 		}
 
+		// If exact match found, use it
 		if result != nil && result.ContactID != nil {
 			if !seen[*result.ContactID] {
 				matchedIDs = append(matchedIDs, *result.ContactID)
 				seen[*result.ContactID] = true
 			}
+			continue
+		}
+
+		// Step 2: Fall back to fuzzy name matching if display name is available
+		if attendee.DisplayName == "" {
+			continue
+		}
+
+		fuzzyMatch := p.findFuzzyMatch(ctx, attendee.DisplayName, attendee.Email)
+		if fuzzyMatch != nil {
+			if !seen[*fuzzyMatch] {
+				matchedIDs = append(matchedIDs, *fuzzyMatch)
+				seen[*fuzzyMatch] = true
+				logger.Debug().
+					Str("displayName", attendee.DisplayName).
+					Str("email", attendee.Email).
+					Str("contactId", fuzzyMatch.String()).
+					Msg("fuzzy matched attendee to contact")
+			}
 		}
 	}
 
 	return matchedIDs
+}
+
+// findFuzzyMatch attempts to match an attendee by name similarity and contact method overlap
+// Returns the contact ID if a match with confidence >= CalendarFuzzyConfidenceThreshold is found
+func (p *CalendarSyncProvider) findFuzzyMatch(ctx context.Context, displayName, email string) *uuid.UUID {
+	// Find contacts with similar names
+	matches, err := p.contactRepo.FindSimilarContacts(ctx, displayName, CalendarMinSimilarityThreshold, 5)
+	if err != nil {
+		logger.Debug().Err(err).Str("name", displayName).Msg("failed to find similar contacts")
+		return nil
+	}
+
+	if len(matches) == 0 {
+		return nil
+	}
+
+	// Normalize the attendee email for comparison
+	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
+
+	var bestMatch *uuid.UUID
+	var bestScore float64
+
+	for _, match := range matches {
+		// Start with name similarity weighted score (60%)
+		score := match.Similarity * CalendarNameSimilarityWeight
+
+		// Check for contact method overlap (40% weight)
+		// Only count email methods for comparison with the attendee email
+		var methodMatches int
+		var totalEmailMethods int
+
+		for _, method := range match.Contact.Methods {
+			switch method.Type {
+			case "email_personal", "email_work":
+				totalEmailMethods++
+				if strings.ToLower(strings.TrimSpace(method.Value)) == normalizedEmail {
+					methodMatches++
+				}
+			}
+		}
+
+		if totalEmailMethods > 0 {
+			methodScore := float64(methodMatches) / float64(totalEmailMethods)
+			score += methodScore * CalendarMethodOverlapWeight
+		}
+
+		// Update best match if this score meets threshold and is higher than current best
+		if score >= CalendarFuzzyConfidenceThreshold && score > bestScore {
+			bestScore = score
+			contactID := match.Contact.ID
+			bestMatch = &contactID
+		}
+	}
+
+	if bestMatch != nil {
+		logger.Debug().
+			Str("displayName", displayName).
+			Float64("confidence", bestScore).
+			Str("contactId", bestMatch.String()).
+			Msg("found fuzzy match for attendee")
+	}
+
+	return bestMatch
 }
 
 // updateLastContactedForPastEvents updates last_contacted for contacts in past events
