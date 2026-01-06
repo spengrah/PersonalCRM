@@ -83,9 +83,9 @@ func (s *Scheduler) Start() error {
 	// Skip cleanup job in testing environments
 	// In testing mode, we want to see all activity and avoid confusion
 
-	// Schedule external sync check job (every 5 minutes)
+	// Schedule external sync check job (every hour)
 	if s.syncEnabled && s.syncService != nil {
-		_, err := s.cron.AddFunc("0 */5 * * * *", func() {
+		_, err := s.cron.AddFunc("0 0 * * * *", func() {
 			ctx := context.Background()
 			logger.Debug().Msg("checking for due external syncs")
 
@@ -96,7 +96,7 @@ func (s *Scheduler) Start() error {
 		if err != nil {
 			return err
 		}
-		logger.Info().Msg("external sync scheduler enabled (runs every 5 minutes)")
+		logger.Info().Msg("external sync scheduler enabled (runs every hour)")
 	}
 
 	// Start the cron scheduler
