@@ -200,9 +200,11 @@ export function GoogleAccountsSection() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center space-x-2 mb-1">
                     <p className="font-medium text-gray-900 truncate">{account.account_id}</p>
-                    <span className="text-xs text-gray-500">
-                      Connected {formatDate(account.created_at)}
-                    </span>
+                    {account.created_at && (
+                      <span className="text-xs text-gray-500">
+                        Connected {formatDate(account.created_at)}
+                      </span>
+                    )}
                   </div>
                   {account.account_name && (
                     <p className="text-sm text-gray-600">{account.account_name}</p>
