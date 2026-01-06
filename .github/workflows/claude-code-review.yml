@@ -52,42 +52,15 @@ jobs:
 
             IMPORTANT: First check for previous review comments using `gh pr view ${{ github.event.pull_request.number }} --comments`. If you previously left a review, reference it in your new comment (e.g., "Following up on my previous review..." or "Addressing the changes since my last review...")' }}
 
-            ## Review Philosophy: STRICT MODE
+            ## Review Standards
 
-            **"If Claude Code can fix it, don't merge it."**
+            Follow the strict code review standards in @.ai/reviewers.md
 
-            Since implementation cost is low with Claude Code, maintain a HIGH bar for approval.
-            Request changes for anything that could be improved.
-
-            ## Approval Criteria (ALL must be true)
-
-            AUTO-APPROVE only if the code meets ALL of these criteria:
-            ✓ No security concerns (SQL injection, XSS, auth issues, secrets, etc.)
-            ✓ No bugs or unhandled edge cases
-            ✓ Comprehensive test coverage for new/changed code
-            ✓ Clear, well-documented code (comments where needed)
-            ✓ Follows repository conventions (check @.ai/rules.md, @CLAUDE.md)
-            ✓ Proper error handling and validation
-            ✓ Good performance (no obvious inefficiencies)
-            ✓ No TODOs or technical debt introduced
-            ✓ No code style inconsistencies
-
-            ## Request Changes (DEFAULT)
-
-            REQUEST CHANGES if ANY of these apply:
-            - Security concerns (even potential/minor ones)
-            - Bugs, race conditions, or edge cases not handled
-            - Missing or insufficient tests
-            - Unclear code needing comments/documentation
-            - Doesn't follow repo conventions or best practices
-            - Performance concerns or inefficiencies
-            - Poor/missing error handling or validation
-            - Code style inconsistencies
-            - Opportunities for refactoring
-            - TODOs or unfinished work
-            - Missing documentation
-
-            Use the repository's CLAUDE.md and .ai/rules.md for guidance on conventions.
+            This file contains:
+            - Review philosophy: "If Claude Code can fix it, don't merge it"
+            - Approval criteria (ALL must be true for approval)
+            - Request changes criteria (ANY applies = request changes)
+            - References to @.ai/rules.md for repository conventions
 
             ## How to Submit Review
 

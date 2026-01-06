@@ -34,6 +34,12 @@ This project uses AI-specific documentation in the `.ai/` directory for better o
 
 ---
 
+## 🔍 Code Review Standards
+
+For AI-powered code reviews (Codex, etc.), see [`.ai/reviewers.md`](.ai/reviewers.md)
+
+---
+
 ## 📖 Documentation Hierarchy
 
 1. **Existing code** - Always the source of truth
