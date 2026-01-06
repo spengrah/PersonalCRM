@@ -10,6 +10,10 @@ on:
       # Frontend TypeScript/React
       - "frontend/src/**/*.ts"
       - "frontend/src/**/*.tsx"
+      # TEMPORARY: AI agent documentation (for testing dual reviewers)
+      - ".ai/**"
+      - "AGENTS.md"
+      - ".claude/**"
 
 jobs:
   claude-review:
