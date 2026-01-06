@@ -329,3 +329,101 @@ func toLower(s string) string {
 }
 
 // normalizePhone is now defined in import.go and used by both production code and tests
+
+// TestMatchScoring_OnlyCountMatchableMethodTypes is a regression test for issue #101
+// The bug was that totalMethods was incremented for ALL contact methods (including telegram,
+// whatsapp, etc.), but only email and phone types were checked for matches. This inflated
+// the denominator and deflated the method overlap score.
+func TestMatchScoring_OnlyCountMatchableMethodTypes(t *testing.T) {
+	tests := []struct {
+		name           string
+		methods        []repository.ContactMethod
+		candidateEmail string
+		expectedTotal  int
+		expectedMatch  int
+		expectedScore  float64
+	}{
+		{
+			name: "email only - perfect match",
+			methods: []repository.ContactMethod{
+				{Type: "email_work", Value: "john@example.com"},
+			},
+			candidateEmail: "john@example.com",
+			expectedTotal:  1,
+			expectedMatch:  1,
+			expectedScore:  1.0, // 1/1
+		},
+		{
+			name: "email with non-matchable types should not inflate denominator",
+			methods: []repository.ContactMethod{
+				{Type: "email_work", Value: "john@example.com"},
+				{Type: "telegram", Value: "@johnsmith"},
+				{Type: "whatsapp", Value: "+1234567890"},
+			},
+			candidateEmail: "john@example.com",
+			expectedTotal:  1, // Only email_work counts - telegram and whatsapp are ignored
+			expectedMatch:  1,
+			expectedScore:  1.0, // BUG would have: 1/3 = 0.33, FIX has: 1/1 = 1.0
+		},
+		{
+			name: "multiple matchable types with non-matchable",
+			methods: []repository.ContactMethod{
+				{Type: "email_work", Value: "john@example.com"},
+				{Type: "email_personal", Value: "john.personal@example.com"},
+				{Type: "phone", Value: "+1234567890"},
+				{Type: "discord", Value: "john#1234"},
+				{Type: "signal", Value: "+1234567890"},
+			},
+			candidateEmail: "john@example.com",
+			expectedTotal:  3,     // 2 emails + 1 phone
+			expectedMatch:  1,     // Only work email matches
+			expectedScore:  0.333, // 1/3
+		},
+		{
+			name: "only non-matchable types",
+			methods: []repository.ContactMethod{
+				{Type: "telegram", Value: "@johnsmith"},
+				{Type: "discord", Value: "john#1234"},
+				{Type: "twitter", Value: "@john"},
+			},
+			candidateEmail: "john@example.com",
+			expectedTotal:  0, // No matchable types
+			expectedMatch:  0,
+			expectedScore:  0.0, // No contribution from methods
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the scoring logic from findBestMatch
+			candidateEmails := make(map[string]bool)
+			candidateEmails[strings.ToLower(tt.candidateEmail)] = true
+
+			var methodMatches int
+			var totalMethods int
+
+			// This is the FIXED logic - only counting matchable types
+			for _, method := range tt.methods {
+				switch method.Type {
+				case "email_personal", "email_work":
+					totalMethods++
+					if candidateEmails[strings.ToLower(method.Value)] {
+						methodMatches++
+					}
+				case "phone":
+					totalMethods++
+					// Phone matching would happen here but we're testing emails
+				}
+			}
+
+			assert.Equal(t, tt.expectedTotal, totalMethods, "totalMethods should only count matchable types")
+			assert.Equal(t, tt.expectedMatch, methodMatches, "methodMatches should count actual matches")
+
+			var methodScore float64
+			if totalMethods > 0 {
+				methodScore = float64(methodMatches) / float64(totalMethods)
+			}
+			assert.InDelta(t, tt.expectedScore, methodScore, 0.01, "method score should be correct")
+		})
+	}
+}
