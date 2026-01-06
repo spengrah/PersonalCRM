@@ -464,13 +464,14 @@ func (h *ImportHandler) findBestMatch(ctx context.Context, external *repository.
 		var totalMethods int
 
 		for _, method := range match.Contact.Methods {
-			totalMethods++
 			switch method.Type {
 			case "email_personal", "email_work":
+				totalMethods++
 				if candidateEmails[strings.ToLower(method.Value)] {
 					methodMatches++
 				}
 			case "phone":
+				totalMethods++
 				if candidatePhones[normalizePhone(method.Value)] {
 					methodMatches++
 				}
