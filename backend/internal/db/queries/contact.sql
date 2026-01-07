@@ -65,7 +65,7 @@ SELECT COUNT(*) FROM contact WHERE deleted_at IS NULL;
 SELECT
   c.id,
   c.full_name,
-  similarity(c.full_name, $1) as name_similarity,
+  similarity(c.full_name, sqlc.arg(search_name)::text) as name_similarity,
   COALESCE(
     json_agg(
       json_build_object(
@@ -74,11 +74,11 @@ SELECT
       )
     ) FILTER (WHERE cm.id IS NOT NULL),
     '[]'
-  ) as methods_json
+  )::jsonb as methods_json
 FROM contact c
 LEFT JOIN contact_method cm ON c.id = cm.contact_id
 WHERE c.deleted_at IS NULL
-  AND similarity(c.full_name, $1) > $2
+  AND similarity(c.full_name, sqlc.arg(search_name)::text) > sqlc.arg(threshold)::real
 GROUP BY c.id, c.full_name
-ORDER BY similarity(c.full_name, $1) DESC
-LIMIT $3;
+ORDER BY similarity(c.full_name, sqlc.arg(search_name)::text) DESC
+LIMIT sqlc.arg(result_limit);

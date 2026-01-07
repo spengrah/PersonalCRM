@@ -22,9 +22,9 @@ type Querier interface {
 	CountContacts(ctx context.Context) (int64, error)
 	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	CountDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) (int64, error)
-	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	// Count events for a specific contact
 	CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	CountIdentitiesBySource(ctx context.Context, source string) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
@@ -43,6 +43,8 @@ type Querier interface {
 	CreateSyncState(ctx context.Context, arg CreateSyncStateParams) (*ExternalSyncState, error)
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)
 	CreateTimeEntry(ctx context.Context, arg CreateTimeEntryParams) (*TimeEntry, error)
+	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	DeleteCalendarEventsByTitlePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
 	// Test data management queries
 	// These queries are used by the test API endpoints to seed and cleanup test data

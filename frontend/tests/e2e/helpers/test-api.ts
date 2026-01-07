@@ -56,6 +56,26 @@ export interface SeedOverdueContactsResponse {
   ids: string[]
 }
 
+export interface SeedCalendarEventInput {
+  title: string
+  location?: string
+  html_link?: string
+  is_past?: boolean
+  days_ago?: number
+  days_ahead?: number
+}
+
+export interface SeedCalendarEventsRequest {
+  prefix: string
+  contact_id: string
+  events: SeedCalendarEventInput[]
+}
+
+export interface SeedCalendarEventsResponse {
+  created: number
+  ids: string[]
+}
+
 export interface CleanupRequest {
   prefix: string
 }
@@ -63,6 +83,7 @@ export interface CleanupRequest {
 export interface CleanupResponse {
   deleted_contacts: number
   deleted_external_contacts: number
+  deleted_calendar_events: number
 }
 
 export interface TriggerErrorRequest {
@@ -144,6 +165,32 @@ export class TestAPI {
 
     const data = await response.json()
     return data.data as SeedOverdueContactsResponse
+  }
+
+  /**
+   * Seeds calendar events linked to a contact.
+   * Useful for testing the Meetings component on contact pages.
+   */
+  async seedCalendarEvents(
+    contactId: string,
+    events: SeedCalendarEventInput[]
+  ): Promise<SeedCalendarEventsResponse> {
+    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/seed/calendar-events`, {
+      headers: API_HEADERS,
+      data: {
+        prefix: this.prefix,
+        contact_id: contactId,
+        events,
+      } satisfies SeedCalendarEventsRequest,
+    })
+
+    if (!response.ok()) {
+      const body = await response.text()
+      throw new Error(`Failed to seed calendar events: ${response.status()} ${body}`)
+    }
+
+    const data = await response.json()
+    return data.data as SeedCalendarEventsResponse
   }
 
   /**

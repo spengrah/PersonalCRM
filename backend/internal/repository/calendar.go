@@ -51,6 +51,7 @@ type CalendarEvent struct {
 	MatchedContactIDs    []uuid.UUID `json:"matched_contact_ids"`
 	SyncedAt             time.Time   `json:"synced_at"`
 	LastContactedUpdated bool        `json:"last_contacted_updated"`
+	HtmlLink             *string     `json:"html_link,omitempty"`
 	CreatedAt            time.Time   `json:"created_at"`
 	UpdatedAt            time.Time   `json:"updated_at"`
 }
@@ -73,6 +74,7 @@ type UpsertCalendarEventRequest struct {
 	MatchedContactIDs    []uuid.UUID
 	SyncedAt             time.Time
 	LastContactedUpdated bool
+	HtmlLink             *string
 }
 
 // convertDbCalendarEvent converts a database calendar event to a repository calendar event
@@ -133,6 +135,11 @@ func convertDbCalendarEvent(dbEvent *db.CalendarEvent) CalendarEvent {
 		event.LastContactedUpdated = dbEvent.LastContactedUpdated.Bool
 	}
 
+	// Convert html_link
+	if dbEvent.HtmlLink.Valid {
+		event.HtmlLink = &dbEvent.HtmlLink.String
+	}
+
 	// Convert attendees JSONB
 	if len(dbEvent.Attendees) > 0 {
 		var attendees []Attendee
@@ -186,6 +193,7 @@ func (r *CalendarEventRepository) Upsert(ctx context.Context, req UpsertCalendar
 		MatchedContactIds:    matchedContactIDs,
 		SyncedAt:             pgtype.Timestamptz{Time: req.SyncedAt, Valid: true},
 		LastContactedUpdated: pgtype.Bool{Bool: req.LastContactedUpdated, Valid: true},
+		HtmlLink:             stringToPgText(req.HtmlLink),
 	})
 	if err != nil {
 		return nil, err

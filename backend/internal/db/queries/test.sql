@@ -15,3 +15,9 @@ SELECT COUNT(*) FROM contact WHERE full_name LIKE $1 || '%';
 
 -- name: CountExternalContactsByDisplayNamePrefix :one
 SELECT COUNT(*) FROM external_contact WHERE display_name LIKE $1 || '%';
+
+-- name: DeleteCalendarEventsByTitlePrefix :execrows
+DELETE FROM calendar_event WHERE title LIKE $1 || '%';
+
+-- name: DeleteCalendarEventsByGcalEventIdPrefix :execrows
+DELETE FROM calendar_event WHERE gcal_event_id LIKE $1 || '%';

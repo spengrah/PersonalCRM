@@ -242,9 +242,9 @@ type ContactMatch struct {
 // Returns contacts with similarity above the threshold, ordered by similarity (highest first)
 func (r *ContactRepository) FindSimilarContacts(ctx context.Context, name string, threshold float64, limit int32) ([]ContactMatch, error) {
 	rows, err := r.queries.FindSimilarContacts(ctx, db.FindSimilarContactsParams{
-		FullName:  name,
-		Threshold: threshold,
-		Limit:     limit,
+		SearchName:  name,
+		Threshold:   float32(threshold),
+		ResultLimit: limit,
 	})
 	if err != nil {
 		return nil, err
@@ -283,7 +283,7 @@ func (r *ContactRepository) FindSimilarContacts(ctx context.Context, name string
 				FullName: row.FullName,
 				Methods:  methods,
 			},
-			Similarity: row.NameSimilarity,
+			Similarity: float64(row.NameSimilarity),
 		})
 	}
 
