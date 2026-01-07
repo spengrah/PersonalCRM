@@ -86,7 +86,71 @@ jobs:
           echo "Codex approved in existing review"
           exit 0
 
-      - name: Wait for Codex auto-review
+      - name: Delete old trigger comments
+        if: steps.check-existing.outputs.has_review != 'true' && github.event.action == 'synchronize'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          CURRENT_SHA="${{ github.event.pull_request.head.sha }}"
+
+          echo "Cleaning up old @codex trigger comments..."
+
+          # Find and delete old trigger comments (not for current commit)
+          OLD_COMMENT_IDS=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.body | contains(\"codex-trigger:\")) | select(.body | contains(\"$CURRENT_SHA\") | not) | .id" \
+            2>/dev/null)
+
+          for id in $OLD_COMMENT_IDS; do
+            echo "Deleting old trigger comment: $id"
+            gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/comments/$id" 2>/dev/null || true
+          done
+
+      - name: Check if already triggered
+        if: steps.check-existing.outputs.has_review != 'true' && github.event.action == 'synchronize'
+        id: check-triggered
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          CURRENT_SHA="${{ github.event.pull_request.head.sha }}"
+
+          # Check if we already posted a trigger comment for this commit
+          EXISTING_TRIGGER=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.body | contains(\"codex-trigger:$CURRENT_SHA\")) | .id" \
+            2>/dev/null | head -1)
+
+          if [[ -n "$EXISTING_TRIGGER" ]]; then
+            echo "Already triggered for this commit"
+            echo "already_triggered=true" >> $GITHUB_OUTPUT
+          else
+            echo "Need to trigger Codex review"
+            echo "already_triggered=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post Codex review trigger
+        if: steps.check-existing.outputs.has_review != 'true' && github.event.action == 'synchronize' && steps.check-triggered.outputs.already_triggered != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          CURRENT_SHA="${{ github.event.pull_request.head.sha }}"
+
+          echo "Posting @codex review trigger comment..."
+
+          gh pr comment "$PR_NUMBER" --body "@codex review
+
+          Please review this PR using the standards in \`.ai/reviewers.md\`.
+
+          **IMPORTANT:** End your review with exactly one of:
+          - \`RESULT=PASS\` if the code meets all criteria
+          - \`RESULT=FAIL\` if any issues are found
+
+          <!-- codex-trigger:$CURRENT_SHA -->"
+
+      - name: Wait for Codex review
         if: steps.check-existing.outputs.has_review != 'true'
         id: wait-for-review
         env:
