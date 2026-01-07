@@ -56,12 +56,6 @@ jobs:
 
             Follow the strict code review standards in @.ai/reviewers.md
 
-            This file contains:
-            - Review philosophy: "If Claude Code can fix it, don't merge it"
-            - Approval criteria (ALL must be true for approval)
-            - Request changes criteria (ANY applies = request changes)
-            - References to @.ai/rules.md for repository conventions
-
             ## How to Submit Review
 
             After reviewing, you MUST submit exactly ONE GitHub review using `gh pr review`.
