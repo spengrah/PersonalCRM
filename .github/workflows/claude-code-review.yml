@@ -58,46 +58,17 @@ jobs:
 
             ## How to Submit Review
 
-            After reviewing, you MUST submit exactly ONE GitHub review using `gh pr review`.
+            After reviewing per @.ai/reviewers.md, submit exactly ONE GitHub review:
 
-            CRITICAL: Do NOT submit multiple reviews or use both `gh api` and `gh pr review`. Submit ONE review only.
-
-            ### If Code is Excellent (rare):
             ```bash
-            gh pr review ${{ github.event.pull_request.number }} --approve -b "✅ LGTM - Code meets all quality criteria:
-            - Security: No concerns
-            - Tests: Comprehensive coverage
-            - Documentation: Clear and complete
-            - Performance: Efficient implementation
-            - Conventions: Follows repo standards"
+            # If ALL criteria pass:
+            gh pr review ${{ github.event.pull_request.number }} --approve -b "Your review here"
+
+            # If ANY issues found (default):
+            gh pr review ${{ github.event.pull_request.number }} --request-changes -b "Your review here"
             ```
 
-            ### If Any Issues Found (default):
-            ```bash
-            gh pr review ${{ github.event.pull_request.number }} --request-changes -b "Found issues that should be addressed:
-
-            **Security:**
-            - [List any security concerns]
-
-            **Code Quality:**
-            - [List bugs, edge cases, refactoring needs]
-
-            **Testing:**
-            - [List missing or insufficient tests]
-
-            **Documentation:**
-            - [List unclear code or missing docs]
-
-            **Performance:**
-            - [List inefficiencies]
-
-            **Style/Conventions:**
-            - [List style issues or convention violations]
-
-            Since these can be quickly fixed with Claude Code, please address before merging."
-            ```
-
-            Note: For specific line-by-line feedback, include file paths and line numbers in your review body using markdown formatting. Do not use gh api to create separate inline comments.
+            CRITICAL: Submit ONE review only. Do not use gh api for inline comments - include file paths and line numbers in the review body.
 
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
