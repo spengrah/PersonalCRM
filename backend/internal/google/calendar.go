@@ -23,9 +23,11 @@ const (
 	CalendarSourceName = "gcal"
 	// CalendarDefaultInterval is the default sync interval for calendar events
 	CalendarDefaultInterval = 15 * time.Minute
-	// CalendarPastSyncDays is the number of days to sync into the past (1 year for historical record)
+	// CalendarPastSyncDays is the number of days to sync into the past.
+	// 1 year provides comprehensive meeting history for relationship context.
 	CalendarPastSyncDays = 365
-	// CalendarFutureSyncDays is the number of days to sync into the future
+	// CalendarFutureSyncDays is the number of days to sync into the future.
+	// 30 days captures near-term scheduled meetings without excessive API calls.
 	CalendarFutureSyncDays = 30
 
 	// Fuzzy matching constants for calendar attendee matching

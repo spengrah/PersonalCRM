@@ -330,6 +330,19 @@ func main() {
 			// Initialize calendar repo for test seeding
 			testCalendarRepo := repository.NewCalendarEventRepository(database.Queries)
 
+			// Initialize calendar handler if not already done (allows reading seeded events in tests)
+			if calendarHandler == nil {
+				calendarHandler = handlers.NewCalendarHandler(testCalendarRepo)
+				// Register calendar routes that weren't registered earlier (OAuth not configured)
+				contacts.GET("/:id/events", calendarHandler.ListEventsForContact)
+				contacts.GET("/:id/events/upcoming", calendarHandler.ListUpcomingEventsForContact)
+				events := v1.Group("/events")
+				{
+					events.GET("/upcoming", calendarHandler.ListUpcomingEvents)
+				}
+				logger.Info().Msg("calendar handler initialized for testing (no OAuth)")
+			}
+
 			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService, testCalendarRepo)
 			testRoutes := v1.Group("/test")
 			{

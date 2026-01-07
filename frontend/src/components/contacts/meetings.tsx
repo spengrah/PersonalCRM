@@ -3,6 +3,7 @@
 import { useState, useMemo } from 'react'
 import { Calendar, Clock, MapPin, Users, ExternalLink, ChevronDown } from 'lucide-react'
 import { useEventsForContact } from '@/hooks/use-calendar'
+import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import { Button } from '@/components/ui/button'
 import type { CalendarEvent } from '@/types/calendar'
 
@@ -40,8 +41,8 @@ function formatTimeRange(startTime: string, endTime: string): string {
   return `${startStr} - ${endStr}`
 }
 
-function isPastEvent(event: CalendarEvent): boolean {
-  return new Date(event.end_time) < new Date()
+function isPastEvent(event: CalendarEvent, currentTime: Date): boolean {
+  return new Date(event.end_time) < currentTime
 }
 
 function MeetingCard({ event, isPast }: { event: CalendarEvent; isPast: boolean }) {
@@ -103,12 +104,13 @@ export function Meetings({ contactId }: MeetingsProps) {
   const [displayLimit, setDisplayLimit] = useState(10)
 
   const { data: events, isLoading, error } = useEventsForContact(contactId, { limit: 100 })
+  const { currentTime } = useAcceleratedTime()
 
   const { filteredEvents, upcomingCount, pastCount } = useMemo(() => {
     if (!events) return { filteredEvents: [], upcomingCount: 0, pastCount: 0 }
 
-    const upcoming = events.filter(e => !isPastEvent(e))
-    const past = events.filter(e => isPastEvent(e))
+    const upcoming = events.filter(e => !isPastEvent(e, currentTime))
+    const past = events.filter(e => isPastEvent(e, currentTime))
 
     let filtered: CalendarEvent[]
     switch (filter) {
@@ -134,7 +136,7 @@ export function Meetings({ contactId }: MeetingsProps) {
       upcomingCount: upcoming.length,
       pastCount: past.length,
     }
-  }, [events, filter])
+  }, [events, filter, currentTime])
 
   const displayedEvents = filteredEvents.slice(0, displayLimit)
   const hasMore = filteredEvents.length > displayLimit
@@ -207,7 +209,7 @@ export function Meetings({ contactId }: MeetingsProps) {
       </div>
       <div className="divide-y divide-gray-200">
         {displayedEvents.map(event => (
-          <MeetingCard key={event.id} event={event} isPast={isPastEvent(event)} />
+          <MeetingCard key={event.id} event={event} isPast={isPastEvent(event, currentTime)} />
         ))}
       </div>
       {hasMore && (
