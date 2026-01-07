@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8  # 7 min for polling + 1 min buffer
     permissions:
+      contents: read
+      issues: write  # For posting/deleting trigger comments
       pull-requests: write
 
     steps:
