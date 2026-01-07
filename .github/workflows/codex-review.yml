@@ -15,7 +15,7 @@ jobs:
   codex-review:
     name: Codex Review
     runs-on: ubuntu-latest
-    timeout-minutes: 6  # 5 min for polling + 1 min buffer
+    timeout-minutes: 8  # 7 min for polling + 1 min buffer
     permissions:
       pull-requests: write
 
@@ -73,7 +73,7 @@ jobs:
           else
             echo "result=pass" >> $GITHUB_OUTPUT
             echo "- Result: ✅ PASS (default - fail-open)" >> $GITHUB_STEP_SUMMARY
-            echo "- Warning: Could not parse RESULT= from review" >> $GITHUB_STEP_SUMMARY
+            echo "- ⚠️ Warning: Could not parse RESULT= from review" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Exit based on existing review
@@ -86,71 +86,7 @@ jobs:
           echo "Codex approved in existing review"
           exit 0
 
-      - name: Delete old trigger comments
-        if: steps.check-existing.outputs.has_review != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          REPO="${{ github.repository }}"
-          CURRENT_SHA="${{ github.event.pull_request.head.sha }}"
-
-          echo "Cleaning up old @codex review trigger comments..."
-
-          # Find and delete old trigger comments (not for current commit)
-          OLD_COMMENT_IDS=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
-            --jq ".[] | select(.body | contains(\"codex-trigger:\")) | select(.body | contains(\"$CURRENT_SHA\") | not) | .id" \
-            2>/dev/null)
-
-          for id in $OLD_COMMENT_IDS; do
-            echo "Deleting old trigger comment: $id"
-            gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/comments/$id" 2>/dev/null || true
-          done
-
-      - name: Check if already triggered
-        if: steps.check-existing.outputs.has_review != 'true'
-        id: check-triggered
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          REPO="${{ github.repository }}"
-          CURRENT_SHA="${{ github.event.pull_request.head.sha }}"
-
-          # Check if we already posted a trigger comment for this commit
-          EXISTING_TRIGGER=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
-            --jq ".[] | select(.body | contains(\"codex-trigger:$CURRENT_SHA\")) | .id" \
-            2>/dev/null | head -1)
-
-          if [[ -n "$EXISTING_TRIGGER" ]]; then
-            echo "Already triggered for this commit"
-            echo "already_triggered=true" >> $GITHUB_OUTPUT
-          else
-            echo "Need to trigger Codex review"
-            echo "already_triggered=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Post Codex review trigger
-        if: steps.check-existing.outputs.has_review != 'true' && steps.check-triggered.outputs.already_triggered != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          CURRENT_SHA="${{ github.event.pull_request.head.sha }}"
-
-          echo "Posting @codex review trigger comment..."
-
-          gh pr comment "$PR_NUMBER" --body "@codex review
-
-          Please review this PR using the standards in \`.ai/reviewers.md\`.
-
-          **IMPORTANT:** End your review with exactly one of:
-          - \`RESULT=PASS\` if the code meets all criteria
-          - \`RESULT=FAIL\` if any issues are found
-
-          <!-- codex-trigger:$CURRENT_SHA -->"
-
-      - name: Wait for Codex review
+      - name: Wait for Codex auto-review
         if: steps.check-existing.outputs.has_review != 'true'
         id: wait-for-review
         env:
@@ -163,14 +99,14 @@ jobs:
 
           echo "## Codex Review Status" >> $GITHUB_STEP_SUMMARY
           echo "- Commit: $COMMIT_SHA" >> $GITHUB_STEP_SUMMARY
-          echo "- Triggered at: $WORKFLOW_START" >> $GITHUB_STEP_SUMMARY
-          echo "- Timeout: 5 minutes" >> $GITHUB_STEP_SUMMARY
+          echo "- Started: $WORKFLOW_START" >> $GITHUB_STEP_SUMMARY
+          echo "- Timeout: 7 minutes" >> $GITHUB_STEP_SUMMARY
 
-          echo "Waiting for Codex review (5 minute timeout)..."
+          echo "Waiting for Codex auto-review (7 minute timeout)..."
 
-          # Poll for up to 5 minutes (30 attempts × 10 seconds)
-          for i in {1..30}; do
-            echo "Checking for Codex review (attempt $i/30)..."
+          # Poll for up to 7 minutes (42 attempts x 10 seconds)
+          for i in {1..42}; do
+            echo "Checking for Codex review (attempt $i/42)..."
 
             # Look for Codex review posted after workflow started
             REVIEW=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
@@ -192,7 +128,7 @@ jobs:
 
           echo "Timeout waiting for Codex review"
           echo "has_review=false" >> $GITHUB_OUTPUT
-          echo "- Status: ⚠️ Timeout (no response in 5 minutes)" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ⏱️ Timeout (no response in 7 minutes)" >> $GITHUB_STEP_SUMMARY
           echo "- Action: Failing open (treating as PASS)" >> $GITHUB_STEP_SUMMARY
 
       - name: Parse Codex review
@@ -233,12 +169,11 @@ jobs:
           # Layer 4: Default to PASS (fail-open)
           echo "result=pass" >> $GITHUB_OUTPUT
           echo "- Result: ✅ PASS (default - fail-open)" >> $GITHUB_STEP_SUMMARY
-          echo "- Warning: Could not parse RESULT= from review" >> $GITHUB_STEP_SUMMARY
+          echo "- ⚠️ Warning: Could not parse RESULT= from review" >> $GITHUB_STEP_SUMMARY
 
       - name: Set final status
         if: steps.check-existing.outputs.has_review != 'true'
         run: |
-          # Determine result from either wait or parse step
           RESULT="${{ steps.parse-review.outputs.result }}"
           HAS_REVIEW="${{ steps.wait-for-review.outputs.has_review }}"
 
