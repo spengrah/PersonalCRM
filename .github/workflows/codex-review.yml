@@ -17,9 +17,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8  # 7 min for polling + 1 min buffer
     permissions:
+      contents: read
+      issues: write  # For posting/deleting trigger comments
       pull-requests: write
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Check for existing Codex review
         id: check-existing
         env:
