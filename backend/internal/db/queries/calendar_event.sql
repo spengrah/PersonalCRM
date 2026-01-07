@@ -19,9 +19,10 @@ INSERT INTO calendar_event (
     attendees,
     matched_contact_ids,
     synced_at,
-    last_contacted_updated
+    last_contacted_updated,
+    html_link
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
 )
 ON CONFLICT (gcal_event_id, gcal_calendar_id, google_account_id)
 DO UPDATE SET
@@ -37,6 +38,7 @@ DO UPDATE SET
     attendees = EXCLUDED.attendees,
     matched_contact_ids = EXCLUDED.matched_contact_ids,
     synced_at = EXCLUDED.synced_at,
+    html_link = EXCLUDED.html_link,
     updated_at = NOW()
 RETURNING *;
 

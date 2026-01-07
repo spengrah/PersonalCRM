@@ -29,6 +29,7 @@ type CalendarEvent struct {
 	LastContactedUpdated pgtype.Bool        `json:"last_contacted_updated"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	HtmlLink             pgtype.Text        `json:"html_link"`
 }
 
 type Connection struct {

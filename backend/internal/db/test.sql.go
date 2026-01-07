@@ -33,6 +33,30 @@ func (q *Queries) CountExternalContactsByDisplayNamePrefix(ctx context.Context, 
 	return count, err
 }
 
+const DeleteCalendarEventsByGcalEventIdPrefix = `-- name: DeleteCalendarEventsByGcalEventIdPrefix :execrows
+DELETE FROM calendar_event WHERE gcal_event_id LIKE $1 || '%'
+`
+
+func (q *Queries) DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteCalendarEventsByGcalEventIdPrefix, dollar_1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const DeleteCalendarEventsByTitlePrefix = `-- name: DeleteCalendarEventsByTitlePrefix :execrows
+DELETE FROM calendar_event WHERE title LIKE $1 || '%'
+`
+
+func (q *Queries) DeleteCalendarEventsByTitlePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteCalendarEventsByTitlePrefix, dollar_1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const DeleteContactsByNamePrefix = `-- name: DeleteContactsByNamePrefix :execrows
 
 DELETE FROM contact WHERE full_name LIKE $1 || '%'

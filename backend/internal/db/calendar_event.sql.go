@@ -37,7 +37,7 @@ func (q *Queries) DeleteEventsByAccount(ctx context.Context, googleAccountID str
 }
 
 const GetCalendarEventByGcalID = `-- name: GetCalendarEventByGcalID :one
-SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at FROM calendar_event
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
 WHERE gcal_event_id = $1
   AND gcal_calendar_id = $2
   AND google_account_id = $3
@@ -74,12 +74,13 @@ func (q *Queries) GetCalendarEventByGcalID(ctx context.Context, arg GetCalendarE
 		&i.LastContactedUpdated,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HtmlLink,
 	)
 	return &i, err
 }
 
 const GetCalendarEventByID = `-- name: GetCalendarEventByID :one
-SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at FROM calendar_event
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
 WHERE id = $1
 LIMIT 1
 `
@@ -108,12 +109,13 @@ func (q *Queries) GetCalendarEventByID(ctx context.Context, id pgtype.UUID) (*Ca
 		&i.LastContactedUpdated,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HtmlLink,
 	)
 	return &i, err
 }
 
 const ListEventsByAccountAndDateRange = `-- name: ListEventsByAccountAndDateRange :many
-SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at FROM calendar_event
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
 WHERE google_account_id = $1
   AND start_time >= $2
   AND start_time <= $3
@@ -157,6 +159,7 @@ func (q *Queries) ListEventsByAccountAndDateRange(ctx context.Context, arg ListE
 			&i.LastContactedUpdated,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.HtmlLink,
 		); err != nil {
 			return nil, err
 		}
@@ -169,7 +172,7 @@ func (q *Queries) ListEventsByAccountAndDateRange(ctx context.Context, arg ListE
 }
 
 const ListEventsForContact = `-- name: ListEventsForContact :many
-SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at FROM calendar_event
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
 WHERE $1::uuid = ANY(matched_contact_ids)
   AND status != 'cancelled'
 ORDER BY start_time DESC
@@ -212,6 +215,7 @@ func (q *Queries) ListEventsForContact(ctx context.Context, arg ListEventsForCon
 			&i.LastContactedUpdated,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.HtmlLink,
 		); err != nil {
 			return nil, err
 		}
@@ -224,7 +228,7 @@ func (q *Queries) ListEventsForContact(ctx context.Context, arg ListEventsForCon
 }
 
 const ListPastEventsNeedingUpdate = `-- name: ListPastEventsNeedingUpdate :many
-SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at FROM calendar_event
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
 WHERE last_contacted_updated = FALSE
   AND status = 'confirmed'
   AND end_time < $1
@@ -268,6 +272,7 @@ func (q *Queries) ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastE
 			&i.LastContactedUpdated,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.HtmlLink,
 		); err != nil {
 			return nil, err
 		}
@@ -280,7 +285,7 @@ func (q *Queries) ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastE
 }
 
 const ListUpcomingEventsForContact = `-- name: ListUpcomingEventsForContact :many
-SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at FROM calendar_event
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
 WHERE $1::uuid = ANY(matched_contact_ids)
   AND status != 'cancelled'
   AND start_time > $2
@@ -324,6 +329,7 @@ func (q *Queries) ListUpcomingEventsForContact(ctx context.Context, arg ListUpco
 			&i.LastContactedUpdated,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.HtmlLink,
 		); err != nil {
 			return nil, err
 		}
@@ -336,7 +342,7 @@ func (q *Queries) ListUpcomingEventsForContact(ctx context.Context, arg ListUpco
 }
 
 const ListUpcomingEventsWithContacts = `-- name: ListUpcomingEventsWithContacts :many
-SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at FROM calendar_event
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
 WHERE array_length(matched_contact_ids, 1) > 0
   AND status != 'cancelled'
   AND start_time > $1
@@ -380,6 +386,7 @@ func (q *Queries) ListUpcomingEventsWithContacts(ctx context.Context, arg ListUp
 			&i.LastContactedUpdated,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.HtmlLink,
 		); err != nil {
 			return nil, err
 		}
@@ -409,7 +416,7 @@ UPDATE calendar_event
 SET matched_contact_ids = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at
+RETURNING id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link
 `
 
 type UpdateMatchedContactsParams struct {
@@ -441,6 +448,7 @@ func (q *Queries) UpdateMatchedContacts(ctx context.Context, arg UpdateMatchedCo
 		&i.LastContactedUpdated,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HtmlLink,
 	)
 	return &i, err
 }
@@ -462,9 +470,10 @@ INSERT INTO calendar_event (
     attendees,
     matched_contact_ids,
     synced_at,
-    last_contacted_updated
+    last_contacted_updated,
+    html_link
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
 )
 ON CONFLICT (gcal_event_id, gcal_calendar_id, google_account_id)
 DO UPDATE SET
@@ -480,8 +489,9 @@ DO UPDATE SET
     attendees = EXCLUDED.attendees,
     matched_contact_ids = EXCLUDED.matched_contact_ids,
     synced_at = EXCLUDED.synced_at,
+    html_link = EXCLUDED.html_link,
     updated_at = NOW()
-RETURNING id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at
+RETURNING id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link
 `
 
 type UpsertCalendarEventParams struct {
@@ -501,6 +511,7 @@ type UpsertCalendarEventParams struct {
 	MatchedContactIds    []pgtype.UUID      `json:"matched_contact_ids"`
 	SyncedAt             pgtype.Timestamptz `json:"synced_at"`
 	LastContactedUpdated pgtype.Bool        `json:"last_contacted_updated"`
+	HtmlLink             pgtype.Text        `json:"html_link"`
 }
 
 // Insert or update a calendar event from Google Calendar
@@ -525,6 +536,7 @@ func (q *Queries) UpsertCalendarEvent(ctx context.Context, arg UpsertCalendarEve
 		arg.MatchedContactIds,
 		arg.SyncedAt,
 		arg.LastContactedUpdated,
+		arg.HtmlLink,
 	)
 	var i CalendarEvent
 	err := row.Scan(
@@ -547,6 +559,7 @@ func (q *Queries) UpsertCalendarEvent(ctx context.Context, arg UpsertCalendarEve
 		&i.LastContactedUpdated,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HtmlLink,
 	)
 	return &i, err
 }

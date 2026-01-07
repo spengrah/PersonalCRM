@@ -63,6 +63,7 @@ type CalendarEventResponse struct {
 	EndTime       string  `json:"end_time"`
 	Status        string  `json:"status"`
 	AttendeeCount int     `json:"attendee_count"`
+	HtmlLink      *string `json:"html_link,omitempty"`
 }
 
 // convertToEventResponse converts a repository event to an API response
@@ -81,6 +82,7 @@ func convertToEventResponse(event *repository.CalendarEvent) CalendarEventRespon
 		EndTime:       event.EndTime.Format("2006-01-02T15:04:05Z07:00"),
 		Status:        event.Status,
 		AttendeeCount: len(event.Attendees),
+		HtmlLink:      event.HtmlLink,
 	}
 }
 

@@ -1054,3 +1054,87 @@ func TestFindFuzzyMatch_IgnoresNonEmailMethods(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Equal(t, contactID, *result)
 }
+
+// ========================================
+// Sync Window and HtmlLink Tests
+// ========================================
+
+// TestSyncWindowConstants verifies the sync window constants are set correctly
+func TestSyncWindowConstants(t *testing.T) {
+	// Verify past sync window is 1 year (365 days)
+	assert.Equal(t, 365, CalendarPastSyncDays, "Past sync window should be 365 days")
+
+	// Verify future sync window is 30 days
+	assert.Equal(t, 30, CalendarFutureSyncDays, "Future sync window should be 30 days")
+}
+
+// TestProcessEvent_ExtractsHtmlLink verifies that HtmlLink is extracted from Google Calendar events
+func TestProcessEvent_ExtractsHtmlLink(t *testing.T) {
+	ctx := context.Background()
+
+	mockCalRepo := &mockCalendarRepo{}
+	mockContactRepo := &mockContactRepo{}
+	mockIdentity := &mockIdentityService{}
+
+	provider := newTestProvider(mockCalRepo, mockContactRepo, mockIdentity)
+
+	// Create a Google Calendar event with HtmlLink
+	event := &calendar.Event{
+		Id:       "test-event-123",
+		Summary:  "Test Meeting",
+		HtmlLink: "https://www.google.com/calendar/event?eid=abc123",
+		Status:   "confirmed",
+		Start: &calendar.EventDateTime{
+			DateTime: "2024-06-15T10:00:00Z",
+		},
+		End: &calendar.EventDateTime{
+			DateTime: "2024-06-15T11:00:00Z",
+		},
+		Organizer: &calendar.EventOrganizer{
+			Email: "user@example.com",
+		},
+	}
+
+	err := provider.processEvent(ctx, event, "user@example.com")
+
+	assert.NoError(t, err)
+	assert.True(t, mockCalRepo.upsertCalled, "Upsert should be called")
+	assert.NotNil(t, mockCalRepo.upsertRequest, "Upsert request should not be nil")
+	assert.NotNil(t, mockCalRepo.upsertRequest.HtmlLink, "HtmlLink should not be nil")
+	assert.Equal(t, "https://www.google.com/calendar/event?eid=abc123", *mockCalRepo.upsertRequest.HtmlLink)
+}
+
+// TestProcessEvent_HandlesEmptyHtmlLink verifies that empty HtmlLink is handled correctly
+func TestProcessEvent_HandlesEmptyHtmlLink(t *testing.T) {
+	ctx := context.Background()
+
+	mockCalRepo := &mockCalendarRepo{}
+	mockContactRepo := &mockContactRepo{}
+	mockIdentity := &mockIdentityService{}
+
+	provider := newTestProvider(mockCalRepo, mockContactRepo, mockIdentity)
+
+	// Create a Google Calendar event without HtmlLink
+	event := &calendar.Event{
+		Id:       "test-event-456",
+		Summary:  "Test Meeting",
+		HtmlLink: "", // Empty
+		Status:   "confirmed",
+		Start: &calendar.EventDateTime{
+			DateTime: "2024-06-15T10:00:00Z",
+		},
+		End: &calendar.EventDateTime{
+			DateTime: "2024-06-15T11:00:00Z",
+		},
+		Organizer: &calendar.EventOrganizer{
+			Email: "user@example.com",
+		},
+	}
+
+	err := provider.processEvent(ctx, event, "user@example.com")
+
+	assert.NoError(t, err)
+	assert.True(t, mockCalRepo.upsertCalled, "Upsert should be called")
+	assert.NotNil(t, mockCalRepo.upsertRequest, "Upsert request should not be nil")
+	assert.Nil(t, mockCalRepo.upsertRequest.HtmlLink, "HtmlLink should be nil for empty string")
+}
