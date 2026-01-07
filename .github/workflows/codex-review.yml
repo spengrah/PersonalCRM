@@ -1,0 +1,257 @@
+name: Codex Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      # Backend Go code (business logic)
+      - "backend/internal/**/*.go"
+      - "backend/cmd/**/*.go"
+      # Frontend TypeScript/React
+      - "frontend/src/**/*.ts"
+      - "frontend/src/**/*.tsx"
+
+jobs:
+  codex-review:
+    name: Codex Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 8  # 7 min for polling + 1 min buffer
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Check for existing Codex review
+        id: check-existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+
+          echo "Checking for existing Codex review on commit $COMMIT_SHA..."
+
+          # Check if Codex already reviewed this commit
+          EXISTING_REVIEW=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+            --jq ".[] | select(.user.login == \"chatgpt-codex-connector\" and .commit_id == \"$COMMIT_SHA\") | .body" \
+            2>/dev/null | head -1)
+
+          if [[ -n "$EXISTING_REVIEW" ]]; then
+            echo "Found existing Codex review for this commit"
+            echo "has_review=true" >> $GITHUB_OUTPUT
+            echo "review_body<<EOF" >> $GITHUB_OUTPUT
+            echo "$EXISTING_REVIEW" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "No existing Codex review found"
+            echo "has_review=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Parse existing review
+        if: steps.check-existing.outputs.has_review == 'true'
+        id: parse-existing
+        env:
+          REVIEW_BODY: ${{ steps.check-existing.outputs.review_body }}
+        run: |
+          echo "## Codex Review Status" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${{ github.event.pull_request.head.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Source: Existing review (cached)" >> $GITHUB_STEP_SUMMARY
+
+          # Parse RESULT= from review
+          if echo "$REVIEW_BODY" | grep -qi "RESULT=PASS"; then
+            echo "result=pass" >> $GITHUB_OUTPUT
+            echo "- Result: ✅ PASS" >> $GITHUB_STEP_SUMMARY
+          elif echo "$REVIEW_BODY" | grep -qi "RESULT=FAIL"; then
+            echo "result=fail" >> $GITHUB_OUTPUT
+            echo "- Result: ❌ FAIL" >> $GITHUB_STEP_SUMMARY
+          elif echo "$REVIEW_BODY" | grep -qE "P0|P1"; then
+            echo "result=fail" >> $GITHUB_OUTPUT
+            echo "- Result: ❌ FAIL (P0/P1 issues detected)" >> $GITHUB_STEP_SUMMARY
+          elif echo "$REVIEW_BODY" | grep -qiE "no issues|looks good|lgtm"; then
+            echo "result=pass" >> $GITHUB_OUTPUT
+            echo "- Result: ✅ PASS (inferred from language)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "result=pass" >> $GITHUB_OUTPUT
+            echo "- Result: ✅ PASS (default - fail-open)" >> $GITHUB_STEP_SUMMARY
+            echo "- ⚠️ Warning: Could not parse RESULT= from review" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Exit based on existing review
+        if: steps.check-existing.outputs.has_review == 'true'
+        run: |
+          if [[ "${{ steps.parse-existing.outputs.result }}" == "fail" ]]; then
+            echo "Codex found issues in existing review"
+            exit 1
+          fi
+          echo "Codex approved in existing review"
+          exit 0
+
+      - name: Delete old trigger comments
+        if: steps.check-existing.outputs.has_review != 'true' && github.event.action == 'synchronize'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          CURRENT_SHA="${{ github.event.pull_request.head.sha }}"
+
+          echo "Cleaning up old @codex trigger comments..."
+
+          # Find and delete old trigger comments (not for current commit)
+          OLD_COMMENT_IDS=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.body | contains(\"codex-trigger:\")) | select(.body | contains(\"$CURRENT_SHA\") | not) | .id" \
+            2>/dev/null)
+
+          for id in $OLD_COMMENT_IDS; do
+            echo "Deleting old trigger comment: $id"
+            gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/comments/$id" 2>/dev/null || true
+          done
+
+      - name: Check if already triggered
+        if: steps.check-existing.outputs.has_review != 'true' && github.event.action == 'synchronize'
+        id: check-triggered
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          CURRENT_SHA="${{ github.event.pull_request.head.sha }}"
+
+          # Check if we already posted a trigger comment for this commit
+          EXISTING_TRIGGER=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.body | contains(\"codex-trigger:$CURRENT_SHA\")) | .id" \
+            2>/dev/null | head -1)
+
+          if [[ -n "$EXISTING_TRIGGER" ]]; then
+            echo "Already triggered for this commit"
+            echo "already_triggered=true" >> $GITHUB_OUTPUT
+          else
+            echo "Need to trigger Codex review"
+            echo "already_triggered=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post Codex review trigger
+        if: steps.check-existing.outputs.has_review != 'true' && github.event.action == 'synchronize' && steps.check-triggered.outputs.already_triggered != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          CURRENT_SHA="${{ github.event.pull_request.head.sha }}"
+
+          echo "Posting @codex review trigger comment..."
+
+          gh pr comment "$PR_NUMBER" --body "@codex review
+
+          Please review this PR using the standards in \`.ai/reviewers.md\`.
+
+          **IMPORTANT:** End your review with exactly one of:
+          - \`RESULT=PASS\` if the code meets all criteria
+          - \`RESULT=FAIL\` if any issues are found
+
+          <!-- codex-trigger:$CURRENT_SHA -->"
+
+      - name: Wait for Codex review
+        if: steps.check-existing.outputs.has_review != 'true'
+        id: wait-for-review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
+          WORKFLOW_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          echo "## Codex Review Status" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: $COMMIT_SHA" >> $GITHUB_STEP_SUMMARY
+          echo "- Started: $WORKFLOW_START" >> $GITHUB_STEP_SUMMARY
+          echo "- Timeout: 7 minutes" >> $GITHUB_STEP_SUMMARY
+
+          echo "Waiting for Codex auto-review (7 minute timeout)..."
+
+          # Poll for up to 7 minutes (42 attempts x 10 seconds)
+          for i in {1..42}; do
+            echo "Checking for Codex review (attempt $i/42)..."
+
+            # Look for Codex review posted after workflow started
+            REVIEW=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+              --jq ".[] | select(.user.login == \"chatgpt-codex-connector\" and .submitted_at >= \"$WORKFLOW_START\") | .body" \
+              2>/dev/null | head -1)
+
+            if [[ -n "$REVIEW" ]]; then
+              echo "Codex review received!"
+              echo "has_review=true" >> $GITHUB_OUTPUT
+              echo "review_body<<EOF" >> $GITHUB_OUTPUT
+              echo "$REVIEW" >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+              echo "- Status: Review received" >> $GITHUB_STEP_SUMMARY
+              exit 0
+            fi
+
+            sleep 10
+          done
+
+          echo "Timeout waiting for Codex review"
+          echo "has_review=false" >> $GITHUB_OUTPUT
+          echo "- Status: ⏱️ Timeout (no response in 7 minutes)" >> $GITHUB_STEP_SUMMARY
+          echo "- Action: Failing open (treating as PASS)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Parse Codex review
+        if: steps.check-existing.outputs.has_review != 'true' && steps.wait-for-review.outputs.has_review == 'true'
+        id: parse-review
+        env:
+          REVIEW_BODY: ${{ steps.wait-for-review.outputs.review_body }}
+        run: |
+          echo "Parsing Codex review..."
+
+          # Layer 1: Check for explicit RESULT=
+          if echo "$REVIEW_BODY" | grep -qi "RESULT=PASS"; then
+            echo "result=pass" >> $GITHUB_OUTPUT
+            echo "- Result: ✅ PASS" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          if echo "$REVIEW_BODY" | grep -qi "RESULT=FAIL"; then
+            echo "result=fail" >> $GITHUB_OUTPUT
+            echo "- Result: ❌ FAIL" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Layer 2: Check for severity badges (Codex's natural format)
+          if echo "$REVIEW_BODY" | grep -qE "P0|P1"; then
+            echo "result=fail" >> $GITHUB_OUTPUT
+            echo "- Result: ❌ FAIL (P0/P1 issues detected)" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Layer 3: Check for positive language
+          if echo "$REVIEW_BODY" | grep -qiE "no issues|looks good|lgtm|no problems"; then
+            echo "result=pass" >> $GITHUB_OUTPUT
+            echo "- Result: ✅ PASS (inferred from language)" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Layer 4: Default to PASS (fail-open)
+          echo "result=pass" >> $GITHUB_OUTPUT
+          echo "- Result: ✅ PASS (default - fail-open)" >> $GITHUB_STEP_SUMMARY
+          echo "- ⚠️ Warning: Could not parse RESULT= from review" >> $GITHUB_STEP_SUMMARY
+
+      - name: Set final status
+        if: steps.check-existing.outputs.has_review != 'true'
+        run: |
+          RESULT="${{ steps.parse-review.outputs.result }}"
+          HAS_REVIEW="${{ steps.wait-for-review.outputs.has_review }}"
+
+          # If no review received (timeout), pass (fail-open)
+          if [[ "$HAS_REVIEW" != "true" ]]; then
+            echo "No Codex review received (timeout) - passing (fail-open)"
+            exit 0
+          fi
+
+          # If review received, use parsed result
+          if [[ "$RESULT" == "fail" ]]; then
+            echo "Codex found issues - failing status check"
+            exit 1
+          fi
+
+          echo "Codex review passed"
+          exit 0
