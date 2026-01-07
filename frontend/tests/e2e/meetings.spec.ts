@@ -53,7 +53,14 @@ test.describe('Meetings Component', () => {
     await expect(page.getByRole('button', { name: /Upcoming \(2\)/i })).toBeVisible()
     await expect(page.getByRole('button', { name: /Past \(2\)/i })).toBeVisible()
 
-    // By default (All tab), all events should be visible
+    // By default (Upcoming tab), only upcoming events should be visible
+    await expect(page.getByText(`${testApi.prefix}-Upcoming Meeting 1`)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-Upcoming Meeting 2`)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-Past Meeting 1`)).not.toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-Past Meeting 2`)).not.toBeVisible()
+
+    // Click All filter to see all events
+    await page.getByRole('button', { name: /All \(4\)/i }).click()
     await expect(page.getByText(`${testApi.prefix}-Upcoming Meeting 1`)).toBeVisible()
     await expect(page.getByText(`${testApi.prefix}-Upcoming Meeting 2`)).toBeVisible()
     await expect(page.getByText(`${testApi.prefix}-Past Meeting 1`)).toBeVisible()

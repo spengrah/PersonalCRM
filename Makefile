@@ -174,7 +174,8 @@ test-e2e: docker-up
 	bash scripts/sync-postgres-auth.sh && \
 	if [ -f frontend/.env.local ]; then mv frontend/.env.local frontend/.env.local.bak; fi; \
 	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > frontend/.env.local; \
-	cd frontend && bunx playwright test --project=chromium; \
+	echo "NEXT_PUBLIC_API_URL=http://localhost:8080" >> frontend/.env.local; \
+	cd frontend && NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 bunx playwright test --project=chromium; \
 	EXIT_CODE=$$?; \
 	rm -f frontend/.env.local; \
 	if [ -f frontend/.env.local.bak ]; then mv frontend/.env.local.bak frontend/.env.local; fi; \
