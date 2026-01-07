@@ -23,6 +23,8 @@ type Querier interface {
 	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	CountDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) (int64, error)
 	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	// Count events for a specific contact
+	CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountIdentitiesBySource(ctx context.Context, source string) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
@@ -47,6 +49,8 @@ type Querier interface {
 	DeleteContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteEnrichment(ctx context.Context, id pgtype.UUID) error
 	DeleteEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) error
+	// Delete all events for a Google account (used when revoking access)
+	DeleteEventsByAccount(ctx context.Context, googleAccountID string) error
 	DeleteExternalContact(ctx context.Context, id pgtype.UUID) error
 	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error
@@ -68,6 +72,10 @@ type Querier interface {
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	FindSimilarContacts(ctx context.Context, arg FindSimilarContactsParams) ([]*FindSimilarContactsRow, error)
+	// Look up an event by its Google Calendar ID
+	GetCalendarEventByGcalID(ctx context.Context, arg GetCalendarEventByGcalIDParams) (*CalendarEvent, error)
+	// Look up an event by its UUID
+	GetCalendarEventByID(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
 	GetContactTags(ctx context.Context, contactID pgtype.UUID) ([]*Tag, error)
@@ -119,6 +127,10 @@ type Querier interface {
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListEnrichmentsBySource(ctx context.Context, arg ListEnrichmentsBySourceParams) ([]*ContactEnrichment, error)
+	// List events by Google account within a date range
+	ListEventsByAccountAndDateRange(ctx context.Context, arg ListEventsByAccountAndDateRangeParams) ([]*CalendarEvent, error)
+	// List calendar events involving a specific contact
+	ListEventsForContact(ctx context.Context, arg ListEventsForContactParams) ([]*CalendarEvent, error)
 	ListExternalContactsBySource(ctx context.Context, arg ListExternalContactsBySourceParams) ([]*ExternalContact, error)
 	ListExternalContactsForCRMContact(ctx context.Context, crmContactID pgtype.UUID) ([]*ExternalContact, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
@@ -127,6 +139,8 @@ type Querier interface {
 	ListOAuthCredentialStatuses(ctx context.Context, provider string) ([]*ListOAuthCredentialStatusesRow, error)
 	// List all OAuth credentials for a provider
 	ListOAuthCredentials(ctx context.Context, provider string) ([]*OauthCredential, error)
+	// List past events that haven't updated last_contacted yet
+	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
 	ListRecentInteractions(ctx context.Context, limit int32) ([]*ListRecentInteractionsRow, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
 	ListReminders(ctx context.Context, arg ListRemindersParams) ([]*Reminder, error)
@@ -139,6 +153,12 @@ type Querier interface {
 	ListTimeEntriesByDateRange(ctx context.Context, arg ListTimeEntriesByDateRangeParams) ([]*TimeEntry, error)
 	ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	ListUnmatchedIdentities(ctx context.Context, arg ListUnmatchedIdentitiesParams) ([]*ExternalIdentity, error)
+	// List upcoming calendar events for a specific contact
+	ListUpcomingEventsForContact(ctx context.Context, arg ListUpcomingEventsForContactParams) ([]*CalendarEvent, error)
+	// List upcoming events that have matched CRM contacts
+	ListUpcomingEventsWithContacts(ctx context.Context, arg ListUpcomingEventsWithContactsParams) ([]*CalendarEvent, error)
+	// Mark an event as having updated last_contacted for its contacts
+	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error)
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
@@ -152,6 +172,8 @@ type Querier interface {
 	UpdateExternalContactMatch(ctx context.Context, arg UpdateExternalContactMatchParams) (*ExternalContact, error)
 	UpdateIdentityMessageCount(ctx context.Context, arg UpdateIdentityMessageCountParams) (*ExternalIdentity, error)
 	UpdateInteraction(ctx context.Context, arg UpdateInteractionParams) (*Interaction, error)
+	// Update the matched contact IDs for an event
+	UpdateMatchedContacts(ctx context.Context, arg UpdateMatchedContactsParams) (*CalendarEvent, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
 	// Update only the token data (for token refresh)
 	UpdateOAuthCredentialTokens(ctx context.Context, arg UpdateOAuthCredentialTokensParams) (*OauthCredential, error)
@@ -164,6 +186,11 @@ type Querier interface {
 	UpdateSyncStateSuccess(ctx context.Context, arg UpdateSyncStateSuccessParams) (*ExternalSyncState, error)
 	UpdateTag(ctx context.Context, arg UpdateTagParams) (*Tag, error)
 	UpdateTimeEntry(ctx context.Context, arg UpdateTimeEntryParams) (*TimeEntry, error)
+	// Insert or update a calendar event from Google Calendar
+	// Note: last_contacted_updated is intentionally NOT included in the ON CONFLICT UPDATE clause.
+	// Once an event has been processed (last_contacted_updated = TRUE), we preserve that state
+	// even if the event is re-synced with updated details. This prevents duplicate last_contacted updates.
+	UpsertCalendarEvent(ctx context.Context, arg UpsertCalendarEventParams) (*CalendarEvent, error)
 	UpsertExternalContact(ctx context.Context, arg UpsertExternalContactParams) (*ExternalContact, error)
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
 	// Insert or update an OAuth credential

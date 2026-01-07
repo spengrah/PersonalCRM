@@ -98,6 +98,7 @@ func main() {
 	var identityHandler *handlers.IdentityHandler
 	var oauthHandler *handlers.OAuthHandler
 	var importHandler *handlers.ImportHandler
+	var calendarHandler *handlers.CalendarHandler
 	var googleOAuthService *google.OAuthService
 	var externalContactRepo *repository.ExternalContactRepository
 
@@ -139,6 +140,20 @@ func main() {
 			)
 			providerRegistry.Register(gcontactsProvider)
 			logger.Info().Msg("Google Contacts sync provider registered")
+
+			// Register Google Calendar provider
+			calendarRepo := repository.NewCalendarEventRepository(database.Queries)
+			gcalProvider := google.NewCalendarSyncProvider(
+				googleOAuthService,
+				calendarRepo,
+				contactRepo,
+				identityService,
+			)
+			providerRegistry.Register(gcalProvider)
+			logger.Info().Msg("Google Calendar sync provider registered")
+
+			// Initialize calendar handler
+			calendarHandler = handlers.NewCalendarHandler(calendarRepo)
 		}
 
 		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
@@ -274,6 +289,18 @@ func main() {
 
 			// Add identity route to contacts
 			contacts.GET("/:id/identities", identityHandler.ListIdentitiesForContact)
+
+			// Add calendar event routes to contacts if calendar handler is initialized
+			if calendarHandler != nil {
+				contacts.GET("/:id/events", calendarHandler.ListEventsForContact)
+				contacts.GET("/:id/events/upcoming", calendarHandler.ListUpcomingEventsForContact)
+
+				// Add global events route
+				events := v1.Group("/events")
+				{
+					events.GET("/upcoming", calendarHandler.ListUpcomingEvents)
+				}
+			}
 
 			// Import candidates routes
 			if importHandler != nil {
