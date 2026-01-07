@@ -72,6 +72,30 @@ REQUEST CHANGES if ANY of these apply:
 
 ---
 
+## Review Output Format
+
+**All AI reviewers MUST include this at the end of their review:**
+
+```
+## Final Recommendation
+RESULT=PASS
+```
+
+Or if issues are found:
+
+```
+## Final Recommendation
+RESULT=FAIL
+```
+
+**Requirements:**
+- The `RESULT=` line must appear exactly as shown (no spaces around `=`)
+- Use `PASS` if code meets ALL approval criteria
+- Use `FAIL` if ANY issue warrants changes
+- This enables automated status check integration
+
+---
+
 ## Convention Reference
 
 For detailed development conventions, see:
