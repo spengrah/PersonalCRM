@@ -74,3 +74,37 @@ jobs:
           # or https://code.claude.com/docs/en/cli-reference for available options
           claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr review:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*)"'
 
+      - name: Check Claude review result
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
+
+          # Get Claude's review for this specific commit
+          REVIEW=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
+            --jq "[.[] | select(.user.login == \"claude[bot]\" and .commit_id == \"$COMMIT_SHA\")] | last")
+
+          if [[ -z "$REVIEW" || "$REVIEW" == "null" ]]; then
+            echo "No Claude review found for commit $COMMIT_SHA - passing (fail-open)"
+            exit 0
+          fi
+
+          STATE=$(echo "$REVIEW" | jq -r '.state')
+          BODY=$(echo "$REVIEW" | jq -r '.body')
+
+          echo "Review state: $STATE"
+          echo "Review commit: $COMMIT_SHA"
+
+          # Fail if CHANGES_REQUESTED or RESULT=FAIL
+          if [[ "$STATE" == "CHANGES_REQUESTED" ]]; then
+            echo "Claude requested changes - failing workflow"
+            exit 1
+          fi
+
+          if echo "$BODY" | grep -qi "RESULT=FAIL"; then
+            echo "Claude indicated RESULT=FAIL - failing workflow"
+            exit 1
+          fi
+
+          echo "Claude review passed"
+
