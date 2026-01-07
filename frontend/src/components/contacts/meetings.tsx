@@ -100,7 +100,7 @@ function MeetingCard({ event, isPast }: { event: CalendarEvent; isPast: boolean 
 }
 
 export function Meetings({ contactId }: MeetingsProps) {
-  const [filter, setFilter] = useState<FilterType>('all')
+  const [filter, setFilter] = useState<FilterType>('upcoming')
   const [displayLimit, setDisplayLimit] = useState(10)
 
   const { data: events, isLoading, error } = useEventsForContact(contactId, { limit: 100 })
