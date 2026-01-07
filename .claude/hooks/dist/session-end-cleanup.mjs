@@ -1,7 +1,6 @@
 // src/session-end-cleanup.ts
 import * as fs from "fs";
 import * as path from "path";
-import { spawn } from "child_process";
 async function main() {
   const input = JSON.parse(await readStdin());
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -41,19 +40,6 @@ async function main() {
           }
         }
       }
-    }
-    const learnScript = path.join(projectDir, "scripts", "braintrust_analyze.py");
-    const globalScript = path.join(process.env.HOME || "", ".claude", "scripts", "braintrust_analyze.py");
-    const scriptPath = fs.existsSync(learnScript) ? learnScript : globalScript;
-    if (fs.existsSync(scriptPath)) {
-      const isGlobalScript = scriptPath === globalScript;
-      const args = isGlobalScript ? ["run", "--with", "braintrust", "--with", "openai", "--with", "aiohttp", "python", scriptPath, "--learn", "--session-id", input.session_id] : ["run", "python", scriptPath, "--learn", "--session-id", input.session_id];
-      const child = spawn("uv", args, {
-        cwd: projectDir,
-        detached: true,
-        stdio: "ignore"
-      });
-      child.unref();
     }
     console.log(JSON.stringify({ result: "continue" }));
   } catch (err) {
