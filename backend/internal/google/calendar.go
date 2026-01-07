@@ -23,8 +23,10 @@ const (
 	CalendarSourceName = "gcal"
 	// CalendarDefaultInterval is the default sync interval for calendar events
 	CalendarDefaultInterval = 15 * time.Minute
-	// CalendarSyncWindowDays is the number of days to sync in each direction
-	CalendarSyncWindowDays = 30
+	// CalendarPastSyncDays is the number of days to sync into the past (1 year for historical record)
+	CalendarPastSyncDays = 365
+	// CalendarFutureSyncDays is the number of days to sync into the future
+	CalendarFutureSyncDays = 30
 
 	// Fuzzy matching constants for calendar attendee matching
 	// CalendarMinSimilarityThreshold is the minimum similarity score for pg_trgm queries
@@ -151,7 +153,7 @@ func (p *CalendarSyncProvider) ValidateCredentials(ctx context.Context, accountI
 	return nil
 }
 
-// initialSync fetches events ±30 days from now and gets a sync token
+// initialSync fetches events from the past year to 30 days ahead and gets a sync token
 func (p *CalendarSyncProvider) initialSync(
 	ctx context.Context,
 	calSvc *calendar.Service,
@@ -159,8 +161,8 @@ func (p *CalendarSyncProvider) initialSync(
 	result *sync.SyncResult,
 ) (*sync.SyncResult, error) {
 	now := accelerated.GetCurrentTime()
-	timeMin := now.AddDate(0, 0, -CalendarSyncWindowDays).Format(time.RFC3339)
-	timeMax := now.AddDate(0, 0, CalendarSyncWindowDays).Format(time.RFC3339)
+	timeMin := now.AddDate(0, 0, -CalendarPastSyncDays).Format(time.RFC3339)
+	timeMax := now.AddDate(0, 0, CalendarFutureSyncDays).Format(time.RFC3339)
 
 	logger.Debug().
 		Str("timeMin", timeMin).
@@ -348,6 +350,7 @@ func (p *CalendarSyncProvider) processEvent(
 		MatchedContactIDs:    matchedContactIDs,
 		SyncedAt:             accelerated.GetCurrentTime(),
 		LastContactedUpdated: false,
+		HtmlLink:             strPtrIfNotEmpty(event.HtmlLink),
 	}
 
 	_, err = p.calendarRepo.Upsert(ctx, req)

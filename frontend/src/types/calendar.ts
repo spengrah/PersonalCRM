@@ -9,4 +9,5 @@ export interface CalendarEvent {
   end_time: string
   status: string
   attendee_count: number
+  html_link?: string
 }

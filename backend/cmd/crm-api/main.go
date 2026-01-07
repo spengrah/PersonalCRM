@@ -327,11 +327,15 @@ func main() {
 				testExternalRepo = repository.NewExternalContactRepository(database.Queries)
 			}
 
-			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService)
+			// Initialize calendar repo for test seeding
+			testCalendarRepo := repository.NewCalendarEventRepository(database.Queries)
+
+			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService, testCalendarRepo)
 			testRoutes := v1.Group("/test")
 			{
 				testRoutes.POST("/seed/external-contacts", testHandler.SeedExternalContacts)
 				testRoutes.POST("/seed/overdue-contacts", testHandler.SeedOverdueContacts)
+				testRoutes.POST("/seed/calendar-events", testHandler.SeedCalendarEvents)
 				testRoutes.POST("/cleanup", testHandler.Cleanup)
 				testRoutes.POST("/trigger-error", testHandler.TriggerError)
 			}
