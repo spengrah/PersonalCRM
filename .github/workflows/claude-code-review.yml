@@ -78,14 +78,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Get Claude's most recent review on this PR
+          COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
+
+          # Get Claude's review for this specific commit
           REVIEW=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
-            --jq '[.[] | select(.user.login == "claude[bot]")] | last')
+            --jq "[.[] | select(.user.login == \"claude[bot]\" and .commit_id == \"$COMMIT_SHA\")] | last")
+
+          if [[ -z "$REVIEW" || "$REVIEW" == "null" ]]; then
+            echo "No Claude review found for commit $COMMIT_SHA - passing (fail-open)"
+            exit 0
+          fi
 
           STATE=$(echo "$REVIEW" | jq -r '.state')
           BODY=$(echo "$REVIEW" | jq -r '.body')
 
           echo "Review state: $STATE"
+          echo "Review commit: $COMMIT_SHA"
 
           # Fail if CHANGES_REQUESTED or RESULT=FAIL
           if [[ "$STATE" == "CHANGES_REQUESTED" ]]; then
