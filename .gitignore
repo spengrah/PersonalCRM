@@ -340,3 +340,17 @@ desktop/src-tauri/target
 desktop/src-tauri/target/release/bundle
 core
 core
+
+# ===========================================
+# CONTINUOUS CLAUDE
+# ===========================================
+# Handoffs are local (not needed for cross-machine)
+thoughts/shared/handoffs/
+
+# Track ledgers, research, and plans for cross-machine sync
+!thoughts/ledgers/
+!thoughts/shared/research/
+!thoughts/shared/plans/
+
+# Claude cache (local)
+.claude/cache/
