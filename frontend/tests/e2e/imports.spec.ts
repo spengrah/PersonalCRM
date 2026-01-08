@@ -448,3 +448,45 @@ test.describe('Imports - Suggested Matches', () => {
     await expect(page.getByText('Link to Existing Contact')).not.toBeVisible()
   })
 })
+
+test.describe('Imports - Source Filter', () => {
+  test('should display source filter buttons', async ({ page }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Verify filter UI is visible
+    await expect(page.getByText('Filter:')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'All Sources', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Google Contacts', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Calendar', exact: true })).toBeVisible()
+
+    // All Sources should be selected by default (has blue background)
+    const allSourcesButton = page.getByRole('button', { name: 'All Sources', exact: true })
+    await expect(allSourcesButton).toHaveClass(/bg-blue-600/)
+  })
+
+  test('should filter when clicking filter buttons', async ({ page }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Click Google Contacts filter
+    await page.getByRole('button', { name: 'Google Contacts', exact: true }).click()
+    await page.waitForLoadState('networkidle')
+
+    // Google Contacts button should now be selected
+    const googleContactsButton = page.getByRole('button', { name: 'Google Contacts', exact: true })
+    await expect(googleContactsButton).toHaveClass(/bg-blue-600/)
+
+    // All Sources should no longer be selected
+    const allSourcesButton = page.getByRole('button', { name: 'All Sources', exact: true })
+    await expect(allSourcesButton).not.toHaveClass(/bg-blue-600/)
+
+    // Click Calendar filter
+    await page.getByRole('button', { name: 'Calendar', exact: true }).click()
+    await page.waitForLoadState('networkidle')
+
+    // Calendar button should now be selected
+    const calendarButton = page.getByRole('button', { name: 'Calendar', exact: true })
+    await expect(calendarButton).toHaveClass(/bg-blue-600/)
+  })
+})

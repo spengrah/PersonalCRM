@@ -378,3 +378,131 @@ describe('ImportsPage - Suggested Matches', () => {
     })
   })
 })
+
+describe('ImportsPage - Source Filter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+
+    // Default mock implementations
+    vi.mocked(useImportAsContact).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    } as any)
+
+    vi.mocked(useLinkCandidate).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    } as any)
+
+    vi.mocked(useIgnoreCandidate).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    } as any)
+
+    vi.mocked(useTriggerSync).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    } as any)
+
+    vi.mocked(useGoogleAccounts).mockReturnValue({
+      data: [],
+    } as any)
+
+    vi.mocked(useContacts).mockReturnValue({
+      data: {
+        contacts: [],
+        total: 0,
+        page: 1,
+        limit: 500,
+      },
+    } as any)
+
+    vi.mocked(useImportCandidates).mockReturnValue({
+      data: {
+        candidates: [],
+        total: 0,
+        page: 1,
+        limit: 20,
+        pages: 0,
+      },
+      isLoading: false,
+      error: null,
+    } as any)
+  })
+
+  it('displays source filter buttons', () => {
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    expect(screen.getByText('Filter:')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'All Sources' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Google Contacts' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument()
+  })
+
+  it('All Sources filter is selected by default', () => {
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    const allSourcesButton = screen.getByRole('button', { name: 'All Sources' })
+    expect(allSourcesButton).toHaveClass('bg-blue-600')
+
+    const googleContactsButton = screen.getByRole('button', { name: 'Google Contacts' })
+    expect(googleContactsButton).toHaveClass('bg-gray-100')
+
+    const calendarButton = screen.getByRole('button', { name: 'Calendar' })
+    expect(calendarButton).toHaveClass('bg-gray-100')
+  })
+
+  it('clicking Google Contacts filter updates selection', async () => {
+    const user = userEvent.setup()
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    const googleContactsButton = screen.getByRole('button', { name: 'Google Contacts' })
+    await user.click(googleContactsButton)
+
+    // useImportCandidates should be called with source filter
+    expect(useImportCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'gcontacts' })
+    )
+  })
+
+  it('clicking Calendar filter updates selection', async () => {
+    const user = userEvent.setup()
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    const calendarButton = screen.getByRole('button', { name: 'Calendar' })
+    await user.click(calendarButton)
+
+    // useImportCandidates should be called with source filter
+    expect(useImportCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'gcal_attendee' })
+    )
+  })
+
+  it('clicking All Sources removes source filter', async () => {
+    const user = userEvent.setup()
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    // First click Calendar to set a filter
+    const calendarButton = screen.getByRole('button', { name: 'Calendar' })
+    await user.click(calendarButton)
+
+    // Then click All Sources
+    const allSourcesButton = screen.getByRole('button', { name: 'All Sources' })
+    await user.click(allSourcesButton)
+
+    // useImportCandidates should be called without source filter (undefined)
+    const lastCall = vi.mocked(useImportCandidates).mock.calls.pop()
+    expect(lastCall?.[0]?.source).toBeUndefined()
+  })
+
+  it('resets to page 1 when changing filter', async () => {
+    const user = userEvent.setup()
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    const calendarButton = screen.getByRole('button', { name: 'Calendar' })
+    await user.click(calendarButton)
+
+    // Should reset page to 1 when changing filter
+    expect(useImportCandidates).toHaveBeenCalledWith(expect.objectContaining({ page: 1 }))
+  })
+})

@@ -31,6 +31,11 @@ import type { ImportCandidate, ImportCandidatesListParams } from '@/types/import
 
 // Constants
 const DEFAULT_PAGE_SIZE = 20
+const SOURCE_FILTERS = [
+  { value: '', label: 'All Sources' },
+  { value: 'gcontacts', label: 'Google Contacts' },
+  { value: 'gcal_attendee', label: 'Calendar' },
+] as const
 const CONTACT_SELECTOR_LIMIT = 500
 
 // Trusted domains for photo URLs (Google profile photos)
@@ -493,6 +498,14 @@ export default function ImportsPage() {
     }
   }
 
+  const handleSourceFilter = (source: string) => {
+    setParams(prev => ({
+      ...prev,
+      page: 1,
+      source: source || undefined,
+    }))
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
@@ -525,6 +538,24 @@ export default function ImportsPage() {
               Sync Calendar
             </Button>
           </div>
+        </div>
+
+        {/* Source filter */}
+        <div className="mb-6 flex items-center gap-2">
+          <span className="text-sm text-gray-500">Filter:</span>
+          {SOURCE_FILTERS.map(filter => (
+            <button
+              key={filter.value}
+              onClick={() => handleSourceFilter(filter.value)}
+              className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
+                (params.source || '') === filter.value
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              {filter.label}
+            </button>
+          ))}
         </div>
 
         {/* Notification */}
