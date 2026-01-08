@@ -26,9 +26,9 @@ LIMIT $2 OFFSET $3;
 
 -- name: CreateContact :one
 INSERT INTO contact (
-  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, created_at
+  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, notes, created_at
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8
+  $1, $2, $3, $4, $5, $6, $7, $8, $9
 ) RETURNING *;
 
 -- name: UpdateContact :one
@@ -39,6 +39,7 @@ UPDATE contact SET
   how_met = $5,
   cadence = $6,
   profile_photo = $7,
+  notes = $8,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;

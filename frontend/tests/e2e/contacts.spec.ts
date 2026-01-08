@@ -1,6 +1,54 @@
 import { test, expect } from '@playwright/test'
 
 test.describe('Contacts', () => {
+  test('should create and edit contact with notes', async ({ page }) => {
+    const suffix = Date.now()
+    const fullName = `Notes Test Contact ${suffix}`
+    const notes =
+      'Met at a conference in 2024. Works in AI/ML. Very interested in personal CRM tools.'
+
+    // Create contact with notes
+    await page.goto('/contacts/new')
+    await page.getByLabel('Full Name').fill(fullName)
+    await page.getByLabel('Notes').fill(notes)
+
+    await Promise.all([
+      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
+      page.getByRole('button', { name: 'Create Contact' }).click(),
+    ])
+
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Verify notes are displayed on detail page
+    await expect(page.getByText(notes)).toBeVisible()
+
+    // Edit the contact to update notes
+    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.waitForLoadState('networkidle')
+
+    const updatedNotes = 'Updated notes: Follow up about collaboration opportunity.'
+    await page.getByLabel('Notes').fill(updatedNotes)
+
+    // Submit the inline edit form
+    await page.getByRole('button', { name: 'Update Contact' }).click()
+    await page.waitForLoadState('networkidle')
+
+    // Wait for form to close and return to detail view (Edit button visible again)
+    await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible({ timeout: 15000 })
+
+    // Verify updated notes are displayed
+    await expect(page.getByText(updatedNotes)).toBeVisible()
+    await expect(page.getByText(notes)).not.toBeVisible()
+
+    // Cleanup
+    page.once('dialog', dialog => dialog.accept())
+    await Promise.all([
+      page.waitForURL('/contacts'),
+      page.getByRole('button', { name: 'Delete' }).click(),
+    ])
+  })
+
   test('should create contact with all methods and normalized handles', async ({ page }) => {
     const suffix = Date.now()
     const fullName = `Playwright Contact ${suffix}`
