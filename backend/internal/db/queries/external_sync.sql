@@ -99,7 +99,7 @@ WHERE id = $1;
 
 -- name: DeleteSyncStatesByAccountID :exec
 DELETE FROM external_sync_state
-WHERE COALESCE(account_id, '') = COALESCE($1, '');
+WHERE account_id IS NOT NULL AND account_id = $1;
 
 -- External Sync Log Queries
 

@@ -198,8 +198,9 @@ func (s *OAuthService) RevokeAccount(ctx context.Context, id uuid.UUID) error {
 		return fmt.Errorf("get credential: %w", err)
 	}
 
-	// Delete associated sync states before credential deletion
-	// We need the account_id (email) to identify which sync states to delete
+	// Delete associated sync states before credential deletion.
+	// This is best-effort cleanup: credential deletion proceeds even if sync state cleanup fails.
+	// We use the account_id (email) to identify which sync states to delete.
 	if s.syncRepo != nil {
 		if err := s.syncRepo.DeleteSyncStatesByAccountID(ctx, cred.AccountID); err != nil {
 			logger.Warn().Err(err).Str("account_id", cred.AccountID).Msg("failed to delete sync states for account")

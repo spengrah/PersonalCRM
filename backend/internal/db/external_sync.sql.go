@@ -206,7 +206,7 @@ func (q *Queries) DeleteSyncState(ctx context.Context, id pgtype.UUID) error {
 
 const DeleteSyncStatesByAccountID = `-- name: DeleteSyncStatesByAccountID :exec
 DELETE FROM external_sync_state
-WHERE COALESCE(account_id, '') = COALESCE($1, '')
+WHERE account_id IS NOT NULL AND account_id = $1
 `
 
 func (q *Queries) DeleteSyncStatesByAccountID(ctx context.Context, accountID pgtype.Text) error {
