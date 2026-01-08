@@ -132,6 +132,68 @@ describe('use-imports hooks', () => {
       expect(mockedImportsApi.getCandidates).toHaveBeenCalledWith({ page: 2, limit: 10 })
     })
 
+    it('fetches import candidates filtered by source', async () => {
+      const mockData = {
+        candidates: [
+          {
+            id: 'ext-1',
+            source: 'gcontacts',
+            display_name: 'Google Contact',
+            emails: [],
+            phones: [],
+          },
+        ],
+        total: 1,
+        page: 1,
+        limit: 20,
+        pages: 1,
+      }
+      mockedImportsApi.getCandidates.mockResolvedValueOnce(mockData)
+
+      const { result } = renderHook(() => useImportCandidates({ source: 'gcontacts' }), {
+        wrapper: createWrapper(queryClient),
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(mockedImportsApi.getCandidates).toHaveBeenCalledWith({ source: 'gcontacts' })
+      expect(result.current.data?.candidates[0].source).toBe('gcontacts')
+    })
+
+    it('fetches calendar attendees when filtered by gcal_attendee source', async () => {
+      const mockData = {
+        candidates: [
+          {
+            id: 'ext-2',
+            source: 'gcal_attendee',
+            display_name: 'Calendar Attendee',
+            emails: ['attendee@example.com'],
+            phones: [],
+            metadata: {
+              meeting_title: 'Team Meeting',
+              meeting_date: '2026-01-08',
+              meeting_link: 'https://calendar.google.com/event/123',
+            },
+          },
+        ],
+        total: 1,
+        page: 1,
+        limit: 20,
+        pages: 1,
+      }
+      mockedImportsApi.getCandidates.mockResolvedValueOnce(mockData)
+
+      const { result } = renderHook(() => useImportCandidates({ source: 'gcal_attendee' }), {
+        wrapper: createWrapper(queryClient),
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(mockedImportsApi.getCandidates).toHaveBeenCalledWith({ source: 'gcal_attendee' })
+      expect(result.current.data?.candidates[0].source).toBe('gcal_attendee')
+      expect(result.current.data?.candidates[0].metadata?.meeting_title).toBe('Team Meeting')
+    })
+
     it('correctly parses candidates with suggested_match field', async () => {
       const mockData = {
         candidates: [

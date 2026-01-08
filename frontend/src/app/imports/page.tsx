@@ -13,6 +13,7 @@ import {
   CheckCircle,
   AlertCircle,
   CloudDownload,
+  Calendar,
 } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
@@ -30,6 +31,11 @@ import type { ImportCandidate, ImportCandidatesListParams } from '@/types/import
 
 // Constants
 const DEFAULT_PAGE_SIZE = 20
+const SOURCE_FILTERS = [
+  { value: '', label: 'All Sources' },
+  { value: 'gcontacts', label: 'Google Contacts' },
+  { value: 'gcal_attendee', label: 'Calendar' },
+] as const
 const CONTACT_SELECTOR_LIMIT = 500
 
 // Trusted domains for photo URLs (Google profile photos)
@@ -180,6 +186,15 @@ function CandidateCard({
     [candidate.first_name, candidate.last_name].filter(Boolean).join(' ') ||
     'Unknown'
 
+  // Get meeting context for calendar attendees
+  const meetingContext =
+    candidate.source === 'gcal_attendee' && candidate.metadata ? candidate.metadata : null
+
+  // Validate meeting link is a safe HTTPS URL
+  const safeMeetingLink = meetingContext?.meeting_link?.startsWith('https://')
+    ? meetingContext.meeting_link
+    : null
+
   return (
     <div className="p-4 bg-white border border-gray-200 rounded-lg hover:shadow-sm transition-shadow">
       <div className="flex items-start justify-between">
@@ -202,7 +217,29 @@ function CandidateCard({
 
           {/* Info */}
           <div className="flex-1 min-w-0">
-            <h3 className="text-base font-medium text-gray-900">{displayName}</h3>
+            <div className="flex items-center flex-wrap gap-2">
+              <h3 className="text-base font-medium text-gray-900">{displayName}</h3>
+              {/* Inline meeting context badge for calendar attendees */}
+              {meetingContext &&
+                meetingContext.meeting_title &&
+                (safeMeetingLink ? (
+                  <a
+                    href={safeMeetingLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`View calendar event: ${meetingContext.meeting_title}`}
+                    className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 hover:bg-blue-200 transition-colors"
+                  >
+                    <Calendar className="w-3 h-3 mr-1" />
+                    From: {meetingContext.meeting_title}
+                  </a>
+                ) : (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                    <Calendar className="w-3 h-3 mr-1" />
+                    From: {meetingContext.meeting_title}
+                  </span>
+                ))}
+            </div>
 
             {/* Organization and job title */}
             {(candidate.organization || candidate.job_title) && (
@@ -231,10 +268,11 @@ function CandidateCard({
                 <a
                   key={idx}
                   href={`mailto:${encodeURIComponent(email)}`}
-                  className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                  title={email}
+                  className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors max-w-[300px]"
                 >
-                  <Mail className="w-3.5 h-3.5 mr-1.5 text-gray-400" />
-                  {email}
+                  <Mail className="w-3.5 h-3.5 mr-1.5 flex-shrink-0 text-gray-400" />
+                  <span className="truncate">{email}</span>
                 </a>
               ))}
               {candidate.phones.slice(0, 2).map((phone, idx) => (
@@ -374,7 +412,7 @@ export default function ImportsPage() {
     }
   }
 
-  const handleSync = async () => {
+  const handleSyncContacts = async () => {
     // Check if there are any Google accounts connected
     if (!googleAccounts || googleAccounts.length === 0) {
       setNotification({
@@ -391,11 +429,11 @@ export default function ImportsPage() {
       }
       setNotification({
         type: 'success',
-        message: `Sync started for ${googleAccounts.length} account${googleAccounts.length > 1 ? 's' : ''}! New contacts will appear shortly.`,
+        message: `Contacts sync started for ${googleAccounts.length} account${googleAccounts.length > 1 ? 's' : ''}!`,
       })
     } catch (error) {
       // Extract error message from API response
-      let errorMessage = 'Failed to start sync. Please try again.'
+      let errorMessage = 'Failed to start contacts sync. Please try again.'
       if (error instanceof Error) {
         errorMessage = error.message
       }
@@ -418,6 +456,56 @@ export default function ImportsPage() {
     }
   }
 
+  const handleSyncCalendar = async () => {
+    // Check if there are any Google accounts connected
+    if (!googleAccounts || googleAccounts.length === 0) {
+      setNotification({
+        type: 'error',
+        message: 'No Google accounts connected. Please connect a Google account in Settings.',
+      })
+      return
+    }
+
+    try {
+      // Sync all connected Google accounts
+      for (const account of googleAccounts) {
+        await syncMutation.mutateAsync({ source: 'gcal', accountId: account.account_id })
+      }
+      setNotification({
+        type: 'success',
+        message: `Calendar sync started for ${googleAccounts.length} account${googleAccounts.length > 1 ? 's' : ''}!`,
+      })
+    } catch (error) {
+      let errorMessage = 'Failed to start calendar sync. Please try again.'
+      if (error instanceof Error) {
+        errorMessage = error.message
+      }
+
+      if (errorMessage.includes('decrypt') || errorMessage.includes('authentication failed')) {
+        errorMessage =
+          'Your Google account connection has expired. Please reconnect your account in Settings.'
+      } else if (errorMessage.includes('refresh token')) {
+        errorMessage =
+          'Unable to refresh your Google account. Please reconnect your account in Settings.'
+      } else if (errorMessage.includes('OAuth')) {
+        errorMessage = 'Authentication error. Please reconnect your Google account in Settings.'
+      }
+
+      setNotification({
+        type: 'error',
+        message: errorMessage,
+      })
+    }
+  }
+
+  const handleSourceFilter = (source: string) => {
+    setParams(prev => ({
+      ...prev,
+      page: 1,
+      source: source || undefined,
+    }))
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
@@ -436,16 +524,38 @@ export default function ImportsPage() {
               {isLoading
                 ? 'Loading...'
                 : data?.total
-                  ? `${data.total} contacts available to import from Google`
+                  ? `${data.total} contacts available to import from Google Contacts and Calendar`
                   : 'No contacts to import'}
             </p>
           </div>
-          <div className="mt-4 flex md:mt-0 md:ml-4">
-            <Button variant="outline" onClick={handleSync} loading={syncMutation.isPending}>
+          <div className="mt-4 flex md:mt-0 md:ml-4 space-x-2">
+            <Button variant="outline" onClick={handleSyncContacts} loading={syncMutation.isPending}>
               <RefreshCw className="w-4 h-4 mr-2" />
-              Sync Google Contacts
+              Sync Contacts
+            </Button>
+            <Button variant="outline" onClick={handleSyncCalendar} loading={syncMutation.isPending}>
+              <Calendar className="w-4 h-4 mr-2" />
+              Sync Calendar
             </Button>
           </div>
+        </div>
+
+        {/* Source filter */}
+        <div className="mb-6 flex items-center gap-2">
+          <span className="text-sm text-gray-500">Filter:</span>
+          {SOURCE_FILTERS.map(filter => (
+            <button
+              key={filter.value}
+              onClick={() => handleSourceFilter(filter.value)}
+              className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
+                (params.source || '') === filter.value
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              {filter.label}
+            </button>
+          ))}
         </div>
 
         {/* Notification */}
@@ -491,10 +601,22 @@ export default function ImportsPage() {
             <p className="mt-1 text-sm text-gray-500">
               All contacts from Google have been imported or are already linked.
             </p>
-            <div className="mt-6">
-              <Button variant="outline" onClick={handleSync} loading={syncMutation.isPending}>
+            <div className="mt-6 flex justify-center space-x-2">
+              <Button
+                variant="outline"
+                onClick={handleSyncContacts}
+                loading={syncMutation.isPending}
+              >
                 <RefreshCw className="w-4 h-4 mr-2" />
-                Sync Google Contacts
+                Sync Contacts
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleSyncCalendar}
+                loading={syncMutation.isPending}
+              >
+                <Calendar className="w-4 h-4 mr-2" />
+                Sync Calendar
               </Button>
             </div>
           </div>

@@ -148,6 +148,7 @@ func main() {
 				calendarRepo,
 				contactRepo,
 				identityService,
+				externalContactRepo,
 			)
 			providerRegistry.Register(gcalProvider)
 			logger.Info().Msg("Google Calendar sync provider registered")

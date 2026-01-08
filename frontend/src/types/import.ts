@@ -8,6 +8,13 @@ export interface SuggestedMatch {
   confidence: number
 }
 
+export interface ImportCandidateMetadata {
+  meeting_title?: string
+  meeting_date?: string
+  meeting_link?: string
+  discovered_at?: string
+}
+
 export interface ImportCandidate {
   id: string
   source: string
@@ -21,6 +28,7 @@ export interface ImportCandidate {
   emails: string[]
   phones: string[]
   suggested_match?: SuggestedMatch
+  metadata?: ImportCandidateMetadata
 }
 
 export interface ImportCandidatesListParams {

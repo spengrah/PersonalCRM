@@ -40,6 +40,8 @@ Commits must be signed. Pre-commit hook auto-formats code (gofmt, prettier) and 
 git commit -S -m "feat: description"
 ```
 
+**After creating a PR or pushing commits:** Always monitor CI status and reviewer comments using `gh pr checks` and `gh pr view --comments`. Address any failures or feedback promptly.
+
 📖 *Detailed: @.github/README.md*
 
 ## Absolute Rules
@@ -104,5 +106,19 @@ frontend/
 | Using `time.Now()` | Use `accelerated.GetCurrentTime()` |
 | Missing `deleted_at IS NULL` in queries | All queries must filter soft deletes |
 | Comparing errors with `==` | Use `errors.Is(err, db.ErrNotFound)` |
+| Querying DB directly | `docker exec crm-postgres psql -U crm_user -d personal_crm -c "..."` |
 
 📖 *Detailed: @.ai/reviewers.md*
+
+## UI Prototyping
+
+Before implementing new UI components in React, create standalone HTML preview files to explore design options. This allows rapid visual iteration without build cycles.
+
+**When to use:** New forms, dashboard widgets, data displays, or any UI with multiple valid approaches.
+
+**Process:**
+1. Create HTML file in `/temp` (gitignored) with Tailwind CSS via CDN
+2. Show multiple design options side-by-side with labels
+3. Get user approval before implementing in React
+
+📖 *Detailed: @.ai/development.md (Section 8)*

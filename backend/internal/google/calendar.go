@@ -21,8 +21,10 @@ import (
 const (
 	// CalendarSourceName is the source identifier for Google Calendar
 	CalendarSourceName = "gcal"
-	// CalendarDefaultInterval is the default sync interval for calendar events
-	CalendarDefaultInterval = 15 * time.Minute
+	// CalendarAttendeeSource is the source identifier for calendar attendee import candidates
+	CalendarAttendeeSource = "gcal_attendee"
+	// CalendarDefaultInterval is the default sync interval for calendar events (daily)
+	CalendarDefaultInterval = 24 * time.Hour
 	// CalendarPastSyncDays is the number of days to sync into the past.
 	// 1 year provides comprehensive meeting history for relationship context.
 	CalendarPastSyncDays = 365
@@ -60,12 +62,28 @@ type identityServiceInterface interface {
 	MatchOrCreate(ctx context.Context, req service.MatchRequest) (*service.MatchResult, error)
 }
 
+// externalContactRepoInterface defines the methods needed from external contact repository (for testability)
+type externalContactRepoInterface interface {
+	Upsert(ctx context.Context, req repository.UpsertExternalContactRequest) (*repository.ExternalContact, error)
+}
+
+// EventContext contains meeting information that is stored as metadata when
+// creating import candidates from unmatched calendar attendees. This provides
+// context about where the attendee was discovered (which meeting) so users
+// can make informed import decisions.
+type EventContext struct {
+	Title     string    // Event summary/title
+	StartTime time.Time // Event start time
+	HtmlLink  string    // URL to view the event in Google Calendar
+}
+
 // CalendarSyncProvider implements SyncProvider for Google Calendar
 type CalendarSyncProvider struct {
-	oauthService    *OAuthService
-	calendarRepo    calendarRepoInterface
-	contactRepo     contactRepoInterface
-	identityService identityServiceInterface
+	oauthService        *OAuthService
+	calendarRepo        calendarRepoInterface
+	contactRepo         contactRepoInterface
+	identityService     identityServiceInterface
+	externalContactRepo externalContactRepoInterface
 }
 
 // NewCalendarSyncProvider creates a new Google Calendar sync provider
@@ -74,12 +92,14 @@ func NewCalendarSyncProvider(
 	calendarRepo *repository.CalendarEventRepository,
 	contactRepo *repository.ContactRepository,
 	identityService *service.IdentityService,
+	externalContactRepo *repository.ExternalContactRepository,
 ) *CalendarSyncProvider {
 	return &CalendarSyncProvider{
-		oauthService:    oauthService,
-		calendarRepo:    calendarRepo,
-		contactRepo:     contactRepo,
-		identityService: identityService,
+		oauthService:        oauthService,
+		calendarRepo:        calendarRepo,
+		contactRepo:         contactRepo,
+		identityService:     identityService,
+		externalContactRepo: externalContactRepo,
 	}
 }
 
@@ -330,8 +350,15 @@ func (p *CalendarSyncProvider) processEvent(
 	// Build attendee list
 	attendees := p.buildAttendeeList(event, accountID)
 
-	// Match attendees to CRM contacts
-	matchedContactIDs := p.matchAttendees(ctx, attendees, accountID)
+	// Create event context for import candidates
+	eventContext := &EventContext{
+		Title:     event.Summary,
+		StartTime: startTime,
+		HtmlLink:  event.HtmlLink,
+	}
+
+	// Match attendees to CRM contacts (and store unmatched as import candidates)
+	matchedContactIDs := p.matchAttendees(ctx, attendees, accountID, eventContext)
 
 	// Prepare upsert request
 	title := event.Summary
@@ -399,11 +426,13 @@ func (p *CalendarSyncProvider) buildAttendeeList(event *calendar.Event, accountI
 
 // matchAttendees matches attendee emails to CRM contacts
 // First attempts exact email matching via identity service, then falls back to
-// fuzzy name matching with weighted scoring (60% name + 40% method overlap)
+// fuzzy name matching with weighted scoring (60% name + 40% method overlap).
+// Unmatched attendees are stored as import candidates with meeting context.
 func (p *CalendarSyncProvider) matchAttendees(
 	ctx context.Context,
 	attendees []repository.Attendee,
 	accountID string,
+	eventContext *EventContext,
 ) []uuid.UUID {
 	matchedIDs := make([]uuid.UUID, 0)
 	seen := make(map[uuid.UUID]bool)
@@ -445,21 +474,28 @@ func (p *CalendarSyncProvider) matchAttendees(
 		}
 
 		// Step 2: Fall back to fuzzy name matching if display name is available
-		if attendee.DisplayName == "" {
-			continue
+		if attendee.DisplayName != "" {
+			fuzzyMatch := p.findFuzzyMatch(ctx, attendee.DisplayName, attendee.Email)
+			if fuzzyMatch != nil {
+				if !seen[*fuzzyMatch] {
+					matchedIDs = append(matchedIDs, *fuzzyMatch)
+					seen[*fuzzyMatch] = true
+					logger.Debug().
+						Str("displayName", attendee.DisplayName).
+						Str("email", attendee.Email).
+						Str("contactId", fuzzyMatch.String()).
+						Msg("fuzzy matched attendee to contact")
+				}
+				continue
+			}
 		}
 
-		fuzzyMatch := p.findFuzzyMatch(ctx, attendee.DisplayName, attendee.Email)
-		if fuzzyMatch != nil {
-			if !seen[*fuzzyMatch] {
-				matchedIDs = append(matchedIDs, *fuzzyMatch)
-				seen[*fuzzyMatch] = true
-				logger.Debug().
-					Str("displayName", attendee.DisplayName).
-					Str("email", attendee.Email).
-					Str("contactId", fuzzyMatch.String()).
-					Msg("fuzzy matched attendee to contact")
-			}
+		// Step 3: No match found - store as import candidate
+		if err := p.storeUnmatchedAttendee(ctx, attendee, accountID, eventContext); err != nil {
+			logger.Warn().
+				Err(err).
+				Str("email", attendee.Email).
+				Msg("failed to store unmatched attendee as import candidate")
 		}
 	}
 
@@ -527,6 +563,73 @@ func (p *CalendarSyncProvider) findFuzzyMatch(ctx context.Context, displayName, 
 	}
 
 	return bestMatch
+}
+
+// storeUnmatchedAttendee stores an unmatched calendar attendee as an import candidate.
+// It creates an external_contact record with source='gcal_attendee' so the attendee
+// appears on the Imports page for user review.
+//
+// Deduplication: Uses normalized (lowercase, trimmed) email as source_id, allowing
+// the database upsert to handle deduplication. If the same person appears in multiple
+// meetings, only one import candidate is created (with metadata from the most recent meeting).
+//
+// Graceful handling: Returns nil without error if externalContactRepo is nil (for tests)
+// or if eventContext is nil (no meeting context available).
+func (p *CalendarSyncProvider) storeUnmatchedAttendee(
+	ctx context.Context,
+	attendee repository.Attendee,
+	accountID string,
+	eventContext *EventContext,
+) error {
+	// Skip if no external contact repo (e.g., in tests)
+	if p.externalContactRepo == nil {
+		return nil
+	}
+
+	// Skip if no event context
+	if eventContext == nil {
+		return nil
+	}
+
+	// Use normalized email as source_id for deduplication
+	sourceID := strings.ToLower(strings.TrimSpace(attendee.Email))
+
+	// Build metadata with meeting context
+	metadata := map[string]any{
+		"meeting_title": eventContext.Title,
+		"meeting_date":  eventContext.StartTime.Format(time.RFC3339),
+		"meeting_link":  eventContext.HtmlLink,
+		"discovered_at": accelerated.GetCurrentTime().Format(time.RFC3339),
+	}
+
+	// Build emails array
+	emails := []repository.EmailEntry{
+		{Value: attendee.Email},
+	}
+
+	syncedAt := accelerated.GetCurrentTime()
+
+	// Upsert external contact (creates or updates existing)
+	_, err := p.externalContactRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:      CalendarAttendeeSource,
+		SourceID:    sourceID,
+		AccountID:   &accountID,
+		DisplayName: strPtrIfNotEmpty(attendee.DisplayName),
+		Emails:      emails,
+		Metadata:    metadata,
+		SyncedAt:    &syncedAt,
+	})
+	if err != nil {
+		return fmt.Errorf("upsert external contact: %w", err)
+	}
+
+	logger.Debug().
+		Str("email", attendee.Email).
+		Str("displayName", attendee.DisplayName).
+		Str("meetingTitle", eventContext.Title).
+		Msg("stored unmatched attendee as import candidate")
+
+	return nil
 }
 
 // updateLastContactedForPastEvents updates last_contacted for contacts in past events
