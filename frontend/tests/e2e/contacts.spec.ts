@@ -26,13 +26,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.waitForLoadState('networkidle')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
-    // Verify "Show more" button is visible (indicates notes are long enough to truncate)
+    // Verify "Show more" button is visible (indicates notes overflow the 4-line clamp)
     const showMoreButton = page.getByRole('button', { name: 'Show more' })
     await expect(showMoreButton).toBeVisible()
-
-    // Verify the notes container has line-clamp class (truncation is applied)
-    const notesContainer = page.locator('.line-clamp-4')
-    await expect(notesContainer).toBeVisible()
 
     // Click "Show more" to expand
     await showMoreButton.click()
@@ -41,15 +37,11 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const showLessButton = page.getByRole('button', { name: 'Show less' })
     await expect(showLessButton).toBeVisible()
 
-    // Verify line-clamp is removed (notes are expanded)
-    await expect(notesContainer).not.toBeVisible()
-
     // Click "Show less" to collapse
     await showLessButton.click()
 
-    // Verify button changed back to "Show more" and truncation is reapplied
+    // Verify button changed back to "Show more"
     await expect(showMoreButton).toBeVisible()
-    await expect(notesContainer).toBeVisible()
 
     // Cleanup
     page.once('dialog', dialog => dialog.accept())

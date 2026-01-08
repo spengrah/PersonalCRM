@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { Navigation } from '@/components/layout/navigation'
 import { ContactForm } from '@/components/contacts/contact-form'
@@ -40,10 +40,20 @@ export default function ContactDetailPage() {
 
   const [isEditing, setIsEditing] = useState(false)
   const [notesExpanded, setNotesExpanded] = useState(false)
+  const [notesOverflowing, setNotesOverflowing] = useState(false)
+  const notesRef = useRef<HTMLDivElement>(null)
 
   const { data: contact, isLoading, error } = useContact(contactId)
   const { data: reminders } = useRemindersByContact(contactId)
   const updateContactMutation = useUpdateContact()
+
+  // Detect if notes content overflows the 4-line clamp
+  useEffect(() => {
+    if (notesRef.current && !notesExpanded) {
+      const isOverflowing = notesRef.current.scrollHeight > notesRef.current.clientHeight
+      setNotesOverflowing(isOverflowing)
+    }
+  }, [contact?.notes, notesExpanded])
   const deleteContactMutation = useDeleteContact()
   const updateLastContactedMutation = useUpdateLastContacted()
 
@@ -51,8 +61,8 @@ export default function ContactDetailPage() {
     try {
       await updateContactMutation.mutateAsync({ id: contactId, data })
       setIsEditing(false)
-    } catch (error) {
-      console.error('Error updating contact:', error)
+    } catch {
+      // Error handled by TanStack Query error state
     }
   }
 
@@ -61,8 +71,8 @@ export default function ContactDetailPage() {
       try {
         await deleteContactMutation.mutateAsync(contactId)
         router.push('/contacts')
-      } catch (error) {
-        console.error('Error deleting contact:', error)
+      } catch {
+        // Error handled by TanStack Query error state
       }
     }
   }
@@ -70,8 +80,8 @@ export default function ContactDetailPage() {
   const handleMarkAsContacted = async () => {
     try {
       await updateLastContactedMutation.mutateAsync(contactId)
-    } catch (error) {
-      console.error('Error updating last contacted:', error)
+    } catch {
+      // Error handled by TanStack Query error state
     }
   }
 
@@ -316,11 +326,12 @@ export default function ContactDetailPage() {
                   <dt className="text-sm font-medium text-gray-500">Notes</dt>
                   <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
                     <div
-                      className={`whitespace-pre-wrap ${!notesExpanded && contact.notes.length > 300 ? 'line-clamp-4' : ''}`}
+                      ref={notesRef}
+                      className={`whitespace-pre-wrap ${!notesExpanded ? 'line-clamp-4' : ''}`}
                     >
                       {contact.notes}
                     </div>
-                    {contact.notes.length > 300 && (
+                    {(notesOverflowing || notesExpanded) && (
                       <button
                         onClick={() => setNotesExpanded(!notesExpanded)}
                         className="mt-2 inline-flex items-center text-sm text-blue-600 hover:text-blue-800 font-medium"
