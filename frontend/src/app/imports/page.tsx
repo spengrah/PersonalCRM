@@ -263,10 +263,11 @@ function CandidateCard({
                 <a
                   key={idx}
                   href={`mailto:${encodeURIComponent(email)}`}
-                  className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                  title={email}
+                  className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors max-w-[200px]"
                 >
-                  <Mail className="w-3.5 h-3.5 mr-1.5 text-gray-400" />
-                  {email}
+                  <Mail className="w-3.5 h-3.5 mr-1.5 flex-shrink-0 text-gray-400" />
+                  <span className="truncate">{email}</span>
                 </a>
               ))}
               {candidate.phones.slice(0, 2).map((phone, idx) => (
