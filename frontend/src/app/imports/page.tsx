@@ -269,7 +269,7 @@ function CandidateCard({
                   key={idx}
                   href={`mailto:${encodeURIComponent(email)}`}
                   title={email}
-                  className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors max-w-[200px]"
+                  className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors max-w-[300px]"
                 >
                   <Mail className="w-3.5 h-3.5 mr-1.5 flex-shrink-0 text-gray-400" />
                   <span className="truncate">{email}</span>
