@@ -1,6 +1,96 @@
 import { test, expect } from '@playwright/test'
 
 test.describe('Contacts', () => {
+  test('should show expandable notes for long content', async ({ page }) => {
+    const suffix = Date.now()
+    const fullName = `Long Notes Contact ${suffix}`
+    // Create notes longer than 300 characters to trigger truncation
+    const longNotes = `Met at the AI conference in San Francisco, March 2024. Works as a senior ML engineer at a startup focused on personal productivity tools.
+
+Very interested in personal CRM concepts and AI-driven contact management. We discussed potential collaboration opportunities around embedding-based contact matching.
+
+Key interests: Machine learning infrastructure, personal knowledge management, privacy-focused software design.
+
+Follow-up: Share the pgvector article, introduce to Sarah from the embeddings team.`
+
+    // Create contact with long notes
+    await page.goto('/contacts/new')
+    await page.getByLabel('Full Name').fill(fullName)
+    await page.getByLabel('Notes').fill(longNotes)
+
+    await Promise.all([
+      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
+      page.getByRole('button', { name: 'Create Contact' }).click(),
+    ])
+
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Verify "Show more" button is visible (indicates notes are long enough to truncate)
+    const showMoreButton = page.getByRole('button', { name: 'Show more' })
+    await expect(showMoreButton).toBeVisible()
+
+    // Verify the notes container has line-clamp class (truncation is applied)
+    const notesContainer = page.locator('.line-clamp-4')
+    await expect(notesContainer).toBeVisible()
+
+    // Click "Show more" to expand
+    await showMoreButton.click()
+
+    // Verify button changed to "Show less"
+    const showLessButton = page.getByRole('button', { name: 'Show less' })
+    await expect(showLessButton).toBeVisible()
+
+    // Verify line-clamp is removed (notes are expanded)
+    await expect(notesContainer).not.toBeVisible()
+
+    // Click "Show less" to collapse
+    await showLessButton.click()
+
+    // Verify button changed back to "Show more" and truncation is reapplied
+    await expect(showMoreButton).toBeVisible()
+    await expect(notesContainer).toBeVisible()
+
+    // Cleanup
+    page.once('dialog', dialog => dialog.accept())
+    await Promise.all([
+      page.waitForURL('/contacts'),
+      page.getByRole('button', { name: 'Delete' }).click(),
+    ])
+  })
+
+  test('should not show expand button for short notes', async ({ page }) => {
+    const suffix = Date.now()
+    const fullName = `Short Notes Contact ${suffix}`
+    const shortNotes = 'Brief note about this contact.'
+
+    // Create contact with short notes
+    await page.goto('/contacts/new')
+    await page.getByLabel('Full Name').fill(fullName)
+    await page.getByLabel('Notes').fill(shortNotes)
+
+    await Promise.all([
+      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
+      page.getByRole('button', { name: 'Create Contact' }).click(),
+    ])
+
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Verify notes are displayed
+    await expect(page.getByText(shortNotes)).toBeVisible()
+
+    // Verify "Show more" button is NOT visible (notes are short)
+    await expect(page.getByRole('button', { name: 'Show more' })).not.toBeVisible()
+
+    // Cleanup
+    page.once('dialog', dialog => dialog.accept())
+    await Promise.all([
+      page.waitForURL('/contacts'),
+      page.getByRole('button', { name: 'Delete' }).click(),
+    ])
+  })
+
   test('should create and edit contact with notes', async ({ page }) => {
     const suffix = Date.now()
     const fullName = `Notes Test Contact ${suffix}`

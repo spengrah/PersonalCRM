@@ -201,6 +201,40 @@ func TestContactValidation_Cadence(t *testing.T) {
 	}
 }
 
+// TestContactValidation_Notes tests Notes validation
+func TestContactValidation_Notes(t *testing.T) {
+	type Contact struct {
+		Notes *string `validate:"omitempty,max=2000"`
+	}
+
+	tests := []struct {
+		name      string
+		notes     *string
+		wantError bool
+	}{
+		{"Valid notes", strPtr("Met at a conference. Works in tech."), false},
+		{"Nil notes valid", nil, false},
+		{"Empty string valid", strPtr(""), false},
+		{"Max length 2000", strPtr(strings.Repeat("a", 2000)), false},
+		{"Exceeds max length", strPtr(strings.Repeat("a", 2001)), true},
+		{"Multiline notes valid", strPtr("Line 1\nLine 2\nLine 3"), false},
+		{"Notes with special characters", strPtr("Notes with émojis 🎉 and symbols @#$%"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contact := Contact{Notes: tt.notes}
+			err := validate.Struct(contact)
+
+			if tt.wantError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestContactValidation_ProfilePhoto tests ProfilePhoto URL validation
 func TestContactValidation_ProfilePhoto(t *testing.T) {
 	type Contact struct {
