@@ -97,6 +97,10 @@ RETURNING *;
 DELETE FROM external_sync_state
 WHERE id = $1;
 
+-- name: DeleteSyncStatesByAccountID :exec
+DELETE FROM external_sync_state
+WHERE account_id IS NOT NULL AND account_id = $1;
+
 -- External Sync Log Queries
 
 -- name: CreateSyncLog :one

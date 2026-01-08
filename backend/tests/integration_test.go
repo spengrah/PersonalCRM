@@ -526,6 +526,76 @@ func TestSyncRepository_Integration(t *testing.T) {
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, len(logs), 2)
 	})
+
+	t.Run("DeleteSyncStatesByAccountID", func(t *testing.T) {
+		// Create sync states for different accounts
+		account1 := "account1@example.com"
+		account2 := "account2@example.com"
+
+		// Create multiple sync states for account1
+		state1a, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+			Source:    "gcontacts",
+			AccountID: &account1,
+			Strategy:  repository.SyncStrategyFetchAll,
+			Enabled:   true,
+		})
+		require.NoError(t, err)
+
+		state1b, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+			Source:    "gcal",
+			AccountID: &account1,
+			Strategy:  repository.SyncStrategyFetchAll,
+			Enabled:   true,
+		})
+		require.NoError(t, err)
+
+		// Create a sync state for account2 (should NOT be deleted)
+		state2, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+			Source:    "gcontacts",
+			AccountID: &account2,
+			Strategy:  repository.SyncStrategyFetchAll,
+			Enabled:   true,
+		})
+		require.NoError(t, err)
+		defer func() { _ = repo.DeleteSyncState(ctx, state2.ID) }()
+
+		// Create a sync state with NULL account_id (e.g., iMessage - should NOT be deleted)
+		stateNull, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+			Source:    "imessage",
+			AccountID: nil, // NULL account_id
+			Strategy:  repository.SyncStrategyContactDriven,
+			Enabled:   true,
+		})
+		require.NoError(t, err)
+		defer func() { _ = repo.DeleteSyncState(ctx, stateNull.ID) }()
+
+		// Delete all sync states for account1
+		err = repo.DeleteSyncStatesByAccountID(ctx, account1)
+		require.NoError(t, err)
+
+		// Verify account1 sync states are deleted
+		_, err = repo.GetSyncState(ctx, state1a.ID)
+		assert.Error(t, err, "state1a should be deleted")
+
+		_, err = repo.GetSyncState(ctx, state1b.ID)
+		assert.Error(t, err, "state1b should be deleted")
+
+		// Verify account2 sync state still exists
+		foundState2, err := repo.GetSyncState(ctx, state2.ID)
+		require.NoError(t, err)
+		assert.Equal(t, state2.ID, foundState2.ID, "account2 state should NOT be deleted")
+
+		// Verify NULL account_id sync state still exists
+		foundStateNull, err := repo.GetSyncState(ctx, stateNull.ID)
+		require.NoError(t, err)
+		assert.Equal(t, stateNull.ID, foundStateNull.ID, "NULL account state (iMessage) should NOT be deleted")
+	})
+
+	t.Run("DeleteSyncStatesByAccountID_NoMatches", func(t *testing.T) {
+		// Deleting sync states for a non-existent account should succeed (no-op)
+		err := repo.DeleteSyncStatesByAccountID(ctx, "nonexistent@example.com")
+		require.NoError(t, err, "Deleting non-existent account should not error")
+	})
 }
 
 // TestOAuthRepository_Integration tests the OAuth repository with a real database

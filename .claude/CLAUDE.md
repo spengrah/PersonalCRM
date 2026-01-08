@@ -50,6 +50,7 @@ git commit -S -m "feat: description"
 4. **Never use npm/npx** → Use bun/bunx
 5. **Never call queries from handlers** → Go through repository
 6. **Always sign commits** → `git commit -S -m "..."`
+7. **Always add comprehensive tests** → Unit tests for logic, integration tests for DB operations, E2E tests for user flows. Cover edge cases and verify unrelated data is unaffected
 
 📖 *Detailed: @.ai/rules.md*
 

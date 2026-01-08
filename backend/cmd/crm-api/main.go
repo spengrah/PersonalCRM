@@ -111,7 +111,7 @@ func main() {
 		// Initialize Google OAuth service if configured
 		if cfg.Google.ClientID != "" && cfg.Google.ClientSecret != "" {
 			var err error
-			googleOAuthService, err = google.NewOAuthService(cfg, oauthRepo)
+			googleOAuthService, err = google.NewOAuthService(cfg, oauthRepo, syncRepo)
 			if err != nil {
 				logger.Warn().Err(err).Msg("failed to initialize Google OAuth service")
 			} else {

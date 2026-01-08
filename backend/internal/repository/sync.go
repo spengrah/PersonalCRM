@@ -372,6 +372,11 @@ func (r *SyncRepository) DeleteSyncState(ctx context.Context, id uuid.UUID) erro
 	return r.queries.DeleteSyncState(ctx, uuidToPgUUID(id))
 }
 
+// DeleteSyncStatesByAccountID deletes all sync states for a specific account
+func (r *SyncRepository) DeleteSyncStatesByAccountID(ctx context.Context, accountID string) error {
+	return r.queries.DeleteSyncStatesByAccountID(ctx, pgtype.Text{String: accountID, Valid: true})
+}
+
 // CreateSyncLog creates a new sync log entry
 func (r *SyncRepository) CreateSyncLog(ctx context.Context, state *SyncState) (*SyncLog, error) {
 	// Convert metadata to JSON
