@@ -15,7 +15,7 @@ import (
 )
 
 func TestCalendarSyncProvider_Config(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
 	config := provider.Config()
 
 	assert.Equal(t, CalendarSourceName, config.Name)
@@ -132,7 +132,7 @@ func TestStrPtrIfNotEmpty(t *testing.T) {
 }
 
 func TestCalendarSyncProvider_GetUserResponse(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	tests := []struct {
@@ -202,7 +202,7 @@ func TestCalendarSyncProvider_GetUserResponse(t *testing.T) {
 }
 
 func TestCalendarSyncProvider_BuildAttendeeList(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -277,7 +277,7 @@ func TestProcessEvent_SkipsAllDayEvents(t *testing.T) {
 
 // TestProcessEvent_SkipsDeclinedEvents verifies that declined events are skipped
 func TestProcessEvent_SkipsDeclinedEvents(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -346,7 +346,7 @@ func TestMatchAttendees_SkipsEmptyEmails(t *testing.T) {
 
 // TestBuildAttendeeList_EmptyAttendees verifies behavior with no attendees
 func TestBuildAttendeeList_EmptyAttendees(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -382,7 +382,7 @@ func TestEventStatusMapping(t *testing.T) {
 
 // TestUserResponse_MultipleAttendees verifies correct user identification among many attendees
 func TestUserResponse_MultipleAttendees(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
 
 	tests := []struct {
 		name      string
@@ -436,7 +436,7 @@ func TestUserResponse_MultipleAttendees(t *testing.T) {
 
 // TestBuildAttendeeList_OrganizerIdentification verifies organizer is correctly flagged
 func TestBuildAttendeeList_OrganizerIdentification(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -548,7 +548,7 @@ func TestMatchAttendees_WithMockedIdentityService(t *testing.T) {
 	}
 
 	// Call the REAL matchAttendees method on the REAL CalendarSyncProvider
-	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", nil)
 
 	assert.True(t, mockIdentity.matchOrCreateCalled)
 	assert.Len(t, mockIdentity.matchOrCreateRequests, 3) // alice, bob, unknown (skipped self and empty)
@@ -579,7 +579,7 @@ func TestMatchAttendees_DeduplicatesContacts(t *testing.T) {
 		{Email: "alice2@example.com", Self: false, DisplayName: "Alice Alt"},
 	}
 
-	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", nil)
 
 	assert.Len(t, matchedIDs, 1) // Only one unique contact
 	assert.Equal(t, contactID, matchedIDs[0])
@@ -609,7 +609,7 @@ func TestMatchAttendees_HandlesIdentityServiceError(t *testing.T) {
 		{Email: "bob@example.com", Self: false, DisplayName: "Bob"},     // Match
 	}
 
-	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", nil)
 
 	assert.True(t, mockIdentity.matchOrCreateCalled)
 	assert.Len(t, matchedIDs, 1)
@@ -762,7 +762,7 @@ func TestMatchAttendees_FuzzyMatchFallback(t *testing.T) {
 		},
 	}
 
-	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", nil)
 
 	// Verify identity service was called first
 	assert.True(t, mockIdentity.matchOrCreateCalled)
@@ -814,7 +814,7 @@ func TestMatchAttendees_FuzzyMatchWithMethodOverlap(t *testing.T) {
 		},
 	}
 
-	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", nil)
 
 	// Verify fuzzy matching was attempted
 	assert.True(t, mockContactRepo.findSimilarCalled)
@@ -866,7 +866,7 @@ func TestMatchAttendees_ExactMatchTakesPrecedence(t *testing.T) {
 		},
 	}
 
-	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", nil)
 
 	// Exact match found, so fuzzy matching should NOT be attempted
 	assert.False(t, mockContactRepo.findSimilarCalled)
@@ -897,7 +897,7 @@ func TestMatchAttendees_NoDisplayName_SkipsFuzzyMatch(t *testing.T) {
 		},
 	}
 
-	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com")
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", nil)
 
 	// Without display name, fuzzy matching should not be attempted
 	assert.False(t, mockContactRepo.findSimilarCalled)

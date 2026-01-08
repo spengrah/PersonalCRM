@@ -2,21 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { Mail, Plus, Trash2, CheckCircle, AlertCircle, Info } from 'lucide-react'
+import { Mail, Plus, Trash2, CheckCircle, AlertCircle, Info, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useGoogleAccounts, useRevokeGoogleAccount } from '@/hooks/use-google-accounts'
+import { useSyncStates, getSyncStateForAccount, formatSyncTime } from '@/hooks/use-sync-states'
+import { useTriggerSync } from '@/hooks/use-imports'
 import { startGoogleOAuthFlow, GoogleAccount } from '@/lib/oauth-api'
-
-// Friendly names for OAuth scopes
-const scopeLabels: Record<string, string> = {
-  'https://www.googleapis.com/auth/gmail.readonly': 'Gmail (read)',
-  'https://www.googleapis.com/auth/calendar.readonly': 'Calendar (read)',
-  'https://www.googleapis.com/auth/contacts.readonly': 'Contacts (read)',
-}
-
-function formatScope(scope: string): string {
-  return scopeLabels[scope] || scope.split('/').pop() || scope
-}
+import type { SyncState } from '@/types/sync'
 
 function formatDate(dateString: string): string {
   return new Date(dateString).toLocaleDateString(undefined, {
@@ -26,15 +18,87 @@ function formatDate(dateString: string): string {
   })
 }
 
+// Compact sync badge component (Option B style)
+function SyncBadge({
+  label,
+  syncState,
+  onSync,
+  loading,
+}: {
+  label: string
+  syncState?: SyncState
+  onSync: () => void
+  loading: boolean
+}) {
+  const lastSyncText = formatSyncTime(syncState?.last_successful_sync_at ?? null)
+  const isSyncing = syncState?.status === 'syncing'
+  const hasError = syncState?.status === 'error'
+
+  return (
+    <div className="inline-flex items-center rounded-md text-xs font-medium bg-white border border-gray-200 overflow-hidden">
+      <span className="px-2.5 py-1 text-gray-700 border-r border-gray-200">{label}</span>
+      <span className={`px-2 py-1 bg-gray-50 ${hasError ? 'text-red-600' : 'text-gray-500'}`}>
+        {isSyncing ? 'Syncing...' : hasError ? 'Error' : lastSyncText}
+      </span>
+      <button
+        onClick={onSync}
+        disabled={loading || isSyncing}
+        className="px-2 py-1 text-blue-600 hover:bg-blue-50 border-l border-gray-200 disabled:opacity-50"
+      >
+        <RefreshCw className={`w-3 h-3 ${loading || isSyncing ? 'animate-spin' : ''}`} />
+      </button>
+    </div>
+  )
+}
+
 export function GoogleAccountsSection() {
   const searchParams = useSearchParams()
   const { data: accounts, isLoading, error, refetch } = useGoogleAccounts()
+  const { data: syncStates } = useSyncStates()
   const revokeMutation = useRevokeGoogleAccount()
+  const triggerSyncMutation = useTriggerSync()
   const [isConnecting, setIsConnecting] = useState(false)
+  const [syncingAccount, setSyncingAccount] = useState<string | null>(null)
   const [notification, setNotification] = useState<{
     type: 'success' | 'error'
     message: string
   } | null>(null)
+
+  const handleSyncCalendar = async (accountId: string) => {
+    setSyncingAccount(`gcal-${accountId}`)
+    try {
+      await triggerSyncMutation.mutateAsync({ source: 'gcal', accountId })
+      setNotification({
+        type: 'success',
+        message: 'Calendar sync started!',
+      })
+    } catch {
+      setNotification({
+        type: 'error',
+        message: 'Failed to start calendar sync.',
+      })
+    } finally {
+      setSyncingAccount(null)
+    }
+  }
+
+  const handleSyncContacts = async (accountId: string) => {
+    setSyncingAccount(`gcontacts-${accountId}`)
+    try {
+      await triggerSyncMutation.mutateAsync({ source: 'gcontacts', accountId })
+      setNotification({
+        type: 'success',
+        message: 'Contacts sync started!',
+      })
+    } catch {
+      setNotification({
+        type: 'error',
+        message: 'Failed to start contacts sync.',
+      })
+    } finally {
+      setSyncingAccount(null)
+    }
+  }
 
   // Handle OAuth callback query params
   useEffect(() => {
@@ -221,24 +285,46 @@ export function GoogleAccountsSection() {
                 </Button>
               </div>
 
-              {/* Scopes */}
-              {account.scopes && account.scopes.length > 0 && (
-                <div className="mt-4 pt-4 border-t border-gray-200">
-                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
-                    Permissions
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {account.scopes.map(scope => (
-                      <span
-                        key={scope}
-                        className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-white border border-gray-200 text-gray-700"
-                      >
-                        {formatScope(scope)}
-                      </span>
-                    ))}
-                  </div>
+              {/* Permissions & Sync (Option B: Compact Badges) */}
+              <div className="mt-4 pt-4 border-t border-gray-200">
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                  Permissions & Sync
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {/* Gmail - simple badge (no sync) */}
+                  {account.scopes?.includes('https://www.googleapis.com/auth/gmail.readonly') && (
+                    <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-white border border-gray-200 text-gray-700">
+                      Gmail (read)
+                    </span>
+                  )}
+                  {/* Calendar - sync badge */}
+                  {account.scopes?.includes(
+                    'https://www.googleapis.com/auth/calendar.readonly'
+                  ) && (
+                    <SyncBadge
+                      label="Calendar"
+                      syncState={getSyncStateForAccount(syncStates, 'gcal', account.account_id)}
+                      onSync={() => handleSyncCalendar(account.account_id)}
+                      loading={syncingAccount === `gcal-${account.account_id}`}
+                    />
+                  )}
+                  {/* Contacts - sync badge */}
+                  {account.scopes?.includes(
+                    'https://www.googleapis.com/auth/contacts.readonly'
+                  ) && (
+                    <SyncBadge
+                      label="Contacts"
+                      syncState={getSyncStateForAccount(
+                        syncStates,
+                        'gcontacts',
+                        account.account_id
+                      )}
+                      onSync={() => handleSyncContacts(account.account_id)}
+                      loading={syncingAccount === `gcontacts-${account.account_id}`}
+                    />
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           ))}
         </div>
