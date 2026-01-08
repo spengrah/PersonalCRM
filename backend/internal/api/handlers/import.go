@@ -76,6 +76,7 @@ type ImportCandidateResponse struct {
 	Emails         []string        `json:"emails"`
 	Phones         []string        `json:"phones"`
 	SuggestedMatch *SuggestedMatch `json:"suggested_match,omitempty"`
+	Metadata       map[string]any  `json:"metadata,omitempty"`
 }
 
 // SuggestedMatch represents a suggested CRM contact match for an import candidate
@@ -535,6 +536,7 @@ func (h *ImportHandler) toImportCandidateResponse(contact *repository.ExternalCo
 		Emails:         make([]string, 0, len(contact.Emails)),
 		Phones:         make([]string, 0, len(contact.Phones)),
 		SuggestedMatch: suggestedMatch,
+		Metadata:       contact.Metadata,
 	}
 
 	for _, email := range contact.Emails {
