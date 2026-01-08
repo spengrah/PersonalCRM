@@ -67,11 +67,14 @@ type externalContactRepoInterface interface {
 	Upsert(ctx context.Context, req repository.UpsertExternalContactRequest) (*repository.ExternalContact, error)
 }
 
-// EventContext contains meeting information for import candidate metadata
+// EventContext contains meeting information that is stored as metadata when
+// creating import candidates from unmatched calendar attendees. This provides
+// context about where the attendee was discovered (which meeting) so users
+// can make informed import decisions.
 type EventContext struct {
-	Title     string
-	StartTime time.Time
-	HtmlLink  string
+	Title     string    // Event summary/title
+	StartTime time.Time // Event start time
+	HtmlLink  string    // URL to view the event in Google Calendar
 }
 
 // CalendarSyncProvider implements SyncProvider for Google Calendar
@@ -562,7 +565,16 @@ func (p *CalendarSyncProvider) findFuzzyMatch(ctx context.Context, displayName, 
 	return bestMatch
 }
 
-// storeUnmatchedAttendee stores an unmatched calendar attendee as an import candidate
+// storeUnmatchedAttendee stores an unmatched calendar attendee as an import candidate.
+// It creates an external_contact record with source='gcal_attendee' so the attendee
+// appears on the Imports page for user review.
+//
+// Deduplication: Uses normalized (lowercase, trimmed) email as source_id, allowing
+// the database upsert to handle deduplication. If the same person appears in multiple
+// meetings, only one import candidate is created (with metadata from the most recent meeting).
+//
+// Graceful handling: Returns nil without error if externalContactRepo is nil (for tests)
+// or if eventContext is nil (no meeting context available).
 func (p *CalendarSyncProvider) storeUnmatchedAttendee(
 	ctx context.Context,
 	attendee repository.Attendee,

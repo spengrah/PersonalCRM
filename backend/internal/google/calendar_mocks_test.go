@@ -114,12 +114,43 @@ func (m *mockIdentityService) MatchOrCreate(ctx context.Context, req service.Mat
 	return nil, nil
 }
 
+// mockExternalContactRepo is a mock implementation of externalContactRepoInterface
+type mockExternalContactRepo struct {
+	upsertCalled   bool
+	upsertRequests []repository.UpsertExternalContactRequest
+	upsertError    error
+	upsertResult   *repository.ExternalContact
+}
+
+func (m *mockExternalContactRepo) Upsert(ctx context.Context, req repository.UpsertExternalContactRequest) (*repository.ExternalContact, error) {
+	m.upsertCalled = true
+	m.upsertRequests = append(m.upsertRequests, req)
+	if m.upsertError != nil {
+		return nil, m.upsertError
+	}
+	if m.upsertResult != nil {
+		return m.upsertResult, nil
+	}
+	// Return a default result
+	return &repository.ExternalContact{
+		ID:       uuid.New(),
+		Source:   req.Source,
+		SourceID: req.SourceID,
+	}, nil
+}
+
 // newTestProvider creates a CalendarSyncProvider with mocked dependencies for testing
 func newTestProvider(calRepo calendarRepoInterface, contactRepo contactRepoInterface, idSvc identityServiceInterface) *CalendarSyncProvider {
+	return newTestProviderWithExternal(calRepo, contactRepo, idSvc, nil)
+}
+
+// newTestProviderWithExternal creates a CalendarSyncProvider with all mocked dependencies including external contact repo
+func newTestProviderWithExternal(calRepo calendarRepoInterface, contactRepo contactRepoInterface, idSvc identityServiceInterface, extRepo externalContactRepoInterface) *CalendarSyncProvider {
 	return &CalendarSyncProvider{
-		oauthService:    nil, // Not needed for unit tests
-		calendarRepo:    calRepo,
-		contactRepo:     contactRepo,
-		identityService: idSvc,
+		oauthService:        nil, // Not needed for unit tests
+		calendarRepo:        calRepo,
+		contactRepo:         contactRepo,
+		identityService:     idSvc,
+		externalContactRepo: extRepo,
 	}
 }

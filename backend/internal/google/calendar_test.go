@@ -1104,6 +1104,246 @@ func TestProcessEvent_ExtractsHtmlLink(t *testing.T) {
 	assert.Equal(t, "https://www.google.com/calendar/event?eid=abc123", *mockCalRepo.upsertRequest.HtmlLink)
 }
 
+// ========================================
+// storeUnmatchedAttendee Tests
+// ========================================
+
+// TestStoreUnmatchedAttendee_Success tests successful storage of unmatched attendees
+func TestStoreUnmatchedAttendee_Success(t *testing.T) {
+	ctx := context.Background()
+
+	mockExtRepo := &mockExternalContactRepo{}
+
+	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
+
+	attendee := repository.Attendee{
+		Email:       "unknown@example.com",
+		DisplayName: "Unknown Person",
+	}
+
+	eventContext := &EventContext{
+		Title:     "Team Meeting",
+		StartTime: time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC),
+		HtmlLink:  "https://calendar.google.com/event?eid=abc123",
+	}
+
+	err := provider.storeUnmatchedAttendee(ctx, attendee, "user@example.com", eventContext)
+
+	assert.NoError(t, err)
+	assert.True(t, mockExtRepo.upsertCalled)
+	assert.Len(t, mockExtRepo.upsertRequests, 1)
+
+	req := mockExtRepo.upsertRequests[0]
+	assert.Equal(t, CalendarAttendeeSource, req.Source)
+	assert.Equal(t, "unknown@example.com", req.SourceID) // Normalized email
+	assert.NotNil(t, req.AccountID)
+	assert.Equal(t, "user@example.com", *req.AccountID)
+	assert.NotNil(t, req.DisplayName)
+	assert.Equal(t, "Unknown Person", *req.DisplayName)
+	assert.Len(t, req.Emails, 1)
+	assert.Equal(t, "unknown@example.com", req.Emails[0].Value)
+
+	// Verify metadata
+	assert.NotNil(t, req.Metadata)
+	assert.Equal(t, "Team Meeting", req.Metadata["meeting_title"])
+	assert.Equal(t, "https://calendar.google.com/event?eid=abc123", req.Metadata["meeting_link"])
+	assert.NotEmpty(t, req.Metadata["meeting_date"])
+	assert.NotEmpty(t, req.Metadata["discovered_at"])
+}
+
+// TestStoreUnmatchedAttendee_NilExternalRepo tests that nil repo is handled gracefully
+func TestStoreUnmatchedAttendee_NilExternalRepo(t *testing.T) {
+	ctx := context.Background()
+
+	// Provider without external contact repo
+	provider := newTestProvider(nil, nil, nil)
+
+	attendee := repository.Attendee{
+		Email:       "unknown@example.com",
+		DisplayName: "Unknown Person",
+	}
+
+	eventContext := &EventContext{
+		Title:     "Team Meeting",
+		StartTime: time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC),
+	}
+
+	err := provider.storeUnmatchedAttendee(ctx, attendee, "user@example.com", eventContext)
+
+	// Should return nil without error when repo is nil
+	assert.NoError(t, err)
+}
+
+// TestStoreUnmatchedAttendee_NilEventContext tests that nil event context is handled gracefully
+func TestStoreUnmatchedAttendee_NilEventContext(t *testing.T) {
+	ctx := context.Background()
+
+	mockExtRepo := &mockExternalContactRepo{}
+	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
+
+	attendee := repository.Attendee{
+		Email:       "unknown@example.com",
+		DisplayName: "Unknown Person",
+	}
+
+	err := provider.storeUnmatchedAttendee(ctx, attendee, "user@example.com", nil)
+
+	// Should return nil without error and NOT call upsert
+	assert.NoError(t, err)
+	assert.False(t, mockExtRepo.upsertCalled)
+}
+
+// TestStoreUnmatchedAttendee_EmailNormalization tests that email is normalized to lowercase
+func TestStoreUnmatchedAttendee_EmailNormalization(t *testing.T) {
+	ctx := context.Background()
+
+	mockExtRepo := &mockExternalContactRepo{}
+	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
+
+	attendee := repository.Attendee{
+		Email:       "  UNKNOWN@EXAMPLE.COM  ", // Uppercase with whitespace
+		DisplayName: "Unknown Person",
+	}
+
+	eventContext := &EventContext{
+		Title:     "Meeting",
+		StartTime: accelerated.GetCurrentTime(),
+	}
+
+	err := provider.storeUnmatchedAttendee(ctx, attendee, "user@example.com", eventContext)
+
+	assert.NoError(t, err)
+	assert.True(t, mockExtRepo.upsertCalled)
+
+	// Source ID should be normalized (lowercase, trimmed)
+	req := mockExtRepo.upsertRequests[0]
+	assert.Equal(t, "unknown@example.com", req.SourceID)
+}
+
+// TestStoreUnmatchedAttendee_EmptyDisplayName tests handling of empty display name
+func TestStoreUnmatchedAttendee_EmptyDisplayName(t *testing.T) {
+	ctx := context.Background()
+
+	mockExtRepo := &mockExternalContactRepo{}
+	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
+
+	attendee := repository.Attendee{
+		Email:       "unknown@example.com",
+		DisplayName: "", // Empty display name
+	}
+
+	eventContext := &EventContext{
+		Title:     "Meeting",
+		StartTime: accelerated.GetCurrentTime(),
+	}
+
+	err := provider.storeUnmatchedAttendee(ctx, attendee, "user@example.com", eventContext)
+
+	assert.NoError(t, err)
+	assert.True(t, mockExtRepo.upsertCalled)
+
+	// DisplayName should be nil for empty string
+	req := mockExtRepo.upsertRequests[0]
+	assert.Nil(t, req.DisplayName)
+}
+
+// TestStoreUnmatchedAttendee_RepoError tests error handling when repo fails
+func TestStoreUnmatchedAttendee_RepoError(t *testing.T) {
+	ctx := context.Background()
+
+	mockExtRepo := &mockExternalContactRepo{
+		upsertError: assert.AnError,
+	}
+	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
+
+	attendee := repository.Attendee{
+		Email:       "unknown@example.com",
+		DisplayName: "Unknown Person",
+	}
+
+	eventContext := &EventContext{
+		Title:     "Meeting",
+		StartTime: accelerated.GetCurrentTime(),
+	}
+
+	err := provider.storeUnmatchedAttendee(ctx, attendee, "user@example.com", eventContext)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "upsert external contact")
+}
+
+// TestStoreUnmatchedAttendee_Deduplication tests that same email results in same source_id
+func TestStoreUnmatchedAttendee_Deduplication(t *testing.T) {
+	ctx := context.Background()
+
+	mockExtRepo := &mockExternalContactRepo{}
+	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
+
+	// Same person in two different meetings
+	attendee := repository.Attendee{
+		Email:       "colleague@example.com",
+		DisplayName: "Colleague",
+	}
+
+	event1 := &EventContext{Title: "Meeting 1", StartTime: accelerated.GetCurrentTime()}
+	event2 := &EventContext{Title: "Meeting 2", StartTime: accelerated.GetCurrentTime().Add(time.Hour)}
+
+	_ = provider.storeUnmatchedAttendee(ctx, attendee, "user@example.com", event1)
+	_ = provider.storeUnmatchedAttendee(ctx, attendee, "user@example.com", event2)
+
+	assert.Len(t, mockExtRepo.upsertRequests, 2)
+
+	// Both should use the same source_id (normalized email)
+	// This allows the database to handle deduplication via upsert
+	assert.Equal(t, mockExtRepo.upsertRequests[0].SourceID, mockExtRepo.upsertRequests[1].SourceID)
+	assert.Equal(t, "colleague@example.com", mockExtRepo.upsertRequests[0].SourceID)
+}
+
+// TestMatchAttendees_StoresUnmatchedAttendees tests that unmatched attendees are stored via matchAttendees
+func TestMatchAttendees_StoresUnmatchedAttendees(t *testing.T) {
+	ctx := context.Background()
+
+	contactID := uuid.New()
+
+	// Identity service returns match for alice, no match for bob
+	mockIdentity := &mockIdentityService{
+		matchOrCreateResults: map[string]*service.MatchResult{
+			"alice@example.com": {ContactID: &contactID},
+		},
+	}
+
+	mockContactRepo := &mockContactRepo{
+		findSimilarResults: []repository.ContactMatch{}, // No fuzzy matches
+	}
+
+	mockExtRepo := &mockExternalContactRepo{}
+
+	provider := newTestProviderWithExternal(nil, mockContactRepo, mockIdentity, mockExtRepo)
+
+	attendees := []repository.Attendee{
+		{Email: "alice@example.com", Self: false, DisplayName: "Alice"}, // Will match
+		{Email: "bob@example.com", Self: false, DisplayName: "Bob"},     // Will NOT match
+	}
+
+	eventContext := &EventContext{
+		Title:     "Team Meeting",
+		StartTime: accelerated.GetCurrentTime(),
+		HtmlLink:  "https://calendar.google.com/event?eid=xyz",
+	}
+
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", eventContext)
+
+	// Alice matched
+	assert.Len(t, matchedIDs, 1)
+	assert.Equal(t, contactID, matchedIDs[0])
+
+	// Bob should be stored as unmatched
+	assert.True(t, mockExtRepo.upsertCalled)
+	assert.Len(t, mockExtRepo.upsertRequests, 1)
+	assert.Equal(t, "bob@example.com", mockExtRepo.upsertRequests[0].SourceID)
+	assert.Equal(t, "Team Meeting", mockExtRepo.upsertRequests[0].Metadata["meeting_title"])
+}
+
 // TestProcessEvent_HandlesEmptyHtmlLink verifies that empty HtmlLink is handled correctly
 func TestProcessEvent_HandlesEmptyHtmlLink(t *testing.T) {
 	ctx := context.Background()

@@ -181,9 +181,14 @@ function CandidateCard({
     [candidate.first_name, candidate.last_name].filter(Boolean).join(' ') ||
     'Unknown'
 
-  // Check if this is a calendar attendee
-  const isCalendarCandidate = candidate.source === 'gcal_attendee'
-  const meetingContext = isCalendarCandidate && candidate.metadata ? candidate.metadata : null
+  // Get meeting context for calendar attendees
+  const meetingContext =
+    candidate.source === 'gcal_attendee' && candidate.metadata ? candidate.metadata : null
+
+  // Validate meeting link is a safe HTTPS URL
+  const safeMeetingLink = meetingContext?.meeting_link?.startsWith('https://')
+    ? meetingContext.meeting_link
+    : null
 
   return (
     <div className="p-4 bg-white border border-gray-200 rounded-lg hover:shadow-sm transition-shadow">
@@ -212,11 +217,12 @@ function CandidateCard({
               {/* Inline meeting context badge for calendar attendees */}
               {meetingContext &&
                 meetingContext.meeting_title &&
-                (meetingContext.meeting_link ? (
+                (safeMeetingLink ? (
                   <a
-                    href={meetingContext.meeting_link}
+                    href={safeMeetingLink}
                     target="_blank"
                     rel="noopener noreferrer"
+                    aria-label={`View calendar event: ${meetingContext.meeting_title}`}
                     className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 hover:bg-blue-200 transition-colors"
                   >
                     <Calendar className="w-3 h-3 mr-1" />

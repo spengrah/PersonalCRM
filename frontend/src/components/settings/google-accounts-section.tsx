@@ -72,10 +72,14 @@ export function GoogleAccountsSection() {
         type: 'success',
         message: 'Calendar sync started!',
       })
-    } catch {
+    } catch (error) {
+      console.error('Calendar sync error:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       setNotification({
         type: 'error',
-        message: 'Failed to start calendar sync.',
+        message: errorMessage.includes('authentication')
+          ? 'Authentication failed. Please reconnect your account.'
+          : `Failed to start calendar sync: ${errorMessage}`,
       })
     } finally {
       setSyncingAccount(null)
@@ -90,10 +94,14 @@ export function GoogleAccountsSection() {
         type: 'success',
         message: 'Contacts sync started!',
       })
-    } catch {
+    } catch (error) {
+      console.error('Contacts sync error:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       setNotification({
         type: 'error',
-        message: 'Failed to start contacts sync.',
+        message: errorMessage.includes('authentication')
+          ? 'Authentication failed. Please reconnect your account.'
+          : `Failed to start contacts sync: ${errorMessage}`,
       })
     } finally {
       setSyncingAccount(null)
