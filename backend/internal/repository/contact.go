@@ -34,6 +34,7 @@ type Contact struct {
 	Cadence       *string         `json:"cadence,omitempty"`
 	LastContacted *time.Time      `json:"last_contacted,omitempty"`
 	ProfilePhoto  *string         `json:"profile_photo,omitempty"`
+	Notes         *string         `json:"notes,omitempty"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
 }
@@ -47,6 +48,7 @@ type CreateContactRequest struct {
 	Cadence       *string    `json:"cadence,omitempty"`
 	LastContacted *time.Time `json:"last_contacted,omitempty"`
 	ProfilePhoto  *string    `json:"profile_photo,omitempty"`
+	Notes         *string    `json:"notes,omitempty"`
 }
 
 // UpdateContactRequest represents the request to update a contact
@@ -57,6 +59,7 @@ type UpdateContactRequest struct {
 	HowMet       *string    `json:"how_met,omitempty"`
 	Cadence      *string    `json:"cadence,omitempty"`
 	ProfilePhoto *string    `json:"profile_photo,omitempty"`
+	Notes        *string    `json:"notes,omitempty"`
 }
 
 // ListContactsParams represents parameters for listing contacts
@@ -111,6 +114,9 @@ func convertDbContact(dbContact *db.Contact) Contact {
 	}
 	if dbContact.ProfilePhoto.Valid {
 		contact.ProfilePhoto = &dbContact.ProfilePhoto.String
+	}
+	if dbContact.Notes.Valid {
+		contact.Notes = &dbContact.Notes.String
 	}
 
 	return contact
@@ -180,6 +186,7 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 		Cadence:       stringToPgText(req.Cadence),
 		LastContacted: timeToPgTimestamptz(req.LastContacted),
 		ProfilePhoto:  stringToPgText(req.ProfilePhoto),
+		Notes:         stringToPgText(req.Notes),
 		CreatedAt:     pgtype.Timestamptz{Time: createdAt, Valid: true},
 	})
 	if err != nil {
@@ -200,6 +207,7 @@ func (r *ContactRepository) UpdateContact(ctx context.Context, id uuid.UUID, req
 		HowMet:       stringToPgText(req.HowMet),
 		Cadence:      stringToPgText(req.Cadence),
 		ProfilePhoto: stringToPgText(req.ProfilePhoto),
+		Notes:        stringToPgText(req.Notes),
 	})
 	if err != nil {
 		return nil, err

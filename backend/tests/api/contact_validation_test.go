@@ -573,6 +573,249 @@ func TestContactAPI_DuplicateMethodTypes(t *testing.T) {
 	assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 }
 
+func TestContactAPI_NotesField(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	router, cleanup := setupContactValidationTestRouter()
+	defer cleanup()
+
+	t.Run("CreateContact_WithNotes", func(t *testing.T) {
+		notes := "Met at a conference. Works in tech. Interested in AI."
+		requestBody := handlers.CreateContactRequest{
+			FullName: "Notes Test User " + uuid.New().String()[:8],
+			Notes:    &notes,
+		}
+
+		jsonBody, _ := json.Marshal(requestBody)
+		req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		contactData := response.Data.(map[string]interface{})
+		assert.Equal(t, notes, contactData["notes"])
+
+		// Cleanup
+		contactID := contactData["id"].(string)
+		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
+		deleteW := httptest.NewRecorder()
+		router.ServeHTTP(deleteW, deleteReq)
+	})
+
+	t.Run("CreateContact_NotesTooLong", func(t *testing.T) {
+		notes := strings.Repeat("a", 2001) // Exceeds max 2000
+		requestBody := handlers.CreateContactRequest{
+			FullName: "Notes Too Long User",
+			Notes:    &notes,
+		}
+
+		jsonBody, _ := json.Marshal(requestBody)
+		req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		var response api.APIResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.False(t, response.Success)
+		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
+	})
+
+	t.Run("CreateContact_NotesAtMaxLength", func(t *testing.T) {
+		notes := strings.Repeat("a", 2000) // Exactly at max
+		requestBody := handlers.CreateContactRequest{
+			FullName: "Notes Max Length User " + uuid.New().String()[:8],
+			Notes:    &notes,
+		}
+
+		jsonBody, _ := json.Marshal(requestBody)
+		req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		contactData := response.Data.(map[string]interface{})
+		assert.Equal(t, notes, contactData["notes"])
+
+		// Cleanup
+		contactID := contactData["id"].(string)
+		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
+		deleteW := httptest.NewRecorder()
+		router.ServeHTTP(deleteW, deleteReq)
+	})
+
+	t.Run("UpdateContact_AddNotes", func(t *testing.T) {
+		// Create contact without notes
+		createReq := handlers.CreateContactRequest{
+			FullName: "Update Notes User " + uuid.New().String()[:8],
+		}
+		jsonBody, _ := json.Marshal(createReq)
+		req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var createResponse api.APIResponse
+		err := json.Unmarshal(w.Body.Bytes(), &createResponse)
+		require.NoError(t, err)
+		contactData := createResponse.Data.(map[string]interface{})
+		contactID := contactData["id"].(string)
+
+		defer func() {
+			deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
+			deleteW := httptest.NewRecorder()
+			router.ServeHTTP(deleteW, deleteReq)
+		}()
+
+		// Update with notes
+		notes := "Added notes after creation"
+		updateReq := handlers.UpdateContactRequest{
+			FullName: contactData["full_name"].(string),
+			Notes:    &notes,
+		}
+		jsonBody, _ = json.Marshal(updateReq)
+		req, _ = http.NewRequest("PUT", "/api/v1/contacts/"+contactID, bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var updateResponse api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &updateResponse)
+		require.NoError(t, err)
+		assert.True(t, updateResponse.Success)
+
+		updatedData := updateResponse.Data.(map[string]interface{})
+		assert.Equal(t, notes, updatedData["notes"])
+	})
+
+	t.Run("UpdateContact_ClearNotes", func(t *testing.T) {
+		// Create contact with notes
+		initialNotes := "Initial notes to be cleared"
+		createReq := handlers.CreateContactRequest{
+			FullName: "Clear Notes User " + uuid.New().String()[:8],
+			Notes:    &initialNotes,
+		}
+		jsonBody, _ := json.Marshal(createReq)
+		req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var createResponse api.APIResponse
+		err := json.Unmarshal(w.Body.Bytes(), &createResponse)
+		require.NoError(t, err)
+		contactData := createResponse.Data.(map[string]interface{})
+		contactID := contactData["id"].(string)
+
+		defer func() {
+			deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
+			deleteW := httptest.NewRecorder()
+			router.ServeHTTP(deleteW, deleteReq)
+		}()
+
+		// Update with empty notes
+		emptyNotes := ""
+		updateReq := handlers.UpdateContactRequest{
+			FullName: contactData["full_name"].(string),
+			Notes:    &emptyNotes,
+		}
+		jsonBody, _ = json.Marshal(updateReq)
+		req, _ = http.NewRequest("PUT", "/api/v1/contacts/"+contactID, bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var updateResponse api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &updateResponse)
+		require.NoError(t, err)
+		assert.True(t, updateResponse.Success)
+
+		updatedData := updateResponse.Data.(map[string]interface{})
+		assert.Equal(t, "", updatedData["notes"])
+	})
+
+	t.Run("GetContact_ReturnsNotes", func(t *testing.T) {
+		// Create contact with notes
+		notes := "Notes to verify on GET"
+		createReq := handlers.CreateContactRequest{
+			FullName: "Get Notes User " + uuid.New().String()[:8],
+			Notes:    &notes,
+		}
+		jsonBody, _ := json.Marshal(createReq)
+		req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var createResponse api.APIResponse
+		err := json.Unmarshal(w.Body.Bytes(), &createResponse)
+		require.NoError(t, err)
+		contactData := createResponse.Data.(map[string]interface{})
+		contactID := contactData["id"].(string)
+
+		defer func() {
+			deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
+			deleteW := httptest.NewRecorder()
+			router.ServeHTTP(deleteW, deleteReq)
+		}()
+
+		// Get the contact
+		req, _ = http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var getResponse api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &getResponse)
+		require.NoError(t, err)
+		assert.True(t, getResponse.Success)
+
+		getData := getResponse.Data.(map[string]interface{})
+		assert.Equal(t, notes, getData["notes"])
+	})
+}
+
 // Helper function to create string pointers
 func stringPtr(s string) *string {
 	return &s

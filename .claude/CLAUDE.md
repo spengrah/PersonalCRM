@@ -8,6 +8,9 @@ For comprehensive development guidelines, see:
 
 This project is already well-documented. Follow the guidelines in those files.
 
+## Key Information
+- This project uses bun as the package manager, so you should use bun instead of npm.
+
 ## Continuous Claude
 
 **Directories:**

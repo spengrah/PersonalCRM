@@ -24,10 +24,10 @@ func (q *Queries) CountContacts(ctx context.Context) (int64, error) {
 
 const CreateContact = `-- name: CreateContact :one
 INSERT INTO contact (
-  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, created_at
+  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, notes, created_at
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8
-) RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at
+  $1, $2, $3, $4, $5, $6, $7, $8, $9
+) RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, notes
 `
 
 type CreateContactParams struct {
@@ -38,6 +38,7 @@ type CreateContactParams struct {
 	Cadence       pgtype.Text        `json:"cadence"`
 	LastContacted pgtype.Timestamptz `json:"last_contacted"`
 	ProfilePhoto  pgtype.Text        `json:"profile_photo"`
+	Notes         pgtype.Text        `json:"notes"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -50,6 +51,7 @@ func (q *Queries) CreateContact(ctx context.Context, arg CreateContactParams) (*
 		arg.Cadence,
 		arg.LastContacted,
 		arg.ProfilePhoto,
+		arg.Notes,
 		arg.CreatedAt,
 	)
 	var i Contact
@@ -65,6 +67,7 @@ func (q *Queries) CreateContact(ctx context.Context, arg CreateContactParams) (*
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Notes,
 	)
 	return &i, err
 }
@@ -132,7 +135,7 @@ func (q *Queries) FindSimilarContacts(ctx context.Context, arg FindSimilarContac
 
 const GetContact = `-- name: GetContact :one
 
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact 
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, notes FROM contact 
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -152,6 +155,7 @@ func (q *Queries) GetContact(ctx context.Context, id pgtype.UUID) (*Contact, err
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Notes,
 	)
 	return &i, err
 }
@@ -166,7 +170,7 @@ func (q *Queries) HardDeleteContact(ctx context.Context, id pgtype.UUID) error {
 }
 
 const ListContacts = `-- name: ListContacts :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact 
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, notes FROM contact 
 WHERE deleted_at IS NULL
 LIMIT $1 OFFSET $2
 `
@@ -197,6 +201,7 @@ func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Notes,
 		); err != nil {
 			return nil, err
 		}
@@ -209,7 +214,7 @@ func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*
 }
 
 const SearchContacts = `-- name: SearchContacts :many
-SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at FROM contact c
+SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.notes FROM contact c
 LEFT JOIN (
   SELECT contact_id, string_agg(value, ' ') AS method_values
   FROM contact_method
@@ -251,6 +256,7 @@ func (q *Queries) SearchContacts(ctx context.Context, arg SearchContactsParams) 
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Notes,
 		); err != nil {
 			return nil, err
 		}
@@ -282,9 +288,10 @@ UPDATE contact SET
   how_met = $5,
   cadence = $6,
   profile_photo = $7,
+  notes = $8,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at
+RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, notes
 `
 
 type UpdateContactParams struct {
@@ -295,6 +302,7 @@ type UpdateContactParams struct {
 	HowMet       pgtype.Text `json:"how_met"`
 	Cadence      pgtype.Text `json:"cadence"`
 	ProfilePhoto pgtype.Text `json:"profile_photo"`
+	Notes        pgtype.Text `json:"notes"`
 }
 
 func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error) {
@@ -306,6 +314,7 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 		arg.HowMet,
 		arg.Cadence,
 		arg.ProfilePhoto,
+		arg.Notes,
 	)
 	var i Contact
 	err := row.Scan(
@@ -320,6 +329,7 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Notes,
 	)
 	return &i, err
 }

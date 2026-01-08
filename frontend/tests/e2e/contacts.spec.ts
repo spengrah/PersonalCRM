@@ -1,6 +1,136 @@
 import { test, expect } from '@playwright/test'
 
 test.describe('Contacts', () => {
+  test('should show expandable notes for long content', async ({ page }) => {
+    const suffix = Date.now()
+    const fullName = `Long Notes Contact ${suffix}`
+    // Create notes longer than 300 characters to trigger truncation
+    const longNotes = `Met at the AI conference in San Francisco, March 2024. Works as a senior ML engineer at a startup focused on personal productivity tools.
+
+Very interested in personal CRM concepts and AI-driven contact management. We discussed potential collaboration opportunities around embedding-based contact matching.
+
+Key interests: Machine learning infrastructure, personal knowledge management, privacy-focused software design.
+
+Follow-up: Share the pgvector article, introduce to Sarah from the embeddings team.`
+
+    // Create contact with long notes
+    await page.goto('/contacts/new')
+    await page.getByLabel('Full Name').fill(fullName)
+    await page.getByLabel('Notes').fill(longNotes)
+
+    await Promise.all([
+      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
+      page.getByRole('button', { name: 'Create Contact' }).click(),
+    ])
+
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Verify "Show more" button is visible (indicates notes overflow the 4-line clamp)
+    const showMoreButton = page.getByRole('button', { name: 'Show more' })
+    await expect(showMoreButton).toBeVisible()
+
+    // Click "Show more" to expand
+    await showMoreButton.click()
+
+    // Verify button changed to "Show less"
+    const showLessButton = page.getByRole('button', { name: 'Show less' })
+    await expect(showLessButton).toBeVisible()
+
+    // Click "Show less" to collapse
+    await showLessButton.click()
+
+    // Verify button changed back to "Show more"
+    await expect(showMoreButton).toBeVisible()
+
+    // Cleanup
+    page.once('dialog', dialog => dialog.accept())
+    await Promise.all([
+      page.waitForURL('/contacts'),
+      page.getByRole('button', { name: 'Delete' }).click(),
+    ])
+  })
+
+  test('should not show expand button for short notes', async ({ page }) => {
+    const suffix = Date.now()
+    const fullName = `Short Notes Contact ${suffix}`
+    const shortNotes = 'Brief note about this contact.'
+
+    // Create contact with short notes
+    await page.goto('/contacts/new')
+    await page.getByLabel('Full Name').fill(fullName)
+    await page.getByLabel('Notes').fill(shortNotes)
+
+    await Promise.all([
+      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
+      page.getByRole('button', { name: 'Create Contact' }).click(),
+    ])
+
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Verify notes are displayed
+    await expect(page.getByText(shortNotes)).toBeVisible()
+
+    // Verify "Show more" button is NOT visible (notes are short)
+    await expect(page.getByRole('button', { name: 'Show more' })).not.toBeVisible()
+
+    // Cleanup
+    page.once('dialog', dialog => dialog.accept())
+    await Promise.all([
+      page.waitForURL('/contacts'),
+      page.getByRole('button', { name: 'Delete' }).click(),
+    ])
+  })
+
+  test('should create and edit contact with notes', async ({ page }) => {
+    const suffix = Date.now()
+    const fullName = `Notes Test Contact ${suffix}`
+    const notes =
+      'Met at a conference in 2024. Works in AI/ML. Very interested in personal CRM tools.'
+
+    // Create contact with notes
+    await page.goto('/contacts/new')
+    await page.getByLabel('Full Name').fill(fullName)
+    await page.getByLabel('Notes').fill(notes)
+
+    await Promise.all([
+      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
+      page.getByRole('button', { name: 'Create Contact' }).click(),
+    ])
+
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Verify notes are displayed on detail page
+    await expect(page.getByText(notes)).toBeVisible()
+
+    // Edit the contact to update notes
+    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.waitForLoadState('networkidle')
+
+    const updatedNotes = 'Updated notes: Follow up about collaboration opportunity.'
+    await page.getByLabel('Notes').fill(updatedNotes)
+
+    // Submit the inline edit form
+    await page.getByRole('button', { name: 'Update Contact' }).click()
+    await page.waitForLoadState('networkidle')
+
+    // Wait for form to close and return to detail view (Edit button visible again)
+    await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible({ timeout: 15000 })
+
+    // Verify updated notes are displayed
+    await expect(page.getByText(updatedNotes)).toBeVisible()
+    await expect(page.getByText(notes)).not.toBeVisible()
+
+    // Cleanup
+    page.once('dialog', dialog => dialog.accept())
+    await Promise.all([
+      page.waitForURL('/contacts'),
+      page.getByRole('button', { name: 'Delete' }).click(),
+    ])
+  })
+
   test('should create contact with all methods and normalized handles', async ({ page }) => {
     const suffix = Date.now()
     const fullName = `Playwright Contact ${suffix}`

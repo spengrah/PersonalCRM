@@ -4,6 +4,10 @@ out/
 build/
 dist/
 
+# Test artifacts
+playwright-report/
+test-results/
+
 # Dependencies
 node_modules/
 

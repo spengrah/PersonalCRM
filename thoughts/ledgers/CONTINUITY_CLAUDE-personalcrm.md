@@ -105,13 +105,90 @@ sqlc generate
 
 ## Session Notes
 
-_Update this section during work sessions with discoveries, decisions, and context for next session._
+### 2026-01-07: Contact Notes Feature (GH Issue #111)
+
+**Problem:** Frontend had notes field but backend never implemented it. Notes silently ignored.
+
+**Solution - Full stack implementation:**
+1. Migration `018_add_contact_notes` - adds `notes TEXT` column to contact table
+2. Updated sqlc queries (`contact.sql`) - CreateContact and UpdateContact include notes
+3. Repository layer - added Notes field to structs and conversion functions
+4. Handler layer - added Notes to request/response structs with `max=2000` validation
+
+**Files changed:**
+- `backend/migrations/018_add_contact_notes.up.sql` (new)
+- `backend/migrations/018_add_contact_notes.down.sql` (new)
+- `backend/internal/db/queries/contact.sql`
+- `backend/internal/repository/contact.go`
+- `backend/internal/api/handlers/contact.go`
+
+**Tests added:**
+- Backend API: 6 tests in `TestContactAPI_NotesField` (create, validation, update, get)
+- E2E: `should create and edit contact with notes` in contacts.spec.ts
+
+**Status:** Implementation complete, all tests passing. Ready to commit.
+
+**Branch:** `continuous-claude-setup` (also contains Continuous Claude setup)
+
+**Continuous Claude hook fixes (same session):**
+- Fixed bundling bug in `pre-compact-continuity.mjs` (CLI check incorrectly triggering)
+- Fixed path resolution in all shell wrappers (set CLAUDE_PROJECT_DIR before cd)
 
 ---
 *Created: 2026-01-07*
 *Last updated: 2026-01-07*
 
 ## Agent Reports
+
+### onboard (2026-01-08T14:46:15.089Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
+### onboard (2026-01-08T14:40:10.555Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
+### onboard (2026-01-08T14:39:50.858Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
+### onboard (2026-01-08T14:18:42.248Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
+### onboard (2026-01-08T00:26:11.687Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
+### onboard (2026-01-07T22:32:07.675Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
+### onboard (2026-01-07T22:27:36.352Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
+### onboard (2026-01-07T22:20:35.513Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
+### onboard (2026-01-07T22:20:30.252Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
+### onboard (2026-01-07T22:20:30.009Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
 
 ### onboard (2026-01-07T22:17:51.868Z)
 - Task: 
