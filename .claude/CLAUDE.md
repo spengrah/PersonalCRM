@@ -1,12 +1,107 @@
 # PersonalCRM - Claude Code Context
 
-For comprehensive development guidelines, see:
-- @.ai/rules.md - Complete development rules and architecture
-- @.ai/reviewers.md - Code review standards (for PR reviews)
-- @.github/README.md - GitHub workflow and issue management
-- @AGENTS.md - Agent-specific guidelines and context
+## Tech Stack
+- **Backend:** Go 1.24 + Gin + PostgreSQL 16 + sqlc (not an ORM)
+- **Frontend:** Next.js 15 + React 19 + TailwindCSS 4 + TanStack Query
+- **Package Manager:** bun (never npm)
+- **Testing:** Go testing + Playwright E2E
+- **Styling:** TailwindCSS with clsx for conditional classes
 
-This project is already well-documented. Follow the guidelines in those files.
+📖 *Detailed: @.ai/architecture.md*
 
-## Key Information
-- This project uses bun as the package manager, so you should use bun instead of npm.
+## Development Commands
+
+```bash
+# Start development
+make dev                 # Start dev servers (Docker PostgreSQL)
+make dev-native          # Start without Docker (for containerized envs)
+make dev-stop            # Stop dev servers
+make dev-api-restart     # Restart just the backend
+
+# Testing
+make test-unit           # Backend unit tests (fast, no DB needed)
+make test-integration    # Backend integration tests (needs DB)
+make test-frontend       # Frontend unit tests
+make test-e2e            # Playwright E2E tests
+./smoke-test.sh          # Full system verification
+
+# Code generation & linting
+make sqlc                # Regenerate Go from SQL (after query changes)
+make lint                # Run all linters
+```
+
+📖 *Detailed: @.ai/development.md*
+
+## Git
+
+Commits must be signed. Pre-commit hook auto-formats code (gofmt, prettier) and re-stages - it never blocks.
+
+```bash
+git commit -S -m "feat: description"
+```
+
+📖 *Detailed: @.github/README.md*
+
+## Absolute Rules
+
+1. **Never use `time.Now()`** → Use `accelerated.GetCurrentTime()`
+2. **Never write raw SQL in Go** → Use sqlc-generated queries
+3. **Never skip layers** → Handler → Service → Repository → DB
+4. **Never use npm/npx** → Use bun/bunx
+5. **Never call queries from handlers** → Go through repository
+6. **Always sign commits** → `git commit -S -m "..."`
+
+📖 *Detailed: @.ai/rules.md*
+
+## Key Patterns
+
+**Error handling in handlers:**
+```go
+if errors.Is(err, db.ErrNotFound) {
+    api.SendNotFound(c, "Contact")
+    return
+}
+```
+
+**Soft deletes:** All queries must filter `WHERE deleted_at IS NULL`
+
+📖 *Detailed: @.ai/patterns.md*
+
+## Project Structure
+
+```
+backend/
+├── cmd/crm-api/main.go          # Entry point
+├── internal/
+│   ├── api/handlers/            # HTTP handlers
+│   ├── service/                 # Business logic
+│   ├── repository/              # Data access layer
+│   ├── db/queries/              # SQL files (sqlc input)
+│   └── accelerated/             # Time functions (use this!)
+├── migrations/                  # SQL migrations (up + down)
+└── tests/{unit,integration,api}/
+
+frontend/
+├── src/
+│   ├── app/                     # Next.js App Router pages
+│   ├── components/              # React components
+│   ├── hooks/                   # React Query hooks
+│   └── lib/                     # API client, query keys, form-classes
+└── tests/e2e/                   # Playwright tests
+```
+
+📖 *Detailed: @.ai/architecture.md, @.ai/development.md*
+
+## Common Gotchas
+
+| Mistake | Fix |
+|---------|-----|
+| `go test ./backend/...` | Use `make test-unit` or `cd backend && go test` |
+| `npm install` | Use `bun install` |
+| `sqlc generate` | Use `make sqlc` (sqlc is in ~/go/bin) |
+| Calling `queries.X()` from handler | Call `repo.X()` instead |
+| Using `time.Now()` | Use `accelerated.GetCurrentTime()` |
+| Missing `deleted_at IS NULL` in queries | All queries must filter soft deletes |
+| Comparing errors with `==` | Use `errors.Is(err, db.ErrNotFound)` |
+
+📖 *Detailed: @.ai/reviewers.md*
