@@ -21,7 +21,7 @@ test.describe('Imports Page', () => {
     await expect(page.getByRole('heading', { name: 'Import Contacts' })).toBeVisible()
 
     // Verify sync button exists (use first() as there may be multiple sync buttons)
-    await expect(page.getByRole('button', { name: /Sync Google Contacts/i }).first()).toBeVisible()
+    await expect(page.getByRole('button', { name: /Sync Contacts/i }).first()).toBeVisible()
   })
 
   test('should show imports in navigation', async ({ page }) => {
@@ -286,7 +286,7 @@ test.describe('Imports - Sync', () => {
 
     // Click the sync button (use first() as there may be multiple sync buttons)
     await page
-      .getByRole('button', { name: /Sync Google Contacts/i })
+      .getByRole('button', { name: /Sync Contacts/i })
       .first()
       .click()
 
