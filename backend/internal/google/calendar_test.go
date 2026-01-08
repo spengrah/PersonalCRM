@@ -1220,16 +1220,16 @@ func TestStoreUnmatchedAttendee_EmailNormalization(t *testing.T) {
 	assert.Equal(t, "unknown@example.com", req.SourceID)
 }
 
-// TestStoreUnmatchedAttendee_EmptyDisplayName tests handling of empty display name
-func TestStoreUnmatchedAttendee_EmptyDisplayName(t *testing.T) {
+// TestStoreUnmatchedAttendee_EmptyDisplayName_InfersFromEmail tests that name is inferred from email when display name is empty
+func TestStoreUnmatchedAttendee_EmptyDisplayName_InfersFromEmail(t *testing.T) {
 	ctx := context.Background()
 
 	mockExtRepo := &mockExternalContactRepo{}
 	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
 
 	attendee := repository.Attendee{
-		Email:       "unknown@example.com",
-		DisplayName: "", // Empty display name
+		Email:       "john.smith@example.com",
+		DisplayName: "", // Empty display name - should be inferred from email
 	}
 
 	eventContext := &EventContext{
@@ -1242,9 +1242,10 @@ func TestStoreUnmatchedAttendee_EmptyDisplayName(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, mockExtRepo.upsertCalled)
 
-	// DisplayName should be nil for empty string
+	// DisplayName should be inferred from email pattern "john.smith@..." -> "John Smith"
 	req := mockExtRepo.upsertRequests[0]
-	assert.Nil(t, req.DisplayName)
+	assert.NotNil(t, req.DisplayName)
+	assert.Equal(t, "John Smith", *req.DisplayName)
 }
 
 // TestStoreUnmatchedAttendee_RepoError tests error handling when repo fails
@@ -1377,4 +1378,302 @@ func TestProcessEvent_HandlesEmptyHtmlLink(t *testing.T) {
 	assert.True(t, mockCalRepo.upsertCalled, "Upsert should be called")
 	assert.NotNil(t, mockCalRepo.upsertRequest, "Upsert request should not be nil")
 	assert.Nil(t, mockCalRepo.upsertRequest.HtmlLink, "HtmlLink should be nil for empty string")
+}
+
+// ========================================
+// Issue #123: Blocked Calendar Domain Tests
+// ========================================
+
+// TestIsBlockedCalendarDomain tests the blocked calendar domain filter
+func TestIsBlockedCalendarDomain(t *testing.T) {
+	tests := []struct {
+		name     string
+		email    string
+		expected bool
+	}{
+		// Blocked domains
+		{"group calendar domain", "u1958p3u4pd7qfvlf9n9416iac@group.calendar.google.com", true},
+		{"resource calendar domain", "room-123@resource.calendar.google.com", true},
+		{"generic calendar domain", "calendar-abc@calendar.google.com", true},
+		{"system calendar domain (holidays)", "en.usa#holiday@group.v.calendar.google.com", true},
+		{"system calendar domain (contacts)", "addressbook#contacts@group.v.calendar.google.com", true},
+
+		// Uppercase variations (should still be blocked)
+		{"uppercase group domain", "ABC@GROUP.CALENDAR.GOOGLE.COM", true},
+		{"mixed case resource domain", "Room@Resource.Calendar.Google.Com", true},
+
+		// With whitespace (should still be blocked after trimming)
+		{"whitespace around blocked domain", "  room@resource.calendar.google.com  ", true},
+
+		// Not blocked - regular email domains
+		{"gmail address", "john.smith@gmail.com", false},
+		{"company domain", "alice@company.com", false},
+		{"google apps domain", "bob@customdomain.com", false},
+		{"similar but not blocked", "room@calendar.example.com", false},
+		{"partial match not blocked", "room@group.calendar.example.com", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isBlockedCalendarDomain(tt.email)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestMatchAttendees_SkipsBlockedDomains tests that blocked calendar domains are skipped
+func TestMatchAttendees_SkipsBlockedDomains(t *testing.T) {
+	ctx := context.Background()
+
+	contactID := uuid.New()
+
+	mockIdentity := &mockIdentityService{
+		matchOrCreateResults: map[string]*service.MatchResult{
+			"alice@example.com": {ContactID: &contactID},
+		},
+	}
+
+	mockContactRepo := &mockContactRepo{}
+	mockExtRepo := &mockExternalContactRepo{}
+
+	provider := newTestProviderWithExternal(nil, mockContactRepo, mockIdentity, mockExtRepo)
+
+	attendees := []repository.Attendee{
+		{Email: "alice@example.com", Self: false, DisplayName: "Alice"},                                    // Should match
+		{Email: "fun-stuff@group.calendar.google.com", Self: false, DisplayName: "Fun Stuff"},              // Should be skipped (blocked domain)
+		{Email: "conf-room-a@resource.calendar.google.com", Self: false, DisplayName: "Conference Room A"}, // Should be skipped (blocked domain)
+		{Email: "en.usa#holiday@group.v.calendar.google.com", Self: false, DisplayName: "US Holidays"},     // Should be skipped (blocked domain)
+		{Email: "unknown@example.com", Self: false, DisplayName: "Unknown"},                                // Should be stored as import candidate
+	}
+
+	eventContext := &EventContext{
+		Title:     "Team Meeting",
+		StartTime: accelerated.GetCurrentTime(),
+	}
+
+	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", eventContext)
+
+	// Only Alice should be matched
+	assert.Len(t, matchedIDs, 1)
+	assert.Equal(t, contactID, matchedIDs[0])
+
+	// Identity service should only be called for non-blocked emails (alice and unknown)
+	assert.Equal(t, 2, len(mockIdentity.matchOrCreateRequests))
+
+	// Only unknown@example.com should be stored as import candidate (not the blocked domains)
+	assert.Len(t, mockExtRepo.upsertRequests, 1)
+	assert.Equal(t, "unknown@example.com", mockExtRepo.upsertRequests[0].SourceID)
+}
+
+// ========================================
+// Issue #124: Name Inference Tests
+// ========================================
+
+// TestInferNameFromEmail tests the email-to-name inference function
+func TestInferNameFromEmail(t *testing.T) {
+	tests := []struct {
+		name     string
+		email    string
+		expected *string
+	}{
+		// Happy path - dot separator
+		{"first.last pattern", "john.smith@gmail.com", strPtr("John Smith")},
+		{"first.middle.last pattern", "john.david.smith@gmail.com", strPtr("John David Smith")},
+
+		// Underscore separator
+		{"first_last pattern", "john_smith@gmail.com", strPtr("John Smith")},
+		{"first_middle_last pattern", "john_david_smith@gmail.com", strPtr("John David Smith")},
+
+		// Single word
+		{"single word", "john@gmail.com", strPtr("John")},
+
+		// Trailing numbers (should be stripped)
+		{"trailing numbers on last name", "john.smith2@gmail.com", strPtr("John Smith")},
+		{"trailing numbers with dot", "john.smith.267@gmail.com", strPtr("John Smith")},
+		{"trailing numbers on all parts", "john2.smith3@gmail.com", strPtr("John Smith")},
+		{"only trailing numbers stripped", "john2smith@gmail.com", strPtr("John2smith")},
+
+		// Gmail + modifier
+		{"gmail plus modifier", "john.smith+work@gmail.com", strPtr("John Smith")},
+		{"plus modifier single word", "john+newsletter@gmail.com", strPtr("John")},
+
+		// Case handling
+		{"uppercase email", "JOHN.SMITH@GMAIL.COM", strPtr("John Smith")},
+		{"mixed case", "JoHn.SmItH@gmail.com", strPtr("John Smith")},
+
+		// Edge cases
+		{"excessive dots", "john...smith@gmail.com", strPtr("John Smith")},
+		{"trailing dot", "john.smith.@gmail.com", strPtr("John Smith")},
+		{"leading dot", ".john.smith@gmail.com", strPtr("John Smith")},
+
+		// Nil cases
+		{"all numbers", "123456@gmail.com", nil},
+		{"only numbers after strip", "123@gmail.com", nil},
+		{"no @ symbol", "johnsmith", nil},
+		{"empty local part after processing", ".@gmail.com", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := inferNameFromEmail(tt.email)
+			if tt.expected == nil {
+				assert.Nil(t, result)
+			} else {
+				assert.NotNil(t, result)
+				assert.Equal(t, *tt.expected, *result)
+			}
+		})
+	}
+}
+
+// TestStripTrailingNumbers tests the trailing number stripping function
+func TestStripTrailingNumbers(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"smith2", "smith"},
+		{"smith123", "smith"},
+		{"smith", "smith"},
+		{"123smith", "123smith"},
+		{"smith2abc", "smith2abc"},
+		{"", ""},
+		{"123", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := stripTrailingNumbers(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestCapitalize tests the capitalize helper function
+func TestCapitalize(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"john", "John"},
+		{"JOHN", "John"},
+		{"jOHN", "John"},
+		{"j", "J"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := capitalize(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestStoreUnmatchedAttendee_PreservesExistingDisplayName tests that provided display names are not overwritten
+func TestStoreUnmatchedAttendee_PreservesExistingDisplayName(t *testing.T) {
+	ctx := context.Background()
+
+	mockExtRepo := &mockExternalContactRepo{}
+	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
+
+	// Attendee has a display name, so it should NOT be inferred from email
+	attendee := repository.Attendee{
+		Email:       "jsmith@example.com", // Would infer "Jsmith" if no display name
+		DisplayName: "John Smith III",     // Should use this instead
+	}
+
+	eventContext := &EventContext{
+		Title:     "Meeting",
+		StartTime: accelerated.GetCurrentTime(),
+	}
+
+	err := provider.storeUnmatchedAttendee(ctx, attendee, "user@example.com", eventContext)
+
+	assert.NoError(t, err)
+	assert.True(t, mockExtRepo.upsertCalled)
+
+	req := mockExtRepo.upsertRequests[0]
+	assert.NotNil(t, req.DisplayName)
+	assert.Equal(t, "John Smith III", *req.DisplayName)
+}
+
+// ========================================
+// Issue #126: Event Response Filtering Tests
+// ========================================
+
+// TestProcessEvent_OnlyAcceptsAcceptedEvents verifies that only accepted events are processed
+func TestProcessEvent_OnlyAcceptsAcceptedEvents(t *testing.T) {
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
+	accountID := "user@example.com"
+
+	tests := []struct {
+		name           string
+		responseStatus string
+		shouldSkip     bool
+	}{
+		{"accepted events are processed", "accepted", false},
+		{"declined events are skipped", "declined", true},
+		{"tentative events are skipped", "tentative", true},
+		{"needsAction events are skipped", "needsAction", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := &calendar.Event{
+				Id:      "test-event",
+				Summary: "Test Meeting",
+				Status:  "confirmed",
+				Attendees: []*calendar.EventAttendee{
+					{
+						Email:          accountID,
+						Self:           true,
+						ResponseStatus: tt.responseStatus,
+					},
+				},
+			}
+
+			userResponse := provider.getUserResponse(event, accountID)
+
+			if tt.shouldSkip {
+				// Event should be skipped (userResponse is nil or not "accepted")
+				assert.True(t, userResponse == nil || *userResponse != "accepted",
+					"Expected event with response '%s' to be skipped", tt.responseStatus)
+			} else {
+				// Event should be processed (userResponse is "accepted")
+				assert.NotNil(t, userResponse)
+				assert.Equal(t, "accepted", *userResponse)
+			}
+		})
+	}
+}
+
+// TestProcessEvent_SkipsEventsWhereUserNotAttendee verifies events without user are skipped
+func TestProcessEvent_SkipsEventsWhereUserNotAttendee(t *testing.T) {
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
+	accountID := "user@example.com"
+
+	event := &calendar.Event{
+		Id:      "test-event",
+		Summary: "Meeting I wasn't invited to",
+		Status:  "confirmed",
+		Organizer: &calendar.EventOrganizer{
+			Email: "other@example.com",
+		},
+		Attendees: []*calendar.EventAttendee{
+			{
+				Email:          "alice@example.com",
+				ResponseStatus: "accepted",
+			},
+			{
+				Email:          "bob@example.com",
+				ResponseStatus: "accepted",
+			},
+		},
+	}
+
+	userResponse := provider.getUserResponse(event, accountID)
+
+	// User is not in attendees or organizer, so response should be nil
+	assert.Nil(t, userResponse)
 }

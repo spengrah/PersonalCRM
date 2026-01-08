@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/identity"
@@ -43,6 +44,16 @@ const (
 	// CalendarMethodOverlapWeight is the weight given to contact method overlap (40%)
 	CalendarMethodOverlapWeight = 0.4
 )
+
+// blockedCalendarDomains contains email domains that represent calendar resources,
+// not real people. These are filtered out during calendar sync to avoid creating
+// import candidates for meeting rooms, group calendars, and other non-person entities.
+var blockedCalendarDomains = []string{
+	"group.calendar.google.com",    // Group/secondary calendars
+	"resource.calendar.google.com", // Room/resource calendars
+	"calendar.google.com",          // Generic calendar resources
+	"group.v.calendar.google.com",  // System calendars (holidays, birthdays)
+}
 
 // calendarRepoInterface defines the methods needed from calendar repository (for testability)
 type calendarRepoInterface interface {
@@ -339,11 +350,13 @@ func (p *CalendarSyncProvider) processEvent(
 	// Determine user's response status
 	userResponse := p.getUserResponse(event, accountID)
 
-	// Skip declined events
-	if userResponse != nil && *userResponse == "declined" {
+	// Only import events the user has firmly accepted
+	// Skip: declined, tentative, needsAction, and events where user is not an attendee
+	if userResponse == nil || *userResponse != "accepted" {
 		logger.Debug().
 			Str("eventId", event.Id).
-			Msg("skipping declined event")
+			Str("userResponse", ptrToStr(userResponse)).
+			Msg("skipping non-accepted event")
 		return nil
 	}
 
@@ -445,6 +458,14 @@ func (p *CalendarSyncProvider) matchAttendees(
 
 		// Skip empty emails
 		if attendee.Email == "" {
+			continue
+		}
+
+		// Skip calendar resource domains (rooms, group calendars, etc.)
+		if isBlockedCalendarDomain(attendee.Email) {
+			logger.Debug().
+				Str("email", attendee.Email).
+				Msg("skipping attendee from blocked calendar domain")
 			continue
 		}
 
@@ -607,6 +628,15 @@ func (p *CalendarSyncProvider) storeUnmatchedAttendee(
 		{Value: attendee.Email},
 	}
 
+	// Determine display name: use provided name, or infer from email if empty
+	var displayName *string
+	if attendee.DisplayName != "" {
+		displayName = &attendee.DisplayName
+	} else {
+		// Try to infer name from email address pattern (e.g., john.smith@domain.com → "John Smith")
+		displayName = inferNameFromEmail(attendee.Email)
+	}
+
 	syncedAt := accelerated.GetCurrentTime()
 
 	// Upsert external contact (creates or updates existing)
@@ -614,7 +644,7 @@ func (p *CalendarSyncProvider) storeUnmatchedAttendee(
 		Source:      CalendarAttendeeSource,
 		SourceID:    sourceID,
 		AccountID:   &accountID,
-		DisplayName: strPtrIfNotEmpty(attendee.DisplayName),
+		DisplayName: displayName,
 		Emails:      emails,
 		Metadata:    metadata,
 		SyncedAt:    &syncedAt,
@@ -625,7 +655,8 @@ func (p *CalendarSyncProvider) storeUnmatchedAttendee(
 
 	logger.Debug().
 		Str("email", attendee.Email).
-		Str("displayName", attendee.DisplayName).
+		Str("displayName", ptrToStr(displayName)).
+		Bool("nameInferred", attendee.DisplayName == "" && displayName != nil).
 		Str("meetingTitle", eventContext.Title).
 		Msg("stored unmatched attendee as import candidate")
 
@@ -707,4 +738,76 @@ func ptrToStr(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// isBlockedCalendarDomain checks if an email address belongs to a blocked calendar domain.
+// These domains represent calendar resources (rooms, group calendars) rather than real people.
+func isBlockedCalendarDomain(email string) bool {
+	email = strings.ToLower(strings.TrimSpace(email))
+	for _, domain := range blockedCalendarDomains {
+		if strings.HasSuffix(email, "@"+domain) {
+			return true
+		}
+	}
+	return false
+}
+
+// inferNameFromEmail attempts to extract a human-readable name from an email address.
+// It handles common patterns like first.last@domain.com and first_last@domain.com.
+// Returns nil if no reasonable name can be inferred.
+func inferNameFromEmail(email string) *string {
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		return nil
+	}
+	local := parts[0]
+
+	// Remove Gmail-style + modifiers (e.g., john+work@gmail.com → john)
+	if plusIdx := strings.Index(local, "+"); plusIdx > 0 {
+		local = local[:plusIdx]
+	}
+
+	// Split by separators (. or _)
+	var nameParts []string
+	if strings.Contains(local, ".") {
+		nameParts = strings.Split(local, ".")
+	} else if strings.Contains(local, "_") {
+		nameParts = strings.Split(local, "_")
+	} else {
+		nameParts = []string{local}
+	}
+
+	// Process each part: strip trailing numbers, capitalize
+	var result []string
+	for _, part := range nameParts {
+		part = strings.TrimSpace(part)
+		part = stripTrailingNumbers(part)
+		if part == "" {
+			continue
+		}
+		result = append(result, capitalize(part))
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+
+	name := strings.Join(result, " ")
+	return &name
+}
+
+// stripTrailingNumbers removes trailing digits from a string.
+// e.g., "smith2" → "smith", "john123" → "john"
+func stripTrailingNumbers(s string) string {
+	return strings.TrimRight(s, "0123456789")
+}
+
+// capitalize returns the string with the first letter uppercased and the rest lowercased.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(strings.ToLower(s))
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
 }
