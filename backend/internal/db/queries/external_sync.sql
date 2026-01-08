@@ -97,6 +97,10 @@ RETURNING *;
 DELETE FROM external_sync_state
 WHERE id = $1;
 
+-- name: DeleteSyncStatesByAccountID :exec
+DELETE FROM external_sync_state
+WHERE COALESCE(account_id, '') = COALESCE($1, '');
+
 -- External Sync Log Queries
 
 -- name: CreateSyncLog :one

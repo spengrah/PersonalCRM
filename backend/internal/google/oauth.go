@@ -52,6 +52,7 @@ var _ OAuthServiceInterface = (*OAuthService)(nil)
 type OAuthService struct {
 	config    *oauth2.Config
 	repo      *repository.OAuthRepository
+	syncRepo  *repository.SyncRepository
 	encryptor *crypto.TokenEncryptor
 }
 
@@ -62,7 +63,7 @@ type UserInfo struct {
 }
 
 // NewOAuthService creates a new Google OAuth service
-func NewOAuthService(cfg *config.Config, repo *repository.OAuthRepository) (*OAuthService, error) {
+func NewOAuthService(cfg *config.Config, repo *repository.OAuthRepository, syncRepo *repository.SyncRepository) (*OAuthService, error) {
 	if cfg.Google.ClientID == "" || cfg.Google.ClientSecret == "" {
 		return nil, fmt.Errorf("google OAuth credentials not configured")
 	}
@@ -83,6 +84,7 @@ func NewOAuthService(cfg *config.Config, repo *repository.OAuthRepository) (*OAu
 	return &OAuthService{
 		config:    oauthConfig,
 		repo:      repo,
+		syncRepo:  syncRepo,
 		encryptor: encryptor,
 	}, nil
 }
@@ -194,6 +196,14 @@ func (s *OAuthService) RevokeAccount(ctx context.Context, id uuid.UUID) error {
 	cred, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("get credential: %w", err)
+	}
+
+	// Delete associated sync states before credential deletion
+	// We need the account_id (email) to identify which sync states to delete
+	if s.syncRepo != nil {
+		if err := s.syncRepo.DeleteSyncStatesByAccountID(ctx, cred.AccountID); err != nil {
+			logger.Warn().Err(err).Str("account_id", cred.AccountID).Msg("failed to delete sync states for account")
+		}
 	}
 
 	// Decrypt access token

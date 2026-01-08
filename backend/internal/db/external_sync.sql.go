@@ -204,6 +204,16 @@ func (q *Queries) DeleteSyncState(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const DeleteSyncStatesByAccountID = `-- name: DeleteSyncStatesByAccountID :exec
+DELETE FROM external_sync_state
+WHERE COALESCE(account_id, '') = COALESCE($1, '')
+`
+
+func (q *Queries) DeleteSyncStatesByAccountID(ctx context.Context, accountID pgtype.Text) error {
+	_, err := q.db.Exec(ctx, DeleteSyncStatesByAccountID, accountID)
+	return err
+}
+
 const GetSyncLog = `-- name: GetSyncLog :one
 SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, metadata, created_at FROM external_sync_log
 WHERE id = $1
