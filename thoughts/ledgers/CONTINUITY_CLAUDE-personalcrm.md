@@ -140,6 +140,26 @@ sqlc generate
 
 ## Agent Reports
 
+### onboard (2026-01-08T14:46:15.089Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
+### onboard (2026-01-08T14:40:10.555Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
+### onboard (2026-01-08T14:39:50.858Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
+### onboard (2026-01-08T14:18:42.248Z)
+- Task: 
+- Summary: 
+- Output: `.claude/cache/agents/onboard/latest-output.md`
+
 ### onboard (2026-01-08T00:26:11.687Z)
 - Task: 
 - Summary: 

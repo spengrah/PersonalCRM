@@ -13,7 +13,16 @@ import {
 } from '@/hooks/use-contacts'
 import { useRemindersByContact } from '@/hooks/use-reminders'
 import { formatDateOnly } from '@/lib/utils'
-import { Edit, Trash2, MessageCircle, MapPin, Calendar, Bell, Clock } from 'lucide-react'
+import {
+  Edit,
+  Trash2,
+  MessageCircle,
+  MapPin,
+  Calendar,
+  Bell,
+  Clock,
+  ChevronDown,
+} from 'lucide-react'
 import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
 import { Meetings } from '@/components/contacts/meetings'
 import {
@@ -30,6 +39,7 @@ export default function ContactDetailPage() {
   const contactId = params.id as string
 
   const [isEditing, setIsEditing] = useState(false)
+  const [notesExpanded, setNotesExpanded] = useState(false)
 
   const { data: contact, isLoading, error } = useContact(contactId)
   const { data: reminders } = useRemindersByContact(contactId)
@@ -304,8 +314,23 @@ export default function ContactDetailPage() {
               {contact.notes && (
                 <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
                   <dt className="text-sm font-medium text-gray-500">Notes</dt>
-                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2 whitespace-pre-wrap">
-                    {contact.notes}
+                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                    <div
+                      className={`whitespace-pre-wrap ${!notesExpanded && contact.notes.length > 300 ? 'line-clamp-4' : ''}`}
+                    >
+                      {contact.notes}
+                    </div>
+                    {contact.notes.length > 300 && (
+                      <button
+                        onClick={() => setNotesExpanded(!notesExpanded)}
+                        className="mt-2 inline-flex items-center text-sm text-blue-600 hover:text-blue-800 font-medium"
+                      >
+                        {notesExpanded ? 'Show less' : 'Show more'}
+                        <ChevronDown
+                          className={`ml-1 w-4 h-4 transition-transform duration-200 ${notesExpanded ? 'rotate-180' : ''}`}
+                        />
+                      </button>
+                    )}
                   </dd>
                 </div>
               )}
