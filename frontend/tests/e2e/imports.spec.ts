@@ -449,6 +449,98 @@ test.describe('Imports - Suggested Matches', () => {
   })
 })
 
+test.describe('Imports - Confidence Sorting (Issue #122)', () => {
+  // This test verifies that import candidates are sorted by confidence score descending.
+  // Candidates with higher match confidence should appear before those with lower confidence.
+  // This was fixed in PR #128.
+
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  test('should sort candidates by confidence score descending', async ({ page }) => {
+    // Seed CRM contacts with distinct names that will match with different confidence levels
+    await testApi.seedOverdueContacts([
+      {
+        full_name: 'High Confidence Match',
+        email: 'high-confidence@example.com',
+        cadence: 'monthly',
+        days_overdue: 1,
+      },
+      {
+        full_name: 'Medium Confidence Match',
+        email: 'medium-confidence@example.com',
+        cadence: 'monthly',
+        days_overdue: 1,
+      },
+    ])
+
+    // Seed external contacts:
+    // 1. High confidence: exact name + exact email match → ~100% confidence
+    // 2. Medium confidence: exact name only, no email match → ~60% confidence
+    // 3. Low/no match: unique name that won't match any CRM contact → no confidence score
+    await testApi.seedExternalContacts([
+      // This one will NOT have a match (seeded first, but should appear last after sorting)
+      {
+        display_name: 'Zzz No Match Person',
+        emails: ['zzz-nomatch@example.com'],
+      },
+      // This one will have medium confidence (name match only, ~60%)
+      {
+        display_name: 'Medium Confidence Match',
+        emails: ['different-email@example.com'],
+      },
+      // This one will have high confidence (name + email match, ~100%)
+      {
+        display_name: 'High Confidence Match',
+        emails: ['high-confidence@example.com'],
+      },
+    ])
+
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Get all candidate cards in order
+    const candidateCards = page.locator('[class*="rounded-lg"]').filter({
+      has: page.getByRole('button', { name: /Import/i }),
+    })
+
+    // Wait for cards to load
+    await expect(candidateCards.first()).toBeVisible()
+
+    // Get the display names in order from the page
+    const cardTexts = await candidateCards.allTextContents()
+
+    // Find the indices of our test contacts
+    const highConfidenceIdx = cardTexts.findIndex(text =>
+      text.includes(`${testApi.prefix}-High Confidence Match`)
+    )
+    const mediumConfidenceIdx = cardTexts.findIndex(text =>
+      text.includes(`${testApi.prefix}-Medium Confidence Match`)
+    )
+    const noMatchIdx = cardTexts.findIndex(text =>
+      text.includes(`${testApi.prefix}-Zzz No Match Person`)
+    )
+
+    // Verify all three candidates are found
+    expect(highConfidenceIdx).not.toBe(-1)
+    expect(mediumConfidenceIdx).not.toBe(-1)
+    expect(noMatchIdx).not.toBe(-1)
+
+    // High confidence should appear before medium confidence
+    expect(highConfidenceIdx).toBeLessThan(mediumConfidenceIdx)
+
+    // Medium confidence should appear before no match (sorted by confidence, then alphabetically)
+    expect(mediumConfidenceIdx).toBeLessThan(noMatchIdx)
+  })
+})
+
 test.describe('Imports - Source Filter', () => {
   test('should display source filter buttons', async ({ page }) => {
     await page.goto('/imports')
