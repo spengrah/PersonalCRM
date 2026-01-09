@@ -23,43 +23,6 @@ A single-user, local-first customer relationship management system with AI-power
    - Backend API: http://localhost:8080
    - Health check: http://localhost:8080/health
 
-## Desktop App (macOS)
-
-Build and run the native desktop app (no browser):
-
-Prereqs:
-- Rust toolchain (cargo)
-- Node.js 18+
-- Go 1.22+
-
-Steps:
-```bash
-# 1) Build backend binary
-cd "backend" && go build -o bin/crm-api ./cmd/crm-api
-
-# 2) Build desktop UI
-cd "../desktop-ui" && npm install && npm run build
-
-# 3) Run desktop app in dev
-cd "../desktop/src-tauri" && cargo run
-```
-
-Package a .app and DMG:
-```bash
-# Build optimized binary and bundle app
-cd "desktop-ui" && npm run build
-cd "../desktop/src-tauri" && cargo build --release
-npx -y @tauri-apps/cli@latest build
-```
-
-Artifacts:
-- App: `desktop/src-tauri/target/release/bundle/macos/Personal CRM.app`
-- DMG: `desktop/src-tauri/target/release/bundle/dmg/Personal CRM_*.dmg`
-
-Notes:
-- The app loads environment variables from the project `.env` when launching the backend.
-- The backend binds to 127.0.0.1 on a free port and is shut down when the app exits.
-
 ## Prerequisites
 
 - Docker and Docker Compose
@@ -607,8 +570,6 @@ Deploy updates automatically via GitHub Actions when you push to main.
 personal-crm/
 ├── frontend/           # Next.js React application (includes E2E tests)
 ├── backend/            # Go API server (includes unit & integration tests)
-├── desktop-ui/         # Vite + React desktop UI
-├── desktop/            # Tauri app (Rust)
 ├── infra/              # Docker Compose & infrastructure
 └── docs/               # Documentation
 ```
