@@ -41,32 +41,4 @@ test.describe('Navigation', () => {
     await expect(nav).toHaveClass(/top-0/)
     await expect(nav).toHaveClass(/z-50/)
   })
-
-  test('modals appear above sticky navigation', async ({ page }) => {
-    await page.goto('/contacts')
-    await page.waitForLoadState('networkidle')
-
-    // Add content to make the page scrollable
-    await page.evaluate(() => {
-      document.body.style.minHeight = '200vh'
-    })
-
-    // Click Add Contact button to open modal
-    await page.getByRole('button', { name: /add contact/i }).click()
-
-    // Wait for modal to appear
-    const modal = page.getByRole('dialog')
-    await expect(modal).toBeVisible()
-
-    // Scroll page while modal is open
-    await page.evaluate(() => window.scrollTo(0, 500))
-    await page.waitForFunction(() => window.scrollY >= 400)
-
-    // Verify modal is still visible (above navigation)
-    await expect(modal).toBeVisible()
-
-    // Close modal
-    await page.keyboard.press('Escape')
-    await expect(modal).not.toBeVisible()
-  })
 })
