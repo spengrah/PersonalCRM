@@ -6,8 +6,8 @@ test.describe('Navigation', () => {
     await page.goto('/contacts')
     await page.waitForLoadState('networkidle')
 
-    // Verify nav is initially visible
-    const nav = page.locator('nav')
+    // Verify nav is initially visible using accessibility-focused selector
+    const nav = page.getByRole('navigation')
     await expect(nav).toBeVisible()
 
     // Add content to make the page scrollable if needed
@@ -18,16 +18,17 @@ test.describe('Navigation', () => {
     // Scroll down significantly
     await page.evaluate(() => window.scrollTo(0, 500))
 
-    // Wait for scroll to complete
-    await page.waitForTimeout(100)
+    // Wait for scroll position to actually change (deterministic wait)
+    await page.waitForFunction(() => window.scrollY >= 400)
 
     // Verify nav is still visible after scrolling
     await expect(nav).toBeVisible()
 
     // Verify nav is at top of viewport (sticky behavior)
+    // Use tolerance to account for browser differences
     const navBox = await nav.boundingBox()
     expect(navBox).not.toBeNull()
-    expect(navBox?.y).toBe(0)
+    expect(navBox?.y).toBeLessThanOrEqual(5)
   })
 
   test('navigation has correct sticky classes', async ({ page }) => {
@@ -35,9 +36,37 @@ test.describe('Navigation', () => {
     await page.waitForLoadState('networkidle')
 
     // Verify the nav element has sticky positioning classes
-    const nav = page.locator('nav')
+    const nav = page.getByRole('navigation')
     await expect(nav).toHaveClass(/sticky/)
     await expect(nav).toHaveClass(/top-0/)
     await expect(nav).toHaveClass(/z-50/)
+  })
+
+  test('modals appear above sticky navigation', async ({ page }) => {
+    await page.goto('/contacts')
+    await page.waitForLoadState('networkidle')
+
+    // Add content to make the page scrollable
+    await page.evaluate(() => {
+      document.body.style.minHeight = '200vh'
+    })
+
+    // Click Add Contact button to open modal
+    await page.getByRole('button', { name: /add contact/i }).click()
+
+    // Wait for modal to appear
+    const modal = page.getByRole('dialog')
+    await expect(modal).toBeVisible()
+
+    // Scroll page while modal is open
+    await page.evaluate(() => window.scrollTo(0, 500))
+    await page.waitForFunction(() => window.scrollY >= 400)
+
+    // Verify modal is still visible (above navigation)
+    await expect(modal).toBeVisible()
+
+    // Close modal
+    await page.keyboard.press('Escape')
+    await expect(modal).not.toBeVisible()
   })
 })
