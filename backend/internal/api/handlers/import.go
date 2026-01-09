@@ -35,6 +35,13 @@ const (
 	// Range: 0.0-1.0, typically 0.4 (40% of final score)
 	// Must satisfy: NameSimilarityWeight + ContactMethodWeight = 1.0
 	ContactMethodWeight = 0.4
+
+	// MaxCandidatesForSorting is the maximum number of candidates to fetch for sorting.
+	// We fetch all candidates (up to this limit) to enable global sorting by confidence
+	// score across all pages. This is necessary because confidence scores are calculated
+	// in-memory via findBestMatch() and cannot be sorted at the database level.
+	// This matches the limit used in the contacts list endpoint.
+	MaxCandidatesForSorting = 10000
 )
 
 // ImportHandler handles import candidate HTTP requests
@@ -121,16 +128,17 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 	var contacts []repository.ExternalContact
 	var err error
 
-	// Fetch all candidates (we'll sort and paginate in memory to ensure
-	// global sorting by confidence score across all pages)
+	// Fetch all candidates up to MaxCandidatesForSorting to enable global sorting
+	// by confidence score across all pages. We can't use DB pagination here because
+	// confidence scores are calculated in-memory via findBestMatch().
 	if source != "" {
-		contacts, err = h.externalRepo.ListUnmatched(ctx, source, 10000, 0)
+		contacts, err = h.externalRepo.ListUnmatched(ctx, source, MaxCandidatesForSorting, 0)
 		if err != nil {
 			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list candidates", err.Error())
 			return
 		}
 	} else {
-		contacts, err = h.externalRepo.ListAllUnmatched(ctx, 10000, 0)
+		contacts, err = h.externalRepo.ListAllUnmatched(ctx, MaxCandidatesForSorting, 0)
 		if err != nil {
 			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list candidates", err.Error())
 			return
@@ -593,6 +601,9 @@ func getCandidateDisplayName(displayName, firstName, lastName *string) string {
 	}
 	if firstName != nil {
 		return *firstName
+	}
+	if lastName != nil {
+		return *lastName
 	}
 	return ""
 }

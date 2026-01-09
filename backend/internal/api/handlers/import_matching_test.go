@@ -489,9 +489,9 @@ func TestGetCandidateDisplayName(t *testing.T) {
 			expected:  "John",
 		},
 		{
-			name:     "last name only - returns empty",
+			name:     "last name only",
 			lastName: stringPtr("Smith"),
-			expected: "",
+			expected: "Smith",
 		},
 		{
 			name:     "all nil - returns empty",
