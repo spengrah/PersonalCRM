@@ -1,3 +1,4 @@
+// Package matching centralizes fuzzy matching normalization utilities.
 package matching
 
 import (
@@ -13,7 +14,7 @@ func NormalizeEmail(email string) string {
 }
 
 // NormalizePhoneLoose strips formatting but preserves a leading + when present.
-// This matches the import matching behavior to avoid changing existing results.
+// This matches import matching behavior to avoid changing existing results.
 func NormalizePhoneLoose(phone string) string {
 	if phone == "" {
 		return ""

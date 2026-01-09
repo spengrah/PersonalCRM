@@ -128,7 +128,10 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 	candidates := make([]ImportCandidateResponse, 0, len(contacts))
 	for _, contact := range contacts {
 		// Find potential matching CRM contact
-		suggestedMatch := h.matchSvc.FindBestMatch(ctx, &contact)
+		suggestedMatch, err := h.matchSvc.FindBestMatch(ctx, &contact)
+		if err != nil {
+			logger.Warn().Err(err).Str("external_id", contact.ID.String()).Msg("failed to find suggested match")
+		}
 		candidate := h.toImportCandidateResponse(&contact, suggestedMatch)
 		candidates = append(candidates, candidate)
 	}

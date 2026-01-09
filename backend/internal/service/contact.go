@@ -57,6 +57,7 @@ func (s *ContactService) GetContact(ctx context.Context, id uuid.UUID) (*reposit
 	return contact, nil
 }
 
+// Deprecated: Use ListContactsPage when pagination metadata is needed.
 func (s *ContactService) ListContacts(ctx context.Context, params repository.ListContactsParams) ([]repository.Contact, error) {
 	contacts, err := s.contactRepo.ListContacts(ctx, params)
 	if err != nil {
@@ -88,6 +89,7 @@ func (s *ContactService) ListContactsPage(ctx context.Context, params repository
 	return contacts, total, nil
 }
 
+// Deprecated: Use SearchContactsPage when pagination metadata is needed.
 func (s *ContactService) SearchContacts(ctx context.Context, params repository.SearchContactsParams) ([]repository.Contact, error) {
 	contacts, err := s.contactRepo.SearchContacts(ctx, params)
 	if err != nil {

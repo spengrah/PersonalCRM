@@ -15,28 +15,32 @@ type ImportSuggestedMatch struct {
 	Confidence  float64
 }
 
+type contactMatchFinder interface {
+	FindSimilarContacts(ctx context.Context, name string, threshold float64, limit int32) ([]repository.ContactMatch, error)
+}
+
 // ImportMatchService encapsulates matching logic for import candidates.
 type ImportMatchService struct {
-	contactRepo *repository.ContactRepository
+	contactRepo contactMatchFinder
 }
 
 // NewImportMatchService creates a new import match service.
-func NewImportMatchService(contactRepo *repository.ContactRepository) *ImportMatchService {
+func NewImportMatchService(contactRepo contactMatchFinder) *ImportMatchService {
 	return &ImportMatchService{contactRepo: contactRepo}
 }
 
 // FindBestMatch finds the best matching CRM contact for an external contact.
-// Returns a suggested match if confidence >= matching.ImportConfig.ConfidenceThreshold, otherwise nil.
-func (s *ImportMatchService) FindBestMatch(ctx context.Context, external *repository.ExternalContact) *ImportSuggestedMatch {
+// Returns a suggested match if confidence >= matching.ImportConfig.ConfidenceThreshold.
+func (s *ImportMatchService) FindBestMatch(ctx context.Context, external *repository.ExternalContact) (*ImportSuggestedMatch, error) {
 	candidateName := extractCandidateName(external)
 	if candidateName == "" {
-		return nil
+		return nil, nil
 	}
 
 	matches, err := s.contactRepo.FindSimilarContacts(ctx, candidateName, matching.ImportConfig.MinSimilarityThreshold, 5)
 	if err != nil {
 		logger.Warn().Err(err).Str("name", candidateName).Msg("failed to find similar contacts")
-		return nil
+		return nil, err
 	}
 
 	candidateEmails := make(map[string]bool)
@@ -65,7 +69,7 @@ func (s *ImportMatchService) FindBestMatch(ctx context.Context, external *reposi
 		}
 	}
 
-	return bestMatch
+	return bestMatch, nil
 }
 
 func extractCandidateName(external *repository.ExternalContact) string {
