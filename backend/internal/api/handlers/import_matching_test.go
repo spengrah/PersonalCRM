@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"sort"
 	"strings"
 	"testing"
 
@@ -329,6 +330,360 @@ func toLower(s string) string {
 }
 
 // normalizePhone is now defined in import.go and used by both production code and tests
+
+// TestCandidateSorting_ByConfidence tests the sorting logic for import candidates (issue #122)
+// Candidates should be sorted by confidence score descending, with those without matches
+// sorted alphabetically at the end.
+func TestCandidateSorting_ByConfidence(t *testing.T) {
+	tests := []struct {
+		name          string
+		candidates    []ImportCandidateResponse
+		expectedOrder []string // Expected order of display names after sorting
+	}{
+		{
+			name: "sort by confidence descending",
+			candidates: []ImportCandidateResponse{
+				{DisplayName: stringPtr("Alice"), SuggestedMatch: &SuggestedMatch{Confidence: 0.55}},
+				{DisplayName: stringPtr("Bob"), SuggestedMatch: &SuggestedMatch{Confidence: 0.95}},
+				{DisplayName: stringPtr("Charlie"), SuggestedMatch: &SuggestedMatch{Confidence: 0.75}},
+			},
+			expectedOrder: []string{"Bob", "Charlie", "Alice"},
+		},
+		{
+			name: "matches before non-matches",
+			candidates: []ImportCandidateResponse{
+				{DisplayName: stringPtr("Alice"), SuggestedMatch: nil},
+				{DisplayName: stringPtr("Bob"), SuggestedMatch: &SuggestedMatch{Confidence: 0.60}},
+				{DisplayName: stringPtr("Charlie"), SuggestedMatch: nil},
+			},
+			expectedOrder: []string{"Bob", "Alice", "Charlie"},
+		},
+		{
+			name: "non-matches sorted alphabetically",
+			candidates: []ImportCandidateResponse{
+				{DisplayName: stringPtr("Charlie"), SuggestedMatch: nil},
+				{DisplayName: stringPtr("Alice"), SuggestedMatch: nil},
+				{DisplayName: stringPtr("Bob"), SuggestedMatch: nil},
+			},
+			expectedOrder: []string{"Alice", "Bob", "Charlie"},
+		},
+		{
+			name: "mixed: high confidence, low confidence, then alphabetical non-matches",
+			candidates: []ImportCandidateResponse{
+				{DisplayName: stringPtr("Zara"), SuggestedMatch: nil},
+				{DisplayName: stringPtr("Alice"), SuggestedMatch: &SuggestedMatch{Confidence: 0.50}},
+				{DisplayName: stringPtr("Bob"), SuggestedMatch: nil},
+				{DisplayName: stringPtr("Charlie"), SuggestedMatch: &SuggestedMatch{Confidence: 0.90}},
+				{DisplayName: stringPtr("Dan"), SuggestedMatch: &SuggestedMatch{Confidence: 0.70}},
+			},
+			expectedOrder: []string{"Charlie", "Dan", "Alice", "Bob", "Zara"},
+		},
+		{
+			name: "equal confidence - stable ordering",
+			candidates: []ImportCandidateResponse{
+				{DisplayName: stringPtr("Alice"), SuggestedMatch: &SuggestedMatch{Confidence: 0.75}},
+				{DisplayName: stringPtr("Bob"), SuggestedMatch: &SuggestedMatch{Confidence: 0.75}},
+			},
+			// With equal confidence, sort.Slice is not guaranteed to be stable,
+			// but we just check both are before any non-matches
+			expectedOrder: []string{"Alice", "Bob"}, // May vary due to non-stable sort
+		},
+		{
+			name:          "empty candidates",
+			candidates:    []ImportCandidateResponse{},
+			expectedOrder: []string{},
+		},
+		{
+			name: "single candidate with match",
+			candidates: []ImportCandidateResponse{
+				{DisplayName: stringPtr("Alice"), SuggestedMatch: &SuggestedMatch{Confidence: 0.80}},
+			},
+			expectedOrder: []string{"Alice"},
+		},
+		{
+			name: "single candidate without match",
+			candidates: []ImportCandidateResponse{
+				{DisplayName: stringPtr("Alice"), SuggestedMatch: nil},
+			},
+			expectedOrder: []string{"Alice"},
+		},
+		{
+			name: "empty names sort to end (issue #129)",
+			candidates: []ImportCandidateResponse{
+				{DisplayName: nil, SuggestedMatch: nil},                // Empty - should be last
+				{DisplayName: stringPtr("Bob"), SuggestedMatch: nil},   // Named
+				{DisplayName: stringPtr("Alice"), SuggestedMatch: nil}, // Named
+				{DisplayName: stringPtr(""), SuggestedMatch: nil},      // Empty string - should be last
+			},
+			expectedOrder: []string{"Alice", "Bob", "", ""},
+		},
+		{
+			name: "empty names after named, matches before all (issue #129)",
+			candidates: []ImportCandidateResponse{
+				{DisplayName: nil, SuggestedMatch: nil},                                              // Empty - last
+				{DisplayName: stringPtr("Zara"), SuggestedMatch: nil},                                // Named - after matches
+				{DisplayName: stringPtr("Alice"), SuggestedMatch: &SuggestedMatch{Confidence: 0.80}}, // Match - first
+				{DisplayName: stringPtr(""), SuggestedMatch: nil},                                    // Empty - last
+			},
+			expectedOrder: []string{"Alice", "Zara", "", ""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Apply the same sorting logic as ListImportCandidates
+			sort.Slice(tt.candidates, func(i, j int) bool {
+				iMatch := tt.candidates[i].SuggestedMatch
+				jMatch := tt.candidates[j].SuggestedMatch
+
+				// Both have matches: sort by confidence descending
+				if iMatch != nil && jMatch != nil {
+					return iMatch.Confidence > jMatch.Confidence
+				}
+
+				// One has match: matched comes first
+				if iMatch != nil {
+					return true
+				}
+				if jMatch != nil {
+					return false
+				}
+
+				// Neither has match: sort alphabetically by display name, empty names last
+				iName := getCandidateDisplayName(tt.candidates[i].DisplayName, tt.candidates[i].FirstName, tt.candidates[i].LastName)
+				jName := getCandidateDisplayName(tt.candidates[j].DisplayName, tt.candidates[j].FirstName, tt.candidates[j].LastName)
+
+				// Empty names sort to end
+				if iName == "" && jName != "" {
+					return false
+				}
+				if iName != "" && jName == "" {
+					return true
+				}
+				return iName < jName
+			})
+
+			// Skip order validation for equal confidence case (non-deterministic)
+			if tt.name == "equal confidence - stable ordering" {
+				// Just verify both still have matches
+				assert.NotNil(t, tt.candidates[0].SuggestedMatch)
+				assert.NotNil(t, tt.candidates[1].SuggestedMatch)
+				return
+			}
+
+			// Extract resulting order
+			resultOrder := make([]string, len(tt.candidates))
+			for i, c := range tt.candidates {
+				if c.DisplayName != nil {
+					resultOrder[i] = *c.DisplayName
+				}
+			}
+
+			assert.Equal(t, tt.expectedOrder, resultOrder)
+		})
+	}
+}
+
+// TestGetCandidateDisplayName tests the helper function for extracting display names
+func TestGetCandidateDisplayName(t *testing.T) {
+	tests := []struct {
+		name        string
+		displayName *string
+		firstName   *string
+		lastName    *string
+		expected    string
+	}{
+		{
+			name:        "display name only",
+			displayName: stringPtr("John Smith"),
+			expected:    "John Smith",
+		},
+		{
+			name:        "display name takes precedence over first/last",
+			displayName: stringPtr("Johnny"),
+			firstName:   stringPtr("John"),
+			lastName:    stringPtr("Smith"),
+			expected:    "Johnny",
+		},
+		{
+			name:      "first and last name",
+			firstName: stringPtr("John"),
+			lastName:  stringPtr("Smith"),
+			expected:  "John Smith",
+		},
+		{
+			name:      "first name only",
+			firstName: stringPtr("John"),
+			expected:  "John",
+		},
+		{
+			name:     "last name only",
+			lastName: stringPtr("Smith"),
+			expected: "Smith",
+		},
+		{
+			name:     "all nil - returns empty",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getCandidateDisplayName(tt.displayName, tt.firstName, tt.lastName)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestPaginationAfterSorting tests that pagination works correctly after in-memory sorting
+func TestPaginationAfterSorting(t *testing.T) {
+	tests := []struct {
+		name          string
+		totalItems    int
+		page          int
+		limit         int
+		expectedStart int
+		expectedEnd   int
+		expectedCount int
+	}{
+		{
+			name:          "first page",
+			totalItems:    50,
+			page:          1,
+			limit:         20,
+			expectedStart: 0,
+			expectedEnd:   20,
+			expectedCount: 20,
+		},
+		{
+			name:          "middle page",
+			totalItems:    50,
+			page:          2,
+			limit:         20,
+			expectedStart: 20,
+			expectedEnd:   40,
+			expectedCount: 20,
+		},
+		{
+			name:          "last partial page",
+			totalItems:    50,
+			page:          3,
+			limit:         20,
+			expectedStart: 40,
+			expectedEnd:   50,
+			expectedCount: 10,
+		},
+		{
+			name:          "page beyond total - empty",
+			totalItems:    50,
+			page:          10,
+			limit:         20,
+			expectedStart: 50,
+			expectedEnd:   50,
+			expectedCount: 0,
+		},
+		{
+			name:          "empty total",
+			totalItems:    0,
+			page:          1,
+			limit:         20,
+			expectedStart: 0,
+			expectedEnd:   0,
+			expectedCount: 0,
+		},
+		{
+			name:          "single item",
+			totalItems:    1,
+			page:          1,
+			limit:         20,
+			expectedStart: 0,
+			expectedEnd:   1,
+			expectedCount: 1,
+		},
+		{
+			name:          "exact page boundary",
+			totalItems:    40,
+			page:          2,
+			limit:         20,
+			expectedStart: 20,
+			expectedEnd:   40,
+			expectedCount: 20,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the pagination logic from ListImportCandidates
+			total := int64(tt.totalItems)
+			offset := (tt.page - 1) * tt.limit
+			end := offset + tt.limit
+
+			if offset > int(total) {
+				offset = int(total)
+			}
+			if end > int(total) {
+				end = int(total)
+			}
+
+			assert.Equal(t, tt.expectedStart, offset, "offset mismatch")
+			assert.Equal(t, tt.expectedEnd, end, "end mismatch")
+			assert.Equal(t, tt.expectedCount, end-offset, "count mismatch")
+		})
+	}
+}
+
+// TestTotalPagesCalculation tests the total pages calculation
+func TestTotalPagesCalculation(t *testing.T) {
+	tests := []struct {
+		name          string
+		total         int64
+		limit         int
+		expectedPages int
+	}{
+		{
+			name:          "exact multiple",
+			total:         40,
+			limit:         20,
+			expectedPages: 2,
+		},
+		{
+			name:          "with remainder",
+			total:         45,
+			limit:         20,
+			expectedPages: 3,
+		},
+		{
+			name:          "single page",
+			total:         15,
+			limit:         20,
+			expectedPages: 1,
+		},
+		{
+			name:          "empty",
+			total:         0,
+			limit:         20,
+			expectedPages: 0,
+		},
+		{
+			name:          "exactly one page",
+			total:         20,
+			limit:         20,
+			expectedPages: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the totalPages calculation from ListImportCandidates
+			totalPages := int(tt.total) / tt.limit
+			if int(tt.total)%tt.limit > 0 {
+				totalPages++
+			}
+
+			assert.Equal(t, tt.expectedPages, totalPages)
+		})
+	}
+}
 
 // TestMatchScoring_OnlyCountMatchableMethodTypes is a regression test for issue #101
 // The bug was that totalMethods was incremented for ALL contact methods (including telegram,

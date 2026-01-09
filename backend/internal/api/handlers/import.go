@@ -35,6 +35,13 @@ const (
 	// Range: 0.0-1.0, typically 0.4 (40% of final score)
 	// Must satisfy: NameSimilarityWeight + ContactMethodWeight = 1.0
 	ContactMethodWeight = 0.4
+
+	// MaxCandidatesForSorting is the maximum number of candidates to fetch for sorting.
+	// We fetch all candidates (up to this limit) to enable global sorting by confidence
+	// score across all pages. This is necessary because confidence scores are calculated
+	// in-memory via findBestMatch() and cannot be sorted at the database level.
+	// This matches the limit used in the contacts list endpoint.
+	MaxCandidatesForSorting = 10000
 )
 
 // ImportHandler handles import candidate HTTP requests
@@ -114,29 +121,28 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 	if limit < 1 || limit > 100 {
 		limit = 20
 	}
-	offset := int32((page - 1) * limit)
 
 	// Check for source filter
 	source := c.Query("source")
 
 	var contacts []repository.ExternalContact
-	var total int64
 	var err error
 
+	// Fetch all candidates up to MaxCandidatesForSorting to enable global sorting
+	// by confidence score across all pages. We can't use DB pagination here because
+	// confidence scores are calculated in-memory via findBestMatch().
 	if source != "" {
-		contacts, err = h.externalRepo.ListUnmatched(ctx, source, int32(limit), offset)
+		contacts, err = h.externalRepo.ListUnmatched(ctx, source, MaxCandidatesForSorting, 0)
 		if err != nil {
 			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list candidates", err.Error())
 			return
 		}
-		total, _ = h.externalRepo.CountUnmatched(ctx, source)
 	} else {
-		contacts, err = h.externalRepo.ListAllUnmatched(ctx, int32(limit), offset)
+		contacts, err = h.externalRepo.ListAllUnmatched(ctx, MaxCandidatesForSorting, 0)
 		if err != nil {
 			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list candidates", err.Error())
 			return
 		}
-		total, _ = h.externalRepo.CountAllUnmatched(ctx)
 	}
 
 	// Convert to response format with suggested matches
@@ -148,19 +154,63 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 		candidates = append(candidates, candidate)
 	}
 
-	// Sort candidates: those with suggested matches first
+	// Sort candidates: by confidence descending, then alphabetically for those without matches
 	sort.Slice(candidates, func(i, j int) bool {
-		hasMatchI := candidates[i].SuggestedMatch != nil
-		hasMatchJ := candidates[j].SuggestedMatch != nil
-		// Items with matches come first
-		return hasMatchI && !hasMatchJ
+		iMatch := candidates[i].SuggestedMatch
+		jMatch := candidates[j].SuggestedMatch
+
+		// Both have matches: sort by confidence descending
+		if iMatch != nil && jMatch != nil {
+			return iMatch.Confidence > jMatch.Confidence
+		}
+
+		// One has match: matched comes first
+		if iMatch != nil {
+			return true
+		}
+		if jMatch != nil {
+			return false
+		}
+
+		// Neither has match: sort alphabetically by display name, empty names last
+		iName := getCandidateDisplayName(candidates[i].DisplayName, candidates[i].FirstName, candidates[i].LastName)
+		jName := getCandidateDisplayName(candidates[j].DisplayName, candidates[j].FirstName, candidates[j].LastName)
+
+		// Empty names sort to end
+		if iName == "" && jName != "" {
+			return false
+		}
+		if iName != "" && jName == "" {
+			return true
+		}
+		return iName < jName
 	})
 
-	api.SendSuccess(c, http.StatusOK, candidates, &api.Meta{
+	// Apply pagination after sorting
+	total := int64(len(candidates))
+	offset := (page - 1) * limit
+	end := offset + limit
+
+	if offset > int(total) {
+		offset = int(total)
+	}
+	if end > int(total) {
+		end = int(total)
+	}
+
+	paginatedCandidates := candidates[offset:end]
+
+	totalPages := int(total) / limit
+	if int(total)%limit > 0 {
+		totalPages++
+	}
+
+	api.SendSuccess(c, http.StatusOK, paginatedCandidates, &api.Meta{
 		Pagination: &api.PaginationMeta{
 			Page:  page,
 			Limit: limit,
 			Total: total,
+			Pages: totalPages,
 		},
 	})
 }
@@ -547,4 +597,21 @@ func (h *ImportHandler) toImportCandidateResponse(contact *repository.ExternalCo
 	}
 
 	return response
+}
+
+// getCandidateDisplayName extracts the display name from response fields for sorting
+func getCandidateDisplayName(displayName, firstName, lastName *string) string {
+	if displayName != nil {
+		return *displayName
+	}
+	if firstName != nil && lastName != nil {
+		return *firstName + " " + *lastName
+	}
+	if firstName != nil {
+		return *firstName
+	}
+	if lastName != nil {
+		return *lastName
+	}
+	return ""
 }
