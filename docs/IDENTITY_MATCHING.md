@@ -114,6 +114,13 @@ Phone numbers are normalized to E.164 format:
 3. If 11 digits starting with `1`, treat as US with country code
 4. Otherwise, preserve the digits with `+` prefix
 
+### Shared Matching Utilities
+
+Normalization and fuzzy scoring utilities live in `backend/internal/matching` and are reused by:
+- IdentityService (exact identifier matching)
+- Import candidate matching (looser phone normalization)
+- Calendar attendee fuzzy matching (weighted scoring)
+
 ---
 
 ## Database Schema

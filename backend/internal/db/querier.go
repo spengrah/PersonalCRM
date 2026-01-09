@@ -29,6 +29,7 @@ type Querier interface {
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	CountReminders(ctx context.Context) (int64, error)
+	CountSearchContacts(ctx context.Context, plaintoTsquery string) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error)
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
@@ -126,6 +127,7 @@ type Querier interface {
 	ListContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactMethod, error)
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error)
+	ListContactsSorted(ctx context.Context, arg ListContactsSortedParams) ([]*Contact, error)
 	ListDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) ([]*ListDueRemindersRow, error)
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
@@ -164,6 +166,7 @@ type Querier interface {
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error)
+	SearchContactsSorted(ctx context.Context, arg SearchContactsSortedParams) ([]*Contact, error)
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteReminder(ctx context.Context, id pgtype.UUID) error

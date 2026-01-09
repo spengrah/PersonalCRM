@@ -94,6 +94,11 @@ make clean
 
 When running in production mode (`make start-local`), always use `make reload` after making code changes. This rebuilds AND restarts the services. Using `make build` alone will NOT restart running processes, causing stale code to be served.
 
+## Backend Notes
+
+- Contact list sorting/pagination is handled in SQL (`backend/internal/db/queries/contact.sql`) using the `sort` and `order` query params.
+- Fuzzy matching weights and normalization helpers are centralized in `backend/internal/matching`.
+
 ## Authentication & Security
 
 ### API Key Setup

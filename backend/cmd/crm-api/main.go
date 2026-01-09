@@ -91,6 +91,7 @@ func main() {
 	// Initialize services
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, reminderRepo)
 	reminderService := service.NewReminderService(reminderRepo, contactRepo)
+	importMatchService := service.NewImportMatchService(contactRepo)
 
 	// Initialize external sync components (feature-flagged)
 	var syncService *service.SyncService
@@ -163,7 +164,7 @@ func main() {
 		identityHandler = handlers.NewIdentityHandler(identityService)
 
 		// Initialize import handler
-		importHandler = handlers.NewImportHandler(externalContactRepo, contactRepo, contactService, enrichmentService)
+		importHandler = handlers.NewImportHandler(externalContactRepo, contactService, importMatchService, enrichmentService)
 
 		logger.Info().Msg("external sync infrastructure enabled")
 	}

@@ -22,6 +22,24 @@ func (q *Queries) CountContacts(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const CountSearchContacts = `-- name: CountSearchContacts :one
+SELECT COUNT(*) FROM contact c
+LEFT JOIN (
+  SELECT contact_id, string_agg(value, ' ') AS method_values
+  FROM contact_method
+  GROUP BY contact_id
+) cm ON cm.contact_id = c.id
+WHERE c.deleted_at IS NULL
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
+`
+
+func (q *Queries) CountSearchContacts(ctx context.Context, plaintoTsquery string) (int64, error) {
+	row := q.db.QueryRow(ctx, CountSearchContacts, plaintoTsquery)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const CreateContact = `-- name: CreateContact :one
 INSERT INTO contact (
   full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, notes, created_at
@@ -213,6 +231,66 @@ func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*
 	return items, nil
 }
 
+const ListContactsSorted = `-- name: ListContactsSorted :many
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, notes FROM contact
+WHERE deleted_at IS NULL
+ORDER BY
+  CASE WHEN $1 = 'name' AND $2 = 'asc' THEN full_name END ASC,
+  CASE WHEN $1 = 'name' AND $2 = 'desc' THEN full_name END DESC,
+  CASE WHEN $1 = 'location' AND $2 = 'asc' THEN COALESCE(location, '') END ASC,
+  CASE WHEN $1 = 'location' AND $2 = 'desc' THEN COALESCE(location, '') END DESC,
+  CASE WHEN $1 = 'birthday' AND $2 = 'asc' THEN birthday END ASC NULLS LAST,
+  CASE WHEN $1 = 'birthday' AND $2 = 'desc' THEN birthday END DESC NULLS FIRST,
+  CASE WHEN $1 = 'last_contacted' AND $2 = 'asc' THEN last_contacted END ASC NULLS LAST,
+  CASE WHEN $1 = 'last_contacted' AND $2 = 'desc' THEN last_contacted END DESC NULLS FIRST
+LIMIT $4 OFFSET $3
+`
+
+type ListContactsSortedParams struct {
+	SortField  interface{} `json:"sort_field"`
+	SortOrder  interface{} `json:"sort_order"`
+	PageOffset int32       `json:"page_offset"`
+	PageLimit  int32       `json:"page_limit"`
+}
+
+func (q *Queries) ListContactsSorted(ctx context.Context, arg ListContactsSortedParams) ([]*Contact, error) {
+	rows, err := q.db.Query(ctx, ListContactsSorted,
+		arg.SortField,
+		arg.SortOrder,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*Contact{}
+	for rows.Next() {
+		var i Contact
+		if err := rows.Scan(
+			&i.ID,
+			&i.FullName,
+			&i.Location,
+			&i.Birthday,
+			&i.HowMet,
+			&i.Cadence,
+			&i.LastContacted,
+			&i.ProfilePhoto,
+			&i.DeletedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Notes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const SearchContacts = `-- name: SearchContacts :many
 SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.notes FROM contact c
 LEFT JOIN (
@@ -237,6 +315,74 @@ type SearchContactsParams struct {
 
 func (q *Queries) SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error) {
 	rows, err := q.db.Query(ctx, SearchContacts, arg.PlaintoTsquery, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*Contact{}
+	for rows.Next() {
+		var i Contact
+		if err := rows.Scan(
+			&i.ID,
+			&i.FullName,
+			&i.Location,
+			&i.Birthday,
+			&i.HowMet,
+			&i.Cadence,
+			&i.LastContacted,
+			&i.ProfilePhoto,
+			&i.DeletedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Notes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SearchContactsSorted = `-- name: SearchContactsSorted :many
+SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.notes FROM contact c
+LEFT JOIN (
+  SELECT contact_id, string_agg(value, ' ') AS method_values
+  FROM contact_method
+  GROUP BY contact_id
+) cm ON cm.contact_id = c.id
+WHERE c.deleted_at IS NULL
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
+ORDER BY
+  CASE WHEN $2 = 'name' AND $3 = 'asc' THEN c.full_name END ASC,
+  CASE WHEN $2 = 'name' AND $3 = 'desc' THEN c.full_name END DESC,
+  CASE WHEN $2 = 'location' AND $3 = 'asc' THEN COALESCE(c.location, '') END ASC,
+  CASE WHEN $2 = 'location' AND $3 = 'desc' THEN COALESCE(c.location, '') END DESC,
+  CASE WHEN $2 = 'birthday' AND $3 = 'asc' THEN c.birthday END ASC NULLS LAST,
+  CASE WHEN $2 = 'birthday' AND $3 = 'desc' THEN c.birthday END DESC NULLS FIRST,
+  CASE WHEN $2 = 'last_contacted' AND $3 = 'asc' THEN c.last_contacted END ASC NULLS LAST,
+  CASE WHEN $2 = 'last_contacted' AND $3 = 'desc' THEN c.last_contacted END DESC NULLS FIRST
+LIMIT $5 OFFSET $4
+`
+
+type SearchContactsSortedParams struct {
+	SearchQuery string      `json:"search_query"`
+	SortField   interface{} `json:"sort_field"`
+	SortOrder   interface{} `json:"sort_order"`
+	PageOffset  int32       `json:"page_offset"`
+	PageLimit   int32       `json:"page_limit"`
+}
+
+func (q *Queries) SearchContactsSorted(ctx context.Context, arg SearchContactsSortedParams) ([]*Contact, error) {
+	rows, err := q.db.Query(ctx, SearchContactsSorted,
+		arg.SearchQuery,
+		arg.SortField,
+		arg.SortOrder,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}

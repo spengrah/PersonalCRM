@@ -187,6 +187,15 @@ if result.ContactID != nil {
 
 **Normalization is automatic** — the service normalizes all identifiers before matching.
 
+### Fuzzy Matching Utilities
+
+Use shared helpers in `backend/internal/matching` instead of re-implementing normalization or scoring:
+
+- `matching.ImportConfig` and `matching.CalendarConfig` define weights and thresholds.
+- `matching.NormalizeEmail` handles lowercasing + trim.
+- `matching.NormalizePhoneE164` is for identity matching and storage.
+- `matching.NormalizePhoneLoose` is for heuristic import matching.
+
 ### Error Wrapping Pattern
 
 ```go
@@ -962,4 +971,3 @@ ORDER BY count DESC;
 *For full feature development process, see [`.ai/development.md`](./development.md)*
 
 *For architecture rationale, see [`.ai/architecture.md`](./architecture.md)*
-

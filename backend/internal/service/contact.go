@@ -70,6 +70,24 @@ func (s *ContactService) ListContacts(ctx context.Context, params repository.Lis
 	return contacts, nil
 }
 
+func (s *ContactService) ListContactsPage(ctx context.Context, params repository.ListContactsParams) ([]repository.Contact, int64, error) {
+	contacts, err := s.contactRepo.ListContacts(ctx, params)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if err := s.attachMethodsToContacts(ctx, contacts); err != nil {
+		return nil, 0, err
+	}
+
+	total, err := s.contactRepo.CountContacts(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return contacts, total, nil
+}
+
 func (s *ContactService) SearchContacts(ctx context.Context, params repository.SearchContactsParams) ([]repository.Contact, error) {
 	contacts, err := s.contactRepo.SearchContacts(ctx, params)
 	if err != nil {
@@ -81,6 +99,24 @@ func (s *ContactService) SearchContacts(ctx context.Context, params repository.S
 	}
 
 	return contacts, nil
+}
+
+func (s *ContactService) SearchContactsPage(ctx context.Context, params repository.SearchContactsParams) ([]repository.Contact, int64, error) {
+	contacts, err := s.contactRepo.SearchContacts(ctx, params)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if err := s.attachMethodsToContacts(ctx, contacts); err != nil {
+		return nil, 0, err
+	}
+
+	total, err := s.contactRepo.CountSearchContacts(ctx, params.Query)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return contacts, total, nil
 }
 
 func (s *ContactService) CreateContact(ctx context.Context, req repository.CreateContactRequest, methods []ContactMethodInput) (contact *repository.Contact, err error) {
