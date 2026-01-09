@@ -64,8 +64,10 @@ type UpdateContactRequest struct {
 
 // ListContactsParams represents parameters for listing contacts
 type ListContactsParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+	Limit  int32  `json:"limit"`
+	Offset int32  `json:"offset"`
+	Sort   string `json:"sort,omitempty"`
+	Order  string `json:"order,omitempty"`
 }
 
 // SearchContactsParams represents parameters for searching contacts
@@ -73,6 +75,8 @@ type SearchContactsParams struct {
 	Query  string `json:"query"`
 	Limit  int32  `json:"limit"`
 	Offset int32  `json:"offset"`
+	Sort   string `json:"sort,omitempty"`
+	Order  string `json:"order,omitempty"`
 }
 
 // convertDbContact converts a database contact to a repository contact
@@ -138,10 +142,24 @@ func (r *ContactRepository) GetContact(ctx context.Context, id uuid.UUID) (*Cont
 
 // ListContacts retrieves a paginated list of contacts
 func (r *ContactRepository) ListContacts(ctx context.Context, params ListContactsParams) ([]Contact, error) {
-	dbContacts, err := r.queries.ListContacts(ctx, db.ListContactsParams{
-		Limit:  params.Limit,
-		Offset: params.Offset,
-	})
+	var (
+		dbContacts []*db.Contact
+		err        error
+	)
+
+	if params.Sort != "" {
+		dbContacts, err = r.queries.ListContactsSorted(ctx, db.ListContactsSortedParams{
+			SortField:  params.Sort,
+			SortOrder:  params.Order,
+			PageOffset: params.Offset,
+			PageLimit:  params.Limit,
+		})
+	} else {
+		dbContacts, err = r.queries.ListContacts(ctx, db.ListContactsParams{
+			Limit:  params.Limit,
+			Offset: params.Offset,
+		})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -156,11 +174,26 @@ func (r *ContactRepository) ListContacts(ctx context.Context, params ListContact
 
 // SearchContacts searches for contacts by query
 func (r *ContactRepository) SearchContacts(ctx context.Context, params SearchContactsParams) ([]Contact, error) {
-	dbContacts, err := r.queries.SearchContacts(ctx, db.SearchContactsParams{
-		PlaintoTsquery: params.Query,
-		Limit:          params.Limit,
-		Offset:         params.Offset,
-	})
+	var (
+		dbContacts []*db.Contact
+		err        error
+	)
+
+	if params.Sort != "" {
+		dbContacts, err = r.queries.SearchContactsSorted(ctx, db.SearchContactsSortedParams{
+			SearchQuery: params.Query,
+			SortField:   params.Sort,
+			SortOrder:   params.Order,
+			PageOffset:  params.Offset,
+			PageLimit:   params.Limit,
+		})
+	} else {
+		dbContacts, err = r.queries.SearchContacts(ctx, db.SearchContactsParams{
+			PlaintoTsquery: params.Query,
+			Limit:          params.Limit,
+			Offset:         params.Offset,
+		})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +271,11 @@ func (r *ContactRepository) HardDeleteContact(ctx context.Context, id uuid.UUID)
 // CountContacts returns the total number of active contacts
 func (r *ContactRepository) CountContacts(ctx context.Context) (int64, error) {
 	return r.queries.CountContacts(ctx)
+}
+
+// CountSearchContacts returns the total number of contacts matching a search query.
+func (r *ContactRepository) CountSearchContacts(ctx context.Context, query string) (int64, error) {
+	return r.queries.CountSearchContacts(ctx, query)
 }
 
 // ContactMatch represents a potential contact match with similarity score

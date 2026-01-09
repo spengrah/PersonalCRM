@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -352,22 +351,29 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 		query.Order = "asc"
 	}
 
-	var contacts []repository.Contact
-	var err error
+	var (
+		contacts []repository.Contact
+		total    int64
+		err      error
+	)
 
-	// Fetch all contacts (we'll sort and paginate in memory)
+	offset := int32((query.Page - 1) * query.Limit)
+	limit := int32(query.Limit)
+
 	if query.Search != "" {
-		// Search contacts - fetch all to allow sorting
-		contacts, err = h.contactService.SearchContacts(c.Request.Context(), repository.SearchContactsParams{
+		contacts, total, err = h.contactService.SearchContactsPage(c.Request.Context(), repository.SearchContactsParams{
 			Query:  query.Search,
-			Limit:  10000, // Large limit to get all search results
-			Offset: 0,
+			Limit:  limit,
+			Offset: offset,
+			Sort:   query.Sort,
+			Order:  query.Order,
 		})
 	} else {
-		// List all contacts
-		contacts, err = h.contactService.ListContacts(c.Request.Context(), repository.ListContactsParams{
-			Limit:  10000, // Large limit to get all contacts
-			Offset: 0,
+		contacts, total, err = h.contactService.ListContactsPage(c.Request.Context(), repository.ListContactsParams{
+			Limit:  limit,
+			Offset: offset,
+			Sort:   query.Sort,
+			Order:  query.Order,
 		})
 	}
 
@@ -376,73 +382,9 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 		return
 	}
 
-	// Apply sorting if requested
-	if query.Sort != "" {
-		sort.Slice(contacts, func(i, j int) bool {
-			var less bool
-			switch query.Sort {
-			case "name":
-				less = contacts[i].FullName < contacts[j].FullName
-			case "location":
-				loc1 := ""
-				loc2 := ""
-				if contacts[i].Location != nil {
-					loc1 = *contacts[i].Location
-				}
-				if contacts[j].Location != nil {
-					loc2 = *contacts[j].Location
-				}
-				less = loc1 < loc2
-			case "birthday":
-				// Handle nil birthdays - put them at the end
-				if contacts[i].Birthday == nil && contacts[j].Birthday == nil {
-					less = false
-				} else if contacts[i].Birthday == nil {
-					less = false
-				} else if contacts[j].Birthday == nil {
-					less = true
-				} else {
-					less = contacts[i].Birthday.Before(*contacts[j].Birthday)
-				}
-			case "last_contacted":
-				// Handle nil last_contacted - put them at the end
-				if contacts[i].LastContacted == nil && contacts[j].LastContacted == nil {
-					less = false
-				} else if contacts[i].LastContacted == nil {
-					less = false
-				} else if contacts[j].LastContacted == nil {
-					less = true
-				} else {
-					less = contacts[i].LastContacted.Before(*contacts[j].LastContacted)
-				}
-			default:
-				less = contacts[i].FullName < contacts[j].FullName
-			}
-
-			if query.Order == "desc" {
-				return !less
-			}
-			return less
-		})
-	}
-
-	// Apply pagination after sorting
-	total := int64(len(contacts))
-	offset := (query.Page - 1) * query.Limit
-	end := offset + query.Limit
-
-	if offset > int(total) {
-		offset = int(total)
-	}
-	if end > int(total) {
-		end = int(total)
-	}
-
-	paginatedContacts := contacts[offset:end]
-
 	// Convert to response format
-	responses := make([]ContactResponse, len(paginatedContacts))
-	for i, contact := range paginatedContacts {
+	responses := make([]ContactResponse, len(contacts))
+	for i, contact := range contacts {
 		responses[i] = contactToResponse(&contact)
 	}
 

@@ -2,9 +2,9 @@ package handlers
 
 import (
 	"sort"
-	"strings"
 	"testing"
 
+	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -61,9 +61,9 @@ func TestMatchScoring_EmailNormalization(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Build email sets like the handler does
 			set1 := make(map[string]bool)
-			set1[toLower(tt.email1)] = true
+			set1[matching.NormalizeEmail(tt.email1)] = true
 
-			matched := set1[toLower(tt.email2)]
+			matched := set1[matching.NormalizeEmail(tt.email2)]
 			assert.Equal(t, tt.match, matched)
 		})
 	}
@@ -113,9 +113,9 @@ func TestMatchScoring_PhoneNormalization(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Build phone sets like the handler does
 			set1 := make(map[string]bool)
-			set1[normalizePhone(tt.phone1)] = true
+			set1[matching.NormalizePhoneLoose(tt.phone1)] = true
 
-			matched := set1[normalizePhone(tt.phone2)]
+			matched := set1[matching.NormalizePhoneLoose(tt.phone2)]
 			assert.Equal(t, tt.match, matched)
 		})
 	}
@@ -175,16 +175,10 @@ func TestMatchScoring_WeightedScore(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Calculate score like the handler does
-			score := tt.nameSimilarity * 0.6
-
-			if tt.totalMethods > 0 {
-				methodScore := float64(tt.methodMatches) / float64(tt.totalMethods)
-				score += methodScore * 0.4
-			}
+			score := matching.ImportConfig.Score(tt.nameSimilarity, tt.methodMatches, tt.totalMethods)
 
 			assert.InDelta(t, tt.expectedScore, score, 0.01)
-			assert.Equal(t, tt.meetsThreshold, score >= 0.5)
+			assert.Equal(t, tt.meetsThreshold, score >= matching.ImportConfig.ConfidenceThreshold)
 		})
 	}
 }
@@ -292,8 +286,7 @@ func TestMatchScoring_MultipleMatches(t *testing.T) {
 
 	for i := range matches {
 		match := &matches[i]
-		// Calculate score
-		score := match.similarity * 0.6
+		score := matching.ImportConfig.Score(match.similarity, 0, 0)
 		methodCount := 0
 		methodMatches := 0
 		if match.emailMatch {
@@ -305,10 +298,10 @@ func TestMatchScoring_MultipleMatches(t *testing.T) {
 			methodMatches++
 		}
 		if methodCount > 0 {
-			score += (float64(methodMatches) / float64(methodCount)) * 0.4
+			score = matching.ImportConfig.Score(match.similarity, methodMatches, methodCount)
 		}
 
-		if score >= 0.5 && score > bestScore {
+		if score >= matching.ImportConfig.ConfidenceThreshold && score > bestScore {
 			bestScore = score
 			bestMatch = match
 		}
@@ -325,11 +318,7 @@ func stringPtr(s string) *string {
 	return &s
 }
 
-func toLower(s string) string {
-	return strings.ToLower(s)
-}
-
-// normalizePhone is now defined in import.go and used by both production code and tests
+// normalizePhone is now centralized in matching.NormalizePhoneLoose
 
 // TestCandidateSorting_ByConfidence tests the sorting logic for import candidates (issue #122)
 // Candidates should be sorted by confidence score descending, with those without matches
@@ -817,11 +806,11 @@ func TestMatchScoring_OnlyCountMatchableMethodTypes(t *testing.T) {
 			// Build candidate sets like the handler does
 			candidateEmails := make(map[string]bool)
 			for _, email := range tt.candidateEmails {
-				candidateEmails[strings.ToLower(email)] = true
+				candidateEmails[matching.NormalizeEmail(email)] = true
 			}
 			candidatePhones := make(map[string]bool)
 			for _, phone := range tt.candidatePhones {
-				candidatePhones[normalizePhone(phone)] = true
+				candidatePhones[matching.NormalizePhoneLoose(phone)] = true
 			}
 
 			var methodMatches int
@@ -832,12 +821,12 @@ func TestMatchScoring_OnlyCountMatchableMethodTypes(t *testing.T) {
 				switch method.Type {
 				case "email_personal", "email_work":
 					totalMethods++
-					if candidateEmails[strings.ToLower(method.Value)] {
+					if candidateEmails[matching.NormalizeEmail(method.Value)] {
 						methodMatches++
 					}
 				case "phone":
 					totalMethods++
-					if candidatePhones[normalizePhone(method.Value)] {
+					if candidatePhones[matching.NormalizePhoneLoose(method.Value)] {
 						methodMatches++
 					}
 				}

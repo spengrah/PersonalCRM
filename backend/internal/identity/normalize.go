@@ -5,6 +5,8 @@ package identity
 import (
 	"regexp"
 	"strings"
+
+	"personal-crm/backend/internal/matching"
 )
 
 // IdentifierType represents the type of external identifier
@@ -53,46 +55,13 @@ func Normalize(raw string, idType IdentifierType) string {
 
 // normalizeEmail normalizes an email address by lowercasing and trimming whitespace
 func normalizeEmail(email string) string {
-	return strings.ToLower(strings.TrimSpace(email))
+	return matching.NormalizeEmail(email)
 }
 
 // normalizePhone normalizes a phone number to E.164 format.
 // It strips all non-digit characters and ensures proper country code handling.
 func normalizePhone(phone string) string {
-	phone = strings.TrimSpace(phone)
-	if phone == "" {
-		return ""
-	}
-
-	// Check if it starts with + (international format)
-	hasPlus := strings.HasPrefix(phone, "+")
-
-	// Remove all non-digit characters
-	digits := nonDigitRegex.ReplaceAllString(phone, "")
-	if digits == "" {
-		return ""
-	}
-
-	// Handle US/Canada numbers (10 digits without country code)
-	// Assume US if 10 digits and no + prefix
-	if len(digits) == 10 && !hasPlus {
-		return "+1" + digits
-	}
-
-	// Handle numbers that already include country code
-	if len(digits) == 11 && digits[0] == '1' {
-		// US/Canada with leading 1
-		return "+" + digits
-	}
-
-	// For other international numbers, preserve the + if it was there
-	if hasPlus {
-		return "+" + digits
-	}
-
-	// If no + and not a recognized format, just prefix with +
-	// This handles international numbers without + prefix
-	return "+" + digits
+	return matching.NormalizePhoneE164(phone)
 }
 
 // normalizeTelegram normalizes a Telegram handle by removing @ prefix and lowercasing

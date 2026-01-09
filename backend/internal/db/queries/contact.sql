@@ -9,6 +9,20 @@ SELECT * FROM contact
 WHERE deleted_at IS NULL
 LIMIT $1 OFFSET $2;
 
+-- name: ListContactsSorted :many
+SELECT * FROM contact
+WHERE deleted_at IS NULL
+ORDER BY
+  CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN full_name END ASC,
+  CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'desc' THEN full_name END DESC,
+  CASE WHEN sqlc.arg(sort_field) = 'location' AND sqlc.arg(sort_order) = 'asc' THEN COALESCE(location, '') END ASC,
+  CASE WHEN sqlc.arg(sort_field) = 'location' AND sqlc.arg(sort_order) = 'desc' THEN COALESCE(location, '') END DESC,
+  CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'asc' THEN birthday END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'desc' THEN birthday END DESC NULLS FIRST,
+  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'asc' THEN last_contacted END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN last_contacted END DESC NULLS FIRST
+LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
+
 -- name: SearchContacts :many
 SELECT c.* FROM contact c
 LEFT JOIN (
@@ -23,6 +37,26 @@ ORDER BY ts_rank(
   plainto_tsquery('english', $1)
 ) DESC
 LIMIT $2 OFFSET $3;
+
+-- name: SearchContactsSorted :many
+SELECT c.* FROM contact c
+LEFT JOIN (
+  SELECT contact_id, string_agg(value, ' ') AS method_values
+  FROM contact_method
+  GROUP BY contact_id
+) cm ON cm.contact_id = c.id
+WHERE c.deleted_at IS NULL
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
+ORDER BY
+  CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN c.full_name END ASC,
+  CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'desc' THEN c.full_name END DESC,
+  CASE WHEN sqlc.arg(sort_field) = 'location' AND sqlc.arg(sort_order) = 'asc' THEN COALESCE(c.location, '') END ASC,
+  CASE WHEN sqlc.arg(sort_field) = 'location' AND sqlc.arg(sort_order) = 'desc' THEN COALESCE(c.location, '') END DESC,
+  CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'asc' THEN c.birthday END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'desc' THEN c.birthday END DESC NULLS FIRST,
+  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'asc' THEN c.last_contacted END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN c.last_contacted END DESC NULLS FIRST
+LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: CreateContact :one
 INSERT INTO contact (
@@ -61,6 +95,16 @@ DELETE FROM contact WHERE id = $1;
 
 -- name: CountContacts :one
 SELECT COUNT(*) FROM contact WHERE deleted_at IS NULL;
+
+-- name: CountSearchContacts :one
+SELECT COUNT(*) FROM contact c
+LEFT JOIN (
+  SELECT contact_id, string_agg(value, ' ') AS method_values
+  FROM contact_method
+  GROUP BY contact_id
+) cm ON cm.contact_id = c.id
+WHERE c.deleted_at IS NULL
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1);
 
 -- name: FindSimilarContacts :many
 SELECT
