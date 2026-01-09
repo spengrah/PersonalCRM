@@ -340,6 +340,7 @@ desktop/src-tauri/target
 desktop/src-tauri/target/release/bundle
 core
 core
+Personal CRM.app/
 
 # Claude cache (local)
 .claude/cache/
