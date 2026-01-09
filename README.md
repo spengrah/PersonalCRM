@@ -570,7 +570,6 @@ Deploy updates automatically via GitHub Actions when you push to main.
 personal-crm/
 ├── frontend/           # Next.js React application (includes E2E tests)
 ├── backend/            # Go API server (includes unit & integration tests)
-├── desktop/            # Tauri app (Rust)
 ├── infra/              # Docker Compose & infrastructure
 └── docs/               # Documentation
 ```
