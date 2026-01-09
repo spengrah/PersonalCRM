@@ -172,9 +172,17 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 			return false
 		}
 
-		// Neither has match: sort alphabetically by display name
+		// Neither has match: sort alphabetically by display name, empty names last
 		iName := getCandidateDisplayName(candidates[i].DisplayName, candidates[i].FirstName, candidates[i].LastName)
 		jName := getCandidateDisplayName(candidates[j].DisplayName, candidates[j].FirstName, candidates[j].LastName)
+
+		// Empty names sort to end
+		if iName == "" && jName != "" {
+			return false
+		}
+		if iName != "" && jName == "" {
+			return true
+		}
 		return iName < jName
 	})
 

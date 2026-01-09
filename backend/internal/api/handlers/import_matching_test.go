@@ -407,6 +407,26 @@ func TestCandidateSorting_ByConfidence(t *testing.T) {
 			},
 			expectedOrder: []string{"Alice"},
 		},
+		{
+			name: "empty names sort to end (issue #129)",
+			candidates: []ImportCandidateResponse{
+				{DisplayName: nil, SuggestedMatch: nil},                // Empty - should be last
+				{DisplayName: stringPtr("Bob"), SuggestedMatch: nil},   // Named
+				{DisplayName: stringPtr("Alice"), SuggestedMatch: nil}, // Named
+				{DisplayName: stringPtr(""), SuggestedMatch: nil},      // Empty string - should be last
+			},
+			expectedOrder: []string{"Alice", "Bob", "", ""},
+		},
+		{
+			name: "empty names after named, matches before all (issue #129)",
+			candidates: []ImportCandidateResponse{
+				{DisplayName: nil, SuggestedMatch: nil},                                              // Empty - last
+				{DisplayName: stringPtr("Zara"), SuggestedMatch: nil},                                // Named - after matches
+				{DisplayName: stringPtr("Alice"), SuggestedMatch: &SuggestedMatch{Confidence: 0.80}}, // Match - first
+				{DisplayName: stringPtr(""), SuggestedMatch: nil},                                    // Empty - last
+			},
+			expectedOrder: []string{"Alice", "Zara", "", ""},
+		},
 	}
 
 	for _, tt := range tests {
@@ -429,9 +449,17 @@ func TestCandidateSorting_ByConfidence(t *testing.T) {
 					return false
 				}
 
-				// Neither has match: sort alphabetically by display name
+				// Neither has match: sort alphabetically by display name, empty names last
 				iName := getCandidateDisplayName(tt.candidates[i].DisplayName, tt.candidates[i].FirstName, tt.candidates[i].LastName)
 				jName := getCandidateDisplayName(tt.candidates[j].DisplayName, tt.candidates[j].FirstName, tt.candidates[j].LastName)
+
+				// Empty names sort to end
+				if iName == "" && jName != "" {
+					return false
+				}
+				if iName != "" && jName == "" {
+					return true
+				}
 				return iName < jName
 			})
 
