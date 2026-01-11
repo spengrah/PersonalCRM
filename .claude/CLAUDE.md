@@ -32,6 +32,20 @@ make lint                # Run all linters
 
 📖 *Detailed: @.ai/development.md*
 
+## Development
+
+**Before pushing any changes**, run the full test suite locally:
+```bash
+make test                # All backend tests (unit + integration)
+make test-e2e            # Playwright E2E tests
+```
+
+This catches issues that CI would flag, avoiding multiple push-fix-push cycles.
+
+**Integration tests suffice for unit tests** when unit tests would require heavy mock infrastructure. If the codebase doesn't have mock interfaces for repositories, write integration tests that exercise the real code path rather than creating mock infrastructure for a single test file.
+
+**Before using repository methods**, read the actual repository code to verify method names and signatures. Don't assume - grep or read the file first.
+
 ## Git
 
 Commits must be signed. Pre-commit hook auto-formats code (gofmt, prettier) and re-stages - it never blocks.
@@ -65,6 +79,8 @@ if errors.Is(err, db.ErrNotFound) {
     return
 }
 ```
+
+**Error propagation in services:** When a service method performs multiple operations, don't silently ignore failures. Either fail-fast on the first error, or collect all errors and return them to the caller. Users should know when operations partially fail.
 
 **Soft deletes:** All queries must filter `WHERE deleted_at IS NULL`
 
@@ -107,6 +123,7 @@ frontend/
 | Missing `deleted_at IS NULL` in queries | All queries must filter soft deletes |
 | Comparing errors with `==` | Use `errors.Is(err, db.ErrNotFound)` |
 | Querying DB directly | `docker exec crm-postgres psql -U crm_user -d personal_crm -c "..."` |
+| Assuming repository method names | Read the repository file first - e.g., `SoftDeleteContact` not `DeleteContact` |
 
 📖 *Detailed: @.ai/reviewers.md*
 

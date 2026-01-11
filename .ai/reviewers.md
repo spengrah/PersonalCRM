@@ -43,6 +43,7 @@ REQUEST CHANGES if ANY of these apply:
 - Missing or insufficient test coverage
 - Tests don't cover edge cases
 - No integration tests for cross-component changes
+- **Exception:** Integration tests are acceptable in place of unit tests when unit tests would require creating heavy mock infrastructure (e.g., mock interfaces for repositories that don't exist in the codebase). Integration tests that exercise real code paths provide higher confidence than mock-based tests.
 
 **Performance:**
 - Performance concerns or inefficiencies
