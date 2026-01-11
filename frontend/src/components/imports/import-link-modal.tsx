@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { ChevronLeft, ChevronRight, X, UserPlus, Link2, Ban } from 'lucide-react'
+import { ChevronLeft, ChevronRight, UserPlus, Link2, Ban } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Button } from '@/components/ui/button'
 import { ContactSelector } from '@/components/ui/contact-selector'
@@ -16,7 +16,7 @@ import {
   areNamesSimilar,
 } from '@/lib/method-conflict-detection'
 import type { ImportCandidate, SelectedMethod, MethodComparison } from '@/types/import'
-import type { ContactMethodType, Contact } from '@/types/contact'
+import type { ContactMethodType } from '@/types/contact'
 
 // Trusted domains for photo URLs
 const TRUSTED_PHOTO_DOMAINS = ['googleusercontent.com', 'google.com', 'gstatic.com']
