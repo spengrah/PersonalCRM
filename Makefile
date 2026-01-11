@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e deploy setup-pi dev-native postgres-native sqlc
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e e2e-db deploy setup-pi dev-native postgres-native sqlc
 
 # Go build cache (workspace-local by default; override via env).
 GOCACHE ?= $(CURDIR)/.gocache
@@ -167,19 +167,22 @@ dev-native: postgres-native
 	@echo "Press Ctrl+C to exit (servers will keep running)"
 	@tail -f logs/frontend-dev.log logs/backend-dev.log 2>/dev/null || sleep infinity
 
-test-e2e: docker-up
+test-e2e: e2e-db
 	@echo "Running Playwright E2E tests..."
-	@ENV_FILE=$${ENV_FILE:-.env.example.testing}; \
+	@ENV_FILE=$${ENV_FILE:-$(CURDIR)/.env.example.testing}; \
+	if [ ! -f "$$ENV_FILE" ]; then echo "❌ ENV file not found: $$ENV_FILE"; exit 1; fi; \
 	set -a; . "$$ENV_FILE"; set +a; \
-	bash scripts/sync-postgres-auth.sh && \
 	if [ -f frontend/.env.local ]; then mv frontend/.env.local frontend/.env.local.bak; fi; \
 	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > frontend/.env.local; \
 	echo "NEXT_PUBLIC_API_URL=http://localhost:8080" >> frontend/.env.local; \
-	cd frontend && NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 bunx playwright test --project=chromium; \
+	cd frontend && PATH=/usr/bin:$$PATH NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 ./node_modules/.bin/playwright test --project=chromium; \
 	EXIT_CODE=$$?; \
 	rm -f frontend/.env.local; \
 	if [ -f frontend/.env.local.bak ]; then mv frontend/.env.local.bak frontend/.env.local; fi; \
 	exit $$EXIT_CODE
+
+e2e-db:
+	@bash scripts/ensure-postgres-for-tests.sh
 
 # Build
 build:
