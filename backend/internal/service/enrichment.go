@@ -195,11 +195,14 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 		externalValues[phone.Value] = true
 	}
 
+	// Collect errors for reporting
+	var methodErrors []string
+
 	// Process selected methods
 	for _, sel := range selectedMethods {
 		// Validate the value exists in external contact
 		if !externalValues[sel.OriginalValue] {
-			logger.Warn().Str("value", sel.OriginalValue).Msg("selected value not found in external contact")
+			methodErrors = append(methodErrors, fmt.Sprintf("value %q not found in external contact", sel.OriginalValue))
 			continue
 		}
 
@@ -220,7 +223,7 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 					Value: sel.OriginalValue,
 				})
 				if err != nil {
-					logger.Warn().Err(err).Str("value", sel.OriginalValue).Msg("failed to update method during enrichment")
+					methodErrors = append(methodErrors, fmt.Sprintf("failed to update method %s: %v", sel.OriginalValue, err))
 					continue
 				}
 				s.recordEnrichment(ctx, contact.ID, external, "method:"+sel.Type+":replaced", sel.OriginalValue)
@@ -237,13 +240,18 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 			IsPrimary: false,
 		})
 		if err != nil {
-			logger.Warn().Err(err).Str("value", sel.OriginalValue).Msg("failed to add method from enrichment")
+			methodErrors = append(methodErrors, fmt.Sprintf("failed to add method %s: %v", sel.OriginalValue, err))
 			continue
 		}
 
 		s.recordEnrichment(ctx, contact.ID, external, "method:"+sel.Type+":"+normalized, sel.OriginalValue)
 		existingNormalized[normalized] = true
 		existingByType[sel.Type] = nil // Mark type as taken (we don't need the actual method)
+	}
+
+	// Return error if any method operations failed
+	if len(methodErrors) > 0 {
+		return fmt.Errorf("method enrichment errors: %s", strings.Join(methodErrors, "; "))
 	}
 
 	return nil
