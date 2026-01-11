@@ -130,11 +130,17 @@ test.describe('Imports - Import Action', () => {
     // Verify candidate is visible
     await expect(page.getByText(displayName)).toBeVisible()
 
-    // Click Import on the candidate
+    // Click Import on the candidate to open the modal
     await page
       .getByRole('button', { name: /Import/i })
       .first()
       .click()
+
+    // Verify modal opens in import mode
+    await expect(page.getByRole('button', { name: 'Import as New' })).toBeVisible()
+
+    // Click the "Import as New Contact" button in the modal
+    await page.getByRole('button', { name: /Import as New Contact/i }).click()
 
     // Wait for the action to complete
     await page.waitForLoadState('networkidle')

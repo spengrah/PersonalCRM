@@ -547,7 +547,7 @@ export function ImportLinkModal({
                 disabled={isLoading}
               >
                 <UserPlus className="w-4 h-4 mr-1" />
-                Import
+                Import as New Contact
               </Button>
             ) : (
               <Button
@@ -556,7 +556,7 @@ export function ImportLinkModal({
                 disabled={isLoading || !selectedContactId}
               >
                 <Link2 className="w-4 h-4 mr-1" />
-                Link
+                Link Contact
               </Button>
             )}
           </div>
