@@ -20,9 +20,14 @@ DELETE FROM contact_method
 WHERE contact_id = $1;
 
 -- name: UpdateContactMethodValue :one
-UPDATE contact_method
+UPDATE contact_method cm
 SET value = $2, updated_at = NOW()
-WHERE id = $1
+WHERE cm.id = $1
+  AND EXISTS (
+    SELECT 1 FROM contact c
+    WHERE c.id = cm.contact_id
+      AND c.deleted_at IS NULL
+  )
 RETURNING *;
 
 -- name: FindMethodsByNormalizedValue :many

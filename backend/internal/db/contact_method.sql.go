@@ -150,9 +150,14 @@ func (q *Queries) ListContactMethodsByContact(ctx context.Context, contactID pgt
 }
 
 const UpdateContactMethodValue = `-- name: UpdateContactMethodValue :one
-UPDATE contact_method
+UPDATE contact_method cm
 SET value = $2, updated_at = NOW()
-WHERE id = $1
+WHERE cm.id = $1
+  AND EXISTS (
+    SELECT 1 FROM contact c
+    WHERE c.id = cm.contact_id
+      AND c.deleted_at IS NULL
+  )
 RETURNING id, contact_id, type, value, is_primary, created_at, updated_at
 `
 

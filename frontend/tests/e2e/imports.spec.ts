@@ -92,13 +92,13 @@ test.describe('Imports - With Seeded Data', () => {
     // Click the Link button on the first candidate
     await page.getByRole('button', { name: /Link/i }).first().click()
 
-    // Verify modal opens
-    await expect(page.getByText('Link to Existing Contact')).toBeVisible()
-    await expect(page.getByText('Select Contact')).toBeVisible()
+    // Verify modal opens with mode toggle and contact selector
+    await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
+    await expect(page.getByText('Search for a contact...')).toBeVisible()
 
     // Verify cancel button works
     await page.getByRole('button', { name: /Cancel/i }).click()
-    await expect(page.getByText('Link to Existing Contact')).not.toBeVisible()
+    await expect(page.getByRole('button', { name: 'Link to Existing' })).not.toBeVisible()
   })
 })
 
@@ -246,8 +246,8 @@ test.describe('Imports - Link Action', () => {
     const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: candidateName })
     await candidateCard.getByRole('button', { name: /Link/i }).click()
 
-    // Wait for modal to open
-    await expect(page.getByText('Link to Existing Contact')).toBeVisible()
+    // Wait for modal to open with mode toggle visible
+    await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
 
     // The ContactSelector is a custom searchable dropdown
     // Click on the selector area (contains placeholder text) to open it
@@ -436,8 +436,8 @@ test.describe('Imports - Suggested Matches', () => {
     // Click the Link button (which should show "Link to [Name] (XX%)")
     await candidateCard.getByRole('button', { name: /Link to/ }).click()
 
-    // Verify modal opens
-    await expect(page.getByText('Link to Existing Contact')).toBeVisible()
+    // Verify modal opens with mode toggle
+    await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
 
     // The suggested contact should be pre-selected - verify by checking the Link Contact
     // button is enabled (it's disabled when no contact is selected)
@@ -445,7 +445,7 @@ test.describe('Imports - Suggested Matches', () => {
 
     // Close modal
     await page.getByRole('button', { name: /Cancel/i }).click()
-    await expect(page.getByText('Link to Existing Contact')).not.toBeVisible()
+    await expect(page.getByRole('button', { name: 'Link to Existing' })).not.toBeVisible()
   })
 })
 
