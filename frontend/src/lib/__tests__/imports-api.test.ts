@@ -219,12 +219,35 @@ describe('importsApi', () => {
         json: async () => ({ success: true }),
       })
 
-      await importsApi.linkCandidate('ext-123', 'crm-456')
+      await importsApi.linkCandidate('ext-123', { crm_contact_id: 'crm-456' })
 
       const fetchCall = (global.fetch as any).mock.calls[0]
       expect(fetchCall[0]).toContain('/api/v1/imports/ext-123/link')
       expect(fetchCall[1].method).toBe('POST')
       expect(JSON.parse(fetchCall[1].body)).toEqual({ crm_contact_id: 'crm-456' })
+    })
+
+    it('links candidate with method selection and conflict resolutions', async () => {
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true }),
+      })
+
+      const request = {
+        crm_contact_id: 'crm-456',
+        selected_methods: [{ original_value: 'john@work.com', type: 'email_work' }],
+        conflict_resolutions: {
+          'john@work.com': 'use_external' as const,
+        },
+      }
+
+      await importsApi.linkCandidate('ext-123', request)
+
+      const fetchCall = (global.fetch as any).mock.calls[0]
+      expect(fetchCall[0]).toContain('/api/v1/imports/ext-123/link')
+      expect(fetchCall[1].method).toBe('POST')
+      expect(JSON.parse(fetchCall[1].body)).toEqual(request)
     })
   })
 

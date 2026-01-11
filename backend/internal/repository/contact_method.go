@@ -128,3 +128,17 @@ func (r *ContactMethodRepository) CreateContactMethod(ctx context.Context, req C
 func (r *ContactMethodRepository) DeleteContactMethodsByContact(ctx context.Context, contactID uuid.UUID) error {
 	return r.queries.DeleteContactMethodsByContact(ctx, uuidToPgUUID(contactID))
 }
+
+// UpdateContactMethodRequest holds parameters for updating a contact method
+type UpdateContactMethodRequest struct {
+	Value string `json:"value"`
+}
+
+// UpdateContactMethod updates a contact method's value
+func (r *ContactMethodRepository) UpdateContactMethod(ctx context.Context, id uuid.UUID, req UpdateContactMethodRequest) error {
+	_, err := r.queries.UpdateContactMethodValue(ctx, db.UpdateContactMethodValueParams{
+		ID:    uuidToPgUUID(id),
+		Value: req.Value,
+	})
+	return err
+}

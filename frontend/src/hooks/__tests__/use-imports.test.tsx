@@ -321,9 +321,29 @@ describe('use-imports hooks', () => {
         wrapper: createWrapper(queryClient),
       })
 
-      await result.current.mutateAsync('ext-123')
+      await result.current.mutateAsync({ id: 'ext-123' })
 
-      expect(mockedImportsApi.importCandidate).toHaveBeenCalledWith('ext-123')
+      expect(mockedImportsApi.importCandidate).toHaveBeenCalledWith('ext-123', undefined)
+      expect(mockedInvalidateFor).toHaveBeenCalledWith('import:imported')
+    })
+
+    it('imports candidate with method selection', async () => {
+      const mockContact = { id: 'crm-456', full_name: 'John Doe' }
+      mockedImportsApi.importCandidate.mockResolvedValueOnce(mockContact)
+
+      const { result } = renderHook(() => useImportAsContact(), {
+        wrapper: createWrapper(queryClient),
+      })
+
+      const request = {
+        selected_methods: [
+          { original_value: 'john@example.com', type: 'email_personal' },
+          { original_value: '+1234567890', type: 'phone' },
+        ],
+      }
+      await result.current.mutateAsync({ id: 'ext-123', request })
+
+      expect(mockedImportsApi.importCandidate).toHaveBeenCalledWith('ext-123', request)
       expect(mockedInvalidateFor).toHaveBeenCalledWith('import:imported')
     })
 
@@ -335,7 +355,7 @@ describe('use-imports hooks', () => {
         wrapper: createWrapper(queryClient),
       })
 
-      await result.current.mutateAsync('ext-123')
+      await result.current.mutateAsync({ id: 'ext-123' })
 
       // Check that the contact was cached
       const cachedContact = queryClient.getQueryData(['contacts', 'detail', 'crm-456'])
@@ -351,9 +371,35 @@ describe('use-imports hooks', () => {
         wrapper: createWrapper(queryClient),
       })
 
-      await result.current.mutateAsync({ id: 'ext-123', crmContactId: 'crm-456' })
+      await result.current.mutateAsync({
+        id: 'ext-123',
+        request: { crm_contact_id: 'crm-456' },
+      })
 
-      expect(mockedImportsApi.linkCandidate).toHaveBeenCalledWith('ext-123', 'crm-456')
+      expect(mockedImportsApi.linkCandidate).toHaveBeenCalledWith('ext-123', {
+        crm_contact_id: 'crm-456',
+      })
+      expect(mockedInvalidateFor).toHaveBeenCalledWith('import:linked')
+    })
+
+    it('links candidate with method selection and conflict resolutions', async () => {
+      mockedImportsApi.linkCandidate.mockResolvedValueOnce(undefined)
+
+      const { result } = renderHook(() => useLinkCandidate(), {
+        wrapper: createWrapper(queryClient),
+      })
+
+      const request = {
+        crm_contact_id: 'crm-456',
+        selected_methods: [{ original_value: 'john@example.com', type: 'email_work' }],
+        conflict_resolutions: {
+          'john@example.com': 'use_external' as const,
+        },
+      }
+
+      await result.current.mutateAsync({ id: 'ext-123', request })
+
+      expect(mockedImportsApi.linkCandidate).toHaveBeenCalledWith('ext-123', request)
       expect(mockedInvalidateFor).toHaveBeenCalledWith('import:linked')
     })
   })
