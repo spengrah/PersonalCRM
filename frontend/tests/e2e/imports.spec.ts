@@ -136,11 +136,11 @@ test.describe('Imports - Import Action', () => {
       .first()
       .click()
 
-    // Verify modal opens in import mode
-    await expect(page.getByRole('button', { name: 'Import as New' })).toBeVisible()
+    // Verify modal opens in import mode - mode toggle should be visible
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
     // Click the "Import as New Contact" button in the modal
-    await page.getByRole('button', { name: /Import as New Contact/i }).click()
+    await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
 
     // Wait for the action to complete
     await page.waitForLoadState('networkidle')
