@@ -247,9 +247,14 @@ export default function ImportsPage() {
     type: 'success' | 'error'
     message: string
   } | null>(null)
-  const [modalState, setModalState] = useState<{ open: boolean; index: number }>({
+  const [modalState, setModalState] = useState<{
+    open: boolean
+    index: number
+    mode: 'import' | 'link'
+  }>({
     open: false,
     index: 0,
+    mode: 'import',
   })
   const [actionInProgress, setActionInProgress] = useState<string | null>(null)
 
@@ -259,12 +264,12 @@ export default function ImportsPage() {
   const syncMutation = useTriggerSync()
 
   // Open the unified modal for import/link at the given index
-  const openModal = (index: number) => {
-    setModalState({ open: true, index })
+  const openModal = (index: number, mode: 'import' | 'link' = 'import') => {
+    setModalState({ open: true, index, mode })
   }
 
   const closeModal = () => {
-    setModalState({ open: false, index: 0 })
+    setModalState({ open: false, index: 0, mode: 'import' })
   }
 
   const handleIgnore = async (candidate: ImportCandidate) => {
@@ -509,8 +514,8 @@ export default function ImportsPage() {
               <CandidateCard
                 key={candidate.id}
                 candidate={candidate}
-                onImport={() => openModal(index)}
-                onLink={() => openModal(index)}
+                onImport={() => openModal(index, 'import')}
+                onLink={() => openModal(index, 'link')}
                 onIgnore={() => handleIgnore(candidate)}
                 importLoading={false}
                 ignoreLoading={actionInProgress === candidate.id && ignoreMutation.isPending}
@@ -552,6 +557,7 @@ export default function ImportsPage() {
         <ImportLinkModal
           candidates={data.candidates}
           initialIndex={modalState.index}
+          initialMode={modalState.mode}
           onClose={closeModal}
           onSuccess={message => setNotification({ type: 'success', message })}
           onError={message => setNotification({ type: 'error', message })}

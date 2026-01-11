@@ -35,6 +35,8 @@ interface ImportLinkModalProps {
   candidates: ImportCandidate[]
   /** Initial index in the candidates array */
   initialIndex: number
+  /** Initial mode - 'import' or 'link' */
+  initialMode?: 'import' | 'link'
   /** Callback when modal is closed */
   onClose: () => void
   /** Callback when an action completes successfully */
@@ -55,12 +57,13 @@ interface MethodSelection {
 export function ImportLinkModal({
   candidates,
   initialIndex,
+  initialMode = 'import',
   onClose,
   onSuccess,
   onError,
 }: ImportLinkModalProps) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex)
-  const [mode, setMode] = useState<ModalMode>('import')
+  const [mode, setMode] = useState<ModalMode>(initialMode)
   const [selectedContactId, setSelectedContactId] = useState<string | undefined>()
   const [methodSelections, setMethodSelections] = useState<Map<string, MethodSelection>>(new Map())
   const [conflictResolutions, setConflictResolutions] = useState<
