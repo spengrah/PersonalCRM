@@ -17,15 +17,8 @@ import {
 } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
-import { ContactSelector } from '@/components/ui/contact-selector'
-import { useContacts } from '@/hooks/use-contacts'
-import {
-  useImportCandidates,
-  useImportAsContact,
-  useLinkCandidate,
-  useIgnoreCandidate,
-  useTriggerSync,
-} from '@/hooks/use-imports'
+import { ImportLinkModal } from '@/components/imports/import-link-modal'
+import { useImportCandidates, useIgnoreCandidate, useTriggerSync } from '@/hooks/use-imports'
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
 import type { ImportCandidate, ImportCandidatesListParams } from '@/types/import'
 
@@ -36,7 +29,6 @@ const SOURCE_FILTERS = [
   { value: 'gcontacts', label: 'Google Contacts' },
   { value: 'gcal_attendee', label: 'Calendar' },
 ] as const
-const CONTACT_SELECTOR_LIMIT = 500
 
 // Trusted domains for photo URLs (Google profile photos)
 const TRUSTED_PHOTO_DOMAINS = ['googleusercontent.com', 'google.com', 'gstatic.com']
@@ -84,83 +76,6 @@ function Notification({
       <button onClick={onDismiss} className="text-gray-400 hover:text-gray-600">
         <X className="w-4 h-4" />
       </button>
-    </div>
-  )
-}
-
-// Link to existing contact modal
-function LinkContactModal({
-  candidate,
-  onLink,
-  onCancel,
-  loading,
-}: {
-  candidate: ImportCandidate
-  onLink: (contactId: string) => void
-  onCancel: () => void
-  loading: boolean
-}) {
-  const [selectedContactId, setSelectedContactId] = useState<string | undefined>(
-    candidate.suggested_match?.contact_id
-  )
-  const { data: contactsData } = useContacts({ limit: CONTACT_SELECTOR_LIMIT })
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (selectedContactId) {
-      onLink(selectedContactId)
-    }
-  }
-
-  const displayName =
-    candidate.display_name ||
-    [candidate.first_name, candidate.last_name].filter(Boolean).join(' ') ||
-    'Unknown'
-
-  return (
-    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-      <div className="relative top-20 mx-auto p-6 border w-full max-w-lg shadow-lg rounded-lg bg-white">
-        <div className="flex items-start justify-between mb-6">
-          <div>
-            <h3 className="text-lg font-medium text-gray-900">Link to Existing Contact</h3>
-            <p className="mt-1 text-sm text-gray-500">
-              Link <span className="font-medium">{displayName}</span> to an existing contact in your
-              CRM. Their data will be used to enrich the existing contact.
-            </p>
-          </div>
-          <button
-            type="button"
-            className="text-gray-400 hover:text-gray-600"
-            onClick={onCancel}
-            disabled={loading}
-          >
-            <X className="w-6 h-6" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit}>
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">Select Contact</label>
-            <ContactSelector
-              contacts={contactsData?.contacts || []}
-              value={selectedContactId}
-              onChange={setSelectedContactId}
-              placeholder="Search for a contact..."
-              disabled={loading}
-              showNoContactOption={false}
-            />
-          </div>
-
-          <div className="flex justify-end space-x-3">
-            <Button type="button" variant="outline" onClick={onCancel} disabled={loading}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={!selectedContactId} loading={loading}>
-              Link Contact
-            </Button>
-          </div>
-        </form>
-      </div>
     </div>
   )
 }
@@ -332,59 +247,24 @@ export default function ImportsPage() {
     type: 'success' | 'error'
     message: string
   } | null>(null)
-  const [linkModalCandidate, setLinkModalCandidate] = useState<ImportCandidate | null>(null)
+  const [modalState, setModalState] = useState<{ open: boolean; index: number }>({
+    open: false,
+    index: 0,
+  })
   const [actionInProgress, setActionInProgress] = useState<string | null>(null)
 
   const { data, isLoading, error } = useImportCandidates(params)
   const { data: googleAccounts } = useGoogleAccounts()
-  const importMutation = useImportAsContact()
-  const linkMutation = useLinkCandidate()
   const ignoreMutation = useIgnoreCandidate()
   const syncMutation = useTriggerSync()
 
-  const handleImport = async (candidate: ImportCandidate) => {
-    const displayName =
-      candidate.display_name ||
-      [candidate.first_name, candidate.last_name].filter(Boolean).join(' ') ||
-      'contact'
-
-    setActionInProgress(candidate.id)
-    try {
-      await importMutation.mutateAsync(candidate.id)
-      setNotification({
-        type: 'success',
-        message: `${displayName} imported successfully!`,
-      })
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : `Failed to import ${displayName}`
-      setNotification({
-        type: 'error',
-        message: errorMessage,
-      })
-    } finally {
-      setActionInProgress(null)
-    }
+  // Open the unified modal for import/link at the given index
+  const openModal = (index: number) => {
+    setModalState({ open: true, index })
   }
 
-  const handleLink = async (candidateId: string, crmContactId: string) => {
-    setActionInProgress(candidateId)
-    try {
-      await linkMutation.mutateAsync({ id: candidateId, crmContactId })
-      setNotification({
-        type: 'success',
-        message: 'Contact linked successfully!',
-      })
-      setLinkModalCandidate(null)
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to link contact'
-      setNotification({
-        type: 'error',
-        message: errorMessage,
-      })
-    } finally {
-      setActionInProgress(null)
-    }
+  const closeModal = () => {
+    setModalState({ open: false, index: 0 })
   }
 
   const handleIgnore = async (candidate: ImportCandidate) => {
@@ -625,14 +505,14 @@ export default function ImportsPage() {
         {/* Candidates list */}
         {!isLoading && !error && data && data.candidates.length > 0 && (
           <div className="space-y-3">
-            {data.candidates.map(candidate => (
+            {data.candidates.map((candidate, index) => (
               <CandidateCard
                 key={candidate.id}
                 candidate={candidate}
-                onImport={() => handleImport(candidate)}
-                onLink={() => setLinkModalCandidate(candidate)}
+                onImport={() => openModal(index)}
+                onLink={() => openModal(index)}
                 onIgnore={() => handleIgnore(candidate)}
-                importLoading={actionInProgress === candidate.id && importMutation.isPending}
+                importLoading={false}
                 ignoreLoading={actionInProgress === candidate.id && ignoreMutation.isPending}
               />
             ))}
@@ -667,13 +547,14 @@ export default function ImportsPage() {
         )}
       </div>
 
-      {/* Link modal */}
-      {linkModalCandidate && (
-        <LinkContactModal
-          candidate={linkModalCandidate}
-          onLink={contactId => handleLink(linkModalCandidate.id, contactId)}
-          onCancel={() => setLinkModalCandidate(null)}
-          loading={linkMutation.isPending}
+      {/* Import/Link modal */}
+      {modalState.open && data?.candidates && data.candidates.length > 0 && (
+        <ImportLinkModal
+          candidates={data.candidates}
+          initialIndex={modalState.index}
+          onClose={closeModal}
+          onSuccess={message => setNotification({ type: 'success', message })}
+          onError={message => setNotification({ type: 'error', message })}
         />
       )}
     </div>

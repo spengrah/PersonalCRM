@@ -72,9 +72,22 @@ type SuggestedMatch struct {
 	Confidence  float64 `json:"confidence"`
 }
 
+// SelectedMethodInput represents a user-selected contact method for import/link
+type SelectedMethodInput struct {
+	OriginalValue string `json:"original_value" binding:"required"`
+	Type          string `json:"type" binding:"required,oneof=email_personal email_work phone telegram signal discord twitter gchat whatsapp"`
+}
+
+// ImportRequest represents an optional request body for importing with method selection
+type ImportRequest struct {
+	SelectedMethods []SelectedMethodInput `json:"selected_methods,omitempty"`
+}
+
 // LinkRequest represents a request to link an external contact to a CRM contact
 type LinkRequest struct {
-	CRMContactID string `json:"crm_contact_id" binding:"required"`
+	CRMContactID        string                `json:"crm_contact_id" binding:"required"`
+	SelectedMethods     []SelectedMethodInput `json:"selected_methods,omitempty"`
+	ConflictResolutions map[string]string     `json:"conflict_resolutions,omitempty"` // value -> "use_crm" | "use_external"
 }
 
 // ListImportCandidates returns unmatched external contacts
@@ -236,6 +249,7 @@ func (h *ImportHandler) GetImportCandidate(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param id path string true "External contact ID"
+// @Param body body ImportRequest false "Optional method selection"
 // @Success 201 {object} api.APIResponse{data=repository.Contact}
 // @Failure 400 {object} api.APIResponse{error=api.APIError}
 // @Failure 404 {object} api.APIResponse{error=api.APIError}
@@ -249,6 +263,11 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid ID", err.Error())
 		return
 	}
+
+	// Parse optional request body for method selection
+	var req ImportRequest
+	// Ignore binding errors - empty body is valid for backward compatibility
+	_ = c.ShouldBindJSON(&req)
 
 	// Get external contact
 	external, err := h.externalRepo.GetByID(ctx, id)
@@ -282,7 +301,82 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 		return
 	}
 
-	// Build methods list
+	// Build methods list - use selected methods if provided, otherwise use auto-selection
+	var methods []service.ContactMethodInput
+	if len(req.SelectedMethods) > 0 {
+		methods = h.buildMethodsFromSelection(external, req.SelectedMethods)
+	} else {
+		methods = h.buildMethodsAuto(external)
+	}
+
+	// Build create request
+	createReq := repository.CreateContactRequest{
+		FullName:     fullName,
+		Birthday:     external.Birthday,
+		ProfilePhoto: external.PhotoURL,
+	}
+	if len(external.Addresses) > 0 && external.Addresses[0].Formatted != "" {
+		location := external.Addresses[0].Formatted
+		createReq.Location = &location
+	}
+
+	// Create the CRM contact
+	contact, err := h.contactSvc.CreateContact(ctx, createReq, methods)
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
+		return
+	}
+
+	// Update external contact to link to new CRM contact
+	if _, err := h.externalRepo.UpdateMatch(ctx, id, &contact.ID, repository.MatchStatusImported); err != nil {
+		logger.Warn().Err(err).Str("external_id", id.String()).Msg("failed to update match status after import")
+		api.SendSuccess(c, http.StatusCreated, contact, nil)
+		return
+	}
+
+	api.SendSuccess(c, http.StatusCreated, contact, nil)
+}
+
+// buildMethodsFromSelection builds contact methods from user selection
+func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalContact, selected []SelectedMethodInput) []service.ContactMethodInput {
+	// Build map of available values from external contact
+	availableValues := make(map[string]bool)
+	for _, email := range external.Emails {
+		availableValues[email.Value] = true
+	}
+	for _, phone := range external.Phones {
+		availableValues[phone.Value] = true
+	}
+
+	// Track used types to prevent duplicates
+	usedTypes := make(map[string]bool)
+	methods := make([]service.ContactMethodInput, 0, len(selected))
+
+	for _, sel := range selected {
+		// Validate the value exists in external contact
+		if !availableValues[sel.OriginalValue] {
+			logger.Warn().Str("value", sel.OriginalValue).Msg("selected value not found in external contact")
+			continue
+		}
+
+		// Skip duplicate types
+		if usedTypes[sel.Type] {
+			logger.Warn().Str("type", sel.Type).Msg("duplicate type in selection, skipping")
+			continue
+		}
+
+		methods = append(methods, service.ContactMethodInput{
+			Type:  sel.Type,
+			Value: sel.OriginalValue,
+		})
+		usedTypes[sel.Type] = true
+	}
+
+	return methods
+}
+
+// buildMethodsAuto builds contact methods using automatic selection (legacy behavior)
+func (h *ImportHandler) buildMethodsAuto(external *repository.ExternalContact) []service.ContactMethodInput {
 	methods := make([]service.ContactMethodInput, 0)
 
 	// Handle emails - we can only store 2 emails (email_personal and email_work)
@@ -330,32 +424,7 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 		})
 	}
 
-	// Build create request
-	createReq := repository.CreateContactRequest{
-		FullName:     fullName,
-		Birthday:     external.Birthday,
-		ProfilePhoto: external.PhotoURL,
-	}
-	if len(external.Addresses) > 0 && external.Addresses[0].Formatted != "" {
-		location := external.Addresses[0].Formatted
-		createReq.Location = &location
-	}
-
-	// Create the CRM contact
-	contact, err := h.contactSvc.CreateContact(ctx, createReq, methods)
-	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
-		return
-	}
-
-	// Update external contact to link to new CRM contact
-	if _, err := h.externalRepo.UpdateMatch(ctx, id, &contact.ID, repository.MatchStatusImported); err != nil {
-		logger.Warn().Err(err).Str("external_id", id.String()).Msg("failed to update match status after import")
-		api.SendSuccess(c, http.StatusCreated, contact, nil)
-		return
-	}
-
-	api.SendSuccess(c, http.StatusCreated, contact, nil)
+	return methods
 }
 
 // LinkContact links an external contact to an existing CRM contact
@@ -410,17 +479,42 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 		return
 	}
 
-	// Enrich the CRM contact
-	if err := h.enricher.EnrichContactFromExternal(ctx, crmContactID, updated); err != nil {
+	// Enrich the CRM contact - use method selections if provided
+	var enrichErr error
+	if len(req.SelectedMethods) > 0 || len(req.ConflictResolutions) > 0 {
+		enrichErr = h.enricher.EnrichContactFromExternalWithSelections(
+			ctx,
+			crmContactID,
+			updated,
+			toEnrichmentMethodSelections(req.SelectedMethods),
+			req.ConflictResolutions,
+		)
+	} else {
+		enrichErr = h.enricher.EnrichContactFromExternal(ctx, crmContactID, updated)
+	}
+
+	if enrichErr != nil {
 		// If there are contact method conflicts, return as user-facing error
-		if strings.Contains(err.Error(), "contact method conflicts") {
-			api.SendError(c, http.StatusConflict, api.ErrCodeValidation, "Cannot link: "+err.Error(), "")
+		if strings.Contains(enrichErr.Error(), "contact method conflicts") {
+			api.SendError(c, http.StatusConflict, api.ErrCodeValidation, "Cannot link: "+enrichErr.Error(), "")
 			return
 		}
-		logger.Warn().Err(err).Str("external_id", id.String()).Msg("enrichment failed during link")
+		logger.Warn().Err(enrichErr).Str("external_id", id.String()).Msg("enrichment failed during link")
 	}
 
 	api.SendSuccess(c, http.StatusOK, updated, nil)
+}
+
+// toEnrichmentMethodSelections converts handler selections to service format
+func toEnrichmentMethodSelections(selections []SelectedMethodInput) []service.MethodSelection {
+	result := make([]service.MethodSelection, len(selections))
+	for i, sel := range selections {
+		result[i] = service.MethodSelection{
+			OriginalValue: sel.OriginalValue,
+			Type:          sel.Type,
+		}
+	}
+	return result
 }
 
 // IgnoreContact marks an external contact as ignored

@@ -148,3 +148,30 @@ func (q *Queries) ListContactMethodsByContact(ctx context.Context, contactID pgt
 	}
 	return items, nil
 }
+
+const UpdateContactMethodValue = `-- name: UpdateContactMethodValue :one
+UPDATE contact_method
+SET value = $2, updated_at = NOW()
+WHERE id = $1
+RETURNING id, contact_id, type, value, is_primary, created_at, updated_at
+`
+
+type UpdateContactMethodValueParams struct {
+	ID    pgtype.UUID `json:"id"`
+	Value string      `json:"value"`
+}
+
+func (q *Queries) UpdateContactMethodValue(ctx context.Context, arg UpdateContactMethodValueParams) (*ContactMethod, error) {
+	row := q.db.QueryRow(ctx, UpdateContactMethodValue, arg.ID, arg.Value)
+	var i ContactMethod
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Type,
+		&i.Value,
+		&i.IsPrimary,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}

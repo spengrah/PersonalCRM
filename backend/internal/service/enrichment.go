@@ -12,6 +12,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// MethodSelection represents a user-selected method for enrichment
+type MethodSelection struct {
+	OriginalValue string
+	Type          string
+}
+
 // EnrichmentService handles contact enrichment from external sources
 type EnrichmentService struct {
 	contactRepo    *repository.ContactRepository
@@ -88,6 +94,156 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 	// Enrich contact methods (emails, phones)
 	if err := s.enrichContactMethods(ctx, contact, external); err != nil {
 		logger.Warn().Err(err).Msg("failed to enrich contact methods")
+	}
+
+	return nil
+}
+
+// EnrichContactFromExternalWithSelections enriches a CRM contact with user-selected methods.
+// Unlike EnrichContactFromExternal, this uses explicit method selections and conflict resolutions.
+func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
+	ctx context.Context,
+	crmContactID uuid.UUID,
+	external *repository.ExternalContact,
+	selectedMethods []MethodSelection,
+	conflictResolutions map[string]string,
+) error {
+	// Get current contact
+	contact, err := s.contactRepo.GetContact(ctx, crmContactID)
+	if err != nil {
+		return err
+	}
+
+	// Track what needs updating
+	needsUpdate := false
+	updateReq := repository.UpdateContactRequest{
+		FullName:     contact.FullName,
+		Location:     contact.Location,
+		Birthday:     contact.Birthday,
+		HowMet:       contact.HowMet,
+		Cadence:      contact.Cadence,
+		ProfilePhoto: contact.ProfilePhoto,
+	}
+
+	// Enrich profile photo if CRM contact has none
+	if contact.ProfilePhoto == nil && external.PhotoURL != nil && *external.PhotoURL != "" {
+		updateReq.ProfilePhoto = external.PhotoURL
+		needsUpdate = true
+		s.recordEnrichment(ctx, crmContactID, external, "profile_photo", *external.PhotoURL)
+	}
+
+	// Enrich birthday if CRM contact has none
+	if contact.Birthday == nil && external.Birthday != nil {
+		updateReq.Birthday = external.Birthday
+		needsUpdate = true
+		s.recordEnrichment(ctx, crmContactID, external, "birthday", external.Birthday.Format("2006-01-02"))
+	}
+
+	// Enrich location from addresses if CRM contact has none
+	if contact.Location == nil && len(external.Addresses) > 0 && external.Addresses[0].Formatted != "" {
+		location := external.Addresses[0].Formatted
+		updateReq.Location = &location
+		needsUpdate = true
+		s.recordEnrichment(ctx, crmContactID, external, "location", location)
+	}
+
+	// Apply updates to contact if any enrichment occurred
+	if needsUpdate {
+		if _, err := s.contactRepo.UpdateContact(ctx, crmContactID, updateReq); err != nil {
+			logger.Warn().Err(err).Msg("failed to update contact with enrichments")
+		}
+	}
+
+	// Enrich contact methods using selections
+	if err := s.enrichContactMethodsWithSelections(ctx, contact, external, selectedMethods, conflictResolutions); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// enrichContactMethodsWithSelections adds methods based on user selection and conflict resolution
+func (s *EnrichmentService) enrichContactMethodsWithSelections(
+	ctx context.Context,
+	contact *repository.Contact,
+	external *repository.ExternalContact,
+	selectedMethods []MethodSelection,
+	conflictResolutions map[string]string,
+) error {
+	// Get existing methods
+	existingMethods, err := s.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
+	if err != nil {
+		return err
+	}
+
+	// Build maps for existing methods
+	existingByType := make(map[string]*repository.ContactMethod)
+	existingNormalized := make(map[string]bool)
+	for i := range existingMethods {
+		m := &existingMethods[i]
+		existingByType[m.Type] = m
+		normalized := identity.Normalize(m.Value, mapMethodTypeToIdentifier(m.Type))
+		existingNormalized[normalized] = true
+	}
+
+	// Build map of available values from external contact
+	externalValues := make(map[string]bool)
+	for _, email := range external.Emails {
+		externalValues[email.Value] = true
+	}
+	for _, phone := range external.Phones {
+		externalValues[phone.Value] = true
+	}
+
+	// Process selected methods
+	for _, sel := range selectedMethods {
+		// Validate the value exists in external contact
+		if !externalValues[sel.OriginalValue] {
+			logger.Warn().Str("value", sel.OriginalValue).Msg("selected value not found in external contact")
+			continue
+		}
+
+		// Check if value is already in CRM (normalized)
+		identType := mapMethodTypeToIdentifier(sel.Type)
+		normalized := identity.Normalize(sel.OriginalValue, identType)
+		if existingNormalized[normalized] {
+			continue // Already have this value
+		}
+
+		// Check if type slot is taken
+		if existingMethod, exists := existingByType[sel.Type]; exists {
+			// Type conflict - check resolution
+			resolution := conflictResolutions[sel.OriginalValue]
+			if resolution == "use_external" {
+				// Replace CRM value with external value
+				err := s.methodRepo.UpdateContactMethod(ctx, existingMethod.ID, repository.UpdateContactMethodRequest{
+					Value: sel.OriginalValue,
+				})
+				if err != nil {
+					logger.Warn().Err(err).Str("value", sel.OriginalValue).Msg("failed to update method during enrichment")
+					continue
+				}
+				s.recordEnrichment(ctx, contact.ID, external, "method:"+sel.Type+":replaced", sel.OriginalValue)
+			}
+			// If resolution is "use_crm" or empty, keep existing value (no action)
+			continue
+		}
+
+		// Type slot is available - add the method
+		_, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+			ContactID: contact.ID,
+			Type:      sel.Type,
+			Value:     sel.OriginalValue,
+			IsPrimary: false,
+		})
+		if err != nil {
+			logger.Warn().Err(err).Str("value", sel.OriginalValue).Msg("failed to add method from enrichment")
+			continue
+		}
+
+		s.recordEnrichment(ctx, contact.ID, external, "method:"+sel.Type+":"+normalized, sel.OriginalValue)
+		existingNormalized[normalized] = true
+		existingByType[sel.Type] = nil // Mark type as taken (we don't need the actual method)
 	}
 
 	return nil

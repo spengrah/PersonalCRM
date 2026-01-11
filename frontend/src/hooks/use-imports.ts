@@ -1,7 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { importsApi } from '@/lib/imports-api'
 import { contactKeys, importKeys, invalidateFor } from '@/lib/query-invalidation'
-import type { ImportCandidatesListParams } from '@/types/import'
+import type {
+  ImportCandidatesListParams,
+  ImportContactRequest,
+  LinkContactRequest,
+} from '@/types/import'
 
 // Re-export importKeys for backward compatibility
 export { importKeys }
@@ -25,11 +29,13 @@ export function useImportCandidate(id: string) {
 }
 
 // Import candidate as new CRM contact
+// Supports optional method selection for enhanced UI
 export function useImportAsContact() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (id: string) => importsApi.importCandidate(id),
+    mutationFn: ({ id, request }: { id: string; request?: ImportContactRequest }) =>
+      importsApi.importCandidate(id, request),
     onSuccess: newContact => {
       // Populate the contact detail cache with the new contact
       queryClient.setQueryData(contactKeys.detail(newContact.id), newContact)
@@ -39,10 +45,11 @@ export function useImportAsContact() {
 }
 
 // Link candidate to existing CRM contact
+// Supports method selection and conflict resolutions for enhanced UI
 export function useLinkCandidate() {
   return useMutation({
-    mutationFn: ({ id, crmContactId }: { id: string; crmContactId: string }) =>
-      importsApi.linkCandidate(id, crmContactId),
+    mutationFn: ({ id, request }: { id: string; request: LinkContactRequest }) =>
+      importsApi.linkCandidate(id, request),
     onSuccess: () => {
       invalidateFor('import:linked')
     },

@@ -19,6 +19,12 @@ INSERT INTO contact_method (
 DELETE FROM contact_method
 WHERE contact_id = $1;
 
+-- name: UpdateContactMethodValue :one
+UPDATE contact_method
+SET value = $2, updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+
 -- name: FindMethodsByNormalizedValue :many
 SELECT cm.*, c.full_name as contact_name
 FROM contact_method cm

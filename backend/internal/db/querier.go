@@ -174,6 +174,7 @@ type Querier interface {
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
+	UpdateContactMethodValue(ctx context.Context, arg UpdateContactMethodValueParams) (*ContactMethod, error)
 	UpdateExternalContactDuplicate(ctx context.Context, arg UpdateExternalContactDuplicateParams) error
 	UpdateExternalContactMatch(ctx context.Context, arg UpdateExternalContactMatchParams) (*ExternalContact, error)
 	UpdateIdentityMessageCount(ctx context.Context, arg UpdateIdentityMessageCountParams) (*ExternalIdentity, error)
