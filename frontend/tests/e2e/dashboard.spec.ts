@@ -5,8 +5,8 @@ test.describe('Dashboard', () => {
   test('should display dashboard with navigation', async ({ page }) => {
     await page.goto('/')
 
-    // Should redirect to dashboard
-    await expect(page).toHaveURL('/dashboard')
+    // Should redirect to dashboard (client-side redirect via useEffect)
+    await expect(page).toHaveURL('/dashboard', { timeout: 10000 })
 
     // Wait for page to fully load
     await page.waitForLoadState('networkidle')
