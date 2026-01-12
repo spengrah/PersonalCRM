@@ -49,7 +49,7 @@ export function ConflictResolver({
             'flex-1 p-3 rounded-lg border cursor-pointer transition-all',
             resolution === 'use_crm'
               ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200'
-              : 'border-gray-200 bg-white hover:border-gray-300',
+              : 'border-gray-200 bg-white hover:border-gray-400 hover:bg-gray-50',
             disabled && 'opacity-50 cursor-not-allowed'
           )}
         >
@@ -80,7 +80,7 @@ export function ConflictResolver({
             'flex-1 p-3 rounded-lg border cursor-pointer transition-all',
             resolution === 'use_external'
               ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200'
-              : 'border-gray-200 bg-white hover:border-gray-300',
+              : 'border-gray-200 bg-white hover:border-gray-400 hover:bg-gray-50',
             disabled && 'opacity-50 cursor-not-allowed'
           )}
         >

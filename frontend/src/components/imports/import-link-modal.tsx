@@ -1,20 +1,35 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
-import { ChevronLeft, ChevronRight, UserPlus, Link2, Ban } from 'lucide-react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import {
+  ChevronLeft,
+  ChevronRight,
+  UserPlus,
+  Link2,
+  Ban,
+  Users,
+  Calendar,
+  HelpCircle,
+} from 'lucide-react'
 import { clsx } from 'clsx'
 import { Button } from '@/components/ui/button'
 import { ContactSelector } from '@/components/ui/contact-selector'
 import { MethodSelector } from './method-selector'
 import { ConflictResolver } from './conflict-resolver'
 import { useContacts, useContact } from '@/hooks/use-contacts'
-import { useImportAsContact, useLinkCandidate, useIgnoreCandidate } from '@/hooks/use-imports'
+import {
+  useImportAsContact,
+  useLinkCandidate,
+  useIgnoreCandidate,
+  useImportCandidates,
+} from '@/hooks/use-imports'
 import { inferEmailType } from '@/lib/email-type-inference'
 import {
   detectMethodConflicts,
   getCandidateDisplayName,
   areNamesSimilar,
 } from '@/lib/method-conflict-detection'
+import { getSourceDisplay } from '@/lib/source-display'
 import type { ImportCandidate, SelectedMethod, MethodComparison } from '@/types/import'
 import type { ContactMethodType } from '@/types/contact'
 
@@ -55,7 +70,7 @@ interface MethodSelection {
 }
 
 export function ImportLinkModal({
-  candidates,
+  candidates: initialCandidates,
   initialIndex,
   initialMode = 'import',
   onClose,
@@ -69,9 +84,15 @@ export function ImportLinkModal({
   const [conflictResolutions, setConflictResolutions] = useState<
     Map<string, 'use_crm' | 'use_external'>
   >(new Map())
+  const [isTransitioning, setIsTransitioning] = useState(false)
+
+  // Fetch all candidates for the modal (not limited by page pagination)
+  const { data: allCandidatesData } = useImportCandidates({ limit: 1000 })
+  const candidates = allCandidatesData?.candidates || initialCandidates
 
   const candidate = candidates[currentIndex]
-  const displayName = getCandidateDisplayName(candidate)
+  const displayName = candidate ? getCandidateDisplayName(candidate) : ''
+  const sourceInfo = candidate ? getSourceDisplay(candidate.source) : null
 
   // Fetch contacts for link mode selector
   const { data: contactsData } = useContacts({ limit: 500 })
@@ -85,6 +106,33 @@ export function ImportLinkModal({
   const ignoreMutation = useIgnoreCandidate()
 
   const isLoading = importMutation.isPending || linkMutation.isPending || ignoreMutation.isPending
+
+  // Helper to handle successful actions - avoids code duplication
+  const handleActionSuccess = useCallback(
+    (message: string) => {
+      onSuccess(message)
+      // Close modal if this was the last candidate
+      if (candidates.length <= 1) {
+        onClose()
+      }
+    },
+    [candidates.length, onSuccess, onClose]
+  )
+
+  // Helper to handle action errors - avoids code duplication
+  const handleActionError = useCallback(
+    (error: unknown, fallbackMessage: string) => {
+      onError(error instanceof Error ? error.message : fallbackMessage)
+    },
+    [onError]
+  )
+
+  // Clamp currentIndex when candidates array shrinks (after import/link/ignore)
+  useEffect(() => {
+    if (candidates.length > 0 && currentIndex >= candidates.length) {
+      setCurrentIndex(candidates.length - 1)
+    }
+  }, [candidates.length, currentIndex])
 
   // Initialize method selections when candidate changes
   useEffect(() => {
@@ -221,6 +269,7 @@ export function ImportLinkModal({
 
   // Handle Import action
   const handleImport = async () => {
+    if (!candidate) return
     const selectedMethods = buildSelectedMethods()
 
     try {
@@ -228,22 +277,15 @@ export function ImportLinkModal({
         id: candidate.id,
         request: selectedMethods.length > 0 ? { selected_methods: selectedMethods } : undefined,
       })
-      onSuccess(`${displayName} imported successfully!`)
-
-      // Move to next candidate or close
-      if (currentIndex < candidates.length - 1) {
-        setCurrentIndex(currentIndex + 1)
-      } else {
-        onClose()
-      }
+      handleActionSuccess(`${displayName} imported successfully!`)
     } catch (error) {
-      onError(error instanceof Error ? error.message : 'Failed to import contact')
+      handleActionError(error, 'Failed to import contact')
     }
   }
 
   // Handle Link action
   const handleLink = async () => {
-    if (!selectedContactId) return
+    if (!selectedContactId || !candidate) return
 
     const selectedMethods = buildSelectedMethods()
     const resolutions: Record<string, 'use_crm' | 'use_external'> = {}
@@ -260,47 +302,69 @@ export function ImportLinkModal({
           conflict_resolutions: Object.keys(resolutions).length > 0 ? resolutions : undefined,
         },
       })
-      onSuccess('Contact linked successfully!')
-
-      // Move to next candidate or close
-      if (currentIndex < candidates.length - 1) {
-        setCurrentIndex(currentIndex + 1)
-      } else {
-        onClose()
-      }
+      handleActionSuccess('Contact linked successfully!')
     } catch (error) {
-      onError(error instanceof Error ? error.message : 'Failed to link contact')
+      handleActionError(error, 'Failed to link contact')
     }
   }
 
   // Handle Ignore action
   const handleIgnore = async () => {
+    if (!candidate) return
     try {
       await ignoreMutation.mutateAsync(candidate.id)
-      onSuccess(`${displayName} ignored`)
-
-      // Move to next candidate or close
-      if (currentIndex < candidates.length - 1) {
-        setCurrentIndex(currentIndex + 1)
-      } else {
-        onClose()
-      }
+      handleActionSuccess(`${displayName} ignored`)
     } catch (error) {
-      onError(error instanceof Error ? error.message : 'Failed to ignore contact')
+      handleActionError(error, 'Failed to ignore contact')
     }
   }
 
-  // Navigation
+  // Navigation with transitions
   const canGoBack = currentIndex > 0
   const canGoForward = currentIndex < candidates.length - 1
 
-  const goBack = () => {
-    if (canGoBack) setCurrentIndex(currentIndex - 1)
-  }
+  const navigateTo = useCallback((newIndex: number) => {
+    setIsTransitioning(true)
+    setTimeout(() => {
+      setCurrentIndex(newIndex)
+      setIsTransitioning(false)
+    }, 150)
+  }, [])
 
-  const goForward = () => {
-    if (canGoForward) setCurrentIndex(currentIndex + 1)
-  }
+  const goBack = useCallback(() => {
+    if (canGoBack && !isLoading && !isTransitioning) navigateTo(currentIndex - 1)
+  }, [canGoBack, isLoading, isTransitioning, currentIndex, navigateTo])
+
+  const goForward = useCallback(() => {
+    if (canGoForward && !isLoading && !isTransitioning) navigateTo(currentIndex + 1)
+  }, [canGoForward, isLoading, isTransitioning, currentIndex, navigateTo])
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't handle if typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return
+      }
+
+      switch (e.key) {
+        case 'Escape':
+          onClose()
+          break
+        case 'ArrowLeft':
+          e.preventDefault()
+          goBack() // goBack already checks canGoBack, isLoading, isTransitioning
+          break
+        case 'ArrowRight':
+          e.preventDefault()
+          goForward() // goForward already checks canGoForward, isLoading, isTransitioning
+          break
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose, goBack, goForward])
 
   // Separate methods by conflict status for link mode
   const nonConflictMethods = methodComparisons.filter(
@@ -310,9 +374,16 @@ export function ImportLinkModal({
     c => c.conflict_type === 'value_conflict' || c.conflict_type === 'type_conflict'
   )
 
+  // Guard against no candidate (shouldn't happen but safety check)
+  if (!candidate) {
+    return null
+  }
+
+  const SourceIcon = sourceInfo?.icon || HelpCircle
+
   return (
     <div
-      className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50"
+      className="fixed inset-0 bg-black/30 backdrop-blur-sm overflow-y-auto h-full w-full z-50"
       onClick={e => {
         if (e.target === e.currentTarget) onClose()
       }}
@@ -322,10 +393,10 @@ export function ImportLinkModal({
         <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b">
           <button
             onClick={goBack}
-            disabled={!canGoBack || isLoading}
+            disabled={!canGoBack || isLoading || isTransitioning}
             className={clsx(
               'p-1.5 rounded transition-colors',
-              canGoBack && !isLoading
+              canGoBack && !isLoading && !isTransitioning
                 ? 'text-gray-600 hover:bg-gray-200'
                 : 'text-gray-300 cursor-not-allowed'
             )}
@@ -340,10 +411,10 @@ export function ImportLinkModal({
 
           <button
             onClick={goForward}
-            disabled={!canGoForward || isLoading}
+            disabled={!canGoForward || isLoading || isTransitioning}
             className={clsx(
               'p-1.5 rounded transition-colors',
-              canGoForward && !isLoading
+              canGoForward && !isLoading && !isTransitioning
                 ? 'text-gray-600 hover:bg-gray-200'
                 : 'text-gray-300 cursor-not-allowed'
             )}
@@ -353,8 +424,13 @@ export function ImportLinkModal({
           </button>
         </div>
 
-        {/* Candidate info */}
-        <div className="px-6 py-4 border-b">
+        {/* Candidate info with transition */}
+        <div
+          className={clsx(
+            'px-6 py-4 border-b transition-opacity duration-150',
+            isTransitioning ? 'opacity-0' : 'opacity-100'
+          )}
+        >
           <div className="flex items-center gap-4">
             {candidate.photo_url && isPhotoUrlTrusted(candidate.photo_url) ? (
               <img
@@ -371,7 +447,10 @@ export function ImportLinkModal({
             )}
             <div>
               <h3 className="text-lg font-medium text-gray-900">{displayName}</h3>
-              <p className="text-sm text-gray-500">{candidate.source}</p>
+              <p className="text-sm text-gray-500 flex items-center gap-1.5">
+                <SourceIcon className="w-3.5 h-3.5" />
+                {sourceInfo?.label || candidate.source}
+              </p>
             </div>
           </div>
         </div>
@@ -428,8 +507,13 @@ export function ImportLinkModal({
           </div>
         )}
 
-        {/* Contact methods section */}
-        <div className="px-6 py-4 max-h-[40vh] overflow-y-auto">
+        {/* Contact methods section with transition */}
+        <div
+          className={clsx(
+            'px-6 py-4 max-h-[40vh] overflow-y-auto transition-opacity duration-150',
+            isTransitioning ? 'opacity-0' : 'opacity-100'
+          )}
+        >
           <h4 className="text-sm font-medium text-gray-700 mb-3">Contact Methods</h4>
 
           {candidate.emails.length === 0 && candidate.phones.length === 0 ? (
@@ -533,7 +617,7 @@ export function ImportLinkModal({
             className="text-gray-500"
           >
             <Ban className="w-4 h-4 mr-1" />
-            Ignore
+            {ignoreMutation.isPending ? 'Ignoring...' : 'Ignore'}
           </Button>
 
           <div className="flex gap-2">
@@ -547,7 +631,7 @@ export function ImportLinkModal({
                 disabled={isLoading}
               >
                 <UserPlus className="w-4 h-4 mr-1" />
-                Import as New Contact
+                {importMutation.isPending ? 'Importing...' : 'Import as New Contact'}
               </Button>
             ) : (
               <Button
@@ -556,7 +640,7 @@ export function ImportLinkModal({
                 disabled={isLoading || !selectedContactId}
               >
                 <Link2 className="w-4 h-4 mr-1" />
-                Link Contact
+                {linkMutation.isPending ? 'Linking...' : 'Link Contact'}
               </Button>
             )}
           </div>
