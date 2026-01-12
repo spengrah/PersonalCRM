@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { ChevronLeft, ChevronRight, UserPlus, Link2, Ban, HelpCircle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Button } from '@/components/ui/button'
+import { Select } from '@/components/ui/select'
 import { ContactSelector } from '@/components/ui/contact-selector'
 import { MethodSelector } from './method-selector'
 import { ConflictResolver } from './conflict-resolver'
@@ -25,6 +26,17 @@ import type { ContactMethodType } from '@/types/contact'
 
 // Trusted domains for photo URLs
 const TRUSTED_PHOTO_DOMAINS = ['googleusercontent.com', 'google.com', 'gstatic.com']
+
+// Cadence options for the dropdown
+const cadenceOptions = [
+  { value: '', label: 'No cadence' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'biweekly', label: 'Bi-weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'quarterly', label: 'Quarterly' },
+  { value: 'biannual', label: 'Bi-annual' },
+  { value: 'annual', label: 'Annual' },
+]
 
 function isPhotoUrlTrusted(url: string): boolean {
   try {
@@ -74,6 +86,7 @@ export function ImportLinkModal({
   const [conflictResolutions, setConflictResolutions] = useState<
     Map<string, 'use_crm' | 'use_external'>
   >(new Map())
+  const [selectedCadence, setSelectedCadence] = useState<string>('')
   const [isTransitioning, setIsTransitioning] = useState(false)
 
   // Fetch all candidates for the modal (not limited by page pagination)
@@ -156,6 +169,7 @@ export function ImportLinkModal({
 
     setMethodSelections(selections)
     setConflictResolutions(new Map())
+    setSelectedCadence('')
 
     // Auto-select suggested match if available
     if (candidate.suggested_match) {
@@ -187,6 +201,13 @@ export function ImportLinkModal({
       setConflictResolutions(resolutions)
     }
   }, [mode, methodComparisons])
+
+  // Pre-select the contact's existing cadence in link mode
+  useEffect(() => {
+    if (mode === 'link' && selectedContact) {
+      setSelectedCadence(selectedContact.cadence || '')
+    }
+  }, [mode, selectedContact])
 
   // Check for name mismatch in link mode
   const hasNameMismatch = useMemo(() => {
@@ -245,11 +266,18 @@ export function ImportLinkModal({
   const handleImport = async () => {
     if (!candidate) return
     const selectedMethods = buildSelectedMethods()
+    const cadence = selectedCadence || undefined
 
     try {
       await importMutation.mutateAsync({
         id: candidate.id,
-        request: selectedMethods.length > 0 ? { selected_methods: selectedMethods } : undefined,
+        request:
+          selectedMethods.length > 0 || cadence
+            ? {
+                selected_methods: selectedMethods.length > 0 ? selectedMethods : undefined,
+                cadence,
+              }
+            : undefined,
       })
       handleActionSuccess(`${displayName} imported successfully!`)
     } catch (error) {
@@ -266,6 +294,7 @@ export function ImportLinkModal({
     conflictResolutions.forEach((value, key) => {
       resolutions[key] = value
     })
+    const cadence = selectedCadence || undefined
 
     try {
       await linkMutation.mutateAsync({
@@ -274,6 +303,7 @@ export function ImportLinkModal({
           crm_contact_id: selectedContactId,
           selected_methods: selectedMethods.length > 0 ? selectedMethods : undefined,
           conflict_resolutions: Object.keys(resolutions).length > 0 ? resolutions : undefined,
+          cadence,
         },
       })
       handleActionSuccess('Contact linked successfully!')
@@ -577,6 +607,23 @@ export function ImportLinkModal({
               )}
             </div>
           )}
+        </div>
+
+        {/* Cadence selector */}
+        <div className="px-6 py-4 border-t">
+          <Select
+            label="Contact Cadence"
+            helpText="How often you want to be reminded to reach out"
+            value={selectedCadence}
+            onChange={e => setSelectedCadence(e.target.value)}
+            disabled={isLoading}
+          >
+            {cadenceOptions.map(option => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </Select>
         </div>
 
         {/* Footer actions */}

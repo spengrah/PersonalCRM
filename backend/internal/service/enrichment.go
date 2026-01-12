@@ -101,12 +101,14 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 
 // EnrichContactFromExternalWithSelections enriches a CRM contact with user-selected methods.
 // Unlike EnrichContactFromExternal, this uses explicit method selections and conflict resolutions.
+// If cadence is provided, it will update the contact's cadence.
 func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 	ctx context.Context,
 	crmContactID uuid.UUID,
 	external *repository.ExternalContact,
 	selectedMethods []MethodSelection,
 	conflictResolutions map[string]string,
+	cadence *string,
 ) error {
 	// Get current contact
 	contact, err := s.contactRepo.GetContact(ctx, crmContactID)
@@ -145,6 +147,12 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 		updateReq.Location = &location
 		needsUpdate = true
 		s.recordEnrichment(ctx, crmContactID, external, "location", location)
+	}
+
+	// Update cadence if provided
+	if cadence != nil {
+		updateReq.Cadence = cadence
+		needsUpdate = true
 	}
 
 	// Apply updates to contact if any enrichment occurred

@@ -81,6 +81,7 @@ type SelectedMethodInput struct {
 // ImportRequest represents an optional request body for importing with method selection
 type ImportRequest struct {
 	SelectedMethods []SelectedMethodInput `json:"selected_methods,omitempty"`
+	Cadence         *string               `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual"`
 }
 
 // LinkRequest represents a request to link an external contact to a CRM contact
@@ -88,6 +89,7 @@ type LinkRequest struct {
 	CRMContactID        string                `json:"crm_contact_id" binding:"required"`
 	SelectedMethods     []SelectedMethodInput `json:"selected_methods,omitempty"`
 	ConflictResolutions map[string]string     `json:"conflict_resolutions,omitempty"` // value -> "use_crm" | "use_external"
+	Cadence             *string               `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual"`
 }
 
 // ListImportCandidates returns unmatched external contacts
@@ -282,6 +284,12 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	// Ignore binding errors - empty body is valid for backward compatibility
 	_ = c.ShouldBindJSON(&req)
 
+	// Validate the request (including cadence if provided)
+	if err := h.validator.Struct(req); err != nil {
+		api.SendValidationError(c, "Validation failed", err.Error())
+		return
+	}
+
 	// Get external contact
 	external, err := h.externalRepo.GetByID(ctx, id)
 	if err != nil {
@@ -327,6 +335,7 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 		FullName:     fullName,
 		Birthday:     external.Birthday,
 		ProfilePhoto: external.PhotoURL,
+		Cadence:      req.Cadence,
 	}
 	if len(external.Addresses) > 0 && external.Addresses[0].Formatted != "" {
 		location := external.Addresses[0].Formatted
@@ -443,6 +452,12 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 		return
 	}
 
+	// Validate the request (including cadence if provided)
+	if err := h.validator.Struct(req); err != nil {
+		api.SendValidationError(c, "Validation failed", err.Error())
+		return
+	}
+
 	crmContactID, err := uuid.Parse(req.CRMContactID)
 	if err != nil {
 		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid CRM contact ID", err.Error())
@@ -469,13 +484,14 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 
 	// Enrich the CRM contact - use method selections if provided
 	var enrichErr error
-	if len(req.SelectedMethods) > 0 || len(req.ConflictResolutions) > 0 {
+	if len(req.SelectedMethods) > 0 || len(req.ConflictResolutions) > 0 || req.Cadence != nil {
 		enrichErr = h.enricher.EnrichContactFromExternalWithSelections(
 			ctx,
 			crmContactID,
 			updated,
 			toEnrichmentMethodSelections(req.SelectedMethods),
 			req.ConflictResolutions,
+			req.Cadence,
 		)
 	} else {
 		enrichErr = h.enricher.EnrichContactFromExternal(ctx, crmContactID, updated)

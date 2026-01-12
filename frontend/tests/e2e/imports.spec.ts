@@ -714,6 +714,280 @@ test.describe('Imports - Modal UX Improvements', () => {
   })
 })
 
+test.describe('Imports - Cadence Selector (Issue #152)', () => {
+  // This test verifies the cadence selector functionality in the import/link modal.
+  // Users can set or update contact cadence during import/link operations.
+
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  test('should show cadence selector in import modal', async ({ page }) => {
+    // Seed a candidate for testing
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Cadence Test Import',
+        emails: ['cadence-import@example.com'],
+      },
+    ])
+
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open import modal
+    const candidateCard = page
+      .locator('[class*="rounded-lg"]')
+      .filter({ hasText: `${testApi.prefix}-Cadence Test Import` })
+    await candidateCard.getByRole('button', { name: /Import/i }).click()
+
+    // Verify cadence selector is visible
+    await expect(page.getByText('Contact Cadence')).toBeVisible()
+    await expect(page.getByText('How often you want to be reminded to reach out')).toBeVisible()
+
+    // Verify dropdown has expected options
+    const cadenceSelect = page.locator('select').filter({ hasText: 'No cadence' })
+    await expect(cadenceSelect).toBeVisible()
+
+    // Close modal
+    await page.getByRole('button', { name: /Cancel/i }).click()
+  })
+
+  test('should import contact with selected cadence', async ({ page }) => {
+    // Seed a candidate
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Cadence Import User',
+        emails: ['cadence-import-user@example.com'],
+      },
+    ])
+
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    const displayName = `${testApi.prefix}-Cadence Import User`
+
+    // Open import modal
+    const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: displayName })
+    await candidateCard.getByRole('button', { name: /Import/i }).click()
+
+    // Wait for modal
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Select monthly cadence
+    const cadenceSelect = page.locator('select').filter({ hasText: 'No cadence' })
+    await cadenceSelect.selectOption('monthly')
+
+    // Import the contact
+    await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
+
+    // Wait for success
+    await expect(page.getByText(/imported successfully/i)).toBeVisible({ timeout: 10000 })
+
+    // Close modal if still open
+    const cancelButton = page.getByRole('button', { name: /Cancel/i })
+    if (await cancelButton.isVisible()) {
+      await cancelButton.click()
+    }
+
+    // Navigate to contacts page and verify the contact has cadence set
+    await page.goto('/contacts')
+    await page.waitForLoadState('networkidle')
+
+    // Search for the imported contact
+    const searchInput = page.getByPlaceholder('Search contacts...')
+    await searchInput.fill(testApi.prefix)
+    await page.waitForLoadState('networkidle')
+
+    // Wait for search results and click on the contact
+    const contactLink = page.getByText(displayName)
+    await expect(contactLink).toBeVisible({ timeout: 10000 })
+    await contactLink.click()
+    await page.waitForLoadState('networkidle')
+
+    // Verify cadence is displayed on detail page
+    await expect(page.getByText('Contact cadence')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('monthly')).toBeVisible({ timeout: 5000 })
+  })
+
+  test('should show cadence selector in link modal', async ({ page }) => {
+    // Seed a candidate and a target contact
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Cadence Link Candidate',
+        emails: ['cadence-link@example.com'],
+      },
+    ])
+
+    await testApi.seedOverdueContacts([
+      {
+        full_name: 'Cadence Link Target',
+        email: 'cadence-target@example.com',
+        cadence: 'quarterly',
+        days_overdue: 1,
+      },
+    ])
+
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open link modal
+    const candidateCard = page
+      .locator('[class*="rounded-lg"]')
+      .filter({ hasText: `${testApi.prefix}-Cadence Link Candidate` })
+    await candidateCard.getByRole('button', { name: /Link/i }).click()
+
+    // Wait for modal to open in link mode
+    await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
+
+    // Select a contact to link to
+    const contactSelector = page.getByText('Search for a contact...')
+    await contactSelector.click()
+    const searchInput = page.locator('input[placeholder="Search for a contact..."]')
+    await searchInput.fill(testApi.prefix)
+
+    const contactOption = page
+      .locator('[class*="cursor-pointer"]')
+      .filter({ hasText: `${testApi.prefix}-Cadence Link Target` })
+    await expect(contactOption).toBeVisible({ timeout: 5000 })
+    await contactOption.click()
+
+    // Verify cadence selector is visible and shows existing cadence
+    await expect(page.getByText('Contact Cadence')).toBeVisible()
+
+    // The selector should show the existing contact's cadence (quarterly)
+    const cadenceSelect = page.locator('select').filter({ hasText: 'Quarterly' })
+    await expect(cadenceSelect).toBeVisible()
+
+    // Close modal
+    await page.getByRole('button', { name: /Cancel/i }).click()
+  })
+
+  test('should update cadence when linking contact', async ({ page }) => {
+    // Seed a candidate and a target contact with NO cadence initially
+    // This avoids timing issues with pre-selection of existing cadence
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Link Cadence Update Test',
+        emails: ['link-update@example.com'],
+      },
+    ])
+
+    await testApi.seedOverdueContacts([
+      {
+        full_name: 'Link Cadence Target',
+        email: 'link-target@example.com',
+        cadence: 'monthly', // Use monthly, will change to weekly
+        days_overdue: 1,
+      },
+    ])
+
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open link modal
+    const candidateCard = page
+      .locator('[class*="rounded-lg"]')
+      .filter({ hasText: `${testApi.prefix}-Link Cadence Update Test` })
+    await candidateCard.getByRole('button', { name: /Link/i }).click()
+
+    // Wait for modal
+    await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
+
+    // Select the target contact
+    const contactSelector = page.getByText('Search for a contact...')
+    await contactSelector.click()
+    const searchInput = page.locator('input[placeholder="Search for a contact..."]')
+    await searchInput.fill(testApi.prefix)
+
+    const contactOption = page
+      .locator('[class*="cursor-pointer"]')
+      .filter({ hasText: `${testApi.prefix}-Link Cadence Target` })
+    await expect(contactOption).toBeVisible({ timeout: 5000 })
+    await contactOption.click()
+
+    // Wait for the cadence dropdown to be visible
+    // The Select component generates id from label: "Contact Cadence" -> "contact-cadence"
+    const cadenceSelect = page.locator('#contact-cadence')
+    await expect(cadenceSelect).toBeVisible({ timeout: 5000 })
+
+    // Wait for the contact data to load and pre-select Monthly cadence
+    await expect(cadenceSelect).toHaveValue('monthly', { timeout: 5000 })
+
+    // Change cadence to weekly
+    await cadenceSelect.selectOption('weekly')
+
+    // Verify the selection changed
+    await expect(cadenceSelect).toHaveValue('weekly')
+
+    // Click Link Contact button
+    const linkResponse = page.waitForResponse(
+      response =>
+        response.request().method() === 'POST' &&
+        response.url().includes('/api/v1/imports/') &&
+        response.url().endsWith('/link')
+    )
+    await page.getByRole('button', { name: /Link Contact/i }).click()
+    await linkResponse
+
+    // Verify success
+    await expect(page.getByText(/linked successfully/i)).toBeVisible({ timeout: 10000 })
+
+    // Navigate to the contact and verify cadence was updated
+    await page.goto('/contacts')
+    await page.waitForLoadState('networkidle')
+
+    const contactSearchInput = page.getByPlaceholder('Search contacts...')
+    await contactSearchInput.fill(`${testApi.prefix}-Link Cadence Target`)
+    await page.waitForLoadState('networkidle')
+
+    // Wait for search results and click on the contact
+    const contactLink = page.getByText(`${testApi.prefix}-Link Cadence Target`)
+    await expect(contactLink).toBeVisible({ timeout: 10000 })
+    await contactLink.click()
+    await page.waitForLoadState('networkidle')
+
+    // Verify cadence is now weekly - look for it in the contact detail section
+    await expect(page.getByText('Contact cadence')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('weekly')).toBeVisible({ timeout: 5000 })
+  })
+
+  test('should default to no cadence in import mode', async ({ page }) => {
+    // Seed a candidate
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Default Cadence Test',
+        emails: ['default-cadence@example.com'],
+      },
+    ])
+
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open import modal
+    const candidateCard = page
+      .locator('[class*="rounded-lg"]')
+      .filter({ hasText: `${testApi.prefix}-Default Cadence Test` })
+    await candidateCard.getByRole('button', { name: /Import/i }).click()
+
+    // Verify modal opens
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Verify default selection is "No cadence"
+    const cadenceSelect = page.locator('select').filter({ hasText: 'No cadence' })
+    await expect(cadenceSelect).toBeVisible()
+    await expect(cadenceSelect).toHaveValue('')
+
+    // Close modal
+    await page.getByRole('button', { name: /Cancel/i }).click()
+  })
+})
+
 test.describe('Imports - Source Filter', () => {
   test('should display source filter buttons', async ({ page }) => {
     await page.goto('/imports')

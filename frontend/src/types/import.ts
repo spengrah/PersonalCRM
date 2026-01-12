@@ -63,6 +63,7 @@ export interface SelectedMethod {
 /** Request body for importing a contact with method selection */
 export interface ImportContactRequest {
   selected_methods?: SelectedMethod[]
+  cadence?: string
 }
 
 /** Request body for linking a contact with method selection and conflict resolution */
@@ -70,6 +71,7 @@ export interface LinkContactRequest {
   crm_contact_id: string
   selected_methods?: SelectedMethod[]
   conflict_resolutions?: Record<string, 'use_crm' | 'use_external'>
+  cadence?: string
 }
 
 /** Type of conflict between external and CRM methods */

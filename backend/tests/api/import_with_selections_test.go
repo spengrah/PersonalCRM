@@ -635,6 +635,357 @@ func TestImportAPI_LinkWithMethodSelection(t *testing.T) {
 	})
 }
 
+func TestImportAPI_ImportWithCadence(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("ImportContact_WithCadence", func(t *testing.T) {
+		// Create an external contact
+		displayName := "Test Cadence Import " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "cadence-test@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Import with cadence
+		cadence := "monthly"
+		importReq := handlers.ImportRequest{
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "cadence-test@gmail.com", Type: "email"},
+			},
+			Cadence: &cadence,
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		// Verify created contact has cadence
+		contactData := response.Data.(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		// Fetch the contact to verify cadence
+		contact, err := contactRepo.GetContact(ctx, contactID)
+		require.NoError(t, err)
+		require.NotNil(t, contact.Cadence)
+		assert.Equal(t, "monthly", *contact.Cadence)
+	})
+
+	t.Run("ImportContact_WithoutCadence_DefaultsToNone", func(t *testing.T) {
+		// Create an external contact
+		displayName := "Test No Cadence Import " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "no-cadence@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Import without cadence
+		importReq := handlers.ImportRequest{
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "no-cadence@gmail.com", Type: "email"},
+			},
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		// Verify created contact has no cadence
+		contactData := response.Data.(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		// Fetch the contact to verify no cadence
+		contact, err := contactRepo.GetContact(ctx, contactID)
+		require.NoError(t, err)
+		assert.Nil(t, contact.Cadence)
+	})
+}
+
+func TestImportAPI_LinkWithCadence(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("LinkContact_WithCadence_UpdatesExisting", func(t *testing.T) {
+		// Create a CRM contact without cadence
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Test Link Cadence " + uuid.New().String()[:8],
+		})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		}()
+
+		// Create an external contact
+		displayName := "External Cadence Link " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "link-cadence@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Link with cadence
+		cadence := "weekly"
+		linkReq := handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "link-cadence@gmail.com", Type: "email"},
+			},
+			Cadence: &cadence,
+		}
+
+		jsonBody, _ := json.Marshal(linkReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/link", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		// Verify contact cadence was updated
+		updatedContact, err := contactRepo.GetContact(ctx, contact.ID)
+		require.NoError(t, err)
+		require.NotNil(t, updatedContact.Cadence)
+		assert.Equal(t, "weekly", *updatedContact.Cadence)
+	})
+
+	t.Run("LinkContact_WithCadence_OverridesExisting", func(t *testing.T) {
+		// Create a CRM contact with existing cadence
+		existingCadence := "quarterly"
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Test Override Cadence " + uuid.New().String()[:8],
+			Cadence:  &existingCadence,
+		})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		}()
+
+		// Create an external contact
+		displayName := "External Override Cadence " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "override-cadence@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Link with new cadence
+		newCadence := "biweekly"
+		linkReq := handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			Cadence:      &newCadence,
+		}
+
+		jsonBody, _ := json.Marshal(linkReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/link", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		// Verify contact cadence was updated to new value
+		updatedContact, err := contactRepo.GetContact(ctx, contact.ID)
+		require.NoError(t, err)
+		require.NotNil(t, updatedContact.Cadence)
+		assert.Equal(t, "biweekly", *updatedContact.Cadence)
+	})
+
+	t.Run("LinkContact_WithoutCadence_PreservesExisting", func(t *testing.T) {
+		// Create a CRM contact with existing cadence
+		existingCadence := "annual"
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Test Preserve Cadence " + uuid.New().String()[:8],
+			Cadence:  &existingCadence,
+		})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		}()
+
+		// Create an external contact
+		displayName := "External Preserve Cadence " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "preserve-cadence@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Link without cadence (should preserve existing)
+		linkReq := handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+		}
+
+		jsonBody, _ := json.Marshal(linkReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/link", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		// Verify contact cadence was preserved
+		updatedContact, err := contactRepo.GetContact(ctx, contact.ID)
+		require.NoError(t, err)
+		require.NotNil(t, updatedContact.Cadence)
+		assert.Equal(t, "annual", *updatedContact.Cadence)
+	})
+
+	t.Run("LinkContact_InvalidCadence", func(t *testing.T) {
+		// Create a CRM contact
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Test Invalid Link Cadence " + uuid.New().String()[:8],
+		})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		}()
+
+		// Create an external contact
+		displayName := "External Invalid Cadence " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Attempt link with invalid cadence value
+		invalidCadence := "hourly" // Not in allowed list
+		linkReq := handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			Cadence:      &invalidCadence,
+		}
+
+		jsonBody, _ := json.Marshal(linkReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/link", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// Should reject with 400 Bad Request
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.False(t, response.Success)
+		require.NotNil(t, response.Error)
+		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
+	})
+}
+
 func TestImportAPI_ImportValidation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -719,5 +1070,47 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, response.Success)
 		assert.Contains(t, response.Error.Message, "name")
+	})
+
+	t.Run("ImportContact_InvalidCadence", func(t *testing.T) {
+		// Create external contact with valid name
+		displayName := "Invalid Cadence Import Test"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "invalid-cadence@example.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Attempt import with invalid cadence value
+		invalidCadence := "daily" // Not in allowed list
+		importReq := handlers.ImportRequest{
+			Cadence: &invalidCadence,
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// Should reject with 400 Bad Request
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.False(t, response.Success)
+		require.NotNil(t, response.Error)
+		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 	})
 }
