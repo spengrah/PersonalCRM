@@ -135,7 +135,7 @@ function ContactsTable({
   }
 
   return (
-    <div className="shadow sm:rounded-lg">
+    <div className="shadow sm:rounded-lg overflow-hidden">
       <table className="min-w-full divide-y divide-gray-300">
         <thead className="bg-gray-50">
           <tr>
@@ -254,11 +254,16 @@ function ContactsTable({
                   )
                 })()}
               </td>
+              {/* Location column: max-w-[200px] balances table layout with readability.
+                  Truncated text shows full value via native title tooltip (desktop only). */}
               <td className="px-6 py-4 whitespace-nowrap">
                 {contact.location && (
-                  <div className="flex items-center text-sm text-gray-900">
-                    <MapPin className="w-4 h-4 mr-2 text-gray-400" />
-                    {contact.location}
+                  <div
+                    className="flex items-center text-sm text-gray-900 max-w-[200px]"
+                    title={contact.location}
+                  >
+                    <MapPin className="w-4 h-4 mr-2 flex-shrink-0 text-gray-400" />
+                    <span className="truncate">{contact.location}</span>
                   </div>
                 )}
               </td>

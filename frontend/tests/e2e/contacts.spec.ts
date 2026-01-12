@@ -1,6 +1,57 @@
 import { test, expect } from '@playwright/test'
 
 test.describe('Contacts', () => {
+  test('should truncate long location with tooltip in contacts table', async ({ page }) => {
+    const suffix = Date.now()
+    const fullName = `Location Test Contact ${suffix}`
+    // Create a very long location that will definitely overflow
+    const longLocation =
+      '1234 Very Long Street Name Boulevard, Extremely Long Neighborhood District, San Francisco, California 94105, United States of America'
+
+    // Create contact with long location
+    await page.goto('/contacts/new')
+    await page.getByLabel('Full Name').fill(fullName)
+    await page.getByLabel('Location').fill(longLocation)
+
+    await Promise.all([
+      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
+      page.getByRole('button', { name: 'Create Contact' }).click(),
+    ])
+
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Navigate to contacts list to see the table
+    await page.goto('/contacts')
+    await page.waitForLoadState('networkidle')
+
+    // Find the row with our contact
+    const contactRow = page.locator('tr', { has: page.getByText(fullName) })
+    await expect(contactRow).toBeVisible()
+
+    // Find the location cell with the truncation
+    const locationDiv = contactRow.locator('div[title]', { hasText: longLocation.slice(0, 20) })
+    await expect(locationDiv).toBeVisible()
+
+    // Verify the title attribute contains the full location (for tooltip)
+    await expect(locationDiv).toHaveAttribute('title', longLocation)
+
+    // Verify the text is truncated (has truncate class or text-overflow: ellipsis)
+    const truncatedSpan = locationDiv.locator('span.truncate')
+    await expect(truncatedSpan).toBeVisible()
+
+    // Cleanup: Go back to contact detail page and delete
+    await contactRow.click()
+    await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/)
+    await page.waitForLoadState('networkidle')
+
+    page.once('dialog', dialog => dialog.accept())
+    await Promise.all([
+      page.waitForURL('/contacts'),
+      page.getByRole('button', { name: 'Delete' }).click(),
+    ])
+  })
+
   test('should show expandable notes for long content', async ({ page }) => {
     const suffix = Date.now()
     const fullName = `Long Notes Contact ${suffix}`
