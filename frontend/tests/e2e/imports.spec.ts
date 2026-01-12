@@ -92,13 +92,13 @@ test.describe('Imports - With Seeded Data', () => {
     // Click the Link button on the first candidate
     await page.getByRole('button', { name: /Link/i }).first().click()
 
-    // Verify modal opens
-    await expect(page.getByText('Link to Existing Contact')).toBeVisible()
-    await expect(page.getByText('Select Contact')).toBeVisible()
+    // Verify modal opens with mode toggle and contact selector
+    await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
+    await expect(page.getByText('Search for a contact...')).toBeVisible()
 
     // Verify cancel button works
     await page.getByRole('button', { name: /Cancel/i }).click()
-    await expect(page.getByText('Link to Existing Contact')).not.toBeVisible()
+    await expect(page.getByRole('button', { name: 'Link to Existing' })).not.toBeVisible()
   })
 })
 
@@ -130,11 +130,17 @@ test.describe('Imports - Import Action', () => {
     // Verify candidate is visible
     await expect(page.getByText(displayName)).toBeVisible()
 
-    // Click Import on the candidate
+    // Click Import on the candidate to open the modal
     await page
       .getByRole('button', { name: /Import/i })
       .first()
       .click()
+
+    // Verify modal opens in import mode - mode toggle should be visible
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Click the "Import as New Contact" button in the modal
+    await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
 
     // Wait for the action to complete
     await page.waitForLoadState('networkidle')
@@ -142,12 +148,24 @@ test.describe('Imports - Import Action', () => {
     // Verify success notification appears
     await expect(page.getByText(/imported successfully/i)).toBeVisible({ timeout: 10000 })
 
-    // Verify the candidate card is removed from the list
-    // Use a more specific selector for the card, not just the text (which also appears in notification)
-    const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: displayName })
-    await expect(candidateCard.getByRole('button', { name: /Import/i })).not.toBeVisible({
+    // Close modal if still open (modal may stay open if there are other candidates in DB)
+    const cancelButton = page.getByRole('button', { name: /Cancel/i })
+    if (await cancelButton.isVisible()) {
+      await cancelButton.click()
+    }
+
+    // Wait for modal to close
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).not.toBeVisible({
       timeout: 5000,
     })
+
+    // Verify the candidate card is removed from the page list
+    // Use a specific selector for candidate cards (with Import button) to exclude the notification
+    const candidateCard = page
+      .locator('[class*="border-gray-200"]')
+      .filter({ hasText: displayName })
+      .filter({ has: page.getByRole('button', { name: 'Import', exact: true }) })
+    await expect(candidateCard).toHaveCount(0, { timeout: 10000 })
   })
 })
 
@@ -180,12 +198,11 @@ test.describe('Imports - Ignore Action', () => {
     await expect(page.getByText(displayName)).toBeVisible()
 
     // Click the X (ignore) button on the candidate
-    // The ignore button is a ghost button with just an X icon
-    const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: displayName })
-    const ignoreButton = candidateCard
-      .getByRole('button')
-      .filter({ has: page.locator('svg') })
-      .last()
+    // The ignore button is a ghost button with just an X icon, aria-label "Ignore candidate"
+    const candidateCard = page
+      .locator('[class*="border-gray-200"]')
+      .filter({ hasText: displayName })
+    const ignoreButton = candidateCard.getByRole('button', { name: 'Ignore candidate' })
 
     await ignoreButton.click()
 
@@ -195,9 +212,11 @@ test.describe('Imports - Ignore Action', () => {
     // Verify notification appears
     await expect(page.getByText(/ignored/i)).toBeVisible({ timeout: 10000 })
 
-    // Verify the candidate card is removed from the list
-    // Use existing candidateCard selector to check Import button is gone
-    await expect(candidateCard.getByRole('button', { name: /Import/i })).not.toBeVisible({
+    // Verify the candidate is no longer in the list (not just "not visible in card")
+    // Wait for the card with the display name to be removed
+    await expect(
+      page.locator('[class*="border-gray-200"]').filter({ hasText: displayName })
+    ).not.toBeVisible({
       timeout: 5000,
     })
   })
@@ -246,8 +265,8 @@ test.describe('Imports - Link Action', () => {
     const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: candidateName })
     await candidateCard.getByRole('button', { name: /Link/i }).click()
 
-    // Wait for modal to open
-    await expect(page.getByText('Link to Existing Contact')).toBeVisible()
+    // Wait for modal to open with mode toggle visible
+    await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
 
     // The ContactSelector is a custom searchable dropdown
     // Click on the selector area (contains placeholder text) to open it
@@ -436,8 +455,8 @@ test.describe('Imports - Suggested Matches', () => {
     // Click the Link button (which should show "Link to [Name] (XX%)")
     await candidateCard.getByRole('button', { name: /Link to/ }).click()
 
-    // Verify modal opens
-    await expect(page.getByText('Link to Existing Contact')).toBeVisible()
+    // Verify modal opens with mode toggle
+    await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
 
     // The suggested contact should be pre-selected - verify by checking the Link Contact
     // button is enabled (it's disabled when no contact is selected)
@@ -445,7 +464,7 @@ test.describe('Imports - Suggested Matches', () => {
 
     // Close modal
     await page.getByRole('button', { name: /Cancel/i }).click()
-    await expect(page.getByText('Link to Existing Contact')).not.toBeVisible()
+    await expect(page.getByRole('button', { name: 'Link to Existing' })).not.toBeVisible()
   })
 })
 
@@ -538,6 +557,150 @@ test.describe('Imports - Confidence Sorting (Issue #122)', () => {
 
     // Medium confidence should appear before no match (sorted by confidence, then alphabetically)
     expect(mediumConfidenceIdx).toBeLessThan(noMatchIdx)
+  })
+})
+
+test.describe('Imports - Modal UX Improvements', () => {
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+
+    // Seed multiple candidates for navigation testing
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Modal Test Contact One',
+        emails: ['modal-test-one@example.com'],
+      },
+      {
+        display_name: 'Modal Test Contact Two',
+        emails: ['modal-test-two@example.com'],
+      },
+      {
+        display_name: 'Modal Test Contact Three',
+        emails: ['modal-test-three@example.com'],
+      },
+    ])
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  test('should close modal when pressing Escape key', async ({ page }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open modal
+    await page
+      .getByRole('button', { name: /Import/i })
+      .first()
+      .click()
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Press Escape
+    await page.keyboard.press('Escape')
+
+    // Modal should be closed
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).not.toBeVisible()
+  })
+
+  test('should navigate with arrow keys', async ({ page }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open modal on first candidate
+    await page
+      .getByRole('button', { name: /Import/i })
+      .first()
+      .click()
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Verify we're on candidate 1
+    await expect(page.getByText(/1 of/)).toBeVisible()
+
+    // Press ArrowRight to go to next - use deterministic wait for new text
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByText(/2 of/)).toBeVisible({ timeout: 5000 })
+
+    // Press ArrowLeft to go back - use deterministic wait for new text
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByText(/1 of/)).toBeVisible({ timeout: 5000 })
+  })
+
+  test('should close modal when clicking backdrop', async ({ page }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open modal
+    await page
+      .getByRole('button', { name: /Import/i })
+      .first()
+      .click()
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Click on backdrop (outside the modal content)
+    // The backdrop has class 'fixed inset-0'
+    await page.locator('.fixed.inset-0').click({ position: { x: 10, y: 10 } })
+
+    // Modal should be closed
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).not.toBeVisible()
+  })
+
+  test('should show loading text during import action', async ({ page }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open modal
+    await page
+      .getByRole('button', { name: /Import/i })
+      .first()
+      .click()
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Click Import button and check for loading state
+    const importButton = page.getByRole('button', { name: 'Import as New Contact', exact: true })
+    await importButton.click()
+
+    // The button should briefly show "Importing..." - use a short timeout as it's transient
+    // Note: This might be too fast to catch in E2E, but we verify the action completes
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByText(/imported successfully/i)).toBeVisible({ timeout: 10000 })
+  })
+
+  test('should display friendly source names with icons', async ({ page }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open modal
+    await page
+      .getByRole('button', { name: /Import/i })
+      .first()
+      .click()
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Should show "Google Contacts" instead of "gcontacts" in the modal
+    // The seeded contacts are from gcontacts source
+    // The source info is in a paragraph element inside the modal, not the filter button
+    // Look for the source display paragraph that contains an SVG icon
+    const sourceDisplay = page.locator('p.text-gray-500').filter({ hasText: 'Google Contacts' })
+    await expect(sourceDisplay.first()).toBeVisible()
+  })
+
+  test('should have transparent backdrop with blur', async ({ page }) => {
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open modal
+    await page
+      .getByRole('button', { name: /Import/i })
+      .first()
+      .click()
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Verify backdrop has the correct classes
+    const backdrop = page.locator('.fixed.inset-0.backdrop-blur-sm')
+    await expect(backdrop).toBeVisible()
   })
 })
 

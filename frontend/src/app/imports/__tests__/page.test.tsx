@@ -15,6 +15,7 @@ vi.mock('@/hooks/use-imports', () => ({
 
 vi.mock('@/hooks/use-contacts', () => ({
   useContacts: vi.fn(),
+  useContact: vi.fn(),
 }))
 
 vi.mock('@/hooks/use-google-accounts', () => ({
@@ -33,7 +34,7 @@ import {
   useIgnoreCandidate,
   useTriggerSync,
 } from '@/hooks/use-imports'
-import { useContacts } from '@/hooks/use-contacts'
+import { useContacts, useContact } from '@/hooks/use-contacts'
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
 
 const createWrapper = () => {
@@ -90,6 +91,16 @@ describe('ImportsPage - Suggested Matches', () => {
         total: 1,
         page: 1,
         limit: 500,
+      },
+    } as any)
+
+    vi.mocked(useContact).mockReturnValue({
+      data: {
+        id: 'contact-1',
+        full_name: 'John Smith',
+        methods: [],
+        created_at: '2024-01-01',
+        updated_at: '2024-01-01',
       },
     } as any)
   })
@@ -230,12 +241,13 @@ describe('ImportsPage - Suggested Matches', () => {
     const linkButton = screen.getByRole('button', { name: 'Link to John Smith (85%)' })
     await user.click(linkButton)
 
-    // Modal should open
+    // Modal should open - new modal has "Import as New" and "Link to Existing" toggle buttons
     await waitFor(() => {
-      expect(screen.getByText('Link to Existing Contact')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Import as New/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Link to Existing/i })).toBeInTheDocument()
     })
 
-    // The modal description should mention the candidate (there will be multiple "John Doe" on page)
+    // The modal should show the candidate name in the header
     expect(screen.getAllByText(/John Doe/).length).toBeGreaterThan(0)
   })
 
@@ -365,16 +377,16 @@ describe('ImportsPage - Suggested Matches', () => {
     await user.click(linkButton)
 
     await waitFor(() => {
-      expect(screen.getByText('Link to Existing Contact')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Import as New/i })).toBeInTheDocument()
     })
 
     // Close modal
     const cancelButton = screen.getByRole('button', { name: /Cancel/i })
     await user.click(cancelButton)
 
-    // Modal should be closed
+    // Modal should be closed - no Import as New button visible
     await waitFor(() => {
-      expect(screen.queryByText('Link to Existing Contact')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Import as New/i })).not.toBeInTheDocument()
     })
   })
 })
@@ -415,6 +427,10 @@ describe('ImportsPage - Source Filter', () => {
         page: 1,
         limit: 500,
       },
+    } as any)
+
+    vi.mocked(useContact).mockReturnValue({
+      data: undefined,
     } as any)
 
     vi.mocked(useImportCandidates).mockReturnValue({

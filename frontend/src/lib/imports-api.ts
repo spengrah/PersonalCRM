@@ -3,6 +3,8 @@ import type {
   ImportCandidate,
   ImportCandidatesListParams,
   ImportCandidatesListResponse,
+  ImportContactRequest,
+  LinkContactRequest,
 } from '@/types/import'
 import type { Contact } from '@/types/contact'
 
@@ -72,15 +74,15 @@ export const importsApi = {
   },
 
   // Import candidate as new CRM contact
-  importCandidate: async (id: string): Promise<Contact> => {
-    return apiClient.post<Contact>(`/api/v1/imports/${id}/import`)
+  // Accepts optional method selection for enhanced UI
+  importCandidate: async (id: string, request?: ImportContactRequest): Promise<Contact> => {
+    return apiClient.post<Contact>(`/api/v1/imports/${id}/import`, request)
   },
 
   // Link candidate to existing CRM contact
-  linkCandidate: async (id: string, crmContactId: string): Promise<void> => {
-    return apiClient.post<void>(`/api/v1/imports/${id}/link`, {
-      crm_contact_id: crmContactId,
-    })
+  // Accepts method selection and conflict resolutions for enhanced UI
+  linkCandidate: async (id: string, request: LinkContactRequest): Promise<void> => {
+    return apiClient.post<void>(`/api/v1/imports/${id}/link`, request)
   },
 
   // Ignore candidate (won't appear in list anymore)

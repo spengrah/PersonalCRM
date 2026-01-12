@@ -1,5 +1,6 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "frontend",
@@ -8,6 +9,7 @@
         "@tanstack/react-query": "^5.84.1",
         "@tanstack/react-query-devtools": "^5.84.1",
         "clsx": "^2.1.1",
+        "free-email-domains": "^1.2.23",
         "lucide-react": "^0.537.0",
         "next": "15.4.6",
         "react": "19.1.0",
@@ -701,6 +703,8 @@
     "flatted": ["flatted@3.3.3", "", {}, "sha512-GX+ysw4PBCz0PzosHDepZGANEuFCMLrnRTiEy9McGjmkCQYwRq4A/X786G/fjM/+OjsWSU1ZrY5qyARZmO/uwg=="],
 
     "for-each": ["for-each@0.3.5", "", { "dependencies": { "is-callable": "^1.2.7" } }, "sha512-dKx12eRCVIzqCxFGplyFKJMPvLEWgmNtUrpTiJIR5u97zEhRG8ySrtboPHZXx7daLxQVrl643cTzbab2tkQjxg=="],
+
+    "free-email-domains": ["free-email-domains@1.2.23", "", {}, "sha512-+W6xtenPc2YXEz9gaWKCIVpo33DvA5DYpdvMJ8hc1nxXOFoQ25TvMWB+hYS0jOVzJLJfAvP/mzaXWpIOmipBcg=="],
 
     "fsevents": ["fsevents@2.3.2", "", { "os": "darwin" }, "sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA=="],
 

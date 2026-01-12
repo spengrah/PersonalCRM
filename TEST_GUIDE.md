@@ -361,7 +361,7 @@ The tests run from the frontend directory to resolve `@playwright/test` from `fr
 
 ```bash
 # Run all E2E tests (recommended)
-make test-e2e  # Uses .env.example.testing, starts Docker, syncs DB password
+make test-e2e  # Uses .env.example.testing, starts Docker if available (falls back to native PostgreSQL)
 
 # Run in headed mode (see browser)
 cd frontend && bunx playwright test --headed
