@@ -284,6 +284,12 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	// Ignore binding errors - empty body is valid for backward compatibility
 	_ = c.ShouldBindJSON(&req)
 
+	// Validate the request (including cadence if provided)
+	if err := h.validator.Struct(req); err != nil {
+		api.SendValidationError(c, "Validation failed", err.Error())
+		return
+	}
+
 	// Get external contact
 	external, err := h.externalRepo.GetByID(ctx, id)
 	if err != nil {
@@ -443,6 +449,12 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	var req LinkRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid request body", err.Error())
+		return
+	}
+
+	// Validate the request (including cadence if provided)
+	if err := h.validator.Struct(req); err != nil {
+		api.SendValidationError(c, "Validation failed", err.Error())
 		return
 	}
 
