@@ -8,6 +8,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/logger"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -312,7 +313,9 @@ func (r *ContactRepository) FindSimilarContacts(ctx context.Context, name string
 				Type  string `json:"type"`
 				Value string `json:"value"`
 			}
-			if err := json.Unmarshal(row.MethodsJson, &methodData); err == nil {
+			if err := json.Unmarshal(row.MethodsJson, &methodData); err != nil {
+				logger.Warn().Err(err).Str("contact_id", contactID.String()).Msg("failed to unmarshal contact methods JSON")
+			} else {
 				methods = make([]ContactMethod, len(methodData))
 				for i, m := range methodData {
 					methods[i] = ContactMethod{
@@ -395,7 +398,9 @@ func (r *ContactRepository) FindSimilarContactsBatch(
 				Type  string `json:"type"`
 				Value string `json:"value"`
 			}
-			if err := json.Unmarshal(row.MethodsJson, &methodData); err == nil {
+			if err := json.Unmarshal(row.MethodsJson, &methodData); err != nil {
+				logger.Warn().Err(err).Str("contact_id", contactID.String()).Str("candidate_id", row.CandidateID).Msg("failed to unmarshal contact methods JSON in batch")
+			} else {
 				methods = make([]ContactMethod, len(methodData))
 				for i, m := range methodData {
 					methods[i] = ContactMethod{

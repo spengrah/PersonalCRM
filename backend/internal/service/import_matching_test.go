@@ -480,3 +480,46 @@ func TestFindBestMatchesBatch_Error(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, results)
 }
+
+func TestFindBestMatchesBatch_UnexpectedCandidateID(t *testing.T) {
+	// This test verifies that the service gracefully handles the case where
+	// the repository returns a batch match with a candidate_id that was not
+	// in the original input. This is a safety check that should be handled
+	// without panicking.
+	externalID := uuid.New()
+	contactID := uuid.New()
+
+	repo := &fakeContactRepo{
+		batchMatches: []repository.BatchContactMatch{
+			{
+				// Return a match for an unexpected candidate ID
+				CandidateID: "unexpected-candidate-id-not-in-input",
+				Matches: []repository.ContactMatch{
+					{
+						Contact: repository.Contact{
+							ID:       contactID,
+							FullName: "Jane Doe",
+							Methods:  []repository.ContactMethod{},
+						},
+						Similarity: 0.9,
+					},
+				},
+			},
+		},
+	}
+	svc := NewImportMatchService(repo)
+
+	externals := []*repository.ExternalContact{
+		{
+			ID:          externalID,
+			DisplayName: stringPtr("Jane Doe"),
+		},
+	}
+
+	// Should not panic and should return nil for the external contact
+	// since the batch result didn't have a matching candidate ID
+	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Nil(t, results[0]) // No match because candidate ID didn't match
+}
