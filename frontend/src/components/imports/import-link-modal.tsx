@@ -78,8 +78,13 @@ export function ImportLinkModal({
   const [isTransitioning, setIsTransitioning] = useState(false)
 
   // Fetch all candidates for the modal (not limited by page pagination)
-  const { data: allCandidatesData } = useImportCandidates({ limit: 1000 })
-  const candidates = allCandidatesData?.candidates || initialCandidates
+  // Note: We need to pass page: 1 explicitly to ensure consistent query params
+  const { data: allCandidatesData, isSuccess } = useImportCandidates({ page: 1, limit: 1000 })
+  // Use fetched data once query succeeds, otherwise fall back to initialCandidates
+  const candidates =
+    isSuccess && allCandidatesData?.candidates?.length
+      ? allCandidatesData.candidates
+      : initialCandidates
 
   const candidate = candidates[currentIndex]
   const displayName = candidate ? getCandidateDisplayName(candidate) : ''
