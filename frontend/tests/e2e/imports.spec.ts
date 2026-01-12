@@ -869,7 +869,8 @@ test.describe('Imports - Cadence Selector (Issue #152)', () => {
   })
 
   test('should update cadence when linking contact', async ({ page }) => {
-    // Seed a candidate and a target contact with quarterly cadence
+    // Seed a candidate and a target contact with NO cadence initially
+    // This avoids timing issues with pre-selection of existing cadence
     await testApi.seedExternalContacts([
       {
         display_name: 'Link Cadence Update Test',
@@ -881,7 +882,7 @@ test.describe('Imports - Cadence Selector (Issue #152)', () => {
       {
         full_name: 'Link Cadence Target',
         email: 'link-target@example.com',
-        cadence: 'quarterly',
+        cadence: 'monthly', // Use monthly, will change to weekly
         days_overdue: 1,
       },
     ])
@@ -910,9 +911,18 @@ test.describe('Imports - Cadence Selector (Issue #152)', () => {
     await expect(contactOption).toBeVisible({ timeout: 5000 })
     await contactOption.click()
 
-    // Change cadence from quarterly to weekly
-    const cadenceSelect = page.locator('select').filter({ hasText: 'Quarterly' })
+    // Wait for the cadence dropdown to show the pre-selected value (Monthly)
+    // This ensures the contact data has loaded and the effect has run
+    const cadenceSelect = page
+      .locator('select[id="cadence"], select')
+      .filter({ hasText: /Monthly/i })
+    await expect(cadenceSelect).toBeVisible({ timeout: 5000 })
+
+    // Change cadence to weekly
     await cadenceSelect.selectOption('weekly')
+
+    // Verify the selection changed
+    await expect(cadenceSelect).toHaveValue('weekly')
 
     // Click Link Contact button
     const linkResponse = page.waitForResponse(
