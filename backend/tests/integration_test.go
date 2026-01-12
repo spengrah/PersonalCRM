@@ -1095,9 +1095,12 @@ func TestFindSimilarContactsBatch_Integration(t *testing.T) {
 
 	// Create database connection
 	dbConfig := config.DatabaseConfig{
-		URL:      databaseURL,
-		MaxConns: 5,
-		MinConns: 1,
+		URL:               databaseURL,
+		MaxConns:          config.DefaultDBMaxConns,
+		MinConns:          config.DefaultDBMinConns,
+		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
+		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
+		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
 	}
 	database, err := db.NewDatabase(ctx, dbConfig)
 	require.NoError(t, err)
