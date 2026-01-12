@@ -128,32 +128,40 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_InvalidEmailFormat", func(t *testing.T) {
-		requestBody := handlers.CreateContactRequest{
-			FullName: "Test User",
-			Methods: []handlers.ContactMethodRequest{
-				{
-					Type:  "email",
-					Value: "not-an-email",
-				},
-			},
+		invalidEmails := []string{
+			"not-an-email",
+			"@domain.com",
+			"user@",
 		}
 
-		jsonBody, _ := json.Marshal(requestBody)
-		req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
-		req.Header.Set("Content-Type", "application/json")
+		for _, invalidEmail := range invalidEmails {
+			requestBody := handlers.CreateContactRequest{
+				FullName: "Test User",
+				Methods: []handlers.ContactMethodRequest{
+					{
+						Type:  "email",
+						Value: invalidEmail,
+					},
+				},
+			}
 
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
+			jsonBody, _ := json.Marshal(requestBody)
+			req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
+			req.Header.Set("Content-Type", "application/json")
 
-		assert.Equal(t, http.StatusBadRequest, w.Code)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
 
-		var response api.APIResponse
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
 
-		assert.False(t, response.Success)
-		assert.NotNil(t, response.Error)
-		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
+			var response api.APIResponse
+			err := json.Unmarshal(w.Body.Bytes(), &response)
+			require.NoError(t, err)
+
+			assert.False(t, response.Success)
+			assert.NotNil(t, response.Error)
+			assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
+		}
 	})
 
 	t.Run("CreateContact_FullNameTooLong", func(t *testing.T) {

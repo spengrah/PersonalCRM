@@ -1,10 +1,12 @@
 package tests
 
 import (
+	"bufio"
 	"context"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -63,6 +66,110 @@ func TestRunMigrations_Integration(t *testing.T) {
 		err := db.RunMigrations("postgres://invalid:invalid@localhost:9999/invalid?sslmode=disable", migrationsPath)
 		assert.Error(t, err)
 	})
+}
+
+func TestMigration020_UnifyEmailDedup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, databaseURL)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close(ctx) }()
+
+	tx, err := conn.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = tx.Rollback(ctx)
+	})
+
+	_, err = tx.Exec(ctx, `ALTER TABLE contact_method DROP CONSTRAINT IF EXISTS contact_method_type_check`)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `ALTER TABLE contact_method DISABLE TRIGGER set_contact_method_value_normalized`)
+	require.NoError(t, err)
+
+	var contactID uuid.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO contact (full_name) VALUES ('Migration 020 Test') RETURNING id`).Scan(&contactID)
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO contact_method (contact_id, type, value, value_normalized, is_primary)
+		VALUES ($1, 'email_personal', 'User@Example.com', 'user@example.com', FALSE),
+		       ($1, 'email_work', 'user@example.com', 'user@example.com', TRUE)
+	`, contactID)
+	require.NoError(t, err)
+
+	migrationPath := filepath.Join(getMigrationsPath(), "020_unify_email_contact_method_type.up.sql")
+	migrationSQL, err := os.ReadFile(migrationPath)
+	require.NoError(t, err)
+	for _, statement := range splitSQLStatements(t, string(migrationSQL)) {
+		_, err = tx.Exec(ctx, statement)
+		require.NoErrorf(t, err, "migration statement failed: %s", statement)
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT type, value, is_primary, value_normalized
+		FROM contact_method
+		WHERE contact_id = $1
+	`, contactID)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	type row struct {
+		methodType      string
+		value           string
+		isPrimary       bool
+		valueNormalized string
+	}
+
+	results := []row{}
+	for rows.Next() {
+		var r row
+		err = rows.Scan(&r.methodType, &r.value, &r.isPrimary, &r.valueNormalized)
+		require.NoError(t, err)
+		results = append(results, r)
+	}
+	require.NoError(t, rows.Err())
+
+	require.Len(t, results, 1)
+	assert.Equal(t, "email", results[0].methodType)
+	assert.Equal(t, "user@example.com", results[0].valueNormalized)
+	assert.True(t, results[0].isPrimary)
+	assert.Equal(t, "user@example.com", results[0].value)
+}
+
+func splitSQLStatements(t *testing.T, sqlText string) []string {
+	t.Helper()
+
+	var builder strings.Builder
+	scanner := bufio.NewScanner(strings.NewReader(sqlText))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "--") {
+			continue
+		}
+		builder.WriteString(line)
+		builder.WriteString("\n")
+	}
+	require.NoError(t, scanner.Err())
+
+	raw := builder.String()
+	parts := strings.Split(raw, ";")
+	statements := make([]string, 0, len(parts))
+	for _, part := range parts {
+		statement := strings.TrimSpace(part)
+		if statement == "" {
+			continue
+		}
+		statements = append(statements, statement)
+	}
+	return statements
 }
 
 // TestContactRepository_Integration tests the contact repository with a real database

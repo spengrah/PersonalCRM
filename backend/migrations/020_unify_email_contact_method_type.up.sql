@@ -1,4 +1,5 @@
--- Unify email/email into single email type
+-- Unify email_personal/email_work into single email type.
+-- NOTE: This is a breaking API change for clients still sending email_personal/email_work.
 
 ALTER TABLE contact_method
     DROP CONSTRAINT IF EXISTS contact_method_type_check;

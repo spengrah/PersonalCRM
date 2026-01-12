@@ -368,7 +368,7 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 		}
 		key := sel.Type + ":" + normalized
 		if usedValues[key] {
-			logger.Warn().Str("value", sel.OriginalValue).Msg("duplicate method value in selection, skipping")
+			logger.Warn().Str("value", sel.OriginalValue).Msg("duplicate method type+value in selection, skipping")
 			continue
 		}
 
@@ -387,6 +387,7 @@ func (h *ImportHandler) buildMethodsAuto(external *repository.ExternalContact) [
 	methods := make([]service.ContactMethodInput, 0)
 
 	// Handle emails - store all available emails
+	// Note: external email labels (work/home/etc.) are intentionally discarded.
 	for _, email := range external.Emails {
 		methods = append(methods, service.ContactMethodInput{
 			Type:  "email",

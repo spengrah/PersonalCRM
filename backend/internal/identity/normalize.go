@@ -52,7 +52,8 @@ func Normalize(raw string, idType IdentifierType) string {
 	}
 }
 
-// normalizeEmail normalizes an email address by lowercasing and trimming whitespace
+// normalizeEmail normalizes an email address by lowercasing and trimming whitespace.
+// Input is assumed to be validated upstream (handlers enforce email format).
 func normalizeEmail(email string) string {
 	return matching.NormalizeEmail(email)
 }

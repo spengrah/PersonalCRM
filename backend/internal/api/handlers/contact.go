@@ -143,6 +143,7 @@ type ListContactsQuery struct {
 
 // ContactMethodRequest represents a single contact method in requests
 type ContactMethodRequest struct {
+	// Note: legacy email_personal/email_work are no longer accepted; clients should send "email".
 	Type      string `json:"type" validate:"required,oneof=email phone telegram discord twitter signal gchat whatsapp" example:"email"`
 	Value     string `json:"value" validate:"required,max=255" example:"john.doe@example.com"`
 	IsPrimary bool   `json:"is_primary" example:"true"`
