@@ -360,8 +360,8 @@ func (r *IdentityRepository) DeleteForContact(ctx context.Context, contactID uui
 // FindContactMethodsByValue finds contact methods matching the given value and types
 func (r *IdentityRepository) FindContactMethodsByValue(ctx context.Context, types []string, normalizedValue string) ([]ContactMethodMatch, error) {
 	rows, err := r.queries.FindMethodsByNormalizedValue(ctx, db.FindMethodsByNormalizedValueParams{
-		Column1: types,
-		Value:   normalizedValue,
+		Column1:         types,
+		ValueNormalized: normalizedValue,
 	})
 	if err != nil {
 		return nil, err

@@ -25,8 +25,6 @@ interface MethodSelectorProps {
   onToggle: () => void
   /** Callback when type is changed */
   onTypeChange: (type: ContactMethodType) => void
-  /** Types that are already used (to disable in dropdown) */
-  usedTypes: Set<string>
   /** Whether the selector is disabled */
   disabled?: boolean
   /** Whether this is an email (vs phone) */
@@ -40,7 +38,6 @@ export function MethodSelector({
   state,
   onToggle,
   onTypeChange,
-  usedTypes,
   disabled = false,
   isEmail,
 }: MethodSelectorProps) {
@@ -101,11 +98,7 @@ export function MethodSelector({
           aria-label="Email type"
         >
           {relevantOptions.map(opt => (
-            <option
-              key={opt.value}
-              value={opt.value}
-              disabled={usedTypes.has(opt.value) && opt.value !== selectedType}
-            >
+            <option key={opt.value} value={opt.value}>
               {opt.label}
             </option>
           ))}

@@ -22,11 +22,20 @@ func TestNormalizeContactMethodRequests(t *testing.T) {
 	assert.Equal(t, "person@example.com", methods[1].Value)
 }
 
-func TestValidateContactMethods_DuplicateTypes(t *testing.T) {
+func TestValidateContactMethods_DuplicateTypesAllowed(t *testing.T) {
 	validate := validator.New()
 	err := validateContactMethods(validate, []ContactMethodRequest{
 		{Type: "email_personal", Value: "one@example.com"},
 		{Type: "email_personal", Value: "two@example.com"},
+	})
+	assert.NoError(t, err)
+}
+
+func TestValidateContactMethods_DuplicateNormalizedValuePerType(t *testing.T) {
+	validate := validator.New()
+	err := validateContactMethods(validate, []ContactMethodRequest{
+		{Type: "email_personal", Value: "Person@Example.com"},
+		{Type: "email_personal", Value: " person@example.com "},
 	})
 	assert.Error(t, err)
 }

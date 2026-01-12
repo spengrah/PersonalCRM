@@ -578,7 +578,9 @@ func normalizeContactMethodRequests(methods []ContactMethodRequest) ([]ContactMe
 		}
 
 		value := rawValue
-		if method.Type == string(repository.ContactMethodTelegram) || method.Type == string(repository.ContactMethodTwitter) {
+		if method.Type == string(repository.ContactMethodTelegram) ||
+			method.Type == string(repository.ContactMethodTwitter) ||
+			method.Type == string(repository.ContactMethodDiscord) {
 			value = strings.TrimLeft(value, "@")
 			value = strings.TrimSpace(value)
 		}
@@ -599,14 +601,19 @@ func validateContactMethods(validate *validator.Validate, methods []ContactMetho
 		return nil
 	}
 
-	types := make(map[string]struct{}, len(methods))
+	normalizedByType := make(map[string]struct{}, len(methods))
 	primaryCount := 0
 
 	for _, method := range methods {
-		if _, exists := types[method.Type]; exists {
-			return fmt.Errorf("duplicate contact method type: %s", method.Type)
+		normalizedValue := repository.NormalizeContactMethodValue(method.Type, method.Value)
+		if normalizedValue == "" {
+			return fmt.Errorf("contact method %s has empty normalized value", method.Type)
 		}
-		types[method.Type] = struct{}{}
+		key := method.Type + ":" + normalizedValue
+		if _, exists := normalizedByType[key]; exists {
+			return fmt.Errorf("duplicate contact method value for type: %s", method.Type)
+		}
+		normalizedByType[key] = struct{}{}
 
 		if method.IsPrimary {
 			primaryCount++

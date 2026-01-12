@@ -82,12 +82,25 @@ describe('contactSchema', () => {
       expect(result.success).toBe(false)
     })
 
-    it('rejects duplicate method types', () => {
+    it('allows duplicate method types with different values', () => {
       const data = {
         full_name: 'Test User',
         methods: [
           { type: 'email_personal', value: 'test@example.com', is_primary: true },
           { type: 'email_personal', value: 'another@example.com', is_primary: false },
+        ],
+      }
+
+      const result = contactSchema.safeParse(data)
+      expect(result.success).toBe(true)
+    })
+
+    it('rejects duplicate normalized values for the same type', () => {
+      const data = {
+        full_name: 'Test User',
+        methods: [
+          { type: 'email_personal', value: 'Test@Example.com', is_primary: true },
+          { type: 'email_personal', value: ' test@example.com ', is_primary: false },
         ],
       }
 

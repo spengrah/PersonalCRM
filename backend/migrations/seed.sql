@@ -73,13 +73,31 @@ SELECT
     id, full_name, location, birthday, how_met, cadence, last_contacted
 FROM contact_data;
 
-INSERT INTO contact_method (contact_id, type, value, is_primary)
-SELECT id, 'email_personal', email, TRUE
+INSERT INTO contact_method (contact_id, type, value, value_normalized, is_primary)
+SELECT id, 'email_personal', email, lower(btrim(email)), TRUE
 FROM contact_data
 WHERE email IS NOT NULL AND btrim(email) <> '';
 
-INSERT INTO contact_method (contact_id, type, value, is_primary)
-SELECT id, 'phone', phone, CASE WHEN email IS NULL OR btrim(email) = '' THEN TRUE ELSE FALSE END
+INSERT INTO contact_method (contact_id, type, value, value_normalized, is_primary)
+SELECT
+    id,
+    'phone',
+    phone,
+    CASE
+        WHEN btrim(phone) = '' THEN ''
+        WHEN btrim(phone) ~ '^\\+' THEN '+' || regexp_replace(btrim(phone), '\\D', '', 'g')
+        ELSE
+            CASE
+                WHEN length(regexp_replace(btrim(phone), '\\D', '', 'g')) = 10 THEN
+                    '+1' || regexp_replace(btrim(phone), '\\D', '', 'g')
+                WHEN length(regexp_replace(btrim(phone), '\\D', '', 'g')) = 11
+                    AND left(regexp_replace(btrim(phone), '\\D', '', 'g'), 1) = '1' THEN
+                    '+' || regexp_replace(btrim(phone), '\\D', '', 'g')
+                ELSE
+                    '+' || regexp_replace(btrim(phone), '\\D', '', 'g')
+            END
+    END,
+    CASE WHEN email IS NULL OR btrim(email) = '' THEN TRUE ELSE FALSE END
 FROM contact_data
 WHERE phone IS NOT NULL AND btrim(phone) <> '';
 

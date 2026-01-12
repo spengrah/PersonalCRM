@@ -71,6 +71,7 @@ export const CONTACT_METHOD_OPTIONS = [
 
 const HANDLE_METHOD_TYPES = new Set<ContactMethodType>(['telegram', 'discord', 'twitter'])
 const EMAIL_METHOD_TYPES = new Set<ContactMethodType>(['email_personal', 'email_work', 'gchat'])
+const PHONE_METHOD_TYPES = new Set<ContactMethodType>(['phone', 'signal', 'whatsapp'])
 
 const CONTACT_METHOD_PRIORITY: Record<ContactMethodType, number> = {
   email_personal: 1,
@@ -95,6 +96,53 @@ export function normalizeContactMethodValue(type: ContactMethodType, value: stri
   return trimmed
 }
 
+export function normalizeContactMethodValueForComparison(type: ContactMethodType, value: string) {
+  const trimmed = value.trim()
+  if (trimmed === '') {
+    return ''
+  }
+
+  if (EMAIL_METHOD_TYPES.has(type)) {
+    return trimmed.toLowerCase()
+  }
+
+  if (HANDLE_METHOD_TYPES.has(type)) {
+    return trimmed.replace(/^@+/, '').trim().toLowerCase()
+  }
+
+  if (PHONE_METHOD_TYPES.has(type)) {
+    return normalizePhoneE164(trimmed)
+  }
+
+  return trimmed
+}
+
+function normalizePhoneE164(value: string) {
+  const trimmed = value.trim()
+  if (trimmed === '') {
+    return ''
+  }
+
+  const hasPlus = trimmed.startsWith('+')
+  const digits = trimmed.replace(/\D/g, '')
+  if (digits === '') {
+    return ''
+  }
+
+  if (digits.length === 10 && !hasPlus) {
+    return `+1${digits}`
+  }
+
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return `+${digits}`
+  }
+
+  if (hasPlus) {
+    return `+${digits}`
+  }
+
+  return `+${digits}`
+}
 export function formatContactMethodValue(type: ContactMethodType, value: string) {
   if (HANDLE_METHOD_TYPES.has(type)) {
     const trimmed = value.trim()

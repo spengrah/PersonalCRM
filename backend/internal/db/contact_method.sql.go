@@ -16,17 +16,19 @@ INSERT INTO contact_method (
     contact_id,
     type,
     value,
+    value_normalized,
     is_primary
 ) VALUES (
-    $1, $2, $3, $4
-) RETURNING id, contact_id, type, value, is_primary, created_at, updated_at
+    $1, $2, $3, $4, $5
+) RETURNING id, contact_id, type, value, is_primary, created_at, updated_at, value_normalized
 `
 
 type CreateContactMethodParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Type      string      `json:"type"`
-	Value     string      `json:"value"`
-	IsPrimary pgtype.Bool `json:"is_primary"`
+	ContactID       pgtype.UUID `json:"contact_id"`
+	Type            string      `json:"type"`
+	Value           string      `json:"value"`
+	ValueNormalized string      `json:"value_normalized"`
+	IsPrimary       pgtype.Bool `json:"is_primary"`
 }
 
 func (q *Queries) CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error) {
@@ -34,6 +36,7 @@ func (q *Queries) CreateContactMethod(ctx context.Context, arg CreateContactMeth
 		arg.ContactID,
 		arg.Type,
 		arg.Value,
+		arg.ValueNormalized,
 		arg.IsPrimary,
 	)
 	var i ContactMethod
@@ -45,6 +48,7 @@ func (q *Queries) CreateContactMethod(ctx context.Context, arg CreateContactMeth
 		&i.IsPrimary,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ValueNormalized,
 	)
 	return &i, err
 }
@@ -60,32 +64,33 @@ func (q *Queries) DeleteContactMethodsByContact(ctx context.Context, contactID p
 }
 
 const FindMethodsByNormalizedValue = `-- name: FindMethodsByNormalizedValue :many
-SELECT cm.id, cm.contact_id, cm.type, cm.value, cm.is_primary, cm.created_at, cm.updated_at, c.full_name as contact_name
+SELECT cm.id, cm.contact_id, cm.type, cm.value, cm.is_primary, cm.created_at, cm.updated_at, cm.value_normalized, c.full_name as contact_name
 FROM contact_method cm
 JOIN contact c ON c.id = cm.contact_id
 WHERE cm.type = ANY($1::text[])
-  AND LOWER(TRIM(cm.value)) = $2
+  AND cm.value_normalized = $2
   AND c.deleted_at IS NULL
 `
 
 type FindMethodsByNormalizedValueParams struct {
-	Column1 []string `json:"column_1"`
-	Value   string   `json:"value"`
+	Column1         []string `json:"column_1"`
+	ValueNormalized string   `json:"value_normalized"`
 }
 
 type FindMethodsByNormalizedValueRow struct {
-	ID          pgtype.UUID        `json:"id"`
-	ContactID   pgtype.UUID        `json:"contact_id"`
-	Type        string             `json:"type"`
-	Value       string             `json:"value"`
-	IsPrimary   pgtype.Bool        `json:"is_primary"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	ContactName string             `json:"contact_name"`
+	ID              pgtype.UUID        `json:"id"`
+	ContactID       pgtype.UUID        `json:"contact_id"`
+	Type            string             `json:"type"`
+	Value           string             `json:"value"`
+	IsPrimary       pgtype.Bool        `json:"is_primary"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ValueNormalized string             `json:"value_normalized"`
+	ContactName     string             `json:"contact_name"`
 }
 
 func (q *Queries) FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error) {
-	rows, err := q.db.Query(ctx, FindMethodsByNormalizedValue, arg.Column1, arg.Value)
+	rows, err := q.db.Query(ctx, FindMethodsByNormalizedValue, arg.Column1, arg.ValueNormalized)
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +106,7 @@ func (q *Queries) FindMethodsByNormalizedValue(ctx context.Context, arg FindMeth
 			&i.IsPrimary,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ValueNormalized,
 			&i.ContactName,
 		); err != nil {
 			return nil, err
@@ -115,9 +121,23 @@ func (q *Queries) FindMethodsByNormalizedValue(ctx context.Context, arg FindMeth
 
 const ListContactMethodsByContact = `-- name: ListContactMethodsByContact :many
 
-SELECT id, contact_id, type, value, is_primary, created_at, updated_at FROM contact_method
+SELECT id, contact_id, type, value, is_primary, created_at, updated_at, value_normalized FROM contact_method
 WHERE contact_id = $1
-ORDER BY is_primary DESC, created_at ASC
+ORDER BY
+    is_primary DESC,
+    CASE type
+        WHEN 'email_personal' THEN 1
+        WHEN 'email_work' THEN 2
+        WHEN 'phone' THEN 3
+        WHEN 'whatsapp' THEN 4
+        WHEN 'telegram' THEN 5
+        WHEN 'signal' THEN 6
+        WHEN 'discord' THEN 7
+        WHEN 'twitter' THEN 8
+        WHEN 'gchat' THEN 9
+        ELSE 99
+    END,
+    created_at ASC
 `
 
 // Contact method queries
@@ -138,6 +158,7 @@ func (q *Queries) ListContactMethodsByContact(ctx context.Context, contactID pgt
 			&i.IsPrimary,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ValueNormalized,
 		); err != nil {
 			return nil, err
 		}
@@ -151,23 +172,26 @@ func (q *Queries) ListContactMethodsByContact(ctx context.Context, contactID pgt
 
 const UpdateContactMethodValue = `-- name: UpdateContactMethodValue :one
 UPDATE contact_method cm
-SET value = $2, updated_at = NOW()
+SET value = $2,
+    value_normalized = $3,
+    updated_at = NOW()
 WHERE cm.id = $1
   AND EXISTS (
     SELECT 1 FROM contact c
     WHERE c.id = cm.contact_id
       AND c.deleted_at IS NULL
   )
-RETURNING id, contact_id, type, value, is_primary, created_at, updated_at
+RETURNING id, contact_id, type, value, is_primary, created_at, updated_at, value_normalized
 `
 
 type UpdateContactMethodValueParams struct {
-	ID    pgtype.UUID `json:"id"`
-	Value string      `json:"value"`
+	ID              pgtype.UUID `json:"id"`
+	Value           string      `json:"value"`
+	ValueNormalized string      `json:"value_normalized"`
 }
 
 func (q *Queries) UpdateContactMethodValue(ctx context.Context, arg UpdateContactMethodValueParams) (*ContactMethod, error) {
-	row := q.db.QueryRow(ctx, UpdateContactMethodValue, arg.ID, arg.Value)
+	row := q.db.QueryRow(ctx, UpdateContactMethodValue, arg.ID, arg.Value, arg.ValueNormalized)
 	var i ContactMethod
 	err := row.Scan(
 		&i.ID,
@@ -177,6 +201,7 @@ func (q *Queries) UpdateContactMethodValue(ctx context.Context, arg UpdateContac
 		&i.IsPrimary,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ValueNormalized,
 	)
 	return &i, err
 }

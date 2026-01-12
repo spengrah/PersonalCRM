@@ -1,8 +1,9 @@
-import { z } from 'zod'
+import * as z from 'zod'
 import {
   CONTACT_METHOD_TYPE_VALUES,
   isEmailMethod,
   normalizeContactMethodValue,
+  normalizeContactMethodValueForComparison,
 } from '@/lib/contact-methods'
 import type { ContactMethodType } from '@/types/contact'
 
@@ -50,7 +51,7 @@ export const contactSchema = z
       return
     }
 
-    const seenTypes = new Set<string>()
+    const seenNormalized = new Set<string>()
     let primaryCount = 0
 
     methods.forEach((method, index) => {
@@ -78,21 +79,14 @@ export const contactSchema = z
         return
       }
 
-      if (seenTypes.has(rawType)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'Each method type can only be used once',
-          path: ['methods', index, 'type'],
-        })
-      } else {
-        seenTypes.add(rawType)
-      }
-
       if (method.is_primary) {
         primaryCount += 1
       }
 
-      const normalizedValue = normalizeContactMethodValue(rawType as ContactMethodType, rawValue)
+      const normalizedValue = normalizeContactMethodValueForComparison(
+        rawType as ContactMethodType,
+        rawValue
+      )
       if (normalizedValue === '') {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -100,6 +94,17 @@ export const contactSchema = z
           path: ['methods', index, 'value'],
         })
         return
+      }
+
+      const normalizedKey = `${rawType}:${normalizedValue}`
+      if (seenNormalized.has(normalizedKey)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'This method value already exists for that type',
+          path: ['methods', index, 'value'],
+        })
+      } else {
+        seenNormalized.add(normalizedKey)
       }
 
       if (isEmailMethod(rawType as ContactMethodType)) {

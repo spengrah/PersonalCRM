@@ -529,7 +529,7 @@ func TestContactAPI_GetContactValidation(t *testing.T) {
 	})
 }
 
-func TestContactAPI_DuplicateMethodTypes(t *testing.T) {
+func TestContactAPI_DuplicateMethodValues(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -542,17 +542,17 @@ func TestContactAPI_DuplicateMethodTypes(t *testing.T) {
 	router, cleanup := setupContactValidationTestRouter()
 	defer cleanup()
 
-	// Create contact with a duplicate method type
+	// Create contact with duplicate normalized values for the same type
 	createReq := handlers.CreateContactRequest{
 		FullName: "First User",
 		Methods: []handlers.ContactMethodRequest{
 			{
 				Type:  "email_personal",
-				Value: "dup1@example.com",
+				Value: "dup@example.com",
 			},
 			{
 				Type:  "email_personal",
-				Value: "dup2@example.com",
+				Value: " Dup@Example.com ",
 			},
 		},
 	}

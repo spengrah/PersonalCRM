@@ -145,17 +145,6 @@ export function ContactForm({
           <div className="divide-y divide-gray-200">
             {fields.map((field, index) => {
               const selectedType = watchedMethods?.[index]?.type
-              const usedTypes = new Set(
-                watchedMethods
-                  ?.map((method, methodIndex) =>
-                    methodIndex === index
-                      ? undefined
-                      : method?.value?.trim()
-                        ? method?.type?.trim()
-                        : undefined
-                  )
-                  .filter(type => type)
-              )
               const option = CONTACT_METHOD_OPTIONS.find(opt => opt.value === selectedType)
               const isPrimary = Boolean(watchedMethods?.[index]?.is_primary)
 
@@ -176,11 +165,7 @@ export function ContactForm({
                       >
                         <option value="">Select</option>
                         {CONTACT_METHOD_OPTIONS.map(opt => (
-                          <option
-                            key={opt.value}
-                            value={opt.value}
-                            disabled={usedTypes.has(opt.value)}
-                          >
+                          <option key={opt.value} value={opt.value}>
                             {opt.label}
                           </option>
                         ))}

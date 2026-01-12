@@ -377,16 +377,18 @@ func contactMethodPriority(methodType string) int {
 		return 2
 	case string(repository.ContactMethodPhone):
 		return 3
-	case string(repository.ContactMethodTelegram):
+	case string(repository.ContactMethodWhatsApp):
 		return 4
-	case string(repository.ContactMethodSignal):
+	case string(repository.ContactMethodTelegram):
 		return 5
-	case string(repository.ContactMethodDiscord):
+	case string(repository.ContactMethodSignal):
 		return 6
-	case string(repository.ContactMethodTwitter):
+	case string(repository.ContactMethodDiscord):
 		return 7
-	case string(repository.ContactMethodGChat):
+	case string(repository.ContactMethodTwitter):
 		return 8
+	case string(repository.ContactMethodGChat):
+		return 9
 	default:
 		return 99
 	}
