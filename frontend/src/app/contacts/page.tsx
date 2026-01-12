@@ -135,7 +135,7 @@ function ContactsTable({
   }
 
   return (
-    <div className="shadow sm:rounded-lg">
+    <div className="shadow sm:rounded-lg overflow-hidden">
       <table className="min-w-full divide-y divide-gray-300">
         <thead className="bg-gray-50">
           <tr>
