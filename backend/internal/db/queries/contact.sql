@@ -127,3 +127,40 @@ WHERE c.deleted_at IS NULL
 GROUP BY c.id, c.full_name
 ORDER BY similarity(c.full_name, sqlc.arg(search_name)::text) DESC
 LIMIT sqlc.arg(result_limit);
+
+-- name: FindSimilarContactsBatch :many
+-- Finds similar contacts for multiple candidate names in a single batch query.
+-- Uses UNNEST to expand input arrays and LATERAL join to find matches per candidate.
+-- Returns results grouped by candidate_id with matches ordered by similarity.
+WITH candidate_names AS (
+  SELECT
+    unnest(sqlc.arg(candidate_names)::text[])::text as candidate_name,
+    unnest(sqlc.arg(candidate_ids)::text[])::text as candidate_id
+)
+SELECT
+  cn.candidate_id::text as candidate_id,
+  cn.candidate_name::text as candidate_name,
+  c.id as contact_id,
+  c.full_name as contact_name,
+  similarity(c.full_name, cn.candidate_name) as name_similarity,
+  COALESCE(
+    json_agg(
+      json_build_object(
+        'type', cm.type,
+        'value', cm.value
+      )
+    ) FILTER (WHERE cm.id IS NOT NULL),
+    '[]'
+  )::jsonb as methods_json
+FROM candidate_names cn
+CROSS JOIN LATERAL (
+  SELECT c.id, c.full_name
+  FROM contact c
+  WHERE c.deleted_at IS NULL
+    AND similarity(c.full_name, cn.candidate_name) > sqlc.arg(threshold)::real
+  ORDER BY similarity(c.full_name, cn.candidate_name) DESC
+  LIMIT sqlc.arg(limit_per_candidate)
+) c
+LEFT JOIN contact_method cm ON c.id = cm.contact_id
+GROUP BY cn.candidate_id, cn.candidate_name, c.id, c.full_name
+ORDER BY cn.candidate_id, similarity(c.full_name, cn.candidate_name) DESC;

@@ -151,6 +151,92 @@ func (q *Queries) FindSimilarContacts(ctx context.Context, arg FindSimilarContac
 	return items, nil
 }
 
+const FindSimilarContactsBatch = `-- name: FindSimilarContactsBatch :many
+WITH candidate_names AS (
+  SELECT
+    unnest($3::text[])::text as candidate_name,
+    unnest($4::text[])::text as candidate_id
+)
+SELECT
+  cn.candidate_id::text as candidate_id,
+  cn.candidate_name::text as candidate_name,
+  c.id as contact_id,
+  c.full_name as contact_name,
+  similarity(c.full_name, cn.candidate_name) as name_similarity,
+  COALESCE(
+    json_agg(
+      json_build_object(
+        'type', cm.type,
+        'value', cm.value
+      )
+    ) FILTER (WHERE cm.id IS NOT NULL),
+    '[]'
+  )::jsonb as methods_json
+FROM candidate_names cn
+CROSS JOIN LATERAL (
+  SELECT c.id, c.full_name
+  FROM contact c
+  WHERE c.deleted_at IS NULL
+    AND similarity(c.full_name, cn.candidate_name) > $1::real
+  ORDER BY similarity(c.full_name, cn.candidate_name) DESC
+  LIMIT $2
+) c
+LEFT JOIN contact_method cm ON c.id = cm.contact_id
+GROUP BY cn.candidate_id, cn.candidate_name, c.id, c.full_name
+ORDER BY cn.candidate_id, similarity(c.full_name, cn.candidate_name) DESC
+`
+
+type FindSimilarContactsBatchParams struct {
+	Threshold         float32  `json:"threshold"`
+	LimitPerCandidate int32    `json:"limit_per_candidate"`
+	CandidateNames    []string `json:"candidate_names"`
+	CandidateIds      []string `json:"candidate_ids"`
+}
+
+type FindSimilarContactsBatchRow struct {
+	CandidateID    string      `json:"candidate_id"`
+	CandidateName  string      `json:"candidate_name"`
+	ContactID      pgtype.UUID `json:"contact_id"`
+	ContactName    string      `json:"contact_name"`
+	NameSimilarity float32     `json:"name_similarity"`
+	MethodsJson    []byte      `json:"methods_json"`
+}
+
+// Finds similar contacts for multiple candidate names in a single batch query.
+// Uses UNNEST to expand input arrays and LATERAL join to find matches per candidate.
+// Returns results grouped by candidate_id with matches ordered by similarity.
+func (q *Queries) FindSimilarContactsBatch(ctx context.Context, arg FindSimilarContactsBatchParams) ([]*FindSimilarContactsBatchRow, error) {
+	rows, err := q.db.Query(ctx, FindSimilarContactsBatch,
+		arg.Threshold,
+		arg.LimitPerCandidate,
+		arg.CandidateNames,
+		arg.CandidateIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*FindSimilarContactsBatchRow{}
+	for rows.Next() {
+		var i FindSimilarContactsBatchRow
+		if err := rows.Scan(
+			&i.CandidateID,
+			&i.CandidateName,
+			&i.ContactID,
+			&i.ContactName,
+			&i.NameSimilarity,
+			&i.MethodsJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const GetContact = `-- name: GetContact :one
 
 SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, notes FROM contact 

@@ -1074,3 +1074,197 @@ func stringPtr(s string) *string {
 func timeNow() time.Time {
 	return accelerated.GetCurrentTime()
 }
+
+// TestFindSimilarContactsBatch_Integration tests the batch matching query
+func TestFindSimilarContactsBatch_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+
+	// Run migrations first
+	migrationsPath := getMigrationsPath()
+	err := db.RunMigrations(databaseURL, migrationsPath)
+	require.NoError(t, err)
+
+	// Create database connection
+	dbConfig := config.DatabaseConfig{
+		URL:      databaseURL,
+		MaxConns: 5,
+		MinConns: 1,
+	}
+	database, err := db.NewDatabase(ctx, dbConfig)
+	require.NoError(t, err)
+	defer database.Close()
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	methodRepo := repository.NewContactMethodRepository(database.Queries)
+
+	t.Run("EmptyInput", func(t *testing.T) {
+		results, err := contactRepo.FindSimilarContactsBatch(ctx, []repository.BatchContactInput{}, 0.3, 5)
+		require.NoError(t, err)
+		assert.Empty(t, results)
+	})
+
+	t.Run("SingleCandidate_WithMatch", func(t *testing.T) {
+		// Create a contact to match against
+		uniqueSuffix := uuid.New().String()[:8]
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Jane Smith " + uniqueSuffix,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
+
+		// Add email method
+		_, err = methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+			ContactID: contact.ID,
+			Type:      "email",
+			Value:     "jane." + uniqueSuffix + "@example.com",
+		})
+		require.NoError(t, err)
+
+		// Search with batch method
+		results, err := contactRepo.FindSimilarContactsBatch(ctx, []repository.BatchContactInput{
+			{
+				CandidateID:   "test-candidate-1",
+				CandidateName: "Jane Smith " + uniqueSuffix,
+			},
+		}, 0.3, 5)
+
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, "test-candidate-1", results[0].CandidateID)
+		require.NotEmpty(t, results[0].Matches)
+		assert.Equal(t, contact.ID, results[0].Matches[0].Contact.ID)
+		assert.True(t, results[0].Matches[0].Similarity > 0.9)
+		// Verify methods are included
+		assert.NotEmpty(t, results[0].Matches[0].Contact.Methods)
+	})
+
+	t.Run("MultipleCandidates_MixedResults", func(t *testing.T) {
+		// Create contacts to match against
+		uniqueSuffix := uuid.New().String()[:8]
+
+		contact1, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Alice Johnson " + uniqueSuffix,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, contact1.ID) }()
+
+		contact2, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Bob Williams " + uniqueSuffix,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, contact2.ID) }()
+
+		// Search with batch method - one should match, one should not
+		results, err := contactRepo.FindSimilarContactsBatch(ctx, []repository.BatchContactInput{
+			{
+				CandidateID:   "candidate-alice",
+				CandidateName: "Alice Johnson " + uniqueSuffix,
+			},
+			{
+				CandidateID:   "candidate-unknown",
+				CandidateName: "Zzz Completely Different Name Xyz",
+			},
+			{
+				CandidateID:   "candidate-bob",
+				CandidateName: "Bob Williams " + uniqueSuffix,
+			},
+		}, 0.3, 5)
+
+		require.NoError(t, err)
+		require.Len(t, results, 3)
+
+		// First candidate should match
+		assert.Equal(t, "candidate-alice", results[0].CandidateID)
+		require.NotEmpty(t, results[0].Matches)
+		assert.Equal(t, contact1.ID, results[0].Matches[0].Contact.ID)
+
+		// Second candidate should not match
+		assert.Equal(t, "candidate-unknown", results[1].CandidateID)
+		assert.Empty(t, results[1].Matches)
+
+		// Third candidate should match
+		assert.Equal(t, "candidate-bob", results[2].CandidateID)
+		require.NotEmpty(t, results[2].Matches)
+		assert.Equal(t, contact2.ID, results[2].Matches[0].Contact.ID)
+	})
+
+	t.Run("BelowThreshold_NoMatch", func(t *testing.T) {
+		// Create a contact
+		uniqueSuffix := uuid.New().String()[:8]
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Very Specific Name " + uniqueSuffix,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
+
+		// Search with a name that won't match (below 0.3 threshold)
+		results, err := contactRepo.FindSimilarContactsBatch(ctx, []repository.BatchContactInput{
+			{
+				CandidateID:   "candidate-nomatch",
+				CandidateName: "Completely Different",
+			},
+		}, 0.3, 5)
+
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, "candidate-nomatch", results[0].CandidateID)
+		assert.Empty(t, results[0].Matches)
+	})
+
+	t.Run("LimitPerCandidate", func(t *testing.T) {
+		// Create multiple similar contacts
+		uniqueSuffix := uuid.New().String()[:8]
+		var contactIDs []uuid.UUID
+
+		for i := 0; i < 5; i++ {
+			contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+				FullName: "Similar Person " + uniqueSuffix,
+			})
+			require.NoError(t, err)
+			contactIDs = append(contactIDs, contact.ID)
+		}
+		defer func() {
+			for _, id := range contactIDs {
+				_ = contactRepo.HardDeleteContact(ctx, id)
+			}
+		}()
+
+		// Search with limit of 3
+		results, err := contactRepo.FindSimilarContactsBatch(ctx, []repository.BatchContactInput{
+			{
+				CandidateID:   "candidate-limit",
+				CandidateName: "Similar Person " + uniqueSuffix,
+			},
+		}, 0.3, 3)
+
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		// Should return at most 3 matches
+		assert.LessOrEqual(t, len(results[0].Matches), 3)
+	})
+
+	t.Run("OrderPreserved", func(t *testing.T) {
+		// Search with multiple candidates
+		results, err := contactRepo.FindSimilarContactsBatch(ctx, []repository.BatchContactInput{
+			{CandidateID: "first", CandidateName: "ZZZ No Match 1"},
+			{CandidateID: "second", CandidateName: "ZZZ No Match 2"},
+			{CandidateID: "third", CandidateName: "ZZZ No Match 3"},
+		}, 0.3, 5)
+
+		require.NoError(t, err)
+		require.Len(t, results, 3)
+		// Verify order is preserved
+		assert.Equal(t, "first", results[0].CandidateID)
+		assert.Equal(t, "second", results[1].CandidateID)
+		assert.Equal(t, "third", results[2].CandidateID)
+	})
+}
