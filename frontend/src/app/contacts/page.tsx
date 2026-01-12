@@ -256,9 +256,12 @@ function ContactsTable({
               </td>
               <td className="px-6 py-4 whitespace-nowrap">
                 {contact.location && (
-                  <div className="flex items-center text-sm text-gray-900">
-                    <MapPin className="w-4 h-4 mr-2 text-gray-400" />
-                    {contact.location}
+                  <div
+                    className="flex items-center text-sm text-gray-900 max-w-[200px]"
+                    title={contact.location}
+                  >
+                    <MapPin className="w-4 h-4 mr-2 flex-shrink-0 text-gray-400" />
+                    <span className="truncate">{contact.location}</span>
                   </div>
                 )}
               </td>
