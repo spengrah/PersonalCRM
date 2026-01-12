@@ -160,7 +160,12 @@ test.describe('Imports - Import Action', () => {
     })
 
     // Verify the candidate card is removed from the page list
-    await expect(page.getByText(displayName)).not.toBeVisible({ timeout: 5000 })
+    // Use a specific selector for candidate cards (with Import button) to exclude the notification
+    const candidateCard = page
+      .locator('[class*="border-gray-200"]')
+      .filter({ hasText: displayName })
+      .filter({ has: page.getByRole('button', { name: 'Import', exact: true }) })
+    await expect(candidateCard).toHaveCount(0, { timeout: 10000 })
   })
 })
 
