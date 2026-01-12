@@ -9,7 +9,7 @@ UPDATE contact c
 SET email = cm.value
 FROM contact_method cm
 WHERE cm.contact_id = c.id
-  AND cm.type = 'email_personal';
+  AND cm.type = 'email';
 
 UPDATE contact c
 SET phone = cm.value

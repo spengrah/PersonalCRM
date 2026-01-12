@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import {
-  normalizeEmail,
-  normalizePhone,
   detectMethodConflicts,
   getCandidateDisplayName,
   calculateNameSimilarity,
@@ -14,53 +12,6 @@ import type { ImportCandidate } from '@/types/import'
 import type { ContactMethod } from '@/types/contact'
 
 describe('method-conflict-detection', () => {
-  describe('normalizeEmail', () => {
-    it('lowercases email addresses', () => {
-      expect(normalizeEmail('John@Example.COM')).toBe('john@example.com')
-    })
-
-    it('trims whitespace', () => {
-      expect(normalizeEmail('  john@example.com  ')).toBe('john@example.com')
-    })
-
-    it('handles already normalized emails', () => {
-      expect(normalizeEmail('john@example.com')).toBe('john@example.com')
-    })
-
-    it('handles empty string', () => {
-      expect(normalizeEmail('')).toBe('')
-    })
-  })
-
-  describe('normalizePhone', () => {
-    it('strips non-digit characters except leading +', () => {
-      expect(normalizePhone('+1 (555) 123-4567')).toBe('+15551234567')
-    })
-
-    it('preserves leading + for international numbers', () => {
-      expect(normalizePhone('+44 20 7946 0958')).toBe('+442079460958')
-    })
-
-    it('handles numbers without leading +', () => {
-      expect(normalizePhone('555-123-4567')).toBe('5551234567')
-    })
-
-    it('handles already normalized numbers', () => {
-      expect(normalizePhone('+15551234567')).toBe('+15551234567')
-    })
-
-    it('strips whitespace from phone numbers', () => {
-      // Note: implementation checks startsWith('+') before stripping non-digits,
-      // so leading whitespace means the + is not at position 0
-      expect(normalizePhone('  1555123  ')).toBe('1555123')
-      expect(normalizePhone('+1 555 123')).toBe('+1555123')
-    })
-
-    it('handles empty string', () => {
-      expect(normalizePhone('')).toBe('')
-    })
-  })
-
   describe('getCandidateDisplayName', () => {
     it('uses display_name if available', () => {
       const candidate = {
@@ -187,7 +138,7 @@ describe('method-conflict-detection', () => {
     })
 
     it('returns adding state for new emails not in CRM', () => {
-      const candidate = createCandidate(['new@gmail.com']) // Free domain -> personal
+      const candidate = createCandidate(['new@gmail.com'])
       const crmMethods: ContactMethod[] = []
 
       const result = detectMethodConflicts(candidate, crmMethods)
@@ -198,12 +149,12 @@ describe('method-conflict-detection', () => {
         external_type: 'email',
         conflict_type: 'none',
         state: 'adding',
-        suggested_crm_type: 'email_personal',
+        suggested_crm_type: 'email',
       })
     })
 
-    it('returns adding state for work emails not in CRM', () => {
-      const candidate = createCandidate(['new@company.com']) // Non-free domain -> work
+    it('returns adding state for new emails not in CRM (non-free domain)', () => {
+      const candidate = createCandidate(['new@company.com'])
       const crmMethods: ContactMethod[] = []
 
       const result = detectMethodConflicts(candidate, crmMethods)
@@ -214,7 +165,7 @@ describe('method-conflict-detection', () => {
         external_type: 'email',
         conflict_type: 'none',
         state: 'adding',
-        suggested_crm_type: 'email_work',
+        suggested_crm_type: 'email',
       })
     })
 
@@ -235,9 +186,9 @@ describe('method-conflict-detection', () => {
     })
 
     it('returns identical state for matching email with same type', () => {
-      // Use gmail.com which is a free domain -> inferred as personal
+      // Use gmail.com as a distinct email value
       const candidate = createCandidate(['john@gmail.com'])
-      const crmMethods = [createMethod('email_personal', 'john@gmail.com')]
+      const crmMethods = [createMethod('email', 'john@gmail.com')]
 
       const result = detectMethodConflicts(candidate, crmMethods)
 
@@ -250,37 +201,36 @@ describe('method-conflict-detection', () => {
       expect(result[0].crm_method?.value).toBe('john@gmail.com')
     })
 
-    it('detects type conflict for same value with different type', () => {
-      // john@gmail.com would infer as email_personal, but CRM has it as work
+    it('treats matching value with different type as identical', () => {
+      // john@gmail.com would infer as email, but CRM has it as work
       const candidate = createCandidate(['john@gmail.com'])
-      const crmMethods = [createMethod('email_work', 'john@gmail.com')]
+      const crmMethods = [createMethod('email', 'john@gmail.com')]
 
       const result = detectMethodConflicts(candidate, crmMethods)
 
       expect(result).toHaveLength(1)
       expect(result[0]).toMatchObject({
         external_value: 'john@gmail.com',
-        conflict_type: 'type_conflict',
-        state: 'conflict',
+        conflict_type: 'identical',
+        state: 'unchanged',
       })
-      expect(result[0].crm_method?.type).toBe('email_work')
+      expect(result[0].crm_method?.type).toBe('email')
     })
 
-    it('detects value conflict for same type with different value', () => {
+    it('adds new value even when type already exists', () => {
       // Both emails infer as personal, but different values
       const candidate = createCandidate(['new@gmail.com'])
-      const crmMethods = [createMethod('email_personal', 'old@gmail.com')]
+      const crmMethods = [createMethod('email', 'old@gmail.com')]
 
       const result = detectMethodConflicts(candidate, crmMethods)
 
       expect(result).toHaveLength(1)
       expect(result[0]).toMatchObject({
         external_value: 'new@gmail.com',
-        conflict_type: 'value_conflict',
-        state: 'conflict',
-        suggested_crm_type: 'email_personal',
+        conflict_type: 'none',
+        state: 'adding',
+        suggested_crm_type: 'email',
       })
-      expect(result[0].crm_method?.value).toBe('old@gmail.com')
     })
 
     it('handles multiple emails with mixed states', () => {
@@ -288,7 +238,7 @@ describe('method-conflict-detection', () => {
         'existing@gmail.com', // Gmail is free email domain -> personal
         'new@company.com', // Company domain -> work type
       ])
-      const crmMethods = [createMethod('email_personal', 'existing@gmail.com')]
+      const crmMethods = [createMethod('email', 'existing@gmail.com')]
 
       const result = detectMethodConflicts(candidate, crmMethods)
 
@@ -298,19 +248,6 @@ describe('method-conflict-detection', () => {
       // Second email is new (different type slot - work)
       expect(result[1].conflict_type).toBe('none')
       expect(result[1].state).toBe('adding')
-    })
-
-    it('detects value conflict when type slot is taken', () => {
-      const candidate = createCandidate([
-        'new@gmail.com', // Personal email (gmail is free domain)
-      ])
-      const crmMethods = [createMethod('email_personal', 'old@gmail.com')]
-
-      const result = detectMethodConflicts(candidate, crmMethods)
-
-      expect(result).toHaveLength(1)
-      expect(result[0].conflict_type).toBe('value_conflict')
-      expect(result[0].state).toBe('conflict')
     })
 
     it('handles phones with normalized matching', () => {
@@ -323,9 +260,19 @@ describe('method-conflict-detection', () => {
       expect(result[0].conflict_type).toBe('identical')
     })
 
+    it('handles normalized email casing', () => {
+      const candidate = createCandidate(['John@Example.com'])
+      const crmMethods = [createMethod('email', 'john@example.com')]
+
+      const result = detectMethodConflicts(candidate, crmMethods)
+
+      expect(result).toHaveLength(1)
+      expect(result[0].conflict_type).toBe('identical')
+    })
+
     it('handles empty candidate methods', () => {
       const candidate = createCandidate()
-      const crmMethods = [createMethod('email_personal', 'john@gmail.com')]
+      const crmMethods = [createMethod('email', 'john@gmail.com')]
 
       const result = detectMethodConflicts(candidate, crmMethods)
 

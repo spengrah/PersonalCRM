@@ -1,6 +1,5 @@
 export type ContactMethodType =
-  | 'email_personal'
-  | 'email_work'
+  | 'email'
   | 'phone'
   | 'telegram'
   | 'signal'

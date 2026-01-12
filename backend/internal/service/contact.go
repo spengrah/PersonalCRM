@@ -371,11 +371,11 @@ func sortContactMethods(methods []repository.ContactMethod) {
 
 func contactMethodPriority(methodType string) int {
 	switch methodType {
-	case string(repository.ContactMethodEmailPersonal):
+	case string(repository.ContactMethodEmail):
 		return 1
-	case string(repository.ContactMethodEmailWork):
-		return 2
 	case string(repository.ContactMethodPhone):
+		return 2
+	case string(repository.ContactMethodWhatsApp):
 		return 3
 	case string(repository.ContactMethodTelegram):
 		return 4

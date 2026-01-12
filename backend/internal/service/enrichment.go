@@ -170,6 +170,9 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 	selectedMethods []MethodSelection,
 	conflictResolutions map[string]string,
 ) error {
+	// conflictResolutions is kept for API compatibility; type conflicts are no longer applicable.
+	_ = conflictResolutions
+
 	// Get existing methods
 	existingMethods, err := s.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
 	if err != nil {
@@ -177,11 +180,9 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 	}
 
 	// Build maps for existing methods
-	existingByType := make(map[string]*repository.ContactMethod)
 	existingNormalized := make(map[string]bool)
 	for i := range existingMethods {
 		m := &existingMethods[i]
-		existingByType[m.Type] = m
 		normalized := identity.Normalize(m.Value, mapMethodTypeToIdentifier(m.Type))
 		existingNormalized[normalized] = true
 	}
@@ -213,26 +214,7 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 			continue // Already have this value
 		}
 
-		// Check if type slot is taken
-		if existingMethod, exists := existingByType[sel.Type]; exists {
-			// Type conflict - check resolution
-			resolution := conflictResolutions[sel.OriginalValue]
-			if resolution == "use_external" {
-				// Replace CRM value with external value
-				err := s.methodRepo.UpdateContactMethod(ctx, existingMethod.ID, repository.UpdateContactMethodRequest{
-					Value: sel.OriginalValue,
-				})
-				if err != nil {
-					methodErrors = append(methodErrors, fmt.Sprintf("failed to update method %s: %v", sel.OriginalValue, err))
-					continue
-				}
-				s.recordEnrichment(ctx, contact.ID, external, "method:"+sel.Type+":replaced", sel.OriginalValue)
-			}
-			// If resolution is "use_crm" or empty, keep existing value (no action)
-			continue
-		}
-
-		// Type slot is available - add the method
+		// Add the method
 		_, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
 			Type:      sel.Type,
@@ -246,7 +228,6 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 
 		s.recordEnrichment(ctx, contact.ID, external, "method:"+sel.Type+":"+normalized, sel.OriginalValue)
 		existingNormalized[normalized] = true
-		existingByType[sel.Type] = nil // Mark type as taken (we don't need the actual method)
 	}
 
 	// Return error if any method operations failed
@@ -269,34 +250,21 @@ func (s *EnrichmentService) enrichContactMethods(
 		return err
 	}
 
-	// Build set of normalized existing values and types
+	// Build set of normalized existing values
 	existingSet := make(map[string]bool)
-	existingTypes := make(map[string]bool)
 	for _, m := range existingMethods {
 		normalized := identity.Normalize(m.Value, mapMethodTypeToIdentifier(m.Type))
 		existingSet[normalized] = true
-		existingTypes[m.Type] = true
 	}
 
 	// Add missing emails
-	var conflicts []string
 	for _, email := range external.Emails {
 		normalized := identity.Normalize(email.Value, identity.IdentifierTypeEmail)
 		if existingSet[normalized] {
 			continue // Already have this email
 		}
 
-		// Determine type based on email type from Google
-		methodType := string(repository.ContactMethodEmailPersonal)
-		if strings.Contains(strings.ToLower(email.Type), "work") {
-			methodType = string(repository.ContactMethodEmailWork)
-		}
-
-		// Check if this type is already taken
-		if existingTypes[methodType] {
-			conflicts = append(conflicts, email.Value+" (type "+methodType+" already exists)")
-			continue
-		}
+		methodType := string(repository.ContactMethodEmail)
 
 		_, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
@@ -311,7 +279,6 @@ func (s *EnrichmentService) enrichContactMethods(
 
 		s.recordEnrichment(ctx, contact.ID, external, "method:"+methodType+":"+normalized, email.Value)
 		existingSet[normalized] = true // Mark as added
-		existingTypes[methodType] = true
 	}
 
 	// Add missing phones
@@ -322,12 +289,6 @@ func (s *EnrichmentService) enrichContactMethods(
 		}
 
 		methodType := string(repository.ContactMethodPhone)
-
-		// Check if phone type is already taken
-		if existingTypes[methodType] {
-			conflicts = append(conflicts, phone.Value+" (phone already exists)")
-			continue
-		}
 
 		_, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
@@ -342,12 +303,6 @@ func (s *EnrichmentService) enrichContactMethods(
 
 		s.recordEnrichment(ctx, contact.ID, external, "method:phone:"+normalized, phone.Value)
 		existingSet[normalized] = true
-		existingTypes[methodType] = true
-	}
-
-	// Return error if there were conflicts
-	if len(conflicts) > 0 {
-		return fmt.Errorf("contact method conflicts: %s", strings.Join(conflicts, "; "))
 	}
 
 	return nil
@@ -387,14 +342,18 @@ func (s *EnrichmentService) ListEnrichments(ctx context.Context, contactID uuid.
 // mapMethodTypeToIdentifier maps contact method type to identity type for normalization
 func mapMethodTypeToIdentifier(methodType string) identity.IdentifierType {
 	switch methodType {
-	case string(repository.ContactMethodEmailPersonal), string(repository.ContactMethodEmailWork):
+	case string(repository.ContactMethodEmail):
 		return identity.IdentifierTypeEmail
-	case string(repository.ContactMethodPhone):
+	case string(repository.ContactMethodPhone), string(repository.ContactMethodSignal):
 		return identity.IdentifierTypePhone
+	case string(repository.ContactMethodGChat):
+		return identity.IdentifierTypeEmail
 	case string(repository.ContactMethodTelegram):
 		return identity.IdentifierTypeTelegram
 	case string(repository.ContactMethodWhatsApp):
 		return identity.IdentifierTypeWhatsApp
+	case string(repository.ContactMethodDiscord), string(repository.ContactMethodTwitter):
+		return identity.IdentifierTypeTelegram
 	default:
 		return identity.IdentifierTypeEmail
 	}

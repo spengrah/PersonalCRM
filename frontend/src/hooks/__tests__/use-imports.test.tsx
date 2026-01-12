@@ -337,7 +337,7 @@ describe('use-imports hooks', () => {
 
       const request = {
         selected_methods: [
-          { original_value: 'john@example.com', type: 'email_personal' },
+          { original_value: 'john@example.com', type: 'email' },
           { original_value: '+1234567890', type: 'phone' },
         ],
       }
@@ -391,7 +391,7 @@ describe('use-imports hooks', () => {
 
       const request = {
         crm_contact_id: 'crm-456',
-        selected_methods: [{ original_value: 'john@example.com', type: 'email_work' }],
+        selected_methods: [{ original_value: 'john@example.com', type: 'email' }],
         conflict_resolutions: {
           'john@example.com': 'use_external' as const,
         },

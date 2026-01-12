@@ -1,41 +1,6 @@
 import type { ContactMethod, ContactMethodType } from '@/types/contact'
 import type { ImportCandidate, MethodComparison, ConflictType, MethodState } from '@/types/import'
-import { inferEmailType } from './email-type-inference'
-
-/**
- * Normalize an email for comparison.
- * Lowercases and trims whitespace.
- */
-export function normalizeEmail(email: string): string {
-  return email.toLowerCase().trim()
-}
-
-/**
- * Normalize a phone number for comparison.
- * Strips all non-digit characters except leading +.
- */
-export function normalizePhone(phone: string): string {
-  if (!phone) return ''
-
-  const hasLeadingPlus = phone.startsWith('+')
-  const digits = phone.replace(/\D/g, '')
-
-  return hasLeadingPlus ? `+${digits}` : digits
-}
-
-/**
- * Check if a value is an email address.
- */
-function isEmail(value: string): boolean {
-  return value.includes('@')
-}
-
-/**
- * Normalize any contact method value.
- */
-function normalizeValue(value: string): string {
-  return isEmail(value) ? normalizeEmail(value) : normalizePhone(value)
-}
+import { normalizeContactMethodValueForComparison } from './contact-methods'
 
 /**
  * Get the display name from an import candidate.
@@ -48,19 +13,19 @@ export function getCandidateDisplayName(candidate: ImportCandidate): string {
 
 /**
  * Extract external contact methods from an import candidate.
- * Preserves original type information for email type inference.
+ * Preserves original type information for conflict resolution.
  */
 export function extractExternalMethods(candidate: ImportCandidate): {
   emails: Array<{ value: string; type: string }>
   phones: Array<{ value: string; type: string }>
 } {
   // The ImportCandidate only has string arrays, not typed methods
-  // We'll need to infer types based on email domain for emails
+  // Preserve the external type for error messaging and conflict handling.
   // For phones, we always use 'phone' type
   return {
     emails: candidate.emails.map(email => ({
       value: email,
-      type: 'unknown', // Will be inferred
+      type: 'unknown',
     })),
     phones: candidate.phones.map(phone => ({
       value: phone,
@@ -79,20 +44,18 @@ export function detectMethodConflicts(
 ): MethodComparison[] {
   const comparisons: MethodComparison[] = []
 
-  // Build maps for CRM methods
+  // Build map for CRM methods by normalized value
   const crmByNormalizedValue = new Map<string, ContactMethod>()
-  const crmByType = new Map<string, ContactMethod>()
 
   for (const method of crmMethods) {
-    const normalized = normalizeValue(method.value)
+    const normalized = normalizeContactMethodValueForComparison(method.type, method.value)
     crmByNormalizedValue.set(normalized, method)
-    crmByType.set(method.type, method)
   }
 
   // Process emails
   for (const email of candidate.emails) {
-    const normalized = normalizeEmail(email)
-    const suggestedType = inferEmailType(email)
+    const suggestedType: ContactMethodType = 'email'
+    const normalized = normalizeContactMethodValueForComparison(suggestedType, email)
 
     // Check if value already exists in CRM
     const existingByValue = crmByNormalizedValue.get(normalized)
@@ -109,26 +72,11 @@ export function detectMethodConflicts(
         value: existingByValue.value,
       }
 
-      if (existingByValue.type === suggestedType) {
-        conflictType = 'identical'
-        state = 'unchanged'
-      } else {
-        conflictType = 'type_conflict'
-        state = 'conflict'
-      }
+      conflictType = 'identical'
+      state = 'unchanged'
     } else {
-      // Value doesn't exist - check if type slot is available
-      const existingByType = crmByType.get(suggestedType)
-      if (existingByType) {
-        // Type slot is taken by a different value
-        crmMethod = {
-          id: existingByType.id || '',
-          type: existingByType.type,
-          value: existingByType.value,
-        }
-        conflictType = 'value_conflict'
-        state = 'conflict'
-      }
+      conflictType = 'none'
+      state = 'adding'
     }
 
     comparisons.push({
@@ -143,7 +91,7 @@ export function detectMethodConflicts(
 
   // Process phones
   for (const phone of candidate.phones) {
-    const normalized = normalizePhone(phone)
+    const normalized = normalizeContactMethodValueForComparison('phone', phone)
     const suggestedType: ContactMethodType = 'phone'
 
     // Check if value already exists in CRM
@@ -163,17 +111,8 @@ export function detectMethodConflicts(
       conflictType = 'identical'
       state = 'unchanged'
     } else {
-      // Value doesn't exist - check if phone slot is taken
-      const existingPhone = crmByType.get('phone')
-      if (existingPhone) {
-        crmMethod = {
-          id: existingPhone.id || '',
-          type: existingPhone.type,
-          value: existingPhone.value,
-        }
-        conflictType = 'value_conflict'
-        state = 'conflict'
-      }
+      conflictType = 'none'
+      state = 'adding'
     }
 
     comparisons.push({

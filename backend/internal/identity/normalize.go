@@ -25,11 +25,10 @@ const (
 type ContactMethodType string
 
 const (
-	ContactMethodTypeEmailPersonal ContactMethodType = "email_personal"
-	ContactMethodTypeEmailWork     ContactMethodType = "email_work"
-	ContactMethodTypePhone         ContactMethodType = "phone"
-	ContactMethodTypeTelegram      ContactMethodType = "telegram"
-	ContactMethodTypeWhatsApp      ContactMethodType = "whatsapp"
+	ContactMethodTypeEmail    ContactMethodType = "email"
+	ContactMethodTypePhone    ContactMethodType = "phone"
+	ContactMethodTypeTelegram ContactMethodType = "telegram"
+	ContactMethodTypeWhatsApp ContactMethodType = "whatsapp"
 )
 
 // nonDigitRegex matches any non-digit character
@@ -53,7 +52,8 @@ func Normalize(raw string, idType IdentifierType) string {
 	}
 }
 
-// normalizeEmail normalizes an email address by lowercasing and trimming whitespace
+// normalizeEmail normalizes an email address by lowercasing and trimming whitespace.
+// Input is assumed to be validated upstream (handlers enforce email format).
 func normalizeEmail(email string) string {
 	return matching.NormalizeEmail(email)
 }
@@ -73,17 +73,17 @@ func normalizeTelegram(handle string) string {
 
 // MapIdentifierTypeToContactMethodTypes maps an external identifier type
 // to the corresponding contact method types for matching.
-// For email identifiers, we search both email_personal and email_work.
+// For email identifiers, we search email contact methods.
 func MapIdentifierTypeToContactMethodTypes(idType IdentifierType) []ContactMethodType {
 	switch idType {
 	case IdentifierTypeEmail:
-		return []ContactMethodType{ContactMethodTypeEmailPersonal, ContactMethodTypeEmailWork}
+		return []ContactMethodType{ContactMethodTypeEmail}
 	case IdentifierTypePhone:
 		return []ContactMethodType{ContactMethodTypePhone}
 	case IdentifierTypeTelegram:
 		return []ContactMethodType{ContactMethodTypeTelegram}
 	case IdentifierTypeIMessageEmail:
-		return []ContactMethodType{ContactMethodTypeEmailPersonal, ContactMethodTypeEmailWork}
+		return []ContactMethodType{ContactMethodTypeEmail}
 	case IdentifierTypeIMessagePhone:
 		return []ContactMethodType{ContactMethodTypePhone}
 	case IdentifierTypeWhatsApp:

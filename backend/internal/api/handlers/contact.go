@@ -92,7 +92,7 @@ type ContactResponse struct {
 // ContactMethodResponse represents a contact method in responses
 type ContactMethodResponse struct {
 	ID        string `json:"id" example:"550e8400-e29b-41d4-a716-446655440000"`
-	Type      string `json:"type" example:"email_personal"`
+	Type      string `json:"type" example:"email"`
 	Value     string `json:"value" example:"john.doe@example.com"`
 	IsPrimary bool   `json:"is_primary" example:"true"`
 }
@@ -143,7 +143,8 @@ type ListContactsQuery struct {
 
 // ContactMethodRequest represents a single contact method in requests
 type ContactMethodRequest struct {
-	Type      string `json:"type" validate:"required,oneof=email_personal email_work phone telegram discord twitter signal gchat whatsapp" example:"email_personal"`
+	// Note: legacy email_personal/email_work are no longer accepted; clients should send "email".
+	Type      string `json:"type" validate:"required,oneof=email phone telegram discord twitter signal gchat whatsapp" example:"email"`
 	Value     string `json:"value" validate:"required,max=255" example:"john.doe@example.com"`
 	IsPrimary bool   `json:"is_primary" example:"true"`
 }
@@ -578,7 +579,9 @@ func normalizeContactMethodRequests(methods []ContactMethodRequest) ([]ContactMe
 		}
 
 		value := rawValue
-		if method.Type == string(repository.ContactMethodTelegram) || method.Type == string(repository.ContactMethodTwitter) {
+		if method.Type == string(repository.ContactMethodTelegram) ||
+			method.Type == string(repository.ContactMethodTwitter) ||
+			method.Type == string(repository.ContactMethodDiscord) {
 			value = strings.TrimLeft(value, "@")
 			value = strings.TrimSpace(value)
 		}
@@ -599,14 +602,19 @@ func validateContactMethods(validate *validator.Validate, methods []ContactMetho
 		return nil
 	}
 
-	types := make(map[string]struct{}, len(methods))
+	normalizedByType := make(map[string]struct{}, len(methods))
 	primaryCount := 0
 
 	for _, method := range methods {
-		if _, exists := types[method.Type]; exists {
-			return fmt.Errorf("duplicate contact method type: %s", method.Type)
+		normalizedValue := repository.NormalizeContactMethodValue(method.Type, method.Value)
+		if normalizedValue == "" {
+			return fmt.Errorf("contact method %s has empty normalized value", method.Type)
 		}
-		types[method.Type] = struct{}{}
+		key := method.Type + ":" + normalizedValue
+		if _, exists := normalizedByType[key]; exists {
+			return fmt.Errorf("duplicate contact method value for type: %s", method.Type)
+		}
+		normalizedByType[key] = struct{}{}
 
 		if method.IsPrimary {
 			primaryCount++
@@ -616,8 +624,7 @@ func validateContactMethods(validate *validator.Validate, methods []ContactMetho
 		}
 
 		switch method.Type {
-		case string(repository.ContactMethodEmailPersonal),
-			string(repository.ContactMethodEmailWork),
+		case string(repository.ContactMethodEmail),
 			string(repository.ContactMethodGChat):
 			if err := validate.Var(method.Value, "email"); err != nil {
 				return fmt.Errorf("invalid email for contact method %s", method.Type)

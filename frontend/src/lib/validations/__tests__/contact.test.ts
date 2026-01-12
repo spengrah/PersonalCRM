@@ -7,7 +7,7 @@ describe('contactSchema', () => {
       const validData = {
         full_name: 'John Doe',
         methods: [
-          { type: 'email_personal', value: 'john@example.com', is_primary: true },
+          { type: 'email', value: 'john@example.com', is_primary: true },
           { type: 'phone', value: '555-1234', is_primary: false },
         ],
         location: 'New York, NY',
@@ -32,7 +32,7 @@ describe('contactSchema', () => {
     it('validates contact with some optional fields', () => {
       const validData = {
         full_name: 'Bob Johnson',
-        methods: [{ type: 'email_personal', value: 'bob@example.com', is_primary: true }],
+        methods: [{ type: 'email', value: 'bob@example.com', is_primary: true }],
         birthday: '1985-06-20',
       }
 
@@ -44,7 +44,7 @@ describe('contactSchema', () => {
   describe('required field validation', () => {
     it('rejects missing full_name', () => {
       const invalidData = {
-        methods: [{ type: 'email_personal', value: 'test@example.com', is_primary: true }],
+        methods: [{ type: 'email', value: 'test@example.com', is_primary: true }],
       }
 
       const result = contactSchema.safeParse(invalidData)
@@ -65,7 +65,7 @@ describe('contactSchema', () => {
     it('accepts valid email method', () => {
       const data = {
         full_name: 'Test User',
-        methods: [{ type: 'email_personal', value: 'test@example.com', is_primary: true }],
+        methods: [{ type: 'email', value: 'test@example.com', is_primary: true }],
       }
 
       const result = contactSchema.safeParse(data)
@@ -75,19 +75,32 @@ describe('contactSchema', () => {
     it('rejects invalid email format', () => {
       const data = {
         full_name: 'Test User',
-        methods: [{ type: 'email_personal', value: 'not-an-email', is_primary: true }],
+        methods: [{ type: 'email', value: 'not-an-email', is_primary: true }],
       }
 
       const result = contactSchema.safeParse(data)
       expect(result.success).toBe(false)
     })
 
-    it('rejects duplicate method types', () => {
+    it('allows duplicate method types with different values', () => {
       const data = {
         full_name: 'Test User',
         methods: [
-          { type: 'email_personal', value: 'test@example.com', is_primary: true },
-          { type: 'email_personal', value: 'another@example.com', is_primary: false },
+          { type: 'email', value: 'test@example.com', is_primary: true },
+          { type: 'email', value: 'another@example.com', is_primary: false },
+        ],
+      }
+
+      const result = contactSchema.safeParse(data)
+      expect(result.success).toBe(true)
+    })
+
+    it('rejects duplicate normalized values for the same type', () => {
+      const data = {
+        full_name: 'Test User',
+        methods: [
+          { type: 'email', value: 'Test@Example.com', is_primary: true },
+          { type: 'email', value: ' test@example.com ', is_primary: false },
         ],
       }
 
@@ -99,7 +112,7 @@ describe('contactSchema', () => {
       const data = {
         full_name: 'Test User',
         methods: [
-          { type: 'email_personal', value: 'test@example.com', is_primary: true },
+          { type: 'email', value: 'test@example.com', is_primary: true },
           { type: 'phone', value: '555-1234', is_primary: true },
         ],
       }
@@ -272,7 +285,7 @@ describe('transformContactFormData', () => {
     const input: ContactFormData = {
       full_name: 'John Doe',
       methods: [
-        { type: 'email_personal', value: 'john@example.com', is_primary: true },
+        { type: 'email', value: 'john@example.com', is_primary: true },
         { type: 'phone', value: '555-1234', is_primary: false },
       ],
       location: 'New York',
@@ -280,7 +293,7 @@ describe('transformContactFormData', () => {
 
     const result = transformContactFormData(input)
     expect(result.methods).toEqual([
-      { type: 'email_personal', value: 'john@example.com', is_primary: true },
+      { type: 'email', value: 'john@example.com', is_primary: true },
       { type: 'phone', value: '555-1234', is_primary: false },
     ])
     expect(result.location).toBe('New York')

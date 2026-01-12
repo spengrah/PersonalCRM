@@ -14,7 +14,6 @@ import {
   useIgnoreCandidate,
   useImportCandidates,
 } from '@/hooks/use-imports'
-import { inferEmailType } from '@/lib/email-type-inference'
 import {
   detectMethodConflicts,
   getCandidateDisplayName,
@@ -136,7 +135,7 @@ export function ImportLinkModal({
 
     // Add emails with inferred types
     candidate.emails.forEach(email => {
-      const inferredType = inferEmailType(email)
+      const inferredType: ContactMethodType = 'email'
       selections.set(email, {
         value: email,
         selected: true, // Pre-select all by default
@@ -195,17 +194,6 @@ export function ImportLinkModal({
     return !areNamesSimilar(displayName, selectedContact.full_name)
   }, [mode, selectedContact, displayName])
 
-  // Get used types (for disabling in dropdowns)
-  const usedTypes = useMemo(() => {
-    const used = new Set<string>()
-    methodSelections.forEach(sel => {
-      if (sel.selected) {
-        used.add(sel.type)
-      }
-    })
-    return used
-  }, [methodSelections])
-
   // Handle method toggle
   const handleMethodToggle = (value: string) => {
     setMethodSelections(prev => {
@@ -224,16 +212,6 @@ export function ImportLinkModal({
       const next = new Map(prev)
       const existing = next.get(value)
       if (existing) {
-        // Handle auto-swap for emails
-        if (existing.isEmail) {
-          // Find any other email with this type and swap
-          next.forEach((sel, key) => {
-            if (key !== value && sel.isEmail && sel.selected && sel.type === type) {
-              const otherType: ContactMethodType = existing.type
-              next.set(key, { ...sel, type: otherType })
-            }
-          })
-        }
         next.set(value, { ...existing, type })
       }
       return next
@@ -526,7 +504,6 @@ export function ImportLinkModal({
                   state="adding"
                   onToggle={() => handleMethodToggle(sel.value)}
                   onTypeChange={type => handleTypeChange(sel.value, type)}
-                  usedTypes={usedTypes}
                   disabled={isLoading}
                   isEmail={sel.isEmail}
                 />
@@ -556,7 +533,6 @@ export function ImportLinkModal({
                           state={comp.state}
                           onToggle={() => handleMethodToggle(comp.external_value)}
                           onTypeChange={type => handleTypeChange(comp.external_value, type)}
-                          usedTypes={usedTypes}
                           disabled={isLoading || comp.conflict_type === 'identical'}
                           isEmail={sel.isEmail}
                         />

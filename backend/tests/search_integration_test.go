@@ -66,7 +66,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmailPersonal), "alice.johnson@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "alice.johnson@example.com", true)
 
 		// Search for exact name
 		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
@@ -98,7 +98,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmailPersonal), "bob.smith@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "bob.smith@example.com", true)
 
 		// Search for partial name (single word)
 		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
@@ -127,7 +127,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmailPersonal), "carol.davis@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "carol.davis@example.com", true)
 
 		// Search by name (FTS tokenizes email addresses specially, so search by name)
 		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
@@ -207,7 +207,7 @@ func TestContactSearch_Integration(t *testing.T) {
 			})
 			require.NoError(t, err)
 			defer func(id uuid.UUID) { _ = repo.HardDeleteContact(ctx, id) }(contact.ID)
-			addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmailPersonal), "pagination.test."+string(rune('a'+i))+"@example.com", true)
+			addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "pagination.test."+string(rune('a'+i))+"@example.com", true)
 		}
 
 		// Test limit
@@ -240,14 +240,14 @@ func TestContactSearch_Integration(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact1.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact1.ID, string(repository.ContactMethodEmailPersonal), "michael.j@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact1.ID, string(repository.ContactMethodEmail), "michael.j@example.com", true)
 
 		contact2, err := repo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName: "Sarah Michael",
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact2.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact2.ID, string(repository.ContactMethodEmailPersonal), "sarah.m@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact2.ID, string(repository.ContactMethodEmail), "sarah.m@example.com", true)
 
 		// Search for "Michael"
 		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
@@ -282,7 +282,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmailPersonal), "david.miller@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "david.miller@example.com", true)
 
 		// Search with different cases
 		testCases := []string{"david", "DAVID", "David", "dAvId"}
@@ -339,7 +339,7 @@ func TestNoteSearch_Integration(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmailPersonal), "note.test@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "note.test@example.com", true)
 
 		// Create a test note
 		note, err := queries.CreateNote(ctx, db.CreateNoteParams{
@@ -377,7 +377,7 @@ func TestNoteSearch_Integration(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmailPersonal), "ranking.test@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "ranking.test@example.com", true)
 
 		// Create notes with different relevance
 		note1, err := queries.CreateNote(ctx, db.CreateNoteParams{
@@ -440,7 +440,7 @@ func TestNoteSearch_Integration(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmailPersonal), "note.pagination@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "note.pagination@example.com", true)
 
 		// Create multiple notes with same keyword
 		for i := 0; i < 5; i++ {
@@ -483,7 +483,7 @@ func TestNoteSearch_Integration(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmailPersonal), "sort.test@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "sort.test@example.com", true)
 
 		// Create notes with same relevance (same keyword count)
 		note1, err := queries.CreateNote(ctx, db.CreateNoteParams{

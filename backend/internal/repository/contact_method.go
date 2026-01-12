@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/identity"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -15,20 +16,18 @@ import (
 type ContactMethodType string
 
 const (
-	ContactMethodEmailPersonal ContactMethodType = "email_personal"
-	ContactMethodEmailWork     ContactMethodType = "email_work"
-	ContactMethodPhone         ContactMethodType = "phone"
-	ContactMethodTelegram      ContactMethodType = "telegram"
-	ContactMethodDiscord       ContactMethodType = "discord"
-	ContactMethodTwitter       ContactMethodType = "twitter"
-	ContactMethodSignal        ContactMethodType = "signal"
-	ContactMethodGChat         ContactMethodType = "gchat"
-	ContactMethodWhatsApp      ContactMethodType = "whatsapp"
+	ContactMethodEmail    ContactMethodType = "email"
+	ContactMethodPhone    ContactMethodType = "phone"
+	ContactMethodTelegram ContactMethodType = "telegram"
+	ContactMethodDiscord  ContactMethodType = "discord"
+	ContactMethodTwitter  ContactMethodType = "twitter"
+	ContactMethodSignal   ContactMethodType = "signal"
+	ContactMethodGChat    ContactMethodType = "gchat"
+	ContactMethodWhatsApp ContactMethodType = "whatsapp"
 )
 
 var ContactMethodTypes = []ContactMethodType{
-	ContactMethodEmailPersonal,
-	ContactMethodEmailWork,
+	ContactMethodEmail,
 	ContactMethodPhone,
 	ContactMethodTelegram,
 	ContactMethodSignal,
@@ -39,13 +38,14 @@ var ContactMethodTypes = []ContactMethodType{
 }
 
 type ContactMethod struct {
-	ID        uuid.UUID `json:"id"`
-	ContactID uuid.UUID `json:"contact_id"`
-	Type      string    `json:"type"`
-	Value     string    `json:"value"`
-	IsPrimary bool      `json:"is_primary"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID              uuid.UUID `json:"id"`
+	ContactID       uuid.UUID `json:"contact_id"`
+	Type            string    `json:"type"`
+	Value           string    `json:"value"`
+	ValueNormalized string    `json:"value_normalized,omitempty"`
+	IsPrimary       bool      `json:"is_primary"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type ContactMethodSummary struct {
@@ -89,8 +89,31 @@ func convertDbContactMethod(dbMethod *db.ContactMethod) ContactMethod {
 	if dbMethod.UpdatedAt.Valid {
 		method.UpdatedAt = dbMethod.UpdatedAt.Time
 	}
+	method.ValueNormalized = dbMethod.ValueNormalized
 
 	return method
+}
+
+// NormalizeContactMethodValue normalizes a contact method value for uniqueness checks.
+// Keep this aligned with identity.Normalize and migration 019 normalization rules.
+func NormalizeContactMethodValue(methodType, value string) string {
+	identifierType := mapMethodTypeToIdentifier(methodType)
+	return identity.Normalize(value, identifierType)
+}
+
+func mapMethodTypeToIdentifier(methodType string) identity.IdentifierType {
+	switch ContactMethodType(methodType) {
+	case ContactMethodEmail, ContactMethodGChat:
+		return identity.IdentifierTypeEmail
+	case ContactMethodPhone, ContactMethodSignal:
+		return identity.IdentifierTypePhone
+	case ContactMethodWhatsApp:
+		return identity.IdentifierTypeWhatsApp
+	case ContactMethodTelegram, ContactMethodDiscord, ContactMethodTwitter:
+		return identity.IdentifierTypeTelegram
+	default:
+		return identity.IdentifierTypeEmail
+	}
 }
 
 func (r *ContactMethodRepository) ListContactMethodsByContact(ctx context.Context, contactID uuid.UUID) ([]ContactMethod, error) {
@@ -111,11 +134,13 @@ func (r *ContactMethodRepository) ListContactMethodsByContact(ctx context.Contex
 }
 
 func (r *ContactMethodRepository) CreateContactMethod(ctx context.Context, req CreateContactMethodRequest) (*ContactMethod, error) {
+	normalized := NormalizeContactMethodValue(req.Type, req.Value)
 	dbMethod, err := r.queries.CreateContactMethod(ctx, db.CreateContactMethodParams{
-		ContactID: uuidToPgUUID(req.ContactID),
-		Type:      req.Type,
-		Value:     req.Value,
-		IsPrimary: pgtype.Bool{Bool: req.IsPrimary, Valid: true},
+		ContactID:       uuidToPgUUID(req.ContactID),
+		Type:            req.Type,
+		Value:           req.Value,
+		ValueNormalized: normalized,
+		IsPrimary:       pgtype.Bool{Bool: req.IsPrimary, Valid: true},
 	})
 	if err != nil {
 		return nil, err
@@ -131,14 +156,18 @@ func (r *ContactMethodRepository) DeleteContactMethodsByContact(ctx context.Cont
 
 // UpdateContactMethodRequest holds parameters for updating a contact method
 type UpdateContactMethodRequest struct {
+	// Type is required to normalize the updated value consistently.
+	Type  string `json:"type"`
 	Value string `json:"value"`
 }
 
 // UpdateContactMethod updates a contact method's value
 func (r *ContactMethodRepository) UpdateContactMethod(ctx context.Context, id uuid.UUID, req UpdateContactMethodRequest) error {
+	normalized := NormalizeContactMethodValue(req.Type, req.Value)
 	_, err := r.queries.UpdateContactMethodValue(ctx, db.UpdateContactMethodValueParams{
-		ID:    uuidToPgUUID(id),
-		Value: req.Value,
+		ID:              uuidToPgUUID(id),
+		Value:           req.Value,
+		ValueNormalized: normalized,
 	})
 	return err
 }

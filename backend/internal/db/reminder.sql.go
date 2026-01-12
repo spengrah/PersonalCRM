@@ -167,9 +167,9 @@ LEFT JOIN LATERAL (
     ORDER BY
         CASE WHEN is_primary THEN 0 ELSE 1 END,
         CASE type
-            WHEN 'email_personal' THEN 1
-            WHEN 'email_work' THEN 2
-            WHEN 'phone' THEN 3
+            WHEN 'email' THEN 1
+            WHEN 'phone' THEN 2
+            WHEN 'whatsapp' THEN 3
             WHEN 'telegram' THEN 4
             WHEN 'signal' THEN 5
             WHEN 'discord' THEN 6

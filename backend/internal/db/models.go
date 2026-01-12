@@ -68,13 +68,14 @@ type ContactEnrichment struct {
 }
 
 type ContactMethod struct {
-	ID        pgtype.UUID        `json:"id"`
-	ContactID pgtype.UUID        `json:"contact_id"`
-	Type      string             `json:"type"`
-	Value     string             `json:"value"`
-	IsPrimary pgtype.Bool        `json:"is_primary"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	ID              pgtype.UUID        `json:"id"`
+	ContactID       pgtype.UUID        `json:"contact_id"`
+	Type            string             `json:"type"`
+	Value           string             `json:"value"`
+	IsPrimary       pgtype.Bool        `json:"is_primary"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ValueNormalized string             `json:"value_normalized"`
 }
 
 type ContactSummary struct {
