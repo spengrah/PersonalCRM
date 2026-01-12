@@ -912,8 +912,8 @@ test.describe('Imports - Cadence Selector (Issue #152)', () => {
     await contactOption.click()
 
     // Wait for the cadence dropdown to be visible
-    // The Select component generates id from label: "select-contact-cadence"
-    const cadenceSelect = page.locator('#select-contact-cadence')
+    // The Select component generates id from label: "Contact Cadence" -> "contact-cadence"
+    const cadenceSelect = page.locator('#contact-cadence')
     await expect(cadenceSelect).toBeVisible({ timeout: 5000 })
 
     // Wait for the contact data to load and pre-select Monthly cadence
