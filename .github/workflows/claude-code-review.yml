@@ -1,36 +1,47 @@
 name: Claude Code Review
 
 on:
-  pull_request:
-    types: [opened, synchronize]
-    paths:
-      # Backend Go code (business logic)
-      - "backend/internal/**/*.go"
-      - "backend/cmd/**/*.go"
-      # Frontend TypeScript/React
-      - "frontend/src/**/*.ts"
-      - "frontend/src/**/*.tsx"
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    # Only run on PRs where CI passed
+    if: |
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
 
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write  # Needed for inline review comments via gh api
+      pull-requests: write
       issues: read
       id-token: write
+      actions: read
 
     steps:
+      - name: Get PR number
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get PR number from the workflow run
+          PR_NUMBER=$(gh api "/repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}" \
+            --jq '.pull_requests[0].number')
+
+          if [[ -z "$PR_NUMBER" || "$PR_NUMBER" == "null" ]]; then
+            echo "Could not determine PR number from workflow run"
+            exit 1
+          fi
+
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "Found PR #$PR_NUMBER"
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Need full history for commit comparison
+          fetch-depth: 0
 
       - name: Run Claude Code Review
         id: claude-review
@@ -39,18 +50,15 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
-            EVENT: ${{ github.event.action }}
+            PR NUMBER: ${{ steps.pr.outputs.pr_number }}
 
-            ${{ github.event.action == 'opened' && '## NEW PR - Full Review
+            ## Full Review
 
-            This is a newly opened pull request. Please conduct a comprehensive review of all changes.' || '## INCREMENTAL REVIEW - New Commits Only
+            CI tests have passed. Please conduct a comprehensive code review of this pull request.
 
-            New commits were pushed to this PR. Focus your review ONLY on the incremental changes.
+            Use `gh pr diff ${{ steps.pr.outputs.pr_number }}` to see the changes.
 
-            Use `git diff ${{ github.event.before }}..${{ github.event.after }}` to see what changed in this push.
-
-            IMPORTANT: First check for previous review comments using `gh pr view ${{ github.event.pull_request.number }} --comments`. If you previously left a review, reference it in your new comment (e.g., "Following up on my previous review..." or "Addressing the changes since my last review...")' }}
+            IMPORTANT: First check for previous review comments using `gh pr view ${{ steps.pr.outputs.pr_number }} --comments`. If you previously left a review, reference it in your new comment.
 
             ## Review Standards
 
@@ -62,26 +70,25 @@ jobs:
 
             ```bash
             # If ALL criteria pass:
-            gh pr review ${{ github.event.pull_request.number }} --approve -b "Your review here"
+            gh pr review ${{ steps.pr.outputs.pr_number }} --approve -b "Your review here"
 
             # If ANY issues found (default):
-            gh pr review ${{ github.event.pull_request.number }} --request-changes -b "Your review here"
+            gh pr review ${{ steps.pr.outputs.pr_number }} --request-changes -b "Your review here"
             ```
 
             CRITICAL: Submit ONE review only. Do not use gh api for inline comments - include file paths and line numbers in the review body.
 
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
           claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr review:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*)"'
 
       - name: Check Claude review result
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
+          PR_NUMBER="${{ steps.pr.outputs.pr_number }}"
+          COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
 
           # Get Claude's review for this specific commit
-          REVIEW=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
+          REVIEW=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" \
             --jq "[.[] | select(.user.login == \"claude[bot]\" and .commit_id == \"$COMMIT_SHA\")] | last")
 
           if [[ -z "$REVIEW" || "$REVIEW" == "null" ]]; then
@@ -107,4 +114,3 @@ jobs:
           fi
 
           echo "Claude review passed"
-
