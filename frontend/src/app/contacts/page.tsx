@@ -254,6 +254,8 @@ function ContactsTable({
                   )
                 })()}
               </td>
+              {/* Location column: max-w-[200px] balances table layout with readability.
+                  Truncated text shows full value via native title tooltip (desktop only). */}
               <td className="px-6 py-4 whitespace-nowrap">
                 {contact.location && (
                   <div
