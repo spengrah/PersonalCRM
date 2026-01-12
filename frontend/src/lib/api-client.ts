@@ -30,6 +30,11 @@ interface ApiResponse<T = unknown> {
   }
 }
 
+interface ApiResponseWithMeta<T> {
+  data: T
+  meta?: ApiResponse['meta']
+}
+
 class ApiClient {
   private baseUrl: string
 
@@ -37,10 +42,27 @@ class ApiClient {
     this.baseUrl = baseUrl
   }
 
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    // Handle empty baseUrl by falling back to window.location.origin
-    const base = this.baseUrl || (typeof window !== 'undefined' ? window.location.origin : '')
-    const url = `${base}${endpoint}`
+  private getBase(): string {
+    return this.baseUrl || (typeof window !== 'undefined' ? window.location.origin : '')
+  }
+
+  private buildUrl(endpoint: string, params?: Record<string, unknown>): string {
+    const url = new URL(endpoint, this.getBase())
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          url.searchParams.append(key, String(value))
+        }
+      })
+    }
+    return url.pathname + url.search
+  }
+
+  private async requestWithMeta<T>(
+    endpoint: string,
+    options: RequestInit = {}
+  ): Promise<ApiResponseWithMeta<T>> {
+    const url = `${this.getBase()}${endpoint}`
 
     // Add timeout to prevent hanging requests
     const controller = new AbortController()
@@ -79,7 +101,7 @@ class ApiClient {
 
       // Handle 204 No Content responses (e.g., DELETE operations)
       if (response.status === 204) {
-        return undefined as T
+        return { data: undefined as T, meta: undefined }
       }
 
       const data: ApiResponse<T> = await response.json()
@@ -88,7 +110,7 @@ class ApiClient {
         throw new ApiError(data.error.message, 400, data.error.code)
       }
 
-      return data.data as T
+      return { data: data.data as T, meta: data.meta }
     } catch (error) {
       clearTimeout(timeoutId) // Clear timeout on error
 
@@ -110,19 +132,22 @@ class ApiClient {
     }
   }
 
+  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const response = await this.requestWithMeta<T>(endpoint, options)
+    return response.data
+  }
+
+  // GET request with metadata (for paginated responses)
+  async getWithMeta<T>(
+    endpoint: string,
+    params?: Record<string, unknown>
+  ): Promise<ApiResponseWithMeta<T>> {
+    return this.requestWithMeta<T>(this.buildUrl(endpoint, params))
+  }
+
   // GET request
   async get<T>(endpoint: string, params?: Record<string, unknown>): Promise<T> {
-    const base = this.baseUrl || (typeof window !== 'undefined' ? window.location.origin : '')
-    const url = new URL(endpoint, base)
-    if (params) {
-      Object.entries(params).forEach(([key, value]) => {
-        if (value !== undefined && value !== null) {
-          url.searchParams.append(key, String(value))
-        }
-      })
-    }
-
-    return this.request<T>(url.pathname + url.search)
+    return this.request<T>(this.buildUrl(endpoint, params))
   }
 
   // POST request
@@ -159,4 +184,4 @@ class ApiClient {
 
 export const apiClient = new ApiClient()
 export { ApiError }
-export type { ApiResponse }
+export type { ApiResponse, ApiResponseWithMeta }
