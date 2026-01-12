@@ -3,6 +3,7 @@
 ALTER TABLE contact_method
     ADD COLUMN value_normalized TEXT;
 
+-- Keep normalization aligned with matching.NormalizePhoneE164() and identity.Normalize().
 UPDATE contact_method
 SET value_normalized = CASE
     WHEN type IN ('email_personal', 'email_work', 'gchat') THEN lower(btrim(value))

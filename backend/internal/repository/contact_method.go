@@ -3,11 +3,10 @@ package repository
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"personal-crm/backend/internal/db"
-	"personal-crm/backend/internal/matching"
+	"personal-crm/backend/internal/identity"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -98,22 +97,24 @@ func convertDbContactMethod(dbMethod *db.ContactMethod) ContactMethod {
 }
 
 // NormalizeContactMethodValue normalizes a contact method value for uniqueness checks.
+// Keep this aligned with identity.Normalize and migration 019 normalization rules.
 func NormalizeContactMethodValue(methodType, value string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return ""
-	}
+	identifierType := mapMethodTypeToIdentifier(methodType)
+	return identity.Normalize(value, identifierType)
+}
 
+func mapMethodTypeToIdentifier(methodType string) identity.IdentifierType {
 	switch ContactMethodType(methodType) {
 	case ContactMethodEmailPersonal, ContactMethodEmailWork, ContactMethodGChat:
-		return matching.NormalizeEmail(trimmed)
-	case ContactMethodPhone, ContactMethodSignal, ContactMethodWhatsApp:
-		return matching.NormalizePhoneE164(trimmed)
-	case ContactMethodTelegram, ContactMethodTwitter, ContactMethodDiscord:
-		trimmed = strings.TrimPrefix(trimmed, "@")
-		return strings.ToLower(strings.TrimSpace(trimmed))
+		return identity.IdentifierTypeEmail
+	case ContactMethodPhone, ContactMethodSignal:
+		return identity.IdentifierTypePhone
+	case ContactMethodWhatsApp:
+		return identity.IdentifierTypeWhatsApp
+	case ContactMethodTelegram, ContactMethodDiscord, ContactMethodTwitter:
+		return identity.IdentifierTypeTelegram
 	default:
-		return trimmed
+		return identity.IdentifierTypeEmail
 	}
 }
 
@@ -157,6 +158,7 @@ func (r *ContactMethodRepository) DeleteContactMethodsByContact(ctx context.Cont
 
 // UpdateContactMethodRequest holds parameters for updating a contact method
 type UpdateContactMethodRequest struct {
+	// Type is required to normalize the updated value consistently.
 	Type  string `json:"type"`
 	Value string `json:"value"`
 }
