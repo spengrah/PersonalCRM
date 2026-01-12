@@ -141,15 +141,24 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 		}
 	}
 
-	// Convert to response format with suggested matches
+	// Convert external contacts to pointers for batch matching
+	contactPtrs := make([]*repository.ExternalContact, len(contacts))
+	for i := range contacts {
+		contactPtrs[i] = &contacts[i]
+	}
+
+	// Find all matches in a single batch query (fixes N+1 query problem)
+	suggestedMatches, err := h.matchSvc.FindBestMatchesBatch(ctx, contactPtrs)
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to find suggested matches in batch")
+		// Continue with nil matches on error
+		suggestedMatches = make([]*service.ImportSuggestedMatch, len(contacts))
+	}
+
+	// Convert to response format using pre-computed matches
 	candidates := make([]ImportCandidateResponse, 0, len(contacts))
-	for _, contact := range contacts {
-		// Find potential matching CRM contact
-		suggestedMatch, err := h.matchSvc.FindBestMatch(ctx, &contact)
-		if err != nil {
-			logger.Warn().Err(err).Str("external_id", contact.ID.String()).Msg("failed to find suggested match")
-		}
-		candidate := h.toImportCandidateResponse(&contact, suggestedMatch)
+	for i := range contacts {
+		candidate := h.toImportCandidateResponse(&contacts[i], suggestedMatches[i])
 		candidates = append(candidates, candidate)
 	}
 

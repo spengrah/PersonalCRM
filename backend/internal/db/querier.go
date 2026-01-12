@@ -76,6 +76,10 @@ type Querier interface {
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	FindSimilarContacts(ctx context.Context, arg FindSimilarContactsParams) ([]*FindSimilarContactsRow, error)
+	// Finds similar contacts for multiple candidate names in a single batch query.
+	// Uses UNNEST to expand input arrays and LATERAL join to find matches per candidate.
+	// Returns results grouped by candidate_id with matches ordered by similarity.
+	FindSimilarContactsBatch(ctx context.Context, arg FindSimilarContactsBatchParams) ([]*FindSimilarContactsBatchRow, error)
 	// Look up an event by its Google Calendar ID
 	GetCalendarEventByGcalID(ctx context.Context, arg GetCalendarEventByGcalIDParams) (*CalendarEvent, error)
 	// Look up an event by its UUID

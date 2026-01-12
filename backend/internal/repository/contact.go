@@ -8,6 +8,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/logger"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -312,7 +313,9 @@ func (r *ContactRepository) FindSimilarContacts(ctx context.Context, name string
 				Type  string `json:"type"`
 				Value string `json:"value"`
 			}
-			if err := json.Unmarshal(row.MethodsJson, &methodData); err == nil {
+			if err := json.Unmarshal(row.MethodsJson, &methodData); err != nil {
+				logger.Warn().Err(err).Str("contact_id", contactID.String()).Msg("failed to unmarshal contact methods JSON")
+			} else {
 				methods = make([]ContactMethod, len(methodData))
 				for i, m := range methodData {
 					methods[i] = ContactMethod{
@@ -334,4 +337,104 @@ func (r *ContactRepository) FindSimilarContacts(ctx context.Context, name string
 	}
 
 	return matches, nil
+}
+
+// BatchContactInput represents input for batch matching
+type BatchContactInput struct {
+	CandidateID   string // External contact ID for result grouping
+	CandidateName string // Name to match against
+}
+
+// BatchContactMatch represents matches for a single candidate
+type BatchContactMatch struct {
+	CandidateID string         // External contact ID
+	Matches     []ContactMatch // Matching contacts ordered by similarity
+}
+
+// FindSimilarContactsBatch finds similar contacts for multiple names in one query.
+// Returns matches grouped by candidate ID, preserving order of inputs.
+// Candidates with empty names should be filtered out before calling this method.
+func (r *ContactRepository) FindSimilarContactsBatch(
+	ctx context.Context,
+	inputs []BatchContactInput,
+	threshold float64,
+	limitPerCandidate int32,
+) ([]BatchContactMatch, error) {
+	if len(inputs) == 0 {
+		return []BatchContactMatch{}, nil
+	}
+
+	// Build input arrays
+	names := make([]string, len(inputs))
+	ids := make([]string, len(inputs))
+	for i, input := range inputs {
+		names[i] = input.CandidateName
+		ids[i] = input.CandidateID
+	}
+
+	rows, err := r.queries.FindSimilarContactsBatch(ctx, db.FindSimilarContactsBatchParams{
+		CandidateNames:    names,
+		CandidateIds:      ids,
+		Threshold:         float32(threshold),
+		LimitPerCandidate: limitPerCandidate,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Group results by candidate ID
+	resultMap := make(map[string][]ContactMatch)
+	for _, row := range rows {
+		// Convert UUID
+		var contactID uuid.UUID
+		if row.ContactID.Valid {
+			contactID = uuid.UUID(row.ContactID.Bytes)
+		}
+
+		// Parse contact methods from JSON
+		var methods []ContactMethod
+		if len(row.MethodsJson) > 0 {
+			var methodData []struct {
+				Type  string `json:"type"`
+				Value string `json:"value"`
+			}
+			if err := json.Unmarshal(row.MethodsJson, &methodData); err != nil {
+				logger.Warn().Err(err).Str("contact_id", contactID.String()).Str("candidate_id", row.CandidateID).Msg("failed to unmarshal contact methods JSON in batch")
+			} else {
+				methods = make([]ContactMethod, len(methodData))
+				for i, m := range methodData {
+					methods[i] = ContactMethod{
+						Type:  m.Type,
+						Value: m.Value,
+					}
+				}
+			}
+		}
+
+		match := ContactMatch{
+			Contact: Contact{
+				ID:       contactID,
+				FullName: row.ContactName,
+				Methods:  methods,
+			},
+			Similarity: float64(row.NameSimilarity),
+		}
+
+		resultMap[row.CandidateID] = append(resultMap[row.CandidateID], match)
+	}
+
+	// Preserve input order and include empty results for candidates with no matches
+	results := make([]BatchContactMatch, len(inputs))
+	for i, input := range inputs {
+		matches := resultMap[input.CandidateID]
+		if matches == nil {
+			matches = []ContactMatch{}
+		}
+		results[i] = BatchContactMatch{
+			CandidateID: input.CandidateID,
+			Matches:     matches,
+		}
+	}
+
+	return results, nil
 }
