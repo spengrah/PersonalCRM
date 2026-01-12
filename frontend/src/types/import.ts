@@ -57,7 +57,7 @@ export interface ExternalContactMethod {
 /** User-selected method to import/link with assigned CRM type */
 export interface SelectedMethod {
   original_value: string
-  type: string // CRM type (email_personal, email_work, phone, etc.)
+  type: string // CRM type (email, phone, etc.)
 }
 
 /** Request body for importing a contact with method selection */

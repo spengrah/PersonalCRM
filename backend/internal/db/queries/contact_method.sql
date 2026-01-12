@@ -6,15 +6,14 @@ WHERE contact_id = $1
 ORDER BY
     is_primary DESC,
     CASE type
-        WHEN 'email_personal' THEN 1
-        WHEN 'email_work' THEN 2
-        WHEN 'phone' THEN 3
-        WHEN 'whatsapp' THEN 4
-        WHEN 'telegram' THEN 5
-        WHEN 'signal' THEN 6
-        WHEN 'discord' THEN 7
-        WHEN 'twitter' THEN 8
-        WHEN 'gchat' THEN 9
+        WHEN 'email' THEN 1
+        WHEN 'phone' THEN 2
+        WHEN 'whatsapp' THEN 3
+        WHEN 'telegram' THEN 4
+        WHEN 'signal' THEN 5
+        WHEN 'discord' THEN 6
+        WHEN 'twitter' THEN 7
+        WHEN 'gchat' THEN 8
         ELSE 99
     END,
     created_at ASC;

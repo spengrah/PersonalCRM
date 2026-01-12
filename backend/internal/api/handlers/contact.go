@@ -92,7 +92,7 @@ type ContactResponse struct {
 // ContactMethodResponse represents a contact method in responses
 type ContactMethodResponse struct {
 	ID        string `json:"id" example:"550e8400-e29b-41d4-a716-446655440000"`
-	Type      string `json:"type" example:"email_personal"`
+	Type      string `json:"type" example:"email"`
 	Value     string `json:"value" example:"john.doe@example.com"`
 	IsPrimary bool   `json:"is_primary" example:"true"`
 }
@@ -143,7 +143,7 @@ type ListContactsQuery struct {
 
 // ContactMethodRequest represents a single contact method in requests
 type ContactMethodRequest struct {
-	Type      string `json:"type" validate:"required,oneof=email_personal email_work phone telegram discord twitter signal gchat whatsapp" example:"email_personal"`
+	Type      string `json:"type" validate:"required,oneof=email phone telegram discord twitter signal gchat whatsapp" example:"email"`
 	Value     string `json:"value" validate:"required,max=255" example:"john.doe@example.com"`
 	IsPrimary bool   `json:"is_primary" example:"true"`
 }
@@ -623,8 +623,7 @@ func validateContactMethods(validate *validator.Validate, methods []ContactMetho
 		}
 
 		switch method.Type {
-		case string(repository.ContactMethodEmailPersonal),
-			string(repository.ContactMethodEmailWork),
+		case string(repository.ContactMethodEmail),
 			string(repository.ContactMethodGChat):
 			if err := validate.Var(method.Value, "email"); err != nil {
 				return fmt.Errorf("invalid email for contact method %s", method.Type)

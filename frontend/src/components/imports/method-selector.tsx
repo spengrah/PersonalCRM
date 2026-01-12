@@ -17,7 +17,7 @@ interface MethodSelectorProps {
   value: string
   /** Whether this method is selected for import/link */
   selected: boolean
-  /** The assigned CRM type (email_personal, email_work, phone, etc.) */
+  /** The assigned CRM type (email, phone, etc.) */
   selectedType: ContactMethodType
   /** Visual state for styling */
   state: MethodState
@@ -44,7 +44,7 @@ export function MethodSelector({
   // Filter options to only show relevant types
   const relevantOptions = CONTACT_METHOD_OPTIONS.filter(opt => {
     if (isEmail) {
-      return opt.value === 'email_personal' || opt.value === 'email_work'
+      return opt.value === 'email'
     }
     return opt.value === 'phone'
   })

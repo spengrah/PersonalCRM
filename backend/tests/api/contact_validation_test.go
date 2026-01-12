@@ -132,7 +132,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 			FullName: "Test User",
 			Methods: []handlers.ContactMethodRequest{
 				{
-					Type:  "email_personal",
+					Type:  "email",
 					Value: "not-an-email",
 				},
 			},
@@ -251,7 +251,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 			FullName: strings.Repeat("a", 255), // Max 255
 			Methods: []handlers.ContactMethodRequest{
 				{
-					Type:  "email_personal",
+					Type:  "email",
 					Value: uniqueEmail,
 				},
 				{
@@ -312,7 +312,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 		FullName: "Update Test User",
 		Methods: []handlers.ContactMethodRequest{
 			{
-				Type:  "email_personal",
+				Type:  "email",
 				Value: "updatetest@example.com",
 			},
 		},
@@ -365,7 +365,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 			FullName: "Updated Name",
 			Methods: []handlers.ContactMethodRequest{
 				{
-					Type:  "email_personal",
+					Type:  "email",
 					Value: "invalid-email",
 				},
 			},
@@ -547,11 +547,11 @@ func TestContactAPI_DuplicateMethodValues(t *testing.T) {
 		FullName: "First User",
 		Methods: []handlers.ContactMethodRequest{
 			{
-				Type:  "email_personal",
+				Type:  "email",
 				Value: "dup@example.com",
 			},
 			{
-				Type:  "email_personal",
+				Type:  "email",
 				Value: " Dup@Example.com ",
 			},
 		},

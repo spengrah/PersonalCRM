@@ -137,7 +137,7 @@ SELECT id, full_name, birthday, last_contacted, NOW(), NOW()
 FROM contact_data;
 
 INSERT INTO contact_method (contact_id, type, value, value_normalized, is_primary)
-SELECT id, 'email_personal', email, lower(btrim(email)), TRUE
+SELECT id, 'email', email, lower(btrim(email)), TRUE
 FROM contact_data
 WHERE email IS NOT NULL AND btrim(email) <> '';
 

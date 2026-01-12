@@ -744,7 +744,7 @@ func TestMatchAttendees_FuzzyMatchFallback(t *testing.T) {
 					ID:       contactID,
 					FullName: "Jon Smith", // Similar to "John Smith"
 					Methods: []repository.ContactMethod{
-						{Type: "email_personal", Value: "jon@example.com"},
+						{Type: "email", Value: "jon@example.com"},
 					},
 				},
 				Similarity: 0.85, // High name similarity
@@ -796,7 +796,7 @@ func TestMatchAttendees_FuzzyMatchWithMethodOverlap(t *testing.T) {
 					ID:       contactID,
 					FullName: "Jon Smith",
 					Methods: []repository.ContactMethod{
-						{Type: "email_work", Value: "john.smith@work.com"}, // Same as attendee!
+						{Type: "email", Value: "john.smith@work.com"}, // Same as attendee!
 					},
 				},
 				Similarity: 0.80, // Good name similarity
@@ -970,7 +970,7 @@ func TestFindFuzzyMatch_SelectsBestMatch(t *testing.T) {
 					ID:       contact2ID,
 					FullName: "John Smyth",
 					Methods: []repository.ContactMethod{
-						{Type: "email_work", Value: "john.smith@work.com"}, // Email matches!
+						{Type: "email", Value: "john.smith@work.com"}, // Email matches!
 					},
 				},
 				Similarity: 0.75, // Lower name similarity but has email match
@@ -1001,7 +1001,7 @@ func TestFindFuzzyMatch_EmailNormalization(t *testing.T) {
 					ID:       contactID,
 					FullName: "John Smith",
 					Methods: []repository.ContactMethod{
-						{Type: "email_personal", Value: "John.Smith@EXAMPLE.COM"}, // Different case
+						{Type: "email", Value: "John.Smith@EXAMPLE.COM"}, // Different case
 					},
 				},
 				Similarity: 0.90,
@@ -1033,9 +1033,9 @@ func TestFindFuzzyMatch_IgnoresNonEmailMethods(t *testing.T) {
 					ID:       contactID,
 					FullName: "John Smith",
 					Methods: []repository.ContactMethod{
-						{Type: "email_work", Value: "john.smith@work.com"}, // Matches attendee email
-						{Type: "phone", Value: "+1234567890"},              // Should be ignored
-						{Type: "phone", Value: "+0987654321"},              // Should be ignored
+						{Type: "email", Value: "john.smith@work.com"}, // Matches attendee email
+						{Type: "phone", Value: "+1234567890"},         // Should be ignored
+						{Type: "phone", Value: "+0987654321"},         // Should be ignored
 					},
 				},
 				Similarity: 0.80,

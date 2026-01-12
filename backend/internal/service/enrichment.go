@@ -264,11 +264,7 @@ func (s *EnrichmentService) enrichContactMethods(
 			continue // Already have this email
 		}
 
-		// Determine type based on email type from Google
-		methodType := string(repository.ContactMethodEmailPersonal)
-		if strings.Contains(strings.ToLower(email.Type), "work") {
-			methodType = string(repository.ContactMethodEmailWork)
-		}
+		methodType := string(repository.ContactMethodEmail)
 
 		_, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
@@ -346,7 +342,7 @@ func (s *EnrichmentService) ListEnrichments(ctx context.Context, contactID uuid.
 // mapMethodTypeToIdentifier maps contact method type to identity type for normalization
 func mapMethodTypeToIdentifier(methodType string) identity.IdentifierType {
 	switch methodType {
-	case string(repository.ContactMethodEmailPersonal), string(repository.ContactMethodEmailWork):
+	case string(repository.ContactMethodEmail):
 		return identity.IdentifierTypeEmail
 	case string(repository.ContactMethodPhone), string(repository.ContactMethodSignal):
 		return identity.IdentifierTypePhone

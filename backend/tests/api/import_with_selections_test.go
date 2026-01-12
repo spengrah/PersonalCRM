@@ -124,7 +124,7 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 		// Import with selected methods
 		importReq := handlers.ImportRequest{
 			SelectedMethods: []handlers.SelectedMethodInput{
-				{OriginalValue: "test-personal@gmail.com", Type: "email_personal"},
+				{OriginalValue: "test-personal@gmail.com", Type: "email"},
 				{OriginalValue: "+15551234567", Type: "phone"},
 			},
 		}
@@ -152,23 +152,29 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 			_ = contactRepo.HardDeleteContact(ctx, contactID)
 		}()
 
-		// Verify contact methods - should have personal email and phone, NOT work email
+		// Verify contact methods - should have selected email and phone values
 		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contactID)
 		require.NoError(t, err)
 		assert.Len(t, methods, 2)
 
-		methodTypes := make(map[string]string)
+		require.Len(t, methods, 2)
+		var emailValue string
+		var phoneValue string
 		for _, m := range methods {
-			methodTypes[m.Type] = m.Value
+			switch m.Type {
+			case "email":
+				emailValue = m.Value
+			case "phone":
+				phoneValue = m.Value
+			}
 		}
 
-		assert.Equal(t, "test-personal@gmail.com", methodTypes["email_personal"])
-		assert.Equal(t, "+15551234567", methodTypes["phone"])
-		assert.Empty(t, methodTypes["email_work"])
+		assert.Equal(t, "test-personal@gmail.com", emailValue)
+		assert.Equal(t, "+15551234567", phoneValue)
 	})
 
-	t.Run("ImportContact_WithDuplicateTypes_SkipsSecond", func(t *testing.T) {
-		// Create an external contact with multiple personal emails
+	t.Run("ImportContact_WithDuplicateTypes_AllowsMultiple", func(t *testing.T) {
+		// Create an external contact with multiple emails
 		displayName := "Test Dup Types User " + uuid.New().String()[:8]
 		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
 			Source:      "test",
@@ -186,11 +192,11 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 			_ = externalRepo.Delete(ctx, external.ID)
 		}()
 
-		// Try to import with duplicate types - second should be skipped
+		// Try to import with duplicate types - both should be added
 		importReq := handlers.ImportRequest{
 			SelectedMethods: []handlers.SelectedMethodInput{
-				{OriginalValue: "first@gmail.com", Type: "email_personal"},
-				{OriginalValue: "second@gmail.com", Type: "email_personal"}, // Duplicate type
+				{OriginalValue: "first@gmail.com", Type: "email"},
+				{OriginalValue: "second@gmail.com", Type: "email"}, // Same type
 			},
 		}
 
@@ -216,11 +222,16 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 			_ = contactRepo.HardDeleteContact(ctx, contactID)
 		}()
 
-		// Verify only first email was added
+		// Verify both emails were added
 		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contactID)
 		require.NoError(t, err)
-		require.Len(t, methods, 1)
-		assert.Equal(t, "first@gmail.com", methods[0].Value)
+		require.Len(t, methods, 2)
+		values := make(map[string]bool)
+		for _, method := range methods {
+			values[method.Value] = true
+		}
+		assert.True(t, values["first@gmail.com"])
+		assert.True(t, values["second@gmail.com"])
 	})
 
 	t.Run("ImportContact_WithInvalidValue_SkipsInvalid", func(t *testing.T) {
@@ -244,8 +255,8 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 		// Try to import with a value not in the external contact
 		importReq := handlers.ImportRequest{
 			SelectedMethods: []handlers.SelectedMethodInput{
-				{OriginalValue: "notexists@example.com", Type: "email_personal"}, // Not in external contact
-				{OriginalValue: "valid@gmail.com", Type: "email_work"},
+				{OriginalValue: "notexists@example.com", Type: "email"}, // Not in external contact
+				{OriginalValue: "valid@gmail.com", Type: "email"},
 			},
 		}
 
@@ -276,7 +287,7 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, methods, 1)
 		assert.Equal(t, "valid@gmail.com", methods[0].Value)
-		assert.Equal(t, "email_work", methods[0].Type)
+		assert.Equal(t, "email", methods[0].Type)
 	})
 
 	t.Run("ImportContact_BackwardCompatibility_NoBody", func(t *testing.T) {
@@ -323,7 +334,7 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 		// Verify auto-selection logic was applied
 		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contactID)
 		require.NoError(t, err)
-		// Auto-selection should add personal and work emails
+		// Auto-selection should add any detected email values
 		assert.GreaterOrEqual(t, len(methods), 1)
 	})
 }
@@ -378,7 +389,7 @@ func TestImportAPI_LinkWithMethodSelection(t *testing.T) {
 		linkReq := handlers.LinkRequest{
 			CRMContactID: contact.ID.String(),
 			SelectedMethods: []handlers.SelectedMethodInput{
-				{OriginalValue: "new@gmail.com", Type: "email_personal"},
+				{OriginalValue: "new@gmail.com", Type: "email"},
 				{OriginalValue: "+15559876543", Type: "phone"},
 			},
 		}
@@ -407,7 +418,7 @@ func TestImportAPI_LinkWithMethodSelection(t *testing.T) {
 			methodTypes[m.Type] = m.Value
 		}
 
-		assert.Equal(t, "new@gmail.com", methodTypes["email_personal"])
+		assert.Equal(t, "new@gmail.com", methodTypes["email"])
 		assert.Equal(t, "+15559876543", methodTypes["phone"])
 	})
 
@@ -443,7 +454,7 @@ func TestImportAPI_LinkWithMethodSelection(t *testing.T) {
 		linkReq := handlers.LinkRequest{
 			CRMContactID: contact.ID.String(),
 			SelectedMethods: []handlers.SelectedMethodInput{
-				{OriginalValue: "external@gmail.com", Type: "email_personal"},
+				{OriginalValue: "external@gmail.com", Type: "email"},
 			},
 			ConflictResolutions: map[string]string{
 				"external@gmail.com": "use_crm", // Should keep CRM value if conflict

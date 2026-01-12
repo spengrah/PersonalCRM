@@ -4,8 +4,7 @@ CREATE TABLE contact_method (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     contact_id UUID NOT NULL REFERENCES contact(id) ON DELETE CASCADE,
     type TEXT NOT NULL CHECK (type IN (
-        'email_personal',
-        'email_work',
+        'email',
         'phone',
         'telegram',
         'discord',
@@ -32,7 +31,7 @@ CREATE TRIGGER update_contact_method_updated_at BEFORE UPDATE ON contact_method
 
 -- Migrate existing email/phone fields into contact_method
 INSERT INTO contact_method (contact_id, type, value)
-SELECT id, 'email_personal', btrim(email)
+SELECT id, 'email', btrim(email)
 FROM contact
 WHERE email IS NOT NULL AND btrim(email) <> '';
 
@@ -41,13 +40,13 @@ SELECT id, 'phone', btrim(phone)
 FROM contact
 WHERE phone IS NOT NULL AND btrim(phone) <> '';
 
--- Set primary method: email_personal first, otherwise phone
+-- Set primary method: email first, otherwise phone
 WITH ranked AS (
     SELECT id,
            ROW_NUMBER() OVER (
                PARTITION BY contact_id
                ORDER BY CASE type
-                   WHEN 'email_personal' THEN 1
+                   WHEN 'email' THEN 1
                    WHEN 'phone' THEN 2
                    ELSE 3
                END

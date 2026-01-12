@@ -57,7 +57,7 @@ func TestContactMethodValidation_Type(t *testing.T) {
 		method    handlers.ContactMethodRequest
 		wantError bool
 	}{
-		{"Valid email personal", handlers.ContactMethodRequest{Type: "email_personal", Value: "john@example.com"}, false},
+		{"Valid email personal", handlers.ContactMethodRequest{Type: "email", Value: "john@example.com"}, false},
 		{"Valid phone", handlers.ContactMethodRequest{Type: "phone", Value: "+1-555-0123"}, false},
 		{"Missing type", handlers.ContactMethodRequest{Type: "", Value: "john@example.com"}, true},
 		{"Invalid type", handlers.ContactMethodRequest{Type: "fax", Value: "123"}, true},
@@ -83,8 +83,8 @@ func TestContactMethodValidation_Value(t *testing.T) {
 		method    handlers.ContactMethodRequest
 		wantError bool
 	}{
-		{"Valid value", handlers.ContactMethodRequest{Type: "email_personal", Value: "john@example.com"}, false},
-		{"Empty value", handlers.ContactMethodRequest{Type: "email_personal", Value: ""}, true},
+		{"Valid value", handlers.ContactMethodRequest{Type: "email", Value: "john@example.com"}, false},
+		{"Empty value", handlers.ContactMethodRequest{Type: "email", Value: ""}, true},
 		{"Max length 255", handlers.ContactMethodRequest{Type: "phone", Value: strings.Repeat("1", 255)}, false},
 		{"Exceeds max length", handlers.ContactMethodRequest{Type: "phone", Value: strings.Repeat("1", 256)}, true},
 	}

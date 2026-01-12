@@ -14,7 +14,6 @@ import {
   useIgnoreCandidate,
   useImportCandidates,
 } from '@/hooks/use-imports'
-import { inferEmailType } from '@/lib/email-type-inference'
 import {
   detectMethodConflicts,
   getCandidateDisplayName,
@@ -136,7 +135,7 @@ export function ImportLinkModal({
 
     // Add emails with inferred types
     candidate.emails.forEach(email => {
-      const inferredType = inferEmailType(email)
+      const inferredType: ContactMethodType = 'email'
       selections.set(email, {
         value: email,
         selected: true, // Pre-select all by default

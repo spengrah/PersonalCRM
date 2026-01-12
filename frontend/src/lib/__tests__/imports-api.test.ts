@@ -236,7 +236,7 @@ describe('importsApi', () => {
 
       const request = {
         crm_contact_id: 'crm-456',
-        selected_methods: [{ original_value: 'john@work.com', type: 'email_work' }],
+        selected_methods: [{ original_value: 'john@work.com', type: 'email' }],
         conflict_resolutions: {
           'john@work.com': 'use_external' as const,
         },

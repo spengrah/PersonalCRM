@@ -15,10 +15,9 @@ import (
 
 func TestSelectedMethodInput_TypeValues(t *testing.T) {
 	// Verify all valid type values that the handler accepts
-	// These match the validation tag: oneof=email_personal email_work phone telegram signal discord twitter gchat whatsapp
+	// These match the validation tag: oneof=email phone telegram signal discord twitter gchat whatsapp
 	validTypes := []string{
-		"email_personal",
-		"email_work",
+		"email",
 		"phone",
 		"telegram",
 		"signal",
@@ -54,7 +53,7 @@ func TestLinkRequest_Structure(t *testing.T) {
 		req := handlers.LinkRequest{
 			CRMContactID: "550e8400-e29b-41d4-a716-446655440000",
 			SelectedMethods: []handlers.SelectedMethodInput{
-				{OriginalValue: "john@example.com", Type: "email_personal"},
+				{OriginalValue: "john@example.com", Type: "email"},
 			},
 		}
 		assert.Len(t, req.SelectedMethods, 1)
@@ -83,7 +82,7 @@ func TestImportRequest_Structure(t *testing.T) {
 	t.Run("WithSelectedMethods", func(t *testing.T) {
 		req := handlers.ImportRequest{
 			SelectedMethods: []handlers.SelectedMethodInput{
-				{OriginalValue: "john@example.com", Type: "email_personal"},
+				{OriginalValue: "john@example.com", Type: "email"},
 				{OriginalValue: "+15551234567", Type: "phone"},
 			},
 		}
@@ -112,7 +111,7 @@ func TestMethodSelectionConversion(t *testing.T) {
 	// Verify that handler SelectedMethodInput can be converted to service MethodSelection
 	handlerInput := handlers.SelectedMethodInput{
 		OriginalValue: "test@example.com",
-		Type:          "email_personal",
+		Type:          "email",
 	}
 
 	// Conversion logic from handler to service

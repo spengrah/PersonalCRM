@@ -217,7 +217,7 @@ func (h *TestHandler) SeedOverdueContacts(c *gin.Context) {
 		var methods []service.ContactMethodInput
 		if input.Email != "" {
 			methods = append(methods, service.ContactMethodInput{
-				Type:      "email_personal",
+				Type:      "email",
 				Value:     input.Email,
 				IsPrimary: true,
 			})

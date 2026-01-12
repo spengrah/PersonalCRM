@@ -144,8 +144,8 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const gchatEmail = `gchat-${suffix}@example.com`
 
     const methods = [
-      { type: 'email_personal', value: personalEmail, expected: personalEmail },
-      { type: 'email_work', value: workEmail, expected: workEmail },
+      { type: 'email', value: personalEmail, expected: personalEmail },
+      { type: 'email', value: workEmail, expected: workEmail },
       { type: 'phone', value: phone, expected: phone },
       { type: 'telegram', value: telegramHandle, expected: `@telegram${suffix}` },
       { type: 'signal', value: signal, expected: signal },

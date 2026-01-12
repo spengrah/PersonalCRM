@@ -282,11 +282,21 @@ test.describe('Imports - Link Action', () => {
     await expect(contactOption).toBeVisible({ timeout: 5000 })
     await contactOption.click()
 
-    // Click Link Contact button
+    // Click Link Contact button and wait for link + refetch to complete
+    const linkResponse = page.waitForResponse(
+      response =>
+        response.request().method() === 'POST' &&
+        response.url().includes('/api/v1/imports/') &&
+        response.url().endsWith('/link')
+    )
+    const candidatesRefetch = page.waitForResponse(
+      response =>
+        response.request().method() === 'GET' &&
+        response.url().includes('/api/v1/imports/candidates')
+    )
     await page.getByRole('button', { name: /Link Contact/i }).click()
-
-    // Wait for action to complete
-    await page.waitForLoadState('networkidle')
+    await linkResponse
+    await candidatesRefetch
 
     // Verify success notification
     await expect(page.getByText(/linked successfully/i)).toBeVisible({ timeout: 10000 })

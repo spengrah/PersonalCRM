@@ -95,7 +95,7 @@ func countMethodOverlap(
 
 	for _, method := range methods {
 		switch method.Type {
-		case "email_personal", "email_work":
+		case "email":
 			totalMethods++
 			if candidateEmails[matching.NormalizeEmail(method.Value)] {
 				methodMatches++

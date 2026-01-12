@@ -543,7 +543,7 @@ func (p *CalendarSyncProvider) findFuzzyMatch(ctx context.Context, displayName, 
 		// Only count email methods for comparison with the attendee email
 		for _, method := range match.Contact.Methods {
 			switch method.Type {
-			case "email_personal", "email_work":
+			case "email":
 				totalEmailMethods++
 				if matching.NormalizeEmail(method.Value) == normalizedEmail {
 					methodMatches++

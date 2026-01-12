@@ -1,6 +1,5 @@
 import type { ContactMethod, ContactMethodType } from '@/types/contact'
 import type { ImportCandidate, MethodComparison, ConflictType, MethodState } from '@/types/import'
-import { inferEmailType } from './email-type-inference'
 import { normalizeContactMethodValueForComparison } from './contact-methods'
 
 /**
@@ -14,19 +13,19 @@ export function getCandidateDisplayName(candidate: ImportCandidate): string {
 
 /**
  * Extract external contact methods from an import candidate.
- * Preserves original type information for email type inference.
+ * Preserves original type information for conflict resolution.
  */
 export function extractExternalMethods(candidate: ImportCandidate): {
   emails: Array<{ value: string; type: string }>
   phones: Array<{ value: string; type: string }>
 } {
   // The ImportCandidate only has string arrays, not typed methods
-  // We'll need to infer types based on email domain for emails
+  // Preserve the external type for error messaging and conflict handling.
   // For phones, we always use 'phone' type
   return {
     emails: candidate.emails.map(email => ({
       value: email,
-      type: 'unknown', // Will be inferred
+      type: 'unknown',
     })),
     phones: candidate.phones.map(phone => ({
       value: phone,
@@ -55,7 +54,7 @@ export function detectMethodConflicts(
 
   // Process emails
   for (const email of candidate.emails) {
-    const suggestedType = inferEmailType(email)
+    const suggestedType: ContactMethodType = 'email'
     const normalized = normalizeContactMethodValueForComparison(suggestedType, email)
 
     // Check if value already exists in CRM

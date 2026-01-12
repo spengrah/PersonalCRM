@@ -138,7 +138,7 @@ describe('method-conflict-detection', () => {
     })
 
     it('returns adding state for new emails not in CRM', () => {
-      const candidate = createCandidate(['new@gmail.com']) // Free domain -> personal
+      const candidate = createCandidate(['new@gmail.com'])
       const crmMethods: ContactMethod[] = []
 
       const result = detectMethodConflicts(candidate, crmMethods)
@@ -149,12 +149,12 @@ describe('method-conflict-detection', () => {
         external_type: 'email',
         conflict_type: 'none',
         state: 'adding',
-        suggested_crm_type: 'email_personal',
+        suggested_crm_type: 'email',
       })
     })
 
-    it('returns adding state for work emails not in CRM', () => {
-      const candidate = createCandidate(['new@company.com']) // Non-free domain -> work
+    it('returns adding state for new emails not in CRM (non-free domain)', () => {
+      const candidate = createCandidate(['new@company.com'])
       const crmMethods: ContactMethod[] = []
 
       const result = detectMethodConflicts(candidate, crmMethods)
@@ -165,7 +165,7 @@ describe('method-conflict-detection', () => {
         external_type: 'email',
         conflict_type: 'none',
         state: 'adding',
-        suggested_crm_type: 'email_work',
+        suggested_crm_type: 'email',
       })
     })
 
@@ -186,9 +186,9 @@ describe('method-conflict-detection', () => {
     })
 
     it('returns identical state for matching email with same type', () => {
-      // Use gmail.com which is a free domain -> inferred as personal
+      // Use gmail.com as a distinct email value
       const candidate = createCandidate(['john@gmail.com'])
-      const crmMethods = [createMethod('email_personal', 'john@gmail.com')]
+      const crmMethods = [createMethod('email', 'john@gmail.com')]
 
       const result = detectMethodConflicts(candidate, crmMethods)
 
@@ -202,9 +202,9 @@ describe('method-conflict-detection', () => {
     })
 
     it('treats matching value with different type as identical', () => {
-      // john@gmail.com would infer as email_personal, but CRM has it as work
+      // john@gmail.com would infer as email, but CRM has it as work
       const candidate = createCandidate(['john@gmail.com'])
-      const crmMethods = [createMethod('email_work', 'john@gmail.com')]
+      const crmMethods = [createMethod('email', 'john@gmail.com')]
 
       const result = detectMethodConflicts(candidate, crmMethods)
 
@@ -214,13 +214,13 @@ describe('method-conflict-detection', () => {
         conflict_type: 'identical',
         state: 'unchanged',
       })
-      expect(result[0].crm_method?.type).toBe('email_work')
+      expect(result[0].crm_method?.type).toBe('email')
     })
 
     it('adds new value even when type already exists', () => {
       // Both emails infer as personal, but different values
       const candidate = createCandidate(['new@gmail.com'])
-      const crmMethods = [createMethod('email_personal', 'old@gmail.com')]
+      const crmMethods = [createMethod('email', 'old@gmail.com')]
 
       const result = detectMethodConflicts(candidate, crmMethods)
 
@@ -229,7 +229,7 @@ describe('method-conflict-detection', () => {
         external_value: 'new@gmail.com',
         conflict_type: 'none',
         state: 'adding',
-        suggested_crm_type: 'email_personal',
+        suggested_crm_type: 'email',
       })
     })
 
@@ -238,7 +238,7 @@ describe('method-conflict-detection', () => {
         'existing@gmail.com', // Gmail is free email domain -> personal
         'new@company.com', // Company domain -> work type
       ])
-      const crmMethods = [createMethod('email_personal', 'existing@gmail.com')]
+      const crmMethods = [createMethod('email', 'existing@gmail.com')]
 
       const result = detectMethodConflicts(candidate, crmMethods)
 
@@ -262,7 +262,7 @@ describe('method-conflict-detection', () => {
 
     it('handles normalized email casing', () => {
       const candidate = createCandidate(['John@Example.com'])
-      const crmMethods = [createMethod('email_personal', 'john@example.com')]
+      const crmMethods = [createMethod('email', 'john@example.com')]
 
       const result = detectMethodConflicts(candidate, crmMethods)
 
@@ -272,7 +272,7 @@ describe('method-conflict-detection', () => {
 
     it('handles empty candidate methods', () => {
       const candidate = createCandidate()
-      const crmMethods = [createMethod('email_personal', 'john@gmail.com')]
+      const crmMethods = [createMethod('email', 'john@gmail.com')]
 
       const result = detectMethodConflicts(candidate, crmMethods)
 

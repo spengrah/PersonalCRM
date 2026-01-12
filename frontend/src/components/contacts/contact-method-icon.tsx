@@ -5,8 +5,7 @@ import { AtSign, Mail, MessageCircle, Phone, Send } from 'lucide-react'
 import type { ContactMethodType } from '@/types/contact'
 
 const iconMap: Record<ContactMethodType, ComponentType<{ className?: string }>> = {
-  email_personal: Mail,
-  email_work: Mail,
+  email: Mail,
   phone: Phone,
   telegram: Send,
   signal: MessageCircle,

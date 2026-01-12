@@ -6,8 +6,7 @@ DROP CONSTRAINT contact_method_type_check;
 ALTER TABLE contact_method
 ADD CONSTRAINT contact_method_type_check
 CHECK (type IN (
-    'email_personal',
-    'email_work',
+    'email',
     'phone',
     'telegram',
     'discord',

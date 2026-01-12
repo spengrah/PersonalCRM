@@ -11,7 +11,7 @@ func TestNormalizeContactMethodValue(t *testing.T) {
 	}{
 		{
 			name:       "email lowercases",
-			methodType: string(ContactMethodEmailPersonal),
+			methodType: string(ContactMethodEmail),
 			value:      " Person@Example.com ",
 			expected:   "person@example.com",
 		},

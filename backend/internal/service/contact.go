@@ -371,24 +371,22 @@ func sortContactMethods(methods []repository.ContactMethod) {
 
 func contactMethodPriority(methodType string) int {
 	switch methodType {
-	case string(repository.ContactMethodEmailPersonal):
+	case string(repository.ContactMethodEmail):
 		return 1
-	case string(repository.ContactMethodEmailWork):
-		return 2
 	case string(repository.ContactMethodPhone):
-		return 3
+		return 2
 	case string(repository.ContactMethodWhatsApp):
-		return 4
+		return 3
 	case string(repository.ContactMethodTelegram):
-		return 5
+		return 4
 	case string(repository.ContactMethodSignal):
-		return 6
+		return 5
 	case string(repository.ContactMethodDiscord):
-		return 7
+		return 6
 	case string(repository.ContactMethodTwitter):
-		return 8
+		return 7
 	case string(repository.ContactMethodGChat):
-		return 9
+		return 8
 	default:
 		return 99
 	}

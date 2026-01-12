@@ -206,7 +206,7 @@ func TestContactMethodRepository_Integration(t *testing.T) {
 
 	method1, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 		ContactID: contact.ID,
-		Type:      string(repository.ContactMethodEmailPersonal),
+		Type:      string(repository.ContactMethodEmail),
 		Value:     "method.test@example.com",
 		IsPrimary: true,
 	})
@@ -226,11 +226,11 @@ func TestContactMethodRepository_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, methods, 2)
 	assert.True(t, methods[0].IsPrimary)
-	assert.Equal(t, string(repository.ContactMethodEmailPersonal), methods[0].Type)
+	assert.Equal(t, string(repository.ContactMethodEmail), methods[0].Type)
 
 	duplicate, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 		ContactID: contact.ID,
-		Type:      string(repository.ContactMethodEmailPersonal),
+		Type:      string(repository.ContactMethodEmail),
 		Value:     " Method.Test@Example.com ",
 		IsPrimary: false,
 	})

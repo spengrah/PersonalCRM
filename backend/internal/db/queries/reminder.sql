@@ -33,15 +33,14 @@ LEFT JOIN LATERAL (
     ORDER BY
         CASE WHEN is_primary THEN 0 ELSE 1 END,
         CASE type
-            WHEN 'email_personal' THEN 1
-            WHEN 'email_work' THEN 2
-            WHEN 'phone' THEN 3
-            WHEN 'whatsapp' THEN 4
-            WHEN 'telegram' THEN 5
-            WHEN 'signal' THEN 6
-            WHEN 'discord' THEN 7
-            WHEN 'twitter' THEN 8
-            ELSE 9
+            WHEN 'email' THEN 1
+            WHEN 'phone' THEN 2
+            WHEN 'whatsapp' THEN 3
+            WHEN 'telegram' THEN 4
+            WHEN 'signal' THEN 5
+            WHEN 'discord' THEN 6
+            WHEN 'twitter' THEN 7
+            ELSE 8
         END,
         created_at ASC
     LIMIT 1

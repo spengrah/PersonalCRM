@@ -691,7 +691,7 @@ func TestMatchScoring_OnlyCountMatchableMethodTypes(t *testing.T) {
 		{
 			name: "email only - perfect match",
 			methods: []repository.ContactMethod{
-				{Type: "email_work", Value: "john@example.com"},
+				{Type: "email", Value: "john@example.com"},
 			},
 			candidateEmails: []string{"john@example.com"},
 			expectedTotal:   1,
@@ -701,12 +701,12 @@ func TestMatchScoring_OnlyCountMatchableMethodTypes(t *testing.T) {
 		{
 			name: "email with non-matchable types should not inflate denominator",
 			methods: []repository.ContactMethod{
-				{Type: "email_work", Value: "john@example.com"},
+				{Type: "email", Value: "john@example.com"},
 				{Type: "telegram", Value: "@johnsmith"},
 				{Type: "whatsapp", Value: "+1234567890"},
 			},
 			candidateEmails: []string{"john@example.com"},
-			expectedTotal:   1, // Only email_work counts - telegram and whatsapp are ignored
+			expectedTotal:   1, // Only email counts - telegram and whatsapp are ignored
 			expectedMatch:   1,
 			expectedScore:   1.0, // BUG would have: 1/3 = 0.33, FIX has: 1/1 = 1.0
 		},
@@ -735,7 +735,7 @@ func TestMatchScoring_OnlyCountMatchableMethodTypes(t *testing.T) {
 		{
 			name: "phone match but email no match",
 			methods: []repository.ContactMethod{
-				{Type: "email_work", Value: "john@example.com"},
+				{Type: "email", Value: "john@example.com"},
 				{Type: "phone", Value: "+1234567890"},
 				{Type: "telegram", Value: "@john"},
 			},
@@ -748,7 +748,7 @@ func TestMatchScoring_OnlyCountMatchableMethodTypes(t *testing.T) {
 		{
 			name: "email match but phone no match",
 			methods: []repository.ContactMethod{
-				{Type: "email_personal", Value: "john@gmail.com"},
+				{Type: "email", Value: "john@gmail.com"},
 				{Type: "phone", Value: "+1234567890"},
 				{Type: "discord", Value: "john#1234"},
 			},
@@ -761,7 +761,7 @@ func TestMatchScoring_OnlyCountMatchableMethodTypes(t *testing.T) {
 		{
 			name: "both email and phone match",
 			methods: []repository.ContactMethod{
-				{Type: "email_work", Value: "john@example.com"},
+				{Type: "email", Value: "john@example.com"},
 				{Type: "phone", Value: "+1234567890"},
 				{Type: "whatsapp", Value: "+1234567890"},
 			},
@@ -774,8 +774,8 @@ func TestMatchScoring_OnlyCountMatchableMethodTypes(t *testing.T) {
 		{
 			name: "multiple matchable types with non-matchable - partial match",
 			methods: []repository.ContactMethod{
-				{Type: "email_work", Value: "john@example.com"},
-				{Type: "email_personal", Value: "john.personal@example.com"},
+				{Type: "email", Value: "john@example.com"},
+				{Type: "email", Value: "john.personal@example.com"},
 				{Type: "phone", Value: "+1234567890"},
 				{Type: "discord", Value: "john#1234"},
 				{Type: "signal", Value: "+1234567890"},
@@ -783,7 +783,7 @@ func TestMatchScoring_OnlyCountMatchableMethodTypes(t *testing.T) {
 			candidateEmails: []string{"john@example.com"},
 			candidatePhones: []string{"+1234567890"},
 			expectedTotal:   3,     // 2 emails + 1 phone
-			expectedMatch:   2,     // work email + phone match
+			expectedMatch:   2,     // one email + phone match
 			expectedScore:   0.667, // 2/3
 		},
 		{
@@ -819,7 +819,7 @@ func TestMatchScoring_OnlyCountMatchableMethodTypes(t *testing.T) {
 			// This is the FIXED logic - only counting matchable types
 			for _, method := range tt.methods {
 				switch method.Type {
-				case "email_personal", "email_work":
+				case "email":
 					totalMethods++
 					if candidateEmails[matching.NormalizeEmail(method.Value)] {
 						methodMatches++

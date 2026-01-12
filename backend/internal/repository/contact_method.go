@@ -16,20 +16,18 @@ import (
 type ContactMethodType string
 
 const (
-	ContactMethodEmailPersonal ContactMethodType = "email_personal"
-	ContactMethodEmailWork     ContactMethodType = "email_work"
-	ContactMethodPhone         ContactMethodType = "phone"
-	ContactMethodTelegram      ContactMethodType = "telegram"
-	ContactMethodDiscord       ContactMethodType = "discord"
-	ContactMethodTwitter       ContactMethodType = "twitter"
-	ContactMethodSignal        ContactMethodType = "signal"
-	ContactMethodGChat         ContactMethodType = "gchat"
-	ContactMethodWhatsApp      ContactMethodType = "whatsapp"
+	ContactMethodEmail    ContactMethodType = "email"
+	ContactMethodPhone    ContactMethodType = "phone"
+	ContactMethodTelegram ContactMethodType = "telegram"
+	ContactMethodDiscord  ContactMethodType = "discord"
+	ContactMethodTwitter  ContactMethodType = "twitter"
+	ContactMethodSignal   ContactMethodType = "signal"
+	ContactMethodGChat    ContactMethodType = "gchat"
+	ContactMethodWhatsApp ContactMethodType = "whatsapp"
 )
 
 var ContactMethodTypes = []ContactMethodType{
-	ContactMethodEmailPersonal,
-	ContactMethodEmailWork,
+	ContactMethodEmail,
 	ContactMethodPhone,
 	ContactMethodTelegram,
 	ContactMethodSignal,
@@ -105,7 +103,7 @@ func NormalizeContactMethodValue(methodType, value string) string {
 
 func mapMethodTypeToIdentifier(methodType string) identity.IdentifierType {
 	switch ContactMethodType(methodType) {
-	case ContactMethodEmailPersonal, ContactMethodEmailWork, ContactMethodGChat:
+	case ContactMethodEmail, ContactMethodGChat:
 		return identity.IdentifierTypeEmail
 	case ContactMethodPhone, ContactMethodSignal:
 		return identity.IdentifierTypePhone

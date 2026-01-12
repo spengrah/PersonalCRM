@@ -75,7 +75,7 @@ type SuggestedMatch struct {
 // SelectedMethodInput represents a user-selected contact method for import/link
 type SelectedMethodInput struct {
 	OriginalValue string `json:"original_value" binding:"required"`
-	Type          string `json:"type" binding:"required,oneof=email_personal email_work phone telegram signal discord twitter gchat whatsapp"`
+	Type          string `json:"type" binding:"required,oneof=email phone telegram signal discord twitter gchat whatsapp"`
 }
 
 // ImportRequest represents an optional request body for importing with method selection
@@ -352,9 +352,8 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 		availableValues[phone.Value] = true
 	}
 
-	// Track used types to prevent duplicates
-	usedTypes := make(map[string]bool)
 	methods := make([]service.ContactMethodInput, 0, len(selected))
+	usedValues := make(map[string]bool)
 
 	for _, sel := range selected {
 		// Validate the value exists in external contact
@@ -363,9 +362,13 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 			continue
 		}
 
-		// Skip duplicate types
-		if usedTypes[sel.Type] {
-			logger.Warn().Str("type", sel.Type).Msg("duplicate type in selection, skipping")
+		normalized := repository.NormalizeContactMethodValue(sel.Type, sel.OriginalValue)
+		if normalized == "" {
+			continue
+		}
+		key := sel.Type + ":" + normalized
+		if usedValues[key] {
+			logger.Warn().Str("value", sel.OriginalValue).Msg("duplicate method value in selection, skipping")
 			continue
 		}
 
@@ -373,7 +376,7 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 			Type:  sel.Type,
 			Value: sel.OriginalValue,
 		})
-		usedTypes[sel.Type] = true
+		usedValues[key] = true
 	}
 
 	return methods
@@ -383,48 +386,19 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 func (h *ImportHandler) buildMethodsAuto(external *repository.ExternalContact) []service.ContactMethodInput {
 	methods := make([]service.ContactMethodInput, 0)
 
-	// Handle emails - we can only store 2 emails (email_personal and email_work)
-	// Strategy: Separate by type, then take first of each type
-	var personalEmails, workEmails []string
+	// Handle emails - store all available emails
 	for _, email := range external.Emails {
-		if email.Type == "work" || email.Type == "other" {
-			workEmails = append(workEmails, email.Value)
-		} else {
-			personalEmails = append(personalEmails, email.Value)
-		}
-	}
-
-	// Add first personal email if available
-	if len(personalEmails) > 0 {
 		methods = append(methods, service.ContactMethodInput{
-			Type:  "email_personal",
-			Value: personalEmails[0],
+			Type:  "email",
+			Value: email.Value,
 		})
 	}
 
-	// Add first work email if available
-	if len(workEmails) > 0 {
-		methods = append(methods, service.ContactMethodInput{
-			Type:  "email_work",
-			Value: workEmails[0],
-		})
-	}
-
-	// Handle phones - we can only store 1 phone due to UNIQUE(contact_id, type) constraint
-	// Take the first phone, preferring one marked as primary
-	if len(external.Phones) > 0 {
-		// Try to find primary phone first
-		phoneToUse := external.Phones[0]
-		for _, phone := range external.Phones {
-			if phone.Primary {
-				phoneToUse = phone
-				break
-			}
-		}
-
+	// Handle phones - store all available phones
+	for _, phone := range external.Phones {
 		methods = append(methods, service.ContactMethodInput{
 			Type:  "phone",
-			Value: phoneToUse.Value,
+			Value: phone.Value,
 		})
 	}
 

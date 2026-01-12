@@ -47,7 +47,7 @@ func TestImportMatchServiceFindBestMatch_BelowThreshold(t *testing.T) {
 					ID:       contactID,
 					FullName: "Low Score",
 					Methods: []repository.ContactMethod{
-						{Type: "email_personal", Value: "low@example.com"},
+						{Type: "email", Value: "low@example.com"},
 					},
 				},
 				Similarity: 0.4,
@@ -74,7 +74,7 @@ func TestImportMatchServiceFindBestMatch_SingleMatch(t *testing.T) {
 					ID:       contactID,
 					FullName: "Jane Doe",
 					Methods: []repository.ContactMethod{
-						{Type: "email_personal", Value: "jane@example.com"},
+						{Type: "email", Value: "jane@example.com"},
 					},
 				},
 				Similarity: 0.9,
@@ -106,7 +106,7 @@ func TestImportMatchServiceFindBestMatch_PrefersBestScore(t *testing.T) {
 					ID:       uuid.New(),
 					FullName: "Match A",
 					Methods: []repository.ContactMethod{
-						{Type: "email_personal", Value: "a@example.com"},
+						{Type: "email", Value: "a@example.com"},
 					},
 				},
 				Similarity: 0.7,
@@ -116,7 +116,7 @@ func TestImportMatchServiceFindBestMatch_PrefersBestScore(t *testing.T) {
 					ID:       bestID,
 					FullName: "Match B",
 					Methods: []repository.ContactMethod{
-						{Type: "email_personal", Value: "b@example.com"},
+						{Type: "email", Value: "b@example.com"},
 					},
 				},
 				Similarity: 0.9,

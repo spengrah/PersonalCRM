@@ -6,7 +6,7 @@ ALTER TABLE contact_method
 -- Keep normalization aligned with matching.NormalizePhoneE164() and identity.Normalize().
 UPDATE contact_method
 SET value_normalized = CASE
-    WHEN type IN ('email_personal', 'email_work', 'gchat') THEN lower(btrim(value))
+    WHEN type IN ('email', 'gchat') THEN lower(btrim(value))
     WHEN type IN ('telegram', 'twitter', 'discord') THEN lower(regexp_replace(btrim(value), '^@+', ''))
     WHEN type IN ('phone', 'signal', 'whatsapp') THEN
         CASE
