@@ -168,6 +168,12 @@ dev-native: postgres-native
 	@tail -f logs/frontend-dev.log logs/backend-dev.log 2>/dev/null || sleep infinity
 
 test-e2e: e2e-db
+	@echo "Cleaning up any conflicting processes..."
+	@-pkill -f "playwright" 2>/dev/null || true
+	@-pkill -f "next.*dev" 2>/dev/null || true
+	@-lsof -ti:3000 | xargs -r kill -9 2>/dev/null || true
+	@-lsof -ti:8080 | xargs -r kill -9 2>/dev/null || true
+	@sleep 1
 	@echo "Running Playwright E2E tests..."
 	@ENV_FILE=$${ENV_FILE:-$(CURDIR)/.env.example.testing}; \
 	if [ ! -f "$$ENV_FILE" ]; then echo "❌ ENV file not found: $$ENV_FILE"; exit 1; fi; \
