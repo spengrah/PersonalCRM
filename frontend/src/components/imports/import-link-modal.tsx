@@ -1,16 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import {
-  ChevronLeft,
-  ChevronRight,
-  UserPlus,
-  Link2,
-  Ban,
-  Users,
-  Calendar,
-  HelpCircle,
-} from 'lucide-react'
+import { ChevronLeft, ChevronRight, UserPlus, Link2, Ban, HelpCircle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Button } from '@/components/ui/button'
 import { ContactSelector } from '@/components/ui/contact-selector'
