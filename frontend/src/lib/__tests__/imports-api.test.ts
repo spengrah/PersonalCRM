@@ -27,6 +27,7 @@ describe('importsApi', () => {
         ok: true,
         status: 200,
         json: async () => ({
+          success: true,
           data: mockCandidates,
           meta: {
             pagination: {
@@ -58,6 +59,7 @@ describe('importsApi', () => {
         ok: true,
         status: 200,
         json: async () => ({
+          success: true,
           data: [],
           meta: { pagination: { total: 0, page: 2, limit: 10, pages: 0 } },
         }),
@@ -75,6 +77,7 @@ describe('importsApi', () => {
         ok: true,
         status: 200,
         json: async () => ({
+          success: true,
           data: [],
           meta: { pagination: { total: 0, page: 1, limit: 20, pages: 0 } },
         }),
@@ -90,7 +93,7 @@ describe('importsApi', () => {
       ;(global.fetch as any).mockResolvedValueOnce({
         ok: true,
         status: 200,
-        json: async () => ({}),
+        json: async () => ({ success: true }),
       })
 
       const result = await importsApi.getCandidates()

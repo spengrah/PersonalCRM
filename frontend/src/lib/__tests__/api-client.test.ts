@@ -3,12 +3,59 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { apiClient, ApiError } from '../api-client'
 
 describe('ApiClient', () => {
+  const originalWindow = global.window
+
   beforeEach(() => {
     global.fetch = vi.fn()
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
+    global.window = originalWindow
+  })
+
+  describe('SSR context', () => {
+    it('handles GET request with params when window is undefined', async () => {
+      // Simulate SSR context
+      ;(global as any).window = undefined
+
+      const mockData = [{ id: '1' }]
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: mockData }),
+      })
+
+      // This should not throw even without a valid base URL
+      await apiClient.get('/api/test', { page: 1, limit: 10 })
+
+      const fetchCall = (global.fetch as any).mock.calls[0]
+      // In SSR context with empty base, the URL will just be the endpoint with params
+      expect(fetchCall[0]).toContain('/api/test')
+      expect(fetchCall[0]).toContain('page=1')
+      expect(fetchCall[0]).toContain('limit=10')
+    })
+
+    it('handles getWithMeta request when window is undefined', async () => {
+      // Simulate SSR context
+      ;(global as any).window = undefined
+
+      const mockData = [{ id: '1' }]
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: mockData,
+          meta: { pagination: { total: 1, page: 1, limit: 10, pages: 1 } },
+        }),
+      })
+
+      const result = await apiClient.getWithMeta('/api/test', { page: 1 })
+
+      expect(result.data).toEqual(mockData)
+      expect(result.meta?.pagination?.total).toBe(1)
+    })
   })
 
   describe('successful requests', () => {
@@ -186,6 +233,118 @@ describe('ApiClient', () => {
     it('works with instanceof Error', () => {
       const error = new ApiError('Test error', 500)
       expect(error instanceof Error).toBe(true)
+    })
+  })
+
+  describe('getWithMeta', () => {
+    it('returns data and pagination metadata', async () => {
+      const mockData = [{ id: '1', name: 'Test' }]
+      const mockPagination = { total: 50, page: 1, limit: 20, pages: 3 }
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: mockData,
+          meta: { pagination: mockPagination },
+        }),
+      })
+
+      const result = await apiClient.getWithMeta('/api/test')
+
+      expect(result.data).toEqual(mockData)
+      expect(result.meta?.pagination).toEqual(mockPagination)
+    })
+
+    it('handles response without meta field', async () => {
+      const mockData = [{ id: '1', name: 'Test' }]
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: mockData,
+        }),
+      })
+
+      const result = await apiClient.getWithMeta('/api/test')
+
+      expect(result.data).toEqual(mockData)
+      expect(result.meta).toBeUndefined()
+    })
+
+    it('handles response with empty pagination', async () => {
+      const mockData: unknown[] = []
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: mockData,
+          meta: { pagination: { total: 0, page: 1, limit: 20, pages: 0 } },
+        }),
+      })
+
+      const result = await apiClient.getWithMeta('/api/test')
+
+      expect(result.data).toEqual([])
+      expect(result.meta?.pagination?.total).toBe(0)
+      expect(result.meta?.pagination?.pages).toBe(0)
+    })
+
+    it('passes query parameters correctly', async () => {
+      const mockData = [{ id: '1' }]
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: mockData,
+          meta: { pagination: { total: 1, page: 2, limit: 10, pages: 1 } },
+        }),
+      })
+
+      await apiClient.getWithMeta('/api/test', { page: 2, limit: 10, search: 'foo' })
+
+      const fetchCall = (global.fetch as any).mock.calls[0]
+      expect(fetchCall[0]).toContain('page=2')
+      expect(fetchCall[0]).toContain('limit=10')
+      expect(fetchCall[0]).toContain('search=foo')
+    })
+
+    it('throws ApiError on HTTP error', async () => {
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        json: async () => ({
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Resource not found',
+          },
+        }),
+      })
+
+      try {
+        await apiClient.getWithMeta('/api/test')
+        expect.fail('Should have thrown an error')
+      } catch (error) {
+        expect(error).toBeInstanceOf(ApiError)
+        expect((error as ApiError).status).toBe(404)
+        expect((error as ApiError).code).toBe('NOT_FOUND')
+      }
+    })
+
+    it('handles 204 No Content response', async () => {
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+      })
+
+      const result = await apiClient.getWithMeta('/api/test')
+
+      expect(result.data).toBeUndefined()
+      expect(result.meta).toBeUndefined()
     })
   })
 })

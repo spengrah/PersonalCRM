@@ -26,35 +26,14 @@ export const contactsApi = {
       ...(params.order && { order: params.order }),
     }
 
-    // Use apiClient with proper headers, but we need to handle the pagination meta
-    const API_BASE_URL =
-      process.env.NEXT_PUBLIC_API_URL ||
-      (typeof window !== 'undefined' ? window.location.origin : '')
-    const url = new URL('/api/v1/contacts', API_BASE_URL)
-    Object.entries(queryParams).forEach(([key, value]) => {
-      if (value !== undefined) {
-        url.searchParams.append(key, String(value))
-      }
-    })
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': process.env.NEXT_PUBLIC_API_KEY || '',
-      },
-    })
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
-    }
-
-    const result = await response.json()
+    const response = await apiClient.getWithMeta<Contact[]>('/api/v1/contacts', queryParams)
 
     return {
-      contacts: result.data || [],
-      total: result.meta?.pagination?.total || 0,
-      page: result.meta?.pagination?.page || 1,
-      limit: result.meta?.pagination?.limit || 20,
-      pages: result.meta?.pagination?.pages || 0,
+      contacts: response.data || [],
+      total: response.meta?.pagination?.total || 0,
+      page: response.meta?.pagination?.page || 1,
+      limit: response.meta?.pagination?.limit || 20,
+      pages: response.meta?.pagination?.pages || 0,
     }
   },
 
