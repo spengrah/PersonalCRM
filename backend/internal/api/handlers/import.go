@@ -110,8 +110,12 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 	if page < 1 {
 		page = 1
 	}
-	if limit < 1 || limit > 100 {
+	if limit < 1 {
 		limit = 20
+	}
+	// Allow up to MaxCandidatesForSorting since we fetch all for sorting anyway
+	if limit > MaxCandidatesForSorting {
+		limit = MaxCandidatesForSorting
 	}
 
 	// Check for source filter
