@@ -47,7 +47,22 @@ class ApiClient {
   }
 
   private buildUrl(endpoint: string, params?: Record<string, unknown>): string {
-    const url = new URL(endpoint, this.getBase())
+    const base = this.getBase()
+    // Handle SSR context where base may be empty
+    if (!base) {
+      const searchParams = new URLSearchParams()
+      if (params) {
+        Object.entries(params).forEach(([key, value]) => {
+          if (value !== undefined && value !== null) {
+            searchParams.append(key, String(value))
+          }
+        })
+      }
+      const search = searchParams.toString()
+      return search ? `${endpoint}?${search}` : endpoint
+    }
+
+    const url = new URL(endpoint, base)
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
         if (value !== undefined && value !== null) {

@@ -3,12 +3,59 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { apiClient, ApiError } from '../api-client'
 
 describe('ApiClient', () => {
+  const originalWindow = global.window
+
   beforeEach(() => {
     global.fetch = vi.fn()
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
+    global.window = originalWindow
+  })
+
+  describe('SSR context', () => {
+    it('handles GET request with params when window is undefined', async () => {
+      // Simulate SSR context
+      ;(global as any).window = undefined
+
+      const mockData = [{ id: '1' }]
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: mockData }),
+      })
+
+      // This should not throw even without a valid base URL
+      await apiClient.get('/api/test', { page: 1, limit: 10 })
+
+      const fetchCall = (global.fetch as any).mock.calls[0]
+      // In SSR context with empty base, the URL will just be the endpoint with params
+      expect(fetchCall[0]).toContain('/api/test')
+      expect(fetchCall[0]).toContain('page=1')
+      expect(fetchCall[0]).toContain('limit=10')
+    })
+
+    it('handles getWithMeta request when window is undefined', async () => {
+      // Simulate SSR context
+      ;(global as any).window = undefined
+
+      const mockData = [{ id: '1' }]
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: mockData,
+          meta: { pagination: { total: 1, page: 1, limit: 10, pages: 1 } },
+        }),
+      })
+
+      const result = await apiClient.getWithMeta('/api/test', { page: 1 })
+
+      expect(result.data).toEqual(mockData)
+      expect(result.meta?.pagination?.total).toBe(1)
+    })
   })
 
   describe('successful requests', () => {
