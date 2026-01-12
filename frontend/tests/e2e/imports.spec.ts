@@ -911,12 +911,13 @@ test.describe('Imports - Cadence Selector (Issue #152)', () => {
     await expect(contactOption).toBeVisible({ timeout: 5000 })
     await contactOption.click()
 
-    // Wait for the cadence dropdown to show the pre-selected value (Monthly)
-    // This ensures the contact data has loaded and the effect has run
-    const cadenceSelect = page
-      .locator('select[id="cadence"], select')
-      .filter({ hasText: /Monthly/i })
+    // Wait for the cadence dropdown to be visible
+    // The Select component generates id from label: "select-contact-cadence"
+    const cadenceSelect = page.locator('#select-contact-cadence')
     await expect(cadenceSelect).toBeVisible({ timeout: 5000 })
+
+    // Wait for the contact data to load and pre-select Monthly cadence
+    await expect(cadenceSelect).toHaveValue('monthly', { timeout: 5000 })
 
     // Change cadence to weekly
     await cadenceSelect.selectOption('weekly')
