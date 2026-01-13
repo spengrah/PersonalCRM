@@ -30,24 +30,21 @@ test.describe('Settings Page', () => {
     await expect(fileInput).toHaveClass(/shadow-sm/)
   })
 
-  test('should display system information section with build info', async ({ page }) => {
+  test('should display system information section with version info', async ({ page }) => {
     await page.goto('/settings')
 
     // Check System Information section is visible
     await expect(page.getByRole('heading', { name: 'System Information' })).toBeVisible()
 
-    // Check Build field exists
-    await expect(page.getByText('Build')).toBeVisible()
+    // Check Version field exists
+    await expect(page.getByText('Version')).toBeVisible()
 
-    // In test environment without NEXT_PUBLIC_COMMIT_HASH, should show "Development"
-    // Note: Testing with a valid commit hash is not practical in E2E because:
+    // In test environment without NEXT_PUBLIC_BUILD_VERSION, should show "Personal CRM (dev)"
+    // Note: Testing with a valid version/commit hash is not practical in E2E because:
     // 1. The env var is baked in at build time, not runtime
-    // 2. We'd need to rebuild the app with a specific hash for each test run
-    // 3. The regex validation logic is simple enough that unit-level verification suffices
-    const buildValue = page.locator('p.text-gray-600:has-text("Build")').locator('+ p')
-    await expect(buildValue).toContainText('Development')
-
-    // Verify no link is rendered (since no valid hash)
-    await expect(buildValue.locator('a')).not.toBeVisible()
+    // 2. We'd need to rebuild the app with specific values for each test run
+    const versionValue = page.locator('p.text-gray-600:has-text("Version")').locator('+ p')
+    await expect(versionValue).toContainText('Personal CRM')
+    await expect(versionValue).toContainText('(dev)')
   })
 })

@@ -268,32 +268,46 @@ export default function SettingsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
               <div>
                 <p className="text-gray-600">Version</p>
-                <p className="font-medium text-gray-900">Personal CRM v1.0</p>
-              </div>
-
-              <div>
-                <p className="text-gray-600">Build</p>
                 <p className="font-medium text-gray-900">
                   {(() => {
+                    const version = process.env.NEXT_PUBLIC_BUILD_VERSION
                     const hash = process.env.NEXT_PUBLIC_COMMIT_HASH
                     const repo = process.env.NEXT_PUBLIC_GITHUB_REPO
                     const isValidHash = hash && /^[0-9a-f]{40}$/i.test(hash)
 
-                    if (isValidHash && repo) {
+                    if (version && isValidHash && repo) {
                       return (
-                        <a
-                          href={`https://github.com/${repo}/commit/${hash}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:text-blue-800 hover:underline"
-                        >
-                          {hash.slice(0, 7)}
-                        </a>
+                        <>
+                          Personal CRM {version}
+                          <span className="text-gray-500">
+                            {' ('}
+                            <a
+                              href={`https://github.com/${repo}/commit/${hash}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              {hash.slice(0, 7)}
+                            </a>
+                            {')'}
+                          </span>
+                        </>
                       )
-                    } else if (isValidHash) {
-                      return <span>{hash.slice(0, 7)}</span>
+                    } else if (version && isValidHash) {
+                      return (
+                        <>
+                          Personal CRM {version}{' '}
+                          <span className="text-gray-500">({hash.slice(0, 7)})</span>
+                        </>
+                      )
+                    } else if (version) {
+                      return <>Personal CRM {version}</>
                     } else {
-                      return <span className="text-gray-500">Development</span>
+                      return (
+                        <>
+                          Personal CRM <span className="text-gray-500">(dev)</span>
+                        </>
+                      )
                     }
                   })()}
                 </p>
@@ -304,11 +318,6 @@ export default function SettingsPage() {
                 <p className="font-medium text-gray-900">
                   {environment === 'testing' ? 'Development' : 'Production'}
                 </p>
-              </div>
-
-              <div>
-                <p className="text-gray-600">Last Updated</p>
-                <p className="font-medium text-gray-900">{new Date().toLocaleDateString()}</p>
               </div>
 
               <div>
