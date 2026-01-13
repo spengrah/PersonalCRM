@@ -204,32 +204,33 @@ func (h *TestHandler) SeedContacts(c *gin.Context) {
 
 	now := accelerated.GetCurrentTime()
 	ids := make([]string, 0, len(req.Contacts))
+	var errors []string
 
-	for _, input := range req.Contacts {
+	for i, input := range req.Contacts {
 		// Normalize and validate contact methods (reuse contact handler logic)
 		methodRequests := make([]ContactMethodRequest, len(input.Methods))
-		for i, m := range input.Methods {
-			methodRequests[i] = ContactMethodRequest(m)
+		for j, m := range input.Methods {
+			methodRequests[j] = ContactMethodRequest(m)
 		}
 
 		normalizedMethods, err := normalizeContactMethodRequests(methodRequests)
 		if err != nil {
-			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Validation failed", err.Error())
-			return
+			errors = append(errors, fmt.Sprintf("contact %d (%s): method normalization failed: %s", i+1, input.FullName, err.Error()))
+			continue
 		}
 
 		if err := validateContactMethods(h.validator, normalizedMethods); err != nil {
-			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Validation failed", err.Error())
-			return
+			errors = append(errors, fmt.Sprintf("contact %d (%s): method validation failed: %s", i+1, input.FullName, err.Error()))
+			continue
 		}
 
 		// Build contact methods for service
 		methods := buildContactMethodInputs(normalizedMethods)
 
 		// Calculate last_contacted time if specified
+		// Uses environment-scaled days (GetCadenceDuration returns different values per CRM_ENV)
 		lastContacted := now
 		if input.LastContactedDaysAgo > 0 {
-			// Use scaled days based on environment (in testing mode, 1 "day" = weekly_cadence / 7)
 			weeklyDuration := reminder.GetCadenceDuration(reminder.CadenceWeekly)
 			scaledDayDuration := weeklyDuration / 7
 			lastContacted = now.Add(-time.Duration(input.LastContactedDaysAgo) * scaledDayDuration)
@@ -256,11 +257,20 @@ func (h *TestHandler) SeedContacts(c *gin.Context) {
 
 		contact, err := h.contactSvc.CreateContact(ctx, createReq, methods)
 		if err != nil {
-			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
-			return
+			errors = append(errors, fmt.Sprintf("contact %d (%s): creation failed: %s", i+1, input.FullName, err.Error()))
+			continue
 		}
 
 		ids = append(ids, contact.ID.String())
+	}
+
+	// If any errors occurred, return partial success with error details
+	// This allows cleanup to work with the IDs that were successfully created
+	if len(errors) > 0 {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal,
+			fmt.Sprintf("Created %d/%d contacts", len(ids), len(req.Contacts)),
+			fmt.Sprintf("errors: %v; created_ids: %v", errors, ids))
+		return
 	}
 
 	api.SendSuccess(c, http.StatusCreated, SeedContactsResponse{
