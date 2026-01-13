@@ -1,5 +1,8 @@
 import { test, expect } from '@playwright/test'
 
+// Run serially - these tests create/delete data via API without TestAPI isolation
+test.describe.configure({ mode: 'serial' })
+
 // API configuration for E2E tests
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
