@@ -36,12 +36,18 @@ test.describe('Settings Page', () => {
     // Check System Information section is visible
     await expect(page.getByRole('heading', { name: 'System Information' })).toBeVisible()
 
-    // Check Build field exists (will show "Development" when NEXT_PUBLIC_COMMIT_HASH is not set)
+    // Check Build field exists
     await expect(page.getByText('Build')).toBeVisible()
 
-    // In test/dev environment without NEXT_PUBLIC_COMMIT_HASH, shows "Development"
-    // In production with commit hash, would show a link with short hash
-    const buildSection = page.locator('text=Build').locator('..')
-    await expect(buildSection).toBeVisible()
+    // In test environment without NEXT_PUBLIC_COMMIT_HASH, should show "Development"
+    // Note: Testing with a valid commit hash is not practical in E2E because:
+    // 1. The env var is baked in at build time, not runtime
+    // 2. We'd need to rebuild the app with a specific hash for each test run
+    // 3. The regex validation logic is simple enough that unit-level verification suffices
+    const buildValue = page.locator('p.text-gray-600:has-text("Build")').locator('+ p')
+    await expect(buildValue).toContainText('Development')
+
+    // Verify no link is rendered (since no valid hash)
+    await expect(buildValue.locator('a')).not.toBeVisible()
   })
 })
