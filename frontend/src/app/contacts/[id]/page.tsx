@@ -383,7 +383,11 @@ export default function ContactDetailPage() {
                       <Clock className="w-4 h-4 mr-2 text-gray-400" />
                       <span>
                         {contact.last_contacted
-                          ? new Date(contact.last_contacted).toLocaleDateString()
+                          ? formatDateOnly(contact.last_contacted, {
+                              year: 'numeric',
+                              month: 'numeric',
+                              day: 'numeric',
+                            })
                           : 'Never'}
                       </span>
                       <button
