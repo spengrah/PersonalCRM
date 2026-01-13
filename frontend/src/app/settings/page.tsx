@@ -272,8 +272,22 @@ export default function SettingsPage() {
               </div>
 
               <div>
-                <p className="text-gray-600">Last Updated</p>
-                <p className="font-medium text-gray-900">{new Date().toLocaleDateString()}</p>
+                <p className="text-gray-600">Build</p>
+                <p className="font-medium text-gray-900">
+                  {process.env.NEXT_PUBLIC_COMMIT_HASH &&
+                  /^[0-9a-f]{40}$/i.test(process.env.NEXT_PUBLIC_COMMIT_HASH) ? (
+                    <a
+                      href={`https://github.com/spengrah/PersonalCRM/commit/${process.env.NEXT_PUBLIC_COMMIT_HASH}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:text-blue-800 hover:underline"
+                    >
+                      {process.env.NEXT_PUBLIC_COMMIT_HASH.slice(0, 7)}
+                    </a>
+                  ) : (
+                    <span className="text-gray-500">Development</span>
+                  )}
+                </p>
               </div>
 
               <div>

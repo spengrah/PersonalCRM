@@ -127,6 +127,7 @@ jobs:
         working-directory: frontend
         env:
           NEXT_PUBLIC_API_KEY: test-api-key-for-ci-build
+          NEXT_PUBLIC_COMMIT_HASH: ${{ github.sha }}
         run: bun run build
 
   e2e-tests:
