@@ -223,13 +223,21 @@ func (s *ContactService) DeleteContact(ctx context.Context, id uuid.UUID) error 
 	return s.contactRepo.SoftDeleteContact(ctx, id)
 }
 
-func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid.UUID) (*repository.Contact, error) {
+// UpdateContactLastContacted updates the last contacted date for a contact.
+// If lastContacted is nil, the current time is used.
+func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted *time.Time) (*repository.Contact, error) {
 	_, err := s.contactRepo.GetContact(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.contactRepo.UpdateContactLastContacted(ctx, id, accelerated.GetCurrentTime()); err != nil {
+	// Use provided date or default to current time
+	dateToSet := accelerated.GetCurrentTime()
+	if lastContacted != nil {
+		dateToSet = *lastContacted
+	}
+
+	if err := s.contactRepo.UpdateContactLastContacted(ctx, id, dateToSet); err != nil {
 		return nil, err
 	}
 

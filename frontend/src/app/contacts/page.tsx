@@ -74,7 +74,7 @@ function ContactsTable({
   const handleMarkAsContacted = async (e: React.MouseEvent, contactId: string) => {
     e.stopPropagation() // Prevent row click
     try {
-      await updateLastContacted.mutateAsync(contactId)
+      await updateLastContacted.mutateAsync({ id: contactId })
       setOpenDropdown(null)
     } catch (error) {
       console.error('Failed to mark as contacted:', error)
