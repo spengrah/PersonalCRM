@@ -19,6 +19,7 @@ jobs:
       issues: read
       id-token: write
       actions: read
+      statuses: write
 
     steps:
       - name: Get PR number
@@ -37,6 +38,16 @@ jobs:
 
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
           echo "Found PR #$PR_NUMBER"
+
+      - name: Set pending status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/statuses/${{ github.event.workflow_run.head_sha }}" \
+            -f state=pending \
+            -f context=claude-review \
+            -f description="Claude code review in progress..." \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -81,6 +92,7 @@ jobs:
           claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr review:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*)"'
 
       - name: Check Claude review result
+        id: check-result
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -114,3 +126,25 @@ jobs:
           fi
 
           echo "Claude review passed"
+
+      - name: Set success status
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/statuses/${{ github.event.workflow_run.head_sha }}" \
+            -f state=success \
+            -f context=claude-review \
+            -f description="Claude code review passed" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Set failure status
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/statuses/${{ github.event.workflow_run.head_sha }}" \
+            -f state=failure \
+            -f context=claude-review \
+            -f description="Claude code review failed" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
