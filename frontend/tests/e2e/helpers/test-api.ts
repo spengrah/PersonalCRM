@@ -21,6 +21,31 @@ export function getTestPrefix(testInfo: TestInfo): string {
 // Types
 // ============================================================================
 
+export interface SeedContactMethodInput {
+  type: 'email' | 'phone' | 'telegram' | 'discord' | 'twitter' | 'signal' | 'gchat' | 'whatsapp'
+  value: string
+  is_primary?: boolean
+}
+
+export interface SeedContactInput {
+  full_name: string
+  location?: string
+  notes?: string
+  cadence?: 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'biannual' | 'annual'
+  methods?: SeedContactMethodInput[]
+  last_contacted_days_ago?: number
+}
+
+export interface SeedContactsRequest {
+  prefix: string
+  contacts: SeedContactInput[]
+}
+
+export interface SeedContactsResponse {
+  created: number
+  ids: string[]
+}
+
 export interface SeedExternalContactInput {
   display_name: string
   emails?: string[]
@@ -117,6 +142,29 @@ export class TestAPI {
    */
   get prefix(): string {
     return this._prefix
+  }
+
+  /**
+   * Seeds contacts in the database with full field support.
+   * Supports location, notes, cadence, methods, and backdated last_contacted.
+   * Contact names are automatically prefixed for cleanup.
+   */
+  async seedContacts(contacts: SeedContactInput[]): Promise<SeedContactsResponse> {
+    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/seed/contacts`, {
+      headers: API_HEADERS,
+      data: {
+        prefix: this.prefix,
+        contacts,
+      } satisfies SeedContactsRequest,
+    })
+
+    if (!response.ok()) {
+      const body = await response.text()
+      throw new Error(`Failed to seed contacts: ${response.status()} ${body}`)
+    }
+
+    const data = await response.json()
+    return data.data as SeedContactsResponse
   }
 
   /**
