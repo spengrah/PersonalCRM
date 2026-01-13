@@ -1,7 +1,5 @@
 import { test, expect } from '@playwright/test'
-
-// Run serially - these tests create/delete data via API without TestAPI isolation
-test.describe.configure({ mode: 'serial' })
+import { createTestAPI, TestAPI } from './helpers/test-api'
 
 // API configuration for E2E tests
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
@@ -12,24 +10,29 @@ const API_HEADERS = {
 }
 
 test.describe('Reminder Lifecycle', () => {
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
   test('deleting a contact should remove its reminders from the reminders list', async ({
     page,
     request,
   }) => {
-    const suffix = Date.now()
-    const contactName = `E2E Delete Contact ${suffix}`
-    const reminderTitle = `Reminder for ${contactName}`
-
-    // Create a contact via API (using backend URL directly)
-    const contactResponse = await request.post(`${API_BASE_URL}/api/v1/contacts`, {
-      headers: API_HEADERS,
-      data: {
-        full_name: contactName,
+    // Seed a contact using TestAPI
+    const { ids } = await testApi.seedContacts([
+      {
+        full_name: 'Delete Contact',
       },
-    })
-    expect(contactResponse.ok()).toBeTruthy()
-    const contactData = await contactResponse.json()
-    const contactId = contactData.data.id
+    ])
+    const contactId = ids[0]
+    const contactName = `${testApi.prefix}-Delete Contact`
+    const reminderTitle = `Reminder for ${contactName}`
 
     // Create a reminder for this contact via API
     const reminderResponse = await request.post(`${API_BASE_URL}/api/v1/reminders`, {
@@ -72,22 +75,17 @@ test.describe('Reminder Lifecycle', () => {
     page,
     request,
   }) => {
-    const suffix = Date.now()
-    const contactName = `E2E Mark Contacted ${suffix}`
-    const autoReminderTitle = `Reach out to ${contactName} (weekly)`
-    const manualReminderTitle = `Manual reminder for ${contactName}`
-
-    // Create a contact via API with a cadence
-    const contactResponse = await request.post(`${API_BASE_URL}/api/v1/contacts`, {
-      headers: API_HEADERS,
-      data: {
-        full_name: contactName,
+    // Seed a contact with cadence using TestAPI
+    const { ids } = await testApi.seedContacts([
+      {
+        full_name: 'Mark Contacted',
         cadence: 'weekly',
       },
-    })
-    expect(contactResponse.ok()).toBeTruthy()
-    const contactData = await contactResponse.json()
-    const contactId = contactData.data.id
+    ])
+    const contactId = ids[0]
+    const contactName = `${testApi.prefix}-Mark Contacted`
+    const autoReminderTitle = `Reach out to ${contactName} (weekly)`
+    const manualReminderTitle = `Manual reminder for ${contactName}`
 
     // Create an "auto" reminder directly via the backend
     // Note: In real usage, the scheduler would create these, but we simulate it here
@@ -139,13 +137,5 @@ test.describe('Reminder Lifecycle', () => {
     // Both reminders should still be visible because we created them as "manual" (default)
     // The real auto-generated reminders would have source='auto' and would be completed
     await expect(page.getByText(manualReminderTitle)).toBeVisible()
-
-    // Cleanup: delete the contact
-    await page.goto(`/contacts/${contactId}`)
-    page.once('dialog', dialog => dialog.accept())
-    await Promise.all([
-      page.waitForURL('/contacts'),
-      page.getByRole('button', { name: 'Delete' }).click(),
-    ])
   })
 })

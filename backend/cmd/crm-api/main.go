@@ -348,6 +348,7 @@ func main() {
 			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService, testCalendarRepo)
 			testRoutes := v1.Group("/test")
 			{
+				testRoutes.POST("/seed/contacts", testHandler.SeedContacts)
 				testRoutes.POST("/seed/external-contacts", testHandler.SeedExternalContacts)
 				testRoutes.POST("/seed/overdue-contacts", testHandler.SeedOverdueContacts)
 				testRoutes.POST("/seed/calendar-events", testHandler.SeedCalendarEvents)

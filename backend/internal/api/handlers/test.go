@@ -148,6 +148,127 @@ func (h *TestHandler) SeedExternalContacts(c *gin.Context) {
 	}, nil)
 }
 
+// SeedContactMethodInput represents a contact method for seeding
+type SeedContactMethodInput struct {
+	Type      string `json:"type" validate:"required,oneof=email phone telegram discord twitter signal gchat whatsapp"`
+	Value     string `json:"value" validate:"required,max=255"`
+	IsPrimary bool   `json:"is_primary"`
+}
+
+// SeedContactInput represents input for creating a contact
+type SeedContactInput struct {
+	FullName             string                   `json:"full_name" validate:"required,min=1,max=255"`
+	Location             string                   `json:"location,omitempty" validate:"omitempty,max=255"`
+	Notes                string                   `json:"notes,omitempty" validate:"omitempty,max=2000"`
+	Cadence              string                   `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual"`
+	Methods              []SeedContactMethodInput `json:"methods,omitempty" validate:"omitempty,max=20,dive"`
+	LastContactedDaysAgo int                      `json:"last_contacted_days_ago,omitempty" validate:"omitempty,min=0,max=3650"`
+}
+
+// SeedContactsRequest represents the request to seed contacts
+type SeedContactsRequest struct {
+	Prefix   string             `json:"prefix" validate:"required,min=1,max=50"`
+	Contacts []SeedContactInput `json:"contacts" validate:"required,min=1,max=100,dive"`
+}
+
+// SeedContactsResponse represents the response from seeding contacts
+type SeedContactsResponse struct {
+	Created int      `json:"created"`
+	IDs     []string `json:"ids"`
+}
+
+// SeedContacts creates contacts for testing with full field support
+// @Summary Seed contacts for testing
+// @Description Create contacts with optional methods, location, notes, and cadence for e2e testing
+// @Tags test
+// @Accept json
+// @Produce json
+// @Param body body SeedContactsRequest true "Seed request"
+// @Success 201 {object} api.APIResponse{data=SeedContactsResponse}
+// @Failure 400 {object} api.APIResponse{error=api.APIError}
+// @Failure 500 {object} api.APIResponse{error=api.APIError}
+// @Router /test/seed/contacts [post]
+func (h *TestHandler) SeedContacts(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var req SeedContactsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid request body", err.Error())
+		return
+	}
+
+	if err := h.validator.Struct(req); err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Validation failed", err.Error())
+		return
+	}
+
+	now := accelerated.GetCurrentTime()
+	ids := make([]string, 0, len(req.Contacts))
+
+	for _, input := range req.Contacts {
+		// Normalize and validate contact methods (reuse contact handler logic)
+		methodRequests := make([]ContactMethodRequest, len(input.Methods))
+		for i, m := range input.Methods {
+			methodRequests[i] = ContactMethodRequest(m)
+		}
+
+		normalizedMethods, err := normalizeContactMethodRequests(methodRequests)
+		if err != nil {
+			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Validation failed", err.Error())
+			return
+		}
+
+		if err := validateContactMethods(h.validator, normalizedMethods); err != nil {
+			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Validation failed", err.Error())
+			return
+		}
+
+		// Build contact methods for service
+		methods := buildContactMethodInputs(normalizedMethods)
+
+		// Calculate last_contacted time if specified
+		lastContacted := now
+		if input.LastContactedDaysAgo > 0 {
+			// Use scaled days based on environment (in testing mode, 1 "day" = weekly_cadence / 7)
+			weeklyDuration := reminder.GetCadenceDuration(reminder.CadenceWeekly)
+			scaledDayDuration := weeklyDuration / 7
+			lastContacted = now.Add(-time.Duration(input.LastContactedDaysAgo) * scaledDayDuration)
+		}
+
+		// Prepend prefix to full_name for cleanup
+		fullName := req.Prefix + "-" + input.FullName
+
+		// Build create request
+		createReq := repository.CreateContactRequest{
+			FullName:      fullName,
+			LastContacted: &lastContacted,
+		}
+
+		if input.Location != "" {
+			createReq.Location = &input.Location
+		}
+		if input.Notes != "" {
+			createReq.Notes = &input.Notes
+		}
+		if input.Cadence != "" {
+			createReq.Cadence = &input.Cadence
+		}
+
+		contact, err := h.contactSvc.CreateContact(ctx, createReq, methods)
+		if err != nil {
+			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
+			return
+		}
+
+		ids = append(ids, contact.ID.String())
+	}
+
+	api.SendSuccess(c, http.StatusCreated, SeedContactsResponse{
+		Created: len(ids),
+		IDs:     ids,
+	}, nil)
+}
+
 // SeedOverdueContactInput represents input for creating an overdue contact
 type SeedOverdueContactInput struct {
 	FullName    string `json:"full_name" validate:"required,min=1,max=255"`

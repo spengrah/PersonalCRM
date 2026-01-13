@@ -1,28 +1,31 @@
 import { test, expect } from '@playwright/test'
+import { createTestAPI, TestAPI } from './helpers/test-api'
 
-// Run serially - these tests create/delete contacts via UI without TestAPI isolation
-test.describe.configure({ mode: 'serial' })
+test.describe('Contacts - TestAPI Seeded', () => {
+  let testApi: TestAPI
 
-test.describe('Contacts', () => {
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
   test('should truncate long location with tooltip in contacts table', async ({ page }) => {
-    const suffix = Date.now()
-    const fullName = `Location Test Contact ${suffix}`
     // Create a very long location that will definitely overflow
     const longLocation =
       '1234 Very Long Street Name Boulevard, Extremely Long Neighborhood District, San Francisco, California 94105, United States of America'
 
-    // Create contact with long location
-    await page.goto('/contacts/new')
-    await page.getByLabel('Full Name').fill(fullName)
-    await page.getByLabel('Location').fill(longLocation)
-
-    await Promise.all([
-      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
-      page.getByRole('button', { name: 'Create Contact' }).click(),
+    const { ids } = await testApi.seedContacts([
+      {
+        full_name: 'Location Test Contact',
+        location: longLocation,
+      },
     ])
 
-    await page.waitForLoadState('networkidle')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Location Test Contact`
 
     // Navigate to contacts list to see the table
     await page.goto('/contacts')
@@ -43,21 +46,13 @@ test.describe('Contacts', () => {
     const truncatedSpan = locationDiv.locator('span.truncate')
     await expect(truncatedSpan).toBeVisible()
 
-    // Cleanup: Go back to contact detail page and delete
-    await contactRow.click()
-    await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/)
+    // Navigate to contact detail to verify location is displayed fully
+    await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('networkidle')
-
-    page.once('dialog', dialog => dialog.accept())
-    await Promise.all([
-      page.waitForURL('/contacts'),
-      page.getByRole('button', { name: 'Delete' }).click(),
-    ])
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible()
   })
 
   test('should show expandable notes for long content', async ({ page }) => {
-    const suffix = Date.now()
-    const fullName = `Long Notes Contact ${suffix}`
     // Create notes longer than 300 characters to trigger truncation
     const longNotes = `Met at the AI conference in San Francisco, March 2024. Works as a senior ML engineer at a startup focused on personal productivity tools.
 
@@ -67,16 +62,17 @@ Key interests: Machine learning infrastructure, personal knowledge management, p
 
 Follow-up: Share the pgvector article, introduce to Sarah from the embeddings team.`
 
-    // Create contact with long notes
-    await page.goto('/contacts/new')
-    await page.getByLabel('Full Name').fill(fullName)
-    await page.getByLabel('Notes').fill(longNotes)
-
-    await Promise.all([
-      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
-      page.getByRole('button', { name: 'Create Contact' }).click(),
+    const { ids } = await testApi.seedContacts([
+      {
+        full_name: 'Long Notes Contact',
+        notes: longNotes,
+      },
     ])
 
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Long Notes Contact`
+
+    await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('networkidle')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
@@ -96,30 +92,22 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     // Verify button changed back to "Show more"
     await expect(showMoreButton).toBeVisible()
-
-    // Cleanup
-    page.once('dialog', dialog => dialog.accept())
-    await Promise.all([
-      page.waitForURL('/contacts'),
-      page.getByRole('button', { name: 'Delete' }).click(),
-    ])
   })
 
   test('should not show expand button for short notes', async ({ page }) => {
-    const suffix = Date.now()
-    const fullName = `Short Notes Contact ${suffix}`
     const shortNotes = 'Brief note about this contact.'
 
-    // Create contact with short notes
-    await page.goto('/contacts/new')
-    await page.getByLabel('Full Name').fill(fullName)
-    await page.getByLabel('Notes').fill(shortNotes)
-
-    await Promise.all([
-      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
-      page.getByRole('button', { name: 'Create Contact' }).click(),
+    const { ids } = await testApi.seedContacts([
+      {
+        full_name: 'Short Notes Contact',
+        notes: shortNotes,
+      },
     ])
 
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Short Notes Contact`
+
+    await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('networkidle')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
@@ -128,22 +116,156 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     // Verify "Show more" button is NOT visible (notes are short)
     await expect(page.getByRole('button', { name: 'Show more' })).not.toBeVisible()
+  })
 
-    // Cleanup
-    page.once('dialog', dialog => dialog.accept())
-    await Promise.all([
-      page.waitForURL('/contacts'),
-      page.getByRole('button', { name: 'Delete' }).click(),
+  test('should edit last contacted date manually', async ({ page }) => {
+    const { ids } = await testApi.seedContacts([
+      {
+        full_name: 'Last Contacted Test',
+      },
     ])
+
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Last Contacted Test`
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Find the Last contacted row and hover to reveal the edit button
+    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
+    await lastContactedRow.hover()
+
+    // Click the edit button (pencil icon)
+    const editButton = page.getByTestId('edit-last-contacted-btn')
+    await expect(editButton).toBeVisible()
+    await editButton.click()
+
+    // Date input should now be visible
+    const dateInput = page.getByTestId('last-contacted-date-input')
+    await expect(dateInput).toBeVisible()
+
+    // Set a past date (2024-01-15)
+    await dateInput.fill('2024-01-15')
+
+    // Click save button
+    const saveButton = page.getByTestId('save-last-contacted-btn')
+    await saveButton.click()
+
+    // Wait for update to complete and verify the date is displayed
+    await expect(dateInput).not.toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('1/15/2024')).toBeVisible()
+  })
+
+  test('should cancel editing last contacted date', async ({ page }) => {
+    const { ids } = await testApi.seedContacts([
+      {
+        full_name: 'Cancel Edit Test',
+      },
+    ])
+
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Cancel Edit Test`
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Get the current last contacted value
+    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
+    const initialDateText = await lastContactedRow.locator('dd span').first().textContent()
+
+    // Hover and click edit
+    await lastContactedRow.hover()
+    await page.getByTestId('edit-last-contacted-btn').click()
+
+    // Change the date
+    const dateInput = page.getByTestId('last-contacted-date-input')
+    await dateInput.fill('2023-06-01')
+
+    // Click cancel
+    await page.getByTestId('cancel-last-contacted-btn').click()
+
+    // Verify the date input is hidden and original date is preserved
+    await expect(dateInput).not.toBeVisible()
+    const currentDateText = await lastContactedRow.locator('dd span').first().textContent()
+    expect(currentDateText).toBe(initialDateText)
+  })
+
+  test('should prevent setting future last contacted date', async ({ page }) => {
+    const { ids } = await testApi.seedContacts([
+      {
+        full_name: 'Future Date Test',
+      },
+    ])
+
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Future Date Test`
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Click edit
+    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
+    await lastContactedRow.hover()
+    await page.getByTestId('edit-last-contacted-btn').click()
+
+    // The date input should have a max attribute preventing future dates
+    const dateInput = page.getByTestId('last-contacted-date-input')
+    const maxDate = await dateInput.getAttribute('max')
+    const today = new Date().toISOString().split('T')[0]
+    expect(maxDate).toBe(today)
+
+    // Cancel and cleanup
+    await page.getByTestId('cancel-last-contacted-btn').click()
+  })
+
+  test('should update Mark as Contacted button behavior', async ({ page }) => {
+    const { ids } = await testApi.seedContacts([
+      {
+        full_name: 'Mark Contacted Test',
+      },
+    ])
+
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Mark Contacted Test`
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Click the "Mark as Contacted" button
+    await page.getByRole('button', { name: 'Mark as Contacted' }).click()
+
+    // Wait for the update and verify the date is today
+    await page.waitForLoadState('networkidle')
+    const today = new Date().toLocaleDateString('en-US')
+    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
+    await expect(lastContactedRow.locator('dd span').first()).toContainText(today)
+  })
+})
+
+// UI tests need serial mode since they create contacts via UI without TestAPI isolation
+test.describe.configure({ mode: 'serial' })
+
+test.describe('Contacts - UI Create (preserved for coverage)', () => {
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
   })
 
   test('should create and edit contact with notes', async ({ page }) => {
-    const suffix = Date.now()
-    const fullName = `Notes Test Contact ${suffix}`
+    const fullName = `${testApi.prefix}-Notes Test Contact`
     const notes =
       'Met at a conference in 2024. Works in AI/ML. Very interested in personal CRM tools.'
 
-    // Create contact with notes
+    // Create contact with notes via UI
     await page.goto('/contacts/new')
     await page.getByLabel('Full Name').fill(fullName)
     await page.getByLabel('Notes').fill(notes)
@@ -176,35 +298,27 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // Verify updated notes are displayed
     await expect(page.getByText(updatedNotes)).toBeVisible()
     await expect(page.getByText(notes)).not.toBeVisible()
-
-    // Cleanup
-    page.once('dialog', dialog => dialog.accept())
-    await Promise.all([
-      page.waitForURL('/contacts'),
-      page.getByRole('button', { name: 'Delete' }).click(),
-    ])
   })
 
   test('should create contact with all methods and normalized handles', async ({ page }) => {
-    const suffix = Date.now()
-    const fullName = `Playwright Contact ${suffix}`
-    const personalEmail = `personal-${suffix}@example.com`
-    const workEmail = `work-${suffix}@example.com`
+    const fullName = `${testApi.prefix}-Playwright Contact`
+    const personalEmail = `personal-${Date.now()}@example.com`
+    const workEmail = `work-${Date.now()}@example.com`
     const phone = '(555) 555-1234'
-    const telegramHandle = `@@telegram${suffix}`
-    const discordHandle = `@@discord${suffix}`
-    const twitterHandle = `@@twitter${suffix}`
+    const telegramHandle = `@@telegram${Date.now()}`
+    const discordHandle = `@@discord${Date.now()}`
+    const twitterHandle = `@@twitter${Date.now()}`
     const signal = '+1 555 555 9876'
-    const gchatEmail = `gchat-${suffix}@example.com`
+    const gchatEmail = `gchat-${Date.now()}@example.com`
 
     const methods = [
       { type: 'email', value: personalEmail, expected: personalEmail },
       { type: 'email', value: workEmail, expected: workEmail },
       { type: 'phone', value: phone, expected: phone },
-      { type: 'telegram', value: telegramHandle, expected: `@telegram${suffix}` },
+      { type: 'telegram', value: telegramHandle, expected: telegramHandle.replace(/^@@/, '@') },
       { type: 'signal', value: signal, expected: signal },
-      { type: 'discord', value: discordHandle, expected: `@discord${suffix}` },
-      { type: 'twitter', value: twitterHandle, expected: `@twitter${suffix}` },
+      { type: 'discord', value: discordHandle, expected: discordHandle.replace(/^@@/, '@') },
+      { type: 'twitter', value: twitterHandle, expected: twitterHandle.replace(/^@@/, '@') },
       { type: 'gchat', value: gchatEmail, expected: gchatEmail },
     ]
 
@@ -251,172 +365,5 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     await expect(page.getByText('Google Chat', { exact: true })).toBeVisible()
     await expect(page.getByRole('link', { name: gchatEmail })).toHaveCount(0)
-
-    page.once('dialog', dialog => dialog.accept())
-    await Promise.all([
-      page.waitForURL('/contacts'),
-      page.getByRole('button', { name: 'Delete' }).click(),
-    ])
-  })
-
-  test('should edit last contacted date manually', async ({ page }) => {
-    const suffix = Date.now()
-    const fullName = `Last Contacted Test ${suffix}`
-
-    // Create a new contact
-    await page.goto('/contacts/new')
-    await page.getByLabel('Full Name').fill(fullName)
-
-    await Promise.all([
-      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
-      page.getByRole('button', { name: 'Create Contact' }).click(),
-    ])
-
-    await page.waitForLoadState('networkidle')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
-
-    // Find the Last contacted row and hover to reveal the edit button
-    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    await lastContactedRow.hover()
-
-    // Click the edit button (pencil icon)
-    const editButton = page.getByTestId('edit-last-contacted-btn')
-    await expect(editButton).toBeVisible()
-    await editButton.click()
-
-    // Date input should now be visible
-    const dateInput = page.getByTestId('last-contacted-date-input')
-    await expect(dateInput).toBeVisible()
-
-    // Set a past date (2024-01-15)
-    await dateInput.fill('2024-01-15')
-
-    // Click save button
-    const saveButton = page.getByTestId('save-last-contacted-btn')
-    await saveButton.click()
-
-    // Wait for update to complete and verify the date is displayed
-    await expect(dateInput).not.toBeVisible({ timeout: 10000 })
-    await expect(page.getByText('1/15/2024')).toBeVisible()
-
-    // Cleanup
-    page.once('dialog', dialog => dialog.accept())
-    await Promise.all([
-      page.waitForURL('/contacts'),
-      page.getByRole('button', { name: 'Delete' }).click(),
-    ])
-  })
-
-  test('should cancel editing last contacted date', async ({ page }) => {
-    const suffix = Date.now()
-    const fullName = `Cancel Edit Test ${suffix}`
-
-    // Create a new contact
-    await page.goto('/contacts/new')
-    await page.getByLabel('Full Name').fill(fullName)
-
-    await Promise.all([
-      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
-      page.getByRole('button', { name: 'Create Contact' }).click(),
-    ])
-
-    await page.waitForLoadState('networkidle')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
-
-    // Get the current last contacted value
-    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    const initialDateText = await lastContactedRow.locator('dd span').first().textContent()
-
-    // Hover and click edit
-    await lastContactedRow.hover()
-    await page.getByTestId('edit-last-contacted-btn').click()
-
-    // Change the date
-    const dateInput = page.getByTestId('last-contacted-date-input')
-    await dateInput.fill('2023-06-01')
-
-    // Click cancel
-    await page.getByTestId('cancel-last-contacted-btn').click()
-
-    // Verify the date input is hidden and original date is preserved
-    await expect(dateInput).not.toBeVisible()
-    const currentDateText = await lastContactedRow.locator('dd span').first().textContent()
-    expect(currentDateText).toBe(initialDateText)
-
-    // Cleanup
-    page.once('dialog', dialog => dialog.accept())
-    await Promise.all([
-      page.waitForURL('/contacts'),
-      page.getByRole('button', { name: 'Delete' }).click(),
-    ])
-  })
-
-  test('should prevent setting future last contacted date', async ({ page }) => {
-    const suffix = Date.now()
-    const fullName = `Future Date Test ${suffix}`
-
-    // Create a new contact
-    await page.goto('/contacts/new')
-    await page.getByLabel('Full Name').fill(fullName)
-
-    await Promise.all([
-      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
-      page.getByRole('button', { name: 'Create Contact' }).click(),
-    ])
-
-    await page.waitForLoadState('networkidle')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
-
-    // Click edit
-    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    await lastContactedRow.hover()
-    await page.getByTestId('edit-last-contacted-btn').click()
-
-    // The date input should have a max attribute preventing future dates
-    const dateInput = page.getByTestId('last-contacted-date-input')
-    const maxDate = await dateInput.getAttribute('max')
-    const today = new Date().toISOString().split('T')[0]
-    expect(maxDate).toBe(today)
-
-    // Cleanup
-    await page.getByTestId('cancel-last-contacted-btn').click()
-    page.once('dialog', dialog => dialog.accept())
-    await Promise.all([
-      page.waitForURL('/contacts'),
-      page.getByRole('button', { name: 'Delete' }).click(),
-    ])
-  })
-
-  test('should update Mark as Contacted button behavior', async ({ page }) => {
-    const suffix = Date.now()
-    const fullName = `Mark Contacted Test ${suffix}`
-
-    // Create a new contact
-    await page.goto('/contacts/new')
-    await page.getByLabel('Full Name').fill(fullName)
-
-    await Promise.all([
-      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
-      page.getByRole('button', { name: 'Create Contact' }).click(),
-    ])
-
-    await page.waitForLoadState('networkidle')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
-
-    // Click the "Mark as Contacted" button
-    await page.getByRole('button', { name: 'Mark as Contacted' }).click()
-
-    // Wait for the update and verify the date is today
-    await page.waitForLoadState('networkidle')
-    const today = new Date().toLocaleDateString('en-US')
-    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    await expect(lastContactedRow.locator('dd span').first()).toContainText(today)
-
-    // Cleanup
-    page.once('dialog', dialog => dialog.accept())
-    await Promise.all([
-      page.waitForURL('/contacts'),
-      page.getByRole('button', { name: 'Delete' }).click(),
-    ])
   })
 })
