@@ -221,3 +221,101 @@ jobs:
           name: playwright-traces
           path: frontend/test-results/
           retention-days: 7
+
+  claude-review:
+    name: Claude Code Review
+    needs: [changes, backend-tests, frontend-tests, e2e-tests]
+    # Run on PRs when tests pass/skip, but skip if ALL tests were skipped (docs/workflow-only changes)
+    if: |
+      always() &&
+      github.event_name == 'pull_request' &&
+      needs.changes.result == 'success' &&
+      (needs.backend-tests.result == 'success' || needs.backend-tests.result == 'skipped') &&
+      (needs.frontend-tests.result == 'success' || needs.frontend-tests.result == 'skipped') &&
+      (needs.e2e-tests.result == 'success' || needs.e2e-tests.result == 'skipped') &&
+      (needs.backend-tests.result == 'success' || needs.frontend-tests.result == 'success' || needs.e2e-tests.result == 'success')
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            ## Full Review
+
+            CI tests have passed. Please conduct a comprehensive code review of this pull request.
+
+            Use `gh pr diff ${{ github.event.pull_request.number }}` to see the changes.
+
+            IMPORTANT: First check for previous review comments using `gh pr view ${{ github.event.pull_request.number }} --comments`. If you previously left a review, reference it in your new comment.
+
+            ## Review Standards
+
+            Follow the strict code review standards in @.ai/reviewers.md
+
+            ## How to Submit Review
+
+            After reviewing per @.ai/reviewers.md, submit exactly ONE GitHub review:
+
+            ```bash
+            # If ALL criteria pass:
+            gh pr review ${{ github.event.pull_request.number }} --approve -b "Your review here"
+
+            # If ANY issues found (default):
+            gh pr review ${{ github.event.pull_request.number }} --request-changes -b "Your review here"
+            ```
+
+            CRITICAL: Submit ONE review only. Do not use gh api for inline comments - include file paths and line numbers in the review body.
+
+          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr review:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*)"'
+
+      - name: Check Claude review result
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          COMMIT_SHA="${{ github.sha }}"
+
+          # Get Claude's review for this specific commit
+          REVIEW=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" \
+            --jq "[.[] | select(.user.login == \"claude[bot]\" and .commit_id == \"$COMMIT_SHA\")] | last")
+
+          if [[ -z "$REVIEW" || "$REVIEW" == "null" ]]; then
+            echo "No Claude review found for commit $COMMIT_SHA - passing (fail-open)"
+            exit 0
+          fi
+
+          STATE=$(echo "$REVIEW" | jq -r '.state')
+          BODY=$(echo "$REVIEW" | jq -r '.body')
+
+          echo "Review state: $STATE"
+          echo "Review commit: $COMMIT_SHA"
+
+          # Fail if CHANGES_REQUESTED or RESULT=FAIL
+          if [[ "$STATE" == "CHANGES_REQUESTED" ]]; then
+            echo "Claude requested changes - failing workflow"
+            exit 1
+          fi
+
+          if echo "$BODY" | grep -qi "RESULT=FAIL"; then
+            echo "Claude indicated RESULT=FAIL - failing workflow"
+            exit 1
+          fi
+
+          echo "Claude review passed"
