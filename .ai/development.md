@@ -601,13 +601,13 @@ func TestNewTableRepository_Integration(t *testing.T) {
     if testing.Short() {
         t.Skip("Skipping integration test")
     }
-    
+
     ctx := context.Background()
     db := setupTestDB(t)
     defer cleanupTestDB(t, db)
-    
+
     repo := repository.NewNewTableRepository(db.Queries)
-    
+
     // Test CRUD operations
     t.Run("Create", func(t *testing.T) {
         item, err := repo.CreateNewTable(ctx, repository.CreateNewTableRequest{
@@ -617,10 +617,92 @@ func TestNewTableRepository_Integration(t *testing.T) {
         assert.NotEmpty(t, item.ID)
         assert.Equal(t, "test", item.Field1)
     })
-    
+
     // More tests...
 }
 ```
+
+### E2E Tests and Parallelism
+
+E2E tests run with Playwright and support parallel execution. The configuration is in `frontend/playwright.config.ts`.
+
+**Worker configuration:**
+```typescript
+// CI uses 3 workers for parallelism, local uses all available CPUs
+workers: process.env.CI ? 3 : undefined,
+```
+
+#### Test Isolation with TestAPI
+
+Tests that create/modify data should use the `TestAPI` helper for proper isolation:
+
+```typescript
+import { test, expect } from '@playwright/test'
+import { createTestAPI, TestAPI } from './helpers/test-api'
+
+test.describe('My Feature', () => {
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+    // Seed data - automatically prefixed with worker ID
+    await testApi.seedExternalContacts([
+      { display_name: 'Test User', emails: ['test@example.com'] }
+    ])
+  })
+
+  test.afterEach(async () => {
+    // Clean up all data with this worker's prefix
+    await testApi.cleanup()
+  })
+
+  test('should do something', async ({ page }) => {
+    // Test code - data is isolated per worker
+  })
+})
+```
+
+**How it works:**
+- `TestAPI` generates a worker-safe prefix: `w{workerIndex}-{timestamp}`
+- All seeded data includes this prefix
+- `cleanup()` removes only data matching that prefix
+- Multiple workers can run simultaneously without conflicts
+
+#### When to Use Serial Mode
+
+If a test creates data **without** using `TestAPI` (e.g., via UI clicks), mark it as serial to prevent conflicts:
+
+```typescript
+import { test, expect } from '@playwright/test'
+
+// Run serially - creates data via UI without TestAPI isolation
+test.describe.configure({ mode: 'serial' })
+
+test.describe('Contacts', () => {
+  test('should create contact via form', async ({ page }) => {
+    // This test clicks through UI to create a contact
+    // Without TestAPI isolation, it could conflict with parallel workers
+  })
+})
+```
+
+**Rule of thumb:**
+- Uses `TestAPI` for data → can run in parallel ✓
+- Read-only test (no data changes) → can run in parallel ✓
+- Creates data via UI or direct API without cleanup → mark as serial
+
+#### Available TestAPI Methods
+
+| Method | Purpose |
+|--------|---------|
+| `seedExternalContacts()` | Create import candidates |
+| `seedOverdueContacts()` | Create contacts with backdated last_contacted |
+| `seedCalendarEvents()` | Create calendar events for a contact |
+| `cleanup()` | Remove all data with this test's prefix |
+
+To add new seed methods, update:
+1. `backend/internal/api/handlers/test.go` - Add endpoint
+2. `frontend/tests/e2e/helpers/test-api.ts` - Add client method
 
 ---
 

@@ -1,5 +1,8 @@
 import { test, expect } from '@playwright/test'
 
+// Run serially - these tests create/delete contacts via UI without TestAPI isolation
+test.describe.configure({ mode: 'serial' })
+
 test.describe('Contacts', () => {
   test('should truncate long location with tooltip in contacts table', async ({ page }) => {
     const suffix = Date.now()
