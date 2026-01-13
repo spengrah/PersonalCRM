@@ -246,10 +246,10 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   })
 })
 
-// UI tests need serial mode since they create contacts via UI without TestAPI isolation
-test.describe.configure({ mode: 'serial' })
-
 test.describe('Contacts - UI Create (preserved for coverage)', () => {
+  // UI tests need serial mode since they create contacts via UI without TestAPI isolation
+  test.describe.configure({ mode: 'serial' })
+
   let testApi: TestAPI
 
   test.beforeEach(async ({ request }, testInfo) => {
