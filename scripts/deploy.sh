@@ -58,11 +58,18 @@ if [ "$SKIP_BUILD" = false ]; then
         exit 1
     fi
 
+    # Get current commit hash for version display
+    COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "")
+    if [ -z "$COMMIT_HASH" ]; then
+        echo "Warning: Could not determine git commit hash"
+    fi
+
     # Build with production values injected
     # NEXT_PUBLIC_API_URL defaults to empty for same-origin requests (works with Tailscale Serve)
     NEXT_PUBLIC_API_KEY="$API_KEY" \
     NEXT_PUBLIC_API_URL="${API_URL:-}" \
     NEXT_PUBLIC_ENABLE_TIME_TRACKING="${TIME_TRACKING:-false}" \
+    NEXT_PUBLIC_COMMIT_HASH="$COMMIT_HASH" \
     make ci-build
     echo ""
 fi
