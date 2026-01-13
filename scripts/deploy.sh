@@ -58,11 +58,26 @@ if [ "$SKIP_BUILD" = false ]; then
         exit 1
     fi
 
+    # Get current commit hash for version display
+    COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "")
+    if [ -z "$COMMIT_HASH" ]; then
+        echo "Warning: Could not determine git commit hash"
+    fi
+
+    # Get GitHub repo from git remote (format: owner/repo)
+    GITHUB_REPO=$(git remote get-url origin 2>/dev/null | sed -n 's/.*github\.com[:/]\([^/]*\/[^/.]*\).*/\1/p' || echo "")
+
+    # Generate CalVer version (YYYY.M.D)
+    BUILD_VERSION=$(date +"%Y.%-m.%-d")
+
     # Build with production values injected
     # NEXT_PUBLIC_API_URL defaults to empty for same-origin requests (works with Tailscale Serve)
     NEXT_PUBLIC_API_KEY="$API_KEY" \
     NEXT_PUBLIC_API_URL="${API_URL:-}" \
     NEXT_PUBLIC_ENABLE_TIME_TRACKING="${TIME_TRACKING:-false}" \
+    NEXT_PUBLIC_COMMIT_HASH="$COMMIT_HASH" \
+    NEXT_PUBLIC_GITHUB_REPO="$GITHUB_REPO" \
+    NEXT_PUBLIC_BUILD_VERSION="$BUILD_VERSION" \
     make ci-build
     echo ""
 fi
