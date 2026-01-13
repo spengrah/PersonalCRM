@@ -73,11 +73,14 @@ export function useDeleteContact() {
 }
 
 // Update last contacted mutation
+// Pass { id, date } where date is an optional YYYY-MM-DD string
+// If date is omitted, sets last_contacted to current time
 export function useUpdateLastContacted() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (id: string) => contactsApi.updateLastContacted(id),
+    mutationFn: ({ id, date }: { id: string; date?: string }) =>
+      contactsApi.updateLastContacted(id, date),
     onSuccess: updatedContact => {
       queryClient.setQueryData(contactKeys.detail(updatedContact.id), updatedContact)
       invalidateFor('contact:touched')

@@ -22,6 +22,9 @@ import {
   Bell,
   Clock,
   ChevronDown,
+  Pencil,
+  Check,
+  X,
 } from 'lucide-react'
 import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
 import { Meetings } from '@/components/contacts/meetings'
@@ -41,6 +44,8 @@ export default function ContactDetailPage() {
   const [isEditing, setIsEditing] = useState(false)
   const [notesExpanded, setNotesExpanded] = useState(false)
   const [notesOverflowing, setNotesOverflowing] = useState(false)
+  const [isEditingLastContacted, setIsEditingLastContacted] = useState(false)
+  const [lastContactedDate, setLastContactedDate] = useState('')
   const notesRef = useRef<HTMLDivElement>(null)
 
   const { data: contact, isLoading, error } = useContact(contactId)
@@ -79,10 +84,46 @@ export default function ContactDetailPage() {
 
   const handleMarkAsContacted = async () => {
     try {
-      await updateLastContactedMutation.mutateAsync(contactId)
+      await updateLastContactedMutation.mutateAsync({ id: contactId })
     } catch {
       // Error handled by TanStack Query error state
     }
+  }
+
+  const handleEditLastContacted = () => {
+    // Initialize with current last contacted date or empty
+    if (contact?.last_contacted) {
+      const date = new Date(contact.last_contacted)
+      setLastContactedDate(date.toISOString().split('T')[0])
+    } else {
+      setLastContactedDate('')
+    }
+    setIsEditingLastContacted(true)
+  }
+
+  const handleSaveLastContacted = async () => {
+    if (!lastContactedDate) return
+
+    // Validate date is not in the future
+    const selectedDate = new Date(lastContactedDate)
+    const today = new Date()
+    today.setHours(23, 59, 59, 999) // End of today
+    if (selectedDate > today) {
+      alert('Last contacted date cannot be in the future')
+      return
+    }
+
+    try {
+      await updateLastContactedMutation.mutateAsync({ id: contactId, date: lastContactedDate })
+      setIsEditingLastContacted(false)
+    } catch {
+      // Error handled by TanStack Query error state
+    }
+  }
+
+  const handleCancelEditLastContacted = () => {
+    setIsEditingLastContacted(false)
+    setLastContactedDate('')
   }
 
   if (isLoading) {
@@ -308,9 +349,57 @@ export default function ContactDetailPage() {
               <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
                 <dt className="text-sm font-medium text-gray-500">Last contacted</dt>
                 <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                  {contact.last_contacted
-                    ? new Date(contact.last_contacted).toLocaleDateString()
-                    : 'Never'}
+                  {isEditingLastContacted ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="date"
+                        value={lastContactedDate}
+                        onChange={e => setLastContactedDate(e.target.value)}
+                        max={new Date().toISOString().split('T')[0]}
+                        className="block rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                        data-testid="last-contacted-date-input"
+                      />
+                      <button
+                        onClick={handleSaveLastContacted}
+                        disabled={!lastContactedDate || updateLastContactedMutation.isPending}
+                        className="inline-flex items-center p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Save"
+                        data-testid="save-last-contacted-btn"
+                      >
+                        <Check className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={handleCancelEditLastContacted}
+                        disabled={updateLastContactedMutation.isPending}
+                        className="inline-flex items-center p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded disabled:opacity-50"
+                        title="Cancel"
+                        data-testid="cancel-last-contacted-btn"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center group">
+                      <Clock className="w-4 h-4 mr-2 text-gray-400" />
+                      <span>
+                        {contact.last_contacted
+                          ? formatDateOnly(contact.last_contacted, {
+                              year: 'numeric',
+                              month: 'numeric',
+                              day: 'numeric',
+                            })
+                          : 'Never'}
+                      </span>
+                      <button
+                        onClick={handleEditLastContacted}
+                        className="ml-2 p-1 text-gray-400 hover:text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Edit last contacted date"
+                        data-testid="edit-last-contacted-btn"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
                 </dd>
               </div>
 

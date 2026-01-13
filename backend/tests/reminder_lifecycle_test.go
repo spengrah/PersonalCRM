@@ -306,8 +306,8 @@ func TestContactService_MarkAsContactedCompletesAutoReminders(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = reminderRepo.HardDeleteReminder(ctx, manualReminder.ID) }()
 
-	// Call the service method to mark as contacted
-	updatedContact, err := contactService.UpdateContactLastContacted(ctx, contact.ID)
+	// Call the service method to mark as contacted (nil = use current time)
+	updatedContact, err := contactService.UpdateContactLastContacted(ctx, contact.ID, nil)
 	require.NoError(t, err)
 	require.NotNil(t, updatedContact)
 	assert.NotNil(t, updatedContact.LastContacted, "LastContacted should be set")

@@ -28,7 +28,7 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
 
   const handleMarkContacted = async () => {
     try {
-      await updateLastContactedMutation.mutateAsync(contact.id)
+      await updateLastContactedMutation.mutateAsync({ id: contact.id })
     } catch (error) {
       console.error('Error marking as contacted:', error)
     }

@@ -15,6 +15,10 @@ export interface ContactsListResponse {
   pages: number
 }
 
+export interface UpdateLastContactedRequest {
+  last_contacted?: string // ISO 8601 date string (YYYY-MM-DD)
+}
+
 export const contactsApi = {
   // Get all contacts
   getContacts: async (params: ContactListParams = {}): Promise<ContactsListResponse> => {
@@ -58,8 +62,11 @@ export const contactsApi = {
   },
 
   // Update last contacted
-  updateLastContacted: async (id: string): Promise<Contact> => {
-    return apiClient.patch<Contact>(`/api/v1/contacts/${id}/last-contacted`)
+  // If date is provided, sets last_contacted to that date
+  // If date is omitted, sets last_contacted to current time
+  updateLastContacted: async (id: string, date?: string): Promise<Contact> => {
+    const body: UpdateLastContactedRequest = date ? { last_contacted: date } : {}
+    return apiClient.patch<Contact>(`/api/v1/contacts/${id}/last-contacted`, body)
   },
 
   // Get overdue contacts

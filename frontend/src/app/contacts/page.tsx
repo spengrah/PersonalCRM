@@ -74,7 +74,7 @@ function ContactsTable({
   const handleMarkAsContacted = async (e: React.MouseEvent, contactId: string) => {
     e.stopPropagation() // Prevent row click
     try {
-      await updateLastContacted.mutateAsync(contactId)
+      await updateLastContacted.mutateAsync({ id: contactId })
       setOpenDropdown(null)
     } catch (error) {
       console.error('Failed to mark as contacted:', error)
@@ -272,7 +272,11 @@ function ContactsTable({
               </td>
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                 {contact.last_contacted
-                  ? new Date(contact.last_contacted).toLocaleDateString()
+                  ? formatDateOnly(contact.last_contacted, {
+                      year: 'numeric',
+                      month: 'numeric',
+                      day: 'numeric',
+                    })
                   : 'Never'}
               </td>
               <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
