@@ -204,7 +204,6 @@ func (h *TestHandler) SeedContacts(c *gin.Context) {
 
 	now := accelerated.GetCurrentTime()
 	ids := make([]string, 0, len(req.Contacts))
-	var errors []string
 
 	for i, input := range req.Contacts {
 		// Normalize and validate contact methods (reuse contact handler logic)
@@ -215,13 +214,15 @@ func (h *TestHandler) SeedContacts(c *gin.Context) {
 
 		normalizedMethods, err := normalizeContactMethodRequests(methodRequests)
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("contact %d (%s): method normalization failed: %s", i+1, input.FullName, err.Error()))
-			continue
+			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation,
+				fmt.Sprintf("Contact %d (%s): method normalization failed", i+1, input.FullName), err.Error())
+			return
 		}
 
 		if err := validateContactMethods(h.validator, normalizedMethods); err != nil {
-			errors = append(errors, fmt.Sprintf("contact %d (%s): method validation failed: %s", i+1, input.FullName, err.Error()))
-			continue
+			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation,
+				fmt.Sprintf("Contact %d (%s): method validation failed", i+1, input.FullName), err.Error())
+			return
 		}
 
 		// Build contact methods for service
@@ -257,20 +258,12 @@ func (h *TestHandler) SeedContacts(c *gin.Context) {
 
 		contact, err := h.contactSvc.CreateContact(ctx, createReq, methods)
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("contact %d (%s): creation failed: %s", i+1, input.FullName, err.Error()))
-			continue
+			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal,
+				fmt.Sprintf("Contact %d (%s): creation failed", i+1, input.FullName), err.Error())
+			return
 		}
 
 		ids = append(ids, contact.ID.String())
-	}
-
-	// If any errors occurred, return partial success with error details
-	// This allows cleanup to work with the IDs that were successfully created
-	if len(errors) > 0 {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal,
-			fmt.Sprintf("Created %d/%d contacts", len(ids), len(req.Contacts)),
-			fmt.Sprintf("errors: %v; created_ids: %v", errors, ids))
-		return
 	}
 
 	api.SendSuccess(c, http.StatusCreated, SeedContactsResponse{
