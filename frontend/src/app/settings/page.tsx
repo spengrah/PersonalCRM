@@ -274,19 +274,28 @@ export default function SettingsPage() {
               <div>
                 <p className="text-gray-600">Build</p>
                 <p className="font-medium text-gray-900">
-                  {process.env.NEXT_PUBLIC_COMMIT_HASH &&
-                  /^[0-9a-f]{40}$/i.test(process.env.NEXT_PUBLIC_COMMIT_HASH) ? (
-                    <a
-                      href={`https://github.com/spengrah/PersonalCRM/commit/${process.env.NEXT_PUBLIC_COMMIT_HASH}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800 hover:underline"
-                    >
-                      {process.env.NEXT_PUBLIC_COMMIT_HASH.slice(0, 7)}
-                    </a>
-                  ) : (
-                    <span className="text-gray-500">Development</span>
-                  )}
+                  {(() => {
+                    const hash = process.env.NEXT_PUBLIC_COMMIT_HASH
+                    const repo = process.env.NEXT_PUBLIC_GITHUB_REPO
+                    const isValidHash = hash && /^[0-9a-f]{40}$/i.test(hash)
+
+                    if (isValidHash && repo) {
+                      return (
+                        <a
+                          href={`https://github.com/${repo}/commit/${hash}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:text-blue-800 hover:underline"
+                        >
+                          {hash.slice(0, 7)}
+                        </a>
+                      )
+                    } else if (isValidHash) {
+                      return <span>{hash.slice(0, 7)}</span>
+                    } else {
+                      return <span className="text-gray-500">Development</span>
+                    }
+                  })()}
                 </p>
               </div>
 
@@ -295,6 +304,11 @@ export default function SettingsPage() {
                 <p className="font-medium text-gray-900">
                   {environment === 'testing' ? 'Development' : 'Production'}
                 </p>
+              </div>
+
+              <div>
+                <p className="text-gray-600">Last Updated</p>
+                <p className="font-medium text-gray-900">{new Date().toLocaleDateString()}</p>
               </div>
 
               <div>
