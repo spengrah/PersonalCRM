@@ -114,7 +114,7 @@ func convertDbContact(dbContact *db.Contact) Contact {
 		contact.Cadence = &dbContact.Cadence.String
 	}
 	if dbContact.LastContacted.Valid {
-		lastContacted := dbContact.LastContacted.Time
+		lastContacted := dbContact.LastContacted.Time.UTC()
 		contact.LastContacted = &lastContacted
 	}
 	if dbContact.ProfilePhoto.Valid {
