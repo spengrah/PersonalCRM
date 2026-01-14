@@ -986,6 +986,602 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 	})
 }
 
+func TestImportAPI_ImportWithName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("ImportContact_WithCustomName", func(t *testing.T) {
+		// Create an external contact with a name
+		displayName := "External Display Name"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "custom-name@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Import with custom name that differs from external
+		customName := "My Custom Contact Name"
+		importReq := handlers.ImportRequest{
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "custom-name@gmail.com", Type: "email"},
+			},
+			Name: &customName,
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		// Verify created contact has custom name
+		contactData := response.Data.(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		contact, err := contactRepo.GetContact(ctx, contactID)
+		require.NoError(t, err)
+		assert.Equal(t, "My Custom Contact Name", contact.FullName)
+	})
+
+	t.Run("ImportContact_WithoutCustomName_UsesExternal", func(t *testing.T) {
+		// Create an external contact
+		displayName := "External Original Name"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "no-custom-name@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Import without custom name
+		importReq := handlers.ImportRequest{
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "no-custom-name@gmail.com", Type: "email"},
+			},
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		// Verify created contact uses external name
+		contactData := response.Data.(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		contact, err := contactRepo.GetContact(ctx, contactID)
+		require.NoError(t, err)
+		assert.Equal(t, "External Original Name", contact.FullName)
+	})
+}
+
+func TestImportAPI_ImportWithPrimaryMethod(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("ImportContact_WithPrimaryMethod", func(t *testing.T) {
+		// Create an external contact with multiple methods
+		displayName := "Test Primary Import " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "primary-test@gmail.com", Type: "home"},
+				{Value: "secondary-test@gmail.com", Type: "work"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Import with one method marked as primary
+		importReq := handlers.ImportRequest{
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "primary-test@gmail.com", Type: "email", IsPrimary: true},
+				{OriginalValue: "secondary-test@gmail.com", Type: "email", IsPrimary: false},
+			},
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		contactData := response.Data.(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		// Verify primary method is set correctly
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contactID)
+		require.NoError(t, err)
+		require.Len(t, methods, 2)
+
+		var primaryCount int
+		var primaryValue string
+		for _, m := range methods {
+			if m.IsPrimary {
+				primaryCount++
+				primaryValue = m.Value
+			}
+		}
+		assert.Equal(t, 1, primaryCount, "Should have exactly one primary method")
+		assert.Equal(t, "primary-test@gmail.com", primaryValue, "Primary method should be the one marked")
+	})
+
+	t.Run("ImportContact_NoPrimaryMethod", func(t *testing.T) {
+		// Create an external contact
+		displayName := "Test No Primary Import " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "no-primary1@gmail.com", Type: "home"},
+				{Value: "no-primary2@gmail.com", Type: "work"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Import without any primary method
+		importReq := handlers.ImportRequest{
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "no-primary1@gmail.com", Type: "email", IsPrimary: false},
+				{OriginalValue: "no-primary2@gmail.com", Type: "email", IsPrimary: false},
+			},
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		contactData := response.Data.(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		// Verify no primary method is set
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contactID)
+		require.NoError(t, err)
+		require.Len(t, methods, 2)
+
+		for _, m := range methods {
+			assert.False(t, m.IsPrimary, "No method should be marked as primary")
+		}
+	})
+}
+
+func TestImportAPI_LinkWithName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("LinkContact_WithCustomName_UpdatesCRM", func(t *testing.T) {
+		// Create a CRM contact with original name
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Original CRM Name",
+		})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		}()
+
+		// Create an external contact
+		displayName := "External Name " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "link-name@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Link with custom name
+		customName := "Updated CRM Name"
+		linkReq := handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			Name:         &customName,
+		}
+
+		jsonBody, _ := json.Marshal(linkReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/link", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		// Verify contact name was updated
+		updatedContact, err := contactRepo.GetContact(ctx, contact.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "Updated CRM Name", updatedContact.FullName)
+	})
+
+	t.Run("LinkContact_WithoutName_PreservesCRM", func(t *testing.T) {
+		// Create a CRM contact with original name
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Preserved CRM Name",
+		})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		}()
+
+		// Create an external contact
+		displayName := "External Name Different " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "preserve-name@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Link without name
+		linkReq := handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "preserve-name@gmail.com", Type: "email"},
+			},
+		}
+
+		jsonBody, _ := json.Marshal(linkReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/link", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		// Verify contact name was preserved
+		updatedContact, err := contactRepo.GetContact(ctx, contact.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "Preserved CRM Name", updatedContact.FullName)
+	})
+}
+
+func TestImportAPI_LinkWithPrimaryMethod(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("LinkContact_WithPrimaryMethod_SetsNewPrimary", func(t *testing.T) {
+		// Create a CRM contact
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Test Primary Link " + uuid.New().String()[:8],
+		})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		}()
+
+		// Create an external contact with methods
+		displayName := "External Primary Link " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "link-primary@gmail.com", Type: "home"},
+				{Value: "link-secondary@gmail.com", Type: "work"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Link with one method marked as primary
+		linkReq := handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "link-primary@gmail.com", Type: "email", IsPrimary: true},
+				{OriginalValue: "link-secondary@gmail.com", Type: "email", IsPrimary: false},
+			},
+		}
+
+		jsonBody, _ := json.Marshal(linkReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/link", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		// Verify primary method is set correctly
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contact.ID)
+		require.NoError(t, err)
+		require.Len(t, methods, 2)
+
+		var primaryCount int
+		var primaryValue string
+		for _, m := range methods {
+			if m.IsPrimary {
+				primaryCount++
+				primaryValue = m.Value
+			}
+		}
+		assert.Equal(t, 1, primaryCount, "Should have exactly one primary method")
+		assert.Equal(t, "link-primary@gmail.com", primaryValue, "Primary method should be the one marked")
+	})
+
+	t.Run("LinkContact_WithPrimaryMethod_ClearsOldPrimary", func(t *testing.T) {
+		// Create a CRM contact with an existing primary method
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Test Clear Primary " + uuid.New().String()[:8],
+		})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		}()
+
+		// Add existing method marked as primary
+		_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+			ContactID: contact.ID,
+			Type:      "email",
+			Value:     "existing-primary@gmail.com",
+			IsPrimary: true,
+		})
+		require.NoError(t, err)
+
+		// Create an external contact
+		displayName := "External Clear Primary " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "new-primary@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Link with new method marked as primary
+		linkReq := handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "new-primary@gmail.com", Type: "email", IsPrimary: true},
+			},
+		}
+
+		jsonBody, _ := json.Marshal(linkReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/link", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		// Verify only new method is primary, old primary is cleared
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contact.ID)
+		require.NoError(t, err)
+		require.Len(t, methods, 2)
+
+		var primaryCount int
+		var primaryValue string
+		for _, m := range methods {
+			if m.IsPrimary {
+				primaryCount++
+				primaryValue = m.Value
+			}
+		}
+		assert.Equal(t, 1, primaryCount, "Should have exactly one primary method after link")
+		assert.Equal(t, "new-primary@gmail.com", primaryValue, "New method should now be primary")
+	})
+
+	t.Run("LinkContact_SetExistingMethodAsPrimary", func(t *testing.T) {
+		// Create a CRM contact with an existing non-primary method
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Test Set Existing Primary " + uuid.New().String()[:8],
+		})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		}()
+
+		// Add existing method NOT marked as primary
+		_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+			ContactID: contact.ID,
+			Type:      "email",
+			Value:     "existing-not-primary@gmail.com",
+			IsPrimary: false,
+		})
+		require.NoError(t, err)
+
+		// Create an external contact with the same email
+		displayName := "External Set Existing Primary " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "existing-not-primary@gmail.com", Type: "home"}, // Same as existing
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Link with existing method marked as primary
+		linkReq := handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "existing-not-primary@gmail.com", Type: "email", IsPrimary: true},
+			},
+		}
+
+		jsonBody, _ := json.Marshal(linkReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/link", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		// Verify existing method is now primary
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contact.ID)
+		require.NoError(t, err)
+		require.Len(t, methods, 1) // No new method added since it already existed
+
+		assert.True(t, methods[0].IsPrimary, "Existing method should now be marked as primary")
+		assert.Equal(t, "existing-not-primary@gmail.com", methods[0].Value)
+	})
+}
+
 func TestImportAPI_ImportValidation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

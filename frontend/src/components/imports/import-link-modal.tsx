@@ -362,7 +362,7 @@ export function ImportLinkModal({
     if (!candidate) return
     // Validate name
     if (!editedName.trim()) {
-      onError('Name cannot be empty')
+      onError('Contact name cannot be empty. Please enter a valid name.')
       return
     }
     const selectedMethods = buildSelectedMethods()
@@ -393,7 +393,7 @@ export function ImportLinkModal({
     if (!selectedContactId || !candidate) return
     // Validate name
     if (!editedName.trim()) {
-      onError('Name cannot be empty')
+      onError('Contact name cannot be empty. Please enter a valid name.')
       return
     }
 

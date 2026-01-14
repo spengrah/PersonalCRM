@@ -266,25 +266,30 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 		existingNormalized[normalized] = true
 	}
 
-	// Handle primary method updates - first clear any existing primary, then set the new one
+	// Handle primary method updates - first clear any existing primary, then set the new one.
+	// We determine which method should be primary:
+	// - If a new method is marked primary, it takes precedence
+	// - Otherwise, if an existing method is marked primary, use that
+	// This ensures the user's explicit selection is honored.
 	primaryMethodID := newPrimaryMethodID
 	if primaryMethodID == nil {
 		primaryMethodID = existingPrimaryMethodID
 	}
 
 	if primaryMethodID != nil {
-		// Clear existing primary
+		// Clear existing primary methods first - fail if this fails to prevent
+		// multiple primary methods per contact
 		for i := range existingMethods {
 			m := &existingMethods[i]
 			if m.IsPrimary && m.ID != *primaryMethodID {
 				if err := s.methodRepo.SetPrimary(ctx, m.ID, false); err != nil {
-					logger.Warn().Err(err).Str("method_id", m.ID.String()).Msg("failed to clear primary status")
+					return fmt.Errorf("failed to clear existing primary method: %w", err)
 				}
 			}
 		}
 		// Set new primary
 		if err := s.methodRepo.SetPrimary(ctx, *primaryMethodID, true); err != nil {
-			methodErrors = append(methodErrors, fmt.Sprintf("failed to set primary method: %v", err))
+			return fmt.Errorf("failed to set primary method: %w", err)
 		}
 	}
 
