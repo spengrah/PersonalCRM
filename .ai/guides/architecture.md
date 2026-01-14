@@ -649,11 +649,11 @@ Restart=always
 
 ---
 
-*For feature development process, see [`.ai/development.md`](./development.md)*
+*For feature development process, see [`.ai/guides/feature-development.md`](./feature-development.md)*
 
-*For common code patterns, see [`.ai/patterns.md`](./patterns.md)*
+*For common code patterns, see [`.ai/patterns/`](../patterns/)*
 
-*For current development rules, see [`.ai/rules.md`](./rules.md)*
+*For current development rules, see [`.ai/rules/core.md`](../rules/core.md)*
 
-*For historical context, see [`PLAN.md`](../PLAN.md) (may be outdated)*
+*For historical context, see [`PLAN.md`](../../PLAN.md) (may be outdated)*
 

@@ -1014,7 +1014,7 @@ ENABLE_TELEGRAM_BOT=false
 
 ---
 
-*For common code patterns, see [`.ai/patterns.md`](./patterns.md)*
+*For common code patterns, see [`.ai/patterns/`](../patterns/)*
 
-*For architecture rationale, see [`.ai/architecture.md`](./architecture.md)*
+*For architecture rationale, see [`.ai/guides/architecture.md`](./architecture.md)*
 

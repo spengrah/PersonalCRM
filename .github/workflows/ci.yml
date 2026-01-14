@@ -271,11 +271,11 @@ jobs:
 
             ## Review Standards
 
-            Follow the strict code review standards in @.ai/reviewers.md
+            Follow the strict code review standards in @.ai/rules/code-review.md
 
             ## How to Submit Review
 
-            After reviewing per @.ai/reviewers.md, submit exactly ONE GitHub review:
+            After reviewing per @.ai/rules/code-review.md, submit exactly ONE GitHub review:
 
             ```bash
             # If ALL criteria pass:

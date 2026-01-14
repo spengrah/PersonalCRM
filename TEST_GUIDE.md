@@ -505,4 +505,4 @@ cd frontend && bunx playwright show-trace trace.zip
 
 ---
 
-*For code examples and patterns, see [`.ai/patterns.md`](.ai/patterns.md)*
+*For code examples and patterns, see [`.ai/patterns/`](.ai/patterns/)*

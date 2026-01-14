@@ -1,7 +1,7 @@
 {
   "context": [
-    ".ai/rules.md",
+    "AGENTS.md",
+    ".ai/rules/core.md",
     ".github/README.md"
   ]
 }
-

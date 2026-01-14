@@ -148,7 +148,7 @@ jobs:
 
           gh pr comment "$PR_NUMBER" --body "@codex review
 
-          Please review this PR using the standards in \`.ai/reviewers.md\`.
+          Please review this PR using the standards in \`.ai/rules/code-review.md\`.
 
           **IMPORTANT:** End your review with exactly one of:
           - \`RESULT=PASS\` if the code meets all criteria
