@@ -1024,7 +1024,8 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
     // Verify the name is displayed in the heading
-    const nameHeading = page.getByRole('heading', { name: new RegExp(`${testApi.prefix}-Original Name Import`) })
+    // Use .first() since the heading contains nested span with same text
+    const nameHeading = page.getByRole('heading', { name: new RegExp(`${testApi.prefix}-Original Name Import`) }).first()
     await expect(nameHeading).toBeVisible()
 
     // Click on the name heading to enter edit mode
@@ -1145,7 +1146,8 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
     // Click on the name heading to enter edit mode
-    const nameHeading = page.getByRole('heading', { name: new RegExp(`${testApi.prefix}-Escape Cancel Test`) })
+    // Use .first() since the heading contains nested span with same text
+    const nameHeading = page.getByRole('heading', { name: new RegExp(`${testApi.prefix}-Escape Cancel Test`) }).first()
     await nameHeading.click()
 
     // Edit the name
@@ -1157,7 +1159,7 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     await nameInput.press('Escape')
 
     // Verify original name is restored in the heading
-    await expect(page.getByRole('heading', { name: new RegExp(`${testApi.prefix}-Escape Cancel Test`) })).toBeVisible()
+    await expect(page.getByRole('heading', { name: new RegExp(`${testApi.prefix}-Escape Cancel Test`) }).first()).toBeVisible()
 
     // Close modal
     await page.getByRole('button', { name: /Cancel/i }).click()
