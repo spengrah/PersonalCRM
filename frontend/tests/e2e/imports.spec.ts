@@ -989,8 +989,7 @@ test.describe('Imports - Cadence Selector (Issue #152)', () => {
 })
 
 test.describe('Imports - Name Editing (Issue #155)', () => {
-  // This test verifies the name editing UI is present in the import/link modal.
-  // Full E2E tests for name editing are complex due to timing; backend API tests cover the functionality.
+  // This test verifies the name editing functionality in the import/link modal.
 
   let testApi: TestAPI
 
@@ -1023,13 +1022,178 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     // Wait for modal
     await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-    // Verify the name is displayed and has a pencil icon (hover indicator for edit)
-    // The name should be in an h3 element that's clickable
+    // Verify the name is displayed in an h3 element
     const modalContent = page.locator('.fixed.inset-0')
     await expect(modalContent.locator('h3')).toBeVisible()
 
     // Close modal
     await page.getByRole('button', { name: /Cancel/i }).click()
+  })
+
+  test('should enter edit mode when clicking name', async ({ page }) => {
+    // Seed a candidate
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Click Edit Test',
+        emails: ['click-edit@example.com'],
+      },
+    ])
+
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open import modal
+    const candidateCard = page
+      .locator('[class*="rounded-lg"]')
+      .filter({ hasText: `${testApi.prefix}-Click Edit Test` })
+    await candidateCard.getByRole('button', { name: /Import/i }).click()
+
+    // Wait for modal
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Click on the name to enter edit mode
+    await page.locator('h3').first().click()
+
+    // Verify input field appears with the name value
+    const nameInput = page.locator('input[type="text"]').first()
+    await expect(nameInput).toBeVisible({ timeout: 5000 })
+    await expect(nameInput).toHaveValue(new RegExp(`${testApi.prefix}-Click Edit Test`))
+
+    // Close modal
+    await page.getByRole('button', { name: /Cancel/i }).click()
+  })
+
+  test('should confirm edit with Enter key', async ({ page }) => {
+    // Seed a candidate
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Enter Key Test',
+        emails: ['enter-key@example.com'],
+      },
+    ])
+
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open import modal
+    const candidateCard = page
+      .locator('[class*="rounded-lg"]')
+      .filter({ hasText: `${testApi.prefix}-Enter Key Test` })
+    await candidateCard.getByRole('button', { name: /Import/i }).click()
+
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Click to enter edit mode
+    await page.locator('h3').first().click()
+    const nameInput = page.locator('input[type="text"]').first()
+    await expect(nameInput).toBeVisible({ timeout: 5000 })
+
+    // Type new name and press Enter
+    await nameInput.fill('New Contact Name')
+    await nameInput.press('Enter')
+
+    // Verify edit mode closed and new name shows in heading
+    await expect(page.locator('h3').filter({ hasText: 'New Contact Name' })).toBeVisible()
+
+    // Close modal
+    await page.getByRole('button', { name: /Cancel/i }).click()
+  })
+
+  test('should cancel edit with Escape key', async ({ page }) => {
+    // Seed a candidate
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Escape Key Test',
+        emails: ['escape-key@example.com'],
+      },
+    ])
+
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open import modal
+    const candidateCard = page
+      .locator('[class*="rounded-lg"]')
+      .filter({ hasText: `${testApi.prefix}-Escape Key Test` })
+    await candidateCard.getByRole('button', { name: /Import/i }).click()
+
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Click to enter edit mode
+    await page.locator('h3').first().click()
+    const nameInput = page.locator('input[type="text"]').first()
+    await expect(nameInput).toBeVisible({ timeout: 5000 })
+
+    // Type new name and press Escape
+    await nameInput.fill('Should Not Save')
+    await nameInput.press('Escape')
+
+    // Verify original name is restored
+    await expect(page.locator('h3').filter({ hasText: new RegExp(`${testApi.prefix}-Escape Key Test`) })).toBeVisible()
+
+    // Close modal
+    await page.getByRole('button', { name: /Cancel/i }).click()
+  })
+
+  test('should edit name and persist on import', async ({ page }) => {
+    // Seed a candidate
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Original Import Name',
+        emails: ['persist-name@example.com'],
+      },
+    ])
+
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    const displayName = `${testApi.prefix}-Original Import Name`
+    const newName = `${testApi.prefix}-Edited Name For Import`
+
+    // Open import modal
+    const candidateCard = page.locator('[class*="rounded-lg"]').filter({ hasText: displayName })
+    await candidateCard.getByRole('button', { name: /Import/i }).click()
+
+    // Wait for modal
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Click on the name to enter edit mode
+    await page.locator('h3').first().click()
+
+    // Wait for input to appear and edit the name
+    const nameInput = page.locator('input[type="text"]').first()
+    await expect(nameInput).toBeVisible({ timeout: 5000 })
+
+    // Clear and type new name, then press Enter to confirm
+    await nameInput.fill(newName)
+    await nameInput.press('Enter')
+
+    // Verify the new name is shown in the heading
+    await expect(page.locator('h3').filter({ hasText: newName })).toBeVisible()
+
+    // Click the "Import as New Contact" button
+    await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
+
+    // Wait for success notification
+    await expect(page.getByText(/imported successfully/i)).toBeVisible({ timeout: 10000 })
+
+    // Close modal if still open
+    const cancelButton = page.getByRole('button', { name: /Cancel/i })
+    if (await cancelButton.isVisible()) {
+      await cancelButton.click()
+    }
+
+    // Navigate to contacts page to verify the contact was created with the edited name
+    await page.goto('/contacts')
+    await page.waitForLoadState('networkidle')
+
+    // Search for the contact with the edited name
+    const searchInput = page.getByPlaceholder('Search contacts...')
+    await searchInput.fill(newName)
+    await page.waitForLoadState('networkidle')
+
+    // Verify the contact appears with the edited name
+    await expect(page.getByText(newName)).toBeVisible({ timeout: 10000 })
   })
 })
 
@@ -1105,6 +1269,50 @@ test.describe('Imports - Primary Method Selection (Issue #159)', () => {
 
     // Verify star is now yellow (primary) - button title changes
     await expect(page.locator('button[title="Primary contact method"]')).toBeVisible()
+
+    // Close modal
+    await page.getByRole('button', { name: /Cancel/i }).click()
+  })
+
+  test('should only allow one primary method at a time', async ({ page }) => {
+    // Seed a candidate with multiple contact methods
+    await testApi.seedExternalContacts([
+      {
+        display_name: 'Single Primary Test',
+        emails: ['single1@example.com', 'single2@example.com'],
+      },
+    ])
+
+    await page.goto('/imports')
+    await page.waitForLoadState('networkidle')
+
+    // Open import modal
+    const candidateCard = page
+      .locator('[class*="rounded-lg"]')
+      .filter({ hasText: `${testApi.prefix}-Single Primary Test` })
+    await candidateCard.getByRole('button', { name: /Import/i }).click()
+
+    // Wait for modal
+    await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+    // Initially no star should be primary
+    const setAsPrimaryButtons = page.locator('button[title="Set as primary"]')
+    await expect(setAsPrimaryButtons.first()).toBeVisible()
+
+    // Click the first star button to set as primary
+    await setAsPrimaryButtons.first().click()
+
+    // Verify first star is now primary (yellow)
+    await expect(page.locator('button[title="Primary contact method"]')).toHaveCount(1)
+
+    // Now click the second star - it should become primary and the first should lose primary status
+    // First, get the remaining "Set as primary" buttons (there should be at least one more)
+    const remainingSetButtons = page.locator('button[title="Set as primary"]')
+    await expect(remainingSetButtons.first()).toBeVisible()
+    await remainingSetButtons.first().click()
+
+    // Verify there is still only ONE primary method (yellow star)
+    await expect(page.locator('button[title="Primary contact method"]')).toHaveCount(1)
 
     // Close modal
     await page.getByRole('button', { name: /Cancel/i }).click()

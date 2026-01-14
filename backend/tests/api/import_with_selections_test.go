@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"personal-crm/backend/internal/api"
@@ -1579,6 +1580,488 @@ func TestImportAPI_LinkWithPrimaryMethod(t *testing.T) {
 
 		assert.True(t, methods[0].IsPrimary, "Existing method should now be marked as primary")
 		assert.Equal(t, "existing-not-primary@gmail.com", methods[0].Value)
+	})
+}
+
+func TestImportAPI_EdgeCases(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("ImportContact_WithEmptyStringNameOverride_UsesOriginal", func(t *testing.T) {
+		// Create an external contact with a valid name
+		displayName := "Original Name For Empty Test"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "empty-string-test@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Try to import with empty string name override
+		emptyName := ""
+		importReq := handlers.ImportRequest{
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "empty-string-test@gmail.com", Type: "email"},
+			},
+			Name: &emptyName,
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// Should succeed because empty name override should be ignored and original name should be used
+		assert.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		// Verify contact uses original name
+		contactData := response.Data.(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		contact, err := contactRepo.GetContact(ctx, contactID)
+		require.NoError(t, err)
+		assert.Equal(t, "Original Name For Empty Test", contact.FullName, "Should use original name when override is empty string")
+	})
+
+	t.Run("ImportContact_WithVeryLongName_Succeeds", func(t *testing.T) {
+		// Create an external contact
+		displayName := "Original Short Name"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "long-name-test@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Try to import with a very long name (300 characters)
+		veryLongName := strings.Repeat("A", 300)
+		importReq := handlers.ImportRequest{
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "long-name-test@gmail.com", Type: "email"},
+			},
+			Name: &veryLongName,
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// Database likely allows long names - verify the behavior
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		contactData := response.Data.(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		// Verify the long name was saved
+		contact, err := contactRepo.GetContact(ctx, contactID)
+		require.NoError(t, err)
+		assert.Equal(t, veryLongName, contact.FullName, "Long name should be preserved")
+	})
+
+	t.Run("ImportContact_WithNonExistentMethodAsPrimary_SkipsInvalidMethod", func(t *testing.T) {
+		// Create an external contact with one email
+		displayName := "NonExistent Primary Test"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "valid-method@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Try to import with a non-existent method marked as primary
+		importReq := handlers.ImportRequest{
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "nonexistent@gmail.com", Type: "email", IsPrimary: true}, // Not in external contact
+				{OriginalValue: "valid-method@gmail.com", Type: "email", IsPrimary: false},
+			},
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// Should succeed but skip the invalid method
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		contactData := response.Data.(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		// Verify only the valid method was added and no primary is set (since the primary one was skipped)
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contactID)
+		require.NoError(t, err)
+		require.Len(t, methods, 1, "Should only have the valid method")
+		assert.Equal(t, "valid-method@gmail.com", methods[0].Value)
+		assert.False(t, methods[0].IsPrimary, "Should not be primary since the one marked primary was skipped")
+	})
+
+	t.Run("LinkContact_WithMethodFromDifferentContact_SkipsInvalidMethod", func(t *testing.T) {
+		// Create a CRM contact
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Different Contact Method Test " + uuid.New().String()[:8],
+		})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		}()
+
+		// Create another CRM contact with a method
+		otherContact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Other Contact " + uuid.New().String()[:8],
+		})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, otherContact.ID)
+		}()
+
+		// Add a method to the other contact
+		_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+			ContactID: otherContact.ID,
+			Type:      "email",
+			Value:     "other-contact@gmail.com",
+			IsPrimary: false,
+		})
+		require.NoError(t, err)
+
+		// Create an external contact (the method value won't match the external contact)
+		displayName := "External Different Method Test"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "external-valid@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Try to link with a method that exists in another contact but not in external
+		linkReq := handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "other-contact@gmail.com", Type: "email", IsPrimary: true}, // Not in external
+				{OriginalValue: "external-valid@gmail.com", Type: "email", IsPrimary: false},
+			},
+		}
+
+		jsonBody, _ := json.Marshal(linkReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/link", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// The link operation should succeed, but the invalid method should be skipped
+		require.Equal(t, http.StatusOK, w.Code)
+
+		// Verify only the valid method was added to the contact
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contact.ID)
+		require.NoError(t, err)
+		require.Len(t, methods, 1, "Should only have one method from external contact")
+		assert.Equal(t, "external-valid@gmail.com", methods[0].Value)
+	})
+
+	t.Run("ImportContact_WithEmptyNameOverride_ReturnsError", func(t *testing.T) {
+		// Create an external contact with a valid name
+		displayName := "Original Valid Name"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "empty-name-test@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Try to import with empty name override
+		emptyName := "   " // whitespace-only name
+		importReq := handlers.ImportRequest{
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "empty-name-test@gmail.com", Type: "email"},
+			},
+			Name: &emptyName,
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// Should still succeed because empty name override should be ignored
+		// and original name should be used
+		assert.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		// Verify contact uses original name
+		contactData := response.Data.(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		contact, err := contactRepo.GetContact(ctx, contactID)
+		require.NoError(t, err)
+		assert.Equal(t, "Original Valid Name", contact.FullName, "Should use original name when override is whitespace")
+	})
+
+	t.Run("ImportContact_MultiplePrimaryMethods_UsesFirst", func(t *testing.T) {
+		// Create an external contact with multiple methods
+		displayName := "Multi Primary Test"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "multi-primary1@gmail.com", Type: "home"},
+				{Value: "multi-primary2@gmail.com", Type: "work"},
+				{Value: "multi-primary3@gmail.com", Type: "other"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Import with multiple methods marked as primary
+		importReq := handlers.ImportRequest{
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "multi-primary1@gmail.com", Type: "email", IsPrimary: true},
+				{OriginalValue: "multi-primary2@gmail.com", Type: "email", IsPrimary: true},
+				{OriginalValue: "multi-primary3@gmail.com", Type: "email", IsPrimary: true},
+			},
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		contactData := response.Data.(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		// Verify only one method is primary (the first one processed)
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contactID)
+		require.NoError(t, err)
+		require.Len(t, methods, 3)
+
+		var primaryCount int
+		for _, m := range methods {
+			if m.IsPrimary {
+				primaryCount++
+			}
+		}
+		assert.Equal(t, 1, primaryCount, "Should have exactly one primary method even when multiple requested")
+	})
+
+	t.Run("LinkContact_WithEmptyNameOverride_PreservesOriginal", func(t *testing.T) {
+		// Create a CRM contact with a name
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Preserved Original Name",
+		})
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		}()
+
+		// Create an external contact
+		displayName := "External Link Name"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "empty-link-name@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// Link with empty name override
+		emptyName := ""
+		linkReq := handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			Name:         &emptyName,
+		}
+
+		jsonBody, _ := json.Marshal(linkReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/link", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		// Verify original name was preserved
+		updatedContact, err := contactRepo.GetContact(ctx, contact.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "Preserved Original Name", updatedContact.FullName, "Empty name override should preserve original")
+	})
+
+	t.Run("ImportContact_WithUnicodeAndSpecialChars", func(t *testing.T) {
+		// Create an external contact with unicode/special character name
+		displayName := "José García-López 日本語名 Émile Øresund"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "unicode-test@gmail.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		importReq := handlers.ImportRequest{
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "unicode-test@gmail.com", Type: "email"},
+			},
+		}
+
+		jsonBody, _ := json.Marshal(importReq)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusCreated, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response.Success)
+
+		contactData := response.Data.(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		// Verify unicode name was preserved
+		contact, err := contactRepo.GetContact(ctx, contactID)
+		require.NoError(t, err)
+		assert.Equal(t, displayName, contact.FullName, "Unicode name should be preserved")
 	})
 }
 
