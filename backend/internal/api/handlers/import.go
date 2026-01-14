@@ -378,6 +378,7 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 
 	methods := make([]service.ContactMethodInput, 0, len(selected))
 	usedValues := make(map[string]bool)
+	hasPrimary := false // Track if we've already assigned a primary
 
 	for _, sel := range selected {
 		// Validate the value exists in external contact
@@ -396,10 +397,16 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 			continue
 		}
 
+		// Only allow one primary method - first one wins
+		isPrimary := sel.IsPrimary && !hasPrimary
+		if isPrimary {
+			hasPrimary = true
+		}
+
 		methods = append(methods, service.ContactMethodInput{
 			Type:      sel.Type,
 			Value:     sel.OriginalValue,
-			IsPrimary: sel.IsPrimary,
+			IsPrimary: isPrimary,
 		})
 		usedValues[key] = true
 	}
