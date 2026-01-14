@@ -67,9 +67,11 @@ if check_process "crm-api"; then
     sleep 2
 fi
 
-if check_process "next dev"; then
+# Stop frontend (bun runs next dev, so check for both patterns)
+if check_process "next dev" || check_process "node.*next"; then
     log_and_print "🔸 Stopping frontend..."
     pkill -f "next dev" || true
+    pkill -f "node.*next" || true
     sleep 2
 fi
 
@@ -133,7 +135,7 @@ fi
 log_and_print "🔸 Starting frontend..."
 (
     cd frontend
-    npm run dev -- --port 3000 >> "../$LOG_FILE" 2>&1
+    PORT=3000 bun run dev >> "../$LOG_FILE" 2>&1
 ) &
 
 # Wait for frontend to be ready
@@ -147,6 +149,14 @@ log_and_print "${GREEN}✅ All services started successfully${NC}"
 
 # Step 3: Test basic functionality
 log_and_print "${BLUE}🧪 Step 3: Testing basic functionality...${NC}"
+
+# Load API key from .env if available (for authenticated endpoints)
+if [ -f ./.env ]; then
+    API_KEY=$(grep -E "^API_KEY=" ./.env | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+    if [ -n "$API_KEY" ]; then
+        log_and_print "🔑 API key loaded from .env"
+    fi
+fi
 
 # Test 1: Health check
 log_and_print "🔸 Testing health endpoint..."
@@ -163,9 +173,19 @@ else
     exit 1
 fi
 
+# Build API headers for authenticated requests
+API_AUTH_HEADER=""
+if [ -n "${API_KEY:-}" ]; then
+    API_AUTH_HEADER="-H X-API-Key: ${API_KEY}"
+fi
+
 # Test 2: Contacts endpoint
 log_and_print "🔸 Testing contacts endpoint..."
-CONTACTS_RESPONSE=$(curl -s -w "%{http_code}" http://localhost:8080/api/v1/contacts)
+if [ -n "$API_AUTH_HEADER" ]; then
+    CONTACTS_RESPONSE=$(curl -s -w "%{http_code}" -H "X-API-Key: ${API_KEY}" http://localhost:8080/api/v1/contacts)
+else
+    CONTACTS_RESPONSE=$(curl -s -w "%{http_code}" http://localhost:8080/api/v1/contacts)
+fi
 HTTP_CODE="${CONTACTS_RESPONSE: -3}"
 RESPONSE_BODY="${CONTACTS_RESPONSE%???}"
 
@@ -180,7 +200,11 @@ fi
 
 # Test 3: Reminder stats endpoint
 log_and_print "🔸 Testing reminder stats endpoint..."
-STATS_RESPONSE=$(curl -s -w "%{http_code}" http://localhost:8080/api/v1/reminders/stats)
+if [ -n "${API_KEY:-}" ]; then
+    STATS_RESPONSE=$(curl -s -w "%{http_code}" -H "X-API-Key: ${API_KEY}" http://localhost:8080/api/v1/reminders/stats)
+else
+    STATS_RESPONSE=$(curl -s -w "%{http_code}" http://localhost:8080/api/v1/reminders/stats)
+fi
 HTTP_CODE="${STATS_RESPONSE: -3}"
 RESPONSE_BODY="${STATS_RESPONSE%???}"
 
@@ -199,16 +223,27 @@ TIMESTAMP=$(date +%s)
 TEST_CONTACT=$(cat << EOF
 {
     "full_name": "Test User",
-    "email": "test-${TIMESTAMP}@example.com",
-    "phone": "+1234567890",
+    "methods": [
+        {
+            "type": "email",
+            "value": "test-${TIMESTAMP}@example.com",
+            "is_primary": true
+        }
+    ],
     "cadence": "weekly",
     "notes": "Smoke test contact"
 }
 EOF
 )
 
+# Build API headers - add API key if available
+API_HEADERS=(-H "Content-Type: application/json")
+if [ -n "${API_KEY:-}" ]; then
+    API_HEADERS+=(-H "X-API-Key: ${API_KEY}")
+fi
+
 CREATE_RESPONSE=$(curl -s -w "%{http_code}" -X POST http://localhost:8080/api/v1/contacts \
-    -H "Content-Type: application/json" \
+    "${API_HEADERS[@]}" \
     -d "$TEST_CONTACT")
 
 HTTP_CODE="${CREATE_RESPONSE: -3}"
@@ -242,7 +277,11 @@ fi
 # Cleanup: Delete test contact if created
 if [ -n "$CONTACT_ID" ]; then
     log_and_print "🔸 Cleaning up test contact..."
-    curl -s -X DELETE "http://localhost:8080/api/v1/contacts/$CONTACT_ID" >> "$LOG_FILE" 2>&1
+    if [ -n "${API_KEY:-}" ]; then
+        curl -s -X DELETE -H "X-API-Key: ${API_KEY}" "http://localhost:8080/api/v1/contacts/$CONTACT_ID" >> "$LOG_FILE" 2>&1
+    else
+        curl -s -X DELETE "http://localhost:8080/api/v1/contacts/$CONTACT_ID" >> "$LOG_FILE" 2>&1
+    fi
 fi
 
 # Step 4: Summary and next steps
@@ -266,7 +305,7 @@ log_and_print "${GREEN}✨ Ready for feature development! ✨${NC}"
 # Function to show running processes
 show_processes() {
     log_and_print "${BLUE}📋 Running Processes:${NC}"
-    ps aux | grep -E "(crm-api|next dev)" | grep -v grep | while read line; do
+    ps aux | grep -E "(crm-api|next dev|node.*next)" | grep -v grep | while read line; do
         log_and_print "• $line"
     done
 }
@@ -280,4 +319,4 @@ echo "2. Add some contacts and test the reminder system"
 echo "3. Check the logs if anything seems off"
 echo "4. Run this script again anytime you need to restart everything"
 echo ""
-echo "💡 To stop everything: make docker-down && pkill -f 'crm-api|next dev'"
+echo "💡 To stop everything: make docker-down && pkill -f 'crm-api' && pkill -f 'next dev' && pkill -f 'node.*next'"
