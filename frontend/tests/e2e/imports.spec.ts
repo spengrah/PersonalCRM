@@ -1023,11 +1023,12 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     // Wait for modal
     await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-    // Verify the name is displayed
-    await expect(page.getByText(`${testApi.prefix}-Original Name Import`)).toBeVisible()
+    // Verify the name is displayed in the heading
+    const nameHeading = page.getByRole('heading', { name: new RegExp(`${testApi.prefix}-Original Name Import`) })
+    await expect(nameHeading).toBeVisible()
 
-    // Click on the name to enter edit mode
-    await page.getByText(`${testApi.prefix}-Original Name Import`).click()
+    // Click on the name heading to enter edit mode
+    await nameHeading.click()
 
     // Verify input field appears
     const nameInput = page.locator('input[type="text"]').first()
@@ -1143,8 +1144,9 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     // Wait for modal
     await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-    // Click on the name to enter edit mode
-    await page.getByText(`${testApi.prefix}-Escape Cancel Test`).click()
+    // Click on the name heading to enter edit mode
+    const nameHeading = page.getByRole('heading', { name: new RegExp(`${testApi.prefix}-Escape Cancel Test`) })
+    await nameHeading.click()
 
     // Edit the name
     const nameInput = page.locator('input[type="text"]').first()
@@ -1154,8 +1156,8 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     // Press Escape to cancel
     await nameInput.press('Escape')
 
-    // Verify original name is restored
-    await expect(page.getByText(`${testApi.prefix}-Escape Cancel Test`)).toBeVisible()
+    // Verify original name is restored in the heading
+    await expect(page.getByRole('heading', { name: new RegExp(`${testApi.prefix}-Escape Cancel Test`) })).toBeVisible()
 
     // Close modal
     await page.getByRole('button', { name: /Cancel/i }).click()
