@@ -171,3 +171,11 @@ func (r *ContactMethodRepository) UpdateContactMethod(ctx context.Context, id uu
 	})
 	return err
 }
+
+// SetPrimary updates the is_primary flag for a contact method
+func (r *ContactMethodRepository) SetPrimary(ctx context.Context, id uuid.UUID, isPrimary bool) error {
+	return r.queries.SetContactMethodPrimary(ctx, db.SetContactMethodPrimaryParams{
+		ID:        uuidToPgUUID(id),
+		IsPrimary: isPrimary,
+	})
+}

@@ -76,12 +76,14 @@ type SuggestedMatch struct {
 type SelectedMethodInput struct {
 	OriginalValue string `json:"original_value" binding:"required"`
 	Type          string `json:"type" binding:"required,oneof=email phone telegram signal discord twitter gchat whatsapp"`
+	IsPrimary     bool   `json:"is_primary"`
 }
 
 // ImportRequest represents an optional request body for importing with method selection
 type ImportRequest struct {
 	SelectedMethods []SelectedMethodInput `json:"selected_methods,omitempty"`
 	Cadence         *string               `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual"`
+	Name            *string               `json:"name,omitempty"`
 }
 
 // LinkRequest represents a request to link an external contact to a CRM contact
@@ -90,6 +92,7 @@ type LinkRequest struct {
 	SelectedMethods     []SelectedMethodInput `json:"selected_methods,omitempty"`
 	ConflictResolutions map[string]string     `json:"conflict_resolutions,omitempty"` // value -> "use_crm" | "use_external"
 	Cadence             *string               `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual"`
+	Name                *string               `json:"name,omitempty"`
 }
 
 // ListImportCandidates returns unmatched external contacts
@@ -308,8 +311,11 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	}
 
 	// Build contact creation request
+	// Use custom name if provided, otherwise fall back to external source name
 	fullName := ""
-	if external.DisplayName != nil {
+	if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
+		fullName = strings.TrimSpace(*req.Name)
+	} else if external.DisplayName != nil {
 		fullName = *external.DisplayName
 	} else if external.FirstName != nil && external.LastName != nil {
 		fullName = *external.FirstName + " " + *external.LastName
@@ -372,6 +378,7 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 
 	methods := make([]service.ContactMethodInput, 0, len(selected))
 	usedValues := make(map[string]bool)
+	hasPrimary := false // Track if we've already assigned a primary
 
 	for _, sel := range selected {
 		// Validate the value exists in external contact
@@ -390,9 +397,16 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 			continue
 		}
 
+		// Only allow one primary method - first one wins
+		isPrimary := sel.IsPrimary && !hasPrimary
+		if isPrimary {
+			hasPrimary = true
+		}
+
 		methods = append(methods, service.ContactMethodInput{
-			Type:  sel.Type,
-			Value: sel.OriginalValue,
+			Type:      sel.Type,
+			Value:     sel.OriginalValue,
+			IsPrimary: isPrimary,
 		})
 		usedValues[key] = true
 	}
@@ -484,7 +498,7 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 
 	// Enrich the CRM contact - use method selections if provided
 	var enrichErr error
-	if len(req.SelectedMethods) > 0 || len(req.ConflictResolutions) > 0 || req.Cadence != nil {
+	if len(req.SelectedMethods) > 0 || len(req.ConflictResolutions) > 0 || req.Cadence != nil || req.Name != nil {
 		enrichErr = h.enricher.EnrichContactFromExternalWithSelections(
 			ctx,
 			crmContactID,
@@ -492,6 +506,7 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 			toEnrichmentMethodSelections(req.SelectedMethods),
 			req.ConflictResolutions,
 			req.Cadence,
+			req.Name,
 		)
 	} else {
 		enrichErr = h.enricher.EnrichContactFromExternal(ctx, crmContactID, updated)
@@ -516,6 +531,7 @@ func toEnrichmentMethodSelections(selections []SelectedMethodInput) []service.Me
 		result[i] = service.MethodSelection{
 			OriginalValue: sel.OriginalValue,
 			Type:          sel.Type,
+			IsPrimary:     sel.IsPrimary,
 		}
 	}
 	return result

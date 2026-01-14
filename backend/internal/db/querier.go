@@ -172,6 +172,7 @@ type Querier interface {
 	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error)
 	SearchContactsSorted(ctx context.Context, arg SearchContactsSortedParams) ([]*Contact, error)
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
+	SetContactMethodPrimary(ctx context.Context, arg SetContactMethodPrimaryParams) error
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteReminder(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteRemindersForContact(ctx context.Context, contactID pgtype.UUID) error

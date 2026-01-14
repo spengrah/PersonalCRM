@@ -53,3 +53,14 @@ JOIN contact c ON c.id = cm.contact_id
 WHERE cm.type = ANY($1::text[])
   AND cm.value_normalized = $2
   AND c.deleted_at IS NULL;
+
+-- name: SetContactMethodPrimary :exec
+UPDATE contact_method cm
+SET is_primary = $2,
+    updated_at = NOW()
+WHERE cm.id = $1
+  AND EXISTS (
+    SELECT 1 FROM contact c
+    WHERE c.id = cm.contact_id
+      AND c.deleted_at IS NULL
+  );

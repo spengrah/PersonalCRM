@@ -29,6 +29,10 @@ interface MethodSelectorProps {
   disabled?: boolean
   /** Whether this is an email (vs phone) */
   isEmail: boolean
+  /** Whether this method is marked as primary */
+  isPrimary?: boolean
+  /** Callback when primary star is clicked */
+  onPrimaryToggle?: () => void
 }
 
 export function MethodSelector({
@@ -40,6 +44,8 @@ export function MethodSelector({
   onTypeChange,
   disabled = false,
   isEmail,
+  isPrimary = false,
+  onPrimaryToggle,
 }: MethodSelectorProps) {
   // Filter options to only show relevant types
   const relevantOptions = CONTACT_METHOD_OPTIONS.filter(opt => {
@@ -107,6 +113,28 @@ export function MethodSelector({
         <span className="text-xs text-gray-500 w-32">
           {relevantOptions.find(opt => opt.value === selectedType)?.label || selectedType}
         </span>
+      )}
+
+      {/* Primary star - only shown for selected methods */}
+      {selected && onPrimaryToggle ? (
+        <button
+          type="button"
+          onClick={onPrimaryToggle}
+          disabled={disabled}
+          className={clsx(
+            'p-1.5 transition-colors flex-shrink-0',
+            isPrimary ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-500',
+            disabled && 'opacity-50 cursor-not-allowed'
+          )}
+          title={isPrimary ? 'Primary contact method' : 'Set as primary'}
+        >
+          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+          </svg>
+        </button>
+      ) : (
+        // Placeholder to maintain layout when star is hidden
+        <span className="w-7 flex-shrink-0" />
       )}
 
       {/* State badge */}

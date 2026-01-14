@@ -58,12 +58,14 @@ export interface ExternalContactMethod {
 export interface SelectedMethod {
   original_value: string
   type: string // CRM type (email, phone, etc.)
+  is_primary?: boolean // Whether this method should be the primary contact method
 }
 
 /** Request body for importing a contact with method selection */
 export interface ImportContactRequest {
   selected_methods?: SelectedMethod[]
   cadence?: string
+  name?: string // Optional custom name (overrides external source name)
 }
 
 /** Request body for linking a contact with method selection and conflict resolution */
@@ -72,6 +74,7 @@ export interface LinkContactRequest {
   selected_methods?: SelectedMethod[]
   conflict_resolutions?: Record<string, 'use_crm' | 'use_external'>
   cadence?: string
+  name?: string // Optional custom name (updates CRM contact name if provided)
 }
 
 /** Type of conflict between external and CRM methods */
