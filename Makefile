@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e e2e-db deploy setup-pi dev-native postgres-native sqlc
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test
 
 # Go build cache (workspace-local by default; override via env).
 GOCACHE ?= $(CURDIR)/.gocache
@@ -32,6 +32,7 @@ help:
 	@echo "  build       - Build both frontend and backend"
 	@echo "  sqlc        - Regenerate sqlc code from SQL queries"
 	@echo "  test        - Run all tests (backend + frontend)"
+	@echo "  smoke-test  - Full system verification (restart everything + test)"
 	@echo "  clean       - Clean build artifacts"
 	@echo ""
 	@echo "Docker:"
@@ -216,6 +217,10 @@ test-frontend:
 test-api:
 	@echo "Running API tests..."
 	@cd backend && go test ./tests/... -v
+
+smoke-test:
+	@echo "Running full system smoke test..."
+	@./scripts/smoke-test.sh
 
 # CI/CD targets
 ci-build-backend:

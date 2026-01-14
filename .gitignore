@@ -344,3 +344,6 @@ Personal CRM.app/
 
 # Claude cache (local)
 .claude/cache/
+
+# Git worktrees
+.worktrees/

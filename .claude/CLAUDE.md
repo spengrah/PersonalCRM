@@ -23,7 +23,7 @@ make test-unit           # Backend unit tests (fast, no DB needed)
 make test-integration    # Backend integration tests (needs DB)
 make test-frontend       # Frontend unit tests
 make test-e2e            # Playwright E2E tests
-./smoke-test.sh          # Full system verification
+make smoke-test          # Full system verification
 
 # Code generation & linting
 make sqlc                # Regenerate Go from SQL (after query changes)
