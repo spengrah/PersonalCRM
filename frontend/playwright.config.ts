@@ -55,7 +55,7 @@ export default defineConfig({
         // Fallbacks for running playwright directly without make test-e2e
         DATABASE_URL:
           process.env.DATABASE_URL ||
-          'postgres://crm_user:crm_password@localhost:5432/personal_crm?sslmode=disable',
+          'postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable',
         API_KEY: process.env.API_KEY || 'dev-api-key-change-in-production',
         MIGRATIONS_PATH: 'migrations',
         CRM_ENV: 'testing',
