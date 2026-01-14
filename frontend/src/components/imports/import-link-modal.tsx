@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
-import { ChevronLeft, ChevronRight, UserPlus, Link2, Ban, HelpCircle } from 'lucide-react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { ChevronLeft, ChevronRight, UserPlus, Link2, Ban, HelpCircle, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
@@ -88,6 +88,14 @@ export function ImportLinkModal({
   >(new Map())
   const [selectedCadence, setSelectedCadence] = useState<string>('')
   const [isTransitioning, setIsTransitioning] = useState(false)
+
+  // Name editing state (GH-155)
+  const [editedName, setEditedName] = useState<string>('')
+  const [isEditingName, setIsEditingName] = useState(false)
+  const nameInputRef = useRef<HTMLInputElement>(null)
+
+  // Primary method state (GH-159)
+  const [primaryMethodValue, setPrimaryMethodValue] = useState<string | null>(null)
 
   // Fetch all candidates for the modal (not limited by page pagination)
   // Note: We need to pass page: 1 explicitly to ensure consistent query params
@@ -209,6 +217,44 @@ export function ImportLinkModal({
     }
   }, [mode, selectedContact])
 
+  // Initialize editedName when candidate/mode/contact changes (GH-155)
+  useEffect(() => {
+    if (mode === 'import') {
+      // Import mode: use external name
+      setEditedName(displayName)
+    } else if (mode === 'link' && selectedContact) {
+      // Link mode: use CRM contact name
+      setEditedName(selectedContact.full_name)
+    } else if (mode === 'link') {
+      // Link mode but no contact selected yet: use external name as placeholder
+      setEditedName(displayName)
+    }
+    setIsEditingName(false)
+  }, [mode, selectedContact, displayName, currentIndex])
+
+  // Initialize primary method from CRM contact in link mode (GH-159)
+  useEffect(() => {
+    if (mode === 'link' && selectedContact?.methods) {
+      const primaryMethod = selectedContact.methods.find(m => m.is_primary)
+      if (primaryMethod) {
+        setPrimaryMethodValue(primaryMethod.value)
+      } else {
+        setPrimaryMethodValue(null)
+      }
+    } else if (mode === 'import') {
+      // Reset primary in import mode
+      setPrimaryMethodValue(null)
+    }
+  }, [mode, selectedContact, currentIndex])
+
+  // Focus name input when entering edit mode
+  useEffect(() => {
+    if (isEditingName && nameInputRef.current) {
+      nameInputRef.current.focus()
+      nameInputRef.current.select()
+    }
+  }, [isEditingName])
+
   // Check for name mismatch in link mode
   const hasNameMismatch = useMemo(() => {
     if (mode !== 'link' || !selectedContact) return false
@@ -248,6 +294,54 @@ export function ImportLinkModal({
     })
   }
 
+  // Handle primary method toggle (GH-159)
+  const handlePrimaryToggle = (value: string) => {
+    // Toggle: if already primary, clear it; otherwise set it as primary
+    if (primaryMethodValue === value) {
+      setPrimaryMethodValue(null)
+    } else {
+      setPrimaryMethodValue(value)
+    }
+  }
+
+  // Handle name editing (GH-155)
+  const handleStartEditingName = () => {
+    setIsEditingName(true)
+  }
+
+  const handleConfirmNameEdit = () => {
+    // Validate non-empty
+    if (editedName.trim()) {
+      setIsEditingName(false)
+    }
+  }
+
+  const handleCancelNameEdit = () => {
+    // Revert to original name
+    if (mode === 'import') {
+      setEditedName(displayName)
+    } else if (selectedContact) {
+      setEditedName(selectedContact.full_name)
+    }
+    setIsEditingName(false)
+  }
+
+  const handleQuickFillName = (name: string) => {
+    setEditedName(name)
+    // If in view mode, entering edit mode isn't needed since we're quick-filling
+    // But if we're already editing, just update the value
+  }
+
+  const handleNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handleConfirmNameEdit()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      handleCancelNameEdit()
+    }
+  }
+
   // Build selected methods for API
   const buildSelectedMethods = (): SelectedMethod[] => {
     const methods: SelectedMethod[] = []
@@ -256,6 +350,7 @@ export function ImportLinkModal({
         methods.push({
           original_value: sel.value,
           type: sel.type,
+          is_primary: sel.value === primaryMethodValue,
         })
       }
     })
@@ -265,21 +360,29 @@ export function ImportLinkModal({
   // Handle Import action
   const handleImport = async () => {
     if (!candidate) return
+    // Validate name
+    if (!editedName.trim()) {
+      onError('Name cannot be empty')
+      return
+    }
     const selectedMethods = buildSelectedMethods()
     const cadence = selectedCadence || undefined
+    // Only include name if it differs from external source
+    const nameToSend = editedName.trim() !== displayName ? editedName.trim() : undefined
 
     try {
       await importMutation.mutateAsync({
         id: candidate.id,
         request:
-          selectedMethods.length > 0 || cadence
+          selectedMethods.length > 0 || cadence || nameToSend
             ? {
                 selected_methods: selectedMethods.length > 0 ? selectedMethods : undefined,
                 cadence,
+                name: nameToSend,
               }
             : undefined,
       })
-      handleActionSuccess(`${displayName} imported successfully!`)
+      handleActionSuccess(`${editedName.trim()} imported successfully!`)
     } catch (error) {
       handleActionError(error, 'Failed to import contact')
     }
@@ -288,6 +391,11 @@ export function ImportLinkModal({
   // Handle Link action
   const handleLink = async () => {
     if (!selectedContactId || !candidate) return
+    // Validate name
+    if (!editedName.trim()) {
+      onError('Name cannot be empty')
+      return
+    }
 
     const selectedMethods = buildSelectedMethods()
     const resolutions: Record<string, 'use_crm' | 'use_external'> = {}
@@ -295,6 +403,11 @@ export function ImportLinkModal({
       resolutions[key] = value
     })
     const cadence = selectedCadence || undefined
+    // Only include name if it differs from CRM contact's current name
+    const nameToSend =
+      selectedContact && editedName.trim() !== selectedContact.full_name
+        ? editedName.trim()
+        : undefined
 
     try {
       await linkMutation.mutateAsync({
@@ -304,6 +417,7 @@ export function ImportLinkModal({
           selected_methods: selectedMethods.length > 0 ? selectedMethods : undefined,
           conflict_resolutions: Object.keys(resolutions).length > 0 ? resolutions : undefined,
           cadence,
+          name: nameToSend,
         },
       })
       handleActionSuccess('Contact linked successfully!')
@@ -439,22 +553,101 @@ export function ImportLinkModal({
             {candidate.photo_url && isPhotoUrlTrusted(candidate.photo_url) ? (
               <img
                 src={candidate.photo_url}
-                alt={displayName}
-                className="w-12 h-12 rounded-full object-cover"
+                alt={editedName || displayName}
+                className="w-12 h-12 rounded-full object-cover flex-shrink-0"
               />
             ) : (
-              <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
                 <span className="text-lg font-medium text-gray-600">
-                  {displayName.charAt(0).toUpperCase()}
+                  {(editedName || displayName).charAt(0).toUpperCase()}
                 </span>
               </div>
             )}
-            <div>
-              <h3 className="text-lg font-medium text-gray-900">{displayName}</h3>
-              <p className="text-sm text-gray-500 flex items-center gap-1.5">
-                <SourceIcon className="w-3.5 h-3.5" />
-                {sourceInfo?.label || candidate.source}
-              </p>
+            <div className="flex-1 min-w-0">
+              {/* Row 1: Name + Source */}
+              <div className="flex items-center justify-between gap-2 h-8">
+                {isEditingName ? (
+                  /* Edit mode: input + checkmark */
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <input
+                      ref={nameInputRef}
+                      type="text"
+                      value={editedName}
+                      onChange={e => setEditedName(e.target.value)}
+                      onKeyDown={handleNameKeyDown}
+                      onBlur={handleConfirmNameEdit}
+                      className="text-base font-medium text-gray-900 border border-blue-500 rounded px-2 py-0.5 flex-1 min-w-0 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      disabled={isLoading}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleConfirmNameEdit}
+                      className="p-1 text-green-600 hover:bg-green-50 rounded flex-shrink-0"
+                      disabled={isLoading}
+                    >
+                      <Check className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  /* View mode: clickable name with pencil on hover */
+                  <div className="group">
+                    <h3
+                      className="text-lg font-medium text-gray-900 cursor-pointer hover:bg-blue-50 hover:text-blue-700 px-2 py-1 -mx-2 -my-1 rounded transition-colors inline-flex items-center gap-2 truncate"
+                      onClick={handleStartEditingName}
+                    >
+                      <span className="truncate">{editedName || displayName}</span>
+                      <svg
+                        className="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+                        />
+                      </svg>
+                    </h3>
+                  </div>
+                )}
+                {/* Source attribution - always visible, right-aligned */}
+                {!isEditingName && (
+                  <span className="text-xs text-gray-500 flex items-center gap-1 flex-shrink-0">
+                    <SourceIcon className="w-3.5 h-3.5" />
+                    {sourceInfo?.label || candidate.source}
+                  </span>
+                )}
+              </div>
+
+              {/* Row 2: Context line (only in edit mode or when name mismatch) */}
+              {isEditingName ? (
+                /* Edit mode: source + original name as quick-fill */
+                <p className="text-sm text-gray-500 mt-1 h-5 flex items-center gap-1">
+                  <SourceIcon className="w-3 h-3" />
+                  {sourceInfo?.label?.replace(' Contacts', '') || candidate.source}:
+                  <button
+                    type="button"
+                    className="text-blue-600 hover:underline"
+                    onClick={() => handleQuickFillName(displayName)}
+                  >
+                    &quot;{displayName}&quot;
+                  </button>
+                </p>
+              ) : hasNameMismatch && selectedContact && !isEditingName ? (
+                /* Link mode with mismatch: show external name hint */
+                <p className="text-sm text-amber-600 mt-1 h-5">
+                  External: &quot;{displayName}&quot; —
+                  <button
+                    type="button"
+                    className="text-blue-600 hover:underline ml-1"
+                    onClick={() => handleQuickFillName(displayName)}
+                  >
+                    use this
+                  </button>
+                </p>
+              ) : null}
             </div>
           </div>
         </div>
@@ -503,11 +696,6 @@ export function ImportLinkModal({
               disabled={isLoading}
               showNoContactOption={false}
             />
-            {hasNameMismatch && selectedContact && (
-              <div className="mt-2 p-2 rounded bg-amber-50 border border-amber-200 text-sm text-amber-800">
-                Name mismatch: &quot;{displayName}&quot; vs &quot;{selectedContact.full_name}&quot;
-              </div>
-            )}
           </div>
         )}
 
@@ -536,6 +724,8 @@ export function ImportLinkModal({
                   onTypeChange={type => handleTypeChange(sel.value, type)}
                   disabled={isLoading}
                   isEmail={sel.isEmail}
+                  isPrimary={sel.value === primaryMethodValue}
+                  onPrimaryToggle={() => handlePrimaryToggle(sel.value)}
                 />
               ))}
             </div>
@@ -565,6 +755,8 @@ export function ImportLinkModal({
                           onTypeChange={type => handleTypeChange(comp.external_value, type)}
                           disabled={isLoading || comp.conflict_type === 'identical'}
                           isEmail={sel.isEmail}
+                          isPrimary={comp.external_value === primaryMethodValue}
+                          onPrimaryToggle={() => handlePrimaryToggle(comp.external_value)}
                         />
                       )
                     })}

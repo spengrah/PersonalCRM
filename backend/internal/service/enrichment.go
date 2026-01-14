@@ -16,6 +16,7 @@ import (
 type MethodSelection struct {
 	OriginalValue string
 	Type          string
+	IsPrimary     bool
 }
 
 // EnrichmentService handles contact enrichment from external sources
@@ -102,6 +103,7 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 // EnrichContactFromExternalWithSelections enriches a CRM contact with user-selected methods.
 // Unlike EnrichContactFromExternal, this uses explicit method selections and conflict resolutions.
 // If cadence is provided, it will update the contact's cadence.
+// If name is provided, it will update the contact's full name.
 func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 	ctx context.Context,
 	crmContactID uuid.UUID,
@@ -109,6 +111,7 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 	selectedMethods []MethodSelection,
 	conflictResolutions map[string]string,
 	cadence *string,
+	name *string,
 ) error {
 	// Get current contact
 	contact, err := s.contactRepo.GetContact(ctx, crmContactID)
@@ -155,6 +158,13 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 		needsUpdate = true
 	}
 
+	// Update name if provided
+	if name != nil && strings.TrimSpace(*name) != "" {
+		trimmedName := strings.TrimSpace(*name)
+		updateReq.FullName = trimmedName
+		needsUpdate = true
+	}
+
 	// Apply updates to contact if any enrichment occurred
 	if needsUpdate {
 		if _, err := s.contactRepo.UpdateContact(ctx, crmContactID, updateReq); err != nil {
@@ -187,12 +197,14 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 		return err
 	}
 
-	// Build maps for existing methods
+	// Build maps for existing methods (value -> method ID)
 	existingNormalized := make(map[string]bool)
+	existingMethodByNormalized := make(map[string]*repository.ContactMethod)
 	for i := range existingMethods {
 		m := &existingMethods[i]
 		normalized := identity.Normalize(m.Value, mapMethodTypeToIdentifier(m.Type))
 		existingNormalized[normalized] = true
+		existingMethodByNormalized[normalized] = m
 	}
 
 	// Build map of available values from external contact
@@ -207,6 +219,10 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 	// Collect errors for reporting
 	var methodErrors []string
 
+	// Track if any selection has IsPrimary set
+	var newPrimaryMethodID *uuid.UUID
+	var existingPrimaryMethodID *uuid.UUID
+
 	// Process selected methods
 	for _, sel := range selectedMethods {
 		// Validate the value exists in external contact
@@ -219,23 +235,57 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 		identType := mapMethodTypeToIdentifier(sel.Type)
 		normalized := identity.Normalize(sel.OriginalValue, identType)
 		if existingNormalized[normalized] {
+			// Method already exists - check if we need to update primary status
+			if sel.IsPrimary {
+				existingMethod := existingMethodByNormalized[normalized]
+				if existingMethod != nil {
+					existingPrimaryMethodID = &existingMethod.ID
+				}
+			}
 			continue // Already have this value
 		}
 
 		// Add the method
-		_, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+		newMethod, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
 			Type:      sel.Type,
 			Value:     sel.OriginalValue,
-			IsPrimary: false,
+			IsPrimary: false, // We'll update primary status separately
 		})
 		if err != nil {
 			methodErrors = append(methodErrors, fmt.Sprintf("failed to add method %s: %v", sel.OriginalValue, err))
 			continue
 		}
 
+		// Track if this new method should be primary
+		if sel.IsPrimary {
+			newPrimaryMethodID = &newMethod.ID
+		}
+
 		s.recordEnrichment(ctx, contact.ID, external, "method:"+sel.Type+":"+normalized, sel.OriginalValue)
 		existingNormalized[normalized] = true
+	}
+
+	// Handle primary method updates - first clear any existing primary, then set the new one
+	primaryMethodID := newPrimaryMethodID
+	if primaryMethodID == nil {
+		primaryMethodID = existingPrimaryMethodID
+	}
+
+	if primaryMethodID != nil {
+		// Clear existing primary
+		for i := range existingMethods {
+			m := &existingMethods[i]
+			if m.IsPrimary && m.ID != *primaryMethodID {
+				if err := s.methodRepo.SetPrimary(ctx, m.ID, false); err != nil {
+					logger.Warn().Err(err).Str("method_id", m.ID.String()).Msg("failed to clear primary status")
+				}
+			}
+		}
+		// Set new primary
+		if err := s.methodRepo.SetPrimary(ctx, *primaryMethodID, true); err != nil {
+			methodErrors = append(methodErrors, fmt.Sprintf("failed to set primary method: %v", err))
+		}
 	}
 
 	// Return error if any method operations failed
