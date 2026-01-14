@@ -305,9 +305,13 @@ log_and_print "${GREEN}✨ Ready for feature development! ✨${NC}"
 # Function to show running processes
 show_processes() {
     log_and_print "${BLUE}📋 Running Processes:${NC}"
-    ps aux | grep -E "(crm-api|next dev|node.*next)" | grep -v grep | while read line; do
-        log_and_print "• $line"
-    done
+    local procs
+    procs=$(ps aux | grep -E "(crm-api|next dev|node.*next)" | grep -v grep || true)
+    if [ -n "$procs" ]; then
+        echo "$procs" | while read line; do
+            log_and_print "• $line"
+        done
+    fi
 }
 
 show_processes
@@ -320,3 +324,5 @@ echo "3. Check the logs if anything seems off"
 echo "4. Run this script again anytime you need to restart everything"
 echo ""
 echo "💡 To stop everything: make docker-down && pkill -f 'crm-api' && pkill -f 'next dev' && pkill -f 'node.*next'"
+
+exit 0
