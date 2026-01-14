@@ -5,8 +5,8 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  // Use 3 workers in CI for parallelism. Tests without TestAPI isolation are marked serial.
-  workers: process.env.CI ? 3 : undefined,
+  // Use 3 workers for parallelism (both CI and local). Higher parallelism causes race conditions.
+  workers: 3,
   reporter: 'html',
   use: {
     baseURL: 'http://localhost:3000',

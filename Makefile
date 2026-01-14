@@ -188,10 +188,11 @@ test-e2e: e2e-db
 	@ENV_FILE=$${ENV_FILE:-$(CURDIR)/.env.example.testing}; \
 	if [ ! -f "$$ENV_FILE" ]; then echo "❌ ENV file not found: $$ENV_FILE"; exit 1; fi; \
 	set -a; . "$$ENV_FILE"; set +a; \
+	export DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable"; \
 	if [ -f frontend/.env.local ]; then mv frontend/.env.local frontend/.env.local.bak; fi; \
 	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > frontend/.env.local; \
 	echo "NEXT_PUBLIC_API_URL=http://localhost:8080" >> frontend/.env.local; \
-	cd frontend && PATH=/usr/bin:$$PATH NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 ./node_modules/.bin/playwright test --project=chromium; \
+	cd frontend && PATH=/usr/bin:$$PATH DATABASE_URL="$$DATABASE_URL" NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 ./node_modules/.bin/playwright test --project=chromium; \
 	EXIT_CODE=$$?; \
 	rm -f frontend/.env.local; \
 	if [ -f frontend/.env.local.bak ]; then mv frontend/.env.local.bak frontend/.env.local; fi; \
@@ -199,6 +200,11 @@ test-e2e: e2e-db
 
 e2e-db:
 	@bash scripts/ensure-postgres-for-tests.sh
+	@echo "Setting up isolated E2E test database..."
+	@docker exec crm-postgres psql -U crm_user -d postgres -c "DROP DATABASE IF EXISTS personal_crm_test;" 2>/dev/null || true
+	@docker exec crm-postgres psql -U crm_user -d postgres -c "CREATE DATABASE personal_crm_test;" 2>/dev/null
+	@docker exec crm-postgres psql -U crm_user -d personal_crm_test -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null
+	@echo "✓ E2E test database ready"
 
 # Build
 build:
