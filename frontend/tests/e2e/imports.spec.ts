@@ -1051,11 +1051,14 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     // Wait for modal
     await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-    // Click on the name to enter edit mode
-    await page.locator('h3').first().click()
+    // Click on the name heading within the modal to enter edit mode
+    // The modal has a fixed inset-0 overlay, and the editable h3 has text-lg class
+    const modal = page.locator('.fixed.inset-0')
+    const nameHeading = modal.locator('h3.text-lg').first()
+    await nameHeading.click()
 
     // Verify input field appears with the name value
-    const nameInput = page.locator('input[type="text"]').first()
+    const nameInput = modal.locator('input[type="text"]').first()
     await expect(nameInput).toBeVisible({ timeout: 5000 })
     await expect(nameInput).toHaveValue(new RegExp(`${testApi.prefix}-Click Edit Test`))
 
@@ -1083,9 +1086,10 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
 
     await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-    // Click to enter edit mode
-    await page.locator('h3').first().click()
-    const nameInput = page.locator('input[type="text"]').first()
+    // Click to enter edit mode - use modal-scoped selector
+    const modal = page.locator('.fixed.inset-0')
+    await modal.locator('h3.text-lg').first().click()
+    const nameInput = modal.locator('input[type="text"]').first()
     await expect(nameInput).toBeVisible({ timeout: 5000 })
 
     // Type new name and press Enter
@@ -1093,7 +1097,7 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     await nameInput.press('Enter')
 
     // Verify edit mode closed and new name shows in heading
-    await expect(page.locator('h3').filter({ hasText: 'New Contact Name' })).toBeVisible()
+    await expect(modal.locator('h3.text-lg').filter({ hasText: 'New Contact Name' })).toBeVisible()
 
     // Close modal
     await page.getByRole('button', { name: /Cancel/i }).click()
@@ -1119,9 +1123,10 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
 
     await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-    // Click to enter edit mode
-    await page.locator('h3').first().click()
-    const nameInput = page.locator('input[type="text"]').first()
+    // Click to enter edit mode - use modal-scoped selector
+    const modal = page.locator('.fixed.inset-0')
+    await modal.locator('h3.text-lg').first().click()
+    const nameInput = modal.locator('input[type="text"]').first()
     await expect(nameInput).toBeVisible({ timeout: 5000 })
 
     // Type new name and press Escape
@@ -1129,7 +1134,7 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     await nameInput.press('Escape')
 
     // Verify original name is restored
-    await expect(page.locator('h3').filter({ hasText: new RegExp(`${testApi.prefix}-Escape Key Test`) })).toBeVisible()
+    await expect(modal.locator('h3.text-lg').filter({ hasText: new RegExp(`${testApi.prefix}-Escape Key Test`) })).toBeVisible()
 
     // Close modal
     await page.getByRole('button', { name: /Cancel/i }).click()
@@ -1157,11 +1162,12 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     // Wait for modal
     await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-    // Click on the name to enter edit mode
-    await page.locator('h3').first().click()
+    // Click on the name to enter edit mode - use modal-scoped selector
+    const modal = page.locator('.fixed.inset-0')
+    await modal.locator('h3.text-lg').first().click()
 
     // Wait for input to appear and edit the name
-    const nameInput = page.locator('input[type="text"]').first()
+    const nameInput = modal.locator('input[type="text"]').first()
     await expect(nameInput).toBeVisible({ timeout: 5000 })
 
     // Clear and type new name, then press Enter to confirm
@@ -1169,7 +1175,7 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     await nameInput.press('Enter')
 
     // Verify the new name is shown in the heading
-    await expect(page.locator('h3').filter({ hasText: newName })).toBeVisible()
+    await expect(modal.locator('h3.text-lg').filter({ hasText: newName })).toBeVisible()
 
     // Click the "Import as New Contact" button
     await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
