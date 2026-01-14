@@ -253,8 +253,8 @@ if [ "$HTTP_CODE" = "201" ]; then
     log_and_print "${GREEN}✅ Contact creation working${NC}"
     echo "Create contact response: $RESPONSE_BODY" >> "$LOG_FILE"
     
-    # Extract contact ID for cleanup
-    CONTACT_ID=$(echo "$RESPONSE_BODY" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+    # Extract contact ID for cleanup (first "id" in response is the contact ID)
+    CONTACT_ID=$(echo "$RESPONSE_BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
     echo "Created contact ID: $CONTACT_ID" >> "$LOG_FILE"
 else
     log_and_print "${RED}❌ Contact creation failed (HTTP $HTTP_CODE)${NC}"
