@@ -19,8 +19,11 @@ api.SendSuccess(c, http.StatusOK, data, &api.Meta{
     },
 })
 
-// Validation error
+// Validation error (struct binding failed)
 api.SendValidationError(c, "Invalid input", err.Error())
+
+// Bad request (invalid parameters)
+api.SendBadRequest(c, "Invalid date format")
 
 // Not found
 api.SendNotFound(c, "Contact")

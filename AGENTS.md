@@ -19,11 +19,11 @@ frontend/src/{app, components, hooks}
 
 ```bash
 make dev          # Start dev server
-make dev-native   # Start without Docker (for containerized envs)
 make test         # All backend tests
 make test-e2e     # Playwright E2E
 make sqlc         # Regenerate from SQL
 make lint         # Run all linters
+make help         # Full command reference
 ```
 
 ## Context Discovery

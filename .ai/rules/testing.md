@@ -154,6 +154,47 @@ func TestNewTableRepository_Integration(t *testing.T) {
 }
 ```
 
+### Frontend Unit Test Pattern (Vitest)
+
+```typescript
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+describe('MyFunction', () => {
+  beforeEach(() => {
+    global.fetch = vi.fn()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('handles valid input', () => {
+    const result = myFunction('input')
+    expect(result).toBe(expectedValue)
+  })
+})
+```
+
+### Frontend Component Test Pattern (React Testing Library)
+
+```typescript
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+
+describe('Button', () => {
+  it('calls onClick when clicked', async () => {
+    const user = userEvent.setup()
+    const handleClick = vi.fn()
+
+    render(<Button onClick={handleClick}>Click me</Button>)
+    await user.click(screen.getByRole('button'))
+
+    expect(handleClick).toHaveBeenCalledOnce()
+  })
+})
+```
+
 ### Key Principles
 
 1. **Test edge cases** - not just happy path

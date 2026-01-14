@@ -7,6 +7,7 @@ GOCACHE ?= $(CURDIR)/.gocache
 export GOCACHE
 
 # Default target
+# NOTE: When adding or removing make targets, update this help section to match
 help:
 	@echo "Available targets:"
 	@echo ""
@@ -31,9 +32,17 @@ help:
 	@echo "  dev-native  - Start dev servers with native PostgreSQL (no Docker)"
 	@echo "  build       - Build both frontend and backend"
 	@echo "  sqlc        - Regenerate sqlc code from SQL queries"
-	@echo "  test        - Run all tests (backend + frontend)"
-	@echo "  smoke-test  - Full system verification (restart everything + test)"
+	@echo "  lint        - Run all linters (backend + frontend)"
 	@echo "  clean       - Clean build artifacts"
+	@echo ""
+	@echo "Testing:"
+	@echo "  test            - Run all backend tests (unit + integration)"
+	@echo "  test-unit       - Run backend unit tests only"
+	@echo "  test-integration- Run backend integration tests only"
+	@echo "  test-frontend   - Run frontend unit tests"
+	@echo "  test-e2e        - Run Playwright E2E tests"
+	@echo "  test-api        - Run API endpoint tests"
+	@echo "  smoke-test      - Full system verification (restart + test)"
 	@echo ""
 	@echo "Docker:"
 	@echo "  docker-up   - Start Docker Compose services"
@@ -182,8 +191,7 @@ test-e2e: e2e-db
 	if [ -f frontend/.env.local ]; then mv frontend/.env.local frontend/.env.local.bak; fi; \
 	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > frontend/.env.local; \
 	echo "NEXT_PUBLIC_API_URL=http://localhost:8080" >> frontend/.env.local; \
-	# CI=1 keeps Playwright single-worker to avoid shared DB flakiness and match CI behavior. \
-	cd frontend && PATH=/usr/bin:$$PATH CI=1 NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 ./node_modules/.bin/playwright test --project=chromium; \
+	cd frontend && PATH=/usr/bin:$$PATH NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 ./node_modules/.bin/playwright test --project=chromium; \
 	EXIT_CODE=$$?; \
 	rm -f frontend/.env.local; \
 	if [ -f frontend/.env.local.bak ]; then mv frontend/.env.local.bak frontend/.env.local; fi; \

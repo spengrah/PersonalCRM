@@ -52,6 +52,11 @@ export default defineConfig({
       stdout: 'pipe',
       env: {
         ...process.env,
+        // Fallbacks for running playwright directly without make test-e2e
+        DATABASE_URL:
+          process.env.DATABASE_URL ||
+          'postgres://crm_user:crm_password@localhost:5432/personal_crm?sslmode=disable',
+        API_KEY: process.env.API_KEY || 'dev-api-key-change-in-production',
         MIGRATIONS_PATH: 'migrations',
         CRM_ENV: 'testing',
         ENABLE_EXTERNAL_SYNC: 'true',
