@@ -1,0 +1,8 @@
+---
+description: Core rules for all development
+alwaysApply: true
+---
+
+See @.ai/rules/core.md for core development rules.
+
+See @AGENTS.md for project context and session workflow.

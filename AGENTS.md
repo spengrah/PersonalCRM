@@ -1,80 +1,43 @@
-# Agent Guidelines for Personal CRM
+# Agent Instructions
 
-This project uses AI-specific documentation in the `.ai/` directory for better organization and token efficiency.
+Read and follow: `.ai/rules/core.md`
 
----
+## About This Repo
 
-## 📚 Core References
+Personal CRM: single-user, local-first CRM for privacy-focused personal use.
+Target deployment: Raspberry Pi backend, access via Tailscale.
 
-- **[`.ai/rules.md`](.ai/rules.md)** - Critical rules and workflow **(START HERE)**
-- **[`.ai/development.md`](.ai/development.md)** - Feature development guide
-- **[`.ai/patterns.md`](.ai/patterns.md)** - Common code patterns
-- **[`.ai/architecture.md`](.ai/architecture.md)** - Architecture context
-- **[`.github/README.md`](.github/README.md)** - Issue workflow and templates
+**Stack:** Go 1.24 + Gin + PostgreSQL 16 + sqlc | Next.js 15 + React 19 + TailwindCSS 4 | bun (never npm)
 
----
-
-## 🚀 Quick Start for Agents
-
-1. **Pick up work:** `gh issue list --label agent-ready`
-2. **Read:** [`.ai/rules.md`](.ai/rules.md) for critical rules
-3. **Follow:** Layered architecture (Handler → Service → Repository → DB)
-4. **Reference:** Existing code is source of truth
-5. **Test:** Always write tests
-
----
-
-## ⚠️ Critical Rules
-
-- Never use `time.Now()` → use `accelerated.GetCurrentTime()`
-- Never skip architectural layers
-- Never write raw SQL in Go → use sqlc
-- Always run `./smoke-test.sh` before major commits
-- Always sign commits → `git commit -S -m "..."`
-
----
-
-## 🔍 Code Review Standards
-
-For AI-powered code reviews (Codex, etc.), see [`.ai/reviewers.md`](.ai/reviewers.md)
-
----
-
-## 📖 Documentation Hierarchy
-
-1. **Existing code** - Always the source of truth
-2. **[`.ai/rules.md`](.ai/rules.md)** - Development rules and workflow
-3. **GitHub Issues** - Current work and context
-4. **[`.ai/development.md`](.ai/development.md)** - How to implement features
-5. **[`PLAN.md`](docs/PLAN.md)** - Historical context (may be outdated)
-
----
-
-## Development Commands
-
-See [README.md](README.md#development-commands) for full command reference.
-
-**Most used:**
-```bash
-make dev                    # Start dev environment
-make reload                 # ⚠️ IMPORTANT: Rebuild + restart (use after code changes)
-make test-unit              # Unit tests
-make test-integration       # Integration tests
-./smoke-test.sh            # Full system test
+**Structure:**
+```
+backend/internal/{api/handlers, service, repository, db/queries}
+frontend/src/{app, components, hooks}
 ```
 
-### ⚠️ Critical: Use `make reload` After Code Changes
-
-**Never use `make build` alone** when services are running. The old processes will keep running with stale code.
+## Commands
 
 ```bash
-# ❌ WRONG - old processes keep running
-make build                  # Builds but doesn't restart!
-
-# ✅ CORRECT - rebuilds AND restarts
-make reload                 # Builds and restarts apps (keeps DB)
+make dev          # Start dev server
+make test         # All backend tests
+make test-e2e     # Playwright E2E
+make sqlc         # Regenerate from SQL
+make lint         # Run all linters
+make help         # Full command reference
 ```
 
----
+## Context Discovery
 
-**For comprehensive guidelines, see [`.ai/rules.md`](.ai/rules.md)**
+Load as needed, not upfront:
+- Architecture decisions: `.ai/guides/architecture.md`
+- Feature development: `.ai/guides/feature-development.md`
+- Code patterns: `.ai/patterns/`
+- Testing rules: `.ai/rules/testing.md`
+- Code review standards: `.ai/rules/code-review.md`
+
+## Session Hints
+
+- Run `make test && make test-e2e` before pushing
+- Read repository code before using methods (names vary, e.g., `SoftDeleteContact` not `DeleteContact`)
+- Prefer integration tests over heavy mocking
+- Use `accelerated.GetCurrentTime()` not `time.Now()`

@@ -1,0 +1,317 @@
+# Frontend Patterns
+
+Reusable React/TypeScript patterns for consistency across the frontend codebase.
+
+## Loading Pattern
+
+```typescript
+function MyComponent() {
+  const { data, isLoading, error } = useContacts()
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <LoadingSpinner />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-md p-4">
+        <p className="text-red-800">
+          {error.message || 'Failed to load data'}
+        </p>
+      </div>
+    )
+  }
+
+  if (!data || data.length === 0) {
+    return (
+      <div className="text-center text-gray-500 p-8">
+        No items found
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {/* Render data */}
+    </div>
+  )
+}
+```
+
+## Form Pattern (with Zod + React Hook Form)
+
+```typescript
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+
+const schema = z.object({
+  full_name: z.string().min(1, "Name is required"),
+  email: z.string().email().optional().or(z.literal('')),
+  phone: z.string().optional(),
+})
+
+type FormData = z.infer<typeof schema>
+
+export function ContactForm({ initialData, onSuccess }: Props) {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+    reset
+  } = useForm<FormData>({
+    resolver: zodResolver(schema),
+    defaultValues: initialData,
+  })
+
+  const createMutation = useCreateContact()
+
+  const onSubmit = (data: FormData) => {
+    createMutation.mutate(data, {
+      onSuccess: (result) => {
+        reset()
+        onSuccess?.(result)
+      },
+      onError: (error) => {
+        // Handle error (show toast, etc.)
+      },
+    })
+  }
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <div>
+        <label htmlFor="full_name" className="block text-sm font-medium text-gray-700">
+          Full Name *
+        </label>
+        <input
+          {...register('full_name')}
+          type="text"
+          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+        />
+        {errors.full_name && (
+          <p className="mt-1 text-sm text-red-600">{errors.full_name.message}</p>
+        )}
+      </div>
+
+      <button
+        type="submit"
+        disabled={createMutation.isPending}
+        className="w-full bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50"
+      >
+        {createMutation.isPending ? 'Saving...' : 'Save Contact'}
+      </button>
+    </form>
+  )
+}
+```
+
+## React Query Mutation Pattern
+
+```typescript
+export function useUpdateContact() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateContactData }) =>
+      contactApi.update(id, data),
+    onMutate: async (variables) => {
+      // Optimistic update (optional)
+      await queryClient.cancelQueries({ queryKey: ['contacts', variables.id] })
+
+      const previousContact = queryClient.getQueryData(['contacts', variables.id])
+
+      queryClient.setQueryData(['contacts', variables.id], (old: any) => ({
+        ...old,
+        ...variables.data,
+      }))
+
+      return { previousContact }
+    },
+    onError: (err, variables, context) => {
+      // Rollback optimistic update
+      if (context?.previousContact) {
+        queryClient.setQueryData(['contacts', variables.id], context.previousContact)
+      }
+    },
+    onSuccess: (data, variables) => {
+      // Invalidate queries
+      queryClient.invalidateQueries({ queryKey: ['contacts'] })
+      queryClient.invalidateQueries({ queryKey: ['contacts', variables.id] })
+    },
+  })
+}
+```
+
+## Centralized Query Invalidation Pattern
+
+Use the centralized invalidation registry for all mutations. This ensures cross-domain effects are handled correctly.
+
+**Using domain events (preferred):**
+```typescript
+import { invalidateFor } from '@/lib/query-invalidation'
+import { contactKeys } from '@/lib/query-keys'
+
+export function useUpdateLastContacted() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: string) => contactsApi.updateLastContacted(id),
+    onSuccess: updatedContact => {
+      // Optimistic update for the specific contact
+      queryClient.setQueryData(contactKeys.detail(updatedContact.id), updatedContact)
+
+      // Invalidate all affected queries via domain event
+      invalidateFor('contact:touched')
+    },
+  })
+}
+```
+
+**Available domain events:**
+
+| Event | Use When | Invalidates |
+|-------|----------|-------------|
+| `contact:created` | New contact added | Contact lists |
+| `contact:updated` | Contact details changed | Contact lists |
+| `contact:deleted` | Contact removed | Contacts + Reminders |
+| `contact:touched` | Marked as contacted | Contacts + Reminders |
+| `reminder:created` | New reminder | All reminders |
+| `reminder:completed` | Reminder done | All reminders |
+| `reminder:deleted` | Reminder removed | All reminders |
+
+## API Client Pattern
+
+```typescript
+class APIClient {
+  private baseURL: string
+
+  constructor(baseURL: string) {
+    this.baseURL = baseURL
+  }
+
+  private async request<T>(
+    endpoint: string,
+    options: RequestInit = {}
+  ): Promise<T> {
+    const config: RequestInit = {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+    }
+
+    const response = await fetch(`${this.baseURL}${endpoint}`, config)
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.error || `HTTP ${response.status}`)
+    }
+
+    // Handle 204 No Content
+    if (response.status === 204) {
+      return undefined as T
+    }
+
+    const data = await response.json()
+    return data.data || data
+  }
+
+  async get<T>(endpoint: string): Promise<T> {
+    return this.request<T>(endpoint, { method: 'GET' })
+  }
+
+  async post<T>(endpoint: string, data: any): Promise<T> {
+    return this.request<T>(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async put<T>(endpoint: string, data: any): Promise<T> {
+    return this.request<T>(endpoint, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async delete<T = void>(endpoint: string): Promise<T> {
+    return this.request<T>(endpoint, { method: 'DELETE' })
+  }
+}
+
+export const apiClient = new APIClient(
+  process.env.NEXT_PUBLIC_API_URL || ''
+)
+```
+
+## Conditional Rendering Pattern
+
+```typescript
+// Null/undefined checks
+{contact.email && (
+  <a href={`mailto:${contact.email}`} className="text-blue-600">
+    {contact.email}
+  </a>
+)}
+
+// Optional chaining
+<p>{contact.location || 'No location set'}</p>
+
+// Multiple conditions
+{contact.birthday && (
+  <div className="flex items-center gap-2">
+    <CalendarIcon className="w-4 h-4" />
+    <span>{formatDate(contact.birthday)}</span>
+  </div>
+)}
+
+// Conditional classes (with clsx)
+import clsx from 'clsx'
+
+<button
+  className={clsx(
+    'px-4 py-2 rounded-md',
+    isActive ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700',
+    isDisabled && 'opacity-50 cursor-not-allowed'
+  )}
+>
+  Click me
+</button>
+```
+
+## Date Formatting Pattern
+
+```typescript
+export function formatDate(dateString: string): string {
+  const date = new Date(dateString)
+  return new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  }).format(date)
+}
+
+export function formatRelativeTime(dateString: string): string {
+  const date = new Date(dateString)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+
+  if (diffDays === 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  if (diffDays < 7) return `${diffDays} days ago`
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`
+  return `${Math.floor(diffDays / 365)} years ago`
+}
+
+// Usage
+<span>{formatDate(contact.created_at)}</span>
+<span className="text-gray-500">{formatRelativeTime(contact.last_contacted)}</span>
+```

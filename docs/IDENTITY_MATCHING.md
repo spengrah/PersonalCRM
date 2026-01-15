@@ -357,5 +357,5 @@ Identity matching integration requires a running database. See the test infrastr
 
 - [External Sync Infrastructure](../docs/PLAN.md) - Sync framework overview
 - [Contact Methods](../docs/contact-methods-plan.md) - How contact methods are stored
-- [Architecture](../.ai/architecture.md) - System architecture
-- [Patterns](../.ai/patterns.md) - Identity matching code patterns
+- [Architecture](../.ai/guides/architecture.md) - System architecture
+- [Patterns](../.ai/patterns/) - Identity matching code patterns

@@ -130,11 +130,9 @@ test.describe('Imports - Import Action', () => {
     // Verify candidate is visible
     await expect(page.getByText(displayName)).toBeVisible()
 
-    // Click Import on the candidate to open the modal
-    await page
-      .getByRole('button', { name: /Import/i })
-      .first()
-      .click()
+    // Click Import on the specific candidate card (not just any Import button)
+    const card = page.locator('[class*="rounded-lg"]').filter({ hasText: displayName })
+    await card.getByRole('button', { name: /Import/i }).click()
 
     // Verify modal opens in import mode - mode toggle should be visible
     await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()

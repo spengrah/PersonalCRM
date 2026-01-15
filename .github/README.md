@@ -137,7 +137,7 @@ Fixes #123"
 gh pr create --fill
 ```
 
-> **Note:** See [`.ai/rules.md`](.ai/rules.md#2-git-workflow-rules) for full branch naming conventions.
+> **Note:** See [`.ai/rules/core.md`](.ai/rules/core.md) for full branch naming conventions.
 
 ### For Humans
 

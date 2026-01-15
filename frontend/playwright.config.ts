@@ -5,8 +5,8 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  // Use 3 workers in CI for parallelism. Tests without TestAPI isolation are marked serial.
-  workers: process.env.CI ? 3 : undefined,
+  // Use 1 worker to avoid parallel test interference
+  workers: 1,
   reporter: 'html',
   use: {
     baseURL: 'http://localhost:3000',
@@ -52,6 +52,11 @@ export default defineConfig({
       stdout: 'pipe',
       env: {
         ...process.env,
+        // Fallbacks for running playwright directly without make test-e2e
+        DATABASE_URL:
+          process.env.DATABASE_URL ||
+          'postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable',
+        API_KEY: process.env.API_KEY || 'dev-api-key-change-in-production',
         MIGRATIONS_PATH: 'migrations',
         CRM_ENV: 'testing',
         ENABLE_EXTERNAL_SYNC: 'true',

@@ -10,15 +10,15 @@ Since implementation cost is low with AI coding tools (Claude Code, Codex, etc.)
 
 AUTO-APPROVE only if the code meets ALL of these criteria:
 
-- ✓ **No security concerns** (SQL injection, XSS, auth issues, secrets in code, etc.)
-- ✓ **No bugs or unhandled edge cases**
-- ✓ **Comprehensive test coverage** for new/changed code
-- ✓ **Clear, well-documented code** (comments where needed)
-- ✓ **Follows repository conventions** (check `.ai/rules.md`)
-- ✓ **Proper error handling and validation**
-- ✓ **Good performance** (no obvious inefficiencies)
-- ✓ **No TODOs or technical debt introduced**
-- ✓ **No code style inconsistencies**
+- **No security concerns** (SQL injection, XSS, auth issues, secrets in code, etc.)
+- **No bugs or unhandled edge cases**
+- **Comprehensive test coverage** for new/changed code
+- **Clear, well-documented code** (comments where needed)
+- **Follows repository conventions** (check `.ai/rules/core.md`)
+- **Proper error handling and validation**
+- **Good performance** (no obvious inefficiencies)
+- **No TODOs or technical debt introduced**
+- **No code style inconsistencies**
 
 ---
 
@@ -53,8 +53,8 @@ REQUEST CHANGES if ANY of these apply:
 **Architecture:**
 - Poor error handling or validation
 - Missing logging for critical operations
-- Breaks architectural patterns (see `.ai/architecture.md`)
-- Violates conventions in `.ai/rules.md`
+- Breaks architectural patterns (see `.ai/guides/architecture.md`)
+- Violates conventions in `.ai/rules/core.md`
 
 **Completeness:**
 - TODOs or unfinished work
@@ -65,7 +65,7 @@ REQUEST CHANGES if ANY of these apply:
 
 ## Review Process
 
-1. **Read conventions:** Review `.ai/rules.md` for project-specific patterns
+1. **Read conventions:** Review `.ai/rules/core.md` for project-specific patterns
 2. **Check ALL criteria:** Go through each approval criterion
 3. **Default to request changes:** When in doubt, request improvements
 4. **Be specific:** Point to exact files and line numbers
@@ -100,7 +100,8 @@ RESULT=FAIL
 ## Convention Reference
 
 For detailed development conventions, see:
-- **[`.ai/rules.md`](.ai/rules.md)** - Critical rules and patterns
-- **[`.ai/development.md`](.ai/development.md)** - Feature development guide
-- **[`.ai/architecture.md`](.ai/architecture.md)** - Architecture context
-- **[`.ai/patterns.md`](.ai/patterns.md)** - Common code patterns
+- **`.ai/rules/core.md`** - Critical rules and patterns
+- **`.ai/rules/testing.md`** - Testing requirements
+- **`.ai/guides/feature-development.md`** - Feature development guide
+- **`.ai/guides/architecture.md`** - Architecture context
+- **`.ai/patterns/`** - Common code patterns
