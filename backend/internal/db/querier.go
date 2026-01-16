@@ -200,8 +200,9 @@ type Querier interface {
 	UpdateTag(ctx context.Context, arg UpdateTagParams) (*Tag, error)
 	UpdateTimeEntry(ctx context.Context, arg UpdateTimeEntryParams) (*TimeEntry, error)
 	// Insert or update a calendar event from Google Calendar
-	// Note: last_contacted_updated is reset when matched_contact_ids changes so newly matched
-	// contacts can be processed. Otherwise we preserve the processed state to avoid duplicates.
+	// Note: last_contacted_updated is reset when matched_contact_ids changes (order-insensitive)
+	// so newly matched contacts can be processed. Otherwise we preserve the processed state
+	// to avoid duplicates.
 	UpsertCalendarEvent(ctx context.Context, arg UpsertCalendarEventParams) (*CalendarEvent, error)
 	UpsertExternalContact(ctx context.Context, arg UpsertExternalContactParams) (*ExternalContact, error)
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)

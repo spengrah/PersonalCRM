@@ -53,6 +53,12 @@ func TestCalendarEventUpsertResetsLastContactedUpdated(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
 
+	contactTwo, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: "Calendar Event Match Reset Two",
+	})
+	require.NoError(t, err)
+	defer func() { _ = contactRepo.HardDeleteContact(ctx, contactTwo.ID) }()
+
 	accountID := "calendar-reset@example.com"
 	defer func() { _ = calendarRepo.DeleteEventsByAccount(ctx, accountID) }()
 
@@ -62,65 +68,114 @@ func TestCalendarEventUpsertResetsLastContactedUpdated(t *testing.T) {
 	title := "Test Meeting"
 	userResponse := "accepted"
 
-	req := repository.UpsertCalendarEventRequest{
-		GcalEventID:          "event-" + uuid.NewString(),
-		GcalCalendarID:       "primary",
-		GoogleAccountID:      accountID,
-		Title:                &title,
-		StartTime:            startTime,
-		EndTime:              endTime,
-		AllDay:               false,
-		Status:               "confirmed",
-		UserResponse:         &userResponse,
-		Attendees:            []repository.Attendee{},
-		MatchedContactIDs:    []uuid.UUID{},
-		SyncedAt:             now,
-		LastContactedUpdated: true,
+	makeRequest := func(eventID string, matched []uuid.UUID, updated bool) repository.UpsertCalendarEventRequest {
+		return repository.UpsertCalendarEventRequest{
+			GcalEventID:          eventID,
+			GcalCalendarID:       "primary",
+			GoogleAccountID:      accountID,
+			Title:                &title,
+			StartTime:            startTime,
+			EndTime:              endTime,
+			AllDay:               false,
+			Status:               "confirmed",
+			UserResponse:         &userResponse,
+			Attendees:            []repository.Attendee{},
+			MatchedContactIDs:    matched,
+			SyncedAt:             now,
+			LastContactedUpdated: updated,
+		}
 	}
 
-	_, err = calendarRepo.Upsert(ctx, req)
-	require.NoError(t, err)
+	t.Run("ResetsOnNewMatch", func(t *testing.T) {
+		eventID := "event-" + uuid.NewString()
+		req := makeRequest(eventID, []uuid.UUID{}, true)
 
-	req.MatchedContactIDs = []uuid.UUID{contact.ID}
-	req.LastContactedUpdated = false
+		_, err = calendarRepo.Upsert(ctx, req)
+		require.NoError(t, err)
 
-	_, err = calendarRepo.Upsert(ctx, req)
-	require.NoError(t, err)
+		req.MatchedContactIDs = []uuid.UUID{contact.ID}
+		req.LastContactedUpdated = false
 
-	updatedEvent, err := calendarRepo.GetByGcalID(ctx, req.GcalEventID, req.GcalCalendarID, req.GoogleAccountID)
-	require.NoError(t, err)
-	assert.False(t, updatedEvent.LastContactedUpdated)
+		_, err = calendarRepo.Upsert(ctx, req)
+		require.NoError(t, err)
 
-	stableEventID := "event-" + uuid.NewString()
-	stableReq := repository.UpsertCalendarEventRequest{
-		GcalEventID:          stableEventID,
-		GcalCalendarID:       "primary",
-		GoogleAccountID:      accountID,
-		Title:                &title,
-		StartTime:            startTime,
-		EndTime:              endTime,
-		AllDay:               false,
-		Status:               "confirmed",
-		UserResponse:         &userResponse,
-		Attendees:            []repository.Attendee{},
-		MatchedContactIDs:    []uuid.UUID{contact.ID},
-		SyncedAt:             now,
-		LastContactedUpdated: true,
-	}
+		updatedEvent, err := calendarRepo.GetByGcalID(ctx, req.GcalEventID, req.GcalCalendarID, req.GoogleAccountID)
+		require.NoError(t, err)
+		assert.False(t, updatedEvent.LastContactedUpdated)
+	})
 
-	_, err = calendarRepo.Upsert(ctx, stableReq)
-	require.NoError(t, err)
+	t.Run("ResetsOnAddedMatch", func(t *testing.T) {
+		eventID := "event-" + uuid.NewString()
+		req := makeRequest(eventID, []uuid.UUID{contact.ID}, true)
 
-	stableReq.LastContactedUpdated = false
-	_, err = calendarRepo.Upsert(ctx, stableReq)
-	require.NoError(t, err)
+		_, err = calendarRepo.Upsert(ctx, req)
+		require.NoError(t, err)
 
-	stableEvent, err := calendarRepo.GetByGcalID(ctx, stableReq.GcalEventID, stableReq.GcalCalendarID, stableReq.GoogleAccountID)
-	require.NoError(t, err)
-	assert.True(t, stableEvent.LastContactedUpdated)
+		req.MatchedContactIDs = []uuid.UUID{contact.ID, contactTwo.ID}
+		req.LastContactedUpdated = false
+
+		_, err = calendarRepo.Upsert(ctx, req)
+		require.NoError(t, err)
+
+		updatedEvent, err := calendarRepo.GetByGcalID(ctx, req.GcalEventID, req.GcalCalendarID, req.GoogleAccountID)
+		require.NoError(t, err)
+		assert.False(t, updatedEvent.LastContactedUpdated)
+	})
+
+	t.Run("ResetsOnRemovedMatch", func(t *testing.T) {
+		eventID := "event-" + uuid.NewString()
+		req := makeRequest(eventID, []uuid.UUID{contact.ID, contactTwo.ID}, true)
+
+		_, err = calendarRepo.Upsert(ctx, req)
+		require.NoError(t, err)
+
+		req.MatchedContactIDs = []uuid.UUID{contact.ID}
+		req.LastContactedUpdated = false
+
+		_, err = calendarRepo.Upsert(ctx, req)
+		require.NoError(t, err)
+
+		updatedEvent, err := calendarRepo.GetByGcalID(ctx, req.GcalEventID, req.GcalCalendarID, req.GoogleAccountID)
+		require.NoError(t, err)
+		assert.False(t, updatedEvent.LastContactedUpdated)
+	})
+
+	t.Run("PreservesOnReorder", func(t *testing.T) {
+		eventID := "event-" + uuid.NewString()
+		req := makeRequest(eventID, []uuid.UUID{contact.ID, contactTwo.ID}, true)
+
+		_, err = calendarRepo.Upsert(ctx, req)
+		require.NoError(t, err)
+
+		req.MatchedContactIDs = []uuid.UUID{contactTwo.ID, contact.ID}
+		req.LastContactedUpdated = false
+
+		_, err = calendarRepo.Upsert(ctx, req)
+		require.NoError(t, err)
+
+		updatedEvent, err := calendarRepo.GetByGcalID(ctx, req.GcalEventID, req.GcalCalendarID, req.GoogleAccountID)
+		require.NoError(t, err)
+		assert.True(t, updatedEvent.LastContactedUpdated)
+	})
+
+	t.Run("PreservesOnSameMatches", func(t *testing.T) {
+		eventID := "event-" + uuid.NewString()
+		req := makeRequest(eventID, []uuid.UUID{contact.ID}, true)
+
+		_, err = calendarRepo.Upsert(ctx, req)
+		require.NoError(t, err)
+
+		req.LastContactedUpdated = false
+		_, err = calendarRepo.Upsert(ctx, req)
+		require.NoError(t, err)
+
+		stableEvent, err := calendarRepo.GetByGcalID(ctx, req.GcalEventID, req.GcalCalendarID, req.GoogleAccountID)
+		require.NoError(t, err)
+		assert.True(t, stableEvent.LastContactedUpdated)
+	})
 }
 
-func TestUpdateContactLastContactedIfLater(t *testing.T) {
+func TestUpdateContactLastContactedIfLater_OnlyUpdatesWhenLater(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}

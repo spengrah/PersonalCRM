@@ -206,6 +206,10 @@ e2e-db:
 		docker exec crm-postgres psql -U crm_user -d postgres -c "CREATE DATABASE personal_crm_test;" 2>/dev/null; \
 		docker exec crm-postgres psql -U crm_user -d personal_crm_test -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; \
 	else \
+		if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='crm_user';" | grep -q 1; then \
+			echo "crm_user role missing; run scripts/start-postgres-native.sh first" >&2; \
+			exit 1; \
+		fi; \
 		sudo -u postgres psql -c "DROP DATABASE IF EXISTS personal_crm_test;" 2>/dev/null || true; \
 		sudo -u postgres psql -c "CREATE DATABASE personal_crm_test OWNER crm_user;" 2>/dev/null; \
 		sudo -u postgres psql -d personal_crm_test -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; \

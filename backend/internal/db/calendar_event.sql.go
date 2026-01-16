@@ -489,7 +489,8 @@ DO UPDATE SET
     attendees = EXCLUDED.attendees,
     matched_contact_ids = EXCLUDED.matched_contact_ids,
     last_contacted_updated = CASE
-        WHEN calendar_event.matched_contact_ids IS DISTINCT FROM EXCLUDED.matched_contact_ids
+        WHEN array(SELECT unnest(calendar_event.matched_contact_ids) ORDER BY 1)
+          IS DISTINCT FROM array(SELECT unnest(EXCLUDED.matched_contact_ids) ORDER BY 1)
         THEN FALSE
         ELSE calendar_event.last_contacted_updated
     END,
@@ -520,8 +521,9 @@ type UpsertCalendarEventParams struct {
 }
 
 // Insert or update a calendar event from Google Calendar
-// Note: last_contacted_updated is reset when matched_contact_ids changes so newly matched
-// contacts can be processed. Otherwise we preserve the processed state to avoid duplicates.
+// Note: last_contacted_updated is reset when matched_contact_ids changes (order-insensitive)
+// so newly matched contacts can be processed. Otherwise we preserve the processed state
+// to avoid duplicates.
 func (q *Queries) UpsertCalendarEvent(ctx context.Context, arg UpsertCalendarEventParams) (*CalendarEvent, error) {
 	row := q.db.QueryRow(ctx, UpsertCalendarEvent,
 		arg.GcalEventID,
