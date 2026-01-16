@@ -1671,17 +1671,18 @@ func TestProcessEvent_HandlesEmptyHtmlLink(t *testing.T) {
 }
 
 // ========================================
-// Issue #123: Blocked Calendar Domain Tests
+// Issue #123/#185: Blocked Calendar Email Tests
 // ========================================
 
-// TestIsBlockedCalendarDomain tests the blocked calendar domain filter
-func TestIsBlockedCalendarDomain(t *testing.T) {
+// TestIsBlockedCalendarEmail_Legacy tests the blocked calendar email filter
+// (originally for Issue #123, expanded for Issue #185)
+func TestIsBlockedCalendarEmail_Legacy(t *testing.T) {
 	tests := []struct {
 		name     string
 		email    string
 		expected bool
 	}{
-		// Blocked domains
+		// Blocked Google Calendar resource domains
 		{"group calendar domain", "u1958p3u4pd7qfvlf9n9416iac@group.calendar.google.com", true},
 		{"resource calendar domain", "room-123@resource.calendar.google.com", true},
 		{"generic calendar domain", "calendar-abc@calendar.google.com", true},
@@ -1705,7 +1706,7 @@ func TestIsBlockedCalendarDomain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isBlockedCalendarDomain(tt.email)
+			result := isBlockedCalendarEmail(tt.email)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1966,4 +1967,131 @@ func TestProcessEvent_SkipsEventsWhereUserNotAttendee(t *testing.T) {
 
 	// User is not in attendees or organizer, so response should be nil
 	assert.Nil(t, userResponse)
+}
+
+// ========================================
+// isBlockedCalendarEmail Tests
+// ========================================
+
+// TestIsBlockedCalendarEmail_BlockedDomains verifies that scheduling service and
+// calendar resource domains are blocked
+func TestIsBlockedCalendarEmail_BlockedDomains(t *testing.T) {
+	blockedEmails := []string{
+		// Google Calendar resources
+		"room@resource.calendar.google.com",
+		"team@group.calendar.google.com",
+		"holidays@calendar.google.com",
+		"events@group.v.calendar.google.com",
+		"bryan%cnslabs.io@gtempaccount.com", // Google temp account
+
+		// Scheduling services
+		"noreply@calendly.com",
+		"calendar-invite@lu.ma",
+		"notifications@cal.com",
+		"booking@savvycal.com",
+		"meeting@acuityscheduling.com",
+		"scheduler@hubspot.com",
+		"invite@oncehub.com",
+		"booking@youcanbook.me",
+		"poll@doodle.com",
+		"meeting@meetingbird.com",
+	}
+
+	for _, email := range blockedEmails {
+		t.Run(email, func(t *testing.T) {
+			assert.True(t, isBlockedCalendarEmail(email),
+				"Expected %s to be blocked", email)
+		})
+	}
+}
+
+// TestIsBlockedCalendarEmail_BlockedPrefixes verifies that system email prefixes are blocked
+func TestIsBlockedCalendarEmail_BlockedPrefixes(t *testing.T) {
+	blockedEmails := []string{
+		"noreply@example.com",
+		"no-reply@company.org",
+		"no_reply@startup.io",
+		"do-not-reply@bigcorp.com",
+		"donotreply@service.net",
+		"calendar-invite@meeting.com",
+		"notifications@alerts.io",
+		"mailer-daemon@mail.example.com",
+		"postmaster@domain.com",
+		// With + modifier
+		"noreply+tag@example.com",
+		"no-reply+unsubscribe@company.org",
+	}
+
+	for _, email := range blockedEmails {
+		t.Run(email, func(t *testing.T) {
+			assert.True(t, isBlockedCalendarEmail(email),
+				"Expected %s to be blocked", email)
+		})
+	}
+}
+
+// TestIsBlockedCalendarEmail_AllowedEmails verifies that legitimate emails are not blocked
+func TestIsBlockedCalendarEmail_AllowedEmails(t *testing.T) {
+	allowedEmails := []string{
+		"alice@example.com",
+		"bob.smith@company.org",
+		"jane+work@gmail.com",
+		"contact@startup.io",
+		"hello@business.com",
+		"eugene@golem.foundation",
+		"spencer@spengrah.xyz",
+		// Emails that might look suspicious but are valid
+		"noreplyman@example.com",    // Contains "noreply" but not as prefix
+		"john.noreply@company.com",  // Contains "noreply" but not as prefix
+		"calendar@mycompany.com",    // Calendar in name but not a blocked domain
+		"notifications.team@co.com", // Contains "notifications" but as part of name
+	}
+
+	for _, email := range allowedEmails {
+		t.Run(email, func(t *testing.T) {
+			assert.False(t, isBlockedCalendarEmail(email),
+				"Expected %s to NOT be blocked", email)
+		})
+	}
+}
+
+// TestIsBlockedCalendarEmail_CaseInsensitive verifies case-insensitive matching
+func TestIsBlockedCalendarEmail_CaseInsensitive(t *testing.T) {
+	blockedEmails := []string{
+		"NOREPLY@calendly.com",
+		"NoReply@CALENDLY.COM",
+		"Calendar-Invite@Lu.Ma",
+		"NOTIFICATIONS@Example.Com",
+	}
+
+	for _, email := range blockedEmails {
+		t.Run(email, func(t *testing.T) {
+			assert.True(t, isBlockedCalendarEmail(email),
+				"Expected %s to be blocked (case-insensitive)", email)
+		})
+	}
+}
+
+// TestIsBlockedCalendarEmail_EdgeCases verifies edge case handling
+func TestIsBlockedCalendarEmail_EdgeCases(t *testing.T) {
+	testCases := []struct {
+		email    string
+		blocked  bool
+		scenario string
+	}{
+		{"", false, "empty string"},
+		{"  noreply@example.com  ", true, "with whitespace"},
+		{"@calendly.com", true, "missing local part but blocked domain"},
+		{"noreply@", true, "blocked prefix even with missing domain"},
+		{"noreply", false, "no @ symbol"},
+		{"user@unknowndomain.com", false, "regular unknown domain"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.scenario, func(t *testing.T) {
+			result := isBlockedCalendarEmail(tc.email)
+			assert.Equal(t, tc.blocked, result,
+				"For %q expected blocked=%v", tc.email, tc.blocked)
+		})
+	}
 }
