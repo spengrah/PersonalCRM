@@ -1,8 +1,8 @@
 -- name: UpsertCalendarEvent :one
 -- Insert or update a calendar event from Google Calendar
--- Note: last_contacted_updated is intentionally NOT included in the ON CONFLICT UPDATE clause.
--- Once an event has been processed (last_contacted_updated = TRUE), we preserve that state
--- even if the event is re-synced with updated details. This prevents duplicate last_contacted updates.
+-- Note: last_contacted_updated is reset when matched_contact_ids changes (order-insensitive)
+-- so newly matched contacts can be processed. Otherwise we preserve the processed state
+-- to avoid duplicates.
 INSERT INTO calendar_event (
     gcal_event_id,
     gcal_calendar_id,
@@ -37,6 +37,12 @@ DO UPDATE SET
     organizer_email = EXCLUDED.organizer_email,
     attendees = EXCLUDED.attendees,
     matched_contact_ids = EXCLUDED.matched_contact_ids,
+    last_contacted_updated = CASE
+        WHEN array(SELECT unnest(calendar_event.matched_contact_ids) ORDER BY 1)
+          IS DISTINCT FROM array(SELECT unnest(EXCLUDED.matched_contact_ids) ORDER BY 1)
+        THEN FALSE
+        ELSE calendar_event.last_contacted_updated
+    END,
     synced_at = EXCLUDED.synced_at,
     html_link = EXCLUDED.html_link,
     updated_at = NOW()

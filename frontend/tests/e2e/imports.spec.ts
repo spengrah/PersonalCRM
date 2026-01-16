@@ -951,8 +951,9 @@ test.describe('Imports - Cadence Selector (Issue #152)', () => {
     await page.waitForLoadState('networkidle')
 
     // Verify cadence is now weekly - look for it in the contact detail section
-    await expect(page.getByText('Contact cadence')).toBeVisible({ timeout: 10000 })
-    await expect(page.getByText('weekly')).toBeVisible({ timeout: 5000 })
+    const cadenceValue = page.getByTestId('contact-cadence')
+    await expect(cadenceValue).toBeVisible({ timeout: 10000 })
+    await expect(cadenceValue).toContainText('weekly', { timeout: 5000 })
   })
 
   test('should default to no cadence in import mode', async ({ page }) => {
@@ -1132,7 +1133,11 @@ test.describe('Imports - Name Editing (Issue #155)', () => {
     await nameInput.press('Escape')
 
     // Verify original name is restored
-    await expect(modal.locator('h3.text-lg').filter({ hasText: new RegExp(`${testApi.prefix}-Escape Key Test`) })).toBeVisible()
+    await expect(
+      modal
+        .locator('h3.text-lg')
+        .filter({ hasText: new RegExp(`${testApi.prefix}-Escape Key Test`) })
+    ).toBeVisible()
 
     // Close modal
     await page.getByRole('button', { name: /Cancel/i }).click()

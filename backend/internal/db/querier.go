@@ -179,6 +179,7 @@ type Querier interface {
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
+	UpdateContactLastContactedIfLater(ctx context.Context, arg UpdateContactLastContactedIfLaterParams) error
 	UpdateContactMethodValue(ctx context.Context, arg UpdateContactMethodValueParams) (*ContactMethod, error)
 	UpdateExternalContactDuplicate(ctx context.Context, arg UpdateExternalContactDuplicateParams) error
 	UpdateExternalContactMatch(ctx context.Context, arg UpdateExternalContactMatchParams) (*ExternalContact, error)
@@ -199,9 +200,9 @@ type Querier interface {
 	UpdateTag(ctx context.Context, arg UpdateTagParams) (*Tag, error)
 	UpdateTimeEntry(ctx context.Context, arg UpdateTimeEntryParams) (*TimeEntry, error)
 	// Insert or update a calendar event from Google Calendar
-	// Note: last_contacted_updated is intentionally NOT included in the ON CONFLICT UPDATE clause.
-	// Once an event has been processed (last_contacted_updated = TRUE), we preserve that state
-	// even if the event is re-synced with updated details. This prevents duplicate last_contacted updates.
+	// Note: last_contacted_updated is reset when matched_contact_ids changes (order-insensitive)
+	// so newly matched contacts can be processed. Otherwise we preserve the processed state
+	// to avoid duplicates.
 	UpsertCalendarEvent(ctx context.Context, arg UpsertCalendarEventParams) (*CalendarEvent, error)
 	UpsertExternalContact(ctx context.Context, arg UpsertExternalContactParams) (*ExternalContact, error)
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)

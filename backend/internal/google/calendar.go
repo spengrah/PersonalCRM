@@ -54,7 +54,7 @@ type calendarRepoInterface interface {
 
 // contactRepoInterface defines the methods needed from contact repository (for testability)
 type contactRepoInterface interface {
-	UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted time.Time) error
+	UpdateContactLastContactedIfLater(ctx context.Context, id uuid.UUID, lastContacted time.Time) error
 	FindSimilarContacts(ctx context.Context, name string, threshold float64, limit int32) ([]repository.ContactMatch, error)
 }
 
@@ -664,7 +664,7 @@ func (p *CalendarSyncProvider) updateLastContactedForPastEvents(ctx context.Cont
 	for _, event := range events {
 		// Update last_contacted for each matched contact
 		for _, contactID := range event.MatchedContactIDs {
-			if err := p.contactRepo.UpdateContactLastContacted(ctx, contactID, event.EndTime); err != nil {
+			if err := p.contactRepo.UpdateContactLastContactedIfLater(ctx, contactID, event.EndTime); err != nil {
 				logger.Warn().
 					Err(err).
 					Str("contactId", contactID.String()).

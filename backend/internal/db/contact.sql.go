@@ -582,3 +582,20 @@ func (q *Queries) UpdateContactLastContacted(ctx context.Context, arg UpdateCont
 	_, err := q.db.Exec(ctx, UpdateContactLastContacted, arg.ID, arg.LastContacted)
 	return err
 }
+
+const UpdateContactLastContactedIfLater = `-- name: UpdateContactLastContactedIfLater :exec
+UPDATE contact SET
+  last_contacted = GREATEST(COALESCE(last_contacted, '1970-01-01'::timestamptz), $2),
+  updated_at = NOW()
+WHERE id = $1 AND deleted_at IS NULL
+`
+
+type UpdateContactLastContactedIfLaterParams struct {
+	ID            pgtype.UUID        `json:"id"`
+	LastContacted pgtype.Timestamptz `json:"last_contacted"`
+}
+
+func (q *Queries) UpdateContactLastContactedIfLater(ctx context.Context, arg UpdateContactLastContactedIfLaterParams) error {
+	_, err := q.db.Exec(ctx, UpdateContactLastContactedIfLater, arg.ID, arg.LastContacted)
+	return err
+}

@@ -82,6 +82,10 @@ func (m *mockContactRepo) UpdateContactLastContacted(ctx context.Context, id uui
 	return m.updateLastContactedError
 }
 
+func (m *mockContactRepo) UpdateContactLastContactedIfLater(ctx context.Context, id uuid.UUID, lastContacted time.Time) error {
+	return m.UpdateContactLastContacted(ctx, id, lastContacted)
+}
+
 func (m *mockContactRepo) FindSimilarContacts(ctx context.Context, name string, threshold float64, limit int32) ([]repository.ContactMatch, error) {
 	m.findSimilarCalled = true
 	m.findSimilarName = name
