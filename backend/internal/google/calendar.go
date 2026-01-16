@@ -35,14 +35,30 @@ const (
 	CalendarFutureSyncDays = 30
 )
 
-// blockedCalendarDomains contains email domains that represent calendar resources,
-// not real people. These are filtered out during calendar sync to avoid creating
-// import candidates for meeting rooms, group calendars, and other non-person entities.
+// blockedCalendarDomains contains email domains that are always system/resource
+// accounts, never real people. We only block domains where ALL emails are system
+// accounts - not company domains where employees might have legitimate addresses.
 var blockedCalendarDomains = []string{
+	// Google Calendar resources (always system, never real people)
 	"group.calendar.google.com",    // Group/secondary calendars
 	"resource.calendar.google.com", // Room/resource calendars
 	"calendar.google.com",          // Generic calendar resources
 	"group.v.calendar.google.com",  // System calendars (holidays, birthdays)
+	"gtempaccount.com",             // Google temp accounts for external invitees
+}
+
+// blockedEmailPrefixes contains email local-part prefixes that indicate system
+// or automated emails rather than real people.
+var blockedEmailPrefixes = []string{
+	"noreply",
+	"no-reply",
+	"no_reply",
+	"do-not-reply",
+	"donotreply",
+	"calendar-invite",
+	"notifications",
+	"mailer-daemon",
+	"postmaster",
 }
 
 // calendarRepoInterface defines the methods needed from calendar repository (for testability)
@@ -483,11 +499,11 @@ func (p *CalendarSyncProvider) matchAttendees(
 			continue
 		}
 
-		// Skip calendar resource domains (rooms, group calendars, etc.)
-		if isBlockedCalendarDomain(attendee.Email) {
+		// Skip blocked emails (scheduling services, calendar resources, noreply, etc.)
+		if isBlockedCalendarEmail(attendee.Email) {
 			logger.Debug().
 				Str("email", attendee.Email).
-				Msg("skipping attendee from blocked calendar domain")
+				Msg("skipping blocked calendar email")
 			continue
 		}
 
@@ -760,15 +776,30 @@ func ptrToStr(s *string) string {
 	return *s
 }
 
-// isBlockedCalendarDomain checks if an email address belongs to a blocked calendar domain.
-// These domains represent calendar resources (rooms, group calendars) rather than real people.
-func isBlockedCalendarDomain(email string) bool {
+// isBlockedCalendarEmail checks if an email address should be filtered out from
+// calendar sync. This includes calendar resources (rooms, group calendars),
+// scheduling services, and system/automated email addresses.
+func isBlockedCalendarEmail(email string) bool {
 	email = strings.ToLower(strings.TrimSpace(email))
+
+	// Check blocked domains (scheduling services, calendar resources)
 	for _, domain := range blockedCalendarDomains {
 		if strings.HasSuffix(email, "@"+domain) {
 			return true
 		}
 	}
+
+	// Check blocked prefixes (noreply, notifications, etc.)
+	parts := strings.SplitN(email, "@", 2)
+	if len(parts) == 2 {
+		localPart := parts[0]
+		for _, prefix := range blockedEmailPrefixes {
+			if localPart == prefix || strings.HasPrefix(localPart, prefix+"+") {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 
