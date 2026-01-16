@@ -1295,6 +1295,75 @@ func TestProcessEvent_ExtractsHtmlLink(t *testing.T) {
 	assert.Equal(t, "https://www.google.com/calendar/event?eid=abc123", *mockCalRepo.upsertRequest.HtmlLink)
 }
 
+// TestProcessEvent_MatchesOrganizerNotInAttendees verifies that when an organizer is not in the
+// attendees list, they are still matched to a contact (fix for issue #183)
+func TestProcessEvent_MatchesOrganizerNotInAttendees(t *testing.T) {
+	ctx := context.Background()
+
+	organizerContactID := uuid.New()
+
+	mockCalRepo := &mockCalendarRepo{}
+	mockContactRepo := &mockContactRepo{}
+	mockIdentity := &mockIdentityService{
+		matchOrCreateResults: map[string]*service.MatchResult{
+			"eugene@golem.foundation": {ContactID: &organizerContactID, MatchType: "exact"},
+		},
+	}
+
+	provider := newTestProvider(mockCalRepo, mockContactRepo, mockIdentity)
+
+	// Recreate the exact scenario from issue #183:
+	// Event "Spencer<>Eugene" where Eugene organized but isn't in attendees
+	event := &calendar.Event{
+		Id:       "spencer-eugene-meeting",
+		Summary:  "Spencer<>Eugene",
+		Status:   "confirmed",
+		HtmlLink: "https://calendar.google.com/event?eid=abc123",
+		Start: &calendar.EventDateTime{
+			DateTime: "2025-12-23T10:00:00Z",
+		},
+		End: &calendar.EventDateTime{
+			DateTime: "2025-12-23T11:00:00Z",
+		},
+		Organizer: &calendar.EventOrganizer{
+			Email:       "eugene@golem.foundation",
+			DisplayName: "Eugene",
+		},
+		Attendees: []*calendar.EventAttendee{
+			{
+				Email:          "hello@spengrah.xyz",
+				DisplayName:    "Spencer",
+				Self:           true,
+				ResponseStatus: "accepted",
+			},
+			// Note: Eugene is NOT in the attendees list
+		},
+	}
+
+	err := provider.processEvent(ctx, event, "hello@spengrah.xyz")
+
+	assert.NoError(t, err)
+	assert.True(t, mockCalRepo.upsertCalled, "Upsert should be called")
+	assert.NotNil(t, mockCalRepo.upsertRequest, "Upsert request should not be nil")
+
+	// Verify the organizer was matched even though they weren't in attendees
+	assert.Len(t, mockCalRepo.upsertRequest.MatchedContactIDs, 1,
+		"Organizer should be matched even when not in attendees list")
+	assert.Equal(t, organizerContactID, mockCalRepo.upsertRequest.MatchedContactIDs[0],
+		"Matched contact should be the organizer's contact")
+
+	// Verify the identity service was called with the organizer's email
+	assert.True(t, mockIdentity.matchOrCreateCalled, "Identity service should be called")
+	var foundOrganizerCall bool
+	for _, req := range mockIdentity.matchOrCreateRequests {
+		if req.RawIdentifier == "eugene@golem.foundation" {
+			foundOrganizerCall = true
+			break
+		}
+	}
+	assert.True(t, foundOrganizerCall, "Identity service should be called with organizer email")
+}
+
 // ========================================
 // storeUnmatchedAttendee Tests
 // ========================================
