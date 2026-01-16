@@ -66,6 +66,7 @@ PostgreSQL
 
 | Mistake | Fix |
 |---------|-----|
+| `make test` from subdirectory | Run `make` commands from project root |
 | `go test ./backend/...` | Use `make test-unit` or `cd backend && go test` |
 | `npm install` | Use `bun install` |
 | `sqlc generate` | Use `make sqlc` (sqlc is in ~/go/bin) |
