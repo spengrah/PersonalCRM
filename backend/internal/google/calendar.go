@@ -407,7 +407,10 @@ func (p *CalendarSyncProvider) getUserResponse(event *calendar.Event, accountID 
 	return nil
 }
 
-// buildAttendeeList builds the attendee list for storage
+// buildAttendeeList builds the attendee list for storage.
+// This includes all attendees from the event plus the organizer if they're not
+// already in the attendee list (Google Calendar sometimes omits the organizer
+// from the attendees array).
 func (p *CalendarSyncProvider) buildAttendeeList(event *calendar.Event, accountID string) []repository.Attendee {
 	attendees := make([]repository.Attendee, 0, len(event.Attendees))
 
@@ -422,6 +425,35 @@ func (p *CalendarSyncProvider) buildAttendeeList(event *calendar.Event, accountI
 			Self:         isSelf,
 			Organizer:    isOrganizer,
 		})
+	}
+
+	// Include organizer if not already in attendees list (Google Calendar sometimes
+	// omits the organizer from the attendees array, but we want to match them too)
+	if event.Organizer != nil && event.Organizer.Email != "" {
+		organizerEmail := event.Organizer.Email
+		// Check both Organizer.Self flag and email match - the Self flag handles
+		// aliases and delegated calendars where email may differ from accountID
+		organizerIsSelf := event.Organizer.Self || strings.EqualFold(organizerEmail, accountID)
+
+		// Check if organizer is already in the attendees list
+		organizerInAttendees := false
+		for _, a := range attendees {
+			if strings.EqualFold(a.Email, organizerEmail) {
+				organizerInAttendees = true
+				break
+			}
+		}
+
+		// Add organizer as attendee if not self and not already in list
+		if !organizerIsSelf && !organizerInAttendees {
+			attendees = append(attendees, repository.Attendee{
+				Email:        organizerEmail,
+				DisplayName:  event.Organizer.DisplayName,
+				ResponseType: "", // Organizers don't have a response status
+				Self:         false,
+				Organizer:    true,
+			})
+		}
 	}
 
 	return attendees

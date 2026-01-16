@@ -344,18 +344,24 @@ func TestMatchAttendees_SkipsEmptyEmails(t *testing.T) {
 	assert.Equal(t, "valid@example.com", validAttendees[0].Email)
 }
 
-// TestBuildAttendeeList_EmptyAttendees verifies behavior with no attendees
+// TestBuildAttendeeList_EmptyAttendees verifies behavior with no attendees but an organizer
 func TestBuildAttendeeList_EmptyAttendees(t *testing.T) {
 	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
-		Organizer: &calendar.EventOrganizer{Email: "organizer@example.com"},
+		Organizer: &calendar.EventOrganizer{Email: "organizer@example.com", DisplayName: "Organizer"},
 		Attendees: []*calendar.EventAttendee{},
 	}
 
 	attendees := provider.buildAttendeeList(event, accountID)
-	assert.Empty(t, attendees)
+
+	// Organizer should be included even when not in attendees list
+	assert.Len(t, attendees, 1)
+	assert.Equal(t, "organizer@example.com", attendees[0].Email)
+	assert.Equal(t, "Organizer", attendees[0].DisplayName)
+	assert.True(t, attendees[0].Organizer)
+	assert.False(t, attendees[0].Self)
 }
 
 // TestEventStatusMapping verifies all event status values are handled
@@ -472,6 +478,221 @@ func TestBuildAttendeeList_OrganizerIdentification(t *testing.T) {
 	}
 	assert.NotNil(t, bob)
 	assert.False(t, bob.Organizer, "Bob should not be marked as organizer")
+}
+
+// TestBuildAttendeeList_OrganizerNotInAttendees verifies organizer is added when not in attendees list
+// This is the fix for issue #183 - organizers who aren't also attendees should still be matched
+func TestBuildAttendeeList_OrganizerNotInAttendees(t *testing.T) {
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
+	accountID := "user@example.com"
+
+	// Event where organizer (Eugene) is NOT in the attendees list
+	// This matches the bug report example: Spencer<>Eugene meeting
+	event := &calendar.Event{
+		Organizer: &calendar.EventOrganizer{
+			Email:       "eugene@golem.foundation",
+			DisplayName: "Eugene",
+		},
+		Attendees: []*calendar.EventAttendee{
+			{
+				Email:          "hello@spengrah.xyz",
+				DisplayName:    "Spencer",
+				Self:           true,
+				ResponseStatus: "accepted",
+			},
+		},
+	}
+
+	attendees := provider.buildAttendeeList(event, accountID)
+
+	// Should have 2 attendees: Spencer (self) + Eugene (organizer added)
+	assert.Len(t, attendees, 2)
+
+	// Find Eugene (organizer who was added)
+	var eugene *repository.Attendee
+	for i := range attendees {
+		if attendees[i].Email == "eugene@golem.foundation" {
+			eugene = &attendees[i]
+			break
+		}
+	}
+	assert.NotNil(t, eugene, "Organizer Eugene should be in attendees list")
+	assert.Equal(t, "Eugene", eugene.DisplayName)
+	assert.True(t, eugene.Organizer)
+	assert.False(t, eugene.Self)
+	assert.Equal(t, "", eugene.ResponseType) // Organizers don't have response status
+}
+
+// TestBuildAttendeeList_OrganizerAlreadyInAttendees verifies organizer is not duplicated
+func TestBuildAttendeeList_OrganizerAlreadyInAttendees(t *testing.T) {
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
+	accountID := "user@example.com"
+
+	// Event where organizer IS in the attendees list
+	event := &calendar.Event{
+		Organizer: &calendar.EventOrganizer{
+			Email:       "organizer@example.com",
+			DisplayName: "Organizer",
+		},
+		Attendees: []*calendar.EventAttendee{
+			{
+				Email:          "user@example.com",
+				Self:           true,
+				ResponseStatus: "accepted",
+			},
+			{
+				Email:          "organizer@example.com",
+				DisplayName:    "Organizer",
+				ResponseStatus: "accepted",
+			},
+		},
+	}
+
+	attendees := provider.buildAttendeeList(event, accountID)
+
+	// Should only have 2 attendees - organizer should NOT be duplicated
+	assert.Len(t, attendees, 2)
+
+	// Count how many times organizer appears
+	organizerCount := 0
+	for _, a := range attendees {
+		if a.Email == "organizer@example.com" {
+			organizerCount++
+		}
+	}
+	assert.Equal(t, 1, organizerCount, "Organizer should appear exactly once")
+}
+
+// TestBuildAttendeeList_OrganizerIsSelf verifies organizer is not added when they are self
+func TestBuildAttendeeList_OrganizerIsSelf(t *testing.T) {
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
+	accountID := "user@example.com"
+
+	// User is the organizer but not in attendees list
+	event := &calendar.Event{
+		Organizer: &calendar.EventOrganizer{
+			Email:       "user@example.com",
+			DisplayName: "User",
+		},
+		Attendees: []*calendar.EventAttendee{
+			{
+				Email:          "other@example.com",
+				DisplayName:    "Other Person",
+				ResponseStatus: "accepted",
+			},
+		},
+	}
+
+	attendees := provider.buildAttendeeList(event, accountID)
+
+	// Should only have 1 attendee - organizer (self) should NOT be added
+	assert.Len(t, attendees, 1)
+	assert.Equal(t, "other@example.com", attendees[0].Email)
+}
+
+// TestBuildAttendeeList_OrganizerEmailCaseInsensitive verifies case-insensitive duplicate detection
+func TestBuildAttendeeList_OrganizerEmailCaseInsensitive(t *testing.T) {
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
+	accountID := "user@example.com"
+
+	// Organizer email has different case than in attendees list
+	event := &calendar.Event{
+		Organizer: &calendar.EventOrganizer{
+			Email:       "ORGANIZER@EXAMPLE.COM",
+			DisplayName: "Organizer",
+		},
+		Attendees: []*calendar.EventAttendee{
+			{
+				Email:          "organizer@example.com", // lowercase
+				DisplayName:    "Organizer",
+				ResponseStatus: "accepted",
+			},
+		},
+	}
+
+	attendees := provider.buildAttendeeList(event, accountID)
+
+	// Should only have 1 attendee - case difference should not cause duplication
+	assert.Len(t, attendees, 1)
+}
+
+// TestBuildAttendeeList_NoOrganizer verifies behavior when organizer is nil
+func TestBuildAttendeeList_NoOrganizer(t *testing.T) {
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
+	accountID := "user@example.com"
+
+	event := &calendar.Event{
+		Organizer: nil,
+		Attendees: []*calendar.EventAttendee{
+			{
+				Email:          "other@example.com",
+				DisplayName:    "Other Person",
+				ResponseStatus: "accepted",
+			},
+		},
+	}
+
+	attendees := provider.buildAttendeeList(event, accountID)
+
+	// Should work fine with nil organizer
+	assert.Len(t, attendees, 1)
+	assert.Equal(t, "other@example.com", attendees[0].Email)
+}
+
+// TestBuildAttendeeList_OrganizerEmptyEmail verifies behavior when organizer has empty email
+func TestBuildAttendeeList_OrganizerEmptyEmail(t *testing.T) {
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
+	accountID := "user@example.com"
+
+	event := &calendar.Event{
+		Organizer: &calendar.EventOrganizer{
+			Email:       "",
+			DisplayName: "No Email Organizer",
+		},
+		Attendees: []*calendar.EventAttendee{
+			{
+				Email:          "other@example.com",
+				DisplayName:    "Other Person",
+				ResponseStatus: "accepted",
+			},
+		},
+	}
+
+	attendees := provider.buildAttendeeList(event, accountID)
+
+	// Should not add organizer with empty email
+	assert.Len(t, attendees, 1)
+	assert.Equal(t, "other@example.com", attendees[0].Email)
+}
+
+// TestBuildAttendeeList_OrganizerSelfFlag verifies organizer is not added when Organizer.Self is true
+// even if organizer email differs from accountID (handles aliases and delegated calendars)
+func TestBuildAttendeeList_OrganizerSelfFlag(t *testing.T) {
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
+	accountID := "user@example.com"
+
+	// Organizer uses an alias email but Self flag is true
+	event := &calendar.Event{
+		Organizer: &calendar.EventOrganizer{
+			Email:       "user-alias@example.com", // Different from accountID
+			DisplayName: "User Alias",
+			Self:        true, // But Self flag indicates it's the user
+		},
+		Attendees: []*calendar.EventAttendee{
+			{
+				Email:          "other@example.com",
+				DisplayName:    "Other Person",
+				ResponseStatus: "accepted",
+			},
+		},
+	}
+
+	attendees := provider.buildAttendeeList(event, accountID)
+
+	// Should only have 1 attendee - organizer with Self=true should NOT be added
+	// even though their email doesn't match accountID
+	assert.Len(t, attendees, 1)
+	assert.Equal(t, "other@example.com", attendees[0].Email)
 }
 
 // TestCalendarEventTimeValidation verifies time parsing requirements
@@ -1102,6 +1323,75 @@ func TestProcessEvent_ExtractsHtmlLink(t *testing.T) {
 	assert.NotNil(t, mockCalRepo.upsertRequest, "Upsert request should not be nil")
 	assert.NotNil(t, mockCalRepo.upsertRequest.HtmlLink, "HtmlLink should not be nil")
 	assert.Equal(t, "https://www.google.com/calendar/event?eid=abc123", *mockCalRepo.upsertRequest.HtmlLink)
+}
+
+// TestProcessEvent_MatchesOrganizerNotInAttendees verifies that when an organizer is not in the
+// attendees list, they are still matched to a contact (fix for issue #183)
+func TestProcessEvent_MatchesOrganizerNotInAttendees(t *testing.T) {
+	ctx := context.Background()
+
+	organizerContactID := uuid.New()
+
+	mockCalRepo := &mockCalendarRepo{}
+	mockContactRepo := &mockContactRepo{}
+	mockIdentity := &mockIdentityService{
+		matchOrCreateResults: map[string]*service.MatchResult{
+			"eugene@golem.foundation": {ContactID: &organizerContactID, MatchType: "exact"},
+		},
+	}
+
+	provider := newTestProvider(mockCalRepo, mockContactRepo, mockIdentity)
+
+	// Recreate the exact scenario from issue #183:
+	// Event "Spencer<>Eugene" where Eugene organized but isn't in attendees
+	event := &calendar.Event{
+		Id:       "spencer-eugene-meeting",
+		Summary:  "Spencer<>Eugene",
+		Status:   "confirmed",
+		HtmlLink: "https://calendar.google.com/event?eid=abc123",
+		Start: &calendar.EventDateTime{
+			DateTime: "2025-12-23T10:00:00Z",
+		},
+		End: &calendar.EventDateTime{
+			DateTime: "2025-12-23T11:00:00Z",
+		},
+		Organizer: &calendar.EventOrganizer{
+			Email:       "eugene@golem.foundation",
+			DisplayName: "Eugene",
+		},
+		Attendees: []*calendar.EventAttendee{
+			{
+				Email:          "hello@spengrah.xyz",
+				DisplayName:    "Spencer",
+				Self:           true,
+				ResponseStatus: "accepted",
+			},
+			// Note: Eugene is NOT in the attendees list
+		},
+	}
+
+	err := provider.processEvent(ctx, event, "hello@spengrah.xyz")
+
+	assert.NoError(t, err)
+	assert.True(t, mockCalRepo.upsertCalled, "Upsert should be called")
+	assert.NotNil(t, mockCalRepo.upsertRequest, "Upsert request should not be nil")
+
+	// Verify the organizer was matched even though they weren't in attendees
+	assert.Len(t, mockCalRepo.upsertRequest.MatchedContactIDs, 1,
+		"Organizer should be matched even when not in attendees list")
+	assert.Equal(t, organizerContactID, mockCalRepo.upsertRequest.MatchedContactIDs[0],
+		"Matched contact should be the organizer's contact")
+
+	// Verify the identity service was called with the organizer's email
+	assert.True(t, mockIdentity.matchOrCreateCalled, "Identity service should be called")
+	var foundOrganizerCall bool
+	for _, req := range mockIdentity.matchOrCreateRequests {
+		if req.RawIdentifier == "eugene@golem.foundation" {
+			foundOrganizerCall = true
+			break
+		}
+	}
+	assert.True(t, foundOrganizerCall, "Identity service should be called with organizer email")
 }
 
 // ========================================

@@ -17,6 +17,8 @@ frontend/src/{app, components, hooks}
 
 ## Commands
 
+From project root:
+
 ```bash
 make dev          # Start dev server
 make test         # All backend tests
