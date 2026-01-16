@@ -431,7 +431,9 @@ func (p *CalendarSyncProvider) buildAttendeeList(event *calendar.Event, accountI
 	// omits the organizer from the attendees array, but we want to match them too)
 	if event.Organizer != nil && event.Organizer.Email != "" {
 		organizerEmail := event.Organizer.Email
-		organizerIsSelf := strings.EqualFold(organizerEmail, accountID)
+		// Check both Organizer.Self flag and email match - the Self flag handles
+		// aliases and delegated calendars where email may differ from accountID
+		organizerIsSelf := event.Organizer.Self || strings.EqualFold(organizerEmail, accountID)
 
 		// Check if organizer is already in the attendees list
 		organizerInAttendees := false

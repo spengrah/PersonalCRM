@@ -665,6 +665,36 @@ func TestBuildAttendeeList_OrganizerEmptyEmail(t *testing.T) {
 	assert.Equal(t, "other@example.com", attendees[0].Email)
 }
 
+// TestBuildAttendeeList_OrganizerSelfFlag verifies organizer is not added when Organizer.Self is true
+// even if organizer email differs from accountID (handles aliases and delegated calendars)
+func TestBuildAttendeeList_OrganizerSelfFlag(t *testing.T) {
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil)
+	accountID := "user@example.com"
+
+	// Organizer uses an alias email but Self flag is true
+	event := &calendar.Event{
+		Organizer: &calendar.EventOrganizer{
+			Email:       "user-alias@example.com", // Different from accountID
+			DisplayName: "User Alias",
+			Self:        true, // But Self flag indicates it's the user
+		},
+		Attendees: []*calendar.EventAttendee{
+			{
+				Email:          "other@example.com",
+				DisplayName:    "Other Person",
+				ResponseStatus: "accepted",
+			},
+		},
+	}
+
+	attendees := provider.buildAttendeeList(event, accountID)
+
+	// Should only have 1 attendee - organizer with Self=true should NOT be added
+	// even though their email doesn't match accountID
+	assert.Len(t, attendees, 1)
+	assert.Equal(t, "other@example.com", attendees[0].Email)
+}
+
 // TestCalendarEventTimeValidation verifies time parsing requirements
 func TestCalendarEventTimeValidation(t *testing.T) {
 	// Test valid RFC3339 times (as returned by Google Calendar API)
