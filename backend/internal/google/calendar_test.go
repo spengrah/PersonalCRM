@@ -1973,28 +1973,17 @@ func TestProcessEvent_SkipsEventsWhereUserNotAttendee(t *testing.T) {
 // isBlockedCalendarEmail Tests
 // ========================================
 
-// TestIsBlockedCalendarEmail_BlockedDomains verifies that scheduling service and
-// calendar resource domains are blocked
+// TestIsBlockedCalendarEmail_BlockedDomains verifies that calendar resource domains
+// are blocked. Note: We only block domains where ALL emails are system accounts
+// (not company domains where employees might have legitimate addresses).
 func TestIsBlockedCalendarEmail_BlockedDomains(t *testing.T) {
 	blockedEmails := []string{
-		// Google Calendar resources
+		// Google Calendar resources (always system, never real people)
 		"room@resource.calendar.google.com",
 		"team@group.calendar.google.com",
 		"holidays@calendar.google.com",
 		"events@group.v.calendar.google.com",
 		"bryan%cnslabs.io@gtempaccount.com", // Google temp account
-
-		// Scheduling services
-		"noreply@calendly.com",
-		"calendar-invite@lu.ma",
-		"notifications@cal.com",
-		"booking@savvycal.com",
-		"meeting@acuityscheduling.com",
-		"scheduler@hubspot.com",
-		"invite@oncehub.com",
-		"booking@youcanbook.me",
-		"poll@doodle.com",
-		"meeting@meetingbird.com",
 	}
 
 	for _, email := range blockedEmails {
@@ -2045,6 +2034,14 @@ func TestIsBlockedCalendarEmail_AllowedEmails(t *testing.T) {
 		"john.noreply@company.com",  // Contains "noreply" but not as prefix
 		"calendar@mycompany.com",    // Calendar in name but not a blocked domain
 		"notifications.team@co.com", // Contains "notifications" but as part of name
+		// Real employees at scheduling companies should NOT be blocked
+		// (This is why we don't block company domains - only system prefixes)
+		"alice@calendly.com",
+		"bob@lu.ma",
+		"jane@cal.com",
+		"john@hubspot.com",
+		"meeting@savvycal.com", // "meeting" is not a blocked prefix
+		"scheduler@doodle.com", // "scheduler" is not a blocked prefix
 	}
 
 	for _, email := range allowedEmails {
@@ -2081,7 +2078,8 @@ func TestIsBlockedCalendarEmail_EdgeCases(t *testing.T) {
 	}{
 		{"", false, "empty string"},
 		{"  noreply@example.com  ", true, "with whitespace"},
-		{"@calendly.com", true, "missing local part but blocked domain"},
+		{"@resource.calendar.google.com", true, "missing local part but blocked domain"},
+		{"@calendly.com", false, "company domain not blocked (employees could use it)"},
 		{"noreply@", true, "blocked prefix even with missing domain"},
 		{"noreply", false, "no @ symbol"},
 		{"user@unknowndomain.com", false, "regular unknown domain"},

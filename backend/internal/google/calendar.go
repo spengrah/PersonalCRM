@@ -35,28 +35,16 @@ const (
 	CalendarFutureSyncDays = 30
 )
 
-// blockedCalendarDomains contains email domains that represent calendar resources
-// or scheduling services, not real people. These are filtered out during calendar
-// sync to avoid creating import candidates for non-person entities.
+// blockedCalendarDomains contains email domains that are always system/resource
+// accounts, never real people. We only block domains where ALL emails are system
+// accounts - not company domains where employees might have legitimate addresses.
 var blockedCalendarDomains = []string{
-	// Google Calendar resources
+	// Google Calendar resources (always system, never real people)
 	"group.calendar.google.com",    // Group/secondary calendars
 	"resource.calendar.google.com", // Room/resource calendars
 	"calendar.google.com",          // Generic calendar resources
 	"group.v.calendar.google.com",  // System calendars (holidays, birthdays)
 	"gtempaccount.com",             // Google temp accounts for external invitees
-
-	// Scheduling services
-	"calendly.com",
-	"lu.ma",
-	"cal.com",
-	"savvycal.com",
-	"acuityscheduling.com",
-	"hubspot.com",
-	"oncehub.com",
-	"youcanbook.me",
-	"doodle.com",
-	"meetingbird.com",
 }
 
 // blockedEmailPrefixes contains email local-part prefixes that indicate system
