@@ -192,7 +192,7 @@ test-e2e: e2e-db
 	if [ -f frontend/.env.local ]; then mv frontend/.env.local frontend/.env.local.bak; fi; \
 	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > frontend/.env.local; \
 	echo "NEXT_PUBLIC_API_URL=http://localhost:8080" >> frontend/.env.local; \
-	cd frontend && PATH=/usr/bin:$$PATH DATABASE_URL="$$DATABASE_URL" NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 ./node_modules/.bin/playwright test --project=chromium; \
+	cd frontend && CI=true DATABASE_URL="$$DATABASE_URL" API_KEY=$$API_KEY NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 ./node_modules/.bin/playwright test --project=chromium; \
 	EXIT_CODE=$$?; \
 	rm -f frontend/.env.local; \
 	if [ -f frontend/.env.local.bak ]; then mv frontend/.env.local.bak frontend/.env.local; fi; \
@@ -201,9 +201,16 @@ test-e2e: e2e-db
 e2e-db:
 	@bash scripts/ensure-postgres-for-tests.sh
 	@echo "Setting up isolated E2E test database..."
-	@docker exec crm-postgres psql -U crm_user -d postgres -c "DROP DATABASE IF EXISTS personal_crm_test;" 2>/dev/null || true
-	@docker exec crm-postgres psql -U crm_user -d postgres -c "CREATE DATABASE personal_crm_test;" 2>/dev/null
-	@docker exec crm-postgres psql -U crm_user -d personal_crm_test -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null
+	@if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then \
+		docker exec crm-postgres psql -U crm_user -d postgres -c "DROP DATABASE IF EXISTS personal_crm_test;" 2>/dev/null || true; \
+		docker exec crm-postgres psql -U crm_user -d postgres -c "CREATE DATABASE personal_crm_test;" 2>/dev/null; \
+		docker exec crm-postgres psql -U crm_user -d personal_crm_test -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; \
+	else \
+		sudo -u postgres psql -c "DROP DATABASE IF EXISTS personal_crm_test;" 2>/dev/null || true; \
+		sudo -u postgres psql -c "CREATE DATABASE personal_crm_test OWNER crm_user;" 2>/dev/null; \
+		sudo -u postgres psql -d personal_crm_test -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; \
+		sudo -u postgres psql -d personal_crm_test -c "GRANT ALL ON SCHEMA public TO crm_user;" 2>/dev/null; \
+	fi
 	@echo "✓ E2E test database ready"
 
 # Build

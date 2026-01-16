@@ -84,6 +84,12 @@ UPDATE contact SET
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL;
 
+-- name: UpdateContactLastContactedIfLater :exec
+UPDATE contact SET
+  last_contacted = GREATEST(COALESCE(last_contacted, '1970-01-01'::timestamptz), $2),
+  updated_at = NOW()
+WHERE id = $1 AND deleted_at IS NULL;
+
 -- name: SoftDeleteContact :exec
 UPDATE contact SET
   deleted_at = NOW(),

@@ -259,6 +259,14 @@ func (r *ContactRepository) UpdateContactLastContacted(ctx context.Context, id u
 	})
 }
 
+// UpdateContactLastContactedIfLater updates last_contacted only if the new value is later.
+func (r *ContactRepository) UpdateContactLastContactedIfLater(ctx context.Context, id uuid.UUID, lastContacted time.Time) error {
+	return r.queries.UpdateContactLastContactedIfLater(ctx, db.UpdateContactLastContactedIfLaterParams{
+		ID:            uuidToPgUUID(id),
+		LastContacted: pgtype.Timestamptz{Time: lastContacted, Valid: true},
+	})
+}
+
 // SoftDeleteContact soft deletes a contact
 func (r *ContactRepository) SoftDeleteContact(ctx context.Context, id uuid.UUID) error {
 	return r.queries.SoftDeleteContact(ctx, uuidToPgUUID(id))
