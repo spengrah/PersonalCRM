@@ -1,0 +1,13 @@
+# Shared by CI (dorny/paths-filter) and pre-push hook
+# Tests run if ANY changed file matches these patterns
+
+code:
+  - 'backend/**'
+  - 'frontend/src/**'
+  - 'frontend/tests/**'
+  - 'tests/**'
+  - 'go.mod'
+  - 'go.sum'
+  - 'frontend/package.json'
+  - 'frontend/bun.lockb'
+  - 'Makefile'
