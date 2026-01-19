@@ -2,12 +2,13 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash(git push*--no-verify*)",
-        "hooks": [{"type": "command", "command": "echo 'Blocked: Cannot skip pre-push hooks' >&2 && exit 2"}]
-      },
-      {
-        "matcher": "Bash(git push*-n*)",
-        "hooks": [{"type": "command", "command": "echo 'Blocked: Cannot skip pre-push hooks (-n flag)' >&2 && exit 2"}]
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.ai/skills/learnings/block-no-verify.sh"
+          }
+        ]
       }
     ]
   }

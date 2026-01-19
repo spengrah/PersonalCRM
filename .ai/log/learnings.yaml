@@ -1,0 +1,210 @@
+---
+timestamp: "2026-01-18T14:44:11.109770"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Skill files belong in .ai/skills/, not src/skills/
+detail: |
+  During migration planning, the agent initially placed skill files in src/skills/learnings/ following the source repo's pattern. User corrected: skill files should go directly in .ai/skills/learnings/, with .claude/skills and .codex/skills symlinking to ../.ai/skills. This keeps all AI-facing content in the .ai/ directory which is cleaner for cross-agent compatibility.
+actionable: true
+suggested_location: .ai/guides/architecture.md
+
+---
+timestamp: "2026-01-18T14:44:11.109770"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: distinction
+summary: Unified git hooks vs separate Claude PreToolUse hooks
+detail: |
+  Two approaches for pre-push testing: (1) Unified: single git hook handles lint+tests+learnings for all pushes, Claude settings just block --no-verify bypass. (2) Separate: Claude PreToolUse hook runs tests inline for Claude pushes, git hook stays lint-only. User chose unified approach for consistency across all developers and tools. The unified approach simplifies the system and ensures same behavior regardless of who/what initiates the push.
+actionable: true
+suggested_location: .ai/patterns/hooks.md
+
+---
+timestamp: "2026-01-18T14:44:11.109770"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: Cross-compatibility agent infrastructure uses symlinks to shared .ai/ directory
+detail: |
+  Multi-agent compatibility achieved through: (1) .ai/ directory contains shared rules, patterns, guides, skills, and MCP config. (2) Each agent directory (.claude/, .cursor/, .codex/) symlinks to shared resources: .claude/skills → ../.ai/skills, .claude/mcp.json → ../.ai/mcp.json, etc. (3) This ensures all agents see the same configuration and skills without duplication. Pattern observed from agentic-coding repo and successfully migrated to PersonalCRM.
+actionable: true
+suggested_location: .ai/guides/architecture.md
+
+---
+timestamp: "2026-01-18T14:44:11.109770"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Colima disk lock requires full cleanup, not just restart
+detail: |
+  When colima fails with 'disk in use' error, simply running colima stop/start doesn't work. Required sequence: colima stop -f; colima delete -f; rm -rf ~/.colima/_lima/colima; colima start. The disk lock state persists across normal stop/start cycles and needs manual cleanup of the _lima directory.
+actionable: true
+suggested_location: .ai/patterns/development-environment.md
+
+---
+timestamp: "2026-01-18T14:44:11.109770"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: Pre-push hooks use test-triggers.yml for smart test skipping
+detail: |
+  Pre-push hook integrates with test-triggers.yml to skip tests when only non-code files changed (e.g., docs, learnings). Pattern: (1) test-triggers.yml defines paths that trigger tests (backend/**, frontend/src/**, go.mod, etc.). (2) Pre-push hook checks git diff against these patterns. (3) Shared by both CI (dorny/paths-filter) and local hooks for consistency. This speeds up documentation-only commits while ensuring code changes always run full test suite.
+actionable: true
+suggested_location: .ai/patterns/testing.md
+
+---
+timestamp: "2026-01-18T14:44:11.109770"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: rule
+summary: PreToolUse hooks should block bypass, not duplicate git hook logic
+detail: |
+  When implementing git hooks + Claude PreToolUse hooks, the PreToolUse hook should NOT duplicate testing logic. Instead: (1) Git pre-push hook handles all actual checks (lint, tests, learnings). (2) Claude PreToolUse hook ONLY blocks bypass attempts (git push --no-verify, git push -n). This separation ensures: single source of truth for checks, consistent behavior for all users, and Claude agents can't bypass required checks.
+actionable: true
+suggested_location: .ai/rules/core.md
+
+---
+timestamp: "2026-01-18T14:44:11.109770"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: Learnings system uses incremental extraction with state tracking
+detail: |
+  The learnings skill extracts insights from Claude sessions using: (1) extract-learnings.py uses headless Claude (Sonnet) to analyze transcripts including thinking blocks. (2) Incremental extraction: tracks state in .ai/log/extraction-state.json to only process new content since last call. (3) Outputs to .ai/log/learnings.yaml with structured format: type, summary, detail, actionable, suggested_location. (4) Called from pre-push hook, PreCompact hook, or manually. (5) Deduplicates by session + summary to avoid repeated learnings.
+actionable: true
+suggested_location: .ai/guides/learnings-system.md
+
+---
+timestamp: "2026-01-18T14:44:11.109770"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Settings.json and settings.local.json both need hook updates
+detail: |
+  When updating Claude PreToolUse hooks, both .claude/settings.json AND .claude/settings.local.json may contain hook configurations that need updating. The agent initially only updated settings.json but had to also update the hooks section in settings.local.json to fully replace the old pre-push-tests.sh hook with bypass-blocking logic. Check both files when migrating hook configurations.
+actionable: true
+suggested_location: .ai/patterns/claude-configuration.md
+
+---
+timestamp: "2026-01-18T14:51:10.726368"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Background bash processes don't inherit cwd from parent reliably
+detail: |
+  In the pre-push hook, background processes spawned with `run_tests &` and `run_learnings &` failed to access `.ai/pre-push.json` even though `cd "$PROJECT_ROOT"` was executed at the script top level. The foreground lint process worked fine. Fix: Add explicit `cd "$PROJECT_ROOT"` at the start of each background function. This is a subtle bash behavior when functions are backgrounded - they may not reliably inherit the parent's working directory.
+actionable: true
+suggested_location: .ai/guides/architecture.md
+
+---
+timestamp: "2026-01-18T14:51:10.726368"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: ".gitignore order matters: exceptions must come after the ignoring rule"
+detail: |
+  When trying to allow `.ai/log/.gitkeep` while ignoring `.ai/log/*`, the global `log/` pattern (line 227) was matching `.ai/log/` and preventing the file from being tracked. Adding `!.ai/log/` as an exception AFTER the `log/` rule fixed it. Git processes .gitignore rules sequentially - you can't un-ignore something that was ignored by a later rule.
+actionable: true
+suggested_location: .ai/patterns/gitignore.md
+
+---
+timestamp: "2026-01-18T14:51:10.726368"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: Use unified git hooks over separate PreToolUse hooks for consistency
+detail: |
+  Two approaches for pre-push testing exist: (1) Unified: single git hook handles lint+tests+learnings for all pushes, Claude settings just block --no-verify bypass. (2) Separate: Claude PreToolUse hook runs tests inline for Claude pushes, git hook stays lint-only. The unified approach was chosen for consistency across all developers and tools. This simplifies the system and ensures same behavior regardless of who/what pushes.
+actionable: true
+suggested_location: .ai/guides/architecture.md
+
+---
+timestamp: "2026-01-18T14:51:10.726368"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: git check-ignore showing a negation rule means the file is NOT ignored
+detail: |
+  When debugging `.ai/log/.gitkeep`, `git check-ignore -v` showed `.gitignore:354:!.ai/log/.gitkeep` and the output said 'Still ignored'. This was confusing - the `!` prefix is a negation rule, which means the file is actually ALLOWED (not ignored). The tool shows which rule matched, and negation rules mean 'do not ignore'. Verify by attempting `git add` - if it succeeds, the file isn't ignored despite what the output implies.
+actionable: true
+suggested_location: .ai/patterns/git.md
+
+---
+timestamp: "2026-01-18T14:57:37.500798"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Background processes in git hooks need explicit directory context
+detail: |
+  When git hooks run background processes (e.g., via `&` or subprocess), they don't inherit the working directory correctly when the hook is a symlink. The fix is to explicitly `cd "$PROJECT_ROOT"` at the start of each background function. This was discovered when the pre-push hook's background lint and test processes were failing silently because they ran from the wrong directory.
+actionable: true
+suggested_location: .ai/patterns/name.md
+
+---
+timestamp: "2026-01-18T14:57:37.500798"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Claude Code PreToolUse hooks require session reload to take effect
+detail: |
+  Changes to hooks in settings.json or settings.local.json during an active session don't get applied until the session is reloaded. Multiple tests of bypass blocking (git push --no-verify) passed through even with correct hook configuration because the hooks were added/modified after the session started. Future agents should note that hook changes won't work until restart.
+actionable: true
+suggested_location: .ai/guides/name.md
+
+---
+timestamp: "2026-01-18T14:57:37.500798"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: "Claude Code settings: local overrides project for same keys, but hooks merge"
+detail: |
+  settings.local.json (gitignored) has higher precedence than settings.json (tracked), BUT hooks are special: PreToolUse hooks from ALL scopes (user, project, local) are merged and all execute. This means duplicate hooks in both files would run twice. Best practice: keep team hooks in settings.json, remove from settings.local.json to avoid duplication.
+actionable: true
+suggested_location: .ai/guides/name.md
+
+---
+timestamp: "2026-01-18T14:57:37.500798"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: rule
+summary: Compound bash commands with && may not match PreToolUse hook patterns
+detail: |
+  Hook pattern `Bash(git push*--no-verify*)` may not match when the problematic command is part of a compound statement like `echo 'test' && git add . && git commit && git push --no-verify`. The full command string might need to be considered for pattern matching. Testing showed that even isolated `git push --no-verify` commands didn't get blocked, suggesting session reload was the real issue, but this is still a potential gotcha.
+actionable: true
+suggested_location: .ai/rules/name.md
+
+---
+timestamp: "2026-01-19T17:44:19.079756"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Claude Code hooks are loaded at session start, not live
+detail: |
+  Changes to .claude/settings.json hooks require starting a NEW session to take effect. The agent spent time testing hook changes within the same session, which couldn't work because hooks are only loaded when the session initializes. This is a critical timing issue that would waste effort if not known upfront.
+actionable: true
+suggested_location: .ai/guides/claude-code-hooks.md
+
+---
+timestamp: "2026-01-19T17:44:19.079756"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: PreToolUse hook matchers use regex, not glob patterns
+detail: |
+  The matcher field in PreToolUse hooks matches tool NAMES (like 'Bash', 'Edit|Write', 'Notebook.*') using regex syntax, NOT command content. To validate command content, the hook command must parse the JSON input using jq. The pattern 'Bash(git push*--no-verify*)' is completely wrong - the correct approach is matcher: 'Bash' with a validation script that reads tool_input.command from stdin JSON.
+actionable: true
+suggested_location: .ai/guides/claude-code-hooks.md
+
+---
+timestamp: "2026-01-19T17:44:19.079756"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: git reset --hard reverts ALL tracked files including .claude/settings.json
+detail: |
+  When using git reset --hard to revert test commits, it also reverts changes to .claude/settings.json if those changes weren't committed. The agent had to re-apply the settings.json fix after each reset. This is obvious git behavior but the agent didn't anticipate it in the context of iterating on hook development.
+actionable: true
+suggested_location: none
+
+---
+timestamp: "2026-01-19T17:44:19.079756"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: PreToolUse hooks receive tool parameters as JSON on stdin
+detail: |
+  Claude Code PreToolUse hooks receive the complete tool invocation as JSON on stdin, including tool_input fields. For Bash commands, the actual command string is at .tool_input.command. Hook scripts must parse this JSON (using jq) to validate command content. The hook's exit code determines whether to block (non-zero) or allow (zero) the tool use.
+actionable: true
+suggested_location: .ai/guides/claude-code-hooks.md
+
+---
+timestamp: "2026-01-19T17:44:19.079756"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: documentation_gap
+summary: Background hook working directory behavior not documented
+detail: |
+  The session shows a commit 'fix: ensure correct directory in background hook processes' suggesting there was a previous issue with hook working directories. However, there's no documentation about this gotcha - that hooks may not run in $CLAUDE_PROJECT_DIR by default, or that background hooks have different working directory behavior. This gap likely caused the previous debugging session.
+actionable: true
+suggested_location: .ai/guides/claude-code-hooks.md
+
