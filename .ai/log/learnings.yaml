@@ -208,3 +208,33 @@ detail: |
 actionable: true
 suggested_location: .ai/guides/claude-code-hooks.md
 
+---
+timestamp: "2026-01-19T17:53:38.030495"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: PreToolUse hooks require session restart to load
+detail: |
+  When adding or modifying PreToolUse hooks in .claude/settings.json, the changes don't take effect in the current session. The hook configuration is loaded at session start and won't be picked up until Claude Code is restarted. This caused confusion when testing the block-no-verify.sh hook - the script worked correctly when tested directly (exit 2, proper message), but wasn't being triggered by Claude Code because the session hadn't been restarted after adding the hook configuration.
+actionable: true
+suggested_location: .ai/guides/claude-code.md
+
+---
+timestamp: "2026-01-19T17:53:38.030495"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: distinction
+summary: Hook scripts vs hook triggering are separate concerns
+detail: |
+  When debugging hooks that aren't working, test the hook script directly first before assuming Claude Code integration is broken. The script can be tested by piping JSON to it (e.g., `echo '{"tool_input": {"command": "..."}}' | script.sh`). If the script works standalone but the hook doesn't fire, it's a configuration or session loading issue, not a script issue. This distinction saves time debugging the wrong layer.
+actionable: true
+suggested_location: .ai/guides/claude-code.md
+
+---
+timestamp: "2026-01-19T17:53:38.030495"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: documentation_gap
+summary: CLAUDE.md commit signing rule was violated
+detail: |
+  The user's global CLAUDE.md explicitly states 'ALWAYS sign commits (eg `git commit -S -m "feat: message"`)' but the agent initially attempted `git commit -m` without the -S flag (line 70). The agent did eventually use -S, but only after user intervention. This suggests the rule wasn't prominent enough or the agent didn't internalize it before attempting commits. The rule exists and is clear, but may need to be in the project-level CLAUDE.md or .ai/rules/core.md where commit instructions are, not just in the global config which agents might scan less carefully.
+actionable: true
+suggested_location: .ai/rules/core.md
+
