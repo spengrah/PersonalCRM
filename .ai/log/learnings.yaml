@@ -413,3 +413,39 @@ detail: |
   Tests that pass locally can fail in CI if they make assumptions about response structure. In this session, contact_ids_test.go passed locally but failed in CI because the test was parsing responses incorrectly. The api.APIResponse wrapper pattern wasn't being handled properly. Always verify CI passes, don't trust local test runs alone.
 actionable: true
 
+---
+timestamp: "2026-01-20T09:03:21.454665"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: gotcha
+summary: CI may not auto-trigger for all pushed commits
+detail: |
+  After addressing code review feedback and pushing commits 778cb0b and adcecb0 to the PR, GitHub CI did not automatically trigger for these new commits. The agent waited multiple times but no new CI runs appeared for the latest commit SHA. This is distinct from CI being slow - the workflow simply didn't start. Future agents should be aware that CI may not trigger automatically in all cases and should not indefinitely wait for runs that may never start.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:03:21.454665"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: gotcha
+summary: learnings.yaml merge conflicts need manual 'keep both' resolution
+detail: |
+  The learnings.yaml file is append-only and can have conflicts when parallel sessions both add learnings. The resolution is always to remove conflict markers and keep all learnings from both branches, since they come from different sessions with different session_ids. This happened when merging main after a parallel PR session added its own learnings. The file structure with '---' separators makes it straightforward to combine both sets.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:03:21.454665"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: architecture
+summary: Code review feedback can be outdated after rapid fixes
+detail: |
+  When a reviewer (like Claude Code Review) requests changes, and the agent immediately addresses them in new commits, the PR status will still show 'Changes requested' until the reviewer re-runs or CI picks up the new commits. The agent correctly pushed fixes (778cb0b and adcecb0) that addressed both review issues (API quota documentation and getTodayUTC helper), but the PR continued showing the old review status because CI hadn't re-run. Agents should understand that review status lags behind actual code state.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:03:21.454665"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: documentation_gap
+summary: No guidance on handling stalled CI workflows
+detail: |
+  The core rules and guides don't document what to do when GitHub CI doesn't trigger for new commits. The agent correctly waited and checked multiple times using 'gh run list' and 'gh pr checks', but there's no documented workflow for: (1) how long to wait before considering CI stalled, (2) whether/how to manually trigger workflows, (3) what causes CI to not auto-trigger. This led to uncertainty and repeated checks with no resolution. Documentation should cover CI troubleshooting patterns.
+actionable: true
+
