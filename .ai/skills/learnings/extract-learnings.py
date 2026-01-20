@@ -372,8 +372,13 @@ def parse_learnings(raw_output: str) -> list[dict] | None:
     return [{"type": "raw", "content": raw_output}]
 
 
-def load_existing_learnings(log_path: Path) -> set[tuple[str, str]]:
-    """Load existing (session_id, summary) pairs from log for deduplication."""
+def get_session_log_path(session_id: str) -> Path:
+    """Get the per-session learnings file path."""
+    return Path(".ai/log/learnings") / f"{session_id}.yaml"
+
+
+def load_existing_learnings(log_path: Path) -> set[str]:
+    """Load existing summaries from log for deduplication."""
     existing = set()
     if not log_path.exists():
         return existing
@@ -383,18 +388,17 @@ def load_existing_learnings(log_path: Path) -> set[tuple[str, str]]:
         with open(log_path) as f:
             for doc in yaml.safe_load_all(f):
                 if doc and isinstance(doc, dict):
-                    session_id = doc.get("session_id", "")
                     summary = doc.get("summary", "")
-                    if session_id and summary:
-                        existing.add((session_id, summary))
+                    if summary:
+                        existing.add(summary)
     except Exception:
         pass  # If we can't read existing log, proceed without dedupe
 
     return existing
 
 
-def append_to_log(learnings: list[dict], log_path: Path, session_id: str) -> int:
-    """Append learnings to the project log file, deduplicating by session+summary.
+def append_to_log(learnings: list[dict], log_path: Path) -> int:
+    """Append learnings to the session log file, deduplicating by summary.
 
     Returns the number of new learnings appended.
     """
@@ -411,12 +415,11 @@ def append_to_log(learnings: list[dict], log_path: Path, session_id: str) -> int
             summary = learning.get("summary", "")
 
             # Skip duplicates
-            if (session_id, summary) in existing:
+            if summary in existing:
                 continue
 
             entry = {
                 "timestamp": timestamp,
-                "session_id": session_id,
                 **learning
             }
             # Write as YAML document
@@ -554,8 +557,8 @@ def main():
                 print()
 
         # Append to log (with deduplication)
-        log_path = Path(args.output) if args.output else Path(".ai/log/learnings.yaml")
-        new_count = append_to_log(learnings, log_path, session_id)
+        log_path = Path(args.output) if args.output else get_session_log_path(session_id)
+        new_count = append_to_log(learnings, log_path)
         skipped = len(learnings) - new_count
         if new_count > 0:
             print(f"Appended {new_count} new learnings to: {log_path}", file=sys.stderr)

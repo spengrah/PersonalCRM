@@ -13,11 +13,11 @@ allowed-tools: Bash, Read, Edit, Glob
 ./.ai/skills/learnings/extract-learnings.sh --trigger manual
 ```
 
-This analyzes the session transcript (including thinking blocks) and writes structured learnings to `.ai/log/learnings.yaml`.
+This analyzes the session transcript (including thinking blocks) and writes structured learnings to `.ai/log/learnings/{session_id}.yaml`.
 
 ## 2. Review Extracted Learnings
 
-Read `.ai/log/learnings.yaml` and review the latest entries. Each learning has:
+Read the per-session file in `.ai/log/learnings/` and review the latest entries. Each learning has:
 - `type`: gotcha | distinction | architecture | rule | documentation_gap
 - `summary`: One-line description
 - `detail`: Full context
@@ -43,7 +43,7 @@ Possible destinations:
 - `.ai/rules/*.md` - Add to relevant rule
 - `.ai/patterns/*.md` - Create or update pattern
 - `.ai/guides/*.md` - Create or update guide
-- `CLAUDE.md` - Update agent instructions
+- `AGENTS.md` - Update agent instructions
 
 For `documentation_gap` types, focus on:
 - Finding the existing doc that failed
@@ -57,7 +57,7 @@ Not every learning needs immediate action. Use your judgment.
 Stage and commit separately from code changes:
 
 ```bash
-git add .ai/log/learnings.yaml .ai/patterns/ .ai/rules/ .ai/guides/ .claude/CLAUDE.md
+git add .ai/log/learnings/ .ai/patterns/ .ai/rules/ .ai/guides/ .claude/CLAUDE.md
 git commit -S -m "docs: session learnings"
 ```
 

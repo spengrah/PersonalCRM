@@ -1,541 +1,378 @@
-
----
-timestamp: "2026-01-19T22:06:55.572429"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: gotcha
-summary: Serena MCP tools can return results too large for Read tool
-detail: |
-  When using `mcp__serena__read_file` on large test files, the result may be saved to a temp file that itself exceeds Read tool's token limit (25000 tokens). The workaround is to read directly from the workspace using the standard Read tool on the actual source file path instead of trying to read the MCP tool's output file. This happened when reading `backend/internal/google/calendar_test.go` - the MCP tool saved 72,358 characters to a temp file that was then too large to read.
-actionable: true
-
----
-timestamp: "2026-01-19T22:06:55.572429"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: rule
-summary: Use conventional branch names matching commit type
-detail: |
-  Branch names should follow conventional commit prefixes: feat/, fix/, refactor/, docs/, test/, chore/. The project uses `feat/reduce-calendar-sync-interval` for a feature that will have a `feat:` commit message. This is documented in `.ai/rules/core.md` but worth reinforcing as a pattern to follow automatically.
-actionable: true
-
----
-timestamp: "2026-01-19T22:06:55.572429"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: architecture
-summary: Project uses pre-commit hooks for formatting staged files
-detail: |
-  The repository has pre-commit hooks that automatically format Go files with gofmt when committing. The output shows 'Pre-commit: Formatting staged files...' and 'Go files formatted' messages. Agents should expect this and not be surprised by the additional output during git commits. The hooks run automatically and don't require manual intervention.
-actionable: true
-
----
-timestamp: "2026-01-19T22:06:55.572429"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: gotcha
-summary: Serena MCP has think_about_* tools that prompt for reflection
-detail: |
-  The Serena MCP includes metacognitive tools like `mcp__serena__think_about_collected_information` and `mcp__serena__think_about_task_adherence` that return prompts asking the agent to reflect on whether it has enough information or is staying on task. These don't provide data - they're prompts for the agent to self-assess. The agent correctly used them to verify it had sufficient context before proceeding.
-actionable: true
-
----
-timestamp: "2026-01-19T22:06:55.572429"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: distinction
-summary: Simple changes don't need full feature-dev workflow
-detail: |
-  The feature-dev skill includes phases for exploration, clarification, architecture design, and code review with multiple parallel agents. For a trivial change (updating a constant from 24 hours to 15 minutes), the agent correctly skipped the heavy exploration and architecture phases. The full workflow is overkill when the issue is well-specified and the change is a simple constant update with no architectural implications.
-actionable: true
-
----
-timestamp: "2026-01-19T22:28:03.108868"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: gotcha
-summary: E2E tests fail late at night due to UTC/local timezone mismatch
-detail: |
-  When E2E tests run late at night (e.g., 10pm PST on Jan 19), they fail because the backend stores timestamps in UTC (which is Jan 20), and formatDateOnly extracts the UTC date portion ('2026-01-20'), displaying '1/20/2026' while tests expect the local date '1/19/2026'. Tests must use UTC date components (getUTCMonth(), getUTCDate(), getUTCFullYear()) for comparison, not local date methods (toLocaleDateString()). This is a common gotcha when testing date-related functionality across timezones.
-actionable: true
-
----
-timestamp: "2026-01-19T22:28:03.108868"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: architecture
-summary: formatDateOnly extracts UTC date portion, not local date
-detail: |
-  The frontend's formatDateOnly utility (in lib/utils.ts) is designed to avoid timezone conversion issues by extracting just the date part from ISO strings (e.g., '2026-01-20T06:00:00Z' → '2026-01-20'). This means displayed dates show the UTC date portion, not the local date. This is intentional to avoid off-by-one-day bugs, but it means the UI will show tomorrow's date when local time is late at night and UTC has already rolled over. Tests and code expecting 'today's date' must account for this by using UTC date components.
-actionable: true
-
----
-timestamp: "2026-01-19T22:28:03.108868"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: gotcha
-summary: Pre-push hooks block --no-verify flag via block-no-verify.sh
-detail: |
-  The repository has a hook (scripts/hooks/block-no-verify.sh) that prevents using --no-verify or -n flags with git push. This ensures all pre-push checks (lint, tests, learnings) must pass before pushing. Agents cannot bypass failing tests by using --no-verify - they must fix the underlying issues. This was encountered when trying to bypass flaky E2E tests.
-actionable: true
-
----
-timestamp: "2026-01-19T22:28:03.108868"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: documentation_gap
-summary: Core rules don't mention E2E timezone testing requirements
-detail: |
-  The project's .ai/rules/core.md and .ai/rules/testing.md don't document the critical requirement that E2E tests comparing dates must use UTC date components when the backend stores UTC timestamps. This led to E2E tests being written with toLocaleDateString() which fails late at night. Documentation should be strengthened to include: 'When testing date display in E2E tests, use UTC date components (getUTCMonth(), getUTCDate(), getUTCFullYear()) if backend stores UTC timestamps, as formatDateOnly extracts UTC date portions.'
-actionable: true
-
----
-timestamp: "2026-01-20T08:38:48.085531"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: gotcha
-summary: Pre-push hooks block push even when committing only learnings
-detail: |
-  The pre-push hook runs learnings extraction which can generate new learnings to commit. This creates a chicken-and-egg situation: pushing triggers learning extraction, which modifies learnings.yaml, which blocks the push. The hook intelligently detects when only learnings files changed and skips tests/learning extraction to break this cycle. Agents should understand this is expected behavior and not try to work around it.
-actionable: false
-
----
-timestamp: "2026-01-20T08:38:48.085531"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: documentation_gap
-summary: E2E date testing gotcha was undocumented until this session
-detail: |
-  Tests were failing late at night due to UTC/local timezone mismatch when comparing dates. The fix (using UTC date components) was not documented anywhere. This session added documentation to .ai/rules/testing.md, but the fact that this gotcha existed and caused flaky tests reveals that critical E2E testing patterns should be documented proactively. Future insight: When fixing flaky tests, always check if the root cause represents a pattern that should be documented.
-actionable: true
-
----
-timestamp: "2026-01-20T08:38:48.085531"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: architecture
-summary: Code review bot requests changes via GitHub comments
-detail: |
-  The project uses an automated Claude code review bot that runs in CI and posts review comments requesting changes. The bot checks for documentation completeness, code duplication, and follows project conventions. Agents should expect review feedback and address it by reading PR comments with 'gh pr view <number> --comments'. The review is blocking - PR cannot merge until addressed.
-actionable: true
-
----
-timestamp: "2026-01-20T08:38:48.085531"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: rule
-summary: Extracted helper functions need descriptive JSDoc explaining WHY
-detail: |
-  When code review requested extracting duplicate UTC date logic to a helper, the helper needed comprehensive documentation explaining the non-obvious reason it exists: formatDateOnly extracts UTC date portion, so tests using toLocaleDateString() fail late at night when UTC has rolled to next day. Good helper docs explain the gotcha/pitfall the abstraction prevents, not just what the code does.
-actionable: true
-
----
-timestamp: "2026-01-20T08:38:48.085531"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: gotcha
-summary: GitHub PR checks continue in background after agent completes work
-detail: |
-  After pushing code, the agent watched CI checks with 'gh pr checks --watch' but one check (Claude Code Review) took significantly longer than tests (2m12s vs immediate for unit tests). The agent waited multiple times (60s, 90s, 120s delays) before the review completed. When reviewing PRs, agents should expect code review checks to take 2-3+ minutes and should check once after all tests pass rather than polling repeatedly.
-actionable: true
-
 ---
 timestamp: "2026-01-20T04:01:52.031612"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: sqlc regeneration changes Go types requiring repository layer updates
 detail: |
   When running `make sqlc` to regenerate database code, sqlc may change plain Go types (like `bool`) to pgtype wrapper types (like `pgtype.Bool`). This breaks existing repository code that passes plain values. After sqlc regeneration, always check for compilation errors in repository files and update them to use the wrapper types with `.Bool` field and `.Valid = true`. Example: `IsPrimary: pgtype.Bool{Bool: isPrimary, Valid: true}` instead of `IsPrimary: isPrimary`. The pgtype import is typically already present in repository files.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:01:52.031612"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: distinction
 summary: GitHub CLI project access requires different permissions than issue access
 detail: |
   The GitHub CLI requires the 'project' scope to access GitHub Projects v2 data via `gh project` commands, but can access issues via `gh issue` commands without this scope. When a user wants to work with GitHub Projects, they need to run `gh auth refresh --hostname github.com -s project` (note: --hostname is required in non-interactive mode). Issues can be accessed as a fallback using `gh issue list` with labels like 'agent-ready' to identify work items.
+  
 actionable: false
 
 ---
 timestamp: "2026-01-20T04:01:52.031612"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: architecture
 summary: Feature development should use parallel exploration agents before implementation
 detail: |
   The feature-dev workflow launches 2-3 parallel code-explorer agents to understand different aspects of the codebase (similar features, architecture patterns, UI conventions). Each agent is asked to return a list of 5-10 key files. After agents complete, the implementing agent should read all identified files to build deep understanding before proceeding to implementation. This prevents making changes without understanding existing patterns. The parallel approach is faster than sequential exploration.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:01:52.031612"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: rule
 summary: Always verify backend compilation after adding new sqlc queries
 detail: |
   After adding SQL queries and running `make sqlc`, immediately verify backend compilation with `cd backend && go build ./cmd/crm-api`. Pre-existing type errors in the codebase may surface after regeneration due to sqlc version changes or configuration differences. Fix these before proceeding with frontend work to avoid discovering compilation issues later. If lint fails with pre-existing errors, build directly to isolate your changes.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:01:52.031612"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: architecture
 summary: Frontend keyboard navigation requires IDs-only backend endpoint for performance
 detail: |
   For keyboard navigation between items (contacts, etc.), create a lightweight backend endpoint that returns only IDs rather than full objects. Add `ids_only=true` query parameter to existing list endpoints. In the backend: add ID-only SQL queries (e.g., `SELECT id FROM contact`), add repository methods accepting same filter/sort params as full queries, modify handler to return `{ids: [...], total: n}` format when ids_only=true. Frontend uses these IDs with existing detail endpoints. This pattern keeps navigation fast while reusing filter/sort logic.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:01:52.031612"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: URL search params must be passed through Link hrefs for context preservation
 detail: |
   In Next.js 15, when navigating from a list page to a detail page and wanting to preserve context (sort, filter, search), you must build URLs that include these params as query strings. Create a helper function that builds the URL: `const buildUrl = (id) => { const params = new URLSearchParams(); if (sort) params.set('sort', sort); ...; return `/items/${id}?${params}`; }`. Use this in both Link hrefs AND router.push() calls. The detail page reads these with `useSearchParams()`. Don't rely on client-side state - URL is the source of truth.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:01:52.031612"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: documentation_gap
 summary: Clarifying questions phase was skipped initially due to unclear trigger
 detail: |
   The feature-dev skill defines Phase 3 (Clarifying Questions) as 'CRITICAL: DO NOT SKIP' but the agent initially tried to proceed directly after codebase exploration. The spec was actually quite detailed, but the agent should have explicitly gone through the checklist: edge cases, error handling, integration points, scope boundaries, design preferences. The phase should be mandatory even when requirements seem clear - there are always clarifications needed (as shown by the follow-up questions about edit mode UI, direct link handling, etc.). Strengthen the skill to make Phase 3 a hard gate that cannot be bypassed.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:01:52.031612"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: rule
 summary: Custom agents must be manually installed and won't appear in predefined lists
 detail: |
   When users install custom agents (like ui-visual-analyzer, ux-interaction-tester), these won't appear in the Task tool's documentation but can still be invoked by specifying their names as the subagent_type parameter. Don't assume an agent doesn't exist just because it's not in the predefined list. When a user says they've installed agents, acknowledge them and use them via Task tool with the exact names provided.
+  
 actionable: false
 
 ---
 timestamp: "2026-01-20T04:22:17.881808"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: documentation_gap
 summary: Session hints says 'Read repository code before using methods' but wasn't highlighted enough during sqlc workflow
 detail: |
   The .claude/CLAUDE.md session hints include 'Read repository code before using methods (names vary, e.g., SoftDeleteContact not DeleteContact)' and the gotchas table warns 'Not building after make sqlc' and 'sqlc changed types after regeneration'. However, during implementation, the agent still encountered compilation errors after sqlc regeneration due to type changes (pgtype.Bool). The workflow should emphasize: (1) ALWAYS run 'go build ./cmd/crm-api' immediately after 'make sqlc', (2) Check for pgtype wrapper type changes in repository layer, (3) This is so common it should be a mandatory step, not just a warning in a table. The documentation exists but needs to be surfaced more prominently in the sqlc workflow guidance.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:22:17.881808"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: Custom agents defined in ~/.claude/agents/ aren't automatically available to Task tool
 detail: |
   User created custom agent definitions (ui-visual-analyzer.md, ux-interaction-tester.md) in ~/.claude/agents/ directory with proper YAML frontmatter (name, description, tools, skills, model). However, these agents don't appear in the Task tool's available agents list. The Task tool only recognizes built-in agents like 'Bash', 'general-purpose', 'Explore', 'Plan', etc. Custom agents may require: (1) session restart, (2) a specific plugin to load them, or (3) they're meant to be used differently than via Task tool. The agent definitions reference 'skills' (e.g., agent-browser) which are separate from agents. This is a non-obvious limitation that wastes time when trying to use custom agents.
+  
 actionable: false
 
 ---
 timestamp: "2026-01-20T04:22:17.881808"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: architecture
 summary: agent-browser skill requires platform-specific binaries, not available for linux-arm64 by default
 detail: |
   The agent-browser skill is a Rust CLI tool that ships with precompiled binaries for common platforms (x64 Linux, macOS, Windows) but not for ARM64 Linux (Raspberry Pi). When invoked on an unsupported platform, it fails with 'No binary found for linux-arm64' and suggests running 'npm run build:native'. Building requires: (1) Rust toolchain installation via rustup, (2) pnpm/bun to install dependencies, (3) cargo build --release which can take 10-20 minutes on ARM devices. This is a significant time investment for what should be a quick visual test. Future agents should check platform compatibility before attempting to use agent-browser, or fall back to alternative testing methods.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:22:17.881808"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: rule
 summary: E2E tests provide sufficient UI validation - visual testing is optional for styling verification only
 detail: |
   The session showed that comprehensive E2E tests (76 passing tests using Playwright) already validate UI functionality including navigation, keyboard interactions, and user flows. Visual testing with tools like agent-browser primarily catches styling issues (layout, spacing, colors) rather than functional problems. When visual testing tools are unavailable or require significant setup, agents should recognize that passing E2E tests provide adequate coverage for functional correctness and proceed with confidence. Visual testing should be treated as a nice-to-have for design quality checks, not a mandatory gate for PR approval.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:22:17.881808"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: Background git push with pre-push hooks can be interrupted causing repeated failures
 detail: |
   When running 'git push' with pre-push hooks that run linters/tests, the command can take significant time. Running it in the background (run_in_background: true) makes it susceptible to user interruption (exit code 137), leaving the push incomplete. Each retry attempt restarts the entire hook sequence. Better approach: (1) Run pre-push checks manually first (make lint, make test), (2) Then push without background flag, or (3) Use --no-verify if checks already passed manually (but only with user permission). The hooks in this project run 'make lint' which includes backend and frontend linting.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:39:47.202148"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: Pre-push hooks can trigger mid-push, requiring session continuation
 detail: |
   The pre-push hook runs learning extraction and blocks the push if new learnings are found. This creates a workflow where: (1) push fails with exit code from hook, (2) agent must review extracted learnings, (3) commit the learnings file, (4) push again. Agents should expect this pattern and handle it smoothly rather than treating it as an error.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:39:47.202148"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: documentation_gap
 summary: sqlc build verification rule exists but wasn't consistently followed
 detail: |
   The core.md gotchas table explicitly states 'Not building after `make sqlc` | Always run `go build ./cmd/crm-api` to verify compilation' and 'sqlc changed types after regeneration | Update repository to use `pgtype.X{Value: v, Valid: true}` wrappers'. During the session, the agent had to discover these rules through trial and error when backend tests failed with missing handlers import. The existing documentation was correct but wasn't referenced proactively during implementation. This suggests agents need stronger prompting to check gotchas/rules BEFORE implementing, not after failures.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:39:47.202148"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: rule
 summary: Code review requested comprehensive tests across all layers
 detail: |
   When adding a new feature (keyboard navigation), the automated code review blocked the PR until tests were added at three layers: (1) E2E tests for user-facing functionality (arrow keys, nav bar, URL context), (2) Backend integration tests for new API queries (ListContactIDs with sorting/filtering), (3) Frontend unit tests for new hooks (useKeyboardNavigation). This demonstrates the project's testing standard: new features require comprehensive coverage, not just happy-path tests.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:39:47.202148"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: architecture
 summary: IDs-only API endpoints pattern for efficient navigation
 detail: |
   For keyboard navigation features, the pattern is to create a lightweight `ids_only=true` query parameter that returns just an array of IDs (not full objects). This enables the frontend to build navigation state efficiently without fetching full contact objects. The backend implements this by adding CASE statements to SELECT clauses that conditionally return either full columns or just the ID. This pattern can be reused for any list-based navigation feature (events, notes, etc.).
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:39:47.202148"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: Vitest config requires explicit invocation with bunx vitest
 detail: |
   Running tests with `bun test` doesn't respect the vitest.config.ts settings (like jsdom environment), causing 'document is not defined' errors for React hook tests. Must use `bunx vitest run` instead to properly load the config with jsdom environment. This is a bun-specific quirk where the test runner doesn't automatically pick up vitest configuration.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:39:47.202148"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: Git operations require full absolute paths from project root
 detail: |
   When the working directory context is unclear, git commands with relative paths like 'git add frontend/...' fail with 'pathspec did not match'. Always use 'cd /home/dev/workspace/PersonalCRM && git ...' pattern to ensure commands run from the correct directory. This is especially important when switching between different command contexts (frontend, backend, root).
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:39:47.202148"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: rule
 summary: Force-push requires --force-with-lease after amending commits
 detail: |
   When amending a commit that has already been pushed (e.g., to fix a lint error), use `git push --force-with-lease` instead of regular push. This safely overwrites the remote commit while protecting against overwriting others' changes. The session demonstrated this pattern: push failed → fix lint → amend commit → push --force-with-lease.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:56:22.011405"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: E2E tests fail when clicking contact name Link vs table row
 detail: |
   When testing navigation from the contacts list page, clicking on the contact name text (which is a Link) may not preserve URL context params the same way as clicking the table row (which uses handleRowClick with router.push). Both should use buildContactUrl(), but timing/state issues can cause test flakiness. Best practice: In E2E tests, either click directly on the row element or navigate directly to detail pages with params in the URL rather than relying on list page clicks.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:56:22.011405"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: E2E navigation tests must wait for IDs list to load before testing buttons
 detail: |
   Contact navigation bar buttons require the full IDs list to be fetched from the server before they can navigate. E2E tests that click navigation buttons immediately after page load will fail because the IDs array is still empty, making navigation impossible. Always use await page.waitForLoadState('networkidle') and wait for buttons to be enabled before clicking in tests.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:56:22.011405"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: Navigation bar selector must use text content not class names
 detail: |
   The ContactNavigationBar component uses standard Tailwind classes without distinctive class names like 'navigation'. E2E tests should locate navigation elements by visible text content (e.g., 'of' pattern for position indicator) or ARIA roles (e.g., getByRole('button', { name: 'Next contact' })), not by CSS class selectors. Searching for [class*='navigation'] will fail.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:56:22.011405"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: architecture
 summary: Contacts list page preserves navigation context in URLs via buildContactUrl
 detail: |
   The contacts list page (frontend/src/app/contacts/page.tsx) maintains navigation context (sort, order, search params) by building URLs with buildContactUrl() function. Both the Link component (line 216) and handleRowClick (line 82) use this function to append params. This ensures that when users click a contact from the list, the detail page receives the list context and can enable keyboard navigation. This pattern is critical for the navigation feature to work.
+  
 actionable: false
 
 ---
 timestamp: "2026-01-20T04:56:22.011405"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: rule
 summary: E2E tests should navigate directly with params, not rely on list page state
 detail: |
   When testing features that depend on URL params (like navigation context), E2E tests should navigate directly to the target URL with params (e.g., page.goto(`/contacts/${id}?sort=name&order=asc`)) rather than visiting the list page and clicking. This makes tests more reliable by avoiding state synchronization issues and ensures the feature being tested (URL param handling) is exercised directly.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T04:56:22.011405"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: git commit --amend during pre-push hooks requires --no-edit flag
 detail: |
   When amending a commit after test failures during pre-push, always use --no-edit flag: git commit --amend --no-edit -S. Without it, the editor will open which can't work in automated/agent contexts. The pre-commit hooks (formatting) will still run automatically and don't need manual triggering.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T05:06:41.761762"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: Backend integration test responses use api.APIResponse wrapper with .Data field
 detail: |
   When creating contacts in backend integration tests, the HTTP response is wrapped in an api.APIResponse structure where the actual contact data is in the .Data field (which is map[string]interface{}). To extract the ID, use: `resp.Data.(map[string]interface{})["id"].(string)`. Direct access to `resp["id"]` will panic with 'interface conversion: interface {} is nil, not string'. This is different from the test seed endpoints which may return unwrapped data.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T05:06:41.761762"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: Local tests passing doesn't guarantee CI will pass - run tests locally before pushing
 detail: |
   Tests can pass locally but fail in CI due to subtle differences in test setup or environment. The agent pushed code after local tests passed, but CI failed due to a type assertion panic in the test helper function. This caused unnecessary commit amendments and force pushes. Always run the full test suite locally (make test && make test-e2e) before pushing to avoid CI failures and wasted cycles.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T05:06:41.761762"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: rule
 summary: When extracting data from JSON responses in tests, check the response wrapper structure first
 detail: |
   Before writing test helpers that extract data from API responses, examine how existing tests handle the same endpoint. The contact creation endpoint returns data wrapped in api.APIResponse{Success: bool, Data: interface{}, Error: *string}, not raw JSON. Writing test helpers without checking the actual response structure leads to runtime panics. Pattern to follow: 1) Look at existing tests for the same/similar endpoints, 2) Unmarshal into api.APIResponse, 3) Assert resp.Success, 4) Type assert resp.Data to map[string]interface{}, 5) Extract nested fields.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T05:17:53.006717"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: All API responses are wrapped in api.APIResponse - never unmarshal directly to response types
 detail: |
   When writing tests for API endpoints, responses must be unmarshaled in two steps: first into api.APIResponse (which has success and data fields), then extract the actual data from the Data field by type-asserting to map[string]interface{}. Direct unmarshaling into response structs will fail. Example: var apiResp api.APIResponse; json.Unmarshal(body, &apiResp); data := apiResp.Data.(map[string]interface{})
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T05:17:53.006717"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: architecture
 summary: Helper functions in integration tests should follow the same API response parsing pattern
 detail: |
   When creating helper functions like createContact() in integration tests, they must also parse the wrapped api.APIResponse structure. This pattern should be consistent across all test helpers that make API calls. Don't parse responses directly - always unwrap from api.APIResponse first, even in helper functions.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T05:17:53.006717"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: Local tests passing doesn't guarantee CI passes - API wrapper parsing can differ
 detail: |
   Tests that pass locally can fail in CI if they make assumptions about response structure. In this session, contact_ids_test.go passed locally but failed in CI because the test was parsing responses incorrectly. The api.APIResponse wrapper pattern wasn't being handled properly. Always verify CI passes, don't trust local test runs alone.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T14:45:30.793044"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: Never merge PRs with UI changes without explicit user approval
 detail: |
   Agent merged PR #189 autonomously after CI passed, but user explicitly stated UI changes require human testing before merge. This is a critical workflow violation - PRs with visual/interactive components need manual verification of design, UX, and accessibility beyond automated tests. Agent should wait for explicit merge approval from user when UI is involved.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T14:45:30.793044"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: rule
 summary: Backend binary (backend/crm-api) must not be committed to git
 detail: |
   The compiled Go binary at backend/crm-api was accidentally staged and committed, requiring removal with 'git rm --cached backend/crm-api' and commit amend. This binary is a build artifact that should be gitignored. Future agents should verify staged files before committing to avoid including build artifacts, especially after running 'git add -A'.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T14:45:30.793044"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: architecture
 summary: Contact list uses default sort=last_contacted&order=desc when unspecified
 detail: |
   When contact list page has no explicit sort parameters in state (initialized as {page: 1, limit: 20}), the detail page defaults to sort=last_contacted&order=desc. This mismatch caused navigation order bugs - arrow keys navigated in different order than displayed list. Fix requires always including explicit sort/order params in URLs even when showing default view, preventing implicit vs explicit default conflicts.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T14:45:30.793044"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: Global Enter keydown handlers must check event.target type before preventDefault
 detail: |
   Global keyboard handlers that call preventDefault() on Enter key will break native button/link activation if not scoped properly. The handler excluded inputs/textareas but not buttons/links, so pressing Enter on 'Delete' or 'Cancel' buttons triggered edit mode instead of clicking the button. Required check: 'if (target.tagName === BUTTON || target.tagName === A || target.closest(button, a)) return' before preventDefault. Critical for keyboard accessibility.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T14:45:30.793044"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: documentation_gap
 summary: Testing docs don't warn about binary files in commits
 detail: |
   Agent committed backend/crm-api binary despite .ai/rules/core.md having a 'Common Gotchas' section. No existing rule warned about build artifacts. The core.md gotcha table should include: 'git add -A without checking | Review git status before commit, exclude binaries'. This would have prevented the issue during the commit workflow.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T15:17:14.462519"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
 summary: Loading flicker in navigation requires prefetching adjacent items
 detail: |
   When implementing keyboard navigation between items (contacts, etc.), the first visit to each item will show a loading flicker unless adjacent items are prefetched. React Query's prefetchQuery should be called in a useEffect when navigation IDs are available to prefetch prev/next items. Pattern: 1) Create usePrefetchX hook returning a callback, 2) In detail page, useEffect with [navigationIds, currentIndex] deps, 3) Prefetch navigationIds[currentIndex-1] and navigationIds[currentIndex+1]. This prevents visual flicker and creates smooth navigation UX.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T15:17:14.462519"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: architecture
 summary: React Query caching persists within session but not across hard refreshes
 detail: |
   React Query's cache is session-scoped - once data is fetched, it stays cached for the staleTime duration (e.g., 2 minutes) during the current browser session. However, hard refreshes clear the cache completely, causing all data to be refetched on first access. This is why prefetching is critical for navigation UX - the first navigation to each item in a session will always require a fetch unless prefetched. Don't rely on 'eventual caching' to solve flicker issues; implement explicit prefetching instead.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T15:17:14.462519"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: rule
 summary: Prefetching must match the query's staleTime to be effective
 detail: |
   When implementing prefetchQuery for navigation, use the same staleTime as the main query (e.g., 1000 * 60 * 2 for 2 minutes). If prefetch staleTime is shorter, the data may become stale before the user navigates, defeating the purpose. If it's longer, it may serve outdated data. Keep prefetch and query staleTime synchronized to ensure prefetched data is still fresh when accessed.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T15:17:14.462519"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: distinction
 summary: Prefetching happens in background - no await needed
 detail: |
   React Query's queryClient.prefetchQuery() fires asynchronously in the background and doesn't need to be awaited in the useEffect. The pattern is: call prefetchContact(nextId) and prefetchContact(prevId) without await, letting them populate the cache opportunistically. When navigation happens, if prefetch completed, data is instant; if not, normal loading occurs. Don't block the UI or add complexity waiting for prefetch completion.
+  
 actionable: true
 
 ---
 timestamp: "2026-01-20T15:17:14.462519"
-session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: documentation_gap
 summary: Feature development guide should mention prefetching for navigation UX
 detail: |
   The .ai/guides/feature-development.md or similar docs don't explicitly call out the need to implement prefetching when adding keyboard or UI navigation between items. Developers implementing navigation features may not realize that basic useQuery implementations cause flicker. The guide should include: 'When implementing navigation between items, always add prefetching of adjacent items to prevent loading flicker. See use-contacts.ts usePrefetchContact pattern.' This would save agents from discovering the issue only after user testing reveals the flicker.
-actionable: true
-
----
-timestamp: "2026-01-20T09:03:21.454665"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: gotcha
-summary: CI may not auto-trigger for all pushed commits
-detail: |
-  After addressing code review feedback and pushing commits 778cb0b and adcecb0 to the PR, GitHub CI did not automatically trigger for these new commits. The agent waited multiple times but no new CI runs appeared for the latest commit SHA. This is distinct from CI being slow - the workflow simply didn't start. Future agents should be aware that CI may not trigger automatically in all cases and should not indefinitely wait for runs that may never start.
-actionable: true
-
----
-timestamp: "2026-01-20T09:03:21.454665"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: gotcha
-summary: learnings.yaml merge conflicts need manual 'keep both' resolution
-detail: |
-  The learnings.yaml file is append-only and can have conflicts when parallel sessions both add learnings. The resolution is always to remove conflict markers and keep all learnings from both branches, since they come from different sessions with different session_ids. This happened when merging main after a parallel PR session added its own learnings. The file structure with '---' separators makes it straightforward to combine both sets.
-actionable: true
-
----
-timestamp: "2026-01-20T09:03:21.454665"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: architecture
-summary: Code review feedback can be outdated after rapid fixes
-detail: |
-  When a reviewer (like Claude Code Review) requests changes, and the agent immediately addresses them in new commits, the PR status will still show 'Changes requested' until the reviewer re-runs or CI picks up the new commits. The agent correctly pushed fixes (778cb0b and adcecb0) that addressed both review issues (API quota documentation and getTodayUTC helper), but the PR continued showing the old review status because CI hadn't re-run. Agents should understand that review status lags behind actual code state.
-actionable: true
-
----
-timestamp: "2026-01-20T09:03:21.454665"
-session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
-type: documentation_gap
-summary: No guidance on handling stalled CI workflows
-detail: |
-  The core rules and guides don't document what to do when GitHub CI doesn't trigger for new commits. The agent correctly waited and checked multiple times using 'gh run list' and 'gh pr checks', but there's no documented workflow for: (1) how long to wait before considering CI stalled, (2) whether/how to manually trigger workflows, (3) what causes CI to not auto-trigger. This led to uncertainty and repeated checks with no resolution. Documentation should cover CI troubleshooting patterns.
+  
 actionable: true
 

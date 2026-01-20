@@ -18,14 +18,26 @@ These rules apply to all AI agents working on this project.
 - Prefer boring, readable code over clever abstractions
 - Do not over-engineer or add unrequested features
 - Run lint/format after code changes
-- Run all tests before pushing
+- Run tests to verify changes work during development
 
 ## Testing Requirements
 
 - **Always add comprehensive tests** for new/changed code
-- Run `make test && make test-e2e` before pushing
-- All tests must pass before pushing (no skipping failures)
+- Run `make test && make test-e2e` to verify changes work
 - Unit tests for business logic, integration tests for DB operations, E2E for user flows
+
+## Pre-push Hooks
+
+Git pre-push hooks run automatically and may block push:
+
+- **Tests**: Runs lint and all test suites. Push blocked if tests fail.
+- **Learnings**: Extracts session learnings. If new learnings found, push blocked with instructions to review and apply them.
+
+When push is blocked by learnings extraction:
+1. Read the new learnings in `.ai/log/learnings/`
+2. For each actionable learning, decide if/where to apply it
+3. Commit any applied changes plus the learnings files
+4. Push again
 
 ## Code Review Approval Criteria
 

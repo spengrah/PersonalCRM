@@ -39,7 +39,7 @@ Load as needed, not upfront:
 
 ## Session Hints
 
-- Run `make test && make test-e2e` before pushing
+- Run `make test && make test-e2e` to verify changes work (also runs automatically on push)
 - Read repository code before using methods (names vary, e.g., `SoftDeleteContact` not `DeleteContact`)
 - Prefer integration tests over heavy mocking
 - Use `accelerated.GetCurrentTime()` not `time.Now()`
