@@ -575,3 +575,30 @@ detail: |
   The user requested removal of suggested_location property from learnings schema, stating 'the main agent should determine on its own where, if anywhere, to apply the learnings'. This philosophy wasn't documented anywhere - that learnings should not prescribe their location, allowing the applying agent to use full context and judgment. The agent initially updated messages to say 'apply it to the codebase' but user corrected to 'project docs/rules', revealing the agent misunderstood that learnings primarily enhance documentation/rules, not production code. This principle should be documented in learnings skill docs.
 actionable: true
 
+---
+timestamp: "2026-01-19T19:43:32.446338"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Pre-push hook skip logic must include documentation application locations
+detail: |
+  When agents extract learnings and apply them to documentation (`.ai/guides/`, `.ai/patterns/`, `.ai/rules/`, `CLAUDE.md`, `AGENTS.md`), the pre-push hook should skip re-extraction for pushes containing ONLY these files. Without this, the hook triggers extraction again after committing applied learnings, creating unnecessary work. The skip logic should identify 'learnings application locations' - places where insights get documented but don't represent new session work that would generate additional learnings.
+actionable: true
+
+---
+timestamp: "2026-01-19T19:43:32.446338"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: distinction
+summary: Skip learnings for documentation destinations, not infrastructure changes
+detail: |
+  There's a critical distinction between files where learnings are applied (`.ai/guides/`, `.ai/patterns/`, `.ai/rules/`, learnings output) versus infrastructure that implements features (`.ai/skills/`, `scripts/hooks/`). The former should skip extraction on push - they're destinations, not sources of new learnings. The latter should trigger extraction - modifying skills or hooks is development work that might generate insights. This prevents false positives while catching real learning opportunities.
+actionable: true
+
+---
+timestamp: "2026-01-19T19:43:32.446338"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: documentation_gap
+summary: Pre-push messaging didn't guide agents to judge/apply learnings
+detail: |
+  The pre-push hook's 'NEW learnings' message originally said 'Review .ai/log/learnings.yaml, then: git add && commit && push' without mentioning the judgment/application step. This caused agents to blindly commit learnings without evaluating whether they should be applied to documentation. The fix was changing the message to 'BLOCKED: New learnings extracted. See instructions above.' which points to the detailed instructions from extract-learnings.sh that explain the review/judge/apply workflow. The guidance needs to be explicit that learnings enhance documentation, not just get committed.
+actionable: true
+
