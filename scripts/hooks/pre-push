@@ -157,6 +157,7 @@ save_test_marker() {
 
 # Run test commands
 run_tests() {
+  cd "$PROJECT_ROOT"  # Ensure correct directory in background
   local enabled=$(jq -r '.test.enabled // false' "$CONFIG_FILE")
   if [[ "$enabled" != "true" ]]; then
     echo "SKIP" > "$TEST_RESULT"
@@ -205,6 +206,7 @@ run_tests() {
 
 # Run learnings extraction
 run_learnings() {
+  cd "$PROJECT_ROOT"  # Ensure correct directory in background
   local enabled=$(jq -r '.learnings.enabled // false' "$CONFIG_FILE")
   if [[ "$enabled" != "true" ]]; then
     echo "SKIP" > "$LEARN_RESULT"
