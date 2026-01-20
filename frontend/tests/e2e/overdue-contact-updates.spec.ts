@@ -127,7 +127,13 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     await page.waitForLoadState('networkidle')
 
     // Last contacted should show today's date (use first() as date may appear multiple times)
-    const today = new Date().toLocaleDateString()
+    // Note: Backend stores timestamps in UTC, and formatDateOnly extracts the UTC date part
+    // So the displayed date is the UTC date (e.g., if it's 10pm PST Jan 19, UTC is Jan 20)
+    const now = new Date()
+    const utcMonth = now.getUTCMonth() + 1
+    const utcDay = now.getUTCDate()
+    const utcYear = now.getUTCFullYear()
+    const today = `${utcMonth}/${utcDay}/${utcYear}`
     await expect(page.getByText(today).first()).toBeVisible()
   })
 
@@ -149,7 +155,13 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     await page.waitForTimeout(2000)
 
     // Last contacted should update to today (use first() as date may appear multiple times)
-    const today = new Date().toLocaleDateString()
+    // Note: Backend stores timestamps in UTC, and formatDateOnly extracts the UTC date part
+    // So the displayed date is the UTC date (e.g., if it's 10pm PST Jan 19, UTC is Jan 20)
+    const now = new Date()
+    const utcMonth = now.getUTCMonth() + 1
+    const utcDay = now.getUTCDate()
+    const utcYear = now.getUTCFullYear()
+    const today = `${utcMonth}/${utcDay}/${utcYear}`
     await expect(page.getByText(today).first()).toBeVisible()
 
     // Navigate back to dashboard
@@ -182,9 +194,15 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible()
 
     // 2. Contact Detail: should show today's date (use first() as date may appear multiple times)
+    // Note: Backend stores timestamps in UTC, and formatDateOnly extracts the UTC date part
+    // So the displayed date is the UTC date (e.g., if it's 10pm PST Jan 19, UTC is Jan 20)
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('networkidle')
-    const today = new Date().toLocaleDateString()
+    const now = new Date()
+    const utcMonth = now.getUTCMonth() + 1
+    const utcDay = now.getUTCDate()
+    const utcYear = now.getUTCFullYear()
+    const today = `${utcMonth}/${utcDay}/${utcYear}`
     await expect(page.getByText(today).first()).toBeVisible()
 
     // 3. Contacts List: should show today's date in the row

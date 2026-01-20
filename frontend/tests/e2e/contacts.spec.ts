@@ -239,10 +239,17 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.getByRole('button', { name: 'Mark as Contacted' }).click()
 
     // Wait for the update and verify the date is today
+    // Note: Backend stores timestamps in UTC, and formatDateOnly extracts the UTC date part
+    // So the displayed date is the UTC date (e.g., if it's 10pm PST Jan 19, UTC is Jan 20)
     await page.waitForLoadState('networkidle')
-    const today = new Date().toLocaleDateString('en-US')
+    const now = new Date()
+    // Get today's UTC date components and format them as MM/DD/YYYY
+    const utcMonth = now.getUTCMonth() + 1
+    const utcDay = now.getUTCDate()
+    const utcYear = now.getUTCFullYear()
+    const todayUtc = `${utcMonth}/${utcDay}/${utcYear}`
     const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    await expect(lastContactedRow.locator('dd span').first()).toContainText(today)
+    await expect(lastContactedRow.locator('dd span').first()).toContainText(todayUtc)
   })
 })
 
