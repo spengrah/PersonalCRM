@@ -116,3 +116,120 @@ detail: |
   When running 'git push' with pre-push hooks that run linters/tests, the command can take significant time. Running it in the background (run_in_background: true) makes it susceptible to user interruption (exit code 137), leaving the push incomplete. Each retry attempt restarts the entire hook sequence. Better approach: (1) Run pre-push checks manually first (make lint, make test), (2) Then push without background flag, or (3) Use --no-verify if checks already passed manually (but only with user permission). The hooks in this project run 'make lint' which includes backend and frontend linting.
 actionable: true
 
+---
+timestamp: "2026-01-20T04:39:47.202148"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: Pre-push hooks can trigger mid-push, requiring session continuation
+detail: |
+  The pre-push hook runs learning extraction and blocks the push if new learnings are found. This creates a workflow where: (1) push fails with exit code from hook, (2) agent must review extracted learnings, (3) commit the learnings file, (4) push again. Agents should expect this pattern and handle it smoothly rather than treating it as an error.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:39:47.202148"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: documentation_gap
+summary: sqlc build verification rule exists but wasn't consistently followed
+detail: |
+  The core.md gotchas table explicitly states 'Not building after `make sqlc` | Always run `go build ./cmd/crm-api` to verify compilation' and 'sqlc changed types after regeneration | Update repository to use `pgtype.X{Value: v, Valid: true}` wrappers'. During the session, the agent had to discover these rules through trial and error when backend tests failed with missing handlers import. The existing documentation was correct but wasn't referenced proactively during implementation. This suggests agents need stronger prompting to check gotchas/rules BEFORE implementing, not after failures.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:39:47.202148"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: rule
+summary: Code review requested comprehensive tests across all layers
+detail: |
+  When adding a new feature (keyboard navigation), the automated code review blocked the PR until tests were added at three layers: (1) E2E tests for user-facing functionality (arrow keys, nav bar, URL context), (2) Backend integration tests for new API queries (ListContactIDs with sorting/filtering), (3) Frontend unit tests for new hooks (useKeyboardNavigation). This demonstrates the project's testing standard: new features require comprehensive coverage, not just happy-path tests.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:39:47.202148"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: architecture
+summary: IDs-only API endpoints pattern for efficient navigation
+detail: |
+  For keyboard navigation features, the pattern is to create a lightweight `ids_only=true` query parameter that returns just an array of IDs (not full objects). This enables the frontend to build navigation state efficiently without fetching full contact objects. The backend implements this by adding CASE statements to SELECT clauses that conditionally return either full columns or just the ID. This pattern can be reused for any list-based navigation feature (events, notes, etc.).
+actionable: true
+
+---
+timestamp: "2026-01-20T04:39:47.202148"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: Vitest config requires explicit invocation with bunx vitest
+detail: |
+  Running tests with `bun test` doesn't respect the vitest.config.ts settings (like jsdom environment), causing 'document is not defined' errors for React hook tests. Must use `bunx vitest run` instead to properly load the config with jsdom environment. This is a bun-specific quirk where the test runner doesn't automatically pick up vitest configuration.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:39:47.202148"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: Git operations require full absolute paths from project root
+detail: |
+  When the working directory context is unclear, git commands with relative paths like 'git add frontend/...' fail with 'pathspec did not match'. Always use 'cd /home/dev/workspace/PersonalCRM && git ...' pattern to ensure commands run from the correct directory. This is especially important when switching between different command contexts (frontend, backend, root).
+actionable: true
+
+---
+timestamp: "2026-01-20T04:39:47.202148"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: rule
+summary: Force-push requires --force-with-lease after amending commits
+detail: |
+  When amending a commit that has already been pushed (e.g., to fix a lint error), use `git push --force-with-lease` instead of regular push. This safely overwrites the remote commit while protecting against overwriting others' changes. The session demonstrated this pattern: push failed → fix lint → amend commit → push --force-with-lease.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:56:22.011405"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: E2E tests fail when clicking contact name Link vs table row
+detail: |
+  When testing navigation from the contacts list page, clicking on the contact name text (which is a Link) may not preserve URL context params the same way as clicking the table row (which uses handleRowClick with router.push). Both should use buildContactUrl(), but timing/state issues can cause test flakiness. Best practice: In E2E tests, either click directly on the row element or navigate directly to detail pages with params in the URL rather than relying on list page clicks.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:56:22.011405"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: E2E navigation tests must wait for IDs list to load before testing buttons
+detail: |
+  Contact navigation bar buttons require the full IDs list to be fetched from the server before they can navigate. E2E tests that click navigation buttons immediately after page load will fail because the IDs array is still empty, making navigation impossible. Always use await page.waitForLoadState('networkidle') and wait for buttons to be enabled before clicking in tests.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:56:22.011405"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: Navigation bar selector must use text content not class names
+detail: |
+  The ContactNavigationBar component uses standard Tailwind classes without distinctive class names like 'navigation'. E2E tests should locate navigation elements by visible text content (e.g., 'of' pattern for position indicator) or ARIA roles (e.g., getByRole('button', { name: 'Next contact' })), not by CSS class selectors. Searching for [class*='navigation'] will fail.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:56:22.011405"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: architecture
+summary: Contacts list page preserves navigation context in URLs via buildContactUrl
+detail: |
+  The contacts list page (frontend/src/app/contacts/page.tsx) maintains navigation context (sort, order, search params) by building URLs with buildContactUrl() function. Both the Link component (line 216) and handleRowClick (line 82) use this function to append params. This ensures that when users click a contact from the list, the detail page receives the list context and can enable keyboard navigation. This pattern is critical for the navigation feature to work.
+actionable: false
+
+---
+timestamp: "2026-01-20T04:56:22.011405"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: rule
+summary: E2E tests should navigate directly with params, not rely on list page state
+detail: |
+  When testing features that depend on URL params (like navigation context), E2E tests should navigate directly to the target URL with params (e.g., page.goto(`/contacts/${id}?sort=name&order=asc`)) rather than visiting the list page and clicking. This makes tests more reliable by avoiding state synchronization issues and ensures the feature being tested (URL param handling) is exercised directly.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:56:22.011405"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: git commit --amend during pre-push hooks requires --no-edit flag
+detail: |
+  When amending a commit after test failures during pre-push, always use --no-edit flag: git commit --amend --no-edit -S. Without it, the editor will open which can't work in automated/agent contexts. The pre-commit hooks (formatting) will still run automatically and don't need manual triggering.
+actionable: true
+

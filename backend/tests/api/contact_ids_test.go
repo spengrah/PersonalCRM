@@ -101,10 +101,12 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		router.ServeHTTP(w, req)
 		require.Equal(t, http.StatusCreated, w.Code)
 
-		var resp map[string]interface{}
+		var resp api.APIResponse
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
-		return resp["id"].(string)
+		require.True(t, resp.Success)
+		contactData := resp.Data.(map[string]interface{})
+		return contactData["id"].(string)
 	}
 
 	// Helper to delete a contact
