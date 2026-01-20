@@ -25,8 +25,8 @@ const (
 	CalendarSourceName = "gcal"
 	// CalendarAttendeeSource is the source identifier for calendar attendee import candidates
 	CalendarAttendeeSource = "gcal_attendee"
-	// CalendarDefaultInterval is the default sync interval for calendar events (daily)
-	CalendarDefaultInterval = 24 * time.Hour
+	// CalendarDefaultInterval is the default sync interval for calendar events (every 15 minutes)
+	CalendarDefaultInterval = 15 * time.Minute
 	// CalendarPastSyncDays is the number of days to sync into the past.
 	// 1 year provides comprehensive meeting history for relationship context.
 	CalendarPastSyncDays = 365
