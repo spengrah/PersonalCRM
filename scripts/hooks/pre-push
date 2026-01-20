@@ -204,26 +204,44 @@ run_tests() {
   fi
 }
 
-# Check if only learnings-related docs are being pushed (skip extraction)
-# These are the destinations where learnings get applied, not code that generates learnings
+# Check if only learnings-related docs changed since last extraction
+# This checks commits SINCE last extraction, not all unpushed commits
 should_skip_learnings() {
-  local remote_branch
-  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/main"
-  local pushed_files
-  pushed_files=$(git diff --name-only "$remote_branch"...HEAD 2>/dev/null)
+  local state_file=".ai/log/.last-extraction-commit"
 
-  [[ -z "$pushed_files" ]] && return 0  # No changes
+  # If no state file, can't skip (first run)
+  [[ ! -f "$state_file" ]] && return 1
 
-  # Check if ALL pushed files are learnings application locations
+  local last_commit
+  last_commit=$(cat "$state_file" 2>/dev/null)
+
+  # Verify the commit exists
+  if ! git rev-parse --verify "$last_commit" >/dev/null 2>&1; then
+    return 1  # Invalid commit, must run extraction
+  fi
+
+  # Get files changed since last extraction
+  local changed_files
+  changed_files=$(git diff --name-only "$last_commit" HEAD 2>/dev/null)
+
+  [[ -z "$changed_files" ]] && return 0  # No changes since extraction
+
+  # Check if ALL changed files are learnings application locations
   while IFS= read -r file; do
     case "$file" in
       .ai/log/*|.ai/guides/*|.ai/patterns/*|.ai/rules/*) ;;  # Skip these
       .claude/CLAUDE.md|CLAUDE.md|AGENTS.md) ;;              # Skip these
       *) return 1 ;;  # Found a file that might generate learnings
     esac
-  done <<< "$pushed_files"
+  done <<< "$changed_files"
 
-  return 0  # Only learnings docs, skip extraction
+  return 0  # Only learnings docs changed since last extraction
+}
+
+# Save current commit as last extraction point
+save_extraction_commit() {
+  local state_file=".ai/log/.last-extraction-commit"
+  git rev-parse HEAD > "$state_file"
 }
 
 # Run learnings extraction (runs synchronously for reliable temp file writing)
@@ -253,6 +271,9 @@ run_learnings() {
   set -e
 
   if [[ "$exit_code" -eq 0 ]] || [[ "$exit_code" -eq 2 ]]; then
+    # Save extraction point so we can skip next time if only learnings docs change
+    save_extraction_commit
+
     # Check if new learnings were added (uncommitted changes to file)
     if git diff --quiet .ai/log/learnings.yaml 2>/dev/null; then
       echo "  [learn] OK No new learnings" >&2
