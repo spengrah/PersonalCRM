@@ -358,3 +358,83 @@ detail: |
 actionable: true
 suggested_location: .ai/guides/onboarding.md
 
+---
+timestamp: "2026-01-19T18:33:25.260408"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Learnings extraction agent instructions must be shown to agent, not hidden
+detail: |
+  The pre-push hook was redirecting extract-learnings.sh stderr to /dev/null (>/dev/null 2>&1), which hid the agent instructions telling Claude to review and apply learnings. When learnings are extracted, the agent needs to see the instructions on stderr. Fix: Only hide stdout, show stderr (>/dev/null without 2>&1), and handle exit code 2 as 'new learnings' not 'failure'.
+actionable: true
+suggested_location: .ai/guides/architecture.md
+
+---
+timestamp: "2026-01-19T18:33:25.260408"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: "Extract-learnings.sh uses exit codes to signal results: 0=none, 2=new learnings"
+detail: |
+  The extract-learnings.sh script uses exit codes to communicate results: exit 0 means no new learnings, exit 2 means new learnings extracted (with agent instructions on stderr). Pre-push hooks must handle exit 2 as success-with-action-needed, not as failure. This allows the script to both signal state and provide agent instructions in one call.
+actionable: true
+suggested_location: .ai/guides/learnings-system.md
+
+---
+timestamp: "2026-01-19T18:33:25.260408"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Each trigger type needs its own case in extract-learnings.sh with proper messaging
+detail: |
+  The extract-learnings.sh script handles different triggers (pre-compact, subagent-stop, pre-push) with different messaging. Pre-push was falling through to default case which didn't provide agent instructions. Each trigger needs: (1) appropriate exit code, (2) message on correct stream (stderr for agent, stdout for human), (3) instructions matching the context (e.g., pre-push tells agent to apply learnings before committing).
+actionable: true
+suggested_location: .ai/guides/learnings-system.md
+
+---
+timestamp: "2026-01-19T18:33:25.260408"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: documentation_gap
+summary: Agent didn't know learnings flow included review+apply step before committing
+detail: |
+  When pre-push extracted learnings, the agent immediately tried to commit them without reviewing or applying actionable ones first. The intended flow is: extract → agent reviews → agent applies actionable learnings → commit everything together. The gap: extract-learnings.sh had cases for pre-compact/subagent-stop but not pre-push, so no instructions were shown. Fix needed: Add pre-push case with clear instructions. This reveals the learnings documentation should explicitly state the review+apply requirement.
+actionable: true
+suggested_location: .ai/guides/learnings-system.md
+
+---
+timestamp: "2026-01-19T18:33:25.260408"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: rule
+summary: Learnings flow requires agent judgment on applying each learning individually
+detail: |
+  When learnings are extracted, the agent must not blindly commit them. The correct flow: (1) Read new learnings from .ai/log/learnings.yaml, (2) For each actionable learning, use judgment to decide whether and how to apply it to suggested_location, (3) Apply learnings that make sense, (4) Commit learnings file plus any applied changes together. User explicitly asked 'how come you aren't using your judgement to apply extracted learnings?' when agent skipped this step.
+actionable: true
+suggested_location: .ai/rules/learnings.md
+
+---
+timestamp: "2026-01-19T18:35:45.725926"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Backgrounded bash functions with `set -e` may silently fail to write output files
+detail: |
+  When a bash function is backgrounded with `&` and contains commands that exit with non-zero status, even if properly handled with `if/elif`, the file writes may not complete if `set -e` is active in the parent script. The `wait` command will wait for completion, but the backgrounded function's environment may not properly inherit or handle the temp file path variable (`$LEARN_RESULT`). This caused the pre-push hook to show empty learnings status despite extraction completing successfully. The issue manifests as: (1) extraction runs and shows AGENT message, (2) exit code 2 is returned, (3) but `echo "NEW" > "$LEARN_RESULT"` doesn't persist, (4) main script reads empty value from temp file.
+actionable: true
+suggested_location: .ai/guides/architecture.md
+
+---
+timestamp: "2026-01-19T18:35:45.725926"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Pre-push hook learnings check let push succeed when result file was empty
+detail: |
+  The pre-push hook's learnings status check didn't properly handle the empty string case. When `LEARN_STATUS=$(cat "$LEARN_RESULT")` returned empty (due to the backgrounded function failing to write), the subsequent check `if [[ "$LEARN_STATUS" == "NEW" ]]` evaluated to false, allowing the push to proceed even though new learnings were extracted. The check should explicitly handle empty/missing status as a failure case rather than implicitly treating it as success.
+actionable: true
+suggested_location: .ai/guides/architecture.md
+
+---
+timestamp: "2026-01-19T18:35:45.725926"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: Bash temp file communication between main script and background functions needs explicit path export
+detail: |
+  When using temp files for inter-process communication between a main bash script and backgrounded functions, the temp file path variable must be explicitly exported or the file path must be passed as a parameter. Simply setting `TEMP_FILE=$(mktemp)` before backgrounding isn't sufficient - backgrounded functions may not reliably access the variable. Better pattern: pass the path as a function argument: `run_function "$TEMP_FILE" &` rather than relying on variable inheritance.
+actionable: true
+suggested_location: .ai/guides/architecture.md
+

@@ -156,24 +156,26 @@ save_test_marker() {
 }
 
 # Run test commands
+# Args: $1 = result file path (passed explicitly for background reliability)
 run_tests() {
+  local result_file="$1"
   cd "$PROJECT_ROOT"  # Ensure correct directory in background
   local enabled=$(jq -r '.test.enabled // false' "$CONFIG_FILE")
   if [[ "$enabled" != "true" ]]; then
-    echo "SKIP" > "$TEST_RESULT"
+    echo "SKIP" > "$result_file"
     return
   fi
 
   # Check if we can skip tests
   if should_skip_tests; then
     echo "  [test] OK Skipped (only learnings changed since last pass)" >&2
-    echo "PASS" > "$TEST_RESULT"
+    echo "PASS" > "$result_file"
     return
   fi
 
   local count=$(jq '.test.commands | length' "$CONFIG_FILE")
   if [[ "$count" -eq 0 ]]; then
-    echo "SKIP" > "$TEST_RESULT"
+    echo "SKIP" > "$result_file"
     return
   fi
 
@@ -197,10 +199,10 @@ run_tests() {
   done
 
   if [[ "$failed" -eq 1 ]]; then
-    echo "FAIL" > "$TEST_RESULT"
+    echo "FAIL" > "$result_file"
   else
     save_test_marker
-    echo "PASS" > "$TEST_RESULT"
+    echo "PASS" > "$result_file"
   fi
 }
 
@@ -225,18 +227,20 @@ should_skip_learnings() {
 }
 
 # Run learnings extraction
+# Args: $1 = result file path (passed explicitly for background reliability)
 run_learnings() {
+  local result_file="$1"
   cd "$PROJECT_ROOT"  # Ensure correct directory in background
   local enabled=$(jq -r '.learnings.enabled // false' "$CONFIG_FILE")
   if [[ "$enabled" != "true" ]]; then
-    echo "SKIP" > "$LEARN_RESULT"
+    echo "SKIP" > "$result_file"
     return
   fi
 
   # Skip if only learnings files are being pushed
   if should_skip_learnings; then
     echo "  [learn] OK Skipped (only learnings files)" >&2
-    echo "PASS" > "$LEARN_RESULT"
+    echo "PASS" > "$result_file"
     return
   fi
 
@@ -248,13 +252,13 @@ run_learnings() {
 
   if [[ "$exit_code" -eq 0 ]]; then
     echo "  [learn] OK No new learnings" >&2
-    echo "PASS" > "$LEARN_RESULT"
+    echo "PASS" > "$result_file"
   elif [[ "$exit_code" -eq 2 ]]; then
     # Exit 2 = new learnings extracted, agent message already shown
-    echo "NEW" > "$LEARN_RESULT"
+    echo "NEW" > "$result_file"
   else
     echo "  [learn] WARN Extraction failed (non-blocking)" >&2
-    echo "PASS" > "$LEARN_RESULT"
+    echo "PASS" > "$result_file"
   fi
 }
 
@@ -270,9 +274,9 @@ if [[ "$LINT_STATUS" == "FAIL" ]]; then
   exit 1
 fi
 
-# Run tests and learnings in parallel
-run_tests &
-run_learnings &
+# Run tests and learnings in parallel (pass temp file paths explicitly for background reliability)
+run_tests "$TEST_RESULT" &
+run_learnings "$LEARN_RESULT" &
 wait
 
 # Collect results
