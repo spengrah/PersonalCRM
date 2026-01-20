@@ -13,6 +13,29 @@ test.describe('Contacts - TestAPI Seeded', () => {
     await testApi.cleanup()
   })
 
+  test('should use leading-normal on contact name to prevent descender clipping', async ({
+    page,
+  }) => {
+    // Names with descenders (g, y, p, q, j) should not be clipped
+    const { ids } = await testApi.seedContacts([
+      {
+        full_name: 'Gregory Yancy',
+      },
+    ])
+
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Gregory Yancy`
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('networkidle')
+
+    // Verify the heading is visible and has leading-normal class (not leading-7)
+    const heading = page.getByRole('heading', { name: fullName })
+    await expect(heading).toBeVisible()
+    await expect(heading).toHaveClass(/leading-normal/)
+    await expect(heading).not.toHaveClass(/leading-7/)
+  })
+
   test('should truncate long location with tooltip in contacts table', async ({ page }) => {
     // Create a very long location that will definitely overflow
     const longLocation =

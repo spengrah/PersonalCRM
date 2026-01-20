@@ -273,7 +273,7 @@ export default function ContactDetailPage() {
         <div className="max-w-3xl mx-auto py-6 sm:px-6 lg:px-8">
           <div className="md:flex md:items-center md:justify-between mb-6">
             <div className="flex-1 min-w-0">
-              <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
+              <h2 className="text-2xl font-bold leading-normal text-gray-900 sm:text-3xl sm:truncate">
                 Edit Contact
               </h2>
               <p className="mt-1 text-sm text-gray-500">
@@ -339,10 +339,9 @@ export default function ContactDetailPage() {
         {/* Header */}
         <div className="md:flex md:items-center md:justify-between mb-6">
           <div className="flex-1 min-w-0">
-            <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
+            <h2 className="text-2xl font-bold leading-normal text-gray-900 sm:text-3xl sm:truncate">
               {contact.full_name}
             </h2>
-            <p className="mt-1 text-sm text-gray-500">Contact details and information</p>
           </div>
           <div className="mt-4 flex space-x-3 md:mt-0 md:ml-4">
             <Button
@@ -374,9 +373,6 @@ export default function ContactDetailPage() {
         <div className="bg-white shadow overflow-hidden sm:rounded-lg">
           <div className="px-4 py-5 sm:px-6">
             <h3 className="text-lg leading-6 font-medium text-gray-900">Contact Information</h3>
-            <p className="mt-1 max-w-2xl text-sm text-gray-500">
-              Personal details and contact information.
-            </p>
           </div>
           <div className="border-t border-gray-200">
             <dl className="divide-y divide-gray-200">

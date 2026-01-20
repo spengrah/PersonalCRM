@@ -401,7 +401,7 @@ export default function ImportsPage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center space-x-3">
               <CloudDownload className="w-8 h-8 text-blue-600" />
-              <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
+              <h2 className="text-2xl font-bold leading-normal text-gray-900 sm:text-3xl sm:truncate">
                 Import Contacts
               </h2>
             </div>
