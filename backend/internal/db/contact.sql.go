@@ -273,6 +273,72 @@ func (q *Queries) HardDeleteContact(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const ListContactIDs = `-- name: ListContactIDs :many
+SELECT id FROM contact
+WHERE deleted_at IS NULL
+`
+
+// Lightweight query returning only IDs for navigation
+func (q *Queries) ListContactIDs(ctx context.Context) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, ListContactIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListContactIDsSorted = `-- name: ListContactIDsSorted :many
+SELECT id FROM contact
+WHERE deleted_at IS NULL
+ORDER BY
+  CASE WHEN $1 = 'name' AND $2 = 'asc' THEN full_name END ASC,
+  CASE WHEN $1 = 'name' AND $2 = 'desc' THEN full_name END DESC,
+  CASE WHEN $1 = 'location' AND $2 = 'asc' THEN COALESCE(location, '') END ASC,
+  CASE WHEN $1 = 'location' AND $2 = 'desc' THEN COALESCE(location, '') END DESC,
+  CASE WHEN $1 = 'birthday' AND $2 = 'asc' THEN birthday END ASC NULLS LAST,
+  CASE WHEN $1 = 'birthday' AND $2 = 'desc' THEN birthday END DESC NULLS FIRST,
+  CASE WHEN $1 = 'last_contacted' AND $2 = 'asc' THEN last_contacted END ASC NULLS LAST,
+  CASE WHEN $1 = 'last_contacted' AND $2 = 'desc' THEN last_contacted END DESC NULLS FIRST
+`
+
+type ListContactIDsSortedParams struct {
+	SortField interface{} `json:"sort_field"`
+	SortOrder interface{} `json:"sort_order"`
+}
+
+// Lightweight query returning only IDs with sorting for navigation
+func (q *Queries) ListContactIDsSorted(ctx context.Context, arg ListContactIDsSortedParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, ListContactIDsSorted, arg.SortField, arg.SortOrder)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListContacts = `-- name: ListContacts :many
 SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, notes FROM contact 
 WHERE deleted_at IS NULL
@@ -370,6 +436,89 @@ func (q *Queries) ListContactsSorted(ctx context.Context, arg ListContactsSorted
 			return nil, err
 		}
 		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SearchContactIDs = `-- name: SearchContactIDs :many
+SELECT c.id FROM contact c
+LEFT JOIN (
+  SELECT contact_id, string_agg(value, ' ') AS method_values
+  FROM contact_method
+  GROUP BY contact_id
+) cm ON cm.contact_id = c.id
+WHERE c.deleted_at IS NULL
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
+ORDER BY ts_rank(
+  to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
+  plainto_tsquery('english', $1)
+) DESC
+`
+
+// Lightweight query returning only IDs with search for navigation
+func (q *Queries) SearchContactIDs(ctx context.Context, plaintoTsquery string) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, SearchContactIDs, plaintoTsquery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SearchContactIDsSorted = `-- name: SearchContactIDsSorted :many
+SELECT c.id FROM contact c
+LEFT JOIN (
+  SELECT contact_id, string_agg(value, ' ') AS method_values
+  FROM contact_method
+  GROUP BY contact_id
+) cm ON cm.contact_id = c.id
+WHERE c.deleted_at IS NULL
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
+ORDER BY
+  CASE WHEN $2 = 'name' AND $3 = 'asc' THEN c.full_name END ASC,
+  CASE WHEN $2 = 'name' AND $3 = 'desc' THEN c.full_name END DESC,
+  CASE WHEN $2 = 'location' AND $3 = 'asc' THEN COALESCE(c.location, '') END ASC,
+  CASE WHEN $2 = 'location' AND $3 = 'desc' THEN COALESCE(c.location, '') END DESC,
+  CASE WHEN $2 = 'birthday' AND $3 = 'asc' THEN c.birthday END ASC NULLS LAST,
+  CASE WHEN $2 = 'birthday' AND $3 = 'desc' THEN c.birthday END DESC NULLS FIRST,
+  CASE WHEN $2 = 'last_contacted' AND $3 = 'asc' THEN c.last_contacted END ASC NULLS LAST,
+  CASE WHEN $2 = 'last_contacted' AND $3 = 'desc' THEN c.last_contacted END DESC NULLS FIRST
+`
+
+type SearchContactIDsSortedParams struct {
+	SearchQuery string      `json:"search_query"`
+	SortField   interface{} `json:"sort_field"`
+	SortOrder   interface{} `json:"sort_order"`
+}
+
+// Lightweight query returning only IDs with search and sorting for navigation
+func (q *Queries) SearchContactIDsSorted(ctx context.Context, arg SearchContactIDsSortedParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, SearchContactIDsSorted, arg.SearchQuery, arg.SortField, arg.SortOrder)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

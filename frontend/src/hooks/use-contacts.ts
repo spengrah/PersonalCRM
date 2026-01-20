@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { contactsApi } from '@/lib/contacts-api'
+import { contactsApi, type ContactIDsParams } from '@/lib/contacts-api'
 import { contactKeys, invalidateFor } from '@/lib/query-invalidation'
 import type { CreateContactRequest, UpdateContactRequest, ContactListParams } from '@/types/contact'
 
@@ -32,6 +32,15 @@ export function useOverdueContacts() {
     staleTime: 1000 * 60 * 5, // 5 minutes
     refetchOnWindowFocus: true,
     // No refetchInterval needed - invalidation handles updates after mutations
+  })
+}
+
+// Get contact IDs only (lightweight, for navigation)
+export function useContactIDs(params: ContactIDsParams = {}) {
+  return useQuery({
+    queryKey: [...contactKeys.lists(), 'navigation-ids', params],
+    queryFn: () => contactsApi.getContactIDs(params),
+    staleTime: 1000 * 60 * 5, // 5 minutes - navigation list doesn't need to be super fresh
   })
 }
 

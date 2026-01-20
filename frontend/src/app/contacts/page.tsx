@@ -34,12 +34,14 @@ function ContactsTable({
   loading,
   sortBy,
   sortOrder,
+  searchTerm,
   onSort,
 }: {
   contacts: Contact[]
   loading: boolean
   sortBy?: SortField
   sortOrder?: 'asc' | 'desc'
+  searchTerm?: string
   onSort: (field: SortField) => void
 }) {
   const router = useRouter()
@@ -67,8 +69,18 @@ function ContactsTable({
     )
   }
 
+  // Build URL with navigation context params
+  const buildContactUrl = (contactId: string) => {
+    const params = new URLSearchParams()
+    if (sortBy) params.set('sort', sortBy)
+    if (sortOrder) params.set('order', sortOrder)
+    if (searchTerm) params.set('search', searchTerm)
+    const queryString = params.toString()
+    return `/contacts/${contactId}${queryString ? `?${queryString}` : ''}`
+  }
+
   const handleRowClick = (contactId: string) => {
-    router.push(`/contacts/${contactId}`)
+    router.push(buildContactUrl(contactId))
   }
 
   const handleMarkAsContacted = async (e: React.MouseEvent, contactId: string) => {
@@ -201,7 +213,7 @@ function ContactsTable({
                   </div>
                   <div className="ml-4">
                     <div className="text-sm font-medium text-gray-900">
-                      <Link href={`/contacts/${contact.id}`} className="hover:text-blue-600">
+                      <Link href={buildContactUrl(contact.id)} className="hover:text-blue-600">
                         {contact.full_name}
                       </Link>
                     </div>
@@ -442,6 +454,7 @@ export default function ContactsPage() {
             loading={isLoading}
             sortBy={params.sort}
             sortOrder={params.order}
+            searchTerm={searchTerm || undefined}
             onSort={handleSort}
           />
         </div>

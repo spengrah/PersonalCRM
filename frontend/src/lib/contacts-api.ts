@@ -15,6 +15,17 @@ export interface ContactsListResponse {
   pages: number
 }
 
+export interface ContactIDsResponse {
+  ids: string[]
+  total: number
+}
+
+export interface ContactIDsParams {
+  sort?: string
+  order?: 'asc' | 'desc'
+  search?: string
+}
+
 export interface UpdateLastContactedRequest {
   last_contacted?: string // ISO 8601 date string (YYYY-MM-DD)
 }
@@ -72,5 +83,17 @@ export const contactsApi = {
   // Get overdue contacts
   getOverdueContacts: async (): Promise<OverdueContact[]> => {
     return apiClient.get<OverdueContact[]>('/api/v1/contacts/overdue')
+  },
+
+  // Get contact IDs only (lightweight, for navigation)
+  getContactIDs: async (params: ContactIDsParams = {}): Promise<ContactIDsResponse> => {
+    const queryParams = {
+      ids_only: 'true',
+      ...(params.sort && { sort: params.sort }),
+      ...(params.order && { order: params.order }),
+      ...(params.search && { search: params.search }),
+    }
+
+    return apiClient.get<ContactIDsResponse>('/api/v1/contacts', queryParams)
   },
 }

@@ -126,6 +126,10 @@ type Querier interface {
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
 	ListAllUnmatchedExternalContacts(ctx context.Context, arg ListAllUnmatchedExternalContactsParams) ([]*ExternalContact, error)
+	// Lightweight query returning only IDs for navigation
+	ListContactIDs(ctx context.Context) ([]pgtype.UUID, error)
+	// Lightweight query returning only IDs with sorting for navigation
+	ListContactIDsSorted(ctx context.Context, arg ListContactIDsSortedParams) ([]pgtype.UUID, error)
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
 	// Contact method queries
 	ListContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactMethod, error)
@@ -169,6 +173,10 @@ type Querier interface {
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
+	// Lightweight query returning only IDs with search for navigation
+	SearchContactIDs(ctx context.Context, plaintoTsquery string) ([]pgtype.UUID, error)
+	// Lightweight query returning only IDs with search and sorting for navigation
+	SearchContactIDsSorted(ctx context.Context, arg SearchContactIDsSortedParams) ([]pgtype.UUID, error)
 	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error)
 	SearchContactsSorted(ctx context.Context, arg SearchContactsSortedParams) ([]*Contact, error)
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
