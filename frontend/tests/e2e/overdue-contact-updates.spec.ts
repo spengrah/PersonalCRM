@@ -1,5 +1,6 @@
 import { test, expect, APIRequestContext } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
+import { getTodayUTC } from './helpers/date-utils'
 
 /**
  * Comprehensive E2E tests for overdue contact updates.
@@ -127,7 +128,7 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     await page.waitForLoadState('networkidle')
 
     // Last contacted should show today's date (use first() as date may appear multiple times)
-    const today = new Date().toLocaleDateString()
+    const today = getTodayUTC()
     await expect(page.getByText(today).first()).toBeVisible()
   })
 
@@ -149,7 +150,7 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     await page.waitForTimeout(2000)
 
     // Last contacted should update to today (use first() as date may appear multiple times)
-    const today = new Date().toLocaleDateString()
+    const today = getTodayUTC()
     await expect(page.getByText(today).first()).toBeVisible()
 
     // Navigate back to dashboard
@@ -184,7 +185,7 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     // 2. Contact Detail: should show today's date (use first() as date may appear multiple times)
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('networkidle')
-    const today = new Date().toLocaleDateString()
+    const today = getTodayUTC()
     await expect(page.getByText(today).first()).toBeVisible()
 
     // 3. Contacts List: should show today's date in the row

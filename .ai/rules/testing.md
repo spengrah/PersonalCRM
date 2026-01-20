@@ -220,3 +220,18 @@ This applies to all test helpers that call API endpoints.
 2. **Verify unrelated data is unaffected** - ensure operations are scoped correctly
 3. **Use descriptive test names** - `TestContactRepository_SoftDelete_DoesNotAffectOtherContacts`
 4. **Clean up after tests** - use defer or afterEach hooks
+
+## E2E Date Testing
+
+When testing date display in E2E tests, use UTC date components if the backend stores UTC timestamps:
+
+```typescript
+// ❌ WRONG - fails late at night when UTC has rolled to next day
+const today = new Date().toLocaleDateString()
+
+// ✅ CORRECT - matches how formatDateOnly extracts UTC date portion
+const now = new Date()
+const today = `${now.getUTCMonth() + 1}/${now.getUTCDate()}/${now.getUTCFullYear()}`
+```
+
+The `formatDateOnly` utility extracts the UTC date portion from ISO strings (e.g., `2026-01-20T06:00:00Z` → `1/20/2026`), so displayed dates show UTC dates, not local dates. Tests using local date methods like `toLocaleDateString()` will fail when run late at night and UTC has already rolled over to the next day.
