@@ -10,7 +10,7 @@ Extract project-relevant learnings from session transcripts using headless Claud
 - Mines session transcripts including thinking blocks
 - Incremental extraction (only processes new content since last call)
 - Outputs structured learnings (type, summary, detail, actionable)
-- Deduplicates by session + summary
+- Deduplicates by summary within each session file
 
 ```bash
 # Preview transcript (no extraction)
@@ -31,7 +31,7 @@ python extract-learnings.py --full
 - Requires `uv` to be installed
 
 **Output:**
-- Learnings appended to `.ai/log/learnings.yaml`
+- Learnings appended to `.ai/log/learnings/{session_id}.yaml`
 - Extraction state saved to `.ai/log/extraction-state.json` (gitignored)
 
 ## extract-learnings.sh
@@ -56,10 +56,14 @@ The `/learnings` skill (defined in `SKILL.md`) is the primary interface. It:
 3. Agent applies learnings to appropriate locations
 4. Agent commits learnings separately
 
-### When to run
+### When extraction runs
 
-- **Before pushing**: Agent rule in CLAUDE.md instructs running `/learnings` pre-push
-- **Session end**: Human runs `/learnings` manually before closing
+- **Before pushing**: Automatically via git pre-push hook
+- **Manual**: Run `/learnings` skill or `./extract-learnings.sh --trigger manual`
+
+Future triggers (not yet implemented):
+- Before compaction (PreCompact hook)
+- After subagents complete (SubagentStop hook)
 
 ### Incremental extraction
 
@@ -84,9 +88,15 @@ Each `/learnings` call only processes content after the last extraction, keeping
 
 Codex CLI stores sessions in `~/.codex/sessions/` as JSONL, but reasoning blocks are encrypted (`encrypted_content` field). Only brief summaries like "**Considering exploration plan**" are accessible. Without full reasoning, extraction value is limited.
 
-## Future: Hook integration
+## Hook Integration
 
-For automated extraction, hooks can be added later:
+### Implemented
+
+Git pre-push hook (`.git/hooks/pre-push`) runs extraction automatically before push.
+
+### Planned
+
+Claude Code hooks could automate extraction at other points:
 
 ```json
 {
@@ -99,4 +109,19 @@ For automated extraction, hooks can be added later:
     }]
   }
 }
+```
+
+## Migration Script
+
+`migrate-learnings.py` converts the old monolithic `learnings.yaml` to per-session files:
+
+```bash
+# Preview what would be created
+python migrate-learnings.py --dry-run
+
+# Run migration
+python migrate-learnings.py
+
+# Run migration and delete old file
+python migrate-learnings.py --delete-old
 ```

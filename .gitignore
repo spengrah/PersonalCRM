@@ -348,10 +348,10 @@ Personal CRM.app/
 # Claude cache (local)
 .claude/cache/
 
-# Learnings log (allow learnings.yaml and .gitkeep only)
+# Learnings log (allow learnings directory only)
 .ai/log/*
-!.ai/log/learnings.yaml
-!.ai/log/.gitkeep
+!.ai/log/learnings/
+!.ai/log/learnings/*
 
 # Git worktrees
 .worktrees/

@@ -44,10 +44,10 @@ echo "[extract-learnings] Running extraction (trigger: ${TRIGGER:-manual})..." >
 
 cd "$PROJECT_ROOT"
 
-# Capture state before extraction
+# Capture state before extraction (hash of learnings directory listing)
 BEFORE_HASH=""
-if [ -f .ai/log/learnings.yaml ]; then
-    BEFORE_HASH=$(md5sum .ai/log/learnings.yaml 2>/dev/null | cut -d' ' -f1 || md5 -q .ai/log/learnings.yaml 2>/dev/null)
+if [ -d .ai/log/learnings ]; then
+    BEFORE_HASH=$(ls -la .ai/log/learnings/ 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || ls -la .ai/log/learnings/ 2>/dev/null | md5 -q 2>/dev/null || echo "")
 fi
 
 # Run extraction
@@ -60,10 +60,10 @@ if [ $exit_code -ne 0 ]; then
     exit $exit_code
 fi
 
-# Check if learnings.yaml was modified
+# Check if learnings directory was modified
 AFTER_HASH=""
-if [ -f .ai/log/learnings.yaml ]; then
-    AFTER_HASH=$(md5sum .ai/log/learnings.yaml 2>/dev/null | cut -d' ' -f1 || md5 -q .ai/log/learnings.yaml 2>/dev/null)
+if [ -d .ai/log/learnings ]; then
+    AFTER_HASH=$(ls -la .ai/log/learnings/ 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || ls -la .ai/log/learnings/ 2>/dev/null | md5 -q 2>/dev/null || echo "")
 fi
 
 if [ "$BEFORE_HASH" = "$AFTER_HASH" ]; then
@@ -81,10 +81,10 @@ case "$TRIGGER" in
                     AGENT: LEARNINGS EXTRACTED
 ==============================================================
   New learnings from this session have been written to:
-  .ai/log/learnings.yaml
+  .ai/log/learnings/
 
   Before compaction, you should:
-  1. Read .ai/log/learnings.yaml
+  1. Read .ai/log/learnings/
   2. For each actionable learning, judge whether and where
      to apply it to project docs/rules
   3. Apply learnings now - context will be lost after compaction
@@ -101,10 +101,10 @@ EOF
                     AGENT: LEARNINGS EXTRACTED
 ==============================================================
   New learnings from this session have been written to:
-  .ai/log/learnings.yaml
+  .ai/log/learnings/
 
   You should:
-  1. Read .ai/log/learnings.yaml
+  1. Read .ai/log/learnings/
   2. For each actionable learning, judge whether and where
      to apply it to project docs/rules
 ==============================================================
@@ -120,10 +120,10 @@ EOF
                     AGENT: LEARNINGS EXTRACTED
 ==============================================================
   New learnings from this session have been written to:
-  .ai/log/learnings.yaml
+  .ai/log/learnings/
 
   Before pushing, you should:
-  1. Read the new learnings in .ai/log/learnings.yaml
+  1. Read the new learnings in .ai/log/learnings/
   2. For each actionable learning, judge whether and where
      to apply it to project docs/rules
   3. Commit learnings (and any applied changes)
@@ -136,14 +136,14 @@ EOF
     session-end)
         # Brief message for human visibility, exit 0 (agent can't act anyway)
         echo ""
-        echo "[extract-learnings] Session learnings saved to .ai/log/learnings.yaml"
+        echo "[extract-learnings] Session learnings saved to .ai/log/learnings/"
         echo ""
         exit 0
         ;;
     *)
         # For manual or unknown triggers, just note that learnings were extracted
         echo ""
-        echo "[extract-learnings] New learnings written to .ai/log/learnings.yaml"
+        echo "[extract-learnings] New learnings written to .ai/log/learnings/"
         echo ""
         exit 0
         ;;
