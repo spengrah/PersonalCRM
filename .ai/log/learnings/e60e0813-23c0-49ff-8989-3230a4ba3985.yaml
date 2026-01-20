@@ -160,3 +160,83 @@ detail: |
   
 actionable: true
 
+---
+timestamp: "2026-01-20T09:58:31.377962"
+type: gotcha
+summary: Git rebase updates the wrong branch when invoked from a different branch
+detail: |
+  When you run `git rebase origin/main` while on a different branch than your target branch, git will rebase the current branch instead of the intended branch. In the session, the agent was on `fix/keyboard-navigation-followup` when trying to rebase `refactor/per-session-learnings`, resulting in the wrong branch being rebased. The fix is to always ensure you've checked out the target branch before running `git rebase`.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:58:31.377962"
+type: gotcha
+summary: Learnings YAML file merge conflicts occur when parallel sessions append to monolithic file
+detail: |
+  When multiple feature branches are being worked on in parallel, they both append new learnings to the same `.ai/log/learnings.yaml` file. When these branches are merged, Git creates merge conflicts because both branches added content to the end of the file. The solution implemented was to split learnings into per-session files (`.ai/log/learnings/{session_id}.yaml`) so each session writes to its own file, eliminating merge conflicts entirely.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:58:31.377962"
+type: architecture
+summary: Per-session learnings files eliminate merge conflicts and improve organization
+detail: |
+  Migrated from a monolithic `.ai/log/learnings.yaml` file to per-session files at `.ai/log/learnings/{session_id}.yaml`. This architecture: (1) Prevents merge conflicts when parallel sessions extract learnings, (2) Makes it easy to see which learnings came from which session, (3) Allows pruning old session learnings without affecting others, (4) Removes the need for session_id field in each document since it's implicit in the filename. The migration script groups existing learnings by session_id and creates separate files.
+actionable: false
+
+---
+timestamp: "2026-01-20T09:58:31.377962"
+type: rule
+summary: Test instructions should focus on verification during development, not before push
+detail: |
+  Pre-push hooks automatically run tests, so instructing agents to 'run tests before pushing' is redundant for the push action itself. However, running tests during development (before you're ready to push) catches issues earlier and saves context. Agent instructions should say 'Run tests to verify changes work' or 'Run tests during development' rather than 'Run tests before pushing'. Updated in `.ai/rules/core.md` and `.claude/CLAUDE.md`.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:58:31.377962"
+type: rule
+summary: Agents should be aware of pre-push hooks that may require action
+detail: |
+  Pre-push hooks can block push operations and require agent action before push succeeds. For example, the learnings extraction hook blocks push if new learnings are found and instructs the agent to review and apply them. Core rules should mention that 'Git pre-push hooks run automatically and may block push, requiring you to review learnings or fix test failures before pushing again.' This helps agents understand the workflow when their push is blocked.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:58:31.377962"
+type: documentation_gap
+summary: Learnings skill README had outdated/inaccurate information about hook triggers
+detail: |
+  The README.md for the learnings skill claimed that PreCompact and SubagentStop hooks were implemented when they were actually planned future work. It also described pre-push as an 'agent rule' when it's actually programmatic. The documentation should clearly distinguish between 'Implemented' (git pre-push hook) and 'Planned' (PreCompact, SubagentStop) triggers, and accurately describe that extraction runs automatically via hooks rather than being an agent instruction. Fixed by updating the 'When extraction runs' and 'Hook Integration' sections to be accurate.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:58:31.377962"
+type: distinction
+summary: File path updates in documentation must be comprehensive across all references
+detail: |
+  When changing a file path structure (like moving from `.ai/log/learnings.yaml` to `.ai/log/learnings/{session_id}.yaml`), you must search and update ALL references across: agent instructions (CLAUDE.md, AGENTS.md), documentation (README.md, SKILL.md), rules (core.md), scripts (shell wrappers), and gitignore rules. Missing even one reference creates confusion. Use `grep -r "old-path" .ai/` to find all references before making the change.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:58:31.377962"
+type: gotcha
+summary: Gitignore requires both directory and contents patterns to unignore nested files
+detail: |
+  To unignore files within an ignored directory, you need TWO patterns: `!.ai/log/learnings/` to unignore the directory itself, AND `!.ai/log/learnings/*` to unignore its contents. Using only the directory pattern (`!.ai/log/learnings/`) is insufficient - Git still ignores the files inside. This is because Git's ignore rules apply hierarchically.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:58:31.377962"
+type: architecture
+summary: Learnings extraction uses directory hash instead of file hash for change detection
+detail: |
+  The shell wrapper checks if new learnings were extracted by comparing directory listing hashes before and after extraction: `ls -la .ai/log/learnings/ | md5sum`. This works for per-session files because any new or modified file changes the directory listing. The command includes `|| echo ""` fallback for when the directory doesn't exist yet. This is more robust than checking individual files when multiple sessions may create different files.
+actionable: false
+
+---
+timestamp: "2026-01-20T09:58:31.377962"
+type: gotcha
+summary: Session data persists across branch switches if files are in working tree
+detail: |
+  When switching branches with `git checkout main`, files created in the working tree (like migrated learnings files) persist even though they're not committed to the new branch. This caused confusion when the agent ran migration, switched to main, and found the learnings directory still existed from the previous migration run. The fix is to either: (1) clean the working tree before migration, or (2) re-run migration after switching to the new base branch to ensure correct state.
+actionable: true
+
