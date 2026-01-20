@@ -355,3 +355,4 @@ Personal CRM.app/
 
 # Git worktrees
 .worktrees/
+.ai/log/.transcript-temp.md

@@ -307,6 +307,7 @@ def extract_with_claude(transcript_path: Path, session_id: str, model: str = "cl
     Spawn headless Claude to extract learnings from transcript.
 
     Uses the user's existing Claude Code auth - no separate API key needed.
+    MCP servers are disabled via --strict-mcp-config to reduce startup overhead.
     """
     claude_cli = find_claude_cli()
     prompt = f"Read the session transcript at {transcript_path} and extract learnings."
@@ -319,6 +320,8 @@ def extract_with_claude(transcript_path: Path, session_id: str, model: str = "cl
         "--output-format", "json",
         "--json-schema", json.dumps(LEARNINGS_SCHEMA),
         "--no-session-persistence",
+        "--mcp-config", '{"mcpServers":{}}',  # Empty config - no MCP servers
+        "--strict-mcp-config",  # Ignore project MCP configs
     ]
 
     result = subprocess.run(
@@ -525,10 +528,10 @@ def main():
         print(transcript)
         sys.exit(0)
 
-    # Write transcript to temp file (avoids large stdin issues)
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-        f.write(transcript)
-        transcript_path = Path(f.name)
+    # Write transcript to project temp file (must be in project dir for headless Claude access)
+    transcript_path = Path(".ai/log/.transcript-temp.md")
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text(transcript)
 
     try:
         # Extract learnings with headless Claude
