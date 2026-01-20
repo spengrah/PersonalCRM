@@ -32,21 +32,23 @@ Learning types:
 
 ## 3. Apply Learnings
 
+**Important:** Learnings enhance project documentation and rules, not production code. You decide where (if anywhere) each learning belongs based on full context.
+
 For each actionable learning, decide:
 - Should it be applied now?
-- Where should it go? (use your judgment)
+- Where should it go?
 - What's the specific change?
+
+Possible destinations:
+- `.ai/rules/*.md` - Add to relevant rule
+- `.ai/patterns/*.md` - Create or update pattern
+- `.ai/guides/*.md` - Create or update guide
+- `CLAUDE.md` - Update agent instructions
 
 For `documentation_gap` types, focus on:
 - Finding the existing doc that failed
 - Understanding why it was missed (buried, unclear, too weak)
 - Strengthening it so future agents won't miss it
-
-Apply changes directly:
-- `AGENTS.md`
-- `.ai/patterns/*.md` -> Create or update pattern
-- `.ai/rules/*.md` -> Add to relevant rule
-- `.ai/guides/*.md` -> Create or update guide
 
 Not every learning needs immediate action. Use your judgment.
 

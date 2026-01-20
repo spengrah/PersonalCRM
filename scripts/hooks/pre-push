@@ -204,7 +204,8 @@ run_tests() {
   fi
 }
 
-# Check if only learnings files are being pushed (skip extraction to avoid infinite loop)
+# Check if only learnings-related docs are being pushed (skip extraction)
+# These are the destinations where learnings get applied, not code that generates learnings
 should_skip_learnings() {
   local remote_branch
   remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/main"
@@ -213,14 +214,16 @@ should_skip_learnings() {
 
   [[ -z "$pushed_files" ]] && return 0  # No changes
 
-  # Check if ALL pushed files are in .ai/log/
+  # Check if ALL pushed files are learnings application locations
   while IFS= read -r file; do
-    if [[ ! "$file" =~ ^\.ai/log/ ]]; then
-      return 1  # Found a non-learnings file, must run extraction
-    fi
+    case "$file" in
+      .ai/log/*|.ai/guides/*|.ai/patterns/*|.ai/rules/*) ;;  # Skip these
+      .claude/CLAUDE.md|CLAUDE.md|AGENTS.md) ;;              # Skip these
+      *) return 1 ;;  # Found a file that might generate learnings
+    esac
   done <<< "$pushed_files"
 
-  return 0  # Only learnings files, skip extraction
+  return 0  # Only learnings docs, skip extraction
 }
 
 # Run learnings extraction (runs synchronously for reliable temp file writing)
@@ -303,8 +306,7 @@ fi
 
 if [[ "$LEARN_STATUS" == "NEW" ]]; then
   echo "" >&2
-  echo "WARN: New learnings extracted. Review .ai/log/learnings.yaml" >&2
-  echo "  Then: git add .ai/log/ && git commit -m 'docs: session learnings' && git push" >&2
+  echo "BLOCKED: New learnings extracted. See instructions above." >&2
   echo "" >&2
   exit 1
 fi

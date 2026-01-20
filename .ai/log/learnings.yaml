@@ -548,3 +548,30 @@ detail: |
 actionable: true
 suggested_location: .ai/patterns/bash-exit-code-handling.md
 
+---
+timestamp: "2026-01-19T19:30:46.317727"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Learnings extraction runs on every push attempt, even when only learnings files changed
+detail: |
+  The pre-push hook initially ran learnings extraction even when only .ai/log/learnings.yaml was being pushed, creating an infinite loop situation. The fix required adding a should_skip_learnings() function that checks if all pushed files match ^.ai/log/ pattern and skips extraction in that case. Without this, the agent would commit learnings, push, trigger extraction again, find nothing new, but still waste time calling Claude unnecessarily.
+actionable: false
+
+---
+timestamp: "2026-01-19T19:30:46.317727"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: Pre-push hook uses exit code 2 to signal agent instructions vs exit 0 for normal pass
+detail: |
+  The PersonalCRM pre-push hook architecture differs from typical hooks by using exit code 2 (not exit 1 for failure) when new learnings are extracted. Exit 2 + stderr output signals 'show agent instructions and block push'. This requires synchronous execution of extract-learnings.sh because backgrounded processes with temp file communication don't reliably propagate non-zero exit codes to the parent shell. The hook reads result files to determine: SKIP/PASS (exit 0), NEW learnings (exit 2), or test/lint failures (exit 1).
+actionable: true
+
+---
+timestamp: "2026-01-19T19:30:46.317727"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: documentation_gap
+summary: Agent removed suggested_location but it wasn't documented that agents should self-determine where learnings apply
+detail: |
+  The user requested removal of suggested_location property from learnings schema, stating 'the main agent should determine on its own where, if anywhere, to apply the learnings'. This philosophy wasn't documented anywhere - that learnings should not prescribe their location, allowing the applying agent to use full context and judgment. The agent initially updated messages to say 'apply it to the codebase' but user corrected to 'project docs/rules', revealing the agent misunderstood that learnings primarily enhance documentation/rules, not production code. This principle should be documented in learnings skill docs.
+actionable: true
+
