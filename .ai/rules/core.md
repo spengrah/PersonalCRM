@@ -92,6 +92,8 @@ PostgreSQL
 | sqlc changed types after regeneration | Update repository to use `pgtype.X{Value: v, Valid: true}` wrappers |
 | `git add -A` includes binaries | Review `git status` before commit, exclude `backend/crm-api` |
 | Merging PRs with UI changes | Never merge UI PRs autonomously - wait for human review |
+| `git add path/[id]/file` fails | Use quotes: `git add "path/[id]/file"` (bash interprets brackets as globs) |
+| Fixing only one instance of a pattern | Search entire codebase and fix ALL instances to maintain consistency |
 
 ## Anti-Patterns
 
@@ -119,6 +121,14 @@ contact, err := queries.GetContact(ctx, id)
 
 // ✅ CORRECT - go through repository
 contact, err := h.contactRepo.GetContact(ctx, id)
+```
+
+```tsx
+// ❌ WRONG - leading-7 with truncate clips descenders (y, g, j, p, q)
+<h2 className="leading-7 sm:text-3xl sm:truncate">Gregory</h2>
+
+// ✅ CORRECT - leading-normal provides adequate line height
+<h2 className="leading-normal sm:text-3xl sm:truncate">Gregory</h2>
 ```
 
 ## Error Handling

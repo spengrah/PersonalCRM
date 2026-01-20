@@ -1,0 +1,40 @@
+---
+timestamp: "2026-01-20T13:13:57.698795"
+type: gotcha
+summary: Claude Code review checks require fixing ALL instances of a pattern, not just one
+detail: |
+  When fixing a UI bug (descender clipping from leading-7), the initial fix only updated one instance. The automated code review correctly flagged this as creating code style inconsistency - the same pattern existed in 6 other files and all needed to be updated. Future agents should: (1) search for all instances of the pattern being fixed across the entire codebase, (2) fix all instances in the same commit to maintain consistency. The reviewer specifically cited `.ai/rules/code-review.md` which requires consistent code style.
+actionable: true
+
+---
+timestamp: "2026-01-20T13:13:57.698795"
+type: rule
+summary: Always add test coverage when implementing fixes, even for CSS/visual changes
+detail: |
+  The code review requested test coverage for a line-height CSS fix. While visual testing is complex, a simple E2E test verifying the CSS class is present (`.toHaveClass('leading-normal')`) is valuable and expected. Future agents should: (1) add at least basic assertion tests for CSS class changes, (2) use descriptive test names that explain WHY (e.g., 'should use leading-normal to prevent descender clipping'), (3) include names with descenders (g, y, p, q, j) in test data to make the purpose clear.
+actionable: true
+
+---
+timestamp: "2026-01-20T13:13:57.698795"
+type: gotcha
+summary: Pre-push learnings extraction can block even when no learnings are found
+detail: |
+  The pre-push hook ran learnings extraction which reported 'No significant learnings from this session' but still blocked the push with 'WARN New learnings extracted'. On retry, it passed. This appears to be a hook state management issue - the first run updates state even when no learnings are written. Working tree showed clean, no new files created. Solution: just retry the push - the second attempt will pass. This is a known false positive, not a real blocker.
+actionable: false
+
+---
+timestamp: "2026-01-20T13:13:57.698795"
+type: distinction
+summary: "Path escaping: use quotes for paths with brackets in bash commands"
+detail: |
+  When staging files like `frontend/src/app/contacts/[id]/page.tsx`, the command `git add frontend/src/app/contacts/[id]/page.tsx` fails with 'no matches found' because bash interprets brackets as glob patterns. Must use quotes: `git add "frontend/src/app/contacts/[id]/page.tsx"`. This applies to all CLI commands operating on Next.js dynamic route paths.
+actionable: true
+
+---
+timestamp: "2026-01-20T13:13:57.698795"
+type: architecture
+summary: "Leading-7 with sm:text-3xl creates descender clipping when combined with truncate"
+detail: |
+  The Tailwind pattern `className="leading-7 sm:text-3xl sm:truncate"` causes characters with descenders (y, g, j, p, q) to be clipped at the bottom. Leading-7 = 1.75rem line-height, but sm:text-3xl = 1.875rem font size, so the line-height is SMALLER than the font. Combined with `truncate` (which adds `overflow: hidden`), this clips the bottom of descenders. Solution: use `leading-normal` (1.5 line-height ratio) instead of `leading-7` for headings with truncate. This pattern affected 7 page headings across the codebase.
+actionable: true
+
