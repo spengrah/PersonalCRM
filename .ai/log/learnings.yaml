@@ -414,6 +414,96 @@ detail: |
 actionable: true
 
 ---
+timestamp: "2026-01-20T14:45:30.793044"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: Never merge PRs with UI changes without explicit user approval
+detail: |
+  Agent merged PR #189 autonomously after CI passed, but user explicitly stated UI changes require human testing before merge. This is a critical workflow violation - PRs with visual/interactive components need manual verification of design, UX, and accessibility beyond automated tests. Agent should wait for explicit merge approval from user when UI is involved.
+actionable: true
+
+---
+timestamp: "2026-01-20T14:45:30.793044"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: rule
+summary: Backend binary (backend/crm-api) must not be committed to git
+detail: |
+  The compiled Go binary at backend/crm-api was accidentally staged and committed, requiring removal with 'git rm --cached backend/crm-api' and commit amend. This binary is a build artifact that should be gitignored. Future agents should verify staged files before committing to avoid including build artifacts, especially after running 'git add -A'.
+actionable: true
+
+---
+timestamp: "2026-01-20T14:45:30.793044"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: architecture
+summary: Contact list uses default sort=last_contacted&order=desc when unspecified
+detail: |
+  When contact list page has no explicit sort parameters in state (initialized as {page: 1, limit: 20}), the detail page defaults to sort=last_contacted&order=desc. This mismatch caused navigation order bugs - arrow keys navigated in different order than displayed list. Fix requires always including explicit sort/order params in URLs even when showing default view, preventing implicit vs explicit default conflicts.
+actionable: true
+
+---
+timestamp: "2026-01-20T14:45:30.793044"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: Global Enter keydown handlers must check event.target type before preventDefault
+detail: |
+  Global keyboard handlers that call preventDefault() on Enter key will break native button/link activation if not scoped properly. The handler excluded inputs/textareas but not buttons/links, so pressing Enter on 'Delete' or 'Cancel' buttons triggered edit mode instead of clicking the button. Required check: 'if (target.tagName === BUTTON || target.tagName === A || target.closest(button, a)) return' before preventDefault. Critical for keyboard accessibility.
+actionable: true
+
+---
+timestamp: "2026-01-20T14:45:30.793044"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: documentation_gap
+summary: Testing docs don't warn about binary files in commits
+detail: |
+  Agent committed backend/crm-api binary despite .ai/rules/core.md having a 'Common Gotchas' section. No existing rule warned about build artifacts. The core.md gotcha table should include: 'git add -A without checking | Review git status before commit, exclude binaries'. This would have prevented the issue during the commit workflow.
+actionable: true
+
+---
+timestamp: "2026-01-20T15:17:14.462519"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: Loading flicker in navigation requires prefetching adjacent items
+detail: |
+  When implementing keyboard navigation between items (contacts, etc.), the first visit to each item will show a loading flicker unless adjacent items are prefetched. React Query's prefetchQuery should be called in a useEffect when navigation IDs are available to prefetch prev/next items. Pattern: 1) Create usePrefetchX hook returning a callback, 2) In detail page, useEffect with [navigationIds, currentIndex] deps, 3) Prefetch navigationIds[currentIndex-1] and navigationIds[currentIndex+1]. This prevents visual flicker and creates smooth navigation UX.
+actionable: true
+
+---
+timestamp: "2026-01-20T15:17:14.462519"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: architecture
+summary: React Query caching persists within session but not across hard refreshes
+detail: |
+  React Query's cache is session-scoped - once data is fetched, it stays cached for the staleTime duration (e.g., 2 minutes) during the current browser session. However, hard refreshes clear the cache completely, causing all data to be refetched on first access. This is why prefetching is critical for navigation UX - the first navigation to each item in a session will always require a fetch unless prefetched. Don't rely on 'eventual caching' to solve flicker issues; implement explicit prefetching instead.
+actionable: true
+
+---
+timestamp: "2026-01-20T15:17:14.462519"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: rule
+summary: Prefetching must match the query's staleTime to be effective
+detail: |
+  When implementing prefetchQuery for navigation, use the same staleTime as the main query (e.g., 1000 * 60 * 2 for 2 minutes). If prefetch staleTime is shorter, the data may become stale before the user navigates, defeating the purpose. If it's longer, it may serve outdated data. Keep prefetch and query staleTime synchronized to ensure prefetched data is still fresh when accessed.
+actionable: true
+
+---
+timestamp: "2026-01-20T15:17:14.462519"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: distinction
+summary: Prefetching happens in background - no await needed
+detail: |
+  React Query's queryClient.prefetchQuery() fires asynchronously in the background and doesn't need to be awaited in the useEffect. The pattern is: call prefetchContact(nextId) and prefetchContact(prevId) without await, letting them populate the cache opportunistically. When navigation happens, if prefetch completed, data is instant; if not, normal loading occurs. Don't block the UI or add complexity waiting for prefetch completion.
+actionable: true
+
+---
+timestamp: "2026-01-20T15:17:14.462519"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: documentation_gap
+summary: Feature development guide should mention prefetching for navigation UX
+detail: |
+  The .ai/guides/feature-development.md or similar docs don't explicitly call out the need to implement prefetching when adding keyboard or UI navigation between items. Developers implementing navigation features may not realize that basic useQuery implementations cause flicker. The guide should include: 'When implementing navigation between items, always add prefetching of adjacent items to prevent loading flicker. See use-contacts.ts usePrefetchContact pattern.' This would save agents from discovering the issue only after user testing reveals the flicker.
+actionable: true
+
+---
 timestamp: "2026-01-20T09:03:21.454665"
 session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
 type: gotcha

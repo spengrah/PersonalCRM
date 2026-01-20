@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import {
   useContact,
   useContactIDs,
+  usePrefetchContact,
   useUpdateContact,
   useDeleteContact,
   useUpdateLastContacted,
@@ -89,6 +90,21 @@ export default function ContactDetailPage() {
     }
   )
 
+  // Prefetch adjacent contacts for smooth navigation
+  const prefetchContact = usePrefetchContact()
+  useEffect(() => {
+    if (navigationIds.length === 0 || currentIndex < 0) return
+
+    // Prefetch previous contact
+    if (currentIndex > 0) {
+      prefetchContact(navigationIds[currentIndex - 1])
+    }
+    // Prefetch next contact
+    if (currentIndex < navigationIds.length - 1) {
+      prefetchContact(navigationIds[currentIndex + 1])
+    }
+  }, [navigationIds, currentIndex, prefetchContact])
+
   // Handle Enter key (toggle edit mode) and Escape key (discard/return to list)
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -97,7 +113,12 @@ export default function ContactDetailPage() {
         return
       }
 
-      if (event.key === 'Enter') {
+      if (event.key === 'Enter' && !isEditing) {
+        // Don't intercept Enter on buttons/links - let native activation work
+        const target = event.target as HTMLElement
+        if (target.tagName === 'BUTTON' || target.tagName === 'A' || target.closest('button, a')) {
+          return
+        }
         event.preventDefault()
         setIsEditing(true)
       }
