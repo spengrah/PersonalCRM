@@ -241,15 +241,17 @@ run_learnings() {
   fi
 
   echo "  [learn] -> Extracting learnings..." >&2
-  if ./.ai/skills/learnings/extract-learnings.sh --trigger pre-push >/dev/null 2>&1; then
-    # Check if new learnings were added
-    if git diff --quiet .ai/log/learnings.yaml 2>/dev/null; then
-      echo "  [learn] OK No new learnings" >&2
-      echo "PASS" > "$LEARN_RESULT"
-    else
-      echo "  [learn] WARN New learnings extracted (review before push)" >&2
-      echo "NEW" > "$LEARN_RESULT"
-    fi
+
+  # Run extraction (stderr shown to agent, stdout hidden)
+  ./.ai/skills/learnings/extract-learnings.sh --trigger pre-push >/dev/null
+  local exit_code=$?
+
+  if [[ "$exit_code" -eq 0 ]]; then
+    echo "  [learn] OK No new learnings" >&2
+    echo "PASS" > "$LEARN_RESULT"
+  elif [[ "$exit_code" -eq 2 ]]; then
+    # Exit 2 = new learnings extracted, agent message already shown
+    echo "NEW" > "$LEARN_RESULT"
   else
     echo "  [learn] WARN Extraction failed (non-blocking)" >&2
     echo "PASS" > "$LEARN_RESULT"

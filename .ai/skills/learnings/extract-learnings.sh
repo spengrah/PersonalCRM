@@ -112,6 +112,27 @@ EOF
 EOF
         exit 2
         ;;
+    pre-push)
+        # Exit code 2 + stderr = agent sees the message
+        cat >&2 << 'EOF'
+
+==============================================================
+                    AGENT: LEARNINGS EXTRACTED
+==============================================================
+  New learnings from this session have been written to:
+  .ai/log/learnings.yaml
+
+  Before pushing, you should:
+  1. Read the new learnings in .ai/log/learnings.yaml
+  2. For each actionable learning, judge whether and how to
+     apply it to the suggested_location
+  3. Commit learnings (and any applied changes)
+  4. Push again
+==============================================================
+
+EOF
+        exit 2
+        ;;
     session-end)
         # Brief message for human visibility, exit 0 (agent can't act anyway)
         echo ""
