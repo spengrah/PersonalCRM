@@ -24,6 +24,20 @@ export function useContact(id: string) {
   })
 }
 
+// Prefetch a contact (for navigation smoothness)
+export function usePrefetchContact() {
+  const queryClient = useQueryClient()
+
+  return (id: string) => {
+    if (!id) return
+    queryClient.prefetchQuery({
+      queryKey: contactKeys.detail(id),
+      queryFn: () => contactsApi.getContact(id),
+      staleTime: 1000 * 60 * 2, // 2 minutes
+    })
+  }
+}
+
 // Get overdue contacts
 export function useOverdueContacts() {
   return useQuery({

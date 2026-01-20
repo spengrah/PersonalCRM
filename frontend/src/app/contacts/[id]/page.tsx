@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import {
   useContact,
   useContactIDs,
+  usePrefetchContact,
   useUpdateContact,
   useDeleteContact,
   useUpdateLastContacted,
@@ -88,6 +89,21 @@ export default function ContactDetailPage() {
       enabled: !isEditing && !isLoading && !isLoadingIDs,
     }
   )
+
+  // Prefetch adjacent contacts for smooth navigation
+  const prefetchContact = usePrefetchContact()
+  useEffect(() => {
+    if (navigationIds.length === 0 || currentIndex < 0) return
+
+    // Prefetch previous contact
+    if (currentIndex > 0) {
+      prefetchContact(navigationIds[currentIndex - 1])
+    }
+    // Prefetch next contact
+    if (currentIndex < navigationIds.length - 1) {
+      prefetchContact(navigationIds[currentIndex + 1])
+    }
+  }, [navigationIds, currentIndex, prefetchContact])
 
   // Handle Enter key (toggle edit mode) and Escape key (discard/return to list)
   useEffect(() => {
