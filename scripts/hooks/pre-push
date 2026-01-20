@@ -204,9 +204,9 @@ run_tests() {
   fi
 }
 
-# Run learnings extraction
+# Run learnings extraction (runs synchronously for reliable temp file writing)
 run_learnings() {
-  cd "$PROJECT_ROOT"  # Ensure correct directory in background
+  cd "$PROJECT_ROOT"
   local enabled=$(jq -r '.learnings.enabled // false' "$CONFIG_FILE")
   if [[ "$enabled" != "true" ]]; then
     echo "SKIP" > "$LEARN_RESULT"
@@ -215,9 +215,9 @@ run_learnings() {
 
   echo "  [learn] -> Extracting learnings..." >&2
 
-  # Run extraction (suppress output, check file changes after)
+  # Run synchronously, show stderr (agent sees instructions), hide stdout
   # Exit codes: 0 = no new learnings, 2 = new learnings extracted, other = error
-  ./.ai/skills/learnings/extract-learnings.sh --trigger pre-push >/dev/null 2>&1
+  ./.ai/skills/learnings/extract-learnings.sh --trigger pre-push >/dev/null
   local exit_code=$?
 
   if [[ "$exit_code" -eq 0 ]] || [[ "$exit_code" -eq 2 ]]; then
@@ -226,7 +226,7 @@ run_learnings() {
       echo "  [learn] OK No new learnings" >&2
       echo "PASS" > "$LEARN_RESULT"
     else
-      echo "  [learn] WARN New learnings extracted (review before push)" >&2
+      echo "  [learn] WARN New learnings extracted" >&2
       echo "NEW" > "$LEARN_RESULT"
     fi
   else
@@ -247,9 +247,9 @@ if [[ "$LINT_STATUS" == "FAIL" ]]; then
   exit 1
 fi
 
-# Run tests and learnings in parallel
+# Run tests in background, learnings synchronously (for reliable temp file writing)
 run_tests &
-run_learnings &
+run_learnings
 wait
 
 # Collect results
