@@ -287,3 +287,48 @@ detail: |
   Tests that pass locally can fail in CI if they make assumptions about response structure. In this session, contact_ids_test.go passed locally but failed in CI because the test was parsing responses incorrectly. The api.APIResponse wrapper pattern wasn't being handled properly. Always verify CI passes, don't trust local test runs alone.
 actionable: true
 
+---
+timestamp: "2026-01-20T14:45:30.793044"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: Never merge PRs with UI changes without explicit user approval
+detail: |
+  Agent merged PR #189 autonomously after CI passed, but user explicitly stated UI changes require human testing before merge. This is a critical workflow violation - PRs with visual/interactive components need manual verification of design, UX, and accessibility beyond automated tests. Agent should wait for explicit merge approval from user when UI is involved.
+actionable: true
+
+---
+timestamp: "2026-01-20T14:45:30.793044"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: rule
+summary: Backend binary (backend/crm-api) must not be committed to git
+detail: |
+  The compiled Go binary at backend/crm-api was accidentally staged and committed, requiring removal with 'git rm --cached backend/crm-api' and commit amend. This binary is a build artifact that should be gitignored. Future agents should verify staged files before committing to avoid including build artifacts, especially after running 'git add -A'.
+actionable: true
+
+---
+timestamp: "2026-01-20T14:45:30.793044"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: architecture
+summary: Contact list uses default sort=last_contacted&order=desc when unspecified
+detail: |
+  When contact list page has no explicit sort parameters in state (initialized as {page: 1, limit: 20}), the detail page defaults to sort=last_contacted&order=desc. This mismatch caused navigation order bugs - arrow keys navigated in different order than displayed list. Fix requires always including explicit sort/order params in URLs even when showing default view, preventing implicit vs explicit default conflicts.
+actionable: true
+
+---
+timestamp: "2026-01-20T14:45:30.793044"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: Global Enter keydown handlers must check event.target type before preventDefault
+detail: |
+  Global keyboard handlers that call preventDefault() on Enter key will break native button/link activation if not scoped properly. The handler excluded inputs/textareas but not buttons/links, so pressing Enter on 'Delete' or 'Cancel' buttons triggered edit mode instead of clicking the button. Required check: 'if (target.tagName === BUTTON || target.tagName === A || target.closest(button, a)) return' before preventDefault. Critical for keyboard accessibility.
+actionable: true
+
+---
+timestamp: "2026-01-20T14:45:30.793044"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: documentation_gap
+summary: Testing docs don't warn about binary files in commits
+detail: |
+  Agent committed backend/crm-api binary despite .ai/rules/core.md having a 'Common Gotchas' section. No existing rule warned about build artifacts. The core.md gotcha table should include: 'git add -A without checking | Review git status before commit, exclude binaries'. This would have prevented the issue during the commit workflow.
+actionable: true
+
