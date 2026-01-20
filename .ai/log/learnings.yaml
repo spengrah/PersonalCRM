@@ -238,3 +238,73 @@ detail: |
 actionable: true
 suggested_location: .ai/rules/core.md
 
+---
+timestamp: "2026-01-19T18:08:50.325474"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: MCP config must be at `.mcp.json` in project root, not `.claude/mcp.json`
+detail: |
+  Claude Code loads MCP servers from `.mcp.json` in the project root, NOT from `.claude/mcp.json`. The agent initially created the config in `.ai/mcp.json` and symlinked it to `.claude/mcp.json`, which doesn't work. The correct approach is to place `.mcp.json` directly at the project root. This is documented in Claude Code's MCP documentation but easy to miss.
+actionable: true
+suggested_location: .ai/guides/mcp-setup.md
+
+---
+timestamp: "2026-01-19T18:08:50.325474"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Serena MCP requires gopls in PATH, not just installed in ~/go/bin
+detail: |
+  When Serena MCP starts via Claude Code, it inherits the environment's PATH. Having gopls installed via `go install` places it in ~/go/bin, but this directory is often not in the PATH that MCP servers inherit. The agent initially tried hardcoding PATH in the MCP config's `env` field, but the correct solution is simpler: ensure ~/go/bin is in the user's shell profile (.zprofile) so all processes inherit it. Avoid hardcoding user-specific paths in source-controlled config files.
+actionable: true
+suggested_location: .ai/guides/mcp-setup.md
+
+---
+timestamp: "2026-01-19T18:08:50.325474"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: MCP config `env` field replacing PATH causes uvx to be unfindable
+detail: |
+  When the agent tried to fix the gopls PATH issue by adding an `env` field to .mcp.json with a hardcoded PATH, it replaced the entire PATH environment variable, making `uvx` (the command that starts Serena) unfindable since uvx is in a non-standard location (/Users/spencer/Library/Application Support/enchanted/bin). Setting env.PATH in MCP config is fragile and requires including every directory needed. Better to fix the user's system PATH instead.
+actionable: true
+suggested_location: .ai/guides/mcp-setup.md
+
+---
+timestamp: "2026-01-19T18:08:50.325474"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: rule
+summary: Never hardcode user-specific paths in source-controlled configuration files
+detail: |
+  The agent initially tried to solve PATH issues by hardcoding absolute paths like /Users/spencer/go/bin in .mcp.json. The user correctly rejected this because it makes the config non-portable. When encountering environment-dependent tool dependencies, the correct approach is: 1) Document the requirement (e.g., 'gopls must be in PATH'), 2) Modify the user's environment setup (shell profile), not the project config. Project configs should remain portable across different users and machines.
+actionable: true
+suggested_location: .ai/rules/core.md
+
+---
+timestamp: "2026-01-19T18:08:50.325474"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: distinction
+summary: Pre-push hook blocks with NEW learnings, not WARN - must review and commit
+detail: |
+  When the pre-push hook extracts new learnings, it blocks the push with 'WARN: New learnings extracted' and instructs to review .ai/log/learnings.yaml, then commit with a specific message. The agent correctly identified this, committed the learnings with 'docs: session learnings', then pushed. This is a required workflow step that agents should recognize and handle automatically when pushing.
+actionable: true
+suggested_location: .ai/guides/git-workflow.md
+
+---
+timestamp: "2026-01-19T18:08:50.325474"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: Serena MCP provides symbol-level code inspection via LSP integration
+detail: |
+  Serena MCP integrates with language servers (gopls for Go, typescript-language-server for TypeScript) to provide symbol-aware code analysis. Tools like `get_symbols_overview` return structured symbol information (structs, methods, functions) and `find_symbol` can retrieve specific symbols with their bodies. Symbol name paths use Go-style notation like '(*ContactHandler).CreateContact' for methods. This enables precise code navigation and manipulation without parsing files manually.
+actionable: true
+suggested_location: .ai/guides/mcp-setup.md
+
+---
+timestamp: "2026-01-19T18:08:50.325474"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Session restart required for MCP config changes to take effect
+detail: |
+  MCP servers are loaded when Claude Code starts a session. Changes to .mcp.json or environment variables (like PATH in .zprofile) require fully restarting the Claude Code session - not just /exit and restart within the same process, but closing and reopening the terminal/application. The agent correctly advised the user to restart after each config change but should be more explicit about the level of restart required.
+actionable: true
+suggested_location: .ai/guides/mcp-setup.md
+
