@@ -176,6 +176,6 @@ func (r *ContactMethodRepository) UpdateContactMethod(ctx context.Context, id uu
 func (r *ContactMethodRepository) SetPrimary(ctx context.Context, id uuid.UUID, isPrimary bool) error {
 	return r.queries.SetContactMethodPrimary(ctx, db.SetContactMethodPrimaryParams{
 		ID:        uuidToPgUUID(id),
-		IsPrimary: isPrimary,
+		IsPrimary: pgtype.Bool{Bool: isPrimary, Valid: true},
 	})
 }

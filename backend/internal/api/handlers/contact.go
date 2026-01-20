@@ -134,11 +134,18 @@ type UpdateContactRequest struct {
 
 // ListContactsQuery represents query parameters for listing contacts
 type ListContactsQuery struct {
-	Page   int    `form:"page" validate:"omitempty,min=1" example:"1"`
-	Limit  int    `form:"limit" validate:"omitempty,min=1,max=1000" example:"20"`
-	Search string `form:"search" validate:"omitempty,max=255" example:"john"`
-	Sort   string `form:"sort" validate:"omitempty,oneof=name location birthday last_contacted" example:"name"`
-	Order  string `form:"order" validate:"omitempty,oneof=asc desc" example:"asc"`
+	Page    int    `form:"page" validate:"omitempty,min=1" example:"1"`
+	Limit   int    `form:"limit" validate:"omitempty,min=1,max=1000" example:"20"`
+	Search  string `form:"search" validate:"omitempty,max=255" example:"john"`
+	Sort    string `form:"sort" validate:"omitempty,oneof=name location birthday last_contacted" example:"name"`
+	Order   string `form:"order" validate:"omitempty,oneof=asc desc" example:"asc"`
+	IDsOnly bool   `form:"ids_only" example:"false"`
+}
+
+// ContactIDsResponse represents the response for ID-only queries
+type ContactIDsResponse struct {
+	IDs   []string `json:"ids"`
+	Total int      `json:"total"`
 }
 
 // ContactMethodRequest represents a single contact method in requests
@@ -324,7 +331,7 @@ func (h *ContactHandler) GetContact(c *gin.Context) {
 
 // ListContacts retrieves a paginated list of contacts
 // @Summary List contacts
-// @Description Get a paginated list of contacts with optional search and sorting
+// @Description Get a paginated list of contacts with optional search and sorting. Use ids_only=true to get just IDs for navigation.
 // @Tags contacts
 // @Produce json
 // @Param page query int false "Page number" default(1) minimum(1)
@@ -332,6 +339,7 @@ func (h *ContactHandler) GetContact(c *gin.Context) {
 // @Param search query string false "Search term (name or contact methods)" maxlength(255)
 // @Param sort query string false "Sort by field" Enums(name, location, birthday, last_contacted) default("")
 // @Param order query string false "Sort order" Enums(asc, desc) default("asc")
+// @Param ids_only query bool false "Return only contact IDs (for navigation)" default(false)
 // @Success 200 {object} api.APIResponse{data=[]ContactResponse,meta=api.Meta} "Contacts retrieved successfully"
 // @Failure 400 {object} api.APIResponse{error=api.APIError} "Invalid query parameters"
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
@@ -357,6 +365,32 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 	}
 	if query.Order == "" {
 		query.Order = "asc"
+	}
+
+	// Handle IDs-only request (lightweight response for navigation)
+	if query.IDsOnly {
+		ids, err := h.contactService.ListContactIDs(c.Request.Context(), repository.ListContactIDsParams{
+			Sort:   query.Sort,
+			Order:  query.Order,
+			Search: query.Search,
+		})
+		if err != nil {
+			api.SendInternalError(c, "Failed to retrieve contact IDs")
+			return
+		}
+
+		// Convert UUIDs to strings
+		idStrings := make([]string, len(ids))
+		for i, id := range ids {
+			idStrings[i] = id.String()
+		}
+
+		response := ContactIDsResponse{
+			IDs:   idStrings,
+			Total: len(idStrings),
+		}
+		api.SendSuccess(c, http.StatusOK, response, nil)
+		return
 	}
 
 	var (

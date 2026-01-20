@@ -121,6 +121,12 @@ func (s *ContactService) SearchContactsPage(ctx context.Context, params reposito
 	return contacts, total, nil
 }
 
+// ListContactIDs retrieves a list of contact IDs with optional sorting and search.
+// This is a lightweight method for navigation purposes (e.g., keyboard navigation between contacts).
+func (s *ContactService) ListContactIDs(ctx context.Context, params repository.ListContactIDsParams) ([]uuid.UUID, error) {
+	return s.contactRepo.ListContactIDs(ctx, params)
+}
+
 func (s *ContactService) CreateContact(ctx context.Context, req repository.CreateContactRequest, methods []ContactMethodInput) (contact *repository.Contact, err error) {
 	tx, err := s.database.Pool.Begin(ctx)
 	if err != nil {

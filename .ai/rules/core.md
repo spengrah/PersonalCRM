@@ -76,6 +76,8 @@ PostgreSQL
 | Comparing errors with `==` | Use `errors.Is(err, db.ErrNotFound)` |
 | Querying DB directly | `docker exec crm-postgres psql -U crm_user -d personal_crm -c "..."` |
 | Assuming repository method names | Read the repository file first |
+| Not building after `make sqlc` | Always run `go build ./cmd/crm-api` to verify compilation |
+| sqlc changed types after regeneration | Update repository to use `pgtype.X{Value: v, Valid: true}` wrappers |
 
 ## Anti-Patterns
 
