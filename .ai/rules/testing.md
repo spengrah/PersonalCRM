@@ -195,6 +195,25 @@ describe('Button', () => {
 })
 ```
 
+### Backend API Response Parsing
+
+All API responses are wrapped in `api.APIResponse`:
+
+```go
+// ❌ WRONG - direct unmarshaling fails
+var contact Contact
+json.Unmarshal(w.Body.Bytes(), &contact)  // contact.ID will be empty
+
+// ✅ CORRECT - unwrap from api.APIResponse first
+var resp api.APIResponse
+json.Unmarshal(w.Body.Bytes(), &resp)
+require.True(t, resp.Success)
+data := resp.Data.(map[string]interface{})
+contactID := data["id"].(string)  // now works
+```
+
+This applies to all test helpers that call API endpoints.
+
 ### Key Principles
 
 1. **Test edge cases** - not just happy path

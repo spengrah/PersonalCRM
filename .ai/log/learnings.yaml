@@ -260,3 +260,30 @@ detail: |
   Before writing test helpers that extract data from API responses, examine how existing tests handle the same endpoint. The contact creation endpoint returns data wrapped in api.APIResponse{Success: bool, Data: interface{}, Error: *string}, not raw JSON. Writing test helpers without checking the actual response structure leads to runtime panics. Pattern to follow: 1) Look at existing tests for the same/similar endpoints, 2) Unmarshal into api.APIResponse, 3) Assert resp.Success, 4) Type assert resp.Data to map[string]interface{}, 5) Extract nested fields.
 actionable: true
 
+---
+timestamp: "2026-01-20T05:17:53.006717"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: All API responses are wrapped in api.APIResponse - never unmarshal directly to response types
+detail: |
+  When writing tests for API endpoints, responses must be unmarshaled in two steps: first into api.APIResponse (which has success and data fields), then extract the actual data from the Data field by type-asserting to map[string]interface{}. Direct unmarshaling into response structs will fail. Example: var apiResp api.APIResponse; json.Unmarshal(body, &apiResp); data := apiResp.Data.(map[string]interface{})
+actionable: true
+
+---
+timestamp: "2026-01-20T05:17:53.006717"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: architecture
+summary: Helper functions in integration tests should follow the same API response parsing pattern
+detail: |
+  When creating helper functions like createContact() in integration tests, they must also parse the wrapped api.APIResponse structure. This pattern should be consistent across all test helpers that make API calls. Don't parse responses directly - always unwrap from api.APIResponse first, even in helper functions.
+actionable: true
+
+---
+timestamp: "2026-01-20T05:17:53.006717"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: Local tests passing doesn't guarantee CI passes - API wrapper parsing can differ
+detail: |
+  Tests that pass locally can fail in CI if they make assumptions about response structure. In this session, contact_ids_test.go passed locally but failed in CI because the test was parsing responses incorrectly. The api.APIResponse wrapper pattern wasn't being handled properly. Always verify CI passes, don't trust local test runs alone.
+actionable: true
+
