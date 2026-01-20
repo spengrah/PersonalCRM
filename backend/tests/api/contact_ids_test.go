@@ -116,6 +116,25 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		router.ServeHTTP(w, req)
 	}
 
+	// Helper to parse IDs-only response (wrapped in api.APIResponse)
+	parseIDsResponse := func(body []byte) ContactIDsResponse {
+		var apiResp api.APIResponse
+		err := json.Unmarshal(body, &apiResp)
+		require.NoError(t, err)
+		require.True(t, apiResp.Success)
+
+		// Convert map to ContactIDsResponse
+		data := apiResp.Data.(map[string]interface{})
+		var resp ContactIDsResponse
+		resp.Total = int(data["total"].(float64))
+		if idsInterface, ok := data["ids"].([]interface{}); ok {
+			for _, id := range idsInterface {
+				resp.IDs = append(resp.IDs, id.(string))
+			}
+		}
+		return resp
+	}
+
 	t.Run("returns IDs only when ids_only=true", func(t *testing.T) {
 		// Create test contacts
 		id1 := createContact("IDs Test Contact Alpha")
@@ -129,9 +148,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, w.Code)
 
-		var resp ContactIDsResponse
-		err := json.Unmarshal(w.Body.Bytes(), &resp)
-		require.NoError(t, err)
+		resp := parseIDsResponse(w.Body.Bytes())
 
 		// Should have IDs array and total count
 		assert.NotNil(t, resp.IDs)
@@ -162,10 +179,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-
-		var respAsc ContactIDsResponse
-		err := json.Unmarshal(w.Body.Bytes(), &respAsc)
-		require.NoError(t, err)
+		respAsc := parseIDsResponse(w.Body.Bytes())
 
 		// Get IDs sorted by name descending
 		req = httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&sort=name&order=desc", nil)
@@ -173,10 +187,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-
-		var respDesc ContactIDsResponse
-		err = json.Unmarshal(w.Body.Bytes(), &respDesc)
-		require.NoError(t, err)
+		respDesc := parseIDsResponse(w.Body.Bytes())
 
 		// Both should have same total but potentially different order
 		assert.Equal(t, respAsc.Total, respDesc.Total)
@@ -220,10 +231,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-
-		var resp ContactIDsResponse
-		err := json.Unmarshal(w.Body.Bytes(), &resp)
-		require.NoError(t, err)
+		resp := parseIDsResponse(w.Body.Bytes())
 
 		// Should find the searchable contact
 		assert.Contains(t, resp.IDs, id1)
@@ -235,10 +243,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-
-		var resp ContactIDsResponse
-		err := json.Unmarshal(w.Body.Bytes(), &resp)
-		require.NoError(t, err)
+		resp := parseIDsResponse(w.Body.Bytes())
 
 		assert.Equal(t, 0, len(resp.IDs))
 		assert.Equal(t, 0, resp.Total)
@@ -255,10 +260,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-
-		var resp ContactIDsResponse
-		err := json.Unmarshal(w.Body.Bytes(), &resp)
-		require.NoError(t, err)
+		resp := parseIDsResponse(w.Body.Bytes())
 
 		// Deleted contact should NOT be in the list
 		assert.NotContains(t, resp.IDs, id)
