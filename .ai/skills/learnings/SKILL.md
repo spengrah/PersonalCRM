@@ -22,7 +22,6 @@ Read `.ai/log/learnings.yaml` and review the latest entries. Each learning has:
 - `summary`: One-line description
 - `detail`: Full context
 - `actionable`: Whether it can be applied now
-- `suggested_location`: Where it might go (use your judgment)
 
 Learning types:
 - **gotcha**: Non-obvious things that trip up agents
@@ -33,9 +32,9 @@ Learning types:
 
 ## 3. Apply Learnings
 
-For each learning, decide:
+For each actionable learning, decide:
 - Should it be applied now?
-- Where should it go? (may differ from suggested_location)
+- Where should it go? (use your judgment)
 - What's the specific change?
 
 For `documentation_gap` types, focus on:

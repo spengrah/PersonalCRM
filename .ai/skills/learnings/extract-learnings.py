@@ -77,13 +77,9 @@ LEARNINGS_SCHEMA = {
                     "actionable": {
                         "type": "boolean",
                         "description": "Whether this can be applied now"
-                    },
-                    "suggested_location": {
-                        "type": "string",
-                        "description": "Where the change should go: CLAUDE.md, .ai/patterns/name.md, .ai/guides/name.md, .ai/rules/name.md, or none"
                     }
                 },
-                "required": ["type", "summary", "detail", "actionable", "suggested_location"]
+                "required": ["type", "summary", "detail", "actionable"]
             }
         }
     },
@@ -551,8 +547,7 @@ def main():
             for learning in learnings:
                 print(f"## {learning.get('type', 'unknown').upper()}: {learning.get('summary', 'No summary')}")
                 print(f"\n{learning.get('detail', '')}")
-                if learning.get('actionable'):
-                    print(f"\n**Suggested location:** {learning.get('suggested_location', 'none')}")
+                print(f"\n**Actionable:** {'Yes' if learning.get('actionable') else 'No'}")
                 print()
 
         # Append to log (with deduplication)

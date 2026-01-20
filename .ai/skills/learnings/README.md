@@ -9,7 +9,7 @@ Extract project-relevant learnings from session transcripts using headless Claud
 **Features:**
 - Mines session transcripts including thinking blocks
 - Incremental extraction (only processes new content since last call)
-- Outputs structured learnings (type, summary, detail, actionable, suggested_location)
+- Outputs structured learnings (type, summary, detail, actionable)
 - Deduplicates by session + summary
 
 ```bash

@@ -85,8 +85,8 @@ case "$TRIGGER" in
 
   Before compaction, you should:
   1. Read .ai/log/learnings.yaml
-  2. For each actionable learning, judge whether and how to
-     apply it to the suggested_location
+  2. For each actionable learning, judge whether and where
+     to apply it to project docs/rules
   3. Apply learnings now - context will be lost after compaction
 ==============================================================
 
@@ -105,8 +105,8 @@ EOF
 
   You should:
   1. Read .ai/log/learnings.yaml
-  2. For each actionable learning, judge whether and how to
-     apply it to the suggested_location
+  2. For each actionable learning, judge whether and where
+     to apply it to project docs/rules
 ==============================================================
 
 EOF
@@ -124,8 +124,8 @@ EOF
 
   Before pushing, you should:
   1. Read the new learnings in .ai/log/learnings.yaml
-  2. For each actionable learning, judge whether and how to
-     apply it to the suggested_location
+  2. For each actionable learning, judge whether and where
+     to apply it to project docs/rules
   3. Commit learnings (and any applied changes)
   4. Push again
 ==============================================================
