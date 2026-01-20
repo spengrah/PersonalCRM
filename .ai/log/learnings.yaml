@@ -233,3 +233,30 @@ detail: |
   When amending a commit after test failures during pre-push, always use --no-edit flag: git commit --amend --no-edit -S. Without it, the editor will open which can't work in automated/agent contexts. The pre-commit hooks (formatting) will still run automatically and don't need manual triggering.
 actionable: true
 
+---
+timestamp: "2026-01-20T05:06:41.761762"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: Backend integration test responses use api.APIResponse wrapper with .Data field
+detail: |
+  When creating contacts in backend integration tests, the HTTP response is wrapped in an api.APIResponse structure where the actual contact data is in the .Data field (which is map[string]interface{}). To extract the ID, use: `resp.Data.(map[string]interface{})["id"].(string)`. Direct access to `resp["id"]` will panic with 'interface conversion: interface {} is nil, not string'. This is different from the test seed endpoints which may return unwrapped data.
+actionable: true
+
+---
+timestamp: "2026-01-20T05:06:41.761762"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: Local tests passing doesn't guarantee CI will pass - run tests locally before pushing
+detail: |
+  Tests can pass locally but fail in CI due to subtle differences in test setup or environment. The agent pushed code after local tests passed, but CI failed due to a type assertion panic in the test helper function. This caused unnecessary commit amendments and force pushes. Always run the full test suite locally (make test && make test-e2e) before pushing to avoid CI failures and wasted cycles.
+actionable: true
+
+---
+timestamp: "2026-01-20T05:06:41.761762"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: rule
+summary: When extracting data from JSON responses in tests, check the response wrapper structure first
+detail: |
+  Before writing test helpers that extract data from API responses, examine how existing tests handle the same endpoint. The contact creation endpoint returns data wrapped in api.APIResponse{Success: bool, Data: interface{}, Error: *string}, not raw JSON. Writing test helpers without checking the actual response structure leads to runtime panics. Pattern to follow: 1) Look at existing tests for the same/similar endpoints, 2) Unmarshal into api.APIResponse, 3) Assert resp.Success, 4) Type assert resp.Data to map[string]interface{}, 5) Extract nested fields.
+actionable: true
+
