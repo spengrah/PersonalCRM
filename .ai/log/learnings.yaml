@@ -1,5 +1,131 @@
 
 ---
+timestamp: "2026-01-19T22:06:55.572429"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: gotcha
+summary: Serena MCP tools can return results too large for Read tool
+detail: |
+  When using `mcp__serena__read_file` on large test files, the result may be saved to a temp file that itself exceeds Read tool's token limit (25000 tokens). The workaround is to read directly from the workspace using the standard Read tool on the actual source file path instead of trying to read the MCP tool's output file. This happened when reading `backend/internal/google/calendar_test.go` - the MCP tool saved 72,358 characters to a temp file that was then too large to read.
+actionable: true
+
+---
+timestamp: "2026-01-19T22:06:55.572429"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: rule
+summary: Use conventional branch names matching commit type
+detail: |
+  Branch names should follow conventional commit prefixes: feat/, fix/, refactor/, docs/, test/, chore/. The project uses `feat/reduce-calendar-sync-interval` for a feature that will have a `feat:` commit message. This is documented in `.ai/rules/core.md` but worth reinforcing as a pattern to follow automatically.
+actionable: true
+
+---
+timestamp: "2026-01-19T22:06:55.572429"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: architecture
+summary: Project uses pre-commit hooks for formatting staged files
+detail: |
+  The repository has pre-commit hooks that automatically format Go files with gofmt when committing. The output shows 'Pre-commit: Formatting staged files...' and 'Go files formatted' messages. Agents should expect this and not be surprised by the additional output during git commits. The hooks run automatically and don't require manual intervention.
+actionable: true
+
+---
+timestamp: "2026-01-19T22:06:55.572429"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: gotcha
+summary: Serena MCP has think_about_* tools that prompt for reflection
+detail: |
+  The Serena MCP includes metacognitive tools like `mcp__serena__think_about_collected_information` and `mcp__serena__think_about_task_adherence` that return prompts asking the agent to reflect on whether it has enough information or is staying on task. These don't provide data - they're prompts for the agent to self-assess. The agent correctly used them to verify it had sufficient context before proceeding.
+actionable: true
+
+---
+timestamp: "2026-01-19T22:06:55.572429"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: distinction
+summary: Simple changes don't need full feature-dev workflow
+detail: |
+  The feature-dev skill includes phases for exploration, clarification, architecture design, and code review with multiple parallel agents. For a trivial change (updating a constant from 24 hours to 15 minutes), the agent correctly skipped the heavy exploration and architecture phases. The full workflow is overkill when the issue is well-specified and the change is a simple constant update with no architectural implications.
+actionable: true
+
+---
+timestamp: "2026-01-19T22:28:03.108868"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: gotcha
+summary: E2E tests fail late at night due to UTC/local timezone mismatch
+detail: |
+  When E2E tests run late at night (e.g., 10pm PST on Jan 19), they fail because the backend stores timestamps in UTC (which is Jan 20), and formatDateOnly extracts the UTC date portion ('2026-01-20'), displaying '1/20/2026' while tests expect the local date '1/19/2026'. Tests must use UTC date components (getUTCMonth(), getUTCDate(), getUTCFullYear()) for comparison, not local date methods (toLocaleDateString()). This is a common gotcha when testing date-related functionality across timezones.
+actionable: true
+
+---
+timestamp: "2026-01-19T22:28:03.108868"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: architecture
+summary: formatDateOnly extracts UTC date portion, not local date
+detail: |
+  The frontend's formatDateOnly utility (in lib/utils.ts) is designed to avoid timezone conversion issues by extracting just the date part from ISO strings (e.g., '2026-01-20T06:00:00Z' → '2026-01-20'). This means displayed dates show the UTC date portion, not the local date. This is intentional to avoid off-by-one-day bugs, but it means the UI will show tomorrow's date when local time is late at night and UTC has already rolled over. Tests and code expecting 'today's date' must account for this by using UTC date components.
+actionable: true
+
+---
+timestamp: "2026-01-19T22:28:03.108868"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: gotcha
+summary: Pre-push hooks block --no-verify flag via block-no-verify.sh
+detail: |
+  The repository has a hook (scripts/hooks/block-no-verify.sh) that prevents using --no-verify or -n flags with git push. This ensures all pre-push checks (lint, tests, learnings) must pass before pushing. Agents cannot bypass failing tests by using --no-verify - they must fix the underlying issues. This was encountered when trying to bypass flaky E2E tests.
+actionable: true
+
+---
+timestamp: "2026-01-19T22:28:03.108868"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: documentation_gap
+summary: Core rules don't mention E2E timezone testing requirements
+detail: |
+  The project's .ai/rules/core.md and .ai/rules/testing.md don't document the critical requirement that E2E tests comparing dates must use UTC date components when the backend stores UTC timestamps. This led to E2E tests being written with toLocaleDateString() which fails late at night. Documentation should be strengthened to include: 'When testing date display in E2E tests, use UTC date components (getUTCMonth(), getUTCDate(), getUTCFullYear()) if backend stores UTC timestamps, as formatDateOnly extracts UTC date portions.'
+actionable: true
+
+---
+timestamp: "2026-01-20T08:38:48.085531"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: gotcha
+summary: Pre-push hooks block push even when committing only learnings
+detail: |
+  The pre-push hook runs learnings extraction which can generate new learnings to commit. This creates a chicken-and-egg situation: pushing triggers learning extraction, which modifies learnings.yaml, which blocks the push. The hook intelligently detects when only learnings files changed and skips tests/learning extraction to break this cycle. Agents should understand this is expected behavior and not try to work around it.
+actionable: false
+
+---
+timestamp: "2026-01-20T08:38:48.085531"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: documentation_gap
+summary: E2E date testing gotcha was undocumented until this session
+detail: |
+  Tests were failing late at night due to UTC/local timezone mismatch when comparing dates. The fix (using UTC date components) was not documented anywhere. This session added documentation to .ai/rules/testing.md, but the fact that this gotcha existed and caused flaky tests reveals that critical E2E testing patterns should be documented proactively. Future insight: When fixing flaky tests, always check if the root cause represents a pattern that should be documented.
+actionable: true
+
+---
+timestamp: "2026-01-20T08:38:48.085531"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: architecture
+summary: Code review bot requests changes via GitHub comments
+detail: |
+  The project uses an automated Claude code review bot that runs in CI and posts review comments requesting changes. The bot checks for documentation completeness, code duplication, and follows project conventions. Agents should expect review feedback and address it by reading PR comments with 'gh pr view <number> --comments'. The review is blocking - PR cannot merge until addressed.
+actionable: true
+
+---
+timestamp: "2026-01-20T08:38:48.085531"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: rule
+summary: Extracted helper functions need descriptive JSDoc explaining WHY
+detail: |
+  When code review requested extracting duplicate UTC date logic to a helper, the helper needed comprehensive documentation explaining the non-obvious reason it exists: formatDateOnly extracts UTC date portion, so tests using toLocaleDateString() fail late at night when UTC has rolled to next day. Good helper docs explain the gotcha/pitfall the abstraction prevents, not just what the code does.
+actionable: true
+
+---
+timestamp: "2026-01-20T08:38:48.085531"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: gotcha
+summary: GitHub PR checks continue in background after agent completes work
+detail: |
+  After pushing code, the agent watched CI checks with 'gh pr checks --watch' but one check (Claude Code Review) took significantly longer than tests (2m12s vs immediate for unit tests). The agent waited multiple times (60s, 90s, 120s delays) before the review completed. When reviewing PRs, agents should expect code review checks to take 2-3+ minutes and should check once after all tests pass rather than polling repeatedly.
+actionable: true
+
+---
 timestamp: "2026-01-20T04:01:52.031612"
 session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
 type: gotcha
@@ -375,5 +501,41 @@ type: documentation_gap
 summary: Feature development guide should mention prefetching for navigation UX
 detail: |
   The .ai/guides/feature-development.md or similar docs don't explicitly call out the need to implement prefetching when adding keyboard or UI navigation between items. Developers implementing navigation features may not realize that basic useQuery implementations cause flicker. The guide should include: 'When implementing navigation between items, always add prefetching of adjacent items to prevent loading flicker. See use-contacts.ts usePrefetchContact pattern.' This would save agents from discovering the issue only after user testing reveals the flicker.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:03:21.454665"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: gotcha
+summary: CI may not auto-trigger for all pushed commits
+detail: |
+  After addressing code review feedback and pushing commits 778cb0b and adcecb0 to the PR, GitHub CI did not automatically trigger for these new commits. The agent waited multiple times but no new CI runs appeared for the latest commit SHA. This is distinct from CI being slow - the workflow simply didn't start. Future agents should be aware that CI may not trigger automatically in all cases and should not indefinitely wait for runs that may never start.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:03:21.454665"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: gotcha
+summary: learnings.yaml merge conflicts need manual 'keep both' resolution
+detail: |
+  The learnings.yaml file is append-only and can have conflicts when parallel sessions both add learnings. The resolution is always to remove conflict markers and keep all learnings from both branches, since they come from different sessions with different session_ids. This happened when merging main after a parallel PR session added its own learnings. The file structure with '---' separators makes it straightforward to combine both sets.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:03:21.454665"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: architecture
+summary: Code review feedback can be outdated after rapid fixes
+detail: |
+  When a reviewer (like Claude Code Review) requests changes, and the agent immediately addresses them in new commits, the PR status will still show 'Changes requested' until the reviewer re-runs or CI picks up the new commits. The agent correctly pushed fixes (778cb0b and adcecb0) that addressed both review issues (API quota documentation and getTodayUTC helper), but the PR continued showing the old review status because CI hadn't re-run. Agents should understand that review status lags behind actual code state.
+actionable: true
+
+---
+timestamp: "2026-01-20T09:03:21.454665"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: documentation_gap
+summary: No guidance on handling stalled CI workflows
+detail: |
+  The core rules and guides don't document what to do when GitHub CI doesn't trigger for new commits. The agent correctly waited and checked multiple times using 'gh run list' and 'gh pr checks', but there's no documented workflow for: (1) how long to wait before considering CI stalled, (2) whether/how to manually trigger workflows, (3) what causes CI to not auto-trigger. This led to uncertainty and repeated checks with no resolution. Documentation should cover CI troubleshooting patterns.
 actionable: true
 
