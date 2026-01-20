@@ -629,3 +629,48 @@ detail: |
   Files in .ai/skills/learnings/ (extract-learnings.sh, SKILL.md, etc.) are infrastructure that GENERATES learnings and should trigger extraction. Files in .ai/log/, .ai/guides/, .ai/patterns/, .ai/rules/ are DESTINATIONS where learnings get applied and should NOT trigger extraction. The pre-push hook must only skip extraction when pushing destination files, not infrastructure files. Skipping for infrastructure changes would miss the session where those tools were modified.
 actionable: true
 
+---
+timestamp: "2026-01-19T20:29:29.230428"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Headless Claude needs project-local temp files to avoid permission prompts
+detail: |
+  When using headless Claude with `claude -p` for extraction tasks, creating temp files in system temp directories (e.g., `/var/folders/.../T`) triggers permission prompts because files are outside the project workspace. The solution is to create temp files within the project directory (e.g., `.ai/log/.transcript-temp.md`) where Claude already has workspace access. This eliminates interactive permission prompts during automated workflows.
+actionable: true
+
+---
+timestamp: "2026-01-19T20:29:29.230428"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: MCP config flag requires proper JSON structure with mcpServers key
+detail: |
+  The `--mcp-config` flag for Claude CLI requires a complete MCP configuration structure, not just empty braces. Using `--mcp-config "{}"` causes headless Claude to hang indefinitely. The correct format is `--mcp-config '{"mcpServers":{}}'`. This is critical when disabling MCP servers for headless sessions via `--strict-mcp-config` to reduce startup overhead.
+actionable: true
+
+---
+timestamp: "2026-01-19T20:29:29.230428"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: distinction
+summary: Permission prompts vs MCP config issues have different symptoms
+detail: |
+  When debugging headless Claude hangs, distinguish between two issues: (1) Permission prompts show 'Approval Required' notifications from terminal-notifier processes, caused by file access outside the project workspace; (2) MCP config issues cause silent hangs without notifications, caused by malformed JSON in `--mcp-config`. The first requires fixing file locations or adding `--dangerously-skip-permissions`; the second requires correct JSON structure with `{"mcpServers":{}}` format.
+actionable: true
+
+---
+timestamp: "2026-01-19T20:29:29.230428"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: rule
+summary: Test headless Claude flags incrementally before committing
+detail: |
+  When adding new CLI flags to headless Claude invocations, test them incrementally in isolation before combining. For example, test `--mcp-config` alone, then with `--strict-mcp-config`, then with `--dangerously-skip-permissions`. This identifies which specific flag causes issues (like `--mcp-config "{}"` hanging) rather than debugging the entire command at once. Use manual timeout wrappers on macOS since `timeout` command doesn't exist: `command & PID=$!; sleep N; kill -0 $PID && kill $PID`.
+actionable: true
+
+---
+timestamp: "2026-01-19T20:29:29.230428"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: Headless extraction optimization strategy combines MCP disable and local temp files
+detail: |
+  Optimizing headless Claude for extraction tasks requires two complementary changes: (1) Disable MCP servers with `--mcp-config '{"mcpServers":{}}' --strict-mcp-config` to eliminate startup overhead when only Read tool is needed; (2) Write temp files to project directory (`.ai/log/`) instead of system temp to avoid permission prompts. This architecture avoids both unnecessary MCP server initialization and interactive permission workflows, enabling fully automated extraction in git hooks.
+actionable: true
+
