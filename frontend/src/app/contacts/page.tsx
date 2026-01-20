@@ -70,13 +70,13 @@ function ContactsTable({
   }
 
   // Build URL with navigation context params
+  // Always include sort/order (default to last_contacted desc) so navigation order matches list order
   const buildContactUrl = (contactId: string) => {
     const params = new URLSearchParams()
-    if (sortBy) params.set('sort', sortBy)
-    if (sortOrder) params.set('order', sortOrder)
+    params.set('sort', sortBy || 'last_contacted')
+    params.set('order', sortOrder || 'desc')
     if (searchTerm) params.set('search', searchTerm)
-    const queryString = params.toString()
-    return `/contacts/${contactId}${queryString ? `?${queryString}` : ''}`
+    return `/contacts/${contactId}?${params.toString()}`
   }
 
   const handleRowClick = (contactId: string) => {

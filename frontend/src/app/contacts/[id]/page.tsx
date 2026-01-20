@@ -97,7 +97,12 @@ export default function ContactDetailPage() {
         return
       }
 
-      if (event.key === 'Enter') {
+      if (event.key === 'Enter' && !isEditing) {
+        // Don't intercept Enter on buttons/links - let native activation work
+        const target = event.target as HTMLElement
+        if (target.tagName === 'BUTTON' || target.tagName === 'A' || target.closest('button, a')) {
+          return
+        }
         event.preventDefault()
         setIsEditing(true)
       }
