@@ -458,3 +458,93 @@ detail: |
 actionable: true
 suggested_location: .ai/guides/learnings-system.md
 
+---
+timestamp: "2026-01-19T19:08:44.541253"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Bash if statements treat ANY non-zero exit code as false, including semantic signals
+detail: |
+  The pre-push hook had a critical bug where `extract-learnings.sh` exits with code 2 to signal 'new learnings extracted' (not a failure). The hook's `if ./extract-learnings.sh; then` treated exit code 2 as failure and skipped the git diff check. Fix: explicitly handle both success codes: `if [[ $exit_code -eq 0 ]] || [[ $exit_code -eq 2 ]]; then`. When using exit codes as semantic signals (not just success/failure), always capture the code and check explicitly.
+actionable: true
+suggested_location: .ai/patterns/bash-exit-codes.md
+
+---
+timestamp: "2026-01-19T19:08:44.541253"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Background shell functions must cd to project root before running commands
+detail: |
+  When running background functions with `function_name &`, the background process inherits the shell's working directory but won't track subsequent `cd` commands in the parent. Functions that run in background must explicitly `cd "$PROJECT_ROOT"` at the start, even if the main script already did this. This affected both `run_tests()` and `run_learnings()` in the pre-push hook - they were executing from the wrong directory.
+actionable: true
+suggested_location: .ai/patterns/bash-background-jobs.md
+
+---
+timestamp: "2026-01-19T19:08:44.541253"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: Use git diff to detect changes, not tool exit codes, for idempotent checks
+detail: |
+  The agentic-coding pattern uses `git diff --quiet <file>` to detect if extraction produced changes, rather than relying on exit codes. This is more reliable and naturally handles the infinite loop case: after committing learnings, `git diff` returns true (no changes), so the hook passes. This is better than exit code signals which require complex coordination between scripts.
+actionable: true
+suggested_location: .ai/patterns/git-based-detection.md
+
+---
+timestamp: "2026-01-19T19:08:44.541253"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: documentation_gap
+summary: Shell exit code semantics not documented, caused exit code 2 to be mishandled
+detail: |
+  The extract-learnings.sh script uses exit code 2 as a semantic signal (new learnings) but the pre-push hook treated it as a generic failure. No documentation existed explaining: (1) exit code 0 = no changes, (2) exit code 2 = changes made, (3) other codes = actual errors. This caused the hook to silently pass when it should block. Need a patterns document about using exit codes as semantic signals in bash scripts.
+actionable: true
+suggested_location: .ai/patterns/bash-exit-codes.md
+
+---
+timestamp: "2026-01-19T19:22:01.876821"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Backgrounded bash functions don't reliably write to temp files passed as variables
+detail: |
+  When bash functions are backgrounded with `&`, they may not reliably write to temp files created with `mktemp` in the parent process, even when the path is passed via a variable like `$LEARN_RESULT`. The symptom is that the temp file remains empty or the write never completes before the parent process reads it. Solution: Run critical functions synchronously if they need to communicate results via temp files, or use alternative IPC mechanisms.
+actionable: true
+suggested_location: .ai/guides/architecture.md
+
+---
+timestamp: "2026-01-19T19:22:01.876821"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: Pre-push hooks should run critical blocking checks synchronously, not backgrounded
+detail: |
+  When a pre-push hook needs to block a push based on a check result (like learnings extraction), that check must run synchronously to ensure reliable communication about whether to block. Backgrounding for parallelism is valuable for speed, but not when the result determines whether the push proceeds. The pattern: background fast-fail checks (tests), run synchronously checks that might block with user instructions (learnings extraction with exit code 2).
+actionable: true
+suggested_location: .ai/patterns/
+
+---
+timestamp: "2026-01-19T19:22:01.876821"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: distinction
+summary: Exit code 2 requires synchronous execution to reliably block git push
+detail: |
+  The PersonalCRM pre-push hook uses exit code 2 from extract-learnings.sh to signal 'new learnings extracted, block push and show agent instructions'. This differs from agentic-coding which always uses exit 0 and relies only on git diff. The exit code 2 pattern requires synchronous execution because backgrounded processes with temp file communication don't reliably propagate this state. If using exit code 2 for agent messaging, run synchronously; if using git diff only, backgrounding is safe.
+actionable: true
+suggested_location: .ai/patterns/
+
+---
+timestamp: "2026-01-19T19:22:01.876821"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Suppressing stderr (2>&1) hides critical agent instructions from pre-push hooks
+detail: |
+  The extract-learnings.sh script outputs instructions to stderr for the agent to read (e.g., 'Before pushing, you should: 1. Read the new learnings...'). When the pre-push hook runs extraction with `>/dev/null 2>&1`, it suppresses both stdout AND stderr, preventing the agent from seeing these instructions. Correct pattern: suppress only stdout with `>/dev/null` to hide verbose output while preserving agent-facing messages on stderr.
+actionable: true
+suggested_location: .ai/rules/core.md
+
+---
+timestamp: "2026-01-19T19:23:23.759576"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: set -e exits script before exit code capture without set +e wrapper
+detail: |
+  In bash scripts with `set -e`, if a command returns non-zero, the script exits immediately BEFORE you can capture the exit code with `$?`. The fix is to wrap the command with `set +e` / `set -e` to temporarily disable errexit. Pattern: `set +e; command; local exit_code=$?; set -e`. This is critical for pre-push hooks that need to distinguish between different non-zero exit codes (e.g., 2 for 'new learnings extracted' vs other errors).
+actionable: true
+suggested_location: .ai/patterns/bash-exit-code-handling.md
+
