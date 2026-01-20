@@ -80,3 +80,48 @@ detail: |
   The project's .ai/rules/core.md and .ai/rules/testing.md don't document the critical requirement that E2E tests comparing dates must use UTC date components when the backend stores UTC timestamps. This led to E2E tests being written with toLocaleDateString() which fails late at night. Documentation should be strengthened to include: 'When testing date display in E2E tests, use UTC date components (getUTCMonth(), getUTCDate(), getUTCFullYear()) if backend stores UTC timestamps, as formatDateOnly extracts UTC date portions.'
 actionable: true
 
+---
+timestamp: "2026-01-20T08:38:48.085531"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: gotcha
+summary: Pre-push hooks block push even when committing only learnings
+detail: |
+  The pre-push hook runs learnings extraction which can generate new learnings to commit. This creates a chicken-and-egg situation: pushing triggers learning extraction, which modifies learnings.yaml, which blocks the push. The hook intelligently detects when only learnings files changed and skips tests/learning extraction to break this cycle. Agents should understand this is expected behavior and not try to work around it.
+actionable: false
+
+---
+timestamp: "2026-01-20T08:38:48.085531"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: documentation_gap
+summary: E2E date testing gotcha was undocumented until this session
+detail: |
+  Tests were failing late at night due to UTC/local timezone mismatch when comparing dates. The fix (using UTC date components) was not documented anywhere. This session added documentation to .ai/rules/testing.md, but the fact that this gotcha existed and caused flaky tests reveals that critical E2E testing patterns should be documented proactively. Future insight: When fixing flaky tests, always check if the root cause represents a pattern that should be documented.
+actionable: true
+
+---
+timestamp: "2026-01-20T08:38:48.085531"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: architecture
+summary: Code review bot requests changes via GitHub comments
+detail: |
+  The project uses an automated Claude code review bot that runs in CI and posts review comments requesting changes. The bot checks for documentation completeness, code duplication, and follows project conventions. Agents should expect review feedback and address it by reading PR comments with 'gh pr view <number> --comments'. The review is blocking - PR cannot merge until addressed.
+actionable: true
+
+---
+timestamp: "2026-01-20T08:38:48.085531"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: rule
+summary: Extracted helper functions need descriptive JSDoc explaining WHY
+detail: |
+  When code review requested extracting duplicate UTC date logic to a helper, the helper needed comprehensive documentation explaining the non-obvious reason it exists: formatDateOnly extracts UTC date portion, so tests using toLocaleDateString() fail late at night when UTC has rolled to next day. Good helper docs explain the gotcha/pitfall the abstraction prevents, not just what the code does.
+actionable: true
+
+---
+timestamp: "2026-01-20T08:38:48.085531"
+session_id: e60e0813-23c0-49ff-8989-3230a4ba3985
+type: gotcha
+summary: GitHub PR checks continue in background after agent completes work
+detail: |
+  After pushing code, the agent watched CI checks with 'gh pr checks --watch' but one check (Claude Code Review) took significantly longer than tests (2m12s vs immediate for unit tests). The agent waited multiple times (60s, 90s, 120s delays) before the review completed. When reviewing PRs, agents should expect code review checks to take 2-3+ minutes and should check once after all tests pass rather than polling repeatedly.
+actionable: true
+
