@@ -602,3 +602,30 @@ detail: |
   The pre-push hook's 'NEW learnings' message originally said 'Review .ai/log/learnings.yaml, then: git add && commit && push' without mentioning the judgment/application step. This caused agents to blindly commit learnings without evaluating whether they should be applied to documentation. The fix was changing the message to 'BLOCKED: New learnings extracted. See instructions above.' which points to the detailed instructions from extract-learnings.sh that explain the review/judge/apply workflow. The guidance needs to be explicit that learnings enhance documentation, not just get committed.
 actionable: true
 
+---
+timestamp: "2026-01-19T19:50:47.737743"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Pre-push skip logic must check commits since last extraction, not all unpushed commits
+detail: |
+  When learnings extraction blocks a push, the user commits learnings and tries to push again. All original commits are still unpushed. A skip check that examines 'all unpushed commits' will always find the original code and never skip. Instead, track the HEAD commit when extraction runs (saved to .ai/log/.last-extraction-commit), then on subsequent pushes check only files that changed SINCE that commit. If only learnings docs changed since the last extraction point, skip extraction entirely. This prevents infinite extraction loops when committing learnings.
+actionable: true
+
+---
+timestamp: "2026-01-19T19:50:47.737743"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: set -e exits bash scripts before $? capture without set +e wrapper
+detail: |
+  In bash scripts with 'set -e', if a command returns non-zero, the script exits immediately BEFORE you can capture the exit code with '$?'. The fix is to wrap the command with 'set +e' / 'set -e' to temporarily disable errexit. Pattern: 'set +e; command; local exit_code=$?; set -e'. This is critical for pre-push hooks that need to distinguish between different non-zero exit codes (e.g., exit 2 for 'new learnings extracted' vs other errors). Without this wrapper, the hook would terminate on any non-zero exit instead of handling it appropriately.
+actionable: true
+
+---
+timestamp: "2026-01-19T19:50:47.737743"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: distinction
+summary: Distinguish learnings infrastructure files from learnings application destinations
+detail: |
+  Files in .ai/skills/learnings/ (extract-learnings.sh, SKILL.md, etc.) are infrastructure that GENERATES learnings and should trigger extraction. Files in .ai/log/, .ai/guides/, .ai/patterns/, .ai/rules/ are DESTINATIONS where learnings get applied and should NOT trigger extraction. The pre-push hook must only skip extraction when pushing destination files, not infrastructure files. Skipping for infrastructure changes would miss the session where those tools were modified.
+actionable: true
+
