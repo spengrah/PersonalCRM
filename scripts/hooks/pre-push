@@ -1,0 +1,337 @@
+#!/bin/bash
+# Unified pre-push hook: lint, test, learnings (parallel execution)
+#
+# Reads configuration from .ai/pre-push.json
+# Runs enabled checks in parallel for speed
+# Blocks push if any required check fails
+#
+# To bypass (not recommended): git push --no-verify
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$PROJECT_ROOT"
+
+CONFIG_FILE=".ai/pre-push.json"
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "Warning: No $CONFIG_FILE found, skipping pre-push checks" >&2
+  exit 0
+fi
+
+# Temp files for parallel execution results
+LINT_RESULT=$(mktemp)
+TEST_RESULT=$(mktemp)
+LEARN_RESULT=$(mktemp)
+trap "rm -f $LINT_RESULT $TEST_RESULT $LEARN_RESULT" EXIT
+
+echo "==============================================================" >&2
+echo "Pre-push: Running checks..." >&2
+echo "==============================================================" >&2
+
+# Run lint commands
+run_lint() {
+  local enabled=$(jq -r '.lint.enabled // false' "$CONFIG_FILE")
+  if [[ "$enabled" != "true" ]]; then
+    echo "SKIP" > "$LINT_RESULT"
+    return
+  fi
+
+  local count=$(jq '.lint.commands | length' "$CONFIG_FILE")
+  if [[ "$count" -eq 0 ]]; then
+    echo "SKIP" > "$LINT_RESULT"
+    return
+  fi
+
+  local failed=0
+  for i in $(seq 0 $((count - 1))); do
+    local name=$(jq -r ".lint.commands[$i].name" "$CONFIG_FILE")
+    local cmd=$(jq -r ".lint.commands[$i].command" "$CONFIG_FILE")
+    local optional=$(jq -r ".lint.commands[$i].optional // false" "$CONFIG_FILE")
+
+    echo "  [lint] -> $name" >&2
+    if eval "$cmd" >/dev/null 2>&1; then
+      echo "  [lint] OK $name" >&2
+    else
+      if [[ "$optional" == "true" ]]; then
+        echo "  [lint] WARN $name (optional)" >&2
+      else
+        echo "  [lint] FAIL $name" >&2
+        failed=1
+      fi
+    fi
+  done
+
+  if [[ "$failed" -eq 1 ]]; then
+    echo "FAIL" > "$LINT_RESULT"
+  else
+    echo "PASS" > "$LINT_RESULT"
+  fi
+}
+
+# Check if a file matches any pattern in test-triggers.yml
+file_triggers_tests() {
+  local file="$1"
+  local triggers="test-triggers.yml"
+
+  [[ ! -f "$triggers" ]] && return 0  # No config = always run tests
+
+  # Parse YAML patterns (lines starting with '  - ')
+  while IFS= read -r line; do
+    # Extract pattern from "  - 'pattern'" or "  - pattern"
+    if [[ "$line" =~ ^[[:space:]]*-[[:space:]]+(.+)$ ]]; then
+      local pattern
+      pattern=$(echo "${BASH_REMATCH[1]}" | tr -d "'\"")
+
+      # Glob pattern (contains *)
+      if [[ "$pattern" == *"*"* ]]; then
+        # Convert glob to regex: ** = .*, * = [^/]*
+        # Use placeholder to avoid clobbering
+        local regex="${pattern//\*\*/__DOUBLESTAR__}"
+        regex="${regex//\*/$'[^/]*'}"
+        regex="${regex//__DOUBLESTAR__/.*}"
+        if [[ "$file" =~ ^${regex}$ ]]; then
+          return 0  # File triggers tests
+        fi
+      # Exact match
+      elif [[ "$file" == "$pattern" ]]; then
+        return 0
+      fi
+    fi
+  done < "$triggers"
+
+  return 1  # File does not trigger tests
+}
+
+# Check if any files in a list trigger tests
+any_file_triggers_tests() {
+  local changed_files="$1"
+  [[ -z "$changed_files" ]] && return 1  # No changes = no tests needed
+
+  while IFS= read -r file; do
+    if file_triggers_tests "$file"; then
+      return 0  # At least one file triggers tests
+    fi
+  done <<< "$changed_files"
+  return 1  # No files trigger tests
+}
+
+# Check if tests can be skipped
+should_skip_tests() {
+  # Case 1: No pushed files trigger tests
+  local remote_branch
+  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/main"
+  local pushed_files
+  pushed_files=$(git diff --name-only "$remote_branch"...HEAD 2>/dev/null)
+
+  if ! any_file_triggers_tests "$pushed_files"; then
+    return 0  # No code changes, skip tests
+  fi
+
+  # Case 2: Tests already passed, no new trigger files since
+  local marker=".ai/log/.tests-passed.json"
+  if [[ -f "$marker" ]]; then
+    local last_tested_commit
+    last_tested_commit=$(jq -r '.commit' "$marker" 2>/dev/null)
+    if [[ -n "$last_tested_commit" ]] && git rev-parse --verify "$last_tested_commit" >/dev/null 2>&1; then
+      local files_since_test
+      files_since_test=$(git diff --name-only "$last_tested_commit" HEAD 2>/dev/null)
+      if ! any_file_triggers_tests "$files_since_test"; then
+        return 0  # Only non-trigger files changed since tests passed
+      fi
+    fi
+  fi
+
+  return 1  # Must run tests
+}
+
+# Save test pass marker
+save_test_marker() {
+  local marker=".ai/log/.tests-passed.json"
+  local commit=$(git rev-parse HEAD)
+  local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  mkdir -p "$(dirname "$marker")"
+  echo "{\"commit\": \"$commit\", \"timestamp\": \"$timestamp\"}" > "$marker"
+}
+
+# Run test commands
+run_tests() {
+  cd "$PROJECT_ROOT"  # Ensure correct directory in background
+  local enabled=$(jq -r '.test.enabled // false' "$CONFIG_FILE")
+  if [[ "$enabled" != "true" ]]; then
+    echo "SKIP" > "$TEST_RESULT"
+    return
+  fi
+
+  # Check if we can skip tests
+  if should_skip_tests; then
+    echo "  [test] OK Skipped (only learnings changed since last pass)" >&2
+    echo "PASS" > "$TEST_RESULT"
+    return
+  fi
+
+  local count=$(jq '.test.commands | length' "$CONFIG_FILE")
+  if [[ "$count" -eq 0 ]]; then
+    echo "SKIP" > "$TEST_RESULT"
+    return
+  fi
+
+  local failed=0
+  for i in $(seq 0 $((count - 1))); do
+    local name=$(jq -r ".test.commands[$i].name" "$CONFIG_FILE")
+    local cmd=$(jq -r ".test.commands[$i].command" "$CONFIG_FILE")
+    local optional=$(jq -r ".test.commands[$i].optional // false" "$CONFIG_FILE")
+
+    echo "  [test] -> $name" >&2
+    if eval "$cmd" >/dev/null 2>&1; then
+      echo "  [test] OK $name" >&2
+    else
+      if [[ "$optional" == "true" ]]; then
+        echo "  [test] WARN $name (optional)" >&2
+      else
+        echo "  [test] FAIL $name" >&2
+        failed=1
+      fi
+    fi
+  done
+
+  if [[ "$failed" -eq 1 ]]; then
+    echo "FAIL" > "$TEST_RESULT"
+  else
+    save_test_marker
+    echo "PASS" > "$TEST_RESULT"
+  fi
+}
+
+# Check if only learnings-related docs changed since last extraction
+# This checks commits SINCE last extraction, not all unpushed commits
+should_skip_learnings() {
+  local state_file=".ai/log/.last-extraction-commit"
+
+  # If no state file, can't skip (first run)
+  [[ ! -f "$state_file" ]] && return 1
+
+  local last_commit
+  last_commit=$(cat "$state_file" 2>/dev/null)
+
+  # Verify the commit exists
+  if ! git rev-parse --verify "$last_commit" >/dev/null 2>&1; then
+    return 1  # Invalid commit, must run extraction
+  fi
+
+  # Get files changed since last extraction
+  local changed_files
+  changed_files=$(git diff --name-only "$last_commit" HEAD 2>/dev/null)
+
+  [[ -z "$changed_files" ]] && return 0  # No changes since extraction
+
+  # Check if ALL changed files are learnings application locations
+  while IFS= read -r file; do
+    case "$file" in
+      .ai/log/*|.ai/guides/*|.ai/patterns/*|.ai/rules/*) ;;  # Skip these
+      .claude/CLAUDE.md|CLAUDE.md|AGENTS.md) ;;              # Skip these
+      *) return 1 ;;  # Found a file that might generate learnings
+    esac
+  done <<< "$changed_files"
+
+  return 0  # Only learnings docs changed since last extraction
+}
+
+# Save current commit as last extraction point
+save_extraction_commit() {
+  local state_file=".ai/log/.last-extraction-commit"
+  git rev-parse HEAD > "$state_file"
+}
+
+# Run learnings extraction (runs synchronously for reliable temp file writing)
+run_learnings() {
+  cd "$PROJECT_ROOT"
+  local enabled=$(jq -r '.learnings.enabled // false' "$CONFIG_FILE")
+  if [[ "$enabled" != "true" ]]; then
+    echo "SKIP" > "$LEARN_RESULT"
+    return
+  fi
+
+  # Skip if only learnings files are being pushed
+  if should_skip_learnings; then
+    echo "  [learn] OK Skipped (only learnings files)" >&2
+    echo "PASS" > "$LEARN_RESULT"
+    return
+  fi
+
+  echo "  [learn] -> Extracting learnings..." >&2
+
+  # Run synchronously, show stderr (agent sees instructions), hide stdout
+  # Exit codes: 0 = no new learnings, 2 = new learnings extracted, other = error
+  # Disable errexit temporarily to capture non-zero exit codes
+  set +e
+  ./.ai/skills/learnings/extract-learnings.sh --trigger pre-push >/dev/null
+  local exit_code=$?
+  set -e
+
+  if [[ "$exit_code" -eq 0 ]] || [[ "$exit_code" -eq 2 ]]; then
+    # Save extraction point so we can skip next time if only learnings docs change
+    save_extraction_commit
+
+    # Check if new learnings were added (uncommitted changes to file)
+    if git diff --quiet .ai/log/learnings.yaml 2>/dev/null; then
+      echo "  [learn] OK No new learnings" >&2
+      echo "PASS" > "$LEARN_RESULT"
+    else
+      echo "  [learn] WARN New learnings extracted" >&2
+      echo "NEW" > "$LEARN_RESULT"
+    fi
+  else
+    echo "  [learn] WARN Extraction failed (non-blocking)" >&2
+    echo "PASS" > "$LEARN_RESULT"
+  fi
+}
+
+# Run lint first (fast, fail early)
+run_lint
+LINT_STATUS=$(cat "$LINT_RESULT")
+
+if [[ "$LINT_STATUS" == "FAIL" ]]; then
+  echo ""
+  echo "=============================================================="
+  echo "FAILED: Linting failed. Fix issues before pushing."
+  echo "=============================================================="
+  exit 1
+fi
+
+# Run tests in background, learnings synchronously (for reliable temp file writing)
+run_tests &
+run_learnings
+wait
+
+# Collect results
+TEST_STATUS=$(cat "$TEST_RESULT")
+LEARN_STATUS=$(cat "$LEARN_RESULT")
+
+echo "" >&2
+echo "==============================================================" >&2
+echo "Results:" >&2
+echo "  Lint:      $LINT_STATUS" >&2
+echo "  Tests:     $TEST_STATUS" >&2
+echo "  Learnings: $LEARN_STATUS" >&2
+echo "==============================================================" >&2
+
+# Determine exit (lint already checked above)
+if [[ "$TEST_STATUS" == "FAIL" ]]; then
+  echo "" >&2
+  echo "FAILED: Tests failed. Fix issues before pushing." >&2
+  echo "" >&2
+  exit 1
+fi
+
+if [[ "$LEARN_STATUS" == "NEW" ]]; then
+  echo "" >&2
+  echo "BLOCKED: New learnings extracted. See instructions above." >&2
+  echo "" >&2
+  exit 1
+fi
+
+echo "" >&2
+echo "OK: All pre-push checks passed." >&2
+exit 0

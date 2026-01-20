@@ -6,8 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-push-tests.sh",
-            "timeout": 600
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hooks/block-no-verify.sh"
           }
         ]
       }

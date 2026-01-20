@@ -1,0 +1,11 @@
+project_name: PersonalCRM
+languages:
+  - go
+  - typescript
+ignored_paths:
+  - node_modules
+  - .git
+  - .next
+  - frontend/.next
+  - backend/bin
+ignore_all_files_in_gitignore: true

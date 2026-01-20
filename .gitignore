@@ -226,6 +226,9 @@ volumes/
 logs/
 log/
 
+# But allow .ai/log directory (learnings storage)
+!.ai/log/
+
 # Runtime logs
 npm-debug.log*
 yarn-debug.log*
@@ -345,5 +348,11 @@ Personal CRM.app/
 # Claude cache (local)
 .claude/cache/
 
+# Learnings log (allow learnings.yaml and .gitkeep only)
+.ai/log/*
+!.ai/log/learnings.yaml
+!.ai/log/.gitkeep
+
 # Git worktrees
 .worktrees/
+.ai/log/.transcript-temp.md
