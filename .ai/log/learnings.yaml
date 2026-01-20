@@ -308,3 +308,53 @@ detail: |
 actionable: true
 suggested_location: .ai/guides/mcp-setup.md
 
+---
+timestamp: "2026-01-19T18:24:03.918534"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Learnings extraction in pre-push creates infinite loop if not skipped for learnings-only commits
+detail: |
+  If the pre-push hook always runs learnings extraction regardless of which files changed, it creates an infinite loop: (1) push fails with new learnings, (2) commit learnings, (3) push triggers extraction again finding new learnings from the commit activity. Must skip extraction when only .ai/log/ files are being pushed.
+actionable: true
+suggested_location: .ai/guides/architecture.md
+
+---
+timestamp: "2026-01-19T18:24:03.918534"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: Git hooks should live in scripts/hooks/ with core.hooksPath config, not .git-hooks/ templates
+detail: |
+  The proper pattern for this project is: (1) actual hooks in scripts/hooks/, (2) install-git-hooks.sh sets 'git config core.hooksPath scripts/hooks', (3) no symlinks or templates needed. This is cleaner than .git-hooks/ templates with install script copying files, and makes hooks visible/editable in the repo.
+actionable: true
+suggested_location: .ai/patterns/git-hooks.md
+
+---
+timestamp: "2026-01-19T18:24:03.918534"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: distinction
+summary: Claude PreToolUse hooks belong in scripts/hooks/, not .ai/skills/
+detail: |
+  block-no-verify.sh is a git hook helper (blocks --no-verify bypass), not a learnings skill. It should live alongside other git infrastructure in scripts/hooks/, even though it's triggered by Claude. Only the extract-learnings scripts should be in .ai/skills/learnings/ since they're actual skill implementation.
+actionable: true
+suggested_location: .ai/patterns/file-organization.md
+
+---
+timestamp: "2026-01-19T18:24:03.918534"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: rule
+summary: Hook skip logic must check if ALL changed files are in skip directory, not just some
+detail: |
+  When implementing skip logic for learnings extraction (to avoid infinite loops), must check that ALL pushed files are in .ai/log/, not just that some are. Pattern: iterate through all changed files, return false if ANY file is outside the skip directory. This prevents extraction from being skipped when code changes are bundled with learnings.
+actionable: true
+suggested_location: .ai/rules/git-hooks.md
+
+---
+timestamp: "2026-01-19T18:24:03.918534"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Git config core.hooksPath is local, not tracked in repo
+detail: |
+  Setting 'git config core.hooksPath scripts/hooks' is stored in .git/config (local), not tracked. Each user must run install-git-hooks.sh after clone to configure hooks. Can't rely on this being set automatically - need documented install script.
+actionable: true
+suggested_location: .ai/guides/onboarding.md
+
