@@ -200,7 +200,7 @@ export default function DashboardPage() {
         {/* Header */}
         <div className="md:flex md:items-center md:justify-between mb-8">
           <div className="flex-1 min-w-0">
-            <h2 className="text-3xl font-bold leading-7 text-gray-900 sm:text-4xl">
+            <h2 className="text-3xl font-bold leading-normal text-gray-900 sm:text-4xl">
               Action Required
             </h2>
             <p className="mt-2 text-lg text-gray-600">
