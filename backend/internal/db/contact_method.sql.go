@@ -169,6 +169,28 @@ func (q *Queries) ListContactMethodsByContact(ctx context.Context, contactID pgt
 	return items, nil
 }
 
+const SetContactMethodPrimary = `-- name: SetContactMethodPrimary :exec
+UPDATE contact_method cm
+SET is_primary = $2,
+    updated_at = NOW()
+WHERE cm.id = $1
+  AND EXISTS (
+    SELECT 1 FROM contact c
+    WHERE c.id = cm.contact_id
+      AND c.deleted_at IS NULL
+  )
+`
+
+type SetContactMethodPrimaryParams struct {
+	ID        pgtype.UUID `json:"id"`
+	IsPrimary pgtype.Bool `json:"is_primary"`
+}
+
+func (q *Queries) SetContactMethodPrimary(ctx context.Context, arg SetContactMethodPrimaryParams) error {
+	_, err := q.db.Exec(ctx, SetContactMethodPrimary, arg.ID, arg.IsPrimary)
+	return err
+}
+
 const UpdateContactMethodValue = `-- name: UpdateContactMethodValue :one
 UPDATE contact_method cm
 SET value = $2,
@@ -203,26 +225,4 @@ func (q *Queries) UpdateContactMethodValue(ctx context.Context, arg UpdateContac
 		&i.ValueNormalized,
 	)
 	return &i, err
-}
-
-const SetContactMethodPrimary = `-- name: SetContactMethodPrimary :exec
-UPDATE contact_method cm
-SET is_primary = $2,
-    updated_at = NOW()
-WHERE cm.id = $1
-  AND EXISTS (
-    SELECT 1 FROM contact c
-    WHERE c.id = cm.contact_id
-      AND c.deleted_at IS NULL
-  )
-`
-
-type SetContactMethodPrimaryParams struct {
-	ID        pgtype.UUID `json:"id"`
-	IsPrimary bool        `json:"is_primary"`
-}
-
-func (q *Queries) SetContactMethodPrimary(ctx context.Context, arg SetContactMethodPrimaryParams) error {
-	_, err := q.db.Exec(ctx, SetContactMethodPrimary, arg.ID, arg.IsPrimary)
-	return err
 }

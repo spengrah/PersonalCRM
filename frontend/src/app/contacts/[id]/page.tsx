@@ -1,17 +1,20 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { Navigation } from '@/components/layout/navigation'
 import { ContactForm } from '@/components/contacts/contact-form'
 import { Button } from '@/components/ui/button'
 import {
   useContact,
+  useContactIDs,
   useUpdateContact,
   useDeleteContact,
   useUpdateLastContacted,
 } from '@/hooks/use-contacts'
 import { useRemindersByContact } from '@/hooks/use-reminders'
+import { useKeyboardNavigation } from '@/hooks/use-keyboard-navigation'
+import { ContactNavigationBar } from '@/components/contacts/contact-navigation-bar'
 import { formatDateOnly } from '@/lib/utils'
 import {
   Edit,
@@ -39,6 +42,7 @@ import type { ContactFormData } from '@/lib/validations/contact'
 export default function ContactDetailPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const contactId = params.id as string
 
   const [isEditing, setIsEditing] = useState(false)
@@ -48,9 +52,71 @@ export default function ContactDetailPage() {
   const [lastContactedDate, setLastContactedDate] = useState('')
   const notesRef = useRef<HTMLDivElement>(null)
 
+  // Extract list context from URL params (or use defaults)
+  const listContext = {
+    sort: searchParams.get('sort') || 'last_contacted',
+    order: (searchParams.get('order') as 'asc' | 'desc') || 'desc',
+    search: searchParams.get('search') || undefined,
+  }
+
   const { data: contact, isLoading, error } = useContact(contactId)
   const { data: reminders } = useRemindersByContact(contactId)
+  const { data: navigationData, isLoading: isLoadingIDs } = useContactIDs(listContext)
   const updateContactMutation = useUpdateContact()
+
+  // Build URL preserving list context params
+  const buildNavigationUrl = useCallback(
+    (newId?: string) => {
+      const params = new URLSearchParams()
+      if (listContext.sort) params.set('sort', listContext.sort)
+      if (listContext.order) params.set('order', listContext.order)
+      if (listContext.search) params.set('search', listContext.search)
+      const queryString = params.toString()
+      const path = newId ? `/contacts/${newId}` : '/contacts'
+      return `${path}${queryString ? `?${queryString}` : ''}`
+    },
+    [listContext.sort, listContext.order, listContext.search]
+  )
+
+  // Keyboard navigation
+  const navigationIds = navigationData?.ids || []
+  const { canGoBack, canGoForward, goBack, goForward, currentIndex, total } = useKeyboardNavigation(
+    {
+      ids: navigationIds,
+      currentId: contactId,
+      onNavigate: id => router.push(buildNavigationUrl(id)),
+      enabled: !isEditing && !isLoading && !isLoadingIDs,
+    }
+  )
+
+  // Handle Enter key (toggle edit mode) and Escape key (discard/return to list)
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      // Don't handle if typing in an input
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return
+      }
+
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        setIsEditing(true)
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        if (isEditing) {
+          // Discard changes and exit edit mode
+          setIsEditing(false)
+        } else {
+          // Return to contacts list (preserving context)
+          router.push(buildNavigationUrl())
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isEditing, router, buildNavigationUrl])
 
   // Detect if notes content overflows the 4-line clamp
   useEffect(() => {
@@ -170,6 +236,19 @@ export default function ContactDetailPage() {
     return (
       <div className="min-h-screen bg-gray-50">
         <Navigation />
+
+        {/* Navigation Bar (disabled in edit mode) */}
+        <ContactNavigationBar
+          onPrevious={goBack}
+          onNext={goForward}
+          canGoBack={canGoBack}
+          canGoForward={canGoForward}
+          currentIndex={currentIndex}
+          totalCount={total}
+          isEditMode={true}
+          isLoading={isLoadingIDs}
+        />
+
         <div className="max-w-3xl mx-auto py-6 sm:px-6 lg:px-8">
           <div className="md:flex md:items-center md:justify-between mb-6">
             <div className="flex-1 min-w-0">
@@ -179,6 +258,11 @@ export default function ContactDetailPage() {
               <p className="mt-1 text-sm text-gray-500">
                 Update {contact.full_name}&apos;s information
               </p>
+            </div>
+            <div className="mt-4 md:mt-0 md:ml-4">
+              <Button variant="outline" size="sm" onClick={() => setIsEditing(false)}>
+                Cancel
+              </Button>
             </div>
           </div>
 
@@ -217,6 +301,18 @@ export default function ContactDetailPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
+
+      {/* Navigation Bar */}
+      <ContactNavigationBar
+        onPrevious={goBack}
+        onNext={goForward}
+        canGoBack={canGoBack}
+        canGoForward={canGoForward}
+        currentIndex={currentIndex}
+        totalCount={total}
+        isEditMode={isEditing}
+        isLoading={isLoadingIDs}
+      />
 
       <div className="max-w-4xl mx-auto py-6 sm:px-6 lg:px-8">
         {/* Header */}

@@ -288,6 +288,56 @@ func (r *ContactRepository) CountSearchContacts(ctx context.Context, query strin
 	return r.queries.CountSearchContacts(ctx, query)
 }
 
+// ListContactIDsParams represents parameters for listing contact IDs
+type ListContactIDsParams struct {
+	Sort   string `json:"sort,omitempty"`
+	Order  string `json:"order,omitempty"`
+	Search string `json:"search,omitempty"`
+}
+
+// ListContactIDs retrieves a list of contact IDs with optional sorting and search.
+// This is a lightweight method for navigation purposes.
+func (r *ContactRepository) ListContactIDs(ctx context.Context, params ListContactIDsParams) ([]uuid.UUID, error) {
+	var (
+		dbIDs []pgtype.UUID
+		err   error
+	)
+
+	hasSearch := params.Search != ""
+	hasSort := params.Sort != ""
+
+	switch {
+	case hasSearch && hasSort:
+		dbIDs, err = r.queries.SearchContactIDsSorted(ctx, db.SearchContactIDsSortedParams{
+			SearchQuery: params.Search,
+			SortField:   params.Sort,
+			SortOrder:   params.Order,
+		})
+	case hasSearch:
+		dbIDs, err = r.queries.SearchContactIDs(ctx, params.Search)
+	case hasSort:
+		dbIDs, err = r.queries.ListContactIDsSorted(ctx, db.ListContactIDsSortedParams{
+			SortField: params.Sort,
+			SortOrder: params.Order,
+		})
+	default:
+		dbIDs, err = r.queries.ListContactIDs(ctx)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]uuid.UUID, len(dbIDs))
+	for i, dbID := range dbIDs {
+		if dbID.Valid {
+			ids[i] = uuid.UUID(dbID.Bytes)
+		}
+	}
+
+	return ids, nil
+}
+
 // ContactMatch represents a potential contact match with similarity score
 type ContactMatch struct {
 	Contact    Contact
