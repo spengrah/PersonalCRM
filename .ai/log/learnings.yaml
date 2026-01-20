@@ -1,1 +1,73 @@
 
+---
+timestamp: "2026-01-20T04:01:52.031612"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: sqlc regeneration changes Go types requiring repository layer updates
+detail: |
+  When running `make sqlc` to regenerate database code, sqlc may change plain Go types (like `bool`) to pgtype wrapper types (like `pgtype.Bool`). This breaks existing repository code that passes plain values. After sqlc regeneration, always check for compilation errors in repository files and update them to use the wrapper types with `.Bool` field and `.Valid = true`. Example: `IsPrimary: pgtype.Bool{Bool: isPrimary, Valid: true}` instead of `IsPrimary: isPrimary`. The pgtype import is typically already present in repository files.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:01:52.031612"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: distinction
+summary: GitHub CLI project access requires different permissions than issue access
+detail: |
+  The GitHub CLI requires the 'project' scope to access GitHub Projects v2 data via `gh project` commands, but can access issues via `gh issue` commands without this scope. When a user wants to work with GitHub Projects, they need to run `gh auth refresh --hostname github.com -s project` (note: --hostname is required in non-interactive mode). Issues can be accessed as a fallback using `gh issue list` with labels like 'agent-ready' to identify work items.
+actionable: false
+
+---
+timestamp: "2026-01-20T04:01:52.031612"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: architecture
+summary: Feature development should use parallel exploration agents before implementation
+detail: |
+  The feature-dev workflow launches 2-3 parallel code-explorer agents to understand different aspects of the codebase (similar features, architecture patterns, UI conventions). Each agent is asked to return a list of 5-10 key files. After agents complete, the implementing agent should read all identified files to build deep understanding before proceeding to implementation. This prevents making changes without understanding existing patterns. The parallel approach is faster than sequential exploration.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:01:52.031612"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: rule
+summary: Always verify backend compilation after adding new sqlc queries
+detail: |
+  After adding SQL queries and running `make sqlc`, immediately verify backend compilation with `cd backend && go build ./cmd/crm-api`. Pre-existing type errors in the codebase may surface after regeneration due to sqlc version changes or configuration differences. Fix these before proceeding with frontend work to avoid discovering compilation issues later. If lint fails with pre-existing errors, build directly to isolate your changes.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:01:52.031612"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: architecture
+summary: Frontend keyboard navigation requires IDs-only backend endpoint for performance
+detail: |
+  For keyboard navigation between items (contacts, etc.), create a lightweight backend endpoint that returns only IDs rather than full objects. Add `ids_only=true` query parameter to existing list endpoints. In the backend: add ID-only SQL queries (e.g., `SELECT id FROM contact`), add repository methods accepting same filter/sort params as full queries, modify handler to return `{ids: [...], total: n}` format when ids_only=true. Frontend uses these IDs with existing detail endpoints. This pattern keeps navigation fast while reusing filter/sort logic.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:01:52.031612"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: gotcha
+summary: URL search params must be passed through Link hrefs for context preservation
+detail: |
+  In Next.js 15, when navigating from a list page to a detail page and wanting to preserve context (sort, filter, search), you must build URLs that include these params as query strings. Create a helper function that builds the URL: `const buildUrl = (id) => { const params = new URLSearchParams(); if (sort) params.set('sort', sort); ...; return `/items/${id}?${params}`; }`. Use this in both Link hrefs AND router.push() calls. The detail page reads these with `useSearchParams()`. Don't rely on client-side state - URL is the source of truth.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:01:52.031612"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: documentation_gap
+summary: Clarifying questions phase was skipped initially due to unclear trigger
+detail: |
+  The feature-dev skill defines Phase 3 (Clarifying Questions) as 'CRITICAL: DO NOT SKIP' but the agent initially tried to proceed directly after codebase exploration. The spec was actually quite detailed, but the agent should have explicitly gone through the checklist: edge cases, error handling, integration points, scope boundaries, design preferences. The phase should be mandatory even when requirements seem clear - there are always clarifications needed (as shown by the follow-up questions about edit mode UI, direct link handling, etc.). Strengthen the skill to make Phase 3 a hard gate that cannot be bypassed.
+actionable: true
+
+---
+timestamp: "2026-01-20T04:01:52.031612"
+session_id: 47651f8d-6109-489c-bc66-7da35aa6d815
+type: rule
+summary: Custom agents must be manually installed and won't appear in predefined lists
+detail: |
+  When users install custom agents (like ui-visual-analyzer, ux-interaction-tester), these won't appear in the Task tool's documentation but can still be invoked by specifying their names as the subagent_type parameter. Don't assume an agent doesn't exist just because it's not in the predefined list. When a user says they've installed agents, acknowledge them and use them via Task tool with the exact names provided.
+actionable: false
+
