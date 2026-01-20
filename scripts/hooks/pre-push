@@ -204,12 +204,38 @@ run_tests() {
   fi
 }
 
+# Check if only learnings files are being pushed (skip extraction to avoid infinite loop)
+should_skip_learnings() {
+  local remote_branch
+  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/main"
+  local pushed_files
+  pushed_files=$(git diff --name-only "$remote_branch"...HEAD 2>/dev/null)
+
+  [[ -z "$pushed_files" ]] && return 0  # No changes
+
+  # Check if ALL pushed files are in .ai/log/
+  while IFS= read -r file; do
+    if [[ ! "$file" =~ ^\.ai/log/ ]]; then
+      return 1  # Found a non-learnings file, must run extraction
+    fi
+  done <<< "$pushed_files"
+
+  return 0  # Only learnings files, skip extraction
+}
+
 # Run learnings extraction (runs synchronously for reliable temp file writing)
 run_learnings() {
   cd "$PROJECT_ROOT"
   local enabled=$(jq -r '.learnings.enabled // false' "$CONFIG_FILE")
   if [[ "$enabled" != "true" ]]; then
     echo "SKIP" > "$LEARN_RESULT"
+    return
+  fi
+
+  # Skip if only learnings files are being pushed
+  if should_skip_learnings; then
+    echo "  [learn] OK Skipped (only learnings files)" >&2
+    echo "PASS" > "$LEARN_RESULT"
     return
   fi
 
