@@ -438,3 +438,23 @@ detail: |
 actionable: true
 suggested_location: .ai/guides/architecture.md
 
+---
+timestamp: "2026-01-19T18:38:41.217467"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: gotcha
+summary: Backgrounded bash functions can't reliably access parent scope variables
+detail: |
+  When running functions in background with `&`, variable inheritance (e.g., `$LEARN_RESULT` defined in parent) is unreliable for file writes. The backgrounded function may execute in a subshell where the variable is not properly expanded or accessible. Fix: Pass temp file paths as explicit function arguments instead of relying on variable inheritance: `run_tests "$TEST_RESULT" &` instead of assuming `$TEST_RESULT` is available inside the function.
+actionable: true
+suggested_location: .ai/patterns/bash-patterns.md
+
+---
+timestamp: "2026-01-19T18:38:41.217467"
+session_id: 537ed02e-5e98-432c-854e-82bbd6c146a1
+type: architecture
+summary: Pre-push hook learnings extraction must block on 'NEW' status
+detail: |
+  The pre-push hook runs learnings extraction in background for performance. When extraction finds new learnings (exit code 2), it writes 'NEW' to a temp file, which the hook reads to decide whether to block the push. The agent should then review the learnings in .ai/log/learnings.yaml, apply actionable ones to their suggested locations, and commit everything before pushing again. This flow was broken when backgrounded functions couldn't write to the temp file reliably.
+actionable: true
+suggested_location: .ai/guides/learnings-system.md
+
