@@ -25,7 +25,9 @@ const (
 	CalendarSourceName = "gcal"
 	// CalendarAttendeeSource is the source identifier for calendar attendee import candidates
 	CalendarAttendeeSource = "gcal_attendee"
-	// CalendarDefaultInterval is the default sync interval for calendar events (every 15 minutes)
+	// CalendarDefaultInterval is the default sync interval for calendar events (every 15 minutes).
+	// Incremental sync via syncToken keeps API usage low (~1-2 calls per sync for typical changes).
+	// Google Calendar API quota: 1M queries/day (default) - 15min interval = 96 syncs/day, well within limits.
 	CalendarDefaultInterval = 15 * time.Minute
 	// CalendarPastSyncDays is the number of days to sync into the past.
 	// 1 year provides comprehensive meeting history for relationship context.

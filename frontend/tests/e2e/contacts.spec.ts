@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
+import { getTodayUTC } from './helpers/date-utils'
 
 test.describe('Contacts - TestAPI Seeded', () => {
   let testApi: TestAPI
@@ -238,16 +239,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // Click the "Mark as Contacted" button
     await page.getByRole('button', { name: 'Mark as Contacted' }).click()
 
-    // Wait for the update and verify the date is today
-    // Note: Backend stores timestamps in UTC, and formatDateOnly extracts the UTC date part
-    // So the displayed date is the UTC date (e.g., if it's 10pm PST Jan 19, UTC is Jan 20)
+    // Wait for the update and verify the date is today (UTC date, see getTodayUTC)
     await page.waitForLoadState('networkidle')
-    const now = new Date()
-    // Get today's UTC date components and format them as MM/DD/YYYY
-    const utcMonth = now.getUTCMonth() + 1
-    const utcDay = now.getUTCDate()
-    const utcYear = now.getUTCFullYear()
-    const todayUtc = `${utcMonth}/${utcDay}/${utcYear}`
+    const todayUtc = getTodayUTC()
     const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
     await expect(lastContactedRow.locator('dd span').first()).toContainText(todayUtc)
   })
