@@ -62,3 +62,43 @@ detail: |
   The contact_method table has both a regular UNIQUE constraint on (contact_id, type) AND a partial unique index on (contact_id, type) WHERE is_primary = TRUE. This creates two separate constraint violations to handle: can't have duplicate method types per contact, and can't have multiple primary methods of same type. Both must be considered in merge logic.
 actionable: true
 
+---
+timestamp: "2026-01-21T01:32:39.693079"
+type: gotcha
+summary: GetMergePreview parameter order (sourceID, targetID) is counterintuitive
+detail: |
+  The GetMergePreview function signature is (ctx, sourceID, targetID) but the natural mental model is 'merge source INTO target', leading to calls with (ctx, target.ID, source.ID). This caused test failures where preview.TargetContact.ID didn't match the expected target because parameters were swapped. When designing merge APIs, consider using named parameters or request structs to avoid this confusion.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:32:39.693079"
+type: gotcha
+summary: MCP Serena tool uses literal mode by default, requiring explicit mode parameter
+detail: |
+  When using mcp__serena__replace_content, the default matching behavior is regex. For literal string replacement (especially with special characters like parentheses, brackets, pipes in markdown tables), must explicitly set "mode": "literal". Without this, replacements with table rows containing pipes '|' or regex special chars will fail to match.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:32:39.693079"
+type: documentation_gap
+summary: Core.md gotcha about updated_at was followed after being added
+detail: |
+  The session successfully identified that 'updated_at column availability' wasn't documented, added it to core.md Common Gotchas table, and this prevented future errors. This shows the learnings feedback loop working correctly - the gap was identified mid-session and immediately fixed. The gotcha entry now reads: 'Assuming all tables have updated_at | Only contact, contact_method, note, time_entry, calendar_event have it'
+actionable: false
+
+---
+timestamp: "2026-01-21T01:32:39.693079"
+type: gotcha
+summary: Review comments from chatgpt-codex-connector bot identify real bugs
+detail: |
+  The automated PR reviewer (chatgpt-codex-connector bot) posted two review comments identifying genuine constraint violations: (1) primary method uniqueness violation when both contacts have primary methods, (2) duplicate third-party connection violations. Both were valid bugs that local tests didn't catch because they only occurred in specific edge cases. Always carefully evaluate bot review comments rather than dismissing them as false positives.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:32:39.693079"
+type: architecture
+summary: Contact merge requires defensive deduplication queries before transfers
+detail: |
+  When merging contacts with UPDATE queries that change foreign keys, partial unique indexes and unique constraints can be violated in non-obvious ways: (1) contact_method has partial unique index on (contact_id, type) WHERE is_primary=TRUE - must demote source's primaries before transfer, (2) connection has UNIQUE(contact_a_id, contact_b_id) - must delete source's connections to third parties that target already connects to. The pattern is: identify all unique constraints, add DELETE queries for would-be duplicates, add UPDATE queries to demote/nullify conflicting values, only then transfer.
+actionable: true
+
