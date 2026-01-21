@@ -198,3 +198,11 @@ detail: |
   The session revealed that integration tests were being skipped locally due to missing DATABASE_URL, but this wasn't caught until CI failed. The testing documentation (.ai/rules/testing.md or session hints in CLAUDE.md) should explicitly state: (1) Integration tests REQUIRE DATABASE_URL to actually run, (2) Without it, tests skip silently, creating false confidence, (3) Use make test-integration (not raw go test) to ensure DATABASE_URL is set. The 'Run make test && make test-e2e to verify changes work' hint exists but doesn't warn about this gotcha.
 actionable: true
 
+---
+timestamp: "2026-01-21T02:42:08.897403"
+type: gotcha
+summary: Modal overflow-hidden clips absolute-positioned dropdowns
+detail: |
+  When a modal container uses overflow-hidden (often for rounded corner clipping), it will clip child components that use absolute positioning like dropdowns from ContactSelector. The fix is to remove overflow-hidden from the modal container and add explicit rounded corners (rounded-t-lg, rounded-b-lg) to header/footer sections instead. This allows dropdowns to extend beyond the modal bounds while preserving visual styling.
+actionable: true
+
