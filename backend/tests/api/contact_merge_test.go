@@ -51,6 +51,7 @@ func TestContactMerge_Integration(t *testing.T) {
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	reminderRepo := repository.NewReminderRepository(database.Queries)
+	noteRepo := repository.NewNoteRepository(database.Queries)
 
 	// Create service
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, reminderRepo)
@@ -70,10 +71,13 @@ func TestContactMerge_Integration(t *testing.T) {
 			FullName: "Merge Source",
 			Location: stringPtr("Los Angeles"),
 			Cadence:  stringPtr("weekly"),
-			Notes:    stringPtr("Source notes"),
 		})
 		require.NoError(t, err)
 		defer func() { _ = contactRepo.HardDeleteContact(ctx, source.ID) }()
+
+		// Create notepad note for source
+		_, err = noteRepo.CreateNotepad(ctx, source.ID, "Source notes")
+		require.NoError(t, err)
 
 		// Add methods to source
 		_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
@@ -91,7 +95,7 @@ func TestContactMerge_Integration(t *testing.T) {
 		assert.Equal(t, source.ID, preview.SourceContact.ID)
 		assert.Equal(t, int64(1), preview.MethodsToTransfer)
 		assert.Equal(t, int64(0), preview.DuplicateMethods)
-		assert.Equal(t, int64(0), preview.NotesToTransfer) // note table, not contact.notes field
+		assert.Equal(t, int64(1), preview.NotesToTransfer) // notepad note created above
 	})
 
 	t.Run("GetMergePreview_WithDuplicateMethods", func(t *testing.T) {
@@ -152,8 +156,11 @@ func TestContactMerge_Integration(t *testing.T) {
 		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName: "Merge Source Full",
 			Location: stringPtr("Boston"),
-			Notes:    stringPtr("Important notes"),
 		})
+		require.NoError(t, err)
+
+		// Create notepad for source
+		_, err = noteRepo.CreateNotepad(ctx, source.ID, "Important notes")
 		require.NoError(t, err)
 
 		// Add method to source
@@ -178,7 +185,12 @@ func TestContactMerge_Integration(t *testing.T) {
 		assert.Equal(t, target.ID, merged.ID)
 		assert.Equal(t, "Merge Target Full", merged.FullName) // target name preserved
 		assert.Equal(t, "Boston", *merged.Location)           // source location selected
-		assert.Contains(t, *merged.Notes, "Important notes")  // notes combined
+
+		// Verify notepad was transferred
+		mergedNotepad, err := noteRepo.GetContactNotepad(ctx, merged.ID)
+		require.NoError(t, err)
+		require.NotNil(t, mergedNotepad)
+		assert.Contains(t, mergedNotepad.Body, "Important notes")
 
 		// Verify methods transferred
 		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, merged.ID)
@@ -269,18 +281,24 @@ func TestContactMerge_Integration(t *testing.T) {
 	})
 
 	t.Run("MergeContacts_CombinesNotes", func(t *testing.T) {
-		// Create target contact with notes
+		// Create target contact
 		target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName: "Notes Target",
-			Notes:    stringPtr("Target notes here"),
 		})
 		require.NoError(t, err)
 
-		// Create source contact with notes
+		// Create notepad for target
+		_, err = noteRepo.CreateNotepad(ctx, target.ID, "Target notes here")
+		require.NoError(t, err)
+
+		// Create source contact
 		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName: "Notes Source",
-			Notes:    stringPtr("Source notes here"),
 		})
+		require.NoError(t, err)
+
+		// Create notepad for source
+		_, err = noteRepo.CreateNotepad(ctx, source.ID, "Source notes here")
 		require.NoError(t, err)
 
 		// Execute merge
@@ -291,9 +309,11 @@ func TestContactMerge_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify notes are combined
-		require.NotNil(t, merged.Notes)
-		assert.Contains(t, *merged.Notes, "Target notes here")
-		assert.Contains(t, *merged.Notes, "Source notes here")
+		mergedNotepad, err := noteRepo.GetContactNotepad(ctx, merged.ID)
+		require.NoError(t, err)
+		require.NotNil(t, mergedNotepad)
+		assert.Contains(t, mergedNotepad.Body, "Target notes here")
+		assert.Contains(t, mergedNotepad.Body, "Source notes here")
 
 		// Cleanup
 		_ = contactRepo.HardDeleteContact(ctx, target.ID)

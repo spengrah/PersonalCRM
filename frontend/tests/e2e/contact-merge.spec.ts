@@ -340,14 +340,17 @@ test.describe('Contact Merge', () => {
       },
       {
         full_name: 'Merge Complete Source',
-        notes: 'Source notes to transfer',
         methods: [{ type: 'phone', value: '+1-555-0100' }],
       },
     ])
 
     const targetId = ids[0]
+    const sourceId = ids[1]
     const targetName = `${testApi.prefix}-Merge Complete Target`
     const sourceName = `${testApi.prefix}-Merge Complete Source`
+
+    // Seed note for source contact (notes are in separate table now)
+    await testApi.seedContactNote(sourceId, 'Source notes to transfer')
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('networkidle')

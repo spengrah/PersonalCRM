@@ -588,7 +588,55 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("transfer contact methods: %w", err)
 	}
 
-	// 3. Transfer notes
+	// 3. Merge notepad notes (combine content if both exist)
+	notepadCategory := pgtype.Text{String: string(repository.NoteCategoryNotepad), Valid: true}
+	sourceNotepad, err := txQueries.GetContactNoteByCategory(ctx, db.GetContactNoteByCategoryParams{
+		ContactID: sourceUUID,
+		Category:  notepadCategory,
+	})
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("get source notepad: %w", err)
+	}
+
+	if sourceNotepad != nil {
+		// Source has a notepad - need to handle it
+		targetNotepad, err := txQueries.GetContactNoteByCategory(ctx, db.GetContactNoteByCategoryParams{
+			ContactID: targetUUID,
+			Category:  notepadCategory,
+		})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("get target notepad: %w", err)
+		}
+
+		// Delete source notepad first (so TransferNotes won't create duplicate)
+		if err := txQueries.DeleteContactNoteByCategory(ctx, db.DeleteContactNoteByCategoryParams{
+			ContactID: sourceUUID,
+			Category:  notepadCategory,
+		}); err != nil {
+			return nil, fmt.Errorf("delete source notepad: %w", err)
+		}
+
+		// Determine combined content
+		var combinedBody string
+		if targetNotepad != nil && targetNotepad.Body != "" {
+			// Both have notepads - combine with separator
+			combinedBody = targetNotepad.Body + "\n\n---\n\n" + sourceNotepad.Body
+		} else {
+			// Only source has notepad
+			combinedBody = sourceNotepad.Body
+		}
+
+		// Upsert combined content to target
+		if _, err := txQueries.UpsertContactNoteByCategory(ctx, db.UpsertContactNoteByCategoryParams{
+			ContactID: targetUUID,
+			Body:      combinedBody,
+			Category:  notepadCategory,
+		}); err != nil {
+			return nil, fmt.Errorf("upsert merged notepad: %w", err)
+		}
+	}
+
+	// Transfer any remaining notes (non-notepad notes for future use)
 	if err := txQueries.TransferNotes(ctx, db.TransferNotesParams{
 		SourceContactID: sourceUUID,
 		TargetContactID: targetUUID,
@@ -707,7 +755,6 @@ func buildMergeUpdateRequest(targetContact, sourceContact *repository.Contact, r
 		HowMet:       targetContact.HowMet,
 		Cadence:      targetContact.Cadence,
 		ProfilePhoto: targetContact.ProfilePhoto,
-		Notes:        targetContact.Notes,
 	}
 
 	// Override name if provided
@@ -726,15 +773,7 @@ func buildMergeUpdateRequest(targetContact, sourceContact *repository.Contact, r
 		updateReq.Cadence = sourceContact.Cadence
 	}
 
-	// Combine notes from both contacts
-	if sourceContact.Notes != nil && *sourceContact.Notes != "" {
-		if targetContact.Notes != nil && *targetContact.Notes != "" {
-			combined := *targetContact.Notes + "\n\n---\n\n" + *sourceContact.Notes
-			updateReq.Notes = &combined
-		} else {
-			updateReq.Notes = sourceContact.Notes
-		}
-	}
+	// Notes are handled separately in MergeContacts using the note table
 
 	return updateReq
 }

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '@/lib/api-client'
 import { contactKeys, invalidateFor } from '@/lib/query-invalidation'
+import { noteKeys } from '@/hooks/use-contact-note'
 import type { Contact } from '@/types/contact'
 
 // Merge preview response from API
@@ -72,6 +73,8 @@ export function useMergeContacts() {
       queryClient.setQueryData(contactKeys.detail(mergedContact.id), mergedContact)
       // Invalidate contact lists since source was deleted and target was updated
       invalidateFor('contact:merged')
+      // Invalidate the merged contact's note query to fetch the combined note
+      queryClient.invalidateQueries({ queryKey: noteKeys.contactNote(mergedContact.id) })
     },
   })
 }
