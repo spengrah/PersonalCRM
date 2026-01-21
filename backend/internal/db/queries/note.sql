@@ -55,8 +55,9 @@ RETURNING *;
 
 -- name: UpsertContactNoteByCategory :one
 -- Insert or update a note for a contact by category (atomic operation for concurrent safety)
+-- Note: This uses the unique index on (contact_id) WHERE category = 'notepad'
 INSERT INTO note (contact_id, body, category)
 VALUES ($1, $2, $3)
-ON CONFLICT (contact_id, category) WHERE category IS NOT NULL
+ON CONFLICT (contact_id) WHERE category = 'notepad'
 DO UPDATE SET body = EXCLUDED.body, updated_at = NOW()
 RETURNING *;

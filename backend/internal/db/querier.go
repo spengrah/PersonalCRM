@@ -219,6 +219,7 @@ type Querier interface {
 	// to avoid duplicates.
 	UpsertCalendarEvent(ctx context.Context, arg UpsertCalendarEventParams) (*CalendarEvent, error)
 	// Insert or update a note for a contact by category (atomic operation for concurrent safety)
+	// Note: This uses the unique index on (contact_id) WHERE category = 'notepad'
 	UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error)
 	UpsertExternalContact(ctx context.Context, arg UpsertExternalContactParams) (*ExternalContact, error)
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
