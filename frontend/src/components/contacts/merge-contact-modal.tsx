@@ -169,9 +169,9 @@ export function MergeContactModal({
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="relative top-10 mx-auto p-0 border w-full max-w-xl shadow-lg rounded-lg bg-white overflow-hidden mb-10">
+      <div className="relative top-10 mx-auto p-0 border w-full max-w-xl shadow-lg rounded-lg bg-white mb-10">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 bg-gray-50 border-b">
+        <div className="flex items-center justify-between px-6 py-4 bg-gray-50 border-b rounded-t-lg">
           <div className="flex items-center gap-2">
             <GitMerge className="w-5 h-5 text-blue-600" />
             <h2 className="text-lg font-semibold text-gray-900">Merge Contacts</h2>
@@ -384,7 +384,7 @@ export function MergeContactModal({
         )}
 
         {/* Footer */}
-        <div className="px-6 py-4 bg-gray-50 border-t flex items-center justify-end gap-3">
+        <div className="px-6 py-4 bg-gray-50 border-t flex items-center justify-end gap-3 rounded-b-lg">
           <Button variant="outline" onClick={onClose} disabled={isLoading}>
             Cancel
           </Button>
