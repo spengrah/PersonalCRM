@@ -22,6 +22,7 @@ import { clsx } from 'clsx'
 
 interface ContactFormProps {
   contact?: Contact
+  initialNotes?: string
   onSubmit: (data: ContactFormData) => void | Promise<void>
   loading?: boolean
   submitText?: string
@@ -39,6 +40,7 @@ const cadenceOptions = [
 
 export function ContactForm({
   contact,
+  initialNotes = '',
   onSubmit,
   loading,
   submitText = 'Save Contact',
@@ -67,7 +69,7 @@ export function ContactForm({
           methods: defaultMethods,
           location: contact.location || '',
           birthday: contact.birthday ? contact.birthday.split('T')[0] : '', // Format date for input
-          notes: contact.notes || '',
+          notes: initialNotes,
           cadence: contact.cadence || '',
         }
       : {

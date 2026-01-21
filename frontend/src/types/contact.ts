@@ -22,7 +22,6 @@ export interface Contact {
   primary_method?: ContactMethod
   location?: string
   birthday?: string
-  notes?: string
   cadence?: string
   last_contacted?: string
   created_at: string
@@ -41,7 +40,6 @@ export interface CreateContactRequest {
   methods?: ContactMethod[]
   location?: string
   birthday?: string
-  notes?: string
   cadence?: string
 }
 
@@ -50,7 +48,6 @@ export interface UpdateContactRequest {
   methods?: ContactMethod[]
   location?: string
   birthday?: string
-  notes?: string
   cadence?: string
 }
 

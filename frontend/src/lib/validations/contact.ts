@@ -166,7 +166,8 @@ export function transformContactFormData(data: ContactFormData) {
     methods: normalizedMethods,
     location: data.location && data.location.trim() !== '' ? data.location : undefined,
     birthday: data.birthday && data.birthday.trim() !== '' ? data.birthday : undefined,
-    notes: data.notes && data.notes.trim() !== '' ? data.notes : undefined,
     cadence: data.cadence && data.cadence.trim() !== '' ? data.cadence : undefined,
+    // Notes are saved separately via the notes API
+    notes: data.notes && data.notes.trim() !== '' ? data.notes : undefined,
   }
 }

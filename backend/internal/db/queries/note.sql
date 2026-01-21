@@ -36,3 +36,19 @@ DELETE FROM note WHERE id = $1;
 
 -- name: CountContactNotes :one
 SELECT COUNT(*) FROM note WHERE contact_id = $1;
+
+-- name: GetContactNoteByCategory :one
+-- Get a single note for a contact by category (e.g., 'notepad')
+SELECT * FROM note
+WHERE contact_id = $1 AND category = $2;
+
+-- name: DeleteContactNoteByCategory :exec
+-- Delete a note for a contact by category
+DELETE FROM note
+WHERE contact_id = $1 AND category = $2;
+
+-- name: CreateNoteWithTimestamp :one
+-- Create a note with a specific created_at timestamp (for migrations)
+INSERT INTO note (contact_id, body, category, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING *;

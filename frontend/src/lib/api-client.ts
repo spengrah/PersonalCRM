@@ -35,6 +35,11 @@ interface ApiResponseWithMeta<T> {
   meta?: ApiResponse['meta']
 }
 
+interface ApiResponseWithStatus<T> {
+  data: T
+  status: number
+}
+
 class ApiClient {
   private baseUrl: string
 
@@ -195,8 +200,96 @@ class ApiClient {
       method: 'DELETE',
     })
   }
+
+  // GET request with status (for endpoints that may return 204)
+  async getWithStatus<T>(
+    endpoint: string,
+    params?: Record<string, unknown>
+  ): Promise<ApiResponseWithStatus<T>> {
+    return this.requestWithStatus<T>(this.buildUrl(endpoint, params))
+  }
+
+  // PUT request with status (for endpoints that may return 204)
+  async putWithStatus<T>(endpoint: string, data?: unknown): Promise<ApiResponseWithStatus<T>> {
+    return this.requestWithStatus<T>(endpoint, {
+      method: 'PUT',
+      body: data ? JSON.stringify(data) : undefined,
+    })
+  }
+
+  // Request that returns status along with data (for handling 204 responses)
+  private async requestWithStatus<T>(
+    endpoint: string,
+    options: RequestInit = {}
+  ): Promise<ApiResponseWithStatus<T>> {
+    const url = `${this.getBase()}${endpoint}`
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10000)
+
+    const config: RequestInit = {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': process.env.NEXT_PUBLIC_API_KEY || '',
+        ...options.headers,
+      },
+      signal: controller.signal,
+      ...options,
+    }
+
+    try {
+      const response = await fetch(url, config)
+      clearTimeout(timeoutId)
+
+      if (!response.ok) {
+        let errorMessage = `HTTP ${response.status}: ${response.statusText}`
+        let errorCode = 'UNKNOWN_ERROR'
+
+        try {
+          const errorData: ApiResponse = await response.json()
+          if (errorData.error) {
+            errorMessage = errorData.error.message
+            errorCode = errorData.error.code
+          }
+        } catch {
+          // If we can't parse the error response, use the default message
+        }
+
+        throw new ApiError(errorMessage, response.status, errorCode)
+      }
+
+      // Handle 204 No Content responses
+      if (response.status === 204) {
+        return { data: undefined as T, status: response.status }
+      }
+
+      const data: ApiResponse<T> = await response.json()
+
+      if (!data.success && data.error) {
+        throw new ApiError(data.error.message, 400, data.error.code)
+      }
+
+      return { data: data.data as T, status: response.status }
+    } catch (error) {
+      clearTimeout(timeoutId)
+
+      if (error instanceof ApiError) {
+        throw error
+      }
+
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new ApiError('Request timed out', 408, 'TIMEOUT_ERROR')
+      }
+
+      throw new ApiError(
+        error instanceof Error ? error.message : 'An unexpected error occurred',
+        0,
+        'NETWORK_ERROR'
+      )
+    }
+  }
 }
 
 export const apiClient = new ApiClient()
 export { ApiError }
-export type { ApiResponse, ApiResponseWithMeta }
+export type { ApiResponse, ApiResponseWithMeta, ApiResponseWithStatus }

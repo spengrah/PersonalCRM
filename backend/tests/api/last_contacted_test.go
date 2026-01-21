@@ -395,7 +395,6 @@ func TestUpdateLastContacted_PreservesOtherContactData(t *testing.T) {
 	defer cleanup()
 
 	// Create a test contact with various fields
-	notes := "Test notes for preservation"
 	location := "San Francisco"
 	cadence := "monthly"
 	createReq := handlers.CreateContactRequest{
@@ -407,7 +406,6 @@ func TestUpdateLastContacted_PreservesOtherContactData(t *testing.T) {
 			},
 		},
 		Location: &location,
-		Notes:    &notes,
 		Cadence:  &cadence,
 	}
 	jsonBody, _ := json.Marshal(createReq)

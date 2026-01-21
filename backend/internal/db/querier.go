@@ -38,6 +38,8 @@ type Querier interface {
 	CreateEnrichment(ctx context.Context, arg CreateEnrichmentParams) (*ContactEnrichment, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
 	CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error)
+	// Create a note with a specific created_at timestamp (for migrations)
+	CreateNoteWithTimestamp(ctx context.Context, arg CreateNoteWithTimestampParams) (*Note, error)
 	CreateReminder(ctx context.Context, arg CreateReminderParams) (*Reminder, error)
 	// External Sync Log Queries
 	CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error)
@@ -47,6 +49,8 @@ type Querier interface {
 	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteCalendarEventsByTitlePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
+	// Delete a note for a contact by category
+	DeleteContactNoteByCategory(ctx context.Context, arg DeleteContactNoteByCategoryParams) error
 	// Test data management queries
 	// These queries are used by the test API endpoints to seed and cleanup test data
 	DeleteContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
@@ -86,6 +90,8 @@ type Querier interface {
 	GetCalendarEventByID(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
+	// Get a single note for a contact by category (e.g., 'notepad')
+	GetContactNoteByCategory(ctx context.Context, arg GetContactNoteByCategoryParams) (*Note, error)
 	GetContactTags(ctx context.Context, contactID pgtype.UUID) ([]*Tag, error)
 	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
 	// Contact Enrichment queries
