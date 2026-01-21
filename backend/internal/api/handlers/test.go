@@ -249,9 +249,8 @@ func (h *TestHandler) SeedContacts(c *gin.Context) {
 		if input.Location != "" {
 			createReq.Location = &input.Location
 		}
-		if input.Notes != "" {
-			createReq.Notes = &input.Notes
-		}
+		// Note: Notes are no longer stored on the contact table.
+		// If tests need notes, they should call PUT /contacts/:id/notes
 		if input.Cadence != "" {
 			createReq.Cadence = &input.Cadence
 		}

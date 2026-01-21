@@ -48,6 +48,57 @@ func (q *Queries) CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, 
 	return &i, err
 }
 
+const CreateNoteWithTimestamp = `-- name: CreateNoteWithTimestamp :one
+INSERT INTO note (contact_id, body, category, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, contact_id, body, category, created_at, updated_at
+`
+
+type CreateNoteWithTimestampParams struct {
+	ContactID pgtype.UUID        `json:"contact_id"`
+	Body      string             `json:"body"`
+	Category  pgtype.Text        `json:"category"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+// Create a note with a specific created_at timestamp (for migrations)
+func (q *Queries) CreateNoteWithTimestamp(ctx context.Context, arg CreateNoteWithTimestampParams) (*Note, error) {
+	row := q.db.QueryRow(ctx, CreateNoteWithTimestamp,
+		arg.ContactID,
+		arg.Body,
+		arg.Category,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i Note
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Body,
+		&i.Category,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}
+
+const DeleteContactNoteByCategory = `-- name: DeleteContactNoteByCategory :exec
+DELETE FROM note
+WHERE contact_id = $1 AND category = $2
+`
+
+type DeleteContactNoteByCategoryParams struct {
+	ContactID pgtype.UUID `json:"contact_id"`
+	Category  pgtype.Text `json:"category"`
+}
+
+// Delete a note for a contact by category
+func (q *Queries) DeleteContactNoteByCategory(ctx context.Context, arg DeleteContactNoteByCategoryParams) error {
+	_, err := q.db.Exec(ctx, DeleteContactNoteByCategory, arg.ContactID, arg.Category)
+	return err
+}
+
 const DeleteNote = `-- name: DeleteNote :exec
 DELETE FROM note WHERE id = $1
 `
@@ -55,6 +106,31 @@ DELETE FROM note WHERE id = $1
 func (q *Queries) DeleteNote(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteNote, id)
 	return err
+}
+
+const GetContactNoteByCategory = `-- name: GetContactNoteByCategory :one
+SELECT id, contact_id, body, category, created_at, updated_at FROM note
+WHERE contact_id = $1 AND category = $2
+`
+
+type GetContactNoteByCategoryParams struct {
+	ContactID pgtype.UUID `json:"contact_id"`
+	Category  pgtype.Text `json:"category"`
+}
+
+// Get a single note for a contact by category (e.g., 'notepad')
+func (q *Queries) GetContactNoteByCategory(ctx context.Context, arg GetContactNoteByCategoryParams) (*Note, error) {
+	row := q.db.QueryRow(ctx, GetContactNoteByCategory, arg.ContactID, arg.Category)
+	var i Note
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Body,
+		&i.Category,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
 }
 
 const GetNote = `-- name: GetNote :one
@@ -177,6 +253,36 @@ type UpdateNoteParams struct {
 
 func (q *Queries) UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error) {
 	row := q.db.QueryRow(ctx, UpdateNote, arg.ID, arg.Body, arg.Category)
+	var i Note
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Body,
+		&i.Category,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}
+
+const UpsertContactNoteByCategory = `-- name: UpsertContactNoteByCategory :one
+INSERT INTO note (contact_id, body, category)
+VALUES ($1, $2, $3)
+ON CONFLICT (contact_id) WHERE category = 'notepad'
+DO UPDATE SET body = EXCLUDED.body, updated_at = NOW()
+RETURNING id, contact_id, body, category, created_at, updated_at
+`
+
+type UpsertContactNoteByCategoryParams struct {
+	ContactID pgtype.UUID `json:"contact_id"`
+	Body      string      `json:"body"`
+	Category  pgtype.Text `json:"category"`
+}
+
+// Insert or update a note for a contact by category (atomic operation for concurrent safety)
+// Note: This uses the unique index on (contact_id) WHERE category = 'notepad'
+func (q *Queries) UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error) {
+	row := q.db.QueryRow(ctx, UpsertContactNoteByCategory, arg.ContactID, arg.Body, arg.Category)
 	var i Note
 	err := row.Scan(
 		&i.ID,

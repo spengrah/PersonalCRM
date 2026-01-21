@@ -87,10 +87,12 @@ func main() {
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	reminderRepo := repository.NewReminderRepository(database.Queries)
 	timeEntryRepo := repository.NewTimeEntryRepository(database.Queries)
+	noteRepo := repository.NewNoteRepository(database.Queries)
 
 	// Initialize services
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, reminderRepo)
 	reminderService := service.NewReminderService(reminderRepo, contactRepo)
+	noteService := service.NewNoteService(noteRepo, contactRepo)
 	importMatchService := service.NewImportMatchService(contactRepo)
 
 	// Initialize external sync components (feature-flagged)
@@ -172,6 +174,7 @@ func main() {
 	// Initialize handlers
 	contactHandler := handlers.NewContactHandler(contactService)
 	reminderHandler := handlers.NewReminderHandler(reminderService)
+	noteHandler := handlers.NewNoteHandler(noteService)
 	systemHandler := handlers.NewSystemHandler(contactRepo, reminderRepo, cfg.Runtime)
 	timeEntryHandler := handlers.NewTimeEntryHandler(timeEntryRepo)
 
@@ -219,6 +222,8 @@ func main() {
 			contacts.DELETE("/:id", contactHandler.DeleteContact)
 			contacts.PATCH("/:id/last-contacted", contactHandler.UpdateContactLastContacted)
 			contacts.GET("/:id/reminders", reminderHandler.GetRemindersByContact)
+			contacts.GET("/:id/notes", noteHandler.GetContactNotepad)
+			contacts.PUT("/:id/notes", noteHandler.SaveContactNotepad)
 		}
 
 		// Reminder routes

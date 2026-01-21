@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect } from 'react'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Button } from '@/components/ui/button'
@@ -22,6 +23,7 @@ import { clsx } from 'clsx'
 
 interface ContactFormProps {
   contact?: Contact
+  initialNotes?: string
   onSubmit: (data: ContactFormData) => void | Promise<void>
   loading?: boolean
   submitText?: string
@@ -39,6 +41,7 @@ const cadenceOptions = [
 
 export function ContactForm({
   contact,
+  initialNotes = '',
   onSubmit,
   loading,
   submitText = 'Save Contact',
@@ -67,7 +70,7 @@ export function ContactForm({
           methods: defaultMethods,
           location: contact.location || '',
           birthday: contact.birthday ? contact.birthday.split('T')[0] : '', // Format date for input
-          notes: contact.notes || '',
+          notes: initialNotes,
           cadence: contact.cadence || '',
         }
       : {
@@ -84,6 +87,12 @@ export function ContactForm({
     control,
     name: 'methods',
   })
+
+  // Sync notes field when initialNotes changes (e.g., when async query resolves)
+  // This prevents stale empty notes from being saved if edit mode is opened before query resolves
+  useEffect(() => {
+    setValue('notes', initialNotes, { shouldDirty: false })
+  }, [initialNotes, setValue])
 
   const watchedMethods = watch('methods')
 

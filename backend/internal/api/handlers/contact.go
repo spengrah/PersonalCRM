@@ -84,7 +84,6 @@ type ContactResponse struct {
 	Cadence       *string                 `json:"cadence,omitempty" example:"monthly" enums:"weekly,monthly,quarterly,biannual,annual"`
 	LastContacted *time.Time              `json:"last_contacted,omitempty" example:"2024-01-15T10:30:00Z"`
 	ProfilePhoto  *string                 `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
-	Notes         *string                 `json:"notes,omitempty" example:"Notes about this contact"`
 	CreatedAt     time.Time               `json:"created_at" example:"2024-01-01T00:00:00Z"`
 	UpdatedAt     time.Time               `json:"updated_at" example:"2024-01-15T10:30:00Z"`
 }
@@ -116,7 +115,6 @@ type CreateContactRequest struct {
 	HowMet       *string                `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
 	Cadence      *string                `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual" example:"monthly"`
 	ProfilePhoto *string                `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
-	Notes        *string                `json:"notes,omitempty" validate:"omitempty,max=2000" example:"Notes about this contact"`
 }
 
 // UpdateContactRequest represents the request to update a contact
@@ -129,7 +127,6 @@ type UpdateContactRequest struct {
 	HowMet       *string                `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
 	Cadence      *string                `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual" example:"monthly"`
 	ProfilePhoto *string                `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
-	Notes        *string                `json:"notes,omitempty" validate:"omitempty,max=2000" example:"Notes about this contact"`
 }
 
 // ListContactsQuery represents query parameters for listing contacts
@@ -187,7 +184,6 @@ func contactToResponse(contact *repository.Contact) ContactResponse {
 		Cadence:       contact.Cadence,
 		LastContacted: contact.LastContacted,
 		ProfilePhoto:  contact.ProfilePhoto,
-		Notes:         contact.Notes,
 		CreatedAt:     contact.CreatedAt,
 		UpdatedAt:     contact.UpdatedAt,
 	}
@@ -220,7 +216,6 @@ func createRequestToRepo(req CreateContactRequest) repository.CreateContactReque
 		Cadence:       req.Cadence,
 		LastContacted: &now,
 		ProfilePhoto:  req.ProfilePhoto,
-		Notes:         req.Notes,
 	}
 }
 
@@ -238,7 +233,6 @@ func updateRequestToRepo(req UpdateContactRequest) repository.UpdateContactReque
 		HowMet:       req.HowMet,
 		Cadence:      req.Cadence,
 		ProfilePhoto: req.ProfilePhoto,
-		Notes:        req.Notes,
 	}
 }
 

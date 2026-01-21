@@ -1,0 +1,304 @@
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: gotcha
+summary: Test database schema requires manual migration for E2E tests
+detail: |
+  When database migrations change the schema, E2E tests may fail with column errors if the test database hasn't been migrated. The error 'column "notes" does not exist' during E2E tests indicates the migration was applied to test DB but test seed helpers still reference old fields. Always check test helper files (like test-api.ts) when schema changes are made, not just production code.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: gotcha
+summary: Backend test files mirror production structure and must be updated in parallel
+detail: |
+  When removing fields from handler structs (CreateContactRequest, UpdateContactRequest), search ALL test files for struct literal usage. Test files like contact_validation_test.go and last_contacted_test.go directly instantiate these structs. Entire test functions may need removal if they test deprecated functionality (e.g., TestContactAPI_NotesField).
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: architecture
+summary: Frontend API client needs explicit status-aware methods for 204 No Content patterns
+detail: |
+  The standard apiClient.get/put methods don't expose HTTP status codes. For endpoints using lazy creation patterns (204 = no content, 200 = content exists), add dedicated methods like getWithStatus/putWithStatus that return both data and status. This pattern is essential for distinguishing between 'empty response' and 'no resource exists'.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: distinction
+summary: Form data transformation must exclude fields saved via separate APIs
+detail: |
+  When migrating a field from one API to another (contact.notes → separate notes API), the form still collects the field but transformContactFormData should NOT include it in the returned object if the parent API no longer accepts it. The caller extracts and saves it separately. However, validation schema should keep the field since the form still validates it.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: gotcha
+summary: Frontend type changes cascade through Contact, CreateContactRequest, UpdateContactRequest, and form props
+detail: |
+  When removing a field from Contact type, it must be removed from: 1) Contact interface 2) CreateContactRequest 3) UpdateContactRequest 4) transformContactFormData return value 5) ContactForm props (add initialFieldName prop instead). Missing any of these causes TypeScript or runtime errors. The form component needs explicit props for fields fetched separately.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: architecture
+summary: Lazy creation pattern requires whitespace normalization at service layer, not handler
+detail: |
+  For lazy creation (no DB record until content exists), implement whitespace detection in the service layer using strings.TrimSpace(), not in the handler. Service should: 1) Trim whitespace 2) If empty and record exists → delete it 3) If empty and no record → return 204 4) If non-empty → upsert. Handler only validates and calls service.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: rule
+summary: Always run `go build ./cmd/crm-api` after `make sqlc` to verify compilation
+detail: |
+  The make sqlc command regenerates Go code from SQL queries and changes struct types (CreateContactParams, UpdateContactParams). A successful sqlc generation doesn't mean the code compiles. Always run `go build ./cmd/crm-api` immediately after to catch struct field mismatches in repositories/handlers before proceeding.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: gotcha
+summary: Separate API endpoints require explicit save in handleUpdateContact with Promise.all
+detail: |
+  When a field moves to a separate API (notes to /contacts/:id/notes), the form submit handler must: 1) Extract the field from form data 2) Save contact via updateContactMutation 3) Save field via separate mutation using Promise.all for parallel execution. Don't forget to handle errors for both operations. Pattern: `await Promise.all([updateContactMutation.mutateAsync(...), saveFieldMutation.mutateAsync(...)])`
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: architecture
+summary: "Migration best practices: TRIM + nullability check prevents empty data migration"
+detail: |
+  When copying text fields to new tables in migrations, always use `WHERE field IS NOT NULL AND TRIM(field) != ''` to skip whitespace-only content. This prevents creating records for logically empty data. Also use COALESCE for timestamps: `COALESCE(updated_at, created_at)` to preserve creation timestamp when update timestamp is null.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: gotcha
+summary: Test helper APIs (SeedContacts) need comments explaining removed fields
+detail: |
+  When removing a field from the main API that was previously used by test helpers, don't silently remove the field from test input types. Add a clear comment explaining the field is now handled via a different endpoint and how tests should seed it. Example: 'Note: Notes are no longer stored on contact table. If tests need to seed notes, call POST /contacts/:id/notes separately.'
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: distinction
+summary: "Use feature-dev:code-explorer agents in PARALLEL for comprehensive codebase understanding"
+detail: |
+  When exploring codebase for a feature, launch 2-3 code-explorer agents in parallel with different focuses: one for similar features tracing implementation, one for high-level architecture/abstractions, one for user experience/UI patterns. Each agent should return 5-10 key files to read. This parallel exploration is faster and more comprehensive than sequential exploration.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: architecture
+summary: Create/Update pages must handle separated API saves with Promise.all
+detail: |
+  When a form field is saved via a separate API endpoint (like notes via PUT /contacts/:id/notes), the page's onSubmit handler must: (1) Extract the separated field from form data via destructuring, (2) Call the main mutation to create/update the entity, (3) If the separated field has content, call its mutation with the new entity ID, (4) Use Promise.all when updating to run both saves in parallel and avoid race conditions. For create, the saves must be sequential (create contact first, then save notes with the new ID). The form's loading state should include both mutations: `loading={createMutation.isPending || separatedFieldMutation.isPending}`
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: gotcha
+summary: E2E test helpers need updating when backend seed APIs change
+detail: |
+  When removing a field from the backend's seed endpoint (like SeedContactInput.Notes), the frontend E2E test helper at frontend/tests/e2e/helpers/test-api.ts must be updated to: (1) Add a deprecation comment to the SeedContactInput interface explaining the field is no longer supported and how to seed it instead, (2) Add a new method like seedContactNote(contactId, body) that calls the new API endpoint, (3) Update all E2E tests to seed the entity first, then call the new seed method with the returned ID. Without this, tests that pass the deprecated field will silently ignore it, causing test failures that are confusing to debug.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: architecture
+summary: Frontend API client needs explicit status-aware methods for 204 responses
+detail: |
+  When an API returns 204 No Content for empty/deleted resources (like GET /contacts/:id/notes returning 204 when no note exists), the frontend needs separate methods or explicit handling: (1) The fetch wrapper must not try to parse JSON on 204 responses, (2) React Query hooks should handle 204 as successful but map data to null/undefined, (3) Components should check for null data and render appropriate empty states. The lazy creation pattern (no DB record until content exists) requires this 204 handling throughout the stack.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: gotcha
+summary: "Migration best practice: TRIM + nullability check prevents empty string pollution"
+detail: |
+  When migrating optional text fields to a new table with lazy creation semantics (no record until content exists), the migration SQL must filter with `WHERE field IS NOT NULL AND TRIM(field) != ''` to prevent creating records for empty strings. This is critical because: (1) Many forms submit empty strings instead of null for optional fields, (2) Whitespace-only content should not create DB records in the lazy creation pattern, (3) Without TRIM, empty/whitespace notes would be migrated and treated as having content. This also preserves the created_at timestamp from the original table for non-empty data.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: architecture
+summary: Whitespace normalization belongs in service layer, not handler
+detail: |
+  When implementing lazy creation with whitespace deletion semantics (empty/whitespace body deletes record, returns 204), the normalization logic `if body == nil || strings.TrimSpace(*body) == ""` should be in the service layer (note.go) not the handler (note.go). This follows the layered architecture: handlers validate HTTP/JSON, services implement business logic. The trimming decision is business logic because it determines whether a record should exist. The handler should just validate the request structure and pass through to the service.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: gotcha
+summary: Always run go build after make sqlc to verify compilation
+detail: |
+  After running `make sqlc` to regenerate type-safe SQL code, immediately run `cd backend && go build ./cmd/crm-api` to verify the generated code compiles. Sqlc may change struct field types (e.g., adding pgtype wrappers) which breaks repository code that constructs these structs. The build failure is immediate and easy to fix if caught right away, but if not caught until later, it's confusing to debug because the SQL queries themselves look correct. This is already in core.md Common Gotcas but bears repeating as it was discovered during this session.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: documentation_gap
+summary: core.md doesn't warn about form data transform vs API type mismatches
+detail: |
+  The core.md file documents the layered architecture and anti-patterns, but doesn't warn about the intentional type mismatch pattern where transformContactFormData includes fields (like notes) that are not in CreateContactRequest/UpdateContactRequest because they're saved via separate APIs. A future agent encountering this pattern will see TypeScript type errors and try to 'fix' them by removing the field from the transform, breaking the functionality. This should be documented in patterns/ or architecture.md with an example showing the destructuring pattern and explaining why the type mismatch is intentional.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:01:33.254657"
+type: gotcha
+summary: Pre-push hooks extract learnings and block push if new learnings found
+detail: |
+  The pre-push hook runs learning extraction automatically. When new learnings are detected, it blocks the push and requires the agent to: (1) review the new learnings in `.ai/log/learnings/`, (2) decide if/where to apply actionable learnings, (3) commit both applied changes and the learnings files, (4) push again. This two-phase workflow ensures learnings are captured and considered before code reaches remote.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:01:33.254657"
+type: gotcha
+summary: CI may fail even when local tests pass due to test isolation issues
+detail: |
+  Tests that pass locally may fail in CI due to different execution order or parallel test execution exposing race conditions or incomplete cleanup. The session showed a test failing in CI with 'TestUpdateLastContacted_PreservesOtherContactData' even though all tests passed locally. This happens because CI runs tests in a fresh environment that may execute in different orders.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:01:33.254657"
+type: gotcha
+summary: Schema migrations require updating ALL test assertions, not just test data setup
+detail: |
+  When removing a field from the database schema (like `contact.notes`), search for and update not just struct literals in test setup but also assertions that verify response data. The session revealed a test that was creating contacts without notes (correctly updated) but still asserting `data["notes"]` should equal a value (missed assertion). Both setup AND verification code must be updated for schema changes.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:01:33.254657"
+type: rule
+summary: Always check CI status after pushing, even when local tests pass
+detail: |
+  The session demonstrates the importance of monitoring CI after pushing. Despite all local tests passing (make test && make test-e2e), the CI caught a test failure that wasn't detected locally. This is because CI provides a clean environment and may execute tests differently. Always use `gh pr checks <pr-number>` to monitor CI status and `gh run view <run-id> --log-failed` to investigate failures.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:01:33.254657"
+type: architecture
+summary: Background task notifications may arrive out of order or after resolution
+detail: |
+  The session showed multiple task-notification messages arriving after the work was already completed successfully (failed push attempts followed by successful push, then delayed E2E test completion). When working with background tasks, expect notifications to be asynchronous and potentially stale. Always verify current state (check git status, PR status) rather than relying solely on task notifications to determine what actions to take.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:01:33.254657"
+type: documentation_gap
+summary: Core rules don't emphasize searching for ALL instances when fixing patterns
+detail: |
+  The core rules include 'Fixing only one instance of a pattern' in the Common Gotchas table, but this guidance wasn't followed when removing notes assertions from tests. The agent updated test setup (removing `Notes` from struct literals) but missed assertion code that checked `data["notes"]`. The rule exists but needs to be more prominent and prescriptive: 'When making schema changes, use Grep to find ALL references (setup AND assertions AND type definitions) before considering the change complete.' This should be elevated from a gotcha to a required step in the schema migration workflow.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:14:47.724595"
+type: gotcha
+summary: Codex reviews may identify race conditions that don't fail in tests
+detail: |
+  The Codex automated review caught two critical race conditions: (1) form state initialized before async query resolves could delete data, and (2) concurrent database saves could create duplicates. Neither of these failures appeared in local tests, but both are valid production concerns. Future agents should take Codex P2 comments seriously even when tests pass - they often catch temporal and concurrency issues that deterministic tests miss.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:14:47.724595"
+type: architecture
+summary: ON CONFLICT requires partial unique index for nullable category columns
+detail: |
+  When adding a unique constraint on (contact_id, category) where category can be NULL, the constraint must be a partial index with 'WHERE category IS NOT NULL'. Otherwise, multiple NULL values would violate the constraint. The corresponding ON CONFLICT clause must also include the WHERE condition: 'ON CONFLICT (contact_id, category) WHERE category IS NOT NULL'. This is a PostgreSQL-specific gotcha when using upserts with nullable columns in unique constraints.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:14:47.724595"
+type: gotcha
+summary: React Hook Form defaultValues don't update when props change
+detail: |
+  When passing initialNotes prop to a form component using react-hook-form, the defaultValues only apply on mount. If the prop updates later (e.g., async query resolves), the form doesn't automatically sync. This creates a race condition where opening edit mode before the query completes initializes the form with empty string, which then overwrites real data on save. The fix is to add useEffect that calls setValue when the prop changes: 'useEffect(() => { setValue('notes', initialNotes, { shouldDirty: false }) }, [initialNotes, setValue])'
+actionable: true
+
+---
+timestamp: "2026-01-21T22:14:47.724595"
+type: rule
+summary: Use upsert (INSERT...ON CONFLICT) instead of check-then-insert for concurrent safety
+detail: |
+  The service initially used a check-then-insert pattern: query for existing note, then either create or update. This has a race condition where two concurrent requests can both see no record, then both insert, creating duplicates. The correct pattern is to use PostgreSQL's INSERT...ON CONFLICT...DO UPDATE (upsert) which is atomic. This eliminates the race condition entirely. Always prefer upsert for create-or-update operations in concurrent environments.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:14:47.724595"
+type: gotcha
+summary: E2E test seed helpers must stay in sync with backend schema changes
+detail: |
+  When migrating the notes field from contact table to a separate note table, the E2E test helper's seedContacts method still accepted a notes parameter, but the backend API silently ignored it. This caused test failures because tests expected seeded notes to appear but they never got created. The fix required: (1) removing notes from SeedContactInput type with a comment explaining the migration, and (2) adding a separate seedContactNote() method that calls the notes API. This is a common pattern when refactoring data models - seed helpers must be updated in lockstep.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:14:47.724595"
+type: distinction
+summary: Empty notes use HTTP 204 No Content, not 404 Not Found
+detail: |
+  For the notepad feature with lazy creation (no DB record until content exists), the backend returns HTTP 204 No Content when no note exists, not 404 Not Found. This distinction matters: 204 means 'success, but no content' (the note slot exists but is empty), while 404 means 'resource not found' (the contact doesn't exist). Frontend code handles 204 by treating it as empty string without showing an error. This pattern applies to any optional fields with lazy creation.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:21:57.408460"
+type: gotcha
+summary: Integration tests require DATABASE_URL set manually or via make target setup
+detail: |
+  Backend integration tests in tests/api/*.go check for DATABASE_URL environment variable and skip if not set. The make test-integration target runs `cd backend && go test ./tests/... -v` WITHOUT setting DATABASE_URL, causing tests to be skipped silently. Tests only run when DATABASE_URL is explicitly exported (e.g., `export DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable"`) before running go test directly. The e2e-db target sets up the test database but isn't used by test-integration. This can lead to writing tests that appear to pass but are actually being skipped.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:21:57.408460"
+type: gotcha
+summary: Code review tools may flag false positives on import usage
+detail: |
+  Automated code review comments about 'unused imports' can be incorrect when the import is used in struct field type declarations. In this session, a review flagged 'time package imported but never used' in note.go, but time.Time was used in NoteResponse struct fields (CreatedAt, UpdatedAt). Always verify automated review comments by checking actual usage before making changes. Type declarations in struct fields count as package usage.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:21:57.408460"
+type: architecture
+summary: Backend API integration tests follow specific pattern with setup/cleanup helpers
+detail: |
+  Backend integration tests in tests/api/ use a standard pattern: (1) Check DATABASE_URL and skip if not set, (2) Create setupTestDB() helper that connects to DB, runs migrations from project-relative path, and returns test database handle, (3) Create setupNoteTestRouter() helper that initializes full dependency chain (db.Queries → repository → service → handler → gin router), (4) Use t.Cleanup() for automatic test database cleanup. Tests use httptest.NewRecorder() and perform actual HTTP requests through the router. This mirrors production architecture and catches integration issues that mocks would miss.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:21:57.408460"
+type: documentation_gap
+summary: Core rules lack guidance on integration test DATABASE_URL requirement
+detail: |
+  The .ai/rules/core.md file documents 'Run `make test && make test-e2e` to verify changes work' but doesn't mention that make test-integration silently skips tests without DATABASE_URL. This led to confusion when newly written tests appeared to pass (via make test-integration) but were actually being skipped. Documentation should clarify: (1) make test-integration requires manual DATABASE_URL setup OR (2) use `make test` which includes proper setup, OR (3) run tests via `cd backend && DATABASE_URL=... go test`. The existing instruction is incomplete - it tells developers to run tests but not how the test database gets configured.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:33:02.082852"
+type: gotcha
+summary: Unique constraints on note table must be category-specific
+detail: |
+  The note table serves multiple purposes: notepad (one per contact) and general categorized notes (many per contact). A unique constraint on (contact_id, category) breaks existing tests that create multiple notes with categories like 'technical'. The constraint should be WHERE category = 'notepad' to only enforce uniqueness for the notepad use case, allowing multiple notes of other categories.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:33:02.082852"
+type: gotcha
+summary: ON CONFLICT clause must match the exact index definition
+detail: |
+  When using ON CONFLICT with a partial unique index, the WHERE clause in the query must exactly match the WHERE clause in the index definition. Changed from 'ON CONFLICT (contact_id, category) WHERE category IS NOT NULL' to 'ON CONFLICT (contact_id) WHERE category = 'notepad'' to match the new index. Mismatched WHERE clauses cause PostgreSQL to fail to recognize the index.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:33:02.082852"
+type: architecture
+summary: Search integration tests create notes with various categories for testing
+detail: |
+  backend/tests/search_integration_test.go creates multiple notes with the same category (e.g., 'technical') for the same contact to test search functionality. Any unique constraints on the note table must account for this pattern and not assume one note per category per contact.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:33:02.082852"
+type: documentation_gap
+summary: Core rules say 'Always add comprehensive tests' but didn't prevent breaking existing tests
+detail: |
+  The agent added comprehensive tests for the new note API endpoints but didn't run existing integration tests before pushing. The rule '.ai/rules/core.md' says 'Run make test && make test-e2e to verify changes work' but it's phrased as a verification step rather than a blocking requirement. Should be strengthened to 'ALWAYS run make test before committing schema changes or migrations' and emphasized that schema changes affect existing tests.
+actionable: true
+

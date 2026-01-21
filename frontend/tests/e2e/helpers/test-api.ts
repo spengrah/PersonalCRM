@@ -30,7 +30,8 @@ export interface SeedContactMethodInput {
 export interface SeedContactInput {
   full_name: string
   location?: string
-  notes?: string
+  // Note: notes are no longer stored on the contact table.
+  // If tests need to seed notes, call seedContactNote() separately after seeding contacts.
   cadence?: 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'biannual' | 'annual'
   methods?: SeedContactMethodInput[]
   last_contacted_days_ago?: number
@@ -239,6 +240,23 @@ export class TestAPI {
 
     const data = await response.json()
     return data.data as SeedCalendarEventsResponse
+  }
+
+  /**
+   * Seeds a note (notepad) for a contact.
+   * Notes are stored in a separate note table with category='notepad'.
+   * Useful for testing notes display and editing on contact pages.
+   */
+  async seedContactNote(contactId: string, body: string): Promise<void> {
+    const response = await this.request.put(`${API_BASE_URL}/api/v1/contacts/${contactId}/notes`, {
+      headers: API_HEADERS,
+      data: { body },
+    })
+
+    if (!response.ok()) {
+      const responseBody = await response.text()
+      throw new Error(`Failed to seed contact note: ${response.status()} ${responseBody}`)
+    }
   }
 
   /**

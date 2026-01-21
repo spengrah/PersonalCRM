@@ -14,6 +14,7 @@ import {
   useUpdateLastContacted,
 } from '@/hooks/use-contacts'
 import { useRemindersByContact } from '@/hooks/use-reminders'
+import { useContactNote, useSaveContactNote } from '@/hooks/use-contact-note'
 import { useKeyboardNavigation } from '@/hooks/use-keyboard-navigation'
 import { ContactNavigationBar } from '@/components/contacts/contact-navigation-bar'
 import { formatDateOnly } from '@/lib/utils'
@@ -62,8 +63,10 @@ export default function ContactDetailPage() {
 
   const { data: contact, isLoading, error } = useContact(contactId)
   const { data: reminders } = useRemindersByContact(contactId)
+  const { data: contactNote } = useContactNote(contactId)
   const { data: navigationData, isLoading: isLoadingIDs } = useContactIDs(listContext)
   const updateContactMutation = useUpdateContact()
+  const saveContactNoteMutation = useSaveContactNote()
 
   // Build URL preserving list context params
   const buildNavigationUrl = useCallback(
@@ -145,13 +148,18 @@ export default function ContactDetailPage() {
       const isOverflowing = notesRef.current.scrollHeight > notesRef.current.clientHeight
       setNotesOverflowing(isOverflowing)
     }
-  }, [contact?.notes, notesExpanded])
+  }, [contactNote?.body, notesExpanded])
   const deleteContactMutation = useDeleteContact()
   const updateLastContactedMutation = useUpdateLastContacted()
 
   const handleUpdateContact = async (data: ContactFormData) => {
     try {
-      await updateContactMutation.mutateAsync({ id: contactId, data })
+      // Extract notes from form data and save separately
+      const { notes, ...contactData } = data
+      await Promise.all([
+        updateContactMutation.mutateAsync({ id: contactId, data: contactData }),
+        saveContactNoteMutation.mutateAsync({ contactId, body: notes || '' }),
+      ])
       setIsEditing(false)
     } catch {
       // Error handled by TanStack Query error state
@@ -291,8 +299,9 @@ export default function ContactDetailPage() {
             <div className="px-4 py-5 sm:p-6">
               <ContactForm
                 contact={contact}
+                initialNotes={contactNote?.body || ''}
                 onSubmit={handleUpdateContact}
-                loading={updateContactMutation.isPending}
+                loading={updateContactMutation.isPending || saveContactNoteMutation.isPending}
                 submitText="Update Contact"
               />
             </div>
@@ -523,7 +532,7 @@ export default function ContactDetailPage() {
                 </dd>
               </div>
 
-              {contact.notes && (
+              {contactNote?.body && (
                 <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
                   <dt className="text-sm font-medium text-gray-500">Notes</dt>
                   <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
@@ -531,7 +540,7 @@ export default function ContactDetailPage() {
                       ref={notesRef}
                       className={`whitespace-pre-wrap ${!notesExpanded ? 'line-clamp-4' : ''}`}
                     >
-                      {contact.notes}
+                      {contactNote.body}
                     </div>
                     {(notesOverflowing || notesExpanded) && (
                       <button
