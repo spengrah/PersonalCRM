@@ -142,3 +142,51 @@ detail: |
   The core.md file documents the layered architecture and anti-patterns, but doesn't warn about the intentional type mismatch pattern where transformContactFormData includes fields (like notes) that are not in CreateContactRequest/UpdateContactRequest because they're saved via separate APIs. A future agent encountering this pattern will see TypeScript type errors and try to 'fix' them by removing the field from the transform, breaking the functionality. This should be documented in patterns/ or architecture.md with an example showing the destructuring pattern and explaining why the type mismatch is intentional.
 actionable: true
 
+---
+timestamp: "2026-01-21T22:01:33.254657"
+type: gotcha
+summary: Pre-push hooks extract learnings and block push if new learnings found
+detail: |
+  The pre-push hook runs learning extraction automatically. When new learnings are detected, it blocks the push and requires the agent to: (1) review the new learnings in `.ai/log/learnings/`, (2) decide if/where to apply actionable learnings, (3) commit both applied changes and the learnings files, (4) push again. This two-phase workflow ensures learnings are captured and considered before code reaches remote.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:01:33.254657"
+type: gotcha
+summary: CI may fail even when local tests pass due to test isolation issues
+detail: |
+  Tests that pass locally may fail in CI due to different execution order or parallel test execution exposing race conditions or incomplete cleanup. The session showed a test failing in CI with 'TestUpdateLastContacted_PreservesOtherContactData' even though all tests passed locally. This happens because CI runs tests in a fresh environment that may execute in different orders.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:01:33.254657"
+type: gotcha
+summary: Schema migrations require updating ALL test assertions, not just test data setup
+detail: |
+  When removing a field from the database schema (like `contact.notes`), search for and update not just struct literals in test setup but also assertions that verify response data. The session revealed a test that was creating contacts without notes (correctly updated) but still asserting `data["notes"]` should equal a value (missed assertion). Both setup AND verification code must be updated for schema changes.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:01:33.254657"
+type: rule
+summary: Always check CI status after pushing, even when local tests pass
+detail: |
+  The session demonstrates the importance of monitoring CI after pushing. Despite all local tests passing (make test && make test-e2e), the CI caught a test failure that wasn't detected locally. This is because CI provides a clean environment and may execute tests differently. Always use `gh pr checks <pr-number>` to monitor CI status and `gh run view <run-id> --log-failed` to investigate failures.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:01:33.254657"
+type: architecture
+summary: Background task notifications may arrive out of order or after resolution
+detail: |
+  The session showed multiple task-notification messages arriving after the work was already completed successfully (failed push attempts followed by successful push, then delayed E2E test completion). When working with background tasks, expect notifications to be asynchronous and potentially stale. Always verify current state (check git status, PR status) rather than relying solely on task notifications to determine what actions to take.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:01:33.254657"
+type: documentation_gap
+summary: Core rules don't emphasize searching for ALL instances when fixing patterns
+detail: |
+  The core rules include 'Fixing only one instance of a pattern' in the Common Gotchas table, but this guidance wasn't followed when removing notes assertions from tests. The agent updated test setup (removing `Notes` from struct literals) but missed assertion code that checked `data["notes"]`. The rule exists but needs to be more prominent and prescriptive: 'When making schema changes, use Grep to find ALL references (setup AND assertions AND type definitions) before considering the change complete.' This should be elevated from a gotcha to a required step in the schema migration workflow.
+actionable: true
+
