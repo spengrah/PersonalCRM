@@ -149,6 +149,73 @@ func (q *Queries) DeleteDuplicateContactMethods(ctx context.Context, arg DeleteD
 	return err
 }
 
+const DeleteDuplicateThirdPartyConnectionsA = `-- name: DeleteDuplicateThirdPartyConnectionsA :exec
+DELETE FROM connection conn_source
+WHERE conn_source.contact_a_id = $1
+  AND conn_source.contact_b_id IN (
+    SELECT conn_target.contact_b_id FROM connection conn_target
+    WHERE conn_target.contact_a_id = $2
+  )
+`
+
+type DeleteDuplicateThirdPartyConnectionsAParams struct {
+	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID pgtype.UUID `json:"target_contact_id"`
+}
+
+// Delete source's connections (as contact_a) where target already connects to the same contact_b
+// Prevents duplicate (target, X) rows after transfer
+func (q *Queries) DeleteDuplicateThirdPartyConnectionsA(ctx context.Context, arg DeleteDuplicateThirdPartyConnectionsAParams) error {
+	_, err := q.db.Exec(ctx, DeleteDuplicateThirdPartyConnectionsA, arg.SourceContactID, arg.TargetContactID)
+	return err
+}
+
+const DeleteDuplicateThirdPartyConnectionsB = `-- name: DeleteDuplicateThirdPartyConnectionsB :exec
+DELETE FROM connection conn_source
+WHERE conn_source.contact_b_id = $1
+  AND conn_source.contact_a_id IN (
+    SELECT conn_target.contact_a_id FROM connection conn_target
+    WHERE conn_target.contact_b_id = $2
+  )
+`
+
+type DeleteDuplicateThirdPartyConnectionsBParams struct {
+	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID pgtype.UUID `json:"target_contact_id"`
+}
+
+// Delete source's connections (as contact_b) where target already connects to the same contact_a
+// Prevents duplicate (X, target) rows after transfer
+func (q *Queries) DeleteDuplicateThirdPartyConnectionsB(ctx context.Context, arg DeleteDuplicateThirdPartyConnectionsBParams) error {
+	_, err := q.db.Exec(ctx, DeleteDuplicateThirdPartyConnectionsB, arg.SourceContactID, arg.TargetContactID)
+	return err
+}
+
+const DemoteSourcePrimaryMethods = `-- name: DemoteSourcePrimaryMethods :exec
+UPDATE contact_method cm_source
+SET is_primary = false,
+    updated_at = NOW()
+WHERE cm_source.contact_id = $1
+  AND cm_source.is_primary = true
+  AND cm_source.type IN (
+    SELECT cm_target.type FROM contact_method cm_target
+    WHERE cm_target.contact_id = $2
+      AND cm_target.is_primary = true
+  )
+`
+
+type DemoteSourcePrimaryMethodsParams struct {
+	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID pgtype.UUID `json:"target_contact_id"`
+}
+
+// Demote source's primary contact methods when target already has a primary for that type
+// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
+func (q *Queries) DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error {
+	_, err := q.db.Exec(ctx, DemoteSourcePrimaryMethods, arg.SourceContactID, arg.TargetContactID)
+	return err
+}
+
 const FindDuplicateContactMethods = `-- name: FindDuplicateContactMethods :many
 SELECT cm_source.value, cm_source.type
 FROM contact_method cm_source

@@ -74,6 +74,12 @@ type Querier interface {
 	DeleteDuplicateConnections(ctx context.Context, arg DeleteDuplicateConnectionsParams) error
 	// Delete contact methods from source that already exist in target (by normalized value and type)
 	DeleteDuplicateContactMethods(ctx context.Context, arg DeleteDuplicateContactMethodsParams) error
+	// Delete source's connections (as contact_a) where target already connects to the same contact_b
+	// Prevents duplicate (target, X) rows after transfer
+	DeleteDuplicateThirdPartyConnectionsA(ctx context.Context, arg DeleteDuplicateThirdPartyConnectionsAParams) error
+	// Delete source's connections (as contact_b) where target already connects to the same contact_a
+	// Prevents duplicate (X, target) rows after transfer
+	DeleteDuplicateThirdPartyConnectionsB(ctx context.Context, arg DeleteDuplicateThirdPartyConnectionsBParams) error
 	DeleteEnrichment(ctx context.Context, id pgtype.UUID) error
 	DeleteEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) error
 	// Delete all events for a Google account (used when revoking access)
@@ -95,6 +101,9 @@ type Querier interface {
 	DeleteSyncStatesByAccountID(ctx context.Context, accountID pgtype.Text) error
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
 	DeleteTimeEntry(ctx context.Context, id pgtype.UUID) error
+	// Demote source's primary contact methods when target already has a primary for that type
+	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
+	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
 	// Find contact methods that exist in both source and target
 	// Used to identify duplicates that will be skipped during merge
 	FindDuplicateContactMethods(ctx context.Context, arg FindDuplicateContactMethodsParams) ([]*FindDuplicateContactMethodsRow, error)

@@ -571,6 +571,15 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("delete duplicate contact methods: %w", err)
 	}
 
+	// 1b. Demote source's primary methods when target already has primaries for those types
+	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
+	if err := txQueries.DemoteSourcePrimaryMethods(ctx, db.DemoteSourcePrimaryMethodsParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("demote source primary methods: %w", err)
+	}
+
 	// 2. Transfer remaining contact methods
 	if err := txQueries.TransferContactMethods(ctx, db.TransferContactMethodsParams{
 		SourceContactID: sourceUUID,
@@ -617,6 +626,22 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		TargetContactID: targetUUID,
 	}); err != nil {
 		return nil, fmt.Errorf("delete duplicate connections: %w", err)
+	}
+
+	// 7b. Delete source's connections to third parties that target already connects to
+	// This prevents duplicate rows after transfer when both connect to the same person
+	if err := txQueries.DeleteDuplicateThirdPartyConnectionsA(ctx, db.DeleteDuplicateThirdPartyConnectionsAParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("delete duplicate third party connections (contact_a): %w", err)
+	}
+
+	if err := txQueries.DeleteDuplicateThirdPartyConnectionsB(ctx, db.DeleteDuplicateThirdPartyConnectionsBParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("delete duplicate third party connections (contact_b): %w", err)
 	}
 
 	// 8. Transfer connections (both directions)

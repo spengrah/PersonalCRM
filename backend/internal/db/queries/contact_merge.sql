@@ -130,3 +130,37 @@ WHERE cm_source.contact_id = sqlc.arg(source_contact_id)
       AND cm_target.value_normalized = cm_source.value_normalized
       AND cm_target.type = cm_source.type
   );
+
+-- name: DemoteSourcePrimaryMethods :exec
+-- Demote source's primary contact methods when target already has a primary for that type
+-- This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
+UPDATE contact_method cm_source
+SET is_primary = false,
+    updated_at = NOW()
+WHERE cm_source.contact_id = sqlc.arg(source_contact_id)
+  AND cm_source.is_primary = true
+  AND cm_source.type IN (
+    SELECT cm_target.type FROM contact_method cm_target
+    WHERE cm_target.contact_id = sqlc.arg(target_contact_id)
+      AND cm_target.is_primary = true
+  );
+
+-- name: DeleteDuplicateThirdPartyConnectionsA :exec
+-- Delete source's connections (as contact_a) where target already connects to the same contact_b
+-- Prevents duplicate (target, X) rows after transfer
+DELETE FROM connection conn_source
+WHERE conn_source.contact_a_id = sqlc.arg(source_contact_id)
+  AND conn_source.contact_b_id IN (
+    SELECT conn_target.contact_b_id FROM connection conn_target
+    WHERE conn_target.contact_a_id = sqlc.arg(target_contact_id)
+  );
+
+-- name: DeleteDuplicateThirdPartyConnectionsB :exec
+-- Delete source's connections (as contact_b) where target already connects to the same contact_a
+-- Prevents duplicate (X, target) rows after transfer
+DELETE FROM connection conn_source
+WHERE conn_source.contact_b_id = sqlc.arg(source_contact_id)
+  AND conn_source.contact_a_id IN (
+    SELECT conn_target.contact_a_id FROM connection conn_target
+    WHERE conn_target.contact_b_id = sqlc.arg(target_contact_id)
+  );
