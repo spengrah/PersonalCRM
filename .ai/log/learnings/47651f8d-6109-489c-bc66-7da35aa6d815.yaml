@@ -376,3 +376,66 @@ detail: |
   
 actionable: true
 
+---
+timestamp: "2026-01-21T00:56:05.755583"
+session_id: 3d185c1d-5f14-4d22-9cbd-eeb7aab26394
+type: gotcha
+summary: Routes registered in main.go before handler methods exist cause silent failures
+detail: |
+  In this session, merge routes were added to backend/cmd/crm-api/main.go (lines 223-224) referencing contactHandler.GetMergePreview and contactHandler.MergeContacts, but the handler methods themselves were never written to backend/internal/api/handlers/contact.go. This caused E2E tests to fail mysteriously - the routes existed, but requests resulted in silent failures or panics. The build succeeded because Go doesn't validate method existence at compile time for interface-like patterns. Future agents should verify handler methods exist IMMEDIATELY after adding routes, using grep or symbol search, before proceeding.
+actionable: true
+
+---
+timestamp: "2026-01-21T00:56:05.755583"
+session_id: 3d185c1d-5f14-4d22-9cbd-eeb7aab26394
+type: gotcha
+summary: sqlc query name conflicts across files break generation
+detail: |
+  When adding merge queries in contact_merge.sql, the agent initially used generic names like 'CountContactInteractions' and 'CountContactNotes', but these already existed in interaction.sql and note.sql. sqlc generation failed with duplicate query name errors. The fix was to rename to context-specific names like 'CountMergeInteractions', 'CountMergeNotes', etc. Future agents should prefix query names with the feature/context (like 'Merge') when adding queries to avoid collisions, especially for common operations like counting.
+actionable: true
+
+---
+timestamp: "2026-01-21T00:56:05.755583"
+session_id: 3d185c1d-5f14-4d22-9cbd-eeb7aab26394
+type: gotcha
+summary: sqlc UPDATE queries with subqueries need explicit table aliases
+detail: |
+  In DeleteDuplicateContactMethods query, a WHERE clause with a subquery caused 'ambiguous column reference: contact_id' errors. The issue was that both the outer UPDATE table and inner SELECT table had 'contact_id' columns, and sqlc couldn't determine which was referenced. Fix required aliasing the subquery table (cm_source) and using qualified names (cm_source.contact_id). This is non-obvious because simple queries don't require aliases. Future agents should proactively alias tables in ANY sqlc query with subqueries or joins.
+actionable: true
+
+---
+timestamp: "2026-01-21T00:56:05.755583"
+session_id: 3d185c1d-5f14-4d22-9cbd-eeb7aab26394
+type: architecture
+summary: Backend merge routes exist but handlers were never implemented
+detail: |
+  The session shows routes were added to main.go (contacts.GET('/:id/merge/preview') and contacts.POST('/:id/merge')) but the actual handler methods GetMergePreview() and MergeContacts() were never written in contact.go. This created a partial implementation where the service layer existed, routes existed, but the HTTP handler layer connecting them was missing. This suggests the agent lost track during implementation phase. Future agents should verify the COMPLETE handler-service-repository-query chain exists after adding backend features, not just individual layers.
+actionable: true
+
+---
+timestamp: "2026-01-21T00:56:05.755583"
+session_id: 3d185c1d-5f14-4d22-9cbd-eeb7aab26394
+type: documentation_gap
+summary: Core rule about 'never skip layers' wasn't followed during implementation
+detail: |
+  The .ai/rules/core.md file explicitly states 'Never skip layers' and shows the Handler → Service → Repository → DB flow. However, during implementation, the agent skipped writing the Handler layer entirely (added routes in main.go but never wrote GetMergePreview/MergeContacts handler methods), while implementing Service and DB layers. This suggests the rule needs strengthening. Recommendation: Add a checklist to core.md that says 'For new features, verify ALL layers exist: 1) SQL queries in db/queries/*.sql, 2) Service methods in service/*.go, 3) Handler methods in handlers/*.go, 4) Routes in cmd/crm-api/main.go'. Make it a mandatory verification step, not just a principle.
+actionable: true
+
+---
+timestamp: "2026-01-21T00:56:05.755583"
+session_id: 3d185c1d-5f14-4d22-9cbd-eeb7aab26394
+type: rule
+summary: Always verify handler methods exist immediately after adding routes
+detail: |
+  This session showed routes added to main.go that referenced non-existent handler methods, causing runtime failures. The correct workflow is: 1) Write handler method in handlers/*.go, 2) Write service method in service/*.go, 3) Write repository methods in repository/*.go, 4) Write SQL queries, 5) Run 'make sqlc', 6) Add routes in main.go, 7) IMMEDIATELY grep for the handler method names to verify they exist. Step 7 catches missing implementations before tests fail mysteriously.
+actionable: true
+
+---
+timestamp: "2026-01-21T00:56:05.755583"
+session_id: 3d185c1d-5f14-4d22-9cbd-eeb7aab26394
+type: gotcha
+summary: Working directory confusion when running backend commands
+detail: |
+  The agent attempted 'cd backend && go build' which failed with 'cd: backend: No such file or directory', suggesting the shell was already in /home/dev/workspace/PersonalCRM/backend. The project root is /home/dev/workspace/PersonalCRM, so commands should use absolute paths or avoid 'cd backend'. Per core.md: 'Run make commands from project root'. Future agents should verify pwd before directory changes, or consistently use absolute paths from /home/dev/workspace/PersonalCRM.
+actionable: true
+
