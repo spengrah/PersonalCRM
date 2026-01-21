@@ -1,0 +1,64 @@
+---
+timestamp: "2026-01-20T16:29:47.532670"
+type: gotcha
+summary: Soft-delete does NOT trigger FK cascade for contact methods
+detail: |
+  When soft-deleting a contact (UPDATE contact SET deleted_at = NOW()), related contact_methods are NOT automatically deleted despite FK constraints. The FK constraint exists but soft-delete is just a field update, not a DELETE, so ON DELETE CASCADE doesn't fire. Source contact methods must be explicitly deleted in the merge operation BEFORE soft-deleting the contact. This is a critical data integrity issue that's easy to miss when designing merge/delete operations.
+actionable: true
+
+---
+timestamp: "2026-01-20T16:29:47.532670"
+type: architecture
+summary: Import/Link and Merge flows share identical UI patterns
+detail: |
+  The Import/Link modal (ImportLinkModal) and Contact Merge feature have structurally identical flows: select source, resolve field conflicts, handle contact methods with deduplication, execute merge. The key difference is just the source type (external contact vs CRM contact) and final action (enrich vs soft-delete). Future implementation should extend ImportLinkModal to support merge as a third mode rather than building a separate component. This maximizes code reuse and maintains UX consistency.
+actionable: true
+
+---
+timestamp: "2026-01-20T16:29:47.532670"
+type: rule
+summary: Match repository method names by reading code, not assuming
+detail: |
+  Repository method names don't always match obvious patterns - e.g., the contact repository uses `SoftDeleteContact` not `DeleteContact`. Before calling repository methods in new code, always read the repository file first to verify actual method names. This prevents compilation errors and wasted time. This gotcha already exists in core.md but was reinforced during this session as a critical workflow step.
+actionable: true
+
+---
+timestamp: "2026-01-20T16:29:47.532670"
+type: architecture
+summary: Use typed structs for field overrides, not maps
+detail: |
+  When designing field override/update patterns (like merge field resolution or enhanced import), use typed structs with optional fields (e.g., `FieldOverrides struct { FullName *string; Location *string }`) instead of map-based approaches (`map[string]*string`). This matches the existing codebase pattern (UpdateContactRequest) and provides compile-time type safety. The architecture review identified this as critical - map-based approaches don't align with Go best practices in this codebase.
+actionable: true
+
+---
+timestamp: "2026-01-20T16:29:47.532670"
+type: distinction
+summary: Premature abstraction vs copy-paste for similar logic
+detail: |
+  When implementing Merge feature that shares logic with existing Linking feature (method deduplication, conflict resolution), the architecture review recommended NOT extracting shared code immediately. Instead: implement merge-specific logic first, then refactor to shared utilities only if duplication becomes painful. This avoids premature abstraction that might not fit both use cases cleanly. Copy-paste is acceptable for initial implementation - generalize only when patterns are proven.
+actionable: true
+
+---
+timestamp: "2026-01-20T16:29:47.532670"
+type: rule
+summary: Prototype UI in temp/ directory using raw HTML, not React components
+detail: |
+  For rapid UI iteration, create HTML prototypes in temp/ directory (git-ignored) using CDN Tailwind, not React components in the source tree. This allows faster iteration without module resolution, build steps, or polluting the component tree. Once design is finalized, translate to React. This is documented in project gotchas but was critical for this session - initial React prototype was rejected for being harder to iterate on.
+actionable: true
+
+---
+timestamp: "2026-01-20T16:29:47.532670"
+type: gotcha
+summary: Single-view modal pattern over multi-step wizards
+detail: |
+  The ImportLinkModal uses a single scrollable view with all steps visible (select contact, resolve conflicts, review, action) rather than a multi-step wizard. When building similar flows like Contact Merge, match this pattern - don't create 3-step wizards. Users prefer seeing all decisions in one view. The initial multi-step merge prototype was rejected; the single-view version matching ImportLinkModal was approved. This is a UX consistency requirement specific to this project.
+actionable: true
+
+---
+timestamp: "2026-01-20T16:29:47.532670"
+type: documentation_gap
+summary: Soft-delete FK cascade behavior needs explicit documentation
+detail: |
+  The core.md rules mention using accelerated.GetCurrentTime() and soft-delete patterns but don't explicitly warn that soft-delete (UPDATE deleted_at = NOW()) does NOT trigger ON DELETE CASCADE for foreign keys. This caused the initial merge spec to miss explicit contact_method deletion. Add to core.md under 'Common Gotchas': 'Soft-deleting contacts does NOT cascade to contact_methods - must explicitly delete related records'. Strengthen the soft-delete section to call out FK behavior.
+actionable: true
+

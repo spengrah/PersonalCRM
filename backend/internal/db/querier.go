@@ -26,6 +26,18 @@ type Querier interface {
 	CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	CountIdentitiesBySource(ctx context.Context, source string) (int64, error)
+	// Count calendar events involving a contact (for merge preview)
+	CountMergeCalendarEvents(ctx context.Context, dollar_1 pgtype.UUID) (int64, error)
+	// Count contact methods for a contact (for merge preview)
+	CountMergeContactMethods(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	// Count interactions for a contact (for merge preview)
+	CountMergeInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	// Count notes for a contact (for merge preview)
+	CountMergeNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	// Count active reminders for a contact (for merge preview)
+	CountMergeReminders(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	// Count time entries for a contact (for merge preview)
+	CountMergeTimeEntries(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	CountReminders(ctx context.Context) (int64, error)
@@ -46,6 +58,9 @@ type Querier interface {
 	CreateSyncState(ctx context.Context, arg CreateSyncStateParams) (*ExternalSyncState, error)
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)
 	CreateTimeEntry(ctx context.Context, arg CreateTimeEntryParams) (*TimeEntry, error)
+	// Remove duplicate contact IDs that may result from merge
+	// Uses subquery with DISTINCT to rebuild the array without duplicates
+	DeduplicateCalendarEventContacts(ctx context.Context, targetContactID pgtype.UUID) error
 	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteCalendarEventsByTitlePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
@@ -54,6 +69,17 @@ type Querier interface {
 	// Test data management queries
 	// These queries are used by the test API endpoints to seed and cleanup test data
 	DeleteContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	// Delete connections that would become duplicates after merge
+	// (connections between source and target, or connections that now point same way)
+	DeleteDuplicateConnections(ctx context.Context, arg DeleteDuplicateConnectionsParams) error
+	// Delete contact methods from source that already exist in target (by normalized value and type)
+	DeleteDuplicateContactMethods(ctx context.Context, arg DeleteDuplicateContactMethodsParams) error
+	// Delete source's connections (as contact_a) where target already connects to the same contact_b
+	// Prevents duplicate (target, X) rows after transfer
+	DeleteDuplicateThirdPartyConnectionsA(ctx context.Context, arg DeleteDuplicateThirdPartyConnectionsAParams) error
+	// Delete source's connections (as contact_b) where target already connects to the same contact_a
+	// Prevents duplicate (X, target) rows after transfer
+	DeleteDuplicateThirdPartyConnectionsB(ctx context.Context, arg DeleteDuplicateThirdPartyConnectionsBParams) error
 	DeleteEnrichment(ctx context.Context, id pgtype.UUID) error
 	DeleteEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) error
 	// Delete all events for a Google account (used when revoking access)
@@ -75,6 +101,12 @@ type Querier interface {
 	DeleteSyncStatesByAccountID(ctx context.Context, accountID pgtype.Text) error
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
 	DeleteTimeEntry(ctx context.Context, id pgtype.UUID) error
+	// Demote source's primary contact methods when target already has a primary for that type
+	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
+	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
+	// Find contact methods that exist in both source and target
+	// Used to identify duplicates that will be skipped during merge
+	FindDuplicateContactMethods(ctx context.Context, arg FindDuplicateContactMethodsParams) ([]*FindDuplicateContactMethodsRow, error)
 	FindExternalContactsByEmail(ctx context.Context, dollar_1 []byte) ([]*ExternalContact, error)
 	FindExternalContactsByNormalizedEmail(ctx context.Context, lower string) ([]*ExternalContact, error)
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
@@ -179,6 +211,9 @@ type Querier interface {
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
+	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
+	// Uses array_replace for efficient in-place replacement
+	ReplaceContactInCalendarEvents(ctx context.Context, arg ReplaceContactInCalendarEventsParams) error
 	// Lightweight query returning only IDs with search for navigation
 	SearchContactIDs(ctx context.Context, plaintoTsquery string) ([]pgtype.UUID, error)
 	// Lightweight query returning only IDs with search and sorting for navigation
@@ -190,6 +225,23 @@ type Querier interface {
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteReminder(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteRemindersForContact(ctx context.Context, contactID pgtype.UUID) error
+	// Transfer connections where source is contact_a to use target instead
+	// This handles the bidirectional relationship table
+	TransferConnectionsAsContactA(ctx context.Context, arg TransferConnectionsAsContactAParams) error
+	// Transfer connections where source is contact_b to use target instead
+	TransferConnectionsAsContactB(ctx context.Context, arg TransferConnectionsAsContactBParams) error
+	// Contact merge queries
+	// These queries support merging one contact (source) into another (target)
+	// Transfer contact methods from source to target contact
+	TransferContactMethods(ctx context.Context, arg TransferContactMethodsParams) error
+	// Transfer interactions from source to target contact
+	TransferInteractions(ctx context.Context, arg TransferInteractionsParams) error
+	// Transfer notes from source to target contact
+	TransferNotes(ctx context.Context, arg TransferNotesParams) error
+	// Transfer reminders from source to target contact
+	TransferReminders(ctx context.Context, arg TransferRemindersParams) error
+	// Transfer time entries from source to target contact
+	TransferTimeEntries(ctx context.Context, arg TransferTimeEntriesParams) error
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error

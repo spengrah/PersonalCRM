@@ -1,0 +1,48 @@
+---
+timestamp: "2026-01-20T14:37:15.520705"
+type: gotcha
+summary: Scheduler frequency doesn't match sync intervals
+detail: |
+  The cron scheduler checks for due syncs every hour (`0 0 * * * *`), but CalendarDefaultInterval is 15 minutes. This means calendar syncs actually run ~hourly instead of every 15 minutes as intended. When sync completes at 10:00, next_sync_at is set to 10:15, but the next scheduler check is at 11:00. This was discovered during UI design work for sync indicators when investigating what triggers should show 'syncing' state. Issue #197 was created to track this bug.
+actionable: false
+
+---
+timestamp: "2026-01-20T14:37:15.520705"
+type: distinction
+summary: Sync state tracking is only for external API fetches, not internal processing
+detail: |
+  The `external_sync_state` table with status ('idle', 'syncing', 'error') only tracks external API fetches from Google Calendar/Contacts. Internal processes like EnrichmentService and ImportMatchService run synchronously within the sync pipeline, not as separate background jobs. They don't have their own sync state tracking. Future processes like RematchService (#182) would need to decide whether to reuse external_sync_state with a new source type or have separate tracking if they're long-running enough to warrant visibility.
+actionable: false
+
+---
+timestamp: "2026-01-20T14:37:15.520705"
+type: architecture
+summary: Sync pipeline embeds matching and enrichment as synchronous steps
+detail: |
+  The sync flow is: RunDueSyncs() → performSync() → provider.Sync() which internally calls ImportMatchService.FindBestMatch() and EnrichmentService.EnrichContact() synchronously. These are not separate background jobs - they happen inline during the fetch from external APIs. This matters for UI indicators: if you want to show activity for 'matching' or 'enrichment', those don't exist as separate trackable states. The entire pipeline is tracked as a single 'syncing' state in external_sync_state.
+actionable: false
+
+---
+timestamp: "2026-01-20T14:37:15.520705"
+type: rule
+summary: Only the icon should change color in nav state indicators, not the text label
+detail: |
+  When creating state indicators for navigation items, apply color/animation classes only to the icon SVG element, not the parent anchor or text label. The text should remain in its default state (text-gray-600). This maintains visual hierarchy and makes the indicator subtle. Example from prototype: icon gets `text-green-600 animate-sync-pulse` for syncing state, but the 'Imports' span stays `text-gray-600`.
+actionable: true
+
+---
+timestamp: "2026-01-20T14:37:15.520705"
+type: gotcha
+summary: Prototype files should go in temp/ not repo root
+detail: |
+  When creating HTML prototypes for UI design work, place them in temp/ directory (which is git-ignored) rather than the repository root. These are meant to be attached to GitHub issues for reference, not committed to the repo. The user had to clarify this when the agent initially created the prototype in the wrong location.
+actionable: true
+
+---
+timestamp: "2026-01-20T14:37:15.520705"
+type: rule
+summary: "Aggregate sync status logic: syncing takes precedence over error"
+detail: |
+  When displaying aggregate sync status across multiple sources, use this precedence: (1) If ANY source is 'syncing', show syncing state; (2) Else if ANY source has 'error' status, show error state; (3) Else show synced state. This ensures users see active operations first, then problems, then normal state. Implemented as: hasSyncing = states.some(s => s.status === 'syncing'); hasError = states.some(s => s.status === 'error'); return hasSyncing ? 'syncing' : hasError ? 'error' : 'synced'.
+actionable: true
+

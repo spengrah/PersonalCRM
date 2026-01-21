@@ -1,0 +1,208 @@
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: gotcha
+summary: Not all tables have updated_at column
+detail: |
+  The reminder, interaction, and connection tables do NOT have updated_at columns, while contact, contact_method, note, time_entry, and calendar_event do. Writing UPDATE queries with 'SET updated_at = NOW()' for tables without this column causes runtime 500 errors that aren't caught at compile time. Always check schema before adding updated_at to queries.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: gotcha
+summary: contact_method has unique partial index on primary methods
+detail: |
+  The contact_method table has a partial unique index '(contact_id, type) WHERE is_primary = TRUE', allowing only ONE primary method per contact per type. When merging contacts where both have a primary email/phone, transferring methods directly violates this constraint. Must demote source's primary methods BEFORE transferring them.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: gotcha
+summary: Connection deduplication requires checking third-party overlaps
+detail: |
+  When merging contacts, deleting only the direct connection between source and target is insufficient. Must also delete source's connections to third parties that the target already connects to, otherwise transferring connections creates duplicate rows violating the connection table's unique constraint on (contact_id, connected_contact_id).
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: distinction
+summary: Contact.notes field vs note table are separate entities
+detail: |
+  The Contact model has both a 'notes' TEXT field (for quick notes) AND a separate 'note' table (for structured notes with timestamps). When merging contacts, must handle both: combine the text field content AND transfer note table records. Easy to overlook one when implementing merge logic.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: architecture
+summary: "E2E test debugging: intercept API responses for actual errors"
+detail: |
+  When Playwright E2E tests fail with vague UI errors, use page.waitForResponse() to intercept the actual API response and extract backend error messages. This pattern revealed all constraint violation root causes during merge testing. The UI may just show 'An error occurred' while the API response contains the actual database error.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: architecture
+summary: Complex merge requires strict operation ordering for constraints
+detail: |
+  Multi-entity merge transactions require careful ordering to avoid constraint violations: (1) delete duplicate relationships, (2) demote conflicting unique values, (3) transfer child entities, (4) update parent entity, (5) soft-delete source. Getting this order wrong causes unique/FK constraint violations that are hard to debug.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: documentation_gap
+summary: Core rules don't warn about updated_at column availability
+detail: |
+  The core.md gotchas table warns about many sqlc pitfalls but doesn't mention that updated_at only exists on some tables. This led to writing queries that failed at runtime. The 'Common Gotchas' section should include: 'Assuming all tables have updated_at | Check schema - only contact, contact_method, note, time_entry, calendar_event have it'.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: gotcha
+summary: contact_method has TWO different unique constraints
+detail: |
+  The contact_method table has both a regular UNIQUE constraint on (contact_id, type) AND a partial unique index on (contact_id, type) WHERE is_primary = TRUE. This creates two separate constraint violations to handle: can't have duplicate method types per contact, and can't have multiple primary methods of same type. Both must be considered in merge logic.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:32:39.693079"
+type: gotcha
+summary: GetMergePreview parameter order (sourceID, targetID) is counterintuitive
+detail: |
+  The GetMergePreview function signature is (ctx, sourceID, targetID) but the natural mental model is 'merge source INTO target', leading to calls with (ctx, target.ID, source.ID). This caused test failures where preview.TargetContact.ID didn't match the expected target because parameters were swapped. When designing merge APIs, consider using named parameters or request structs to avoid this confusion.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:32:39.693079"
+type: gotcha
+summary: MCP Serena tool uses literal mode by default, requiring explicit mode parameter
+detail: |
+  When using mcp__serena__replace_content, the default matching behavior is regex. For literal string replacement (especially with special characters like parentheses, brackets, pipes in markdown tables), must explicitly set "mode": "literal". Without this, replacements with table rows containing pipes '|' or regex special chars will fail to match.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:32:39.693079"
+type: documentation_gap
+summary: Core.md gotcha about updated_at was followed after being added
+detail: |
+  The session successfully identified that 'updated_at column availability' wasn't documented, added it to core.md Common Gotchas table, and this prevented future errors. This shows the learnings feedback loop working correctly - the gap was identified mid-session and immediately fixed. The gotcha entry now reads: 'Assuming all tables have updated_at | Only contact, contact_method, note, time_entry, calendar_event have it'
+actionable: false
+
+---
+timestamp: "2026-01-21T01:32:39.693079"
+type: gotcha
+summary: Review comments from chatgpt-codex-connector bot identify real bugs
+detail: |
+  The automated PR reviewer (chatgpt-codex-connector bot) posted two review comments identifying genuine constraint violations: (1) primary method uniqueness violation when both contacts have primary methods, (2) duplicate third-party connection violations. Both were valid bugs that local tests didn't catch because they only occurred in specific edge cases. Always carefully evaluate bot review comments rather than dismissing them as false positives.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:32:39.693079"
+type: architecture
+summary: Contact merge requires defensive deduplication queries before transfers
+detail: |
+  When merging contacts with UPDATE queries that change foreign keys, partial unique indexes and unique constraints can be violated in non-obvious ways: (1) contact_method has partial unique index on (contact_id, type) WHERE is_primary=TRUE - must demote source's primaries before transfer, (2) connection has UNIQUE(contact_a_id, contact_b_id) - must delete source's connections to third parties that target already connects to. The pattern is: identify all unique constraints, add DELETE queries for would-be duplicates, add UPDATE queries to demote/nullify conflicting values, only then transfer.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:42:31.067617"
+type: gotcha
+summary: Fixing only one instance of a pattern when multiple exist
+detail: |
+  When a bug is identified in a test or codebase (e.g., GetMergePreview parameter order), search ALL occurrences of that pattern and fix them together. In this session, the agent fixed one GetMergePreview call (line 87) but missed another (line 136) in the same file, causing CI to fail even though local tests passed (likely because only one test ran locally). The core.md gotcha table already warns about this: 'Fixing only one instance of a pattern | Search entire codebase and fix ALL instances to maintain consistency'.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:42:31.067617"
+type: documentation_gap
+summary: Core gotcha about fixing all instances was not followed
+detail: |
+  The core.md Common Gotchas table explicitly warns: 'Fixing only one instance of a pattern | Search entire codebase and fix ALL instances to maintain consistency'. However, this guidance wasn't followed when fixing the GetMergePreview parameter order - only one of two calls was fixed. This suggests the gotcha entry may be too abstract or easy to miss. Consider strengthening it with a concrete example: 'Fixing only one call when multiple exist | When fixing a bug pattern (e.g., wrong parameter order), grep for ALL occurrences and fix them together in one commit. Example: grep -n "GetMergePreview" to find all calls before fixing.'
+actionable: true
+
+---
+timestamp: "2026-01-21T01:42:31.067617"
+type: gotcha
+summary: Local test success doesn't guarantee CI success for partial fixes
+detail: |
+  When fixing a bug in test code, running 'make test' locally may pass if it only executes the tests you've been working with, while CI runs the full suite and catches instances you missed. This creates a false sense of security. Always grep for all instances of the pattern being fixed before committing, especially when using 'replace_all' or similar tools that might not catch all variations (e.g., parameter order differences in different function calls).
+actionable: true
+
+---
+timestamp: "2026-01-21T01:54:10.187855"
+type: gotcha
+summary: Integration tests skip when DATABASE_URL unset, hiding failures
+detail: |
+  Backend integration tests silently skip when DATABASE_URL environment variable is not set, causing them to appear to pass locally while failing in CI (where DATABASE_URL is configured). To reproduce integration test failures locally, must explicitly set DATABASE_URL when running tests: `DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/personal_crm?sslmode=disable" go test -v ./backend/tests/api/...`. This explains why pre-push hooks can pass while CI fails.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:54:10.187855"
+type: gotcha
+summary: contact.notes field vs note table are different things
+detail: |
+  The contact table has a `notes` text field (just a string column on the contact record), while the `note` table is a separate table for structured note entities with timestamps and relationships. GetMergePreview.NotesToTransfer counts rows in the `note` TABLE via CountMergeNotes(), not the content of contact.notes FIELD. Tests that set CreateContactRequest.Notes are only populating the text field, not creating note table rows.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:54:10.187855"
+type: gotcha
+summary: assert.Equal type sensitivity requires int64 literals for DB counts
+detail: |
+  MergePreview struct uses int64 for all count fields (MethodsToTransfer, DuplicateMethods, NotesToTransfer, etc) because they come from database COUNT queries. When using assert.Equal(), untyped int literals like `assert.Equal(t, 1, preview.MethodsToTransfer)` fail with type mismatch (int vs int64). Must use explicit int64 literals: `assert.Equal(t, int64(1), preview.MethodsToTransfer)`.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:54:10.187855"
+type: documentation_gap
+summary: Integration test execution not obvious in development workflow
+detail: |
+  The session revealed confusion about why tests passed locally but failed in CI. The root cause was DATABASE_URL not being set locally, causing integration tests to skip. The existing docs mention `make test` but don't emphasize: (1) that integration tests require DATABASE_URL to actually run, (2) how to set it for local integration test execution, or (3) that pre-push hooks may give false confidence if DATABASE_URL is unset. The .ai/rules/core.md mentions 'Run tests to verify changes work during development' but doesn't explain the DATABASE_URL requirement for integration tests.
+actionable: true
+
+---
+timestamp: "2026-01-21T02:15:53.192589"
+type: gotcha
+summary: Integration tests skip silently without DATABASE_URL set
+detail: |
+  When DATABASE_URL environment variable is not set, Go integration tests skip themselves silently (t.Skip() pattern). This creates a false sense of security where `make test` shows PASS but integration tests never actually ran. The pre-push hook showed tests passing locally, but they failed in CI because CI sets DATABASE_URL. Solution: Always set DATABASE_URL in the test-integration make target to ensure tests actually run. Use personal_crm_test database for isolation from dev data.
+actionable: true
+
+---
+timestamp: "2026-01-21T02:15:53.192589"
+type: gotcha
+summary: assert.Equal type mismatches cause CI-only failures
+detail: |
+  Using assert.Equal(t, 1, actualValue) fails when actualValue is int64, even though the values are numerically equal. This passed locally with tests skipped but failed in CI. Always match the exact type in test assertions - use int64(1) when comparing against int64 fields, especially for database-sourced values which are typically int64.
+actionable: true
+
+---
+timestamp: "2026-01-21T02:15:53.192589"
+type: distinction
+summary: Notes field vs note table rows in merge preview
+detail: |
+  MergePreview.NotesToTransfer counts rows in the `note` table (separate entities), NOT the contact.notes text field (single text blob). This distinction was missed in testing - test expected NotesToTransfer=1 when contact.notes text was populated, but got 0 because no rows existed in the note table. Always verify whether 'notes' refers to the legacy text field or the note table.
+actionable: true
+
+---
+timestamp: "2026-01-21T02:15:53.192589"
+type: rule
+summary: Use personal_crm_test for all local integration tests
+detail: |
+  Integration tests should run against personal_crm_test database (same as E2E tests), not personal_crm. This provides: (1) Isolation from dev data, (2) Consistency with E2E test environment, (3) Safety - no risk of deleting real contacts, (4) Clean state for testing. The test-integration make target should set DATABASE_URL to postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable
+actionable: true
+
+---
+timestamp: "2026-01-21T02:15:53.192589"
+type: documentation_gap
+summary: Testing guide doesn't emphasize DATABASE_URL requirement
+detail: |
+  The session revealed that integration tests were being skipped locally due to missing DATABASE_URL, but this wasn't caught until CI failed. The testing documentation (.ai/rules/testing.md or session hints in CLAUDE.md) should explicitly state: (1) Integration tests REQUIRE DATABASE_URL to actually run, (2) Without it, tests skip silently, creating false confidence, (3) Use make test-integration (not raw go test) to ensure DATABASE_URL is set. The 'Run make test && make test-e2e to verify changes work' hint exists but doesn't warn about this gotcha.
+actionable: true
+
+---
+timestamp: "2026-01-21T02:42:08.897403"
+type: gotcha
+summary: Modal overflow-hidden clips absolute-positioned dropdowns
+detail: |
+  When a modal container uses overflow-hidden (often for rounded corner clipping), it will clip child components that use absolute positioning like dropdowns from ContactSelector. The fix is to remove overflow-hidden from the modal container and add explicit rounded corners (rounded-t-lg, rounded-b-lg) to header/footer sections instead. This allows dropdowns to extend beyond the modal bounds while preserving visual styling.
+actionable: true
+
