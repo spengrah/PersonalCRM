@@ -158,3 +158,43 @@ detail: |
   The session revealed confusion about why tests passed locally but failed in CI. The root cause was DATABASE_URL not being set locally, causing integration tests to skip. The existing docs mention `make test` but don't emphasize: (1) that integration tests require DATABASE_URL to actually run, (2) how to set it for local integration test execution, or (3) that pre-push hooks may give false confidence if DATABASE_URL is unset. The .ai/rules/core.md mentions 'Run tests to verify changes work during development' but doesn't explain the DATABASE_URL requirement for integration tests.
 actionable: true
 
+---
+timestamp: "2026-01-21T02:15:53.192589"
+type: gotcha
+summary: Integration tests skip silently without DATABASE_URL set
+detail: |
+  When DATABASE_URL environment variable is not set, Go integration tests skip themselves silently (t.Skip() pattern). This creates a false sense of security where `make test` shows PASS but integration tests never actually ran. The pre-push hook showed tests passing locally, but they failed in CI because CI sets DATABASE_URL. Solution: Always set DATABASE_URL in the test-integration make target to ensure tests actually run. Use personal_crm_test database for isolation from dev data.
+actionable: true
+
+---
+timestamp: "2026-01-21T02:15:53.192589"
+type: gotcha
+summary: assert.Equal type mismatches cause CI-only failures
+detail: |
+  Using assert.Equal(t, 1, actualValue) fails when actualValue is int64, even though the values are numerically equal. This passed locally with tests skipped but failed in CI. Always match the exact type in test assertions - use int64(1) when comparing against int64 fields, especially for database-sourced values which are typically int64.
+actionable: true
+
+---
+timestamp: "2026-01-21T02:15:53.192589"
+type: distinction
+summary: Notes field vs note table rows in merge preview
+detail: |
+  MergePreview.NotesToTransfer counts rows in the `note` table (separate entities), NOT the contact.notes text field (single text blob). This distinction was missed in testing - test expected NotesToTransfer=1 when contact.notes text was populated, but got 0 because no rows existed in the note table. Always verify whether 'notes' refers to the legacy text field or the note table.
+actionable: true
+
+---
+timestamp: "2026-01-21T02:15:53.192589"
+type: rule
+summary: Use personal_crm_test for all local integration tests
+detail: |
+  Integration tests should run against personal_crm_test database (same as E2E tests), not personal_crm. This provides: (1) Isolation from dev data, (2) Consistency with E2E test environment, (3) Safety - no risk of deleting real contacts, (4) Clean state for testing. The test-integration make target should set DATABASE_URL to postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable
+actionable: true
+
+---
+timestamp: "2026-01-21T02:15:53.192589"
+type: documentation_gap
+summary: Testing guide doesn't emphasize DATABASE_URL requirement
+detail: |
+  The session revealed that integration tests were being skipped locally due to missing DATABASE_URL, but this wasn't caught until CI failed. The testing documentation (.ai/rules/testing.md or session hints in CLAUDE.md) should explicitly state: (1) Integration tests REQUIRE DATABASE_URL to actually run, (2) Without it, tests skip silently, creating false confidence, (3) Use make test-integration (not raw go test) to ensure DATABASE_URL is set. The 'Run make test && make test-e2e to verify changes work' hint exists but doesn't warn about this gotcha.
+actionable: true
+
