@@ -133,7 +133,7 @@ func TestContactMerge_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Get merge preview
-		preview, err := contactService.GetMergePreview(ctx, target.ID, source.ID)
+		preview, err := contactService.GetMergePreview(ctx, source.ID, target.ID)
 		require.NoError(t, err)
 
 		assert.Equal(t, 1, preview.MethodsToTransfer) // unique@example.com
