@@ -104,6 +104,23 @@ func (r *NoteRepository) CreateNotepad(ctx context.Context, contactID uuid.UUID,
 	return &note, nil
 }
 
+// UpsertNotepad creates or updates the notepad note for a contact (atomic operation)
+// This is safe against concurrent requests creating duplicate notes
+func (r *NoteRepository) UpsertNotepad(ctx context.Context, contactID uuid.UUID, body string) (*Note, error) {
+	category := string(NoteCategoryNotepad)
+	dbNote, err := r.queries.UpsertContactNoteByCategory(ctx, db.UpsertContactNoteByCategoryParams{
+		ContactID: pgtype.UUID{Bytes: contactID, Valid: true},
+		Body:      body,
+		Category:  pgtype.Text{String: category, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	note := convertDbNote(dbNote)
+	return &note, nil
+}
+
 // UpdateNote updates an existing note
 func (r *NoteRepository) UpdateNote(ctx context.Context, noteID uuid.UUID, body string, category *string) (*Note, error) {
 	var categoryText pgtype.Text

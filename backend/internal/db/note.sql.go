@@ -264,3 +264,32 @@ func (q *Queries) UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, 
 	)
 	return &i, err
 }
+
+const UpsertContactNoteByCategory = `-- name: UpsertContactNoteByCategory :one
+INSERT INTO note (contact_id, body, category)
+VALUES ($1, $2, $3)
+ON CONFLICT (contact_id, category) WHERE category IS NOT NULL
+DO UPDATE SET body = EXCLUDED.body, updated_at = NOW()
+RETURNING id, contact_id, body, category, created_at, updated_at
+`
+
+type UpsertContactNoteByCategoryParams struct {
+	ContactID pgtype.UUID `json:"contact_id"`
+	Body      string      `json:"body"`
+	Category  pgtype.Text `json:"category"`
+}
+
+// Insert or update a note for a contact by category (atomic operation for concurrent safety)
+func (q *Queries) UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error) {
+	row := q.db.QueryRow(ctx, UpsertContactNoteByCategory, arg.ContactID, arg.Body, arg.Category)
+	var i Note
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Body,
+		&i.Category,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}

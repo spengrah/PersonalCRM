@@ -218,6 +218,8 @@ type Querier interface {
 	// so newly matched contacts can be processed. Otherwise we preserve the processed state
 	// to avoid duplicates.
 	UpsertCalendarEvent(ctx context.Context, arg UpsertCalendarEventParams) (*CalendarEvent, error)
+	// Insert or update a note for a contact by category (atomic operation for concurrent safety)
+	UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error)
 	UpsertExternalContact(ctx context.Context, arg UpsertExternalContactParams) (*ExternalContact, error)
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
 	// Insert or update an OAuth credential

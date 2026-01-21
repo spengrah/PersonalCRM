@@ -37,7 +37,7 @@ func (s *NoteService) GetContactNotepad(ctx context.Context, contactID uuid.UUID
 
 // SaveContactNotepad saves the notepad note for a contact
 // If body is empty or whitespace-only, deletes the note and returns nil
-// Otherwise, creates or updates the note and returns the note
+// Otherwise, creates or updates the note atomically and returns the note
 func (s *NoteService) SaveContactNotepad(ctx context.Context, contactID uuid.UUID, body string) (*repository.Note, error) {
 	// Verify the contact exists
 	_, err := s.contactRepo.GetContact(ctx, contactID)
@@ -48,28 +48,16 @@ func (s *NoteService) SaveContactNotepad(ctx context.Context, contactID uuid.UUI
 	// Normalize the body - treat whitespace-only as empty
 	trimmedBody := strings.TrimSpace(body)
 
-	// Get existing note
-	existingNote, err := s.noteRepo.GetContactNotepad(ctx, contactID)
-	if err != nil {
-		return nil, err
-	}
-
-	// If body is empty, delete the note if it exists
+	// If body is empty, delete the note
 	if trimmedBody == "" {
-		if existingNote != nil {
-			if err := s.noteRepo.DeleteContactNotepad(ctx, contactID); err != nil {
-				return nil, err
-			}
+		// Delete any existing note (safe to call even if none exists)
+		if err := s.noteRepo.DeleteContactNotepad(ctx, contactID); err != nil {
+			return nil, err
 		}
 		return nil, nil
 	}
 
-	// If note exists, update it
-	if existingNote != nil {
-		category := string(repository.NoteCategoryNotepad)
-		return s.noteRepo.UpdateNote(ctx, existingNote.ID, trimmedBody, &category)
-	}
-
-	// Create new note
-	return s.noteRepo.CreateNotepad(ctx, contactID, trimmedBody)
+	// Use atomic upsert to create or update the note
+	// This prevents race conditions where concurrent requests could create duplicates
+	return s.noteRepo.UpsertNotepad(ctx, contactID, trimmedBody)
 }
