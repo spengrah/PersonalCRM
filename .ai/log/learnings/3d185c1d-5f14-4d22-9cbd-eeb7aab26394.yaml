@@ -1,0 +1,64 @@
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: gotcha
+summary: Not all tables have updated_at column
+detail: |
+  The reminder, interaction, and connection tables do NOT have updated_at columns, while contact, contact_method, note, time_entry, and calendar_event do. Writing UPDATE queries with 'SET updated_at = NOW()' for tables without this column causes runtime 500 errors that aren't caught at compile time. Always check schema before adding updated_at to queries.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: gotcha
+summary: contact_method has unique partial index on primary methods
+detail: |
+  The contact_method table has a partial unique index '(contact_id, type) WHERE is_primary = TRUE', allowing only ONE primary method per contact per type. When merging contacts where both have a primary email/phone, transferring methods directly violates this constraint. Must demote source's primary methods BEFORE transferring them.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: gotcha
+summary: Connection deduplication requires checking third-party overlaps
+detail: |
+  When merging contacts, deleting only the direct connection between source and target is insufficient. Must also delete source's connections to third parties that the target already connects to, otherwise transferring connections creates duplicate rows violating the connection table's unique constraint on (contact_id, connected_contact_id).
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: distinction
+summary: Contact.notes field vs note table are separate entities
+detail: |
+  The Contact model has both a 'notes' TEXT field (for quick notes) AND a separate 'note' table (for structured notes with timestamps). When merging contacts, must handle both: combine the text field content AND transfer note table records. Easy to overlook one when implementing merge logic.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: architecture
+summary: "E2E test debugging: intercept API responses for actual errors"
+detail: |
+  When Playwright E2E tests fail with vague UI errors, use page.waitForResponse() to intercept the actual API response and extract backend error messages. This pattern revealed all constraint violation root causes during merge testing. The UI may just show 'An error occurred' while the API response contains the actual database error.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: architecture
+summary: Complex merge requires strict operation ordering for constraints
+detail: |
+  Multi-entity merge transactions require careful ordering to avoid constraint violations: (1) delete duplicate relationships, (2) demote conflicting unique values, (3) transfer child entities, (4) update parent entity, (5) soft-delete source. Getting this order wrong causes unique/FK constraint violations that are hard to debug.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: documentation_gap
+summary: Core rules don't warn about updated_at column availability
+detail: |
+  The core.md gotchas table warns about many sqlc pitfalls but doesn't mention that updated_at only exists on some tables. This led to writing queries that failed at runtime. The 'Common Gotchas' section should include: 'Assuming all tables have updated_at | Check schema - only contact, contact_method, note, time_entry, calendar_event have it'.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:22:57.647191"
+type: gotcha
+summary: contact_method has TWO different unique constraints
+detail: |
+  The contact_method table has both a regular UNIQUE constraint on (contact_id, type) AND a partial unique index on (contact_id, type) WHERE is_primary = TRUE. This creates two separate constraint violations to handle: can't have duplicate method types per contact, and can't have multiple primary methods of same type. Both must be considered in merge logic.
+actionable: true
+

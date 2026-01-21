@@ -90,6 +90,7 @@ PostgreSQL
 | Assuming repository method names | Read the repository file first |
 | Not building after `make sqlc` | Always run `go build ./cmd/crm-api` to verify compilation |
 | sqlc changed types after regeneration | Update repository to use `pgtype.X{Value: v, Valid: true}` wrappers |
+| Assuming all tables have `updated_at` | Only contact, contact_method, note, time_entry, calendar_event have it |
 | `git add -A` includes binaries | Review `git status` before commit, exclude `backend/crm-api` |
 | Merging PRs with UI changes | Never merge UI PRs autonomously - wait for human review |
 | `git add path/[id]/file` fails | Use quotes: `git add "path/[id]/file"` (bash interprets brackets as globs) |
