@@ -454,7 +454,7 @@ func TestUpdateLastContacted_PreservesOtherContactData(t *testing.T) {
 		data := response.Data.(map[string]interface{})
 		assert.Equal(t, "Data Preservation Test", data["full_name"])
 		assert.Equal(t, "San Francisco", data["location"])
-		assert.Equal(t, "Test notes for preservation", data["notes"])
+		// Note: notes are now stored in a separate note table, not on the contact
 		assert.Equal(t, "monthly", data["cadence"])
 		assert.Contains(t, data["last_contacted"].(string), "2024-06-15")
 	})
