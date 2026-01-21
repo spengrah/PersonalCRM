@@ -102,3 +102,27 @@ detail: |
   When merging contacts with UPDATE queries that change foreign keys, partial unique indexes and unique constraints can be violated in non-obvious ways: (1) contact_method has partial unique index on (contact_id, type) WHERE is_primary=TRUE - must demote source's primaries before transfer, (2) connection has UNIQUE(contact_a_id, contact_b_id) - must delete source's connections to third parties that target already connects to. The pattern is: identify all unique constraints, add DELETE queries for would-be duplicates, add UPDATE queries to demote/nullify conflicting values, only then transfer.
 actionable: true
 
+---
+timestamp: "2026-01-21T01:42:31.067617"
+type: gotcha
+summary: Fixing only one instance of a pattern when multiple exist
+detail: |
+  When a bug is identified in a test or codebase (e.g., GetMergePreview parameter order), search ALL occurrences of that pattern and fix them together. In this session, the agent fixed one GetMergePreview call (line 87) but missed another (line 136) in the same file, causing CI to fail even though local tests passed (likely because only one test ran locally). The core.md gotcha table already warns about this: 'Fixing only one instance of a pattern | Search entire codebase and fix ALL instances to maintain consistency'.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:42:31.067617"
+type: documentation_gap
+summary: Core gotcha about fixing all instances was not followed
+detail: |
+  The core.md Common Gotchas table explicitly warns: 'Fixing only one instance of a pattern | Search entire codebase and fix ALL instances to maintain consistency'. However, this guidance wasn't followed when fixing the GetMergePreview parameter order - only one of two calls was fixed. This suggests the gotcha entry may be too abstract or easy to miss. Consider strengthening it with a concrete example: 'Fixing only one call when multiple exist | When fixing a bug pattern (e.g., wrong parameter order), grep for ALL occurrences and fix them together in one commit. Example: grep -n "GetMergePreview" to find all calls before fixing.'
+actionable: true
+
+---
+timestamp: "2026-01-21T01:42:31.067617"
+type: gotcha
+summary: Local test success doesn't guarantee CI success for partial fixes
+detail: |
+  When fixing a bug in test code, running 'make test' locally may pass if it only executes the tests you've been working with, while CI runs the full suite and catches instances you missed. This creates a false sense of security. Always grep for all instances of the pattern being fixed before committing, especially when using 'replace_all' or similar tools that might not catch all variations (e.g., parameter order differences in different function calls).
+actionable: true
+
