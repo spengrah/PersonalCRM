@@ -233,7 +233,7 @@ test-unit:
 
 test-integration:
 	@echo "Running backend integration tests..."
-	@cd backend && go test ./tests/... -v
+	@cd backend && DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable" go test ./tests/... -v
 
 test-frontend:
 	@echo "Running frontend tests..."
