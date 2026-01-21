@@ -86,3 +86,59 @@ detail: |
   When exploring codebase for a feature, launch 2-3 code-explorer agents in parallel with different focuses: one for similar features tracing implementation, one for high-level architecture/abstractions, one for user experience/UI patterns. Each agent should return 5-10 key files to read. This parallel exploration is faster and more comprehensive than sequential exploration.
 actionable: true
 
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: architecture
+summary: Create/Update pages must handle separated API saves with Promise.all
+detail: |
+  When a form field is saved via a separate API endpoint (like notes via PUT /contacts/:id/notes), the page's onSubmit handler must: (1) Extract the separated field from form data via destructuring, (2) Call the main mutation to create/update the entity, (3) If the separated field has content, call its mutation with the new entity ID, (4) Use Promise.all when updating to run both saves in parallel and avoid race conditions. For create, the saves must be sequential (create contact first, then save notes with the new ID). The form's loading state should include both mutations: `loading={createMutation.isPending || separatedFieldMutation.isPending}`
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: gotcha
+summary: E2E test helpers need updating when backend seed APIs change
+detail: |
+  When removing a field from the backend's seed endpoint (like SeedContactInput.Notes), the frontend E2E test helper at frontend/tests/e2e/helpers/test-api.ts must be updated to: (1) Add a deprecation comment to the SeedContactInput interface explaining the field is no longer supported and how to seed it instead, (2) Add a new method like seedContactNote(contactId, body) that calls the new API endpoint, (3) Update all E2E tests to seed the entity first, then call the new seed method with the returned ID. Without this, tests that pass the deprecated field will silently ignore it, causing test failures that are confusing to debug.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: architecture
+summary: Frontend API client needs explicit status-aware methods for 204 responses
+detail: |
+  When an API returns 204 No Content for empty/deleted resources (like GET /contacts/:id/notes returning 204 when no note exists), the frontend needs separate methods or explicit handling: (1) The fetch wrapper must not try to parse JSON on 204 responses, (2) React Query hooks should handle 204 as successful but map data to null/undefined, (3) Components should check for null data and render appropriate empty states. The lazy creation pattern (no DB record until content exists) requires this 204 handling throughout the stack.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: gotcha
+summary: "Migration best practice: TRIM + nullability check prevents empty string pollution"
+detail: |
+  When migrating optional text fields to a new table with lazy creation semantics (no record until content exists), the migration SQL must filter with `WHERE field IS NOT NULL AND TRIM(field) != ''` to prevent creating records for empty strings. This is critical because: (1) Many forms submit empty strings instead of null for optional fields, (2) Whitespace-only content should not create DB records in the lazy creation pattern, (3) Without TRIM, empty/whitespace notes would be migrated and treated as having content. This also preserves the created_at timestamp from the original table for non-empty data.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: architecture
+summary: Whitespace normalization belongs in service layer, not handler
+detail: |
+  When implementing lazy creation with whitespace deletion semantics (empty/whitespace body deletes record, returns 204), the normalization logic `if body == nil || strings.TrimSpace(*body) == ""` should be in the service layer (note.go) not the handler (note.go). This follows the layered architecture: handlers validate HTTP/JSON, services implement business logic. The trimming decision is business logic because it determines whether a record should exist. The handler should just validate the request structure and pass through to the service.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: gotcha
+summary: Always run go build after make sqlc to verify compilation
+detail: |
+  After running `make sqlc` to regenerate type-safe SQL code, immediately run `cd backend && go build ./cmd/crm-api` to verify the generated code compiles. Sqlc may change struct field types (e.g., adding pgtype wrappers) which breaks repository code that constructs these structs. The build failure is immediate and easy to fix if caught right away, but if not caught until later, it's confusing to debug because the SQL queries themselves look correct. This is already in core.md Common Gotcas but bears repeating as it was discovered during this session.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:50:16.367987"
+type: documentation_gap
+summary: core.md doesn't warn about form data transform vs API type mismatches
+detail: |
+  The core.md file documents the layered architecture and anti-patterns, but doesn't warn about the intentional type mismatch pattern where transformContactFormData includes fields (like notes) that are not in CreateContactRequest/UpdateContactRequest because they're saved via separate APIs. A future agent encountering this pattern will see TypeScript type errors and try to 'fix' them by removing the field from the transform, breaking the functionality. This should be documented in patterns/ or architecture.md with an example showing the destructuring pattern and explaining why the type mismatch is intentional.
+actionable: true
+
