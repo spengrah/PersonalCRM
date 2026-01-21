@@ -270,3 +270,35 @@ detail: |
   The .ai/rules/core.md file documents 'Run `make test && make test-e2e` to verify changes work' but doesn't mention that make test-integration silently skips tests without DATABASE_URL. This led to confusion when newly written tests appeared to pass (via make test-integration) but were actually being skipped. Documentation should clarify: (1) make test-integration requires manual DATABASE_URL setup OR (2) use `make test` which includes proper setup, OR (3) run tests via `cd backend && DATABASE_URL=... go test`. The existing instruction is incomplete - it tells developers to run tests but not how the test database gets configured.
 actionable: true
 
+---
+timestamp: "2026-01-21T22:33:02.082852"
+type: gotcha
+summary: Unique constraints on note table must be category-specific
+detail: |
+  The note table serves multiple purposes: notepad (one per contact) and general categorized notes (many per contact). A unique constraint on (contact_id, category) breaks existing tests that create multiple notes with categories like 'technical'. The constraint should be WHERE category = 'notepad' to only enforce uniqueness for the notepad use case, allowing multiple notes of other categories.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:33:02.082852"
+type: gotcha
+summary: ON CONFLICT clause must match the exact index definition
+detail: |
+  When using ON CONFLICT with a partial unique index, the WHERE clause in the query must exactly match the WHERE clause in the index definition. Changed from 'ON CONFLICT (contact_id, category) WHERE category IS NOT NULL' to 'ON CONFLICT (contact_id) WHERE category = 'notepad'' to match the new index. Mismatched WHERE clauses cause PostgreSQL to fail to recognize the index.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:33:02.082852"
+type: architecture
+summary: Search integration tests create notes with various categories for testing
+detail: |
+  backend/tests/search_integration_test.go creates multiple notes with the same category (e.g., 'technical') for the same contact to test search functionality. Any unique constraints on the note table must account for this pattern and not assume one note per category per contact.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:33:02.082852"
+type: documentation_gap
+summary: Core rules say 'Always add comprehensive tests' but didn't prevent breaking existing tests
+detail: |
+  The agent added comprehensive tests for the new note API endpoints but didn't run existing integration tests before pushing. The rule '.ai/rules/core.md' says 'Run make test && make test-e2e to verify changes work' but it's phrased as a verification step rather than a blocking requirement. Should be strengthened to 'ALWAYS run make test before committing schema changes or migrations' and emphasized that schema changes affect existing tests.
+actionable: true
+
