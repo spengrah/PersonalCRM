@@ -87,6 +87,12 @@ LEARNINGS_SCHEMA = {
 }
 
 
+def is_claude_code_session() -> bool:
+    """Check if we're running under Claude Code (vs Codex, Cursor, etc.)."""
+    # Claude Code sets this environment variable
+    return os.environ.get("CLAUDE_CODE") == "1"
+
+
 def get_project_sessions_path() -> Path:
     """Convert current working directory to Claude Code's session storage path."""
     cwd = os.getcwd()
@@ -483,6 +489,12 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Only extract learnings when running under Claude Code
+    # Other agents (Codex, Cursor, etc.) have different session formats - not yet supported
+    if not is_claude_code_session():
+        print("Skipping learnings extraction (not running under Claude Code).", file=sys.stderr)
+        sys.exit(0)
 
     sessions_path = get_project_sessions_path()
 
