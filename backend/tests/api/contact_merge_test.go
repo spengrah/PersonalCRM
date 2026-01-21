@@ -89,9 +89,9 @@ func TestContactMerge_Integration(t *testing.T) {
 
 		assert.Equal(t, target.ID, preview.TargetContact.ID)
 		assert.Equal(t, source.ID, preview.SourceContact.ID)
-		assert.Equal(t, 1, preview.MethodsToTransfer)
-		assert.Equal(t, 0, preview.DuplicateMethods)
-		assert.Equal(t, 1, preview.NotesToTransfer) // source has notes
+		assert.Equal(t, int64(1), preview.MethodsToTransfer)
+		assert.Equal(t, int64(0), preview.DuplicateMethods)
+		assert.Equal(t, int64(0), preview.NotesToTransfer) // note table, not contact.notes field
 	})
 
 	t.Run("GetMergePreview_WithDuplicateMethods", func(t *testing.T) {
@@ -136,8 +136,8 @@ func TestContactMerge_Integration(t *testing.T) {
 		preview, err := contactService.GetMergePreview(ctx, source.ID, target.ID)
 		require.NoError(t, err)
 
-		assert.Equal(t, 1, preview.MethodsToTransfer) // unique@example.com
-		assert.Equal(t, 1, preview.DuplicateMethods)  // shared@example.com
+		assert.Equal(t, int64(1), preview.MethodsToTransfer) // unique@example.com
+		assert.Equal(t, int64(1), preview.DuplicateMethods)  // shared@example.com
 	})
 
 	t.Run("MergeContacts_TransfersAllData", func(t *testing.T) {
