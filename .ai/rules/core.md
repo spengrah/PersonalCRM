@@ -95,6 +95,9 @@ PostgreSQL
 | Merging PRs with UI changes | Never merge UI PRs autonomously - wait for human review |
 | `git add path/[id]/file` fails | Use quotes: `git add "path/[id]/file"` (bash interprets brackets as globs) |
 | Fixing only one instance of a pattern | Search entire codebase and fix ALL instances to maintain consistency |
+| Creating prototype HTML in repo root | Place prototypes in `temp/` (git-ignored), attach to issues for reference |
+| Expecting soft-delete to cascade to related records | Soft-delete (UPDATE deleted_at) does NOT trigger ON DELETE CASCADE - explicitly delete related records first |
+| Building multi-step wizard modals | Use single-view scrollable modals (like ImportLinkModal) - all steps visible in one view |
 
 ## Anti-Patterns
 
@@ -150,3 +153,5 @@ if errors.Is(err, db.ErrNotFound) {
 ## Soft Deletes
 
 All queries must filter `WHERE deleted_at IS NULL`. This is enforced in sqlc queries.
+
+**Important:** Soft-delete (`UPDATE deleted_at = NOW()`) does NOT trigger FK cascades. When soft-deleting a parent record (e.g., contact), you must explicitly delete or reassign related records (e.g., contact_methods, notes) first. The ON DELETE CASCADE constraint only fires on actual DELETE statements.
