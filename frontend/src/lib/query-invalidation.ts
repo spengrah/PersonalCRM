@@ -24,6 +24,7 @@ export type DomainEvent =
   | 'contact:updated'
   | 'contact:deleted'
   | 'contact:touched' // marked as contacted
+  | 'contact:merged' // merged with another contact
   // Import events
   | 'import:imported' // imported as new contact
   | 'import:linked' // linked to existing contact
@@ -56,6 +57,8 @@ const invalidationRules: Record<DomainEvent, readonly unknown[][]> = {
   'contact:deleted': [contactKeys.lists(), reminderKeys.all],
   // Backend completes auto-reminders when contact is marked as contacted
   'contact:touched': [contactKeys.lists(), contactKeys.overdue(), reminderKeys.all],
+  // Merge deletes source contact and updates target
+  'contact:merged': [contactKeys.lists(), contactKeys.overdue(), reminderKeys.all],
 
   // Import events
   // Importing creates a new contact, so invalidate both imports and contacts

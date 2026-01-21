@@ -30,6 +30,7 @@ import {
   Pencil,
   Check,
   X,
+  GitMerge,
 } from 'lucide-react'
 import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
 import { Meetings } from '@/components/contacts/meetings'
@@ -40,6 +41,7 @@ import {
   sortContactMethods,
 } from '@/lib/contact-methods'
 import type { ContactFormData } from '@/lib/validations/contact'
+import { MergeContactModal } from '@/components/contacts/merge-contact-modal'
 
 export default function ContactDetailPage() {
   const params = useParams()
@@ -52,6 +54,11 @@ export default function ContactDetailPage() {
   const [notesOverflowing, setNotesOverflowing] = useState(false)
   const [isEditingLastContacted, setIsEditingLastContacted] = useState(false)
   const [lastContactedDate, setLastContactedDate] = useState('')
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false)
+  const [mergeMessage, setMergeMessage] = useState<{
+    type: 'success' | 'error'
+    text: string
+  } | null>(null)
   const notesRef = useRef<HTMLDivElement>(null)
 
   // Extract list context from URL params (or use defaults)
@@ -366,6 +373,10 @@ export default function ContactDetailPage() {
               <Edit className="w-4 h-4 mr-2" />
               Edit
             </Button>
+            <Button variant="outline" size="sm" onClick={() => setIsMergeModalOpen(true)}>
+              <GitMerge className="w-4 h-4 mr-2" />
+              Merge
+            </Button>
             <Button
               variant="danger"
               size="sm"
@@ -618,7 +629,44 @@ export default function ContactDetailPage() {
             </div>
           </div>
         )}
+
+        {/* Merge success/error message */}
+        {mergeMessage && (
+          <div
+            className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg ${
+              mergeMessage.type === 'success'
+                ? 'bg-green-50 text-green-800 border border-green-200'
+                : 'bg-red-50 text-red-800 border border-red-200'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span>{mergeMessage.text}</span>
+              <button
+                onClick={() => setMergeMessage(null)}
+                className="text-current opacity-60 hover:opacity-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Merge Contact Modal */}
+      {isMergeModalOpen && contact && (
+        <MergeContactModal
+          targetContact={contact}
+          onClose={() => setIsMergeModalOpen(false)}
+          onSuccess={message => {
+            setMergeMessage({ type: 'success', text: message })
+            setTimeout(() => setMergeMessage(null), 5000)
+          }}
+          onError={message => {
+            setMergeMessage({ type: 'error', text: message })
+            setTimeout(() => setMergeMessage(null), 5000)
+          }}
+        />
+      )}
     </div>
   )
 }

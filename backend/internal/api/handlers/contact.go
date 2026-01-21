@@ -714,3 +714,155 @@ func buildContactMethodInputs(methods []ContactMethodRequest) []service.ContactM
 
 	return inputs
 }
+
+// MergeContactsRequest represents the request to merge two contacts
+// @Description Merge contacts request
+type MergeContactsRequest struct {
+	SourceContactID string                      `json:"source_contact_id" validate:"required,uuid" example:"550e8400-e29b-41d4-a716-446655440001"`
+	FieldSelections MergeFieldSelectionsRequest `json:"field_selections,omitempty"`
+	NewName         *string                     `json:"new_name,omitempty" validate:"omitempty,min=1,max=255" example:"John Smith"`
+}
+
+// MergeFieldSelectionsRequest specifies which contact's value to use for each field
+type MergeFieldSelectionsRequest struct {
+	Cadence  string `json:"cadence,omitempty" validate:"omitempty,oneof=source target" example:"target"`
+	Location string `json:"location,omitempty" validate:"omitempty,oneof=source target" example:"source"`
+	Birthday string `json:"birthday,omitempty" validate:"omitempty,oneof=source target" example:"target"`
+}
+
+// MergePreviewResponse represents the preview of a merge operation
+// @Description Merge preview response
+type MergePreviewResponse struct {
+	SourceContact          ContactResponse `json:"source_contact"`
+	TargetContact          ContactResponse `json:"target_contact"`
+	MethodsToTransfer      int64           `json:"methods_to_transfer" example:"3"`
+	DuplicateMethods       int64           `json:"duplicate_methods" example:"1"`
+	NotesToTransfer        int64           `json:"notes_to_transfer" example:"5"`
+	InteractionsToTransfer int64           `json:"interactions_to_transfer" example:"12"`
+	RemindersToTransfer    int64           `json:"reminders_to_transfer" example:"2"`
+	CalendarEventsToUpdate int64           `json:"calendar_events_to_update" example:"3"`
+	TimeEntriesToTransfer  int64           `json:"time_entries_to_transfer" example:"0"`
+}
+
+// GetMergePreview returns a preview of what will happen when merging two contacts
+// @Summary Preview contact merge
+// @Description Get a preview of what will be merged when combining two contacts
+// @Tags contacts
+// @Produce json
+// @Param id path string true "Target Contact ID (contact to keep)" format(uuid)
+// @Param source_id query string true "Source Contact ID (contact to merge from)" format(uuid)
+// @Success 200 {object} api.APIResponse{data=MergePreviewResponse} "Merge preview retrieved successfully"
+// @Failure 400 {object} api.APIResponse{error=api.APIError} "Invalid contact ID"
+// @Failure 404 {object} api.APIResponse{error=api.APIError} "Contact not found"
+// @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
+// @Router /contacts/{id}/merge/preview [get]
+func (h *ContactHandler) GetMergePreview(c *gin.Context) {
+	// Parse target contact ID from path
+	targetIDStr := c.Param("id")
+	targetID, err := uuid.Parse(targetIDStr)
+	if err != nil {
+		api.SendValidationError(c, "Invalid target contact ID", "ID must be a valid UUID")
+		return
+	}
+
+	// Parse source contact ID from query
+	sourceIDStr := c.Query("source_id")
+	if sourceIDStr == "" {
+		api.SendValidationError(c, "Missing source_id", "source_id query parameter is required")
+		return
+	}
+	sourceID, err := uuid.Parse(sourceIDStr)
+	if err != nil {
+		api.SendValidationError(c, "Invalid source contact ID", "source_id must be a valid UUID")
+		return
+	}
+
+	preview, err := h.contactService.GetMergePreview(c.Request.Context(), sourceID, targetID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			api.SendNotFound(c, "Contact")
+			return
+		}
+		api.SendInternalError(c, "Failed to get merge preview")
+		return
+	}
+
+	response := MergePreviewResponse{
+		SourceContact:          contactToResponse(preview.SourceContact),
+		TargetContact:          contactToResponse(preview.TargetContact),
+		MethodsToTransfer:      preview.MethodsToTransfer,
+		DuplicateMethods:       preview.DuplicateMethods,
+		NotesToTransfer:        preview.NotesToTransfer,
+		InteractionsToTransfer: preview.InteractionsToTransfer,
+		RemindersToTransfer:    preview.RemindersToTransfer,
+		CalendarEventsToUpdate: preview.CalendarEventsToUpdate,
+		TimeEntriesToTransfer:  preview.TimeEntriesToTransfer,
+	}
+
+	api.SendSuccess(c, http.StatusOK, response, nil)
+}
+
+// MergeContacts merges a source contact into a target contact
+// @Summary Merge contacts
+// @Description Merge one contact into another. The source contact will be archived.
+// @Tags contacts
+// @Accept json
+// @Produce json
+// @Param id path string true "Target Contact ID (contact to keep)" format(uuid)
+// @Param request body MergeContactsRequest true "Merge request"
+// @Success 200 {object} api.APIResponse{data=ContactResponse} "Contacts merged successfully"
+// @Failure 400 {object} api.APIResponse{error=api.APIError} "Invalid request"
+// @Failure 404 {object} api.APIResponse{error=api.APIError} "Contact not found"
+// @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
+// @Router /contacts/{id}/merge [post]
+func (h *ContactHandler) MergeContacts(c *gin.Context) {
+	// Parse target contact ID from path
+	targetIDStr := c.Param("id")
+	targetID, err := uuid.Parse(targetIDStr)
+	if err != nil {
+		api.SendValidationError(c, "Invalid target contact ID", "ID must be a valid UUID")
+		return
+	}
+
+	var req MergeContactsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.SendValidationError(c, "Invalid request body", err.Error())
+		return
+	}
+
+	if err := h.validator.Struct(req); err != nil {
+		api.SendValidationError(c, "Validation failed", err.Error())
+		return
+	}
+
+	sourceID, err := uuid.Parse(req.SourceContactID)
+	if err != nil {
+		api.SendValidationError(c, "Invalid source contact ID", "source_contact_id must be a valid UUID")
+		return
+	}
+
+	// Build service request
+	serviceReq := service.MergeContactsRequest{
+		SourceContactID: sourceID,
+		TargetContactID: targetID,
+		FieldSelections: service.MergeFieldSelections{
+			Cadence:  req.FieldSelections.Cadence,
+			Location: req.FieldSelections.Location,
+			Birthday: req.FieldSelections.Birthday,
+		},
+		NewName: req.NewName,
+	}
+
+	mergedContact, err := h.contactService.MergeContacts(c.Request.Context(), serviceReq)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			api.SendNotFound(c, "Contact")
+			return
+		}
+		api.SendInternalError(c, "Failed to merge contacts")
+		return
+	}
+
+	response := contactToResponse(mergedContact)
+	api.SendSuccess(c, http.StatusOK, response, nil)
+}

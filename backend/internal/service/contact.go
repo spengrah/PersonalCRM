@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type ContactMethodInput struct {
@@ -417,4 +419,302 @@ func suggestedActionForOverdueDays(daysOverdue int) string {
 	default:
 		return "Reconnect with something specific and personal"
 	}
+}
+
+// MergePreview contains information about what will be merged
+type MergePreview struct {
+	SourceContact          *repository.Contact `json:"source_contact"`
+	TargetContact          *repository.Contact `json:"target_contact"`
+	MethodsToTransfer      int64               `json:"methods_to_transfer"`
+	DuplicateMethods       int64               `json:"duplicate_methods"`
+	NotesToTransfer        int64               `json:"notes_to_transfer"`
+	InteractionsToTransfer int64               `json:"interactions_to_transfer"`
+	RemindersToTransfer    int64               `json:"reminders_to_transfer"`
+	CalendarEventsToUpdate int64               `json:"calendar_events_to_update"`
+	TimeEntriesToTransfer  int64               `json:"time_entries_to_transfer"`
+}
+
+// MergeContactsRequest contains the options for merging contacts
+type MergeContactsRequest struct {
+	// SourceContactID is the contact that will be archived after merge
+	SourceContactID uuid.UUID `json:"source_contact_id"`
+	// TargetContactID is the contact that will receive the merged data
+	TargetContactID uuid.UUID `json:"target_contact_id"`
+	// FieldSelections specifies which contact's value to use for conflicting fields
+	FieldSelections MergeFieldSelections `json:"field_selections"`
+	// NewName is the name to use for the merged contact (optional, defaults to target's name)
+	NewName *string `json:"new_name,omitempty"`
+}
+
+// MergeFieldSelections specifies which contact's value to use for each field
+type MergeFieldSelections struct {
+	// Cadence: "source" or "target" (default: target)
+	Cadence string `json:"cadence,omitempty"`
+	// Location: "source" or "target" (default: target)
+	Location string `json:"location,omitempty"`
+	// Birthday: "source" or "target" (default: target)
+	Birthday string `json:"birthday,omitempty"`
+}
+
+// GetMergePreview returns a preview of what will happen when merging two contacts
+func (s *ContactService) GetMergePreview(ctx context.Context, sourceID, targetID uuid.UUID) (*MergePreview, error) {
+	// Verify both contacts exist
+	sourceContact, err := s.GetContact(ctx, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("source contact: %w", err)
+	}
+
+	targetContact, err := s.GetContact(ctx, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("target contact: %w", err)
+	}
+
+	// Cannot merge contact with itself
+	if sourceID == targetID {
+		return nil, errors.New("cannot merge contact with itself")
+	}
+
+	// Get counts for preview
+	sourceMethods, err := s.database.Queries.CountMergeContactMethods(ctx, uuidToPgUUID(sourceID))
+	if err != nil {
+		return nil, fmt.Errorf("count source methods: %w", err)
+	}
+
+	// Find duplicate methods
+	duplicates, err := s.database.Queries.FindDuplicateContactMethods(ctx, db.FindDuplicateContactMethodsParams{
+		SourceContactID: uuidToPgUUID(sourceID),
+		TargetContactID: uuidToPgUUID(targetID),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("find duplicate methods: %w", err)
+	}
+
+	sourceNotes, err := s.database.Queries.CountMergeNotes(ctx, uuidToPgUUID(sourceID))
+	if err != nil {
+		return nil, fmt.Errorf("count source notes: %w", err)
+	}
+
+	sourceInteractions, err := s.database.Queries.CountMergeInteractions(ctx, uuidToPgUUID(sourceID))
+	if err != nil {
+		return nil, fmt.Errorf("count source interactions: %w", err)
+	}
+
+	sourceReminders, err := s.database.Queries.CountMergeReminders(ctx, uuidToPgUUID(sourceID))
+	if err != nil {
+		return nil, fmt.Errorf("count source reminders: %w", err)
+	}
+
+	sourceCalendarEvents, err := s.database.Queries.CountMergeCalendarEvents(ctx, uuidToPgUUID(sourceID))
+	if err != nil {
+		return nil, fmt.Errorf("count source calendar events: %w", err)
+	}
+
+	sourceTimeEntries, err := s.database.Queries.CountMergeTimeEntries(ctx, uuidToPgUUID(sourceID))
+	if err != nil {
+		return nil, fmt.Errorf("count source time entries: %w", err)
+	}
+
+	return &MergePreview{
+		SourceContact:          sourceContact,
+		TargetContact:          targetContact,
+		MethodsToTransfer:      sourceMethods - int64(len(duplicates)),
+		DuplicateMethods:       int64(len(duplicates)),
+		NotesToTransfer:        sourceNotes,
+		InteractionsToTransfer: sourceInteractions,
+		RemindersToTransfer:    sourceReminders,
+		CalendarEventsToUpdate: sourceCalendarEvents,
+		TimeEntriesToTransfer:  sourceTimeEntries,
+	}, nil
+}
+
+// MergeContacts merges the source contact into the target contact.
+// All related entities are transferred to the target, and the source is soft-deleted.
+func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsRequest) (mergedContact *repository.Contact, err error) {
+	// Verify both contacts exist before starting transaction
+	sourceContact, err := s.contactRepo.GetContact(ctx, req.SourceContactID)
+	if err != nil {
+		return nil, fmt.Errorf("source contact: %w", err)
+	}
+
+	targetContact, err := s.contactRepo.GetContact(ctx, req.TargetContactID)
+	if err != nil {
+		return nil, fmt.Errorf("target contact: %w", err)
+	}
+
+	// Cannot merge contact with itself
+	if req.SourceContactID == req.TargetContactID {
+		return nil, errors.New("cannot merge contact with itself")
+	}
+
+	// Start transaction
+	tx, err := s.database.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			if err == nil {
+				err = rollbackErr
+			}
+		}
+	}()
+
+	txQueries := db.New(tx)
+	sourceUUID := uuidToPgUUID(req.SourceContactID)
+	targetUUID := uuidToPgUUID(req.TargetContactID)
+
+	// 1. Delete duplicate contact methods (same normalized value and type)
+	if err := txQueries.DeleteDuplicateContactMethods(ctx, db.DeleteDuplicateContactMethodsParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("delete duplicate contact methods: %w", err)
+	}
+
+	// 2. Transfer remaining contact methods
+	if err := txQueries.TransferContactMethods(ctx, db.TransferContactMethodsParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("transfer contact methods: %w", err)
+	}
+
+	// 3. Transfer notes
+	if err := txQueries.TransferNotes(ctx, db.TransferNotesParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("transfer notes: %w", err)
+	}
+
+	// 4. Transfer interactions
+	if err := txQueries.TransferInteractions(ctx, db.TransferInteractionsParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("transfer interactions: %w", err)
+	}
+
+	// 5. Transfer reminders
+	if err := txQueries.TransferReminders(ctx, db.TransferRemindersParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("transfer reminders: %w", err)
+	}
+
+	// 6. Transfer time entries
+	if err := txQueries.TransferTimeEntries(ctx, db.TransferTimeEntriesParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("transfer time entries: %w", err)
+	}
+
+	// 7. Delete connections between source and target (would be self-referential after merge)
+	if err := txQueries.DeleteDuplicateConnections(ctx, db.DeleteDuplicateConnectionsParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("delete duplicate connections: %w", err)
+	}
+
+	// 8. Transfer connections (both directions)
+	if err := txQueries.TransferConnectionsAsContactA(ctx, db.TransferConnectionsAsContactAParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("transfer connections as contact_a: %w", err)
+	}
+
+	if err := txQueries.TransferConnectionsAsContactB(ctx, db.TransferConnectionsAsContactBParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("transfer connections as contact_b: %w", err)
+	}
+
+	// 9. Update calendar events
+	if err := txQueries.ReplaceContactInCalendarEvents(ctx, db.ReplaceContactInCalendarEventsParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("replace contact in calendar events: %w", err)
+	}
+
+	// 10. Deduplicate calendar event contact arrays
+	if err := txQueries.DeduplicateCalendarEventContacts(ctx, targetUUID); err != nil {
+		return nil, fmt.Errorf("deduplicate calendar event contacts: %w", err)
+	}
+
+	// 11. Update target contact with field selections and optional new name
+	txContactRepo := repository.NewContactRepository(txQueries)
+	updateReq := buildMergeUpdateRequest(targetContact, sourceContact, req)
+	mergedContact, err = txContactRepo.UpdateContact(ctx, req.TargetContactID, updateReq)
+	if err != nil {
+		return nil, fmt.Errorf("update target contact: %w", err)
+	}
+
+	// 12. Soft delete source contact
+	if err := txQueries.SoftDeleteContact(ctx, sourceUUID); err != nil {
+		return nil, fmt.Errorf("soft delete source contact: %w", err)
+	}
+
+	// Commit transaction
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	// Attach methods to the merged contact
+	if err := s.attachMethods(ctx, mergedContact); err != nil {
+		return nil, err
+	}
+
+	return mergedContact, nil
+}
+
+// buildMergeUpdateRequest creates an UpdateContactRequest based on field selections
+func buildMergeUpdateRequest(targetContact, sourceContact *repository.Contact, req MergeContactsRequest) repository.UpdateContactRequest {
+	updateReq := repository.UpdateContactRequest{
+		FullName:     targetContact.FullName,
+		Location:     targetContact.Location,
+		Birthday:     targetContact.Birthday,
+		HowMet:       targetContact.HowMet,
+		Cadence:      targetContact.Cadence,
+		ProfilePhoto: targetContact.ProfilePhoto,
+		Notes:        targetContact.Notes,
+	}
+
+	// Override name if provided
+	if req.NewName != nil && *req.NewName != "" {
+		updateReq.FullName = *req.NewName
+	}
+
+	// Apply field selections
+	if req.FieldSelections.Location == "source" && sourceContact.Location != nil {
+		updateReq.Location = sourceContact.Location
+	}
+	if req.FieldSelections.Birthday == "source" && sourceContact.Birthday != nil {
+		updateReq.Birthday = sourceContact.Birthday
+	}
+	if req.FieldSelections.Cadence == "source" && sourceContact.Cadence != nil {
+		updateReq.Cadence = sourceContact.Cadence
+	}
+
+	// Combine notes from both contacts
+	if sourceContact.Notes != nil && *sourceContact.Notes != "" {
+		if targetContact.Notes != nil && *targetContact.Notes != "" {
+			combined := *targetContact.Notes + "\n\n---\n\n" + *sourceContact.Notes
+			updateReq.Notes = &combined
+		} else {
+			updateReq.Notes = sourceContact.Notes
+		}
+	}
+
+	return updateReq
+}
+
+// Helper to convert uuid to pgtype.UUID (used in merge operations)
+func uuidToPgUUID(id uuid.UUID) pgtype.UUID {
+	return pgtype.UUID{Bytes: id, Valid: true}
 }

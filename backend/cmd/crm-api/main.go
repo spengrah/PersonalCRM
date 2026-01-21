@@ -224,6 +224,9 @@ func main() {
 			contacts.GET("/:id/reminders", reminderHandler.GetRemindersByContact)
 			contacts.GET("/:id/notes", noteHandler.GetContactNotepad)
 			contacts.PUT("/:id/notes", noteHandler.SaveContactNotepad)
+			// Merge routes
+			contacts.GET("/:id/merge/preview", contactHandler.GetMergePreview)
+			contacts.POST("/:id/merge", contactHandler.MergeContacts)
 		}
 
 		// Reminder routes
