@@ -89,11 +89,13 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const { ids } = await testApi.seedContacts([
       {
         full_name: 'Long Notes Contact',
-        notes: longNotes,
       },
     ])
 
     const contactId = ids[0]
+    // Seed notes separately via notes API
+    await testApi.seedContactNote(contactId, longNotes)
+
     const fullName = `${testApi.prefix}-Long Notes Contact`
 
     await page.goto(`/contacts/${contactId}`)
@@ -124,11 +126,13 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const { ids } = await testApi.seedContacts([
       {
         full_name: 'Short Notes Contact',
-        notes: shortNotes,
       },
     ])
 
     const contactId = ids[0]
+    // Seed notes separately via notes API
+    await testApi.seedContactNote(contactId, shortNotes)
+
     const fullName = `${testApi.prefix}-Short Notes Contact`
 
     await page.goto(`/contacts/${contactId}`)

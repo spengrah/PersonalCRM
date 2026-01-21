@@ -4,15 +4,25 @@ import { useRouter } from 'next/navigation'
 import { Navigation } from '@/components/layout/navigation'
 import { ContactForm } from '@/components/contacts/contact-form'
 import { useCreateContact } from '@/hooks/use-contacts'
+import { useSaveContactNote } from '@/hooks/use-contact-note'
 import type { ContactFormData } from '@/lib/validations/contact'
 
 export default function NewContactPage() {
   const router = useRouter()
   const createContactMutation = useCreateContact()
+  const saveContactNoteMutation = useSaveContactNote()
 
   const handleSubmit = async (data: ContactFormData) => {
     try {
-      const newContact = await createContactMutation.mutateAsync(data)
+      // Extract notes from form data
+      const { notes, ...contactData } = data
+      const newContact = await createContactMutation.mutateAsync(contactData)
+
+      // Save notes separately if provided
+      if (notes && notes.trim()) {
+        await saveContactNoteMutation.mutateAsync({ contactId: newContact.id, body: notes })
+      }
+
       router.push(`/contacts/${newContact.id}`)
     } catch (error) {
       console.error('Error creating contact:', error)
@@ -38,7 +48,7 @@ export default function NewContactPage() {
           <div className="px-4 py-5 sm:p-6">
             <ContactForm
               onSubmit={handleSubmit}
-              loading={createContactMutation.isPending}
+              loading={createContactMutation.isPending || saveContactNoteMutation.isPending}
               submitText="Create Contact"
             />
           </div>
