@@ -238,3 +238,35 @@ detail: |
   For the notepad feature with lazy creation (no DB record until content exists), the backend returns HTTP 204 No Content when no note exists, not 404 Not Found. This distinction matters: 204 means 'success, but no content' (the note slot exists but is empty), while 404 means 'resource not found' (the contact doesn't exist). Frontend code handles 204 by treating it as empty string without showing an error. This pattern applies to any optional fields with lazy creation.
 actionable: true
 
+---
+timestamp: "2026-01-21T22:21:57.408460"
+type: gotcha
+summary: Integration tests require DATABASE_URL set manually or via make target setup
+detail: |
+  Backend integration tests in tests/api/*.go check for DATABASE_URL environment variable and skip if not set. The make test-integration target runs `cd backend && go test ./tests/... -v` WITHOUT setting DATABASE_URL, causing tests to be skipped silently. Tests only run when DATABASE_URL is explicitly exported (e.g., `export DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable"`) before running go test directly. The e2e-db target sets up the test database but isn't used by test-integration. This can lead to writing tests that appear to pass but are actually being skipped.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:21:57.408460"
+type: gotcha
+summary: Code review tools may flag false positives on import usage
+detail: |
+  Automated code review comments about 'unused imports' can be incorrect when the import is used in struct field type declarations. In this session, a review flagged 'time package imported but never used' in note.go, but time.Time was used in NoteResponse struct fields (CreatedAt, UpdatedAt). Always verify automated review comments by checking actual usage before making changes. Type declarations in struct fields count as package usage.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:21:57.408460"
+type: architecture
+summary: Backend API integration tests follow specific pattern with setup/cleanup helpers
+detail: |
+  Backend integration tests in tests/api/ use a standard pattern: (1) Check DATABASE_URL and skip if not set, (2) Create setupTestDB() helper that connects to DB, runs migrations from project-relative path, and returns test database handle, (3) Create setupNoteTestRouter() helper that initializes full dependency chain (db.Queries → repository → service → handler → gin router), (4) Use t.Cleanup() for automatic test database cleanup. Tests use httptest.NewRecorder() and perform actual HTTP requests through the router. This mirrors production architecture and catches integration issues that mocks would miss.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:21:57.408460"
+type: documentation_gap
+summary: Core rules lack guidance on integration test DATABASE_URL requirement
+detail: |
+  The .ai/rules/core.md file documents 'Run `make test && make test-e2e` to verify changes work' but doesn't mention that make test-integration silently skips tests without DATABASE_URL. This led to confusion when newly written tests appeared to pass (via make test-integration) but were actually being skipped. Documentation should clarify: (1) make test-integration requires manual DATABASE_URL setup OR (2) use `make test` which includes proper setup, OR (3) run tests via `cd backend && DATABASE_URL=... go test`. The existing instruction is incomplete - it tells developers to run tests but not how the test database gets configured.
+actionable: true
+
