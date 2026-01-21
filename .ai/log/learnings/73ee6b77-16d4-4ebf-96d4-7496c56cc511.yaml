@@ -1,0 +1,88 @@
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: gotcha
+summary: Test database schema requires manual migration for E2E tests
+detail: |
+  When database migrations change the schema, E2E tests may fail with column errors if the test database hasn't been migrated. The error 'column "notes" does not exist' during E2E tests indicates the migration was applied to test DB but test seed helpers still reference old fields. Always check test helper files (like test-api.ts) when schema changes are made, not just production code.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: gotcha
+summary: Backend test files mirror production structure and must be updated in parallel
+detail: |
+  When removing fields from handler structs (CreateContactRequest, UpdateContactRequest), search ALL test files for struct literal usage. Test files like contact_validation_test.go and last_contacted_test.go directly instantiate these structs. Entire test functions may need removal if they test deprecated functionality (e.g., TestContactAPI_NotesField).
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: architecture
+summary: Frontend API client needs explicit status-aware methods for 204 No Content patterns
+detail: |
+  The standard apiClient.get/put methods don't expose HTTP status codes. For endpoints using lazy creation patterns (204 = no content, 200 = content exists), add dedicated methods like getWithStatus/putWithStatus that return both data and status. This pattern is essential for distinguishing between 'empty response' and 'no resource exists'.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: distinction
+summary: Form data transformation must exclude fields saved via separate APIs
+detail: |
+  When migrating a field from one API to another (contact.notes → separate notes API), the form still collects the field but transformContactFormData should NOT include it in the returned object if the parent API no longer accepts it. The caller extracts and saves it separately. However, validation schema should keep the field since the form still validates it.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: gotcha
+summary: Frontend type changes cascade through Contact, CreateContactRequest, UpdateContactRequest, and form props
+detail: |
+  When removing a field from Contact type, it must be removed from: 1) Contact interface 2) CreateContactRequest 3) UpdateContactRequest 4) transformContactFormData return value 5) ContactForm props (add initialFieldName prop instead). Missing any of these causes TypeScript or runtime errors. The form component needs explicit props for fields fetched separately.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: architecture
+summary: Lazy creation pattern requires whitespace normalization at service layer, not handler
+detail: |
+  For lazy creation (no DB record until content exists), implement whitespace detection in the service layer using strings.TrimSpace(), not in the handler. Service should: 1) Trim whitespace 2) If empty and record exists → delete it 3) If empty and no record → return 204 4) If non-empty → upsert. Handler only validates and calls service.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: rule
+summary: Always run `go build ./cmd/crm-api` after `make sqlc` to verify compilation
+detail: |
+  The make sqlc command regenerates Go code from SQL queries and changes struct types (CreateContactParams, UpdateContactParams). A successful sqlc generation doesn't mean the code compiles. Always run `go build ./cmd/crm-api` immediately after to catch struct field mismatches in repositories/handlers before proceeding.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: gotcha
+summary: Separate API endpoints require explicit save in handleUpdateContact with Promise.all
+detail: |
+  When a field moves to a separate API (notes to /contacts/:id/notes), the form submit handler must: 1) Extract the field from form data 2) Save contact via updateContactMutation 3) Save field via separate mutation using Promise.all for parallel execution. Don't forget to handle errors for both operations. Pattern: `await Promise.all([updateContactMutation.mutateAsync(...), saveFieldMutation.mutateAsync(...)])`
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: architecture
+summary: "Migration best practices: TRIM + nullability check prevents empty data migration"
+detail: |
+  When copying text fields to new tables in migrations, always use `WHERE field IS NOT NULL AND TRIM(field) != ''` to skip whitespace-only content. This prevents creating records for logically empty data. Also use COALESCE for timestamps: `COALESCE(updated_at, created_at)` to preserve creation timestamp when update timestamp is null.
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: gotcha
+summary: Test helper APIs (SeedContacts) need comments explaining removed fields
+detail: |
+  When removing a field from the main API that was previously used by test helpers, don't silently remove the field from test input types. Add a clear comment explaining the field is now handled via a different endpoint and how tests should seed it. Example: 'Note: Notes are no longer stored on contact table. If tests need to seed notes, call POST /contacts/:id/notes separately.'
+actionable: true
+
+---
+timestamp: "2026-01-21T21:08:37.574856"
+type: distinction
+summary: "Use feature-dev:code-explorer agents in PARALLEL for comprehensive codebase understanding"
+detail: |
+  When exploring codebase for a feature, launch 2-3 code-explorer agents in parallel with different focuses: one for similar features tracing implementation, one for high-level architecture/abstractions, one for user experience/UI patterns. Each agent should return 5-10 key files to read. This parallel exploration is faster and more comprehensive than sequential exploration.
+actionable: true
+
