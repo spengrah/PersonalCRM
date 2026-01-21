@@ -1,0 +1,48 @@
+---
+timestamp: "2026-01-21T15:20:47.960920"
+type: gotcha
+summary: Local branch can diverge from remote PR branch
+detail: |
+  When working on a PR, commits may exist on the remote branch (origin/feat/branch-name) but not in the local branch. This happens when another agent or the user pushes commits directly. Always check `git log origin/branch-name` vs `git log HEAD` to verify sync. Use `git fetch origin branch-name` and check `git log HEAD..origin/branch-name` to see commits that exist on remote but not locally. The user may test against the remote branch while the local is behind, causing confusion about whether a fix 'works'.
+actionable: true
+
+---
+timestamp: "2026-01-21T15:20:47.960920"
+type: gotcha
+summary: Two parallel notes systems exist in the codebase
+detail: |
+  The codebase has BOTH a `note` table (migration 001, with full-text search, categories, embeddings support) AND a `contact.notes` text field (migration 018). The `note` table queries exist but are completely unused - no handlers, no API routes, no frontend integration. The `contact.notes` field is what's actually in use. This creates confusion when implementing features like merge preview that query the wrong table. Always verify which notes system a feature should use by checking what's actually wired up in handlers and frontend.
+actionable: true
+
+---
+timestamp: "2026-01-21T15:20:47.960920"
+type: architecture
+summary: Merge preview counts from unused note table
+detail: |
+  The GetMergePreview service queries the `note` table to count notes, but the actual merge operation combines the `contact.notes` text field. This means the preview shows 'Notes: None' even when contacts have notes in contact.notes. The merge preview should either be removed (since note table is unused) or updated to check the contact.notes field instead. This architectural mismatch between preview and actual merge behavior creates misleading UX.
+actionable: true
+
+---
+timestamp: "2026-01-21T15:20:47.960920"
+type: documentation_gap
+summary: Common Gotchas table missing git divergence scenarios
+detail: |
+  The Common Gotchas table in core.md doesn't mention the scenario where local and remote branches diverge, leading to confusion when 'the fix was already committed' but isn't present locally. Agents waste time investigating code that's already fixed on remote. Should add: 'Fix exists in PR but not locally | Run `git fetch origin branch && git log HEAD..origin/branch` to see remote-only commits, then pull/merge'
+actionable: true
+
+---
+timestamp: "2026-01-21T15:20:47.960920"
+type: architecture
+summary: "UX pattern: single-view scrollable modals over multi-step wizards"
+detail: |
+  The project established a pattern of using single-view scrollable modals (like ImportLinkModal) instead of multi-step wizard modals with next/back buttons. All steps should be visible in one scrollable view rather than hidden behind pagination. This is already documented in Common Gotchas but the merge modal followed this pattern successfully - the session didn't violate this, reinforcing it's a good pattern to maintain.
+actionable: false
+
+---
+timestamp: "2026-01-21T15:20:47.960920"
+type: rule
+summary: Always fetch remote branch state before investigating 'still broken' reports
+detail: |
+  When a user reports a feature is 'still broken' despite a recent fix commit, always check if local is synced with remote before investigating the code. Pattern: 1) `git fetch origin branch-name`, 2) `git log HEAD..origin/branch-name` to see remote-only commits, 3) inform user their local is behind. This prevents wasted effort analyzing code that's already fixed but just needs to be pulled locally.
+actionable: true
+
