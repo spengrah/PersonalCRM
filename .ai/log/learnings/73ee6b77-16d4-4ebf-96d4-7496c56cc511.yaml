@@ -190,3 +190,51 @@ detail: |
   The core rules include 'Fixing only one instance of a pattern' in the Common Gotchas table, but this guidance wasn't followed when removing notes assertions from tests. The agent updated test setup (removing `Notes` from struct literals) but missed assertion code that checked `data["notes"]`. The rule exists but needs to be more prominent and prescriptive: 'When making schema changes, use Grep to find ALL references (setup AND assertions AND type definitions) before considering the change complete.' This should be elevated from a gotcha to a required step in the schema migration workflow.
 actionable: true
 
+---
+timestamp: "2026-01-21T22:14:47.724595"
+type: gotcha
+summary: Codex reviews may identify race conditions that don't fail in tests
+detail: |
+  The Codex automated review caught two critical race conditions: (1) form state initialized before async query resolves could delete data, and (2) concurrent database saves could create duplicates. Neither of these failures appeared in local tests, but both are valid production concerns. Future agents should take Codex P2 comments seriously even when tests pass - they often catch temporal and concurrency issues that deterministic tests miss.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:14:47.724595"
+type: architecture
+summary: ON CONFLICT requires partial unique index for nullable category columns
+detail: |
+  When adding a unique constraint on (contact_id, category) where category can be NULL, the constraint must be a partial index with 'WHERE category IS NOT NULL'. Otherwise, multiple NULL values would violate the constraint. The corresponding ON CONFLICT clause must also include the WHERE condition: 'ON CONFLICT (contact_id, category) WHERE category IS NOT NULL'. This is a PostgreSQL-specific gotcha when using upserts with nullable columns in unique constraints.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:14:47.724595"
+type: gotcha
+summary: React Hook Form defaultValues don't update when props change
+detail: |
+  When passing initialNotes prop to a form component using react-hook-form, the defaultValues only apply on mount. If the prop updates later (e.g., async query resolves), the form doesn't automatically sync. This creates a race condition where opening edit mode before the query completes initializes the form with empty string, which then overwrites real data on save. The fix is to add useEffect that calls setValue when the prop changes: 'useEffect(() => { setValue('notes', initialNotes, { shouldDirty: false }) }, [initialNotes, setValue])'
+actionable: true
+
+---
+timestamp: "2026-01-21T22:14:47.724595"
+type: rule
+summary: Use upsert (INSERT...ON CONFLICT) instead of check-then-insert for concurrent safety
+detail: |
+  The service initially used a check-then-insert pattern: query for existing note, then either create or update. This has a race condition where two concurrent requests can both see no record, then both insert, creating duplicates. The correct pattern is to use PostgreSQL's INSERT...ON CONFLICT...DO UPDATE (upsert) which is atomic. This eliminates the race condition entirely. Always prefer upsert for create-or-update operations in concurrent environments.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:14:47.724595"
+type: gotcha
+summary: E2E test seed helpers must stay in sync with backend schema changes
+detail: |
+  When migrating the notes field from contact table to a separate note table, the E2E test helper's seedContacts method still accepted a notes parameter, but the backend API silently ignored it. This caused test failures because tests expected seeded notes to appear but they never got created. The fix required: (1) removing notes from SeedContactInput type with a comment explaining the migration, and (2) adding a separate seedContactNote() method that calls the notes API. This is a common pattern when refactoring data models - seed helpers must be updated in lockstep.
+actionable: true
+
+---
+timestamp: "2026-01-21T22:14:47.724595"
+type: distinction
+summary: Empty notes use HTTP 204 No Content, not 404 Not Found
+detail: |
+  For the notepad feature with lazy creation (no DB record until content exists), the backend returns HTTP 204 No Content when no note exists, not 404 Not Found. This distinction matters: 204 means 'success, but no content' (the note slot exists but is empty), while 404 means 'resource not found' (the contact doesn't exist). Frontend code handles 204 by treating it as empty string without showing an error. This pattern applies to any optional fields with lazy creation.
+actionable: true
+
