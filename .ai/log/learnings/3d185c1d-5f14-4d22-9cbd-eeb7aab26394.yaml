@@ -126,3 +126,35 @@ detail: |
   When fixing a bug in test code, running 'make test' locally may pass if it only executes the tests you've been working with, while CI runs the full suite and catches instances you missed. This creates a false sense of security. Always grep for all instances of the pattern being fixed before committing, especially when using 'replace_all' or similar tools that might not catch all variations (e.g., parameter order differences in different function calls).
 actionable: true
 
+---
+timestamp: "2026-01-21T01:54:10.187855"
+type: gotcha
+summary: Integration tests skip when DATABASE_URL unset, hiding failures
+detail: |
+  Backend integration tests silently skip when DATABASE_URL environment variable is not set, causing them to appear to pass locally while failing in CI (where DATABASE_URL is configured). To reproduce integration test failures locally, must explicitly set DATABASE_URL when running tests: `DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/personal_crm?sslmode=disable" go test -v ./backend/tests/api/...`. This explains why pre-push hooks can pass while CI fails.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:54:10.187855"
+type: gotcha
+summary: contact.notes field vs note table are different things
+detail: |
+  The contact table has a `notes` text field (just a string column on the contact record), while the `note` table is a separate table for structured note entities with timestamps and relationships. GetMergePreview.NotesToTransfer counts rows in the `note` TABLE via CountMergeNotes(), not the content of contact.notes FIELD. Tests that set CreateContactRequest.Notes are only populating the text field, not creating note table rows.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:54:10.187855"
+type: gotcha
+summary: assert.Equal type sensitivity requires int64 literals for DB counts
+detail: |
+  MergePreview struct uses int64 for all count fields (MethodsToTransfer, DuplicateMethods, NotesToTransfer, etc) because they come from database COUNT queries. When using assert.Equal(), untyped int literals like `assert.Equal(t, 1, preview.MethodsToTransfer)` fail with type mismatch (int vs int64). Must use explicit int64 literals: `assert.Equal(t, int64(1), preview.MethodsToTransfer)`.
+actionable: true
+
+---
+timestamp: "2026-01-21T01:54:10.187855"
+type: documentation_gap
+summary: Integration test execution not obvious in development workflow
+detail: |
+  The session revealed confusion about why tests passed locally but failed in CI. The root cause was DATABASE_URL not being set locally, causing integration tests to skip. The existing docs mention `make test` but don't emphasize: (1) that integration tests require DATABASE_URL to actually run, (2) how to set it for local integration test execution, or (3) that pre-push hooks may give false confidence if DATABASE_URL is unset. The .ai/rules/core.md mentions 'Run tests to verify changes work during development' but doesn't explain the DATABASE_URL requirement for integration tests.
+actionable: true
+
