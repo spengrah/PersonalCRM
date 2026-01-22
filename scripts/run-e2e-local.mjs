@@ -9,15 +9,21 @@ const repoRoot = execSync('git rev-parse --show-toplevel', {
 const mappingPath = path.join(repoRoot, 'frontend/tests/e2e/test-map.json')
 const baseRef = process.env.E2E_BASE_REF || 'origin/main'
 
-const diffOutput = execSync(`git diff --name-only ${baseRef}...HEAD`, {
-  encoding: 'utf8',
-  stdio: ['ignore', 'pipe', 'inherit'],
-  cwd: repoRoot,
-}).trim()
+const readChangedFiles = command => {
+  const output = execSync(command, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'inherit'],
+    cwd: repoRoot,
+  }).trim()
 
-const changedFiles = diffOutput.length
-  ? diffOutput.split('\n').map(line => line.trim()).filter(Boolean)
-  : []
+  return output.length ? output.split('\n').map(line => line.trim()).filter(Boolean) : []
+}
+
+const changedFiles = new Set([
+  ...readChangedFiles(`git diff --name-only ${baseRef}...HEAD`),
+  ...readChangedFiles('git diff --name-only'),
+  ...readChangedFiles('git diff --name-only --cached'),
+])
 
 const mapping = JSON.parse(readFileSync(mappingPath, 'utf8'))
 
