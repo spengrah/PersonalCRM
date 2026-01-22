@@ -66,12 +66,17 @@ export function useIgnoreCandidate() {
   })
 }
 
+// Mutation key for sync operations (used to track pending syncs globally)
+export const syncMutationKey = ['sync', 'trigger'] as const
+
 // Trigger manual sync
 export function useTriggerSync() {
   return useMutation({
+    mutationKey: syncMutationKey,
     mutationFn: ({ source = 'gcontacts', accountId }: { source?: string; accountId?: string }) =>
       importsApi.triggerSync(source, accountId),
     onSuccess: () => {
+      // Invalidate after sync completes to show final status
       invalidateFor('import:synced')
     },
   })

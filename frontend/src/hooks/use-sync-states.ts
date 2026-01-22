@@ -1,14 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { syncApi } from '@/lib/sync-api'
+import { syncKeys } from '@/lib/query-keys'
 import type { SyncState } from '@/types/sync'
 
-// Query keys for sync states
-export const syncKeys = {
-  all: ['sync'] as const,
-  states: () => [...syncKeys.all, 'states'] as const,
-  state: (source: string, accountId?: string) =>
-    [...syncKeys.all, 'state', source, accountId] as const,
-}
+// Re-export for backwards compatibility
+export { syncKeys }
 
 // Get all sync states
 export function useSyncStates() {
