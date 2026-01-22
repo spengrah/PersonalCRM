@@ -601,16 +601,16 @@ test.describe('Imports (serial) @area:imports', () => {
       // Seed multiple candidates for navigation testing
       await testApi.seedExternalContacts([
         {
-          display_name: 'Modal Test Contact One',
-          emails: ['modal-test-one@example.com'],
+          display_name: 'Modal Test Contact A',
+          emails: ['modal-test-a@example.com'],
         },
         {
-          display_name: 'Modal Test Contact Two',
-          emails: ['modal-test-two@example.com'],
+          display_name: 'Modal Test Contact B',
+          emails: ['modal-test-b@example.com'],
         },
         {
-          display_name: 'Modal Test Contact Three',
-          emails: ['modal-test-three@example.com'],
+          display_name: 'Modal Test Contact C',
+          emails: ['modal-test-c@example.com'],
         },
       ])
     })
@@ -640,6 +640,10 @@ test.describe('Imports (serial) @area:imports', () => {
     })
 
     test('should navigate with arrow keys', async ({ page }) => {
+      const firstName = `${testApi.prefix}-Modal Test Contact A`
+      const secondName = `${testApi.prefix}-Modal Test Contact B`
+      const thirdName = `${testApi.prefix}-Modal Test Contact C`
+
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
 
@@ -649,17 +653,39 @@ test.describe('Imports (serial) @area:imports', () => {
         .first()
         .click()
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+      const modal = page
+        .locator('.fixed.inset-0')
+        .filter({ has: page.getByRole('button', { name: 'Import as New', exact: true }) })
 
       // Verify we're on candidate 1
-      await expect(page.getByText(/1 of/)).toBeVisible()
+      await expect(modal.getByRole('heading', { name: firstName })).toBeVisible()
+      await page.evaluate(() => {
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur()
+        }
+      })
 
       // Press ArrowRight to go to next - use deterministic wait for new text
-      await page.keyboard.press('ArrowRight')
-      await expect(page.getByText(/2 of/)).toBeVisible({ timeout: 5000 })
+      await page.evaluate(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+      })
+      await expect(modal.getByRole('heading', { name: secondName })).toBeVisible({ timeout: 5000 })
 
       // Press ArrowLeft to go back - use deterministic wait for new text
-      await page.keyboard.press('ArrowLeft')
-      await expect(page.getByText(/1 of/)).toBeVisible({ timeout: 5000 })
+      await page.evaluate(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+      })
+      await expect(modal.getByRole('heading', { name: firstName })).toBeVisible({ timeout: 5000 })
+
+      // ArrowRight again to ensure navigation can continue
+      await page.evaluate(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+      })
+      await expect(modal.getByRole('heading', { name: secondName })).toBeVisible({ timeout: 5000 })
+      await page.evaluate(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+      })
+      await expect(modal.getByRole('heading', { name: thirdName })).toBeVisible({ timeout: 5000 })
     })
 
     test('should close modal when clicking backdrop', async ({ page }) => {
