@@ -29,6 +29,22 @@ export function getSyncStateForAccount(
   return states?.find(s => s.source === source && s.account_id === accountId)
 }
 
+// Aggregate sync status type
+export type AggregateSyncStatus = 'synced' | 'syncing' | 'error'
+
+// Get aggregate sync status across all sync states
+// Priority: syncing > error > synced
+export function getAggregateSyncStatus(states: SyncState[] | undefined): AggregateSyncStatus {
+  if (!states || states.length === 0) return 'synced'
+
+  const hasSyncing = states.some(s => s.status === 'syncing')
+  const hasError = states.some(s => s.status === 'error')
+
+  if (hasSyncing) return 'syncing'
+  if (hasError) return 'error'
+  return 'synced'
+}
+
 // Format relative time for sync status
 export function formatSyncTime(dateString: string | null): string {
   if (!dateString) return 'Never'

@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { Users, Calendar, Bell, Settings, Cake, Clock, CloudDownload } from 'lucide-react'
 import { clsx } from 'clsx'
 import { TimeAccelerationWidget } from '@/components/ui/time-acceleration-widget'
+import { useSyncStates, getAggregateSyncStatus } from '@/hooks/use-sync-states'
 
 const isTimeTrackingEnabled = process.env.NEXT_PUBLIC_ENABLE_TIME_TRACKING === 'true'
 
@@ -20,8 +21,22 @@ const navigation = [
   { name: 'Settings', href: '/settings', icon: Settings },
 ]
 
+// Get icon classes for sync status indicator on Imports nav item
+function getSyncIconClasses(syncStatus: 'synced' | 'syncing' | 'error'): string {
+  switch (syncStatus) {
+    case 'syncing':
+      return 'text-green-600 animate-sync-pulse'
+    case 'error':
+      return 'text-red-700'
+    default:
+      return '' // Use default text color from parent
+  }
+}
+
 export function Navigation() {
   const pathname = usePathname()
+  const { data: syncStates } = useSyncStates()
+  const syncStatus = getAggregateSyncStatus(syncStates)
 
   return (
     <nav className="bg-white shadow-sm border-b sticky top-0 z-50">
@@ -47,7 +62,12 @@ export function Navigation() {
                         : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                     )}
                   >
-                    <Icon className="w-4 h-4 mr-2" />
+                    <Icon
+                      className={clsx(
+                        'w-4 h-4 mr-2',
+                        item.name === 'Imports' && getSyncIconClasses(syncStatus)
+                      )}
+                    />
                     {item.name}
                   </Link>
                 )
