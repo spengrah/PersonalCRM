@@ -138,10 +138,8 @@ test.describe('Contact Keyboard Navigation', () => {
     // Try pressing arrow key - should not navigate
     const currentUrl = page.url()
     await page.keyboard.press('ArrowRight')
-    // Wait a moment to see if navigation happened
-    await page.waitForTimeout(500)
     // URL should remain the same
-    expect(page.url()).toBe(currentUrl)
+    await expect(page).toHaveURL(currentUrl, { timeout: 500 })
   })
 
   test('should not navigate when typing in input fields', async ({ page }) => {
@@ -176,11 +174,8 @@ test.describe('Contact Keyboard Navigation', () => {
     await nameInput.press('ArrowRight')
     await nameInput.press('ArrowLeft')
 
-    // Wait a moment
-    await page.waitForTimeout(300)
-
     // Should still be on same page
-    expect(page.url()).toBe(currentUrl)
+    await expect(page).toHaveURL(currentUrl, { timeout: 300 })
   })
 
   test('should preserve URL context (sort, search) during navigation', async ({ page }) => {
@@ -206,8 +201,6 @@ test.describe('Contact Keyboard Navigation', () => {
 
     // Navigate to next contact using keyboard
     await page.keyboard.press('ArrowRight')
-    // Wait for navigation to complete
-    await page.waitForTimeout(500)
     await page.waitForLoadState('domcontentloaded')
 
     // URL should still contain sort params after navigation

@@ -20,7 +20,9 @@ export default defineConfig({
   reporter: [['html', { open: 'never' }], ['list']],
   use: {
     baseURL: 'http://localhost:3000',
-    trace: 'on-first-retry',
+    trace: process.env.CI ? 'on-first-retry' : 'off',
+    screenshot: 'only-on-failure',
+    video: 'off',
   },
 
   projects: [

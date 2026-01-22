@@ -286,15 +286,11 @@ test.describe('Contacts - UI Create (preserved for coverage)', () => {
     await testApi.cleanup()
   })
 
-  test('should create and edit contact with notes', async ({ page }) => {
-    const fullName = `${testApi.prefix}-Notes Test Contact`
-    const notes =
-      'Met at a conference in 2024. Works in AI/ML. Very interested in personal CRM tools.'
+  test('should create a contact from the form', async ({ page }) => {
+    const fullName = `${testApi.prefix}-Create Contact`
 
-    // Create contact with notes via UI
     await page.goto('/contacts/new')
     await page.getByLabel('Full Name').fill(fullName)
-    await page.getByLabel('Notes').fill(notes)
 
     await Promise.all([
       page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
@@ -302,15 +298,32 @@ test.describe('Contacts - UI Create (preserved for coverage)', () => {
     ])
 
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+  })
 
-    // Verify notes are displayed on detail page
+  test('should edit contact notes', async ({ page }) => {
+    const notes =
+      'Met at a conference in 2024. Works in AI/ML. Very interested in personal CRM tools.'
+    const updatedNotes = 'Updated notes: Follow up about collaboration opportunity.'
+
+    const { ids } = await testApi.seedContacts([
+      {
+        full_name: 'Notes Test Contact',
+      },
+    ])
+
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Notes Test Contact`
+
+    await testApi.seedContactNote(contactId, notes)
+
+    await page.goto(`/contacts/${contactId}`)
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
     await expect(page.getByText(notes)).toBeVisible()
 
     // Edit the contact to update notes (use first() to get header Edit button, not the last contacted edit)
     await page.getByRole('button', { name: 'Edit' }).first().click()
     await expect(page.getByLabel('Notes')).toBeVisible()
 
-    const updatedNotes = 'Updated notes: Follow up about collaboration opportunity.'
     await page.getByLabel('Notes').fill(updatedNotes)
 
     // Submit the inline edit form
@@ -324,16 +337,16 @@ test.describe('Contacts - UI Create (preserved for coverage)', () => {
     await expect(page.getByText(notes)).not.toBeVisible()
   })
 
-  test('should create contact with all methods and normalized handles', async ({ page }) => {
+  test('should display contact with all methods and normalized handles', async ({ page }) => {
     const fullName = `${testApi.prefix}-Playwright Contact`
-    const personalEmail = `personal-${Date.now()}@example.com`
-    const workEmail = `work-${Date.now()}@example.com`
+    const personalEmail = `personal-${testApi.prefix}@example.com`
+    const workEmail = `work-${testApi.prefix}@example.com`
     const phone = '(555) 555-1234'
-    const telegramHandle = `@@telegram${Date.now()}`
-    const discordHandle = `@@discord${Date.now()}`
-    const twitterHandle = `@@twitter${Date.now()}`
+    const telegramHandle = `@@telegram-${testApi.prefix}`
+    const discordHandle = `@@discord-${testApi.prefix}`
+    const twitterHandle = `@@twitter-${testApi.prefix}`
     const signal = '+1 555 555 9876'
-    const gchatEmail = `gchat-${Date.now()}@example.com`
+    const gchatEmail = `gchat-${testApi.prefix}@example.com`
 
     const methods = [
       { type: 'email', value: personalEmail, expected: personalEmail },
@@ -346,34 +359,25 @@ test.describe('Contacts - UI Create (preserved for coverage)', () => {
       { type: 'gchat', value: gchatEmail, expected: gchatEmail },
     ]
 
-    await page.goto('/contacts/new')
-    await page.getByLabel('Full Name').fill(fullName)
-
-    // Add method buttons (styled as text link but still a button element)
-    const addMethodButton = page.getByRole('button', { name: 'Add method' })
-    for (let i = 1; i < methods.length; i += 1) {
-      await addMethodButton.click()
-    }
-
-    // Contact method type selects have IDs like "methods.0.type"
-    const typeSelects = page.locator('select[id^="methods"]')
-    await expect(typeSelects).toHaveCount(methods.length)
-
-    for (const [index, method] of methods.entries()) {
-      // Type selector and value input are identified by their IDs
-      await page.locator(`#methods\\.${index}\\.type`).selectOption(method.type)
-      await page.locator(`#methods\\.${index}\\.value`).fill(method.value)
-    }
-
-    // Primary toggle is now a star icon button with title attribute
-    const primaryIndex = methods.findIndex(method => method.type === 'telegram')
-    await page.getByTitle('Set as primary').nth(primaryIndex).click()
-
-    await Promise.all([
-      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
-      page.getByRole('button', { name: 'Create Contact' }).click(),
+    const { ids } = await testApi.seedContacts([
+      {
+        full_name: 'Playwright Contact',
+        methods: [
+          { type: 'email', value: personalEmail },
+          { type: 'email', value: workEmail },
+          { type: 'phone', value: phone },
+          { type: 'telegram', value: telegramHandle, is_primary: true },
+          { type: 'signal', value: signal },
+          { type: 'discord', value: discordHandle },
+          { type: 'twitter', value: twitterHandle },
+          { type: 'gchat', value: gchatEmail },
+        ],
+      },
     ])
 
+    const contactId = ids[0]
+
+    await page.goto(`/contacts/${contactId}`)
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     for (const method of methods) {

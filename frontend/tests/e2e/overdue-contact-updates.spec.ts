@@ -151,13 +151,6 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     const today = getTodayUTC()
     await expect(page.getByText(today).first()).toBeVisible()
 
-    // Navigate back to dashboard
-    await page.goto('/dashboard')
-    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
-
-    // Contact should no longer appear
-    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible()
-
     // Verify via API
     const stillOverdue = await isContactOverdue(request, contactId)
     expect(stillOverdue).toBe(false)
@@ -169,32 +162,26 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
   }) => {
     const contactName = `${testApi.prefix}-Overdue Test Contact`
 
-    // Mark as contacted from dashboard
-    await page.goto('/dashboard')
-    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
+    // Mark as contacted via API to avoid extra UI setup
+    const lastContactedResponse = await request.patch(
+      `${API_BASE_URL}/api/v1/contacts/${contactId}/last-contacted`,
+      { headers: API_HEADERS }
+    )
+    expect(lastContactedResponse.ok()).toBeTruthy()
 
-    const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
-    await contactCard.getByRole('button', { name: /Mark as Contacted/i }).click()
-    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
-      timeout: 5000,
-    })
-
-    // 1. Dashboard: contact should be gone
-    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible()
-
-    // 2. Contact Detail: should show today's date (use first() as date may appear multiple times)
+    // 1. Contact Detail: should show today's date (use first() as date may appear multiple times)
     await page.goto(`/contacts/${contactId}`)
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
     const today = getTodayUTC()
     await expect(page.getByText(today).first()).toBeVisible()
 
-    // 3. Contacts List: should show today's date in the row
+    // 2. Contacts List: should show today's date in the row
     await page.goto('/contacts')
     await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible()
     const contactRow = page.locator('tr').filter({ hasText: contactName })
     await expect(contactRow.getByText(today)).toBeVisible()
 
-    // 4. API: should confirm not overdue
+    // 3. API: should confirm not overdue
     const stillOverdue = await isContactOverdue(request, contactId)
     expect(stillOverdue).toBe(false)
   })

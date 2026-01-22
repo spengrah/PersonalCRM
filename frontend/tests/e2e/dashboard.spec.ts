@@ -56,12 +56,13 @@ test.describe('Dashboard', () => {
 
 test.describe('Dashboard - With Seeded Data', () => {
   let testApi: TestAPI
+  let overdueContactId: string
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
 
     // Seed an overdue contact for dashboard testing
-    await testApi.seedOverdueContacts([
+    const { ids } = await testApi.seedOverdueContacts([
       {
         full_name: 'Dashboard Test Contact',
         cadence: 'weekly',
@@ -69,6 +70,7 @@ test.describe('Dashboard - With Seeded Data', () => {
         email: 'dashboard-test@example.com',
       },
     ])
+    overdueContactId = ids[0]
   })
 
   test.afterEach(async () => {
@@ -97,11 +99,17 @@ test.describe('Dashboard - With Seeded Data', () => {
     const markContactedButton = contactCard.getByRole('button', { name: /Mark as Contacted/i })
     await expect(markContactedButton).toBeVisible()
 
+    const markContactedResponse = page.waitForResponse(
+      response =>
+        response.request().method() === 'PATCH' &&
+        response.url().includes(`/api/v1/contacts/${overdueContactId}/last-contacted`)
+    )
+
     // Click "Mark as Contacted"
     await markContactedButton.click()
 
     // Wait for the mutation to complete
-    await page.waitForTimeout(2000)
+    await markContactedResponse
 
     // The contact should no longer be overdue, so it should vanish from the dashboard
     await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
