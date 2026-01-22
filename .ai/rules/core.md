@@ -23,7 +23,7 @@ These rules apply to all AI agents working on this project.
 ## Testing Requirements
 
 - **Always add comprehensive tests** for new/changed code
-- Run `make test && make test-e2e` to verify changes work
+- Run `make test && make test-e2e-diff` to verify changes work locally (CI runs full E2E)
 - Unit tests for business logic, integration tests for DB operations, E2E for user flows
 
 ## Pre-push Hooks

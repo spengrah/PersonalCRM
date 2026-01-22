@@ -598,7 +598,8 @@ make test-api
 cd frontend && bun run test
 
 # E2E tests
-make test-e2e # uses .env (fallback: .env.example.testing); Docker if available, otherwise native PostgreSQL
+make test-e2e-diff # diff-selected E2E (core + impacted)
+make test-e2e      # full E2E suite; uses .env (fallback: .env.example.testing)
 ```
 
 See [TEST_GUIDE.md](docs/TEST_GUIDE.md) for detailed testing information.

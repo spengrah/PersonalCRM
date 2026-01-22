@@ -328,7 +328,7 @@ Add tests for new features. See [`.ai/rules/testing.md`](../rules/testing.md) fo
 ```bash
 make test-unit         # Backend unit tests
 make test-integration  # Backend DB tests
-make test-e2e          # Playwright E2E tests
+make test-e2e-diff     # Diff-selected Playwright E2E tests (core + impacted)
 ```
 
 ---
@@ -500,4 +500,3 @@ ENABLE_TELEGRAM_BOT=false
 *For common code patterns, see [`.ai/patterns/`](../patterns/)*
 
 *For architecture rationale, see [`.ai/guides/architecture.md`](./architecture.md)*
-
