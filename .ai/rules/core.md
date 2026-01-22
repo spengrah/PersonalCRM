@@ -24,6 +24,8 @@ These rules apply to all AI agents working on this project.
 
 - **Always add comprehensive tests** for new/changed code
 - Run `make test && make test-e2e-diff` to verify changes work locally (CI runs full E2E)
+- Run `make test-e2e` only for the full suite (CI or when explicitly requested)
+- Use make test-e2e-local only when a specific grep is requested.
 - Unit tests for business logic, integration tests for DB operations, E2E for user flows
 
 ## Pre-push Hooks
@@ -48,6 +50,8 @@ PRs must meet ALL of these to pass review:
 - Follows repository conventions (this file)
 - Proper error handling and validation
 - No TODOs or technical debt introduced
+
+See `.ai/rules/code-review.md` for details
 
 ## Git Practices
 
@@ -98,6 +102,7 @@ PostgreSQL
 | Creating prototype HTML in repo root | Place prototypes in `temp/` (git-ignored), attach to issues for reference |
 | Expecting soft-delete to cascade to related records | Soft-delete (UPDATE deleted_at) does NOT trigger ON DELETE CASCADE - explicitly delete related records first |
 | Building multi-step wizard modals | Use single-view scrollable modals (like ImportLinkModal) - all steps visible in one view |
+| Using `\n` in `gh` CLI body/comment strings (renders as literal `\n`) | Use a heredoc or multi-line string for `gh pr create/edit/comment` |
 
 ## Anti-Patterns
 

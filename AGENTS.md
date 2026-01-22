@@ -20,12 +20,13 @@ frontend/src/{app, components, hooks}
 From project root:
 
 ```bash
-make dev          # Start dev server
-make test         # All backend tests
-make test-e2e     # Playwright E2E
-make sqlc         # Regenerate from SQL
-make lint         # Run all linters
-make help         # Full command reference
+make dev            # Start dev server
+make test           # All backend tests
+make test-e2e       # Playwright E2E (for ci)
+make test-e2e-diff  # Diff-selected E2E (local default)
+make sqlc           # Regenerate from SQL
+make lint           # Run all linters
+make help           # Full command reference
 ```
 
 ## Context Discovery
@@ -39,7 +40,7 @@ Load as needed, not upfront:
 
 ## Session Hints
 
-- Run `make test && make test-e2e` to verify changes work (also runs automatically on push)
+- Run `make test && make test-e2e-diff` to verify changes work (also runs automatically on push)
 - Read repository code before using methods (names vary, e.g., `SoftDeleteContact` not `DeleteContact`)
 - Prefer integration tests over heavy mocking
 - Use `accelerated.GetCurrentTime()` not `time.Now()`

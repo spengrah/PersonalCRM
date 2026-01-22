@@ -173,16 +173,16 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		defer deleteContact(id1)
 		defer deleteContact(id2)
 
-		// Get IDs sorted by name ascending
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&sort=name&order=asc", nil)
+		// Get IDs sorted by name ascending (limit to our test contacts)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=IDs+Sort&sort=name&order=asc", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		respAsc := parseIDsResponse(w.Body.Bytes())
 
-		// Get IDs sorted by name descending
-		req = httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&sort=name&order=desc", nil)
+		// Get IDs sorted by name descending (limit to our test contacts)
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=IDs+Sort&sort=name&order=desc", nil)
 		w = httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
