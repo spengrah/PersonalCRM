@@ -1,0 +1,48 @@
+---
+timestamp: "2026-01-22T16:55:11.314231"
+type: gotcha
+summary: Pencil design colors should match existing UI styling, not literal spec
+detail: |
+  When creating Pencil designs for the sync indicator, the issue specified `text-gray-600` for the synced state, but the existing navigation icons use `text-gray-500`. The designs initially used `$--gray-500` to match the UI, which created a discrepancy with the issue spec. The user confirmed to 'match existing styling' over the literal spec. Lesson: When design specs conflict with existing UI patterns, prefer consistency with the existing codebase.
+actionable: true
+
+---
+timestamp: "2026-01-22T16:55:11.314231"
+type: gotcha
+summary: E2E test wait strategy changed from 'networkidle' to 'domcontentloaded'
+detail: |
+  During rebase, discovered upstream changed E2E test wait strategy from `page.waitForLoadState('networkidle')` to `page.waitForLoadState('domcontentloaded')`. This was a recent codebase change that would have caused merge conflicts. When writing new E2E tests, check recent commits for wait strategy patterns to avoid immediate conflicts.
+actionable: true
+
+---
+timestamp: "2026-01-22T16:55:11.314231"
+type: architecture
+summary: Test tagging inherits from outer describe block - no need for nested tags
+detail: |
+  When adding sync indicator E2E tests to navigation.spec.ts, the tests were nested inside `test.describe('Sync Status Indicator', ...)` which was itself inside `test.describe('Navigation @area:navigation', ...)`. The nested tests automatically inherit the `@area:navigation` tag from the outer describe - no need to add tags to nested describes. The test-map.json maps file paths to tags, not individual test blocks.
+actionable: true
+
+---
+timestamp: "2026-01-22T16:55:11.314231"
+type: documentation_gap
+summary: E2E test tagging documentation is insufficient
+detail: |
+  The `.ai/rules/testing.md` has minimal coverage of test tagging (lines 80-91) that mentions tags exist and where the test-map.json lives, but doesn't explain: (1) the structure/format of test-map.json, (2) how to determine which tags to use, (3) when to add new entries vs use existing tags, (4) how the path-to-tag mapping actually works. During this session, the user had to explicitly ask 'do we have a @navigation tag' and 'did we use it correctly', suggesting this should be more discoverable. The brief mention of 'Add area tags to new specs' and 'Update the map when adding new pages/areas' is too vague for agents to apply correctly without examining existing patterns.
+actionable: true
+
+---
+timestamp: "2026-01-22T16:55:11.314231"
+type: rule
+summary: "Commit Pencil design assets with 'docs:' prefix, not 'chore:'"
+detail: |
+  When committing the ui-components.pen file with sync indicator designs, initially attempted to use 'chore:' prefix. User questioned if that was correct. Since Pencil designs are specifications/mockups that document what features should look like (not maintenance tasks or build config), they should use 'docs:' prefix. The designs directory contains design documentation that guides implementation, making 'docs:' the appropriate conventional commit type.
+actionable: true
+
+---
+timestamp: "2026-01-22T16:55:11.314231"
+type: gotcha
+summary: Always check git status before creating feature branch
+detail: |
+  Started implementation work while on main branch that was 2 commits behind origin/main. This required mid-implementation stash-pull-rebase which caused a merge conflict in navigation.spec.ts. Should have checked branch status and pulled/rebased BEFORE starting work. The conflict resolution was successful but could have been avoided entirely by syncing with origin first.
+actionable: true
+
