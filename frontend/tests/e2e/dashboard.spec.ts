@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
-test.describe('Dashboard', () => {
-  test('should display dashboard with navigation', async ({ page }) => {
+test.describe('Dashboard @area:dashboard', () => {
+  test('should display dashboard with navigation @smoke', async ({ page }) => {
     await page.goto('/')
 
     // Should redirect to dashboard (client-side redirect via useEffect)
@@ -54,7 +54,7 @@ test.describe('Dashboard', () => {
   })
 })
 
-test.describe('Dashboard - With Seeded Data', () => {
+test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () => {
   let testApi: TestAPI
   let overdueContactId: string
 

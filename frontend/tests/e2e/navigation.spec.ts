@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 
-test.describe('Navigation', () => {
+test.describe('Navigation @area:navigation', () => {
   test('navigation remains visible when scrolling', async ({ page }) => {
     // Navigate to contacts page (has enough content to scroll)
     await page.goto('/contacts')

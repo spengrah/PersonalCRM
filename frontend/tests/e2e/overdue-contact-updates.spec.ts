@@ -44,7 +44,7 @@ async function getLastContacted(request: APIRequestContext, contactId: string): 
   return data.data.last_contacted
 }
 
-test.describe('Overdue Contact Updates - With Seeded Data', () => {
+test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => {
   let testApi: TestAPI
   let contactId: string
 
@@ -222,7 +222,7 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
   })
 })
 
-test.describe('Overdue Contact Updates - Multiple Contacts', () => {
+test.describe('Overdue Contact Updates - Multiple Contacts @area:overdue', () => {
   let testApi: TestAPI
 
   test.beforeEach(async ({ request }, testInfo) => {

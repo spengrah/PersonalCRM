@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import { getTodayUTC } from './helpers/date-utils'
 
-test.describe('Contacts - TestAPI Seeded', () => {
+test.describe('Contacts - TestAPI Seeded @area:contacts', () => {
   let testApi: TestAPI
 
   test.beforeEach(async ({ request }, testInfo) => {
@@ -272,7 +272,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   })
 })
 
-test.describe('Contacts - UI Create (preserved for coverage)', () => {
+test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', () => {
   // UI tests need serial mode since they create contacts via UI without TestAPI isolation
   test.describe.configure({ mode: 'serial' })
 
@@ -286,7 +286,7 @@ test.describe('Contacts - UI Create (preserved for coverage)', () => {
     await testApi.cleanup()
   })
 
-  test('should create a contact from the form', async ({ page }) => {
+  test('should create a contact from the form @smoke', async ({ page }) => {
     const fullName = `${testApi.prefix}-Create Contact`
 
     await page.goto('/contacts/new')

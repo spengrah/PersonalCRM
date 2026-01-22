@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
-test.describe('Contact Merge', () => {
+test.describe('Contact Merge @area:contact-merge', () => {
   let testApi: TestAPI
 
   test.beforeEach(async ({ request }, testInfo) => {

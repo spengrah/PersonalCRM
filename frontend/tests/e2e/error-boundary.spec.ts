@@ -8,7 +8,7 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 }
 
-test.describe('Error Boundary', () => {
+test.describe('Error Boundary @area:error-boundary', () => {
   test('backend test error endpoint returns 500', async ({ request }) => {
     // Test the backend error trigger endpoint
     const response = await request.post(`${API_BASE_URL}/api/v1/test/trigger-error`, {

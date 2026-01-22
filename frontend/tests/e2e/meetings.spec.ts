@@ -9,7 +9,7 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 }
 
-test.describe('Meetings Component', () => {
+test.describe('Meetings Component @area:meetings', () => {
   let testApi: TestAPI
   let contactId: string
 

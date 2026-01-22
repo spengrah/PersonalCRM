@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
-test.describe('Contact Keyboard Navigation', () => {
+test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   let testApi: TestAPI
 
   test.beforeEach(async ({ request }, testInfo) => {
@@ -12,7 +12,7 @@ test.describe('Contact Keyboard Navigation', () => {
     await testApi.cleanup()
   })
 
-  test('should navigate between contacts with arrow keys', async ({ page }) => {
+  test('should navigate between contacts with arrow keys @smoke', async ({ page }) => {
     // Create 3 contacts to navigate between
     const { ids } = await testApi.seedContacts([
       { full_name: 'Nav Contact A' },

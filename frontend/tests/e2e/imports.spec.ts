@@ -9,7 +9,7 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 }
 
-test.describe('Imports (serial)', () => {
+test.describe('Imports (serial) @area:imports', () => {
   test.describe.configure({ mode: 'serial' })
 
   test.describe('Imports Page', () => {
