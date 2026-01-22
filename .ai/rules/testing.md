@@ -79,13 +79,55 @@ make test              # All backend tests
 
 ## E2E Diff Selection
 
-Local E2E runs use tags and a path-to-tag map to select tests:
+Local E2E runs use tags and a path-to-tag map to run only tests affected by code changes.
 
-- Tags live in test titles (e.g., `@smoke`, `@area:contacts`)
-- Mapping lives in `frontend/tests/e2e/test-map.json`
-- Selector script: `scripts/run-e2e-local.mjs`
+### How It Works
 
-**Rules:**
+1. `scripts/run-e2e-local.mjs` detects changed files via `git diff`
+2. Matches changed paths against patterns in `frontend/tests/e2e/test-map.json`
+3. Collects tags from matched entries (e.g., `@area:navigation`)
+4. Runs tests whose titles contain those tags
+
+### Test Tags
+
+Tags appear in test `describe` blocks:
+
+```typescript
+test.describe('Navigation @area:navigation', () => {
+  // All tests here run when @area:navigation is triggered
+})
+```
+
+Available tags: `@area:dashboard`, `@area:contacts`, `@area:imports`, `@area:navigation`, `@area:settings`, `@area:meetings`, `@area:overdue`, `@area:contact-merge`, `@area:contact-navigation`, `@area:error-boundary`
+
+### test-map.json Structure
+
+Each entry maps a file pattern to tags that should run when that file changes:
+
+```json
+{
+  "pattern": "^frontend/src/components/layout/",
+  "tags": ["@area:navigation", "@area:dashboard"]
+}
+```
+
+### Adding/Updating Tags
+
+**New tests in existing area:** Add the appropriate `@area:` tag to your `describe` block. No map changes needed.
+
+**New source file in existing area:** Check if an existing pattern covers it. If not, add a pattern entry.
+
+**New feature area:**
+1. Create a new `@area:yourfeature` tag
+2. Add it to relevant test `describe` blocks
+3. Add map entries for source files that affect those tests
+
+### Choosing Tags
+
+Tag tests based on what user-facing functionality they verify, not implementation details. A source file may map to multiple tags if it affects multiple areas.
+
+### Rules
+
 - Always keep a small `@smoke` set for core flows
 - Add area tags to new specs
 - Update the map when adding new pages/areas
