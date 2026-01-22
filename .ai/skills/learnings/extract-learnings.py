@@ -89,7 +89,9 @@ LEARNINGS_SCHEMA = {
 
 def is_claude_code_session() -> bool:
     """Check if we're running under Claude Code (vs Codex, Cursor, etc.)."""
-    # Claude Code sets this environment variable
+    # This env var must be set in .claude/settings.json:
+    #   { "env": { "CLAUDE_CODE": "1" } }
+    # Claude Code doesn't set it automatically.
     return os.environ.get("CLAUDE_CODE") == "1"
 
 
