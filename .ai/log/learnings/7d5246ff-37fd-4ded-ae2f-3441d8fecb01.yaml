@@ -46,3 +46,51 @@ detail: |
   Started implementation work while on main branch that was 2 commits behind origin/main. This required mid-implementation stash-pull-rebase which caused a merge conflict in navigation.spec.ts. Should have checked branch status and pulled/rebased BEFORE starting work. The conflict resolution was successful but could have been avoided entirely by syncing with origin first.
 actionable: true
 
+---
+timestamp: "2026-01-22T17:08:02.939499"
+type: gotcha
+summary: Synchronous sync API prevents real-time status display without optimistic UI
+detail: |
+  The backend sync API is synchronous - it doesn't return until sync completes. This means the frontend cannot fetch the 'syncing' status from the database during the sync operation because it's blocked waiting for the HTTP response. The nav polling interval (60s) is also too slow to catch brief syncs. Solution: Use React Query's useIsMutating to track pending mutations and display optimistic 'syncing' state in the UI based on mutation status, not backend database status.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:08:02.939499"
+type: architecture
+summary: CLAUDE_CODE env var must be manually configured, not automatic
+detail: |
+  Claude Code CLI does not automatically set the CLAUDE_CODE environment variable. The learnings extraction script checks for this variable to detect if it's running in Claude Code vs other AI tools. To enable learnings extraction, you must manually add "env": {"CLAUDE_CODE": "1"} to .claude/settings.json. This is documented in the script but easy to miss.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:08:02.939499"
+type: architecture
+summary: Query invalidation requires centralized key management for cross-domain effects
+detail: |
+  When adding new queries that need invalidation from mutations, query keys must be defined in the centralized query-keys.ts file (not locally in hooks) so they can be imported by query-invalidation.ts. The syncKeys were initially defined in use-sync-states.ts but had to be moved to query-keys.ts to enable invalidation from import:synced events. Always define query keys centrally.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:08:02.939499"
+type: rule
+summary: Import mutation onSuccess should invalidate sync states, not just imports
+detail: |
+  The 'import:synced' domain event (triggered by sync mutations) should invalidate both importKeys.lists() AND syncKeys.states(). Previously it only invalidated import lists, causing the nav sync indicator to miss status updates. When triggering a sync, the sync states query must be invalidated so UI components can reflect the updated sync status.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:08:02.939499"
+type: distinction
+summary: Use onMutate vs onSuccess based on whether backend operation is async
+detail: |
+  React Query mutations have both onMutate (fires before API call) and onSuccess (fires after API returns). For synchronous backend operations where the DB state changes during the request, onMutate won't help because the frontend can't fetch the intermediate state while blocked on the response. For async operations, onMutate can trigger early refetches. For sync operations, use optimistic UI (useIsMutating) instead of relying on backend status.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:08:02.939499"
+type: gotcha
+summary: "PR feedback addressed: test refactoring over full E2E state mocking"
+detail: |
+  When PR reviewers request full E2E testing of visual states, consider the cost/benefit. For the sync indicator, full E2E state testing would require complex API mocking to simulate various sync states. The pragmatic approach agreed with the user: test infrastructure (icon presence, CSS animation definition) in E2E, test state logic thoroughly in unit tests, and document the decision with a comment explaining why complex mocking isn't warranted for this particular feature.
+actionable: true
+
