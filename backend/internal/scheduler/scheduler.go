@@ -127,7 +127,9 @@ func (s *Scheduler) GetScheduledJobs() []cron.Entry {
 }
 
 // GetExternalSyncCronSpec returns the cron specification for external sync checks.
-// Keep this at 5 minutes or faster to support 15-minute sync intervals.
+// Returns "0 */5 * * * *" (every 5 minutes) to support variable sync intervals.
+// The fastest supported sync interval is 15 minutes (CalendarDefaultInterval),
+// so checking every 5 minutes ensures syncs run within 5 minutes of being due.
 func GetExternalSyncCronSpec() string {
 	return "0 */5 * * * *"
 }
