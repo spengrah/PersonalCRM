@@ -83,9 +83,10 @@ func (s *Scheduler) Start() error {
 	// Skip cleanup job in testing environments
 	// In testing mode, we want to see all activity and avoid confusion
 
-	// Schedule external sync check job (every hour)
+	// Schedule external sync check job (every 5 minutes)
 	if s.syncEnabled && s.syncService != nil {
-		_, err := s.cron.AddFunc("0 0 * * * *", func() {
+		syncCronSpec := GetExternalSyncCronSpec()
+		_, err := s.cron.AddFunc(syncCronSpec, func() {
 			ctx := context.Background()
 			logger.Debug().Msg("checking for due external syncs")
 
@@ -96,7 +97,7 @@ func (s *Scheduler) Start() error {
 		if err != nil {
 			return err
 		}
-		logger.Info().Msg("external sync scheduler enabled (runs every hour)")
+		logger.Info().Str("cron_spec", syncCronSpec).Msg("external sync scheduler enabled")
 	}
 
 	// Start the cron scheduler
@@ -123,4 +124,10 @@ func (s *Scheduler) RunReminderGenerationNow() error {
 // GetScheduledJobs returns information about scheduled jobs
 func (s *Scheduler) GetScheduledJobs() []cron.Entry {
 	return s.cron.Entries()
+}
+
+// GetExternalSyncCronSpec returns the cron specification for external sync checks.
+// Keep this at 5 minutes or faster to support 15-minute sync intervals.
+func GetExternalSyncCronSpec() string {
+	return "0 */5 * * * *"
 }
