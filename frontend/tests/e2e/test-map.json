@@ -1,0 +1,343 @@
+[
+  {
+    "pattern": "^frontend/playwright\\.config\\.ts$",
+    "tags": [
+      "@area:dashboard",
+      "@area:contacts",
+      "@area:contact-navigation",
+      "@area:contact-merge",
+      "@area:imports",
+      "@area:meetings",
+      "@area:overdue",
+      "@area:settings",
+      "@area:navigation",
+      "@area:error-boundary"
+    ]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/helpers/",
+    "tags": [
+      "@area:dashboard",
+      "@area:contacts",
+      "@area:contact-navigation",
+      "@area:contact-merge",
+      "@area:imports",
+      "@area:meetings",
+      "@area:overdue",
+      "@area:settings",
+      "@area:navigation",
+      "@area:error-boundary"
+    ]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/dashboard\\.spec\\.ts$",
+    "tags": ["@area:dashboard", "@area:overdue"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/contacts\\.spec\\.ts$",
+    "tags": ["@area:contacts", "@area:overdue"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/contact-navigation\\.spec\\.ts$",
+    "tags": ["@area:contact-navigation", "@area:contacts"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/contact-merge\\.spec\\.ts$",
+    "tags": ["@area:contact-merge", "@area:contacts"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/imports\\.spec\\.ts$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/meetings\\.spec\\.ts$",
+    "tags": ["@area:meetings"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/overdue-contact-updates\\.spec\\.ts$",
+    "tags": ["@area:overdue"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/settings\\.spec\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/navigation\\.spec\\.ts$",
+    "tags": ["@area:navigation"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/error-boundary\\.spec\\.ts$",
+    "tags": ["@area:error-boundary"]
+  },
+  {
+    "pattern": "^frontend/src/app/dashboard/",
+    "tags": ["@area:dashboard", "@area:overdue"]
+  },
+  {
+    "pattern": "^frontend/src/app/contacts/",
+    "tags": ["@area:contacts", "@area:contact-navigation", "@area:contact-merge", "@area:overdue"]
+  },
+  {
+    "pattern": "^frontend/src/app/imports/",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^frontend/src/app/settings/",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/components/contacts/",
+    "tags": [
+      "@area:contacts",
+      "@area:contact-navigation",
+      "@area:contact-merge",
+      "@area:meetings",
+      "@area:overdue"
+    ]
+  },
+  {
+    "pattern": "^frontend/src/components/imports/",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^frontend/src/components/settings/",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/components/layout/",
+    "tags": ["@area:navigation", "@area:dashboard"]
+  },
+  {
+    "pattern": "^frontend/src/components/error-boundary\\.tsx$",
+    "tags": ["@area:error-boundary"]
+  },
+  {
+    "pattern": "^frontend/src/hooks/use-contacts\\.ts$",
+    "tags": ["@area:contacts", "@area:contact-navigation", "@area:overdue"]
+  },
+  {
+    "pattern": "^frontend/src/hooks/use-merge\\.ts$",
+    "tags": ["@area:contact-merge"]
+  },
+  {
+    "pattern": "^frontend/src/hooks/use-keyboard-navigation\\.ts$",
+    "tags": ["@area:contact-navigation"]
+  },
+  {
+    "pattern": "^frontend/src/hooks/use-imports\\.ts$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^frontend/src/hooks/use-calendar\\.ts$",
+    "tags": ["@area:meetings"]
+  },
+  {
+    "pattern": "^frontend/src/hooks/use-google-accounts\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/hooks/use-sync-states\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/hooks/use-contact-note\\.ts$",
+    "tags": ["@area:contacts"]
+  },
+  {
+    "pattern": "^frontend/src/lib/api-client\\.ts$",
+    "tags": [
+      "@area:dashboard",
+      "@area:contacts",
+      "@area:contact-navigation",
+      "@area:contact-merge",
+      "@area:imports",
+      "@area:meetings",
+      "@area:overdue",
+      "@area:settings",
+      "@area:navigation",
+      "@area:error-boundary"
+    ]
+  },
+  {
+    "pattern": "^frontend/src/lib/contacts-api\\.ts$",
+    "tags": ["@area:contacts", "@area:contact-navigation", "@area:overdue"]
+  },
+  {
+    "pattern": "^frontend/src/lib/contact-methods\\.ts$",
+    "tags": ["@area:contacts", "@area:contact-merge"]
+  },
+  {
+    "pattern": "^frontend/src/lib/method-conflict-detection\\.ts$",
+    "tags": ["@area:contact-merge"]
+  },
+  {
+    "pattern": "^frontend/src/lib/notes-api\\.ts$",
+    "tags": ["@area:contacts"]
+  },
+  {
+    "pattern": "^frontend/src/lib/imports-api\\.ts$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^frontend/src/lib/source-display\\.ts$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^frontend/src/lib/calendar-api\\.ts$",
+    "tags": ["@area:meetings"]
+  },
+  {
+    "pattern": "^frontend/src/lib/oauth-api\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/lib/system-api\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/lib/sync-api\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/lib/query-(client|keys|invalidation)\\.ts$",
+    "tags": [
+      "@area:dashboard",
+      "@area:contacts",
+      "@area:imports",
+      "@area:overdue",
+      "@area:settings"
+    ]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/contact\\.go$",
+    "tags": ["@area:contacts", "@area:contact-navigation", "@area:contact-merge", "@area:overdue"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/import\\.go$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/calendar\\.go$",
+    "tags": ["@area:meetings"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/system\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/oauth\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/sync\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/identity\\.go$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/note\\.go$",
+    "tags": ["@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/service/contact\\.go$",
+    "tags": ["@area:contacts", "@area:contact-navigation", "@area:contact-merge", "@area:overdue"]
+  },
+  {
+    "pattern": "^backend/internal/service/import_matching\\.go$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^backend/internal/service/identity\\.go$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^backend/internal/service/note\\.go$",
+    "tags": ["@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/service/sync\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/repository/contact\\.go$",
+    "tags": ["@area:contacts", "@area:contact-navigation", "@area:contact-merge", "@area:overdue"]
+  },
+  {
+    "pattern": "^backend/internal/repository/contact_method\\.go$",
+    "tags": ["@area:contacts", "@area:contact-merge"]
+  },
+  {
+    "pattern": "^backend/internal/repository/note\\.go$",
+    "tags": ["@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/repository/external_contact\\.go$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^backend/internal/repository/identity\\.go$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^backend/internal/repository/enrichment\\.go$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^backend/internal/repository/calendar\\.go$",
+    "tags": ["@area:meetings"]
+  },
+  {
+    "pattern": "^backend/internal/repository/oauth\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/repository/sync\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/contact\\.sql$",
+    "tags": ["@area:contacts", "@area:contact-navigation", "@area:overdue"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/contact_method\\.sql$",
+    "tags": ["@area:contacts", "@area:contact-merge"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/contact_merge\\.sql$",
+    "tags": ["@area:contact-merge"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/note\\.sql$",
+    "tags": ["@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/interaction\\.sql$",
+    "tags": ["@area:contacts", "@area:overdue"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/tag\\.sql$",
+    "tags": ["@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/external_contact\\.sql$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/external_identity\\.sql$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/calendar_event\\.sql$",
+    "tags": ["@area:meetings"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/oauth\\.sql$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/external_sync\\.sql$",
+    "tags": ["@area:settings"]
+  }
+]

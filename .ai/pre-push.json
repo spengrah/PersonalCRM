@@ -12,7 +12,7 @@
       { "name": "Unit tests", "command": "make test-unit" },
       { "name": "Integration tests", "command": "make test-integration" },
       { "name": "Frontend tests", "command": "make test-frontend" },
-      { "name": "E2E tests", "command": "make test-e2e" }
+      { "name": "E2E tests", "command": "make test-e2e-diff" }
     ]
   },
   "learnings": {

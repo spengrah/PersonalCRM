@@ -1,9 +1,12 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test
+
+# Repo root (supports running make from subdirectories).
+REPO_ROOT := $(shell git rev-parse --show-toplevel)
 
 # Go build cache (workspace-local by default; override via env).
-GOCACHE ?= $(CURDIR)/.gocache
+GOCACHE ?= $(REPO_ROOT)/.gocache
 export GOCACHE
 
 # Default target
@@ -41,6 +44,8 @@ help:
 	@echo "  test-integration- Run backend integration tests only"
 	@echo "  test-frontend   - Run frontend unit tests"
 	@echo "  test-e2e        - Run Playwright E2E tests"
+	@echo "  test-e2e-local  - Run Playwright E2E tests (honors PLAYWRIGHT_GREP)"
+	@echo "  test-e2e-diff   - Run diff-selected E2E tests (core + impacted)"
 	@echo "  test-api        - Run API endpoint tests"
 	@echo "  smoke-test      - Full system verification (restart + test)"
 	@echo ""
@@ -185,21 +190,47 @@ test-e2e: e2e-db
 	@-lsof -ti:8080 | xargs -r kill -9 2>/dev/null || true
 	@sleep 1
 	@echo "Running Playwright E2E tests..."
-	@ENV_FILE=$${ENV_FILE:-$(CURDIR)/.env.example.testing}; \
+	@ENV_FILE=$${ENV_FILE:-$(REPO_ROOT)/.env.example.testing}; \
 	if [ ! -f "$$ENV_FILE" ]; then echo "❌ ENV file not found: $$ENV_FILE"; exit 1; fi; \
 	set -a; . "$$ENV_FILE"; set +a; \
 	export DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable"; \
-	if [ -f frontend/.env.local ]; then mv frontend/.env.local frontend/.env.local.bak; fi; \
-	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > frontend/.env.local; \
-	echo "NEXT_PUBLIC_API_URL=http://localhost:8080" >> frontend/.env.local; \
-	cd frontend && CI=true DATABASE_URL="$$DATABASE_URL" API_KEY=$$API_KEY NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 ./node_modules/.bin/playwright test --project=chromium; \
+	if [ -f "$(REPO_ROOT)/frontend/.env.local" ]; then mv "$(REPO_ROOT)/frontend/.env.local" "$(REPO_ROOT)/frontend/.env.local.bak"; fi; \
+	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > "$(REPO_ROOT)/frontend/.env.local"; \
+	echo "NEXT_PUBLIC_API_URL=http://localhost:8080" >> "$(REPO_ROOT)/frontend/.env.local"; \
+	cd "$(REPO_ROOT)/frontend" && CI=true DATABASE_URL="$$DATABASE_URL" API_KEY=$$API_KEY NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 ./node_modules/.bin/playwright test --project=chromium; \
 	EXIT_CODE=$$?; \
-	rm -f frontend/.env.local; \
-	if [ -f frontend/.env.local.bak ]; then mv frontend/.env.local.bak frontend/.env.local; fi; \
+	rm -f "$(REPO_ROOT)/frontend/.env.local"; \
+	if [ -f "$(REPO_ROOT)/frontend/.env.local.bak" ]; then mv "$(REPO_ROOT)/frontend/.env.local.bak" "$(REPO_ROOT)/frontend/.env.local"; fi; \
 	exit $$EXIT_CODE
 
+test-e2e-local: e2e-db
+	@echo "Cleaning up any conflicting processes..."
+	@-pkill -f "playwright" 2>/dev/null || true
+	@-pkill -f "next.*dev" 2>/dev/null || true
+	@-lsof -ti:3000 | xargs -r kill -9 2>/dev/null || true
+	@-lsof -ti:8080 | xargs -r kill -9 2>/dev/null || true
+	@sleep 1
+	@echo "Running Playwright E2E tests (local selection)..."
+	@ENV_FILE=$${ENV_FILE:-$(REPO_ROOT)/.env.example.testing}; \
+	if [ ! -f "$$ENV_FILE" ]; then echo "❌ ENV file not found: $$ENV_FILE"; exit 1; fi; \
+	set -a; . "$$ENV_FILE"; set +a; \
+	export DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable"; \
+	if [ -f "$(REPO_ROOT)/frontend/.env.local" ]; then mv "$(REPO_ROOT)/frontend/.env.local" "$(REPO_ROOT)/frontend/.env.local.bak"; fi; \
+	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > "$(REPO_ROOT)/frontend/.env.local"; \
+	echo "NEXT_PUBLIC_API_URL=http://localhost:8080" >> "$(REPO_ROOT)/frontend/.env.local"; \
+	GREP_ARGS=""; \
+	if [ -n "$$PLAYWRIGHT_GREP" ]; then GREP_ARGS="--grep $$PLAYWRIGHT_GREP"; fi; \
+	cd "$(REPO_ROOT)/frontend" && DATABASE_URL="$$DATABASE_URL" API_KEY=$$API_KEY NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 ./node_modules/.bin/playwright test --project=chromium $$GREP_ARGS; \
+	EXIT_CODE=$$?; \
+	rm -f "$(REPO_ROOT)/frontend/.env.local"; \
+	if [ -f "$(REPO_ROOT)/frontend/.env.local.bak" ]; then mv "$(REPO_ROOT)/frontend/.env.local.bak" "$(REPO_ROOT)/frontend/.env.local"; fi; \
+	exit $$EXIT_CODE
+
+test-e2e-diff:
+	@node "$(REPO_ROOT)/scripts/run-e2e-local.mjs"
+
 e2e-db:
-	@bash scripts/ensure-postgres-for-tests.sh
+	@bash "$(REPO_ROOT)/scripts/ensure-postgres-for-tests.sh"
 	@echo "Setting up isolated E2E test database..."
 	@if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then \
 		docker exec crm-postgres psql -U crm_user -d postgres -c "DROP DATABASE IF EXISTS personal_crm_test;" 2>/dev/null || true; \

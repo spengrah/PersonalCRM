@@ -2,14 +2,14 @@
 
 ## Before Pushing
 
-**Always run the full test suite locally before pushing:**
+**Always run the required test suite locally before pushing:**
 
 ```bash
 make test         # All backend tests (unit + integration)
-make test-e2e     # Playwright E2E tests
+make test-e2e-diff # Diff-selected Playwright E2E tests (core + impacted)
 ```
 
-This catches issues that CI would flag, avoiding multiple push-fix-push cycles.
+CI runs the full E2E suite; local runs use diff selection for speed.
 
 ## Test Pyramid
 
@@ -71,9 +71,24 @@ frontend/tests/e2e/   # Playwright browser tests
 make test-unit         # Backend unit tests (fast, no DB)
 make test-integration  # Backend integration tests (needs DB)
 make test-frontend     # Frontend unit tests
-make test-e2e          # Playwright E2E tests
+make test-e2e          # Full Playwright E2E tests
+make test-e2e-local    # Playwright E2E tests (honors PLAYWRIGHT_GREP)
+make test-e2e-diff     # Diff-selected E2E tests (core + impacted)
 make test              # All backend tests
 ```
+
+## E2E Diff Selection
+
+Local E2E runs use tags and a path-to-tag map to select tests:
+
+- Tags live in test titles (e.g., `@smoke`, `@area:contacts`)
+- Mapping lives in `frontend/tests/e2e/test-map.json`
+- Selector script: `scripts/run-e2e-local.mjs`
+
+**Rules:**
+- Always keep a small `@smoke` set for core flows
+- Add area tags to new specs
+- Update the map when adding new pages/areas
 
 ## E2E Test Parallelism
 

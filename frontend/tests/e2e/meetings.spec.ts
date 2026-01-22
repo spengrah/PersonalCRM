@@ -9,7 +9,7 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 }
 
-test.describe('Meetings Component', () => {
+test.describe('Meetings Component @area:meetings', () => {
   let testApi: TestAPI
   let contactId: string
 
@@ -43,7 +43,7 @@ test.describe('Meetings Component', () => {
 
     // Navigate to contact page
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Verify Meetings section exists
     await expect(page.getByRole('heading', { name: /Meetings/i })).toBeVisible()
@@ -75,7 +75,7 @@ test.describe('Meetings Component', () => {
     ])
 
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Click Upcoming filter
     await page.getByRole('button', { name: /Upcoming \(1\)/i }).click()
@@ -93,7 +93,7 @@ test.describe('Meetings Component', () => {
     ])
 
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Click Past filter
     await page.getByRole('button', { name: /Past \(1\)/i }).click()
@@ -118,7 +118,7 @@ test.describe('Meetings Component', () => {
     ])
 
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Find the meeting link - it should be a link with the title text
     const meetingLink = page.getByRole('link', {
@@ -137,7 +137,7 @@ test.describe('Meetings Component', () => {
   test('should not show meetings section when no events exist', async ({ page }) => {
     // Don't seed any events - just navigate to the contact
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Meetings section should not be visible
     await expect(page.getByRole('heading', { name: /Meetings/i })).not.toBeVisible()
@@ -154,7 +154,7 @@ test.describe('Meetings Component', () => {
     await testApi.seedCalendarEvents(contactId, events)
 
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Should show "Load more" button
     await expect(page.getByRole('button', { name: /Load more/i })).toBeVisible()

@@ -1,15 +1,15 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
-test.describe('Dashboard', () => {
-  test('should display dashboard with navigation', async ({ page }) => {
+test.describe('Dashboard @area:dashboard', () => {
+  test('should display dashboard with navigation @smoke', async ({ page }) => {
     await page.goto('/')
 
     // Should redirect to dashboard (client-side redirect via useEffect)
     await expect(page).toHaveURL('/dashboard', { timeout: 10000 })
 
     // Wait for page to fully load
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Should have correct title
     await expect(page).toHaveTitle(/Personal CRM/)
@@ -38,7 +38,7 @@ test.describe('Dashboard', () => {
     await page.goto('/dashboard')
 
     // Wait for content to load
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Should show status message (either overdue count or "all caught up")
     const hasOverdue = await page
@@ -54,14 +54,15 @@ test.describe('Dashboard', () => {
   })
 })
 
-test.describe('Dashboard - With Seeded Data', () => {
+test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () => {
   let testApi: TestAPI
+  let overdueContactId: string
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
 
     // Seed an overdue contact for dashboard testing
-    await testApi.seedOverdueContacts([
+    const { ids } = await testApi.seedOverdueContacts([
       {
         full_name: 'Dashboard Test Contact',
         cadence: 'weekly',
@@ -69,6 +70,7 @@ test.describe('Dashboard - With Seeded Data', () => {
         email: 'dashboard-test@example.com',
       },
     ])
+    overdueContactId = ids[0]
   })
 
   test.afterEach(async () => {
@@ -82,7 +84,7 @@ test.describe('Dashboard - With Seeded Data', () => {
 
     // Navigate to dashboard
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Verify our seeded contact is visible
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
@@ -97,11 +99,17 @@ test.describe('Dashboard - With Seeded Data', () => {
     const markContactedButton = contactCard.getByRole('button', { name: /Mark as Contacted/i })
     await expect(markContactedButton).toBeVisible()
 
+    const markContactedResponse = page.waitForResponse(
+      response =>
+        response.request().method() === 'PATCH' &&
+        response.url().includes(`/api/v1/contacts/${overdueContactId}/last-contacted`)
+    )
+
     // Click "Mark as Contacted"
     await markContactedButton.click()
 
     // Wait for the mutation to complete
-    await page.waitForTimeout(2000)
+    await markContactedResponse
 
     // The contact should no longer be overdue, so it should vanish from the dashboard
     await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({

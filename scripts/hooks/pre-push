@@ -274,8 +274,8 @@ run_learnings() {
     # Save extraction point so we can skip next time if only learnings docs change
     save_extraction_commit
 
-    # Check if new learnings were added (uncommitted changes to file)
-    if git diff --quiet .ai/log/learnings.yaml 2>/dev/null; then
+    # Check if new learnings were added (uncommitted changes to learnings logs)
+    if git diff --quiet -- .ai/log/learnings .ai/log/learnings.yaml 2>/dev/null; then
       echo "  [learn] OK No new learnings" >&2
       echo "PASS" > "$LEARN_RESULT"
     else
