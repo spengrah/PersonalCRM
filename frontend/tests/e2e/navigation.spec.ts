@@ -1,6 +1,10 @@
 import { test, expect } from '@playwright/test'
 
 test.describe('Navigation @area:navigation', () => {
+  // Note: Sync indicator visual states (gray/green/red) are tested via unit tests for
+  // getAggregateSyncStatus and getSyncIconClasses. Full E2E state testing would require
+  // complex API mocking to simulate sync states, which isn't warranted for this nav indicator.
+  // These E2E tests verify the infrastructure (icon presence, CSS animation) works correctly.
   test.describe('Sync Status Indicator', () => {
     test('imports nav item should have an icon element', async ({ page }) => {
       await page.goto('/dashboard')

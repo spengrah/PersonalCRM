@@ -45,6 +45,18 @@ export function getAggregateSyncStatus(states: SyncState[] | undefined): Aggrega
   return 'synced'
 }
 
+// Get icon classes for sync status indicator on Imports nav item
+export function getSyncIconClasses(syncStatus: AggregateSyncStatus): string {
+  switch (syncStatus) {
+    case 'syncing':
+      return 'text-green-600 animate-sync-pulse'
+    case 'error':
+      return 'text-red-700'
+    default:
+      return '' // Use default text color from parent
+  }
+}
+
 // Format relative time for sync status
 export function formatSyncTime(dateString: string | null): string {
   if (!dateString) return 'Never'

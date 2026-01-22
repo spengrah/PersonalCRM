@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { getAggregateSyncStatus, getSyncStateForAccount, formatSyncTime } from '../use-sync-states'
+import {
+  getAggregateSyncStatus,
+  getSyncStateForAccount,
+  getSyncIconClasses,
+  formatSyncTime,
+} from '../use-sync-states'
 import type { SyncState } from '@/types/sync'
 
 // Helper to create a mock sync state
@@ -91,6 +96,20 @@ describe('getAggregateSyncStatus', () => {
       ]
       expect(getAggregateSyncStatus(states)).toBe('syncing')
     })
+  })
+})
+
+describe('getSyncIconClasses', () => {
+  it('should return green pulse classes for syncing status', () => {
+    expect(getSyncIconClasses('syncing')).toBe('text-green-600 animate-sync-pulse')
+  })
+
+  it('should return red class for error status', () => {
+    expect(getSyncIconClasses('error')).toBe('text-red-700')
+  })
+
+  it('should return empty string for synced status', () => {
+    expect(getSyncIconClasses('synced')).toBe('')
   })
 })
 
