@@ -60,12 +60,11 @@ test.describe('Reminder Lifecycle', () => {
       page.getByRole('button', { name: 'Delete' }).click(),
     ])
 
-    // Wait for navigation and network to settle
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible()
 
     // Go back to reminders page and verify the reminder is gone
     await page.goto('/reminders')
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Reminders', level: 2 })).toBeVisible()
 
     // The reminder should no longer be visible
     await expect(page.getByText(reminderTitle)).not.toBeVisible()
@@ -121,14 +120,17 @@ test.describe('Reminder Lifecycle', () => {
     await expect(page.getByRole('heading', { name: contactName }).first()).toBeVisible()
 
     // Click the "Mark as Contacted" button
+    const lastContactedResponse = page.waitForResponse(
+      response =>
+        response.request().method() === 'PATCH' &&
+        response.url().includes(`/api/v1/contacts/${contactId}/last-contacted`)
+    )
     await page.getByRole('button', { name: /Mark as Contacted/i }).click()
-
-    // Wait for the update to process
-    await page.waitForLoadState('domcontentloaded')
+    await lastContactedResponse
 
     // Go back to reminders page
     await page.goto('/reminders')
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Reminders', level: 2 })).toBeVisible()
 
     // Note: Since we created the "auto" reminder via API without the source field,
     // it will be treated as manual by default. This test verifies the UI flow works.

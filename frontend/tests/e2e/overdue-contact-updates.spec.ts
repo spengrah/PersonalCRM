@@ -77,7 +77,7 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
 
     // Go to dashboard
     await page.goto('/dashboard')
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
 
     // Verify contact appears in overdue list
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
@@ -85,9 +85,6 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     // Click "Mark as Contacted" for our contact
     const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
     await contactCard.getByRole('button', { name: /Mark as Contacted/i }).click()
-
-    // Wait for mutation to complete
-    await page.waitForTimeout(2000)
 
     const afterMark = new Date()
 
@@ -116,16 +113,18 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     const contactName = `${testApi.prefix}-Overdue Test Contact`
 
     await page.goto('/dashboard')
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
 
     // Mark as contacted from dashboard
     const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
     await contactCard.getByRole('button', { name: /Mark as Contacted/i }).click()
-    await page.waitForTimeout(2000)
+    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
+      timeout: 5000,
+    })
 
     // Navigate to contact detail page
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: contactName, level: 2 })).toBeVisible()
 
     // Last contacted should show today's date (use first() as date may appear multiple times)
     const today = getTodayUTC()
@@ -140,14 +139,13 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
 
     // Verify contact is initially overdue on dashboard
     await page.goto('/dashboard')
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
 
     // Go to contact detail and mark as contacted
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: contactName, level: 2 })).toBeVisible()
     await page.getByRole('button', { name: /Mark as Contacted/i }).click()
-    await page.waitForTimeout(2000)
 
     // Last contacted should update to today (use first() as date may appear multiple times)
     const today = getTodayUTC()
@@ -155,7 +153,7 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
 
     // Navigate back to dashboard
     await page.goto('/dashboard')
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
 
     // Contact should no longer appear
     await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible()
@@ -173,24 +171,26 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
 
     // Mark as contacted from dashboard
     await page.goto('/dashboard')
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
 
     const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
     await contactCard.getByRole('button', { name: /Mark as Contacted/i }).click()
-    await page.waitForTimeout(2000)
+    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
+      timeout: 5000,
+    })
 
     // 1. Dashboard: contact should be gone
     await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible()
 
     // 2. Contact Detail: should show today's date (use first() as date may appear multiple times)
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
     const today = getTodayUTC()
     await expect(page.getByText(today).first()).toBeVisible()
 
     // 3. Contacts List: should show today's date in the row
     await page.goto('/contacts')
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible()
     const contactRow = page.locator('tr').filter({ hasText: contactName })
     await expect(contactRow.getByText(today)).toBeVisible()
 
@@ -206,13 +206,15 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     const contactName = `${testApi.prefix}-Overdue Test Contact`
 
     await page.goto('/dashboard')
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
 
     const beforeMark = new Date()
 
     const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
     await contactCard.getByRole('button', { name: /Mark as Contacted/i }).click()
-    await page.waitForTimeout(2000)
+    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
+      timeout: 5000,
+    })
 
     const afterMark = new Date()
 

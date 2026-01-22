@@ -99,7 +99,6 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const fullName = `${testApi.prefix}-Long Notes Contact`
 
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     // Verify "Show more" button is visible (indicates notes overflow the 4-line clamp)
@@ -267,7 +266,6 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.getByRole('button', { name: 'Mark as Contacted' }).click()
 
     // Wait for the update and verify the date is today (UTC date, see getTodayUTC)
-    await page.waitForLoadState('domcontentloaded')
     const todayUtc = getTodayUTC()
     const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
     await expect(lastContactedRow.locator('dd span').first()).toContainText(todayUtc)
@@ -303,7 +301,6 @@ test.describe('Contacts - UI Create (preserved for coverage)', () => {
       page.getByRole('button', { name: 'Create Contact' }).click(),
     ])
 
-    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     // Verify notes are displayed on detail page
@@ -311,14 +308,13 @@ test.describe('Contacts - UI Create (preserved for coverage)', () => {
 
     // Edit the contact to update notes (use first() to get header Edit button, not the last contacted edit)
     await page.getByRole('button', { name: 'Edit' }).first().click()
-    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByLabel('Notes')).toBeVisible()
 
     const updatedNotes = 'Updated notes: Follow up about collaboration opportunity.'
     await page.getByLabel('Notes').fill(updatedNotes)
 
     // Submit the inline edit form
     await page.getByRole('button', { name: 'Update Contact' }).click()
-    await page.waitForLoadState('domcontentloaded')
 
     // Wait for form to close and return to detail view (Edit button visible again)
     await expect(page.getByRole('button', { name: 'Edit' }).first()).toBeVisible({ timeout: 15000 })
@@ -378,7 +374,6 @@ test.describe('Contacts - UI Create (preserved for coverage)', () => {
       page.getByRole('button', { name: 'Create Contact' }).click(),
     ])
 
-    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     for (const method of methods) {
