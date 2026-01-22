@@ -24,6 +24,8 @@ These rules apply to all AI agents working on this project.
 
 - **Always add comprehensive tests** for new/changed code
 - Run `make test && make test-e2e-diff` to verify changes work locally (CI runs full E2E)
+- Run `make test-e2e` only for the full suite (CI or when explicitly requested)
+- Use make test-e2e-local only when a specific grep is requested.
 - Unit tests for business logic, integration tests for DB operations, E2E for user flows
 
 ## Pre-push Hooks
@@ -48,6 +50,8 @@ PRs must meet ALL of these to pass review:
 - Follows repository conventions (this file)
 - Proper error handling and validation
 - No TODOs or technical debt introduced
+
+See `.ai/rules/code-review.md` for details
 
 ## Git Practices
 
