@@ -77,7 +77,7 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
 
     // Go to dashboard
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Verify contact appears in overdue list
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
@@ -116,7 +116,7 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     const contactName = `${testApi.prefix}-Overdue Test Contact`
 
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Mark as contacted from dashboard
     const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
@@ -125,7 +125,7 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
 
     // Navigate to contact detail page
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Last contacted should show today's date (use first() as date may appear multiple times)
     const today = getTodayUTC()
@@ -140,12 +140,12 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
 
     // Verify contact is initially overdue on dashboard
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
 
     // Go to contact detail and mark as contacted
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await page.getByRole('button', { name: /Mark as Contacted/i }).click()
     await page.waitForTimeout(2000)
 
@@ -155,7 +155,7 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
 
     // Navigate back to dashboard
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Contact should no longer appear
     await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible()
@@ -173,7 +173,7 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
 
     // Mark as contacted from dashboard
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
     await contactCard.getByRole('button', { name: /Mark as Contacted/i }).click()
@@ -184,13 +184,13 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
 
     // 2. Contact Detail: should show today's date (use first() as date may appear multiple times)
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     const today = getTodayUTC()
     await expect(page.getByText(today).first()).toBeVisible()
 
     // 3. Contacts List: should show today's date in the row
     await page.goto('/contacts')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     const contactRow = page.locator('tr').filter({ hasText: contactName })
     await expect(contactRow.getByText(today)).toBeVisible()
 
@@ -206,7 +206,7 @@ test.describe('Overdue Contact Updates - With Seeded Data', () => {
     const contactName = `${testApi.prefix}-Overdue Test Contact`
 
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     const beforeMark = new Date()
 
@@ -260,7 +260,7 @@ test.describe('Overdue Contact Updates - Multiple Contacts', () => {
 
   test('should show multiple overdue contacts on dashboard', async ({ page }) => {
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Both contacts should be visible
     await expect(

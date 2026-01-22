@@ -196,6 +196,7 @@ jobs:
         working-directory: frontend
         env:
           CI: true
+          PLAYWRIGHT_WORKERS: 4
           DATABASE_URL: postgres://crm_user:crm_password@localhost:5432/personal_crm?sslmode=disable
           SESSION_SECRET: test-session-secret-for-ci
           API_KEY: test-api-key-for-ci

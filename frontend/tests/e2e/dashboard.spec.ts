@@ -9,7 +9,7 @@ test.describe('Dashboard', () => {
     await expect(page).toHaveURL('/dashboard', { timeout: 10000 })
 
     // Wait for page to fully load
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Should have correct title
     await expect(page).toHaveTitle(/Personal CRM/)
@@ -38,7 +38,7 @@ test.describe('Dashboard', () => {
     await page.goto('/dashboard')
 
     // Wait for content to load
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Should show status message (either overdue count or "all caught up")
     const hasOverdue = await page
@@ -82,7 +82,7 @@ test.describe('Dashboard - With Seeded Data', () => {
 
     // Navigate to dashboard
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Verify our seeded contact is visible
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()

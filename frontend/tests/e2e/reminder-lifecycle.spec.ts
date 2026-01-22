@@ -61,11 +61,11 @@ test.describe('Reminder Lifecycle', () => {
     ])
 
     // Wait for navigation and network to settle
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Go back to reminders page and verify the reminder is gone
     await page.goto('/reminders')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // The reminder should no longer be visible
     await expect(page.getByText(reminderTitle)).not.toBeVisible()
@@ -124,11 +124,11 @@ test.describe('Reminder Lifecycle', () => {
     await page.getByRole('button', { name: /Mark as Contacted/i }).click()
 
     // Wait for the update to process
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Go back to reminders page
     await page.goto('/reminders')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Note: Since we created the "auto" reminder via API without the source field,
     // it will be treated as manual by default. This test verifies the UI flow works.

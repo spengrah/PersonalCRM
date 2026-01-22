@@ -27,7 +27,7 @@ test.describe('Contact Merge', () => {
 
     // Navigate to contact detail page
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     // Click the Merge button in the action menu
@@ -51,7 +51,7 @@ test.describe('Contact Merge', () => {
     const fullName = `${testApi.prefix}-Target Contact Display`
 
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     // Open merge modal
@@ -82,7 +82,7 @@ test.describe('Contact Merge', () => {
     const sourceName = `${testApi.prefix}-Select Source Contact`
 
     await page.goto(`/contacts/${targetId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
 
     // Open merge modal
@@ -127,7 +127,7 @@ test.describe('Contact Merge', () => {
     const sourceName = `${testApi.prefix}-Conflict Source`
 
     await page.goto(`/contacts/${targetId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
 
     // Open merge modal
@@ -179,7 +179,7 @@ test.describe('Contact Merge', () => {
     const sourceName = `${testApi.prefix}-Toggle Source`
 
     await page.goto(`/contacts/${targetId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
 
     // Open merge modal
@@ -221,7 +221,7 @@ test.describe('Contact Merge', () => {
     const sourceName = `${testApi.prefix}-Name Edit Source`
 
     await page.goto(`/contacts/${targetId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
 
     // Open merge modal
@@ -255,7 +255,7 @@ test.describe('Contact Merge', () => {
     const fullName = `${testApi.prefix}-Escape Edit Test`
 
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     // Open merge modal
@@ -290,7 +290,7 @@ test.describe('Contact Merge', () => {
     const fullName = `${testApi.prefix}-Escape Close Test`
 
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     // Open merge modal
@@ -316,7 +316,7 @@ test.describe('Contact Merge', () => {
     const fullName = `${testApi.prefix}-Backdrop Close Test`
 
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     // Open merge modal
@@ -353,7 +353,7 @@ test.describe('Contact Merge', () => {
     await testApi.seedContactNote(sourceId, 'Source notes to transfer')
 
     await page.goto(`/contacts/${targetId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
 
     // Open merge modal
@@ -426,7 +426,7 @@ test.describe('Contact Merge', () => {
     const sourceName = `${testApi.prefix}-QuickFill Source Name`
 
     await page.goto(`/contacts/${targetId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
 
     // Open merge modal
@@ -466,7 +466,7 @@ test.describe('Contact Merge', () => {
     const fullName = `${testApi.prefix}-Disabled Button Test`
 
     await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     // Open merge modal
@@ -494,7 +494,7 @@ test.describe('Contact Merge', () => {
     const sourceName = `${testApi.prefix}-Loading Source`
 
     await page.goto(`/contacts/${targetId}`)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
 
     // Open merge modal

@@ -4,7 +4,7 @@ test.describe('Navigation', () => {
   test('navigation remains visible when scrolling', async ({ page }) => {
     // Navigate to contacts page (has enough content to scroll)
     await page.goto('/contacts')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Verify nav is initially visible using accessibility-focused selector
     const nav = page.getByRole('navigation')
@@ -33,7 +33,7 @@ test.describe('Navigation', () => {
 
   test('navigation has correct sticky classes', async ({ page }) => {
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Verify the nav element has sticky positioning classes
     const nav = page.getByRole('navigation')

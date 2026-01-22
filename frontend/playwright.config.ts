@@ -1,13 +1,23 @@
 import { defineConfig, devices } from '@playwright/test'
+import os from 'os'
 
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  // Use 1 worker to avoid parallel test interference
-  workers: 1,
-  reporter: 'html',
+  // Allow safe parallelism; override with PLAYWRIGHT_WORKERS if needed
+  workers: (() => {
+    const configured = Number.parseInt(process.env.PLAYWRIGHT_WORKERS || '', 10)
+    if (Number.isFinite(configured) && configured > 0) {
+      return configured
+    }
+
+    const cpuCount = os.cpus().length || 1
+    const maxWorkers = process.env.CI ? 2 : cpuCount >= 8 ? 4 : cpuCount >= 4 ? 3 : 2
+    return Math.max(1, Math.min(maxWorkers, cpuCount))
+  })(),
+  reporter: [['html', { open: 'never' }], ['list']],
   use: {
     baseURL: 'http://localhost:3000',
     trace: 'on-first-retry',

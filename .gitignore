@@ -89,6 +89,7 @@ $RECYCLE.BIN/
 # ===========================================
 # Binaries
 backend/bin/
+backend/crm-api
 backend/*.exe
 backend/*.exe~
 backend/*.dll

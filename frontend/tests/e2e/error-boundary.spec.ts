@@ -31,7 +31,7 @@ test.describe('Error Boundary', () => {
   test('should display error UI when API returns error', async ({ page }) => {
     // Navigate to the dashboard
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Note: This test verifies the error UI elements exist in the ErrorBoundary component.
     // To fully test error boundary behavior, we'd need to:
@@ -61,7 +61,7 @@ test.describe('Error Boundary', () => {
 
     // For now, just verify the dashboard loads without errors
     await page.goto('/dashboard')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
   })
 })

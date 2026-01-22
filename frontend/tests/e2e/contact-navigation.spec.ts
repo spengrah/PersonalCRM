@@ -26,12 +26,12 @@ test.describe('Contact Keyboard Navigation', () => {
 
     // Navigate to contacts list first to establish context
     await page.goto('/contacts')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Click on the middle contact (B) to go to its detail page
     await page.getByText(fullNameB).click()
     await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+/)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullNameB })).toBeVisible({ timeout: 15000 })
 
     // Verify navigation bar is visible
@@ -40,7 +40,7 @@ test.describe('Contact Keyboard Navigation', () => {
 
     // Press right arrow to go to next contact
     await page.keyboard.press('ArrowRight')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Should have navigated (the exact contact depends on sort order)
     // Just verify we're on a different contact or the navigation worked
@@ -62,12 +62,12 @@ test.describe('Contact Keyboard Navigation', () => {
 
     // Go to list first to establish context
     await page.goto('/contacts')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Click on third contact row
     await page.getByText(fullName3).click()
     await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+/)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName3 })).toBeVisible({ timeout: 15000 })
 
     // Wait for navigation IDs to load, then check for position indicator
@@ -88,11 +88,13 @@ test.describe('Contact Keyboard Navigation', () => {
 
     // Go to list first
     await page.goto('/contacts')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Go to first contact detail via direct URL with sort params
-    await page.goto(`/contacts/${ids[0]}?sort=name&order=asc`)
-    await page.waitForLoadState('networkidle')
+    await page.goto(
+      `/contacts/${ids[0]}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
+    )
+    await page.waitForLoadState('domcontentloaded')
 
     // Previous button should be disabled at first position
     const prevButton = page.getByRole('button', { name: 'Previous contact' })
@@ -115,15 +117,15 @@ test.describe('Contact Keyboard Navigation', () => {
 
     // Go to list first, then to first contact
     await page.goto('/contacts')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await page.getByText(fullNameA).click()
     await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+/)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullNameA })).toBeVisible({ timeout: 15000 })
 
     // Enter edit mode
     await page.getByRole('button', { name: 'Edit' }).first().click()
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Navigation buttons should be visually disabled (grayed out)
     const prevButton = page.getByRole('button', { name: 'Previous contact' })
@@ -153,15 +155,15 @@ test.describe('Contact Keyboard Navigation', () => {
 
     // Go to contact detail and enter edit mode
     await page.goto('/contacts')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await page.getByText(fullNameA).click()
     await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+/)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullNameA })).toBeVisible({ timeout: 15000 })
 
     // Enter edit mode to get input fields
     await page.getByRole('button', { name: 'Edit' }).first().click()
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Focus on name input
     const nameInput = page.getByLabel('Full Name')
@@ -190,8 +192,10 @@ test.describe('Contact Keyboard Navigation', () => {
 
     // Go directly to a contact detail page with sort params
     // This tests that the detail page preserves context when navigating
-    await page.goto(`/contacts/${ids[0]}?sort=name&order=asc`)
-    await page.waitForLoadState('networkidle')
+    await page.goto(
+      `/contacts/${ids[0]}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
+    )
+    await page.waitForLoadState('domcontentloaded')
 
     // URL should contain the sort params
     expect(page.url()).toContain('sort=name')
@@ -204,7 +208,7 @@ test.describe('Contact Keyboard Navigation', () => {
     await page.keyboard.press('ArrowRight')
     // Wait for navigation to complete
     await page.waitForTimeout(500)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // URL should still contain sort params after navigation
     expect(page.url()).toContain('sort=name')
@@ -219,9 +223,11 @@ test.describe('Contact Keyboard Navigation', () => {
       { full_name: 'Button Nav 3' },
     ])
 
-    // Go directly to first contact with sort param to ensure predictable order
-    await page.goto(`/contacts/${ids[0]}?sort=name&order=asc`)
-    await page.waitForLoadState('networkidle')
+    // Go directly to first contact with sort param and search filter to isolate IDs
+    await page.goto(
+      `/contacts/${ids[0]}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
+    )
+    await page.waitForLoadState('domcontentloaded')
 
     // Wait for navigation bar to be fully ready with IDs loaded
     await expect(page.getByRole('button', { name: 'Next contact' })).toBeVisible({ timeout: 10000 })
@@ -234,10 +240,8 @@ test.describe('Contact Keyboard Navigation', () => {
     const nextButton = page.getByRole('button', { name: 'Next contact' })
     await expect(nextButton).toBeEnabled({ timeout: 5000 })
     await nextButton.click()
-
-    // Wait for navigation to complete
-    await page.waitForTimeout(500)
-    await page.waitForLoadState('networkidle')
+    await page.waitForURL(url => url.toString() !== initialUrl)
+    await page.waitForLoadState('domcontentloaded')
 
     // Should have navigated to a different contact
     expect(page.url()).not.toBe(initialUrl)
@@ -252,17 +256,17 @@ test.describe('Contact Keyboard Navigation', () => {
 
     // Go to list first
     await page.goto('/contacts')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Click on contact
     await page.getByText(fullName).click()
     await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+/)
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     // Press Escape to return to list
     await page.keyboard.press('Escape')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // Should be back on contacts list
     await expect(page.getByRole('heading', { name: 'Contacts' })).toBeVisible()
