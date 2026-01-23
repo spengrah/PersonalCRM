@@ -37,3 +37,18 @@ body {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* Custom pulse animation for sync indicator (2.5s, opacity 1→0.5→1) */
+@keyframes sync-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-sync-pulse {
+  animation: sync-pulse 2.5s ease-in-out infinite;
+}

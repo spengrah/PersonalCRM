@@ -2,9 +2,12 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useIsMutating } from '@tanstack/react-query'
 import { Users, Calendar, Bell, Settings, Cake, Clock, CloudDownload } from 'lucide-react'
 import { clsx } from 'clsx'
 import { TimeAccelerationWidget } from '@/components/ui/time-acceleration-widget'
+import { useSyncStates, getAggregateSyncStatus, getSyncIconClasses } from '@/hooks/use-sync-states'
+import { syncMutationKey } from '@/hooks/use-imports'
 
 const isTimeTrackingEnabled = process.env.NEXT_PUBLIC_ENABLE_TIME_TRACKING === 'true'
 
@@ -22,6 +25,14 @@ const navigation = [
 
 export function Navigation() {
   const pathname = usePathname()
+  const { data: syncStates } = useSyncStates()
+  const isSyncMutating = useIsMutating({ mutationKey: syncMutationKey })
+
+  // Show 'syncing' if a sync mutation is in flight (optimistic UI)
+  // This is needed because the sync API is synchronous - the backend
+  // doesn't return until sync completes, so we can't fetch the 'syncing'
+  // status from the DB during the sync.
+  const syncStatus = isSyncMutating > 0 ? 'syncing' : getAggregateSyncStatus(syncStates)
 
   return (
     <nav className="bg-white shadow-sm border-b sticky top-0 z-50">
@@ -47,7 +58,12 @@ export function Navigation() {
                         : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                     )}
                   >
-                    <Icon className="w-4 h-4 mr-2" />
+                    <Icon
+                      className={clsx(
+                        'w-4 h-4 mr-2',
+                        item.name === 'Imports' && getSyncIconClasses(syncStatus)
+                      )}
+                    />
                     {item.name}
                   </Link>
                 )

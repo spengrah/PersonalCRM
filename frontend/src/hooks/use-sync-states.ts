@@ -1,14 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { syncApi } from '@/lib/sync-api'
+import { syncKeys } from '@/lib/query-keys'
 import type { SyncState } from '@/types/sync'
 
-// Query keys for sync states
-export const syncKeys = {
-  all: ['sync'] as const,
-  states: () => [...syncKeys.all, 'states'] as const,
-  state: (source: string, accountId?: string) =>
-    [...syncKeys.all, 'state', source, accountId] as const,
-}
+// Re-export for backwards compatibility
+export { syncKeys }
 
 // Get all sync states
 export function useSyncStates() {
@@ -27,6 +23,34 @@ export function getSyncStateForAccount(
   accountId: string
 ): SyncState | undefined {
   return states?.find(s => s.source === source && s.account_id === accountId)
+}
+
+// Aggregate sync status type
+export type AggregateSyncStatus = 'synced' | 'syncing' | 'error'
+
+// Get aggregate sync status across all sync states
+// Priority: syncing > error > synced
+export function getAggregateSyncStatus(states: SyncState[] | undefined): AggregateSyncStatus {
+  if (!states || states.length === 0) return 'synced'
+
+  const hasSyncing = states.some(s => s.status === 'syncing')
+  const hasError = states.some(s => s.status === 'error')
+
+  if (hasSyncing) return 'syncing'
+  if (hasError) return 'error'
+  return 'synced'
+}
+
+// Get icon classes for sync status indicator on Imports nav item
+export function getSyncIconClasses(syncStatus: AggregateSyncStatus): string {
+  switch (syncStatus) {
+    case 'syncing':
+      return 'text-green-600 animate-sync-pulse'
+    case 'error':
+      return 'text-red-700'
+    default:
+      return '' // Use default text color from parent
+  }
 }
 
 // Format relative time for sync status

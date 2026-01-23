@@ -1,0 +1,120 @@
+---
+timestamp: "2026-01-22T16:55:11.314231"
+type: gotcha
+summary: Pencil design colors should match existing UI styling, not literal spec
+detail: |
+  When creating Pencil designs for the sync indicator, the issue specified `text-gray-600` for the synced state, but the existing navigation icons use `text-gray-500`. The designs initially used `$--gray-500` to match the UI, which created a discrepancy with the issue spec. The user confirmed to 'match existing styling' over the literal spec. Lesson: When design specs conflict with existing UI patterns, prefer consistency with the existing codebase.
+actionable: true
+
+---
+timestamp: "2026-01-22T16:55:11.314231"
+type: gotcha
+summary: E2E test wait strategy changed from 'networkidle' to 'domcontentloaded'
+detail: |
+  During rebase, discovered upstream changed E2E test wait strategy from `page.waitForLoadState('networkidle')` to `page.waitForLoadState('domcontentloaded')`. This was a recent codebase change that would have caused merge conflicts. When writing new E2E tests, check recent commits for wait strategy patterns to avoid immediate conflicts.
+actionable: true
+
+---
+timestamp: "2026-01-22T16:55:11.314231"
+type: architecture
+summary: Test tagging inherits from outer describe block - no need for nested tags
+detail: |
+  When adding sync indicator E2E tests to navigation.spec.ts, the tests were nested inside `test.describe('Sync Status Indicator', ...)` which was itself inside `test.describe('Navigation @area:navigation', ...)`. The nested tests automatically inherit the `@area:navigation` tag from the outer describe - no need to add tags to nested describes. The test-map.json maps file paths to tags, not individual test blocks.
+actionable: true
+
+---
+timestamp: "2026-01-22T16:55:11.314231"
+type: documentation_gap
+summary: E2E test tagging documentation is insufficient
+detail: |
+  The `.ai/rules/testing.md` has minimal coverage of test tagging (lines 80-91) that mentions tags exist and where the test-map.json lives, but doesn't explain: (1) the structure/format of test-map.json, (2) how to determine which tags to use, (3) when to add new entries vs use existing tags, (4) how the path-to-tag mapping actually works. During this session, the user had to explicitly ask 'do we have a @navigation tag' and 'did we use it correctly', suggesting this should be more discoverable. The brief mention of 'Add area tags to new specs' and 'Update the map when adding new pages/areas' is too vague for agents to apply correctly without examining existing patterns.
+actionable: true
+
+---
+timestamp: "2026-01-22T16:55:11.314231"
+type: rule
+summary: "Commit Pencil design assets with 'docs:' prefix, not 'chore:'"
+detail: |
+  When committing the ui-components.pen file with sync indicator designs, initially attempted to use 'chore:' prefix. User questioned if that was correct. Since Pencil designs are specifications/mockups that document what features should look like (not maintenance tasks or build config), they should use 'docs:' prefix. The designs directory contains design documentation that guides implementation, making 'docs:' the appropriate conventional commit type.
+actionable: true
+
+---
+timestamp: "2026-01-22T16:55:11.314231"
+type: gotcha
+summary: Always check git status before creating feature branch
+detail: |
+  Started implementation work while on main branch that was 2 commits behind origin/main. This required mid-implementation stash-pull-rebase which caused a merge conflict in navigation.spec.ts. Should have checked branch status and pulled/rebased BEFORE starting work. The conflict resolution was successful but could have been avoided entirely by syncing with origin first.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:08:02.939499"
+type: gotcha
+summary: Synchronous sync API prevents real-time status display without optimistic UI
+detail: |
+  The backend sync API is synchronous - it doesn't return until sync completes. This means the frontend cannot fetch the 'syncing' status from the database during the sync operation because it's blocked waiting for the HTTP response. The nav polling interval (60s) is also too slow to catch brief syncs. Solution: Use React Query's useIsMutating to track pending mutations and display optimistic 'syncing' state in the UI based on mutation status, not backend database status.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:08:02.939499"
+type: architecture
+summary: CLAUDE_CODE env var must be manually configured, not automatic
+detail: |
+  Claude Code CLI does not automatically set the CLAUDE_CODE environment variable. The learnings extraction script checks for this variable to detect if it's running in Claude Code vs other AI tools. To enable learnings extraction, you must manually add "env": {"CLAUDE_CODE": "1"} to .claude/settings.json. This is documented in the script but easy to miss.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:08:02.939499"
+type: architecture
+summary: Query invalidation requires centralized key management for cross-domain effects
+detail: |
+  When adding new queries that need invalidation from mutations, query keys must be defined in the centralized query-keys.ts file (not locally in hooks) so they can be imported by query-invalidation.ts. The syncKeys were initially defined in use-sync-states.ts but had to be moved to query-keys.ts to enable invalidation from import:synced events. Always define query keys centrally.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:08:02.939499"
+type: rule
+summary: Import mutation onSuccess should invalidate sync states, not just imports
+detail: |
+  The 'import:synced' domain event (triggered by sync mutations) should invalidate both importKeys.lists() AND syncKeys.states(). Previously it only invalidated import lists, causing the nav sync indicator to miss status updates. When triggering a sync, the sync states query must be invalidated so UI components can reflect the updated sync status.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:08:02.939499"
+type: distinction
+summary: Use onMutate vs onSuccess based on whether backend operation is async
+detail: |
+  React Query mutations have both onMutate (fires before API call) and onSuccess (fires after API returns). For synchronous backend operations where the DB state changes during the request, onMutate won't help because the frontend can't fetch the intermediate state while blocked on the response. For async operations, onMutate can trigger early refetches. For sync operations, use optimistic UI (useIsMutating) instead of relying on backend status.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:08:02.939499"
+type: gotcha
+summary: "PR feedback addressed: test refactoring over full E2E state mocking"
+detail: |
+  When PR reviewers request full E2E testing of visual states, consider the cost/benefit. For the sync indicator, full E2E state testing would require complex API mocking to simulate various sync states. The pragmatic approach agreed with the user: test infrastructure (icon presence, CSS animation definition) in E2E, test state logic thoroughly in unit tests, and document the decision with a comment explaining why complex mocking isn't warranted for this particular feature.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:10:41.845367"
+type: gotcha
+summary: Pre-push learnings extraction should be reviewed before blind commit
+detail: |
+  When the pre-push hook extracts new learnings and blocks the push, agents should read and assess whether to apply them to documentation rather than immediately committing. In this session, the agent first tried to blindly commit learnings without reviewing, then on second attempt reviewed them and identified actionable items (#5 about Pencil commit prefix, #9 about query key centralization). The user intervention led to documenting the onMutate vs onSuccess guidance in FRONTEND_STATE.md, which would have been missed otherwise.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:10:41.845367"
+type: rule
+summary: When learnings are extracted, always read and identify actionable items first
+detail: |
+  The workflow should be: (1) Read new learnings file, (2) Identify which are already addressed vs actionable, (3) Ask user which to apply if unclear, (4) Apply actionable learnings to documentation, (5) Commit both learnings and doc updates together. This prevents valuable insights from being filed away without being codified into project documentation. In this session, learning #11 about onMutate vs onSuccess was nearly missed until the user specifically requested it be documented.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:10:41.845367"
+type: documentation_gap
+summary: Core.md lacks guidance on commit prefixes for design artifacts
+detail: |
+  Learning #5 identified that Pencil design assets should use 'docs:' commit prefix, but this isn't documented in core.md's git practices section. The agent identified this as actionable but didn't apply it when the user said 'just commit and push'. Core.md should include a table or section covering commit types for non-code artifacts (designs, diagrams, prototypes, etc.).
+actionable: true
+
