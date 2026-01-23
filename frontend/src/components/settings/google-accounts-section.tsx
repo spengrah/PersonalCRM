@@ -20,6 +20,7 @@ import {
   formatSyncTime,
   accountNeedsReconnection,
 } from '@/hooks/use-sync-states'
+import type { SyncState } from '@/types/sync'
 import { useTriggerSync } from '@/hooks/use-imports'
 import { startGoogleOAuthFlow, GoogleAccount } from '@/lib/oauth-api'
 
