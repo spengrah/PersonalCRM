@@ -17,7 +17,7 @@ vi.mock('../query-client', () => ({
 
 // Import after mocking
 import { invalidateFor, type DomainEvent } from '../query-invalidation'
-import { contactKeys, importKeys, reminderKeys } from '../query-keys'
+import { contactKeys, importKeys, reminderKeys, syncKeys } from '../query-keys'
 
 describe('query-invalidation', () => {
   beforeEach(() => {
@@ -143,12 +143,15 @@ describe('query-invalidation', () => {
         })
       })
 
-      it('invalidates import lists on import:synced', () => {
+      it('invalidates import lists and sync states on import:synced', () => {
         invalidateFor('import:synced')
 
-        expect(mockInvalidateQueries).toHaveBeenCalledTimes(1)
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
           queryKey: importKeys.lists(),
+        })
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: syncKeys.states(),
         })
       })
     })

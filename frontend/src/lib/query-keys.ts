@@ -46,3 +46,11 @@ export const systemKeys = {
   all: ['system'] as const,
   time: () => [...systemKeys.all, 'time'] as const,
 }
+
+// Sync state query keys
+export const syncKeys = {
+  all: ['sync'] as const,
+  states: () => [...syncKeys.all, 'states'] as const,
+  state: (source: string, accountId?: string) =>
+    [...syncKeys.all, 'state', source, accountId] as const,
+}

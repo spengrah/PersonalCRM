@@ -10,7 +10,7 @@
  */
 
 import { queryClient } from './query-client'
-import { contactKeys, importKeys, reminderKeys } from './query-keys'
+import { contactKeys, importKeys, reminderKeys, syncKeys } from './query-keys'
 
 /**
  * Domain events that trigger query invalidations.
@@ -63,8 +63,8 @@ const invalidationRules: Record<DomainEvent, readonly unknown[][]> = {
   'import:linked': [importKeys.lists(), contactKeys.lists()],
   // Ignoring only affects the imports list
   'import:ignored': [importKeys.lists()],
-  // Sync may add new candidates
-  'import:synced': [importKeys.lists()],
+  // Sync trigger updates sync states; completion may add new candidates
+  'import:synced': [importKeys.lists(), syncKeys.states()],
 
   // Reminder events (all invalidate the entire reminders domain)
   'reminder:created': [reminderKeys.all],
@@ -95,4 +95,4 @@ export function invalidateFor(event: DomainEvent): void {
 }
 
 // Re-export keys for convenience (avoids needing two imports)
-export { contactKeys, importKeys, reminderKeys, systemKeys } from './query-keys'
+export { contactKeys, importKeys, reminderKeys, systemKeys, syncKeys } from './query-keys'

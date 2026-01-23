@@ -184,3 +184,8 @@ Enable in development by clicking the flower icon in the bottom-right corner. Sh
 **Stale data across pages:**
 - Check for missing cross-domain invalidations
 - Add the missing query key to the relevant event in `invalidationRules`
+
+**Can't show intermediate state during long API calls:**
+- If the backend operation is **synchronous** (doesn't return until complete), `onMutate` invalidation won't help—the frontend is blocked waiting for the response and can't fetch intermediate state
+- Use **optimistic UI** instead: track pending mutations with `useIsMutating({ mutationKey })` and show optimistic state based on mutation status, not backend data
+- `onMutate` is useful when the backend is **async** (returns immediately, processes in background) and you want to trigger an early refetch to catch the in-progress state

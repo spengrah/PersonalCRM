@@ -1,4 +1,7 @@
 {
+  "env": {
+    "CLAUDE_CODE": "1"
+  },
   "hooks": {
     "PreToolUse": [
       {

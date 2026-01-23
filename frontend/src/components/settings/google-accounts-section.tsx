@@ -2,13 +2,27 @@
 
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { Mail, Plus, Trash2, CheckCircle, AlertCircle, Info, RefreshCw } from 'lucide-react'
+import {
+  Mail,
+  Plus,
+  Trash2,
+  CheckCircle,
+  AlertCircle,
+  Info,
+  RefreshCw,
+  RefreshCcw,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useGoogleAccounts, useRevokeGoogleAccount } from '@/hooks/use-google-accounts'
-import { useSyncStates, getSyncStateForAccount, formatSyncTime } from '@/hooks/use-sync-states'
+import {
+  useSyncStates,
+  getSyncStateForAccount,
+  formatSyncTime,
+  accountNeedsReconnection,
+} from '@/hooks/use-sync-states'
+import type { SyncState } from '@/types/sync'
 import { useTriggerSync } from '@/hooks/use-imports'
 import { startGoogleOAuthFlow, GoogleAccount } from '@/lib/oauth-api'
-import type { SyncState } from '@/types/sync'
 
 function formatDate(dateString: string): string {
   return new Date(dateString).toLocaleDateString(undefined, {
@@ -282,15 +296,29 @@ export function GoogleAccountsSection() {
                     <p className="text-sm text-gray-600">{account.account_name}</p>
                   )}
                 </div>
-                <Button
-                  onClick={() => handleDisconnect(account)}
-                  loading={revokeMutation.isPending}
-                  variant="ghost"
-                  size="sm"
-                  className="text-red-600 hover:text-red-700 hover:bg-red-50 -mr-2"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
+                <div className="flex items-center space-x-2 -mr-2">
+                  {accountNeedsReconnection(syncStates, account.account_id, account.updated_at) && (
+                    <Button
+                      onClick={handleConnectGoogle}
+                      loading={isConnecting}
+                      variant="outline"
+                      size="sm"
+                      className="text-amber-600 border-amber-300 hover:bg-amber-50 hover:border-amber-400"
+                    >
+                      <RefreshCcw className="w-4 h-4 mr-1" />
+                      Reconnect
+                    </Button>
+                  )}
+                  <Button
+                    onClick={() => handleDisconnect(account)}
+                    loading={revokeMutation.isPending}
+                    variant="ghost"
+                    size="sm"
+                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
 
               {/* Permissions & Sync (Option B: Compact Badges) */}
