@@ -166,3 +166,11 @@ detail: |
   When detecting OAuth/authentication errors in error messages, use broad pattern matching with case-insensitive string includes. Patterns to check: 'invalid_grant', 'token has been expired or revoked', 'oauth', 'authentication', 'unauthorized'. Don't rely on exact string matching since error message formats can vary across providers and API versions. The `toLowerCase().includes()` approach is more robust than strict equality checks.
 actionable: true
 
+---
+timestamp: "2026-01-22T20:57:24.044658"
+type: gotcha
+summary: Refactoring imports can accidentally remove type-only imports used by nested functions
+detail: |
+  When refactoring the google-accounts-section.tsx file to add `accountNeedsReconnection` import from use-sync-states, the existing `SyncState` type import from '@/types/sync' was inadvertently removed. The `SyncState` type was still used by the `SyncBadge` internal function's prop signature (`syncState?: SyncState`). This created a type error that wasn't caught immediately because the file wasn't checked for compilation. When adding new imports to a file, verify that all existing type imports used by nested/internal functions are preserved.
+actionable: true
+
