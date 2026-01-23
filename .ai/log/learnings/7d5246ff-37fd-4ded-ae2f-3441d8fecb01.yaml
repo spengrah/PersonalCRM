@@ -94,3 +94,27 @@ detail: |
   When PR reviewers request full E2E testing of visual states, consider the cost/benefit. For the sync indicator, full E2E state testing would require complex API mocking to simulate various sync states. The pragmatic approach agreed with the user: test infrastructure (icon presence, CSS animation definition) in E2E, test state logic thoroughly in unit tests, and document the decision with a comment explaining why complex mocking isn't warranted for this particular feature.
 actionable: true
 
+---
+timestamp: "2026-01-22T17:10:41.845367"
+type: gotcha
+summary: Pre-push learnings extraction should be reviewed before blind commit
+detail: |
+  When the pre-push hook extracts new learnings and blocks the push, agents should read and assess whether to apply them to documentation rather than immediately committing. In this session, the agent first tried to blindly commit learnings without reviewing, then on second attempt reviewed them and identified actionable items (#5 about Pencil commit prefix, #9 about query key centralization). The user intervention led to documenting the onMutate vs onSuccess guidance in FRONTEND_STATE.md, which would have been missed otherwise.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:10:41.845367"
+type: rule
+summary: When learnings are extracted, always read and identify actionable items first
+detail: |
+  The workflow should be: (1) Read new learnings file, (2) Identify which are already addressed vs actionable, (3) Ask user which to apply if unclear, (4) Apply actionable learnings to documentation, (5) Commit both learnings and doc updates together. This prevents valuable insights from being filed away without being codified into project documentation. In this session, learning #11 about onMutate vs onSuccess was nearly missed until the user specifically requested it be documented.
+actionable: true
+
+---
+timestamp: "2026-01-22T17:10:41.845367"
+type: documentation_gap
+summary: Core.md lacks guidance on commit prefixes for design artifacts
+detail: |
+  Learning #5 identified that Pencil design assets should use 'docs:' commit prefix, but this isn't documented in core.md's git practices section. The agent identified this as actionable but didn't apply it when the user said 'just commit and push'. Core.md should include a table or section covering commit types for non-code artifacts (designs, diagrams, prototypes, etc.).
+actionable: true
+
