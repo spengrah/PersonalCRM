@@ -10,7 +10,7 @@
  */
 
 import { queryClient } from './query-client'
-import { contactKeys, importKeys, reminderKeys, timeEntryKeys } from './query-keys'
+import { contactKeys, importKeys, reminderKeys } from './query-keys'
 
 /**
  * Domain events that trigger query invalidations.
@@ -34,10 +34,6 @@ export type DomainEvent =
   | 'reminder:created'
   | 'reminder:completed'
   | 'reminder:deleted'
-  // Time entry events
-  | 'time-entry:created'
-  | 'time-entry:updated'
-  | 'time-entry:deleted'
 
 /**
  * Invalidation rules mapping domain events to affected query keys.
@@ -74,11 +70,6 @@ const invalidationRules: Record<DomainEvent, readonly unknown[][]> = {
   'reminder:created': [reminderKeys.all],
   'reminder:completed': [reminderKeys.all],
   'reminder:deleted': [reminderKeys.all],
-
-  // Time entry events
-  'time-entry:created': [timeEntryKeys.lists(), timeEntryKeys.running(), timeEntryKeys.stats()],
-  'time-entry:updated': [timeEntryKeys.lists(), timeEntryKeys.running(), timeEntryKeys.stats()],
-  'time-entry:deleted': [timeEntryKeys.lists(), timeEntryKeys.running(), timeEntryKeys.stats()],
 }
 
 /**
@@ -104,4 +95,4 @@ export function invalidateFor(event: DomainEvent): void {
 }
 
 // Re-export keys for convenience (avoids needing two imports)
-export { contactKeys, importKeys, reminderKeys, timeEntryKeys, systemKeys } from './query-keys'
+export { contactKeys, importKeys, reminderKeys, systemKeys } from './query-keys'

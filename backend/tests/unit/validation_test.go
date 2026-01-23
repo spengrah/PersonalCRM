@@ -492,68 +492,6 @@ func TestReminderValidation_Description(t *testing.T) {
 	}
 }
 
-// TestTimeEntryValidation_Description tests TimeEntry description validation
-func TestTimeEntryValidation_Description(t *testing.T) {
-	type TimeEntry struct {
-		Description string `validate:"required,max=500"`
-	}
-
-	tests := []struct {
-		name      string
-		desc      string
-		wantError bool
-	}{
-		{"Valid description", "Worked on API development", false},
-		{"Empty description fails", "", true},
-		{"Max length 500", strings.Repeat("a", 500), false},
-		{"Exceeds max length", strings.Repeat("a", 501), true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			entry := TimeEntry{Description: tt.desc}
-			err := validate.Struct(entry)
-
-			if tt.wantError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
-// TestTimeEntryValidation_Project tests TimeEntry project validation
-func TestTimeEntryValidation_Project(t *testing.T) {
-	type TimeEntry struct {
-		Project *string `validate:"omitempty,max=100"`
-	}
-
-	tests := []struct {
-		name      string
-		project   *string
-		wantError bool
-	}{
-		{"Valid project", strPtr("PersonalCRM"), false},
-		{"Nil project valid", nil, false},
-		{"Max length 100", strPtr(strings.Repeat("a", 100)), false},
-		{"Exceeds max length", strPtr(strings.Repeat("a", 101)), true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			entry := TimeEntry{Project: tt.project}
-			err := validate.Struct(entry)
-
-			if tt.wantError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
 // TestComplexValidation_MultipleFields tests validation with multiple fields
 func TestComplexValidation_MultipleFields(t *testing.T) {
 	type Contact struct {

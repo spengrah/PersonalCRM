@@ -57,7 +57,6 @@ type FeatureFlags struct {
 	EnableVectorSearch bool // Default: false
 	EnableTelegramBot  bool // Default: false
 	EnableCalendarSync bool // Default: false
-	EnableTimeTracking bool // Default: false
 	EnableExternalSync bool // Default: false
 }
 
@@ -160,7 +159,6 @@ func Load() (*Config, error) {
 			EnableVectorSearch: getEnvAsBool("ENABLE_VECTOR_SEARCH", false),
 			EnableTelegramBot:  getEnvAsBool("ENABLE_TELEGRAM_BOT", false),
 			EnableCalendarSync: getEnvAsBool("ENABLE_CALENDAR_SYNC", false),
-			EnableTimeTracking: getEnvAsBool("ENABLE_TIME_TRACKING", false),
 			EnableExternalSync: getEnvAsBool("ENABLE_EXTERNAL_SYNC", false),
 		},
 		Runtime: RuntimeConfig{
@@ -378,7 +376,6 @@ func TestConfig() *Config {
 			EnableVectorSearch: false,
 			EnableTelegramBot:  false,
 			EnableCalendarSync: false,
-			EnableTimeTracking: false,
 			EnableExternalSync: false,
 		},
 		Runtime: RuntimeConfig{

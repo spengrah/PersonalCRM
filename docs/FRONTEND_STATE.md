@@ -6,7 +6,7 @@ This document describes the frontend's React Query architecture, focusing on que
 
 ## Overview
 
-The frontend uses [TanStack Query](https://tanstack.com/query) (React Query) for server state management. To ensure data consistency across related domains (contacts, reminders, time entries), we use a **centralized invalidation registry** that defines which queries should be refreshed when mutations occur.
+The frontend uses [TanStack Query](https://tanstack.com/query) (React Query) for server state management. To ensure data consistency across related domains (contacts, reminders), we use a **centralized invalidation registry** that defines which queries should be refreshed when mutations occur.
 
 ---
 
@@ -31,13 +31,6 @@ reminderKeys.list(params)  // ['reminders', 'list', {...}]
 reminderKeys.stats()       // ['reminders', 'stats']
 reminderKeys.byContact(id) // ['reminders', 'contact', id]
 
-// Time Entries
-timeEntryKeys.all          // ['time-entries']
-timeEntryKeys.lists()      // ['time-entries', 'list']
-timeEntryKeys.detail(id)   // ['time-entries', 'detail', id]
-timeEntryKeys.running()    // ['time-entries', 'running']
-timeEntryKeys.stats()      // ['time-entries', 'stats']
-
 // System
 systemKeys.all    // ['system']
 systemKeys.time() // ['system', 'time']
@@ -56,10 +49,6 @@ Mutations emit domain events that trigger query invalidations. Events are define
 | `reminder:created` | New reminder added | `useCreateReminder` |
 | `reminder:completed` | Reminder marked done | `useCompleteReminder` |
 | `reminder:deleted` | Reminder removed | `useDeleteReminder` |
-| `time-entry:created` | Time entry started/added | `useCreateTimeEntry` |
-| `time-entry:updated` | Time entry modified | `useUpdateTimeEntry` |
-| `time-entry:deleted` | Time entry removed | `useDeleteTimeEntry` |
-
 ### Invalidation Rules
 
 The invalidation registry maps events to affected query keys:
@@ -77,10 +66,6 @@ const invalidationRules = {
   'reminder:completed': [reminderKeys.all],
   'reminder:deleted': [reminderKeys.all],
 
-  // Time entry events
-  'time-entry:created': [timeEntryKeys.lists(), timeEntryKeys.running(), timeEntryKeys.stats()],
-  'time-entry:updated': [timeEntryKeys.lists(), timeEntryKeys.running(), timeEntryKeys.stats()],
-  'time-entry:deleted': [timeEntryKeys.lists(), timeEntryKeys.running(), timeEntryKeys.stats()],
 }
 ```
 

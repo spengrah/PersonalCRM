@@ -50,8 +50,6 @@ if [ "$SKIP_BUILD" = false ]; then
     echo "Fetching production config from $PI_HOST..."
     API_KEY=$(ssh "$PI_HOST" 'sudo grep "^API_KEY=" /srv/personalcrm/.env | cut -d= -f2')
     API_URL=$(ssh "$PI_HOST" 'sudo grep "^NEXT_PUBLIC_API_URL=" /srv/personalcrm/.env | cut -d= -f2')
-    TIME_TRACKING=$(ssh "$PI_HOST" 'sudo grep "^NEXT_PUBLIC_ENABLE_TIME_TRACKING=" /srv/personalcrm/.env | cut -d= -f2')
-
     if [ -z "$API_KEY" ]; then
         echo "Error: Could not fetch API_KEY from $PI_HOST"
         echo "Ensure /srv/personalcrm/.env exists and contains API_KEY"
@@ -74,7 +72,6 @@ if [ "$SKIP_BUILD" = false ]; then
     # NEXT_PUBLIC_API_URL defaults to empty for same-origin requests (works with Tailscale Serve)
     NEXT_PUBLIC_API_KEY="$API_KEY" \
     NEXT_PUBLIC_API_URL="${API_URL:-}" \
-    NEXT_PUBLIC_ENABLE_TIME_TRACKING="${TIME_TRACKING:-false}" \
     NEXT_PUBLIC_COMMIT_HASH="$COMMIT_HASH" \
     NEXT_PUBLIC_GITHUB_REPO="$GITHUB_REPO" \
     NEXT_PUBLIC_BUILD_VERSION="$BUILD_VERSION" \
