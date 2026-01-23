@@ -118,3 +118,51 @@ detail: |
   Learning #5 identified that Pencil design assets should use 'docs:' commit prefix, but this isn't documented in core.md's git practices section. The agent identified this as actionable but didn't apply it when the user said 'just commit and push'. Core.md should include a table or section covering commit types for non-code artifacts (designs, diagrams, prototypes, etc.).
 actionable: true
 
+---
+timestamp: "2026-01-22T20:46:56.199094"
+type: gotcha
+summary: Google OAuth tokens in Testing mode expire after 7 days
+detail: |
+  When a Google Cloud OAuth app is in 'Testing' mode (not Published), refresh tokens automatically expire after 7 days. This causes 'invalid_grant' / 'Token has been expired or revoked' errors in sync states. The fix is either: (1) publish the app to Production, or (2) regularly re-authorize test accounts. This is a common issue that trips up developers who don't realize Testing mode has built-in token expiration.
+actionable: false
+
+---
+timestamp: "2026-01-22T20:46:56.199094"
+type: gotcha
+summary: OAuth upsert already handles re-authorization without additional code
+detail: |
+  The backend's OAuth flow already supports re-authorization out of the box because `storeToken()` uses `repo.Upsert()`. When a user goes through the OAuth flow for an account that already exists, the credentials are updated rather than creating a duplicate. No backend changes needed to add a 'Reconnect' button - just trigger the existing OAuth flow. Future agents should check for upsert logic before assuming new backend endpoints are needed for re-auth.
+actionable: true
+
+---
+timestamp: "2026-01-22T20:46:56.199094"
+type: gotcha
+summary: Reconnect button must disappear immediately after OAuth, not after next sync
+detail: |
+  When implementing a reconnect/re-auth UI feature, the button should disappear as soon as OAuth completes successfully, NOT wait for the next sync to clear error states. The error state in external_sync_state won't clear until a new sync runs, which could be minutes away. Solution: compare oauth_credential.updated_at with sync_state.updated_at timestamps - if credentials were refreshed more recently than the error occurred, hide the reconnect button. Don't rely solely on error_message being null.
+actionable: true
+
+---
+timestamp: "2026-01-22T20:46:56.199094"
+type: architecture
+summary: Extract pure helper functions to dedicated files for testability
+detail: |
+  When adding business logic to React components, extract pure functions (especially those with conditional logic and multiple branches) to separate utility files or hooks. This makes them easier to unit test without component rendering overhead. In this session, `accountNeedsReconnection()` was initially inline in the component, then moved to `use-sync-states.ts` where it could be properly unit tested. This pattern enables thorough test coverage of business logic independently from UI rendering.
+actionable: true
+
+---
+timestamp: "2026-01-22T20:46:56.199094"
+type: rule
+summary: E2E tests not required when core logic is unit tested and integration can't be completed
+detail: |
+  For features involving external OAuth flows that redirect outside the application, E2E tests provide limited value because: (1) the external flow can't be completed in automated tests, (2) database seeding is complex, and (3) the core business logic can be thoroughly unit tested. In this case, `accountNeedsReconnection()` had 16 unit tests covering all branches, so E2E tests for button visibility were deemed unnecessary. Document this decision in PRs to explain test coverage approach.
+actionable: true
+
+---
+timestamp: "2026-01-22T20:46:56.199094"
+type: gotcha
+summary: Match auth error patterns broadly with case-insensitive checks
+detail: |
+  When detecting OAuth/authentication errors in error messages, use broad pattern matching with case-insensitive string includes. Patterns to check: 'invalid_grant', 'token has been expired or revoked', 'oauth', 'authentication', 'unauthorized'. Don't rely on exact string matching since error message formats can vary across providers and API versions. The `toLowerCase().includes()` approach is more robust than strict equality checks.
+actionable: true
+
