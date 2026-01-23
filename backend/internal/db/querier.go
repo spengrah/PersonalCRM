@@ -36,8 +36,6 @@ type Querier interface {
 	CountMergeNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	// Count active reminders for a contact (for merge preview)
 	CountMergeReminders(ctx context.Context, contactID pgtype.UUID) (int64, error)
-	// Count time entries for a contact (for merge preview)
-	CountMergeTimeEntries(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	CountReminders(ctx context.Context) (int64, error)
@@ -57,7 +55,6 @@ type Querier interface {
 	CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error)
 	CreateSyncState(ctx context.Context, arg CreateSyncStateParams) (*ExternalSyncState, error)
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)
-	CreateTimeEntry(ctx context.Context, arg CreateTimeEntryParams) (*TimeEntry, error)
 	// Remove duplicate contact IDs that may result from merge
 	// Uses subquery with DISTINCT to rebuild the array without duplicates
 	DeduplicateCalendarEventContacts(ctx context.Context, targetContactID pgtype.UUID) error
@@ -100,7 +97,6 @@ type Querier interface {
 	DeleteSyncState(ctx context.Context, id pgtype.UUID) error
 	DeleteSyncStatesByAccountID(ctx context.Context, accountID pgtype.Text) error
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
-	DeleteTimeEntry(ctx context.Context, id pgtype.UUID) error
 	// Demote source's primary contact methods when target already has a primary for that type
 	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
 	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
@@ -146,7 +142,6 @@ type Querier interface {
 	// Get non-sensitive credential info for display
 	GetOAuthCredentialStatus(ctx context.Context, id pgtype.UUID) (*GetOAuthCredentialStatusRow, error)
 	GetReminder(ctx context.Context, id pgtype.UUID) (*Reminder, error)
-	GetRunningTimeEntry(ctx context.Context) (*TimeEntry, error)
 	GetSyncLog(ctx context.Context, id pgtype.UUID) (*ExternalSyncLog, error)
 	// External Sync State Queries
 	GetSyncState(ctx context.Context, id pgtype.UUID) (*ExternalSyncState, error)
@@ -154,8 +149,6 @@ type Querier interface {
 	// Tag queries
 	GetTag(ctx context.Context, id pgtype.UUID) (*Tag, error)
 	GetTagByName(ctx context.Context, name string) (*Tag, error)
-	GetTimeEntry(ctx context.Context, id pgtype.UUID) (*TimeEntry, error)
-	GetTimeEntryStats(ctx context.Context) (*GetTimeEntryStatsRow, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	HardDeleteReminder(ctx context.Context, id pgtype.UUID) error
 	HasEnrichmentForField(ctx context.Context, arg HasEnrichmentForFieldParams) (bool, error)
@@ -199,9 +192,6 @@ type Querier interface {
 	ListSyncLogsByState(ctx context.Context, arg ListSyncLogsByStateParams) ([]*ExternalSyncLog, error)
 	ListSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListTags(ctx context.Context) ([]*Tag, error)
-	ListTimeEntries(ctx context.Context, arg ListTimeEntriesParams) ([]*TimeEntry, error)
-	ListTimeEntriesByContact(ctx context.Context, contactID pgtype.UUID) ([]*TimeEntry, error)
-	ListTimeEntriesByDateRange(ctx context.Context, arg ListTimeEntriesByDateRangeParams) ([]*TimeEntry, error)
 	ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	ListUnmatchedIdentities(ctx context.Context, arg ListUnmatchedIdentitiesParams) ([]*ExternalIdentity, error)
 	// List upcoming calendar events for a specific contact
@@ -240,8 +230,6 @@ type Querier interface {
 	TransferNotes(ctx context.Context, arg TransferNotesParams) error
 	// Transfer reminders from source to target contact
 	TransferReminders(ctx context.Context, arg TransferRemindersParams) error
-	// Transfer time entries from source to target contact
-	TransferTimeEntries(ctx context.Context, arg TransferTimeEntriesParams) error
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
@@ -264,7 +252,6 @@ type Querier interface {
 	UpdateSyncStateStatus(ctx context.Context, arg UpdateSyncStateStatusParams) (*ExternalSyncState, error)
 	UpdateSyncStateSuccess(ctx context.Context, arg UpdateSyncStateSuccessParams) (*ExternalSyncState, error)
 	UpdateTag(ctx context.Context, arg UpdateTagParams) (*Tag, error)
-	UpdateTimeEntry(ctx context.Context, arg UpdateTimeEntryParams) (*TimeEntry, error)
 	// Insert or update a calendar event from Google Calendar
 	// Note: last_contacted_updated is reset when matched_contact_ids changes (order-insensitive)
 	// so newly matched contacts can be processed. Otherwise we preserve the processed state

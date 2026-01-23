@@ -17,7 +17,7 @@ vi.mock('../query-client', () => ({
 
 // Import after mocking
 import { invalidateFor, type DomainEvent } from '../query-invalidation'
-import { contactKeys, importKeys, reminderKeys, timeEntryKeys, syncKeys } from '../query-keys'
+import { contactKeys, importKeys, reminderKeys, syncKeys } from '../query-keys'
 
 describe('query-invalidation', () => {
   beforeEach(() => {
@@ -107,53 +107,6 @@ describe('query-invalidation', () => {
       })
     })
 
-    describe('time entry events', () => {
-      it('invalidates time entry queries on time-entry:created', () => {
-        invalidateFor('time-entry:created')
-
-        expect(mockInvalidateQueries).toHaveBeenCalledTimes(3)
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: timeEntryKeys.lists(),
-        })
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: timeEntryKeys.running(),
-        })
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: timeEntryKeys.stats(),
-        })
-      })
-
-      it('invalidates time entry queries on time-entry:updated', () => {
-        invalidateFor('time-entry:updated')
-
-        expect(mockInvalidateQueries).toHaveBeenCalledTimes(3)
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: timeEntryKeys.lists(),
-        })
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: timeEntryKeys.running(),
-        })
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: timeEntryKeys.stats(),
-        })
-      })
-
-      it('invalidates time entry queries on time-entry:deleted', () => {
-        invalidateFor('time-entry:deleted')
-
-        expect(mockInvalidateQueries).toHaveBeenCalledTimes(3)
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: timeEntryKeys.lists(),
-        })
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: timeEntryKeys.running(),
-        })
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: timeEntryKeys.stats(),
-        })
-      })
-    })
-
     describe('import events', () => {
       it('invalidates import and contact lists on import:imported', () => {
         invalidateFor('import:imported')
@@ -234,9 +187,6 @@ describe('query-invalidation', () => {
         'reminder:created',
         'reminder:completed',
         'reminder:deleted',
-        'time-entry:created',
-        'time-entry:updated',
-        'time-entry:deleted',
       ]
 
       // This test verifies the type definitions are correct

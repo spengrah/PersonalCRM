@@ -215,8 +215,6 @@ CRM_ENV=production
 ENABLE_VECTOR_SEARCH=false
 ENABLE_TELEGRAM_BOT=false
 ENABLE_CALENDAR_SYNC=false
-ENABLE_TIME_TRACKING=false
-NEXT_PUBLIC_ENABLE_TIME_TRACKING=false
 
 # Scheduler (for reminder notifications)
 SCHEDULER_ENABLED=false
@@ -243,7 +241,7 @@ make deploy
 ```
 
 This will:
-1. Fetch `API_KEY` and `NEXT_PUBLIC_ENABLE_TIME_TRACKING` from Pi (for frontend build)
+1. Fetch `API_KEY` from Pi (for frontend build)
 2. Build backend for ARM64
 3. Build frontend (standalone mode, with production env vars injected)
 4. rsync files to Pi

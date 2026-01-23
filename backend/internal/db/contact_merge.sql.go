@@ -76,19 +76,6 @@ func (q *Queries) CountMergeReminders(ctx context.Context, contactID pgtype.UUID
 	return count, err
 }
 
-const CountMergeTimeEntries = `-- name: CountMergeTimeEntries :one
-SELECT COUNT(*) FROM time_entry
-WHERE contact_id = $1
-`
-
-// Count time entries for a contact (for merge preview)
-func (q *Queries) CountMergeTimeEntries(ctx context.Context, contactID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, CountMergeTimeEntries, contactID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const DeduplicateCalendarEventContacts = `-- name: DeduplicateCalendarEventContacts :exec
 UPDATE calendar_event
 SET matched_contact_ids = (
@@ -385,23 +372,5 @@ type TransferRemindersParams struct {
 // Transfer reminders from source to target contact
 func (q *Queries) TransferReminders(ctx context.Context, arg TransferRemindersParams) error {
 	_, err := q.db.Exec(ctx, TransferReminders, arg.TargetContactID, arg.SourceContactID)
-	return err
-}
-
-const TransferTimeEntries = `-- name: TransferTimeEntries :exec
-UPDATE time_entry
-SET contact_id = $1,
-    updated_at = NOW()
-WHERE contact_id = $2
-`
-
-type TransferTimeEntriesParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
-}
-
-// Transfer time entries from source to target contact
-func (q *Queries) TransferTimeEntries(ctx context.Context, arg TransferTimeEntriesParams) error {
-	_, err := q.db.Exec(ctx, TransferTimeEntries, arg.TargetContactID, arg.SourceContactID)
 	return err
 }

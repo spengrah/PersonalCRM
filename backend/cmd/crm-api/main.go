@@ -86,7 +86,6 @@ func main() {
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	reminderRepo := repository.NewReminderRepository(database.Queries)
-	timeEntryRepo := repository.NewTimeEntryRepository(database.Queries)
 	noteRepo := repository.NewNoteRepository(database.Queries)
 
 	// Initialize services
@@ -176,7 +175,6 @@ func main() {
 	reminderHandler := handlers.NewReminderHandler(reminderService)
 	noteHandler := handlers.NewNoteHandler(noteService)
 	systemHandler := handlers.NewSystemHandler(contactRepo, reminderRepo, cfg.Runtime)
-	timeEntryHandler := handlers.NewTimeEntryHandler(timeEntryRepo)
 
 	// Initialize and start scheduler
 	cronScheduler := scheduler.NewScheduler(reminderService, syncService, cfg.Features.EnableExternalSync)
@@ -255,20 +253,6 @@ func main() {
 				authRoutes.GET("/google/accounts", oauthHandler.ListGoogleAccounts)
 				authRoutes.GET("/google/accounts/:id/status", oauthHandler.GetGoogleAccountStatus)
 				authRoutes.POST("/google/accounts/:id/revoke", oauthHandler.RevokeGoogleAccount)
-			}
-		}
-
-		// Time entry routes (feature-flagged)
-		if cfg.Features.EnableTimeTracking {
-			timeEntries := v1.Group("/time-entries")
-			{
-				timeEntries.POST("", timeEntryHandler.CreateTimeEntry)
-				timeEntries.GET("", timeEntryHandler.ListTimeEntries)
-				timeEntries.GET("/running", timeEntryHandler.GetRunningTimeEntry)
-				timeEntries.GET("/stats", timeEntryHandler.GetTimeEntryStats)
-				timeEntries.GET("/:id", timeEntryHandler.GetTimeEntry)
-				timeEntries.PUT("/:id", timeEntryHandler.UpdateTimeEntry)
-				timeEntries.DELETE("/:id", timeEntryHandler.DeleteTimeEntry)
 			}
 		}
 

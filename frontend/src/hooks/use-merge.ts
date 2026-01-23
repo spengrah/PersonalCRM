@@ -14,7 +14,6 @@ export interface MergePreview {
   interactions_to_transfer: number
   reminders_to_transfer: number
   calendar_events_to_update: number
-  time_entries_to_transfer: number
 }
 
 // Field selections for merge

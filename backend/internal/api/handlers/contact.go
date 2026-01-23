@@ -741,7 +741,6 @@ type MergePreviewResponse struct {
 	InteractionsToTransfer int64           `json:"interactions_to_transfer" example:"12"`
 	RemindersToTransfer    int64           `json:"reminders_to_transfer" example:"2"`
 	CalendarEventsToUpdate int64           `json:"calendar_events_to_update" example:"3"`
-	TimeEntriesToTransfer  int64           `json:"time_entries_to_transfer" example:"0"`
 }
 
 // GetMergePreview returns a preview of what will happen when merging two contacts
@@ -796,7 +795,6 @@ func (h *ContactHandler) GetMergePreview(c *gin.Context) {
 		InteractionsToTransfer: preview.InteractionsToTransfer,
 		RemindersToTransfer:    preview.RemindersToTransfer,
 		CalendarEventsToUpdate: preview.CalendarEventsToUpdate,
-		TimeEntriesToTransfer:  preview.TimeEntriesToTransfer,
 	}
 
 	api.SendSuccess(c, http.StatusOK, response, nil)

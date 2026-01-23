@@ -3,13 +3,11 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useIsMutating } from '@tanstack/react-query'
-import { Users, Calendar, Bell, Settings, Cake, Clock, CloudDownload } from 'lucide-react'
+import { Users, Calendar, Bell, Settings, Cake, CloudDownload } from 'lucide-react'
 import { clsx } from 'clsx'
 import { TimeAccelerationWidget } from '@/components/ui/time-acceleration-widget'
 import { useSyncStates, getAggregateSyncStatus, getSyncIconClasses } from '@/hooks/use-sync-states'
 import { syncMutationKey } from '@/hooks/use-imports'
-
-const isTimeTrackingEnabled = process.env.NEXT_PUBLIC_ENABLE_TIME_TRACKING === 'true'
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: Calendar },
@@ -17,9 +15,6 @@ const navigation = [
   { name: 'Birthdays', href: '/birthdays', icon: Cake },
   { name: 'Reminders', href: '/reminders', icon: Bell },
   { name: 'Imports', href: '/imports', icon: CloudDownload },
-  ...(isTimeTrackingEnabled
-    ? [{ name: 'Time Tracking', href: '/time-tracking', icon: Clock }]
-    : []),
   { name: 'Settings', href: '/settings', icon: Settings },
 ]
 

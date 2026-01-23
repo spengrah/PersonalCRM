@@ -431,7 +431,6 @@ type MergePreview struct {
 	InteractionsToTransfer int64               `json:"interactions_to_transfer"`
 	RemindersToTransfer    int64               `json:"reminders_to_transfer"`
 	CalendarEventsToUpdate int64               `json:"calendar_events_to_update"`
-	TimeEntriesToTransfer  int64               `json:"time_entries_to_transfer"`
 }
 
 // MergeContactsRequest contains the options for merging contacts
@@ -509,11 +508,6 @@ func (s *ContactService) GetMergePreview(ctx context.Context, sourceID, targetID
 		return nil, fmt.Errorf("count source calendar events: %w", err)
 	}
 
-	sourceTimeEntries, err := s.database.Queries.CountMergeTimeEntries(ctx, uuidToPgUUID(sourceID))
-	if err != nil {
-		return nil, fmt.Errorf("count source time entries: %w", err)
-	}
-
 	return &MergePreview{
 		SourceContact:          sourceContact,
 		TargetContact:          targetContact,
@@ -523,7 +517,6 @@ func (s *ContactService) GetMergePreview(ctx context.Context, sourceID, targetID
 		InteractionsToTransfer: sourceInteractions,
 		RemindersToTransfer:    sourceReminders,
 		CalendarEventsToUpdate: sourceCalendarEvents,
-		TimeEntriesToTransfer:  sourceTimeEntries,
 	}, nil
 }
 
@@ -660,15 +653,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("transfer reminders: %w", err)
 	}
 
-	// 6. Transfer time entries
-	if err := txQueries.TransferTimeEntries(ctx, db.TransferTimeEntriesParams{
-		SourceContactID: sourceUUID,
-		TargetContactID: targetUUID,
-	}); err != nil {
-		return nil, fmt.Errorf("transfer time entries: %w", err)
-	}
-
-	// 7. Delete connections between source and target (would be self-referential after merge)
+	// 6. Delete connections between source and target (would be self-referential after merge)
 	if err := txQueries.DeleteDuplicateConnections(ctx, db.DeleteDuplicateConnectionsParams{
 		SourceContactID: sourceUUID,
 		TargetContactID: targetUUID,
@@ -676,7 +661,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("delete duplicate connections: %w", err)
 	}
 
-	// 7b. Delete source's connections to third parties that target already connects to
+	// 6b. Delete source's connections to third parties that target already connects to
 	// This prevents duplicate rows after transfer when both connect to the same person
 	if err := txQueries.DeleteDuplicateThirdPartyConnectionsA(ctx, db.DeleteDuplicateThirdPartyConnectionsAParams{
 		SourceContactID: sourceUUID,
@@ -692,7 +677,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("delete duplicate third party connections (contact_b): %w", err)
 	}
 
-	// 8. Transfer connections (both directions)
+	// 7. Transfer connections (both directions)
 	if err := txQueries.TransferConnectionsAsContactA(ctx, db.TransferConnectionsAsContactAParams{
 		SourceContactID: sourceUUID,
 		TargetContactID: targetUUID,
@@ -707,7 +692,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("transfer connections as contact_b: %w", err)
 	}
 
-	// 9. Update calendar events
+	// 8. Update calendar events
 	if err := txQueries.ReplaceContactInCalendarEvents(ctx, db.ReplaceContactInCalendarEventsParams{
 		SourceContactID: sourceUUID,
 		TargetContactID: targetUUID,
@@ -715,12 +700,12 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("replace contact in calendar events: %w", err)
 	}
 
-	// 10. Deduplicate calendar event contact arrays
+	// 9. Deduplicate calendar event contact arrays
 	if err := txQueries.DeduplicateCalendarEventContacts(ctx, targetUUID); err != nil {
 		return nil, fmt.Errorf("deduplicate calendar event contacts: %w", err)
 	}
 
-	// 11. Update target contact with field selections and optional new name
+	// 10. Update target contact with field selections and optional new name
 	txContactRepo := repository.NewContactRepository(txQueries)
 	updateReq := buildMergeUpdateRequest(targetContact, sourceContact, req)
 	mergedContact, err = txContactRepo.UpdateContact(ctx, req.TargetContactID, updateReq)
@@ -728,7 +713,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("update target contact: %w", err)
 	}
 
-	// 12. Soft delete source contact
+	// 11. Soft delete source contact
 	if err := txQueries.SoftDeleteContact(ctx, sourceUUID); err != nil {
 		return nil, fmt.Errorf("soft delete source contact: %w", err)
 	}

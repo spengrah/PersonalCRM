@@ -28,13 +28,6 @@ SET contact_id = sqlc.arg(target_contact_id),
     updated_at = NOW()
 WHERE contact_id = sqlc.arg(source_contact_id);
 
--- name: TransferTimeEntries :exec
--- Transfer time entries from source to target contact
-UPDATE time_entry
-SET contact_id = sqlc.arg(target_contact_id),
-    updated_at = NOW()
-WHERE contact_id = sqlc.arg(source_contact_id);
-
 -- name: TransferConnectionsAsContactA :exec
 -- Transfer connections where source is contact_a to use target instead
 -- This handles the bidirectional relationship table
@@ -103,11 +96,6 @@ WHERE contact_id = $1;
 -- Count calendar events involving a contact (for merge preview)
 SELECT COUNT(*) FROM calendar_event
 WHERE $1::uuid = ANY(matched_contact_ids);
-
--- name: CountMergeTimeEntries :one
--- Count time entries for a contact (for merge preview)
-SELECT COUNT(*) FROM time_entry
-WHERE contact_id = $1;
 
 -- name: FindDuplicateContactMethods :many
 -- Find contact methods that exist in both source and target
