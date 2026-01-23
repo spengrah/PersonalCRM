@@ -4,6 +4,7 @@ import {
   getSyncStateForAccount,
   getSyncIconClasses,
   formatSyncTime,
+  accountNeedsReconnection,
 } from '../use-sync-states'
 import type { SyncState } from '@/types/sync'
 
@@ -174,5 +175,194 @@ describe('formatSyncTime', () => {
     const result = formatSyncTime(tenDaysAgo.toISOString())
     // Should be a month/day format like "Jan 12"
     expect(result).toMatch(/^[A-Z][a-z]{2} \d{1,2}$/)
+  })
+})
+
+describe('accountNeedsReconnection', () => {
+  const accountId = 'test@example.com'
+  const oldTimestamp = '2024-01-01T00:00:00Z'
+  const newTimestamp = '2024-01-02T00:00:00Z'
+
+  describe('returns false when no reconnection needed', () => {
+    it('returns false when syncStates is undefined', () => {
+      expect(accountNeedsReconnection(undefined, accountId, oldTimestamp)).toBe(false)
+    })
+
+    it('returns false when syncStates is empty', () => {
+      expect(accountNeedsReconnection([], accountId, oldTimestamp)).toBe(false)
+    })
+
+    it('returns false when no sync states match account', () => {
+      const states = [createSyncState({ account_id: 'other@example.com', status: 'error' })]
+      expect(accountNeedsReconnection(states, accountId, oldTimestamp)).toBe(false)
+    })
+
+    it('returns false when sync state has no error', () => {
+      const states = [createSyncState({ account_id: accountId, status: 'idle' })]
+      expect(accountNeedsReconnection(states, accountId, oldTimestamp)).toBe(false)
+    })
+
+    it('returns false when sync state has error but no error_message', () => {
+      const states = [
+        createSyncState({ account_id: accountId, status: 'error', error_message: null }),
+      ]
+      expect(accountNeedsReconnection(states, accountId, oldTimestamp)).toBe(false)
+    })
+
+    it('returns false when error is not auth-related', () => {
+      const states = [
+        createSyncState({
+          account_id: accountId,
+          status: 'error',
+          error_message: 'Network timeout',
+          updated_at: oldTimestamp,
+        }),
+      ]
+      expect(accountNeedsReconnection(states, accountId, oldTimestamp)).toBe(false)
+    })
+
+    it('returns false when account was updated after sync error (already reconnected)', () => {
+      const states = [
+        createSyncState({
+          account_id: accountId,
+          status: 'error',
+          error_message: 'invalid_grant: Token has been expired',
+          updated_at: oldTimestamp, // Error occurred at old timestamp
+        }),
+      ]
+      // Account updated at new timestamp (after the error)
+      expect(accountNeedsReconnection(states, accountId, newTimestamp)).toBe(false)
+    })
+  })
+
+  describe('returns true when reconnection is needed', () => {
+    it('returns true for invalid_grant error', () => {
+      const states = [
+        createSyncState({
+          account_id: accountId,
+          status: 'error',
+          error_message: 'oauth2: "invalid_grant" "Token has been expired or revoked."',
+          updated_at: newTimestamp,
+        }),
+      ]
+      expect(accountNeedsReconnection(states, accountId, oldTimestamp)).toBe(true)
+    })
+
+    it('returns true for token expired error', () => {
+      const states = [
+        createSyncState({
+          account_id: accountId,
+          status: 'error',
+          error_message: 'Token has been expired',
+          updated_at: newTimestamp,
+        }),
+      ]
+      expect(accountNeedsReconnection(states, accountId, oldTimestamp)).toBe(true)
+    })
+
+    it('returns true for token revoked error', () => {
+      const states = [
+        createSyncState({
+          account_id: accountId,
+          status: 'error',
+          error_message: 'Token has been revoked by user',
+          updated_at: newTimestamp,
+        }),
+      ]
+      expect(accountNeedsReconnection(states, accountId, oldTimestamp)).toBe(true)
+    })
+
+    it('returns true for oauth error', () => {
+      const states = [
+        createSyncState({
+          account_id: accountId,
+          status: 'error',
+          error_message: 'get OAuth client: refresh token failed',
+          updated_at: newTimestamp,
+        }),
+      ]
+      expect(accountNeedsReconnection(states, accountId, oldTimestamp)).toBe(true)
+    })
+
+    it('returns true for authentication error', () => {
+      const states = [
+        createSyncState({
+          account_id: accountId,
+          status: 'error',
+          error_message: 'Authentication failed',
+          updated_at: newTimestamp,
+        }),
+      ]
+      expect(accountNeedsReconnection(states, accountId, oldTimestamp)).toBe(true)
+    })
+
+    it('returns true for unauthorized error', () => {
+      const states = [
+        createSyncState({
+          account_id: accountId,
+          status: 'error',
+          error_message: 'Unauthorized: invalid credentials',
+          updated_at: newTimestamp,
+        }),
+      ]
+      expect(accountNeedsReconnection(states, accountId, oldTimestamp)).toBe(true)
+    })
+
+    it('is case insensitive for error matching', () => {
+      const states = [
+        createSyncState({
+          account_id: accountId,
+          status: 'error',
+          error_message: 'INVALID_GRANT: TOKEN EXPIRED',
+          updated_at: newTimestamp,
+        }),
+      ]
+      expect(accountNeedsReconnection(states, accountId, oldTimestamp)).toBe(true)
+    })
+  })
+
+  describe('multiple sync states', () => {
+    it('returns true if any sync state has auth error', () => {
+      const states = [
+        createSyncState({
+          id: '1',
+          account_id: accountId,
+          source: 'gcal',
+          status: 'idle',
+        }),
+        createSyncState({
+          id: '2',
+          account_id: accountId,
+          source: 'gcontacts',
+          status: 'error',
+          error_message: 'invalid_grant',
+          updated_at: newTimestamp,
+        }),
+      ]
+      expect(accountNeedsReconnection(states, accountId, oldTimestamp)).toBe(true)
+    })
+
+    it('returns false if all auth errors are from before account update', () => {
+      const states = [
+        createSyncState({
+          id: '1',
+          account_id: accountId,
+          source: 'gcal',
+          status: 'error',
+          error_message: 'invalid_grant',
+          updated_at: oldTimestamp,
+        }),
+        createSyncState({
+          id: '2',
+          account_id: accountId,
+          source: 'gcontacts',
+          status: 'error',
+          error_message: 'token has been expired',
+          updated_at: oldTimestamp,
+        }),
+      ]
+      // Account updated after both errors
+      expect(accountNeedsReconnection(states, accountId, newTimestamp)).toBe(false)
+    })
   })
 })

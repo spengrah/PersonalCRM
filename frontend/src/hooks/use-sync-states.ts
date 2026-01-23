@@ -74,3 +74,37 @@ export function formatSyncTime(dateString: string | null): string {
     day: 'numeric',
   })
 }
+
+// Auth error patterns that indicate reconnection is needed
+const AUTH_ERROR_PATTERNS = [
+  'invalid_grant',
+  'token has been expired',
+  'token has been revoked',
+  'oauth',
+  'authentication',
+  'unauthorized',
+] as const
+
+// Check if an account needs reconnection due to auth errors
+// Returns false if the account was updated more recently than the sync error (already reconnected)
+export function accountNeedsReconnection(
+  syncStates: SyncState[] | undefined,
+  accountId: string,
+  accountUpdatedAt: string
+): boolean {
+  if (!syncStates) return false
+
+  const accountStates = syncStates.filter(s => s.account_id === accountId)
+  const accountUpdatedTime = new Date(accountUpdatedAt).getTime()
+
+  return accountStates.some(state => {
+    if (state.status !== 'error' || !state.error_message) return false
+
+    // If account was updated after the sync state error, credentials have been refreshed
+    const syncStateUpdatedAt = new Date(state.updated_at).getTime()
+    if (accountUpdatedTime > syncStateUpdatedAt) return false
+
+    const error = state.error_message.toLowerCase()
+    return AUTH_ERROR_PATTERNS.some(pattern => error.includes(pattern))
+  })
+}
