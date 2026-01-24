@@ -1,0 +1,40 @@
+---
+timestamp: "2026-01-24T15:37:57.968644"
+type: gotcha
+summary: find command with -exec may silently produce no output
+detail: |
+  When using `find` with `-exec` to read files, the command may silently fail without errors if there's a syntax issue or permission problem. Using a while-read loop with echo inside is more reliable: `find ... | while read f; do echo "=== $f ==="; cat "$f"; done`
+actionable: true
+
+---
+timestamp: "2026-01-24T15:37:57.968644"
+type: distinction
+summary: "SKILL.md format evolved: name field and space-separated allowed-tools"
+detail: |
+  The new SKILL.md format requires a `name` field in the frontmatter, and `allowed-tools` changed from comma-separated to space-separated format. This is a breaking change that affects skill portability across different projects and requires updates when syncing skills.
+actionable: true
+
+---
+timestamp: "2026-01-24T15:37:57.968644"
+type: architecture
+summary: Learnings skill routes to extract-skill for techniques
+detail: |
+  The updated learnings workflow includes a self-reflection step and routes different learning types to different destinations. Techniques should be routed to the `/extract-skill` skill rather than being manually added to documentation. This creates a systematic workflow: learnings → classification → route to extract-skill for techniques, or to .ai/rules/ for project rules.
+actionable: true
+
+---
+timestamp: "2026-01-24T15:37:57.968644"
+type: gotcha
+summary: Permission prompts may interrupt file edit flow
+detail: |
+  When making edits during a sync operation, user may interrupt to ask clarifying questions about the changes. The agent attempted to update the `is_claude_code_session()` comment but the user blocked to ask 'whats this one about?'. Agent should proactively explain non-obvious changes before making them, especially when syncing from another source where context isn't immediately clear.
+actionable: true
+
+---
+timestamp: "2026-01-24T15:37:57.968644"
+type: rule
+summary: Headless Claude execution needs --permission-mode bypassPermissions
+detail: |
+  When running headless Claude CLI commands (like in extract-learnings.py), add `--permission-mode bypassPermissions` to the command arguments to allow tools like Read to execute without user approval. This is essential for automated extraction scripts that run in hooks.
+actionable: true
+
