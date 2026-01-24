@@ -2,6 +2,28 @@
 
 Extract and apply session learnings to improve future agent work.
 
+## Learning Categories
+
+Learnings fall into a 2x2 matrix based on type and scope:
+
+```
+                    Project-specific          General
+                    ─────────────────────────────────────────
+Rules/Guidelines    │ A: Project rules       │ (out of scope)
+("always/never X")  │ → .ai/rules/           │
+                    │ → .ai/patterns/        │
+                    │ → AGENTS.md            │
+                    ├─────────────────────────────────────────
+Techniques          │ B: Project skills      │ C: Portable skills
+("how to solve X")  │ → .ai/skills/          │ → ~/.claude/skills/
+```
+
+- **A (Rules/Guidelines, Project)**: Constraints, conventions, gotchas specific to this codebase → project docs
+- **B (Techniques, Project)**: How to debug/solve problems in this codebase → `.ai/skills/`
+- **C (Techniques, General)**: Portable techniques that work across codebases → `~/.claude/skills/`
+
+The `/learnings` skill routes each learning to the appropriate destination.
+
 ## extract-learnings.py
 
 Extract project-relevant learnings from session transcripts using headless Claude.
@@ -10,7 +32,8 @@ Extract project-relevant learnings from session transcripts using headless Claud
 - Mines session transcripts including thinking blocks
 - Incremental extraction (only processes new content since last call)
 - Outputs structured learnings (type, summary, detail, actionable)
-- Deduplicates by summary within each session file
+- Deduplicates by summary within each session
+- Per-session files in `.ai/log/learnings/{session_id}.yaml`
 
 ```bash
 # Preview transcript (no extraction)
@@ -29,6 +52,9 @@ python extract-learnings.py --full
 **Dependencies:**
 - PyYAML (auto-installed via `uv run --with pyyaml`)
 - Requires `uv` to be installed
+
+**Headless execution note:**
+The extraction uses `--permission-mode bypassPermissions` to allow automated/headless execution. Without this, headless Claude hangs waiting for Read permission approval that never comes. This is safe because extraction only reads its own transcript file.
 
 **Output:**
 - Learnings appended to `.ai/log/learnings/{session_id}.yaml`
@@ -56,14 +82,10 @@ The `/learnings` skill (defined in `SKILL.md`) is the primary interface. It:
 3. Agent applies learnings to appropriate locations
 4. Agent commits learnings separately
 
-### When extraction runs
+### When to run
 
-- **Before pushing**: Automatically via git pre-push hook
-- **Manual**: Run `/learnings` skill or `./extract-learnings.sh --trigger manual`
-
-Future triggers (not yet implemented):
-- Before compaction (PreCompact hook)
-- After subagents complete (SubagentStop hook)
+- **Before pushing**: Agent rule in AGENTS.md instructs running `/learnings` pre-push
+- **Session end**: Human runs `/learnings` manually before closing
 
 ### Incremental extraction
 
@@ -82,21 +104,17 @@ Each `/learnings` call only processes content after the last extraction, keeping
 
 | Agent | Supported | Notes |
 |-------|-----------|-------|
-| Claude Code | Yes | Full transcript access including thinking blocks |
-| Codex CLI | No | Reasoning content is encrypted; only summaries available |
-| Cursor | Unknown | Not yet investigated |
+| Claude Code | ✅ Yes | Full transcript access including thinking blocks |
+| Codex CLI | ❌ No | Reasoning content is encrypted; only summaries available |
+| Cursor | ❓ Unknown | Not yet investigated |
+
+The script detects the agent type via the `CLAUDE_CODE` environment variable. When not running under Claude Code, extraction silently exits with code 0 (no error). This allows the same hooks to work across different agents without failing.
 
 Codex CLI stores sessions in `~/.codex/sessions/` as JSONL, but reasoning blocks are encrypted (`encrypted_content` field). Only brief summaries like "**Considering exploration plan**" are accessible. Without full reasoning, extraction value is limited.
 
-## Hook Integration
+## Future: Hook integration
 
-### Implemented
-
-Git pre-push hook (`.git/hooks/pre-push`) runs extraction automatically before push.
-
-### Planned
-
-Claude Code hooks could automate extraction at other points:
+For automated extraction, hooks can be added later:
 
 ```json
 {
@@ -109,19 +127,4 @@ Claude Code hooks could automate extraction at other points:
     }]
   }
 }
-```
-
-## Migration Script
-
-`migrate-learnings.py` converts the old monolithic `learnings.yaml` to per-session files:
-
-```bash
-# Preview what would be created
-python migrate-learnings.py --dry-run
-
-# Run migration
-python migrate-learnings.py
-
-# Run migration and delete old file
-python migrate-learnings.py --delete-old
 ```

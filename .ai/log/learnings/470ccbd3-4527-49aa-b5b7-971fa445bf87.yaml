@@ -1,0 +1,96 @@
+---
+timestamp: "2026-01-24T15:37:57.968644"
+type: gotcha
+summary: find command with -exec may silently produce no output
+detail: |
+  When using `find` with `-exec` to read files, the command may silently fail without errors if there's a syntax issue or permission problem. Using a while-read loop with echo inside is more reliable: `find ... | while read f; do echo "=== $f ==="; cat "$f"; done`
+actionable: true
+
+---
+timestamp: "2026-01-24T15:37:57.968644"
+type: distinction
+summary: "SKILL.md format evolved: name field and space-separated allowed-tools"
+detail: |
+  The new SKILL.md format requires a `name` field in the frontmatter, and `allowed-tools` changed from comma-separated to space-separated format. This is a breaking change that affects skill portability across different projects and requires updates when syncing skills.
+actionable: true
+
+---
+timestamp: "2026-01-24T15:37:57.968644"
+type: architecture
+summary: Learnings skill routes to extract-skill for techniques
+detail: |
+  The updated learnings workflow includes a self-reflection step and routes different learning types to different destinations. Techniques should be routed to the `/extract-skill` skill rather than being manually added to documentation. This creates a systematic workflow: learnings → classification → route to extract-skill for techniques, or to .ai/rules/ for project rules.
+actionable: true
+
+---
+timestamp: "2026-01-24T15:37:57.968644"
+type: gotcha
+summary: Permission prompts may interrupt file edit flow
+detail: |
+  When making edits during a sync operation, user may interrupt to ask clarifying questions about the changes. The agent attempted to update the `is_claude_code_session()` comment but the user blocked to ask 'whats this one about?'. Agent should proactively explain non-obvious changes before making them, especially when syncing from another source where context isn't immediately clear.
+actionable: true
+
+---
+timestamp: "2026-01-24T15:37:57.968644"
+type: rule
+summary: Headless Claude execution needs --permission-mode bypassPermissions
+detail: |
+  When running headless Claude CLI commands (like in extract-learnings.py), add `--permission-mode bypassPermissions` to the command arguments to allow tools like Read to execute without user approval. This is essential for automated extraction scripts that run in hooks.
+actionable: true
+
+---
+timestamp: "2026-01-24T15:46:36.922307"
+type: gotcha
+summary: git diff --quiet only detects tracked files, not new untracked files
+detail: |
+  When checking for new files in a directory with git diff --quiet, untracked files won't be detected. Use git ls-files --others --exclude-standard to check for untracked files in addition to git diff. Example: if git diff --quiet .ai/log/learnings/ 2>/dev/null && [[ -z "$(git ls-files --others --exclude-standard .ai/log/learnings/)" ]]; then
+actionable: true
+
+---
+timestamp: "2026-01-24T15:46:36.922307"
+type: documentation_gap
+summary: Learnings extraction happened but review workflow wasn't triggered
+detail: |
+  The pre-push hook runs learnings extraction automatically, but the /learnings skill defines a 5-step workflow (extract, self-reflection, review, apply, commit). The hook only runs step 1, and there's no automatic trigger for the agent to complete steps 2-5. The hook's informational message about reviewing learnings was ignored because the push succeeded. Gap: The connection between automated extraction and the manual review workflow needs to be clearer - either the hook should block until review is complete, or it should automatically invoke the skill, or the agent needs stronger instructions to recognize extraction output as a blocker.
+actionable: true
+
+---
+timestamp: "2026-01-24T15:46:36.922307"
+type: gotcha
+summary: Successful git push signals 'all done' even when hook prints warnings
+detail: |
+  When a pre-push hook prints informational messages like 'AGENT: LEARNINGS EXTRACTED - Before pushing, you should...' but still exits with success (allowing the push), agents will treat the successful push as completion and ignore the informational output. Hooks must block (exit non-zero) if they want to enforce agent action. Informational messages in successful hook runs are treated as FYI, not actionable blockers.
+actionable: true
+
+---
+timestamp: "2026-01-24T16:02:21.999940"
+type: gotcha
+summary: Learnings skill workflow split between hook and skill invocation
+detail: |
+  The pre-push hook runs extract-learnings.sh directly, but the full learnings workflow (self-reflection, classification, routing to /extract-skill) lives in the /learnings SKILL.md. Without explicitly invoking /learnings, agents only see the hook's message telling them what to do, but not the detailed prompts and instructions on how to do it. The fix was adding a --review-only flag so the hook message says 'Run: /learnings --review-only' to bridge the gap.
+actionable: true
+
+---
+timestamp: "2026-01-24T16:02:21.999940"
+type: architecture
+summary: Skills can accept arguments to modify their behavior
+detail: |
+  Skills defined in SKILL.md can document argument support (like --review-only) in an Arguments section. When invoking via the Skill tool, args are passed as a string. The skill's instructions then check for these args and modify execution flow accordingly. This allows skills to handle different contexts (e.g., skip extraction step when it already ran from a hook).
+actionable: true
+
+---
+timestamp: "2026-01-24T16:02:21.999940"
+type: distinction
+summary: Incremental extraction tracks state per-session in extraction-state.json
+detail: |
+  The extract-learnings.py script maintains state in .ai/log/extraction-state.json with session_id, last_extracted_timestamp, and last_extracted_line. Running extraction multiple times is safe because it only processes new content since last_extracted_line. This means calling /learnings after hook extraction would be a quick no-op on the extraction step, not truly redundant but unnecessary overhead.
+actionable: true
+
+---
+timestamp: "2026-01-24T16:02:21.999940"
+type: documentation_gap
+summary: Hook messaging didn't reference the skill, causing workflow disconnect
+detail: |
+  The pre-push hook printed manual instructions ('you should: 1. Read learnings 2. Apply them') but didn't tell the agent to invoke the /learnings skill where the detailed workflow lives. Agents following the hook message would miss the self-reflection prompts and /extract-skill routing instructions. The hook message should reference the skill directly: 'Run: /learnings --review-only'. This reveals that hook messages should point to relevant skills rather than duplicating their instructions.
+actionable: true
+

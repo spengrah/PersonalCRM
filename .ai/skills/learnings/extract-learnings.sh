@@ -117,17 +117,14 @@ EOF
         cat >&2 << 'EOF'
 
 ==============================================================
-                    AGENT: LEARNINGS EXTRACTED
+                    LEARNINGS EXTRACTED
 ==============================================================
-  New learnings from this session have been written to:
-  .ai/log/learnings/
+  New learnings written to .ai/log/learnings/
 
-  Before pushing, you should:
-  1. Read the new learnings in .ai/log/learnings/
-  2. For each actionable learning, judge whether and where
-     to apply it to project docs/rules
-  3. Commit learnings (and any applied changes)
-  4. Push again
+  Run: /learnings --review-only
+
+  This will guide you through self-reflection, classification,
+  and applying learnings to project docs or skills.
 ==============================================================
 
 EOF
