@@ -17,7 +17,7 @@ vi.mock('../query-client', () => ({
 
 // Import after mocking
 import { invalidateFor, type DomainEvent } from '../query-invalidation'
-import { contactKeys, importKeys, reminderKeys, syncKeys } from '../query-keys'
+import { contactKeys, importKeys, syncKeys } from '../query-keys'
 
 describe('query-invalidation', () => {
   beforeEach(() => {
@@ -48,61 +48,36 @@ describe('query-invalidation', () => {
         })
       })
 
-      it('invalidates contacts and reminders on contact:deleted', () => {
+      it('invalidates contact lists on contact:deleted', () => {
         invalidateFor('contact:deleted')
 
-        expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(1)
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
           queryKey: contactKeys.lists(),
         })
-        // Cross-domain: deleting contact also affects reminders
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: reminderKeys.all,
-        })
       })
 
-      it('invalidates contacts, overdue, and reminders on contact:touched', () => {
+      it('invalidates contacts and overdue on contact:touched', () => {
         invalidateFor('contact:touched')
 
-        expect(mockInvalidateQueries).toHaveBeenCalledTimes(3)
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
           queryKey: contactKeys.lists(),
         })
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
           queryKey: contactKeys.overdue(),
         })
-        // Cross-domain: marking as contacted completes auto-reminders
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: reminderKeys.all,
-        })
-      })
-    })
-
-    describe('reminder events', () => {
-      it('invalidates all reminders on reminder:created', () => {
-        invalidateFor('reminder:created')
-
-        expect(mockInvalidateQueries).toHaveBeenCalledTimes(1)
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: reminderKeys.all,
-        })
       })
 
-      it('invalidates all reminders on reminder:completed', () => {
-        invalidateFor('reminder:completed')
+      it('invalidates contacts and overdue on contact:merged', () => {
+        invalidateFor('contact:merged')
 
-        expect(mockInvalidateQueries).toHaveBeenCalledTimes(1)
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: reminderKeys.all,
+          queryKey: contactKeys.lists(),
         })
-      })
-
-      it('invalidates all reminders on reminder:deleted', () => {
-        invalidateFor('reminder:deleted')
-
-        expect(mockInvalidateQueries).toHaveBeenCalledTimes(1)
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: reminderKeys.all,
+          queryKey: contactKeys.overdue(),
         })
       })
     })
@@ -155,22 +130,6 @@ describe('query-invalidation', () => {
         })
       })
     })
-
-    describe('cross-domain invalidation', () => {
-      it('contact:touched invalidates reminder queries (backend completes auto-reminders)', () => {
-        invalidateFor('contact:touched')
-
-        const calls = mockInvalidateQueries.mock.calls.map(call => call[0].queryKey)
-        expect(calls).toContainEqual(reminderKeys.all)
-      })
-
-      it('contact:deleted invalidates reminder queries (cascade delete)', () => {
-        invalidateFor('contact:deleted')
-
-        const calls = mockInvalidateQueries.mock.calls.map(call => call[0].queryKey)
-        expect(calls).toContainEqual(reminderKeys.all)
-      })
-    })
   })
 
   describe('type safety', () => {
@@ -180,13 +139,11 @@ describe('query-invalidation', () => {
         'contact:updated',
         'contact:deleted',
         'contact:touched',
+        'contact:merged',
         'import:imported',
         'import:linked',
         'import:ignored',
         'import:synced',
-        'reminder:created',
-        'reminder:completed',
-        'reminder:deleted',
       ]
 
       // This test verifies the type definitions are correct

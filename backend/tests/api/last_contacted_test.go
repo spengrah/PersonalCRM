@@ -50,8 +50,7 @@ func setupLastContactedTestRouter() (*gin.Engine, func()) {
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
-	reminderRepo := repository.NewReminderRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, reminderRepo)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo)
 	contactHandler := handlers.NewContactHandler(contactService)
 
 	router := gin.New()

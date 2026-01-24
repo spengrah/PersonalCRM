@@ -361,15 +361,6 @@ export function MergeContactModal({
                   count={preview.interactions_to_transfer}
                 />
                 <MergeSummaryRow
-                  label="Reminders"
-                  value={
-                    preview.reminders_to_transfer > 0
-                      ? `${preview.reminders_to_transfer} added`
-                      : 'None'
-                  }
-                  count={preview.reminders_to_transfer}
-                />
-                <MergeSummaryRow
                   label="Calendar events"
                   value={
                     preview.calendar_events_to_update > 0

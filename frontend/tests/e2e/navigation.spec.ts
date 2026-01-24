@@ -45,7 +45,7 @@ test.describe('Navigation @area:navigation', () => {
     })
 
     test('imports link should be accessible from all main pages', async ({ page }) => {
-      const pages = ['/dashboard', '/contacts', '/imports', '/settings', '/birthdays', '/reminders']
+      const pages = ['/dashboard', '/contacts', '/imports', '/settings', '/birthdays']
 
       for (const pagePath of pages) {
         await page.goto(pagePath)

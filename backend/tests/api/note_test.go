@@ -51,11 +51,10 @@ func setupNoteTestRouter() (*gin.Engine, func()) {
 	// Set up repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
-	reminderRepo := repository.NewReminderRepository(database.Queries)
 	noteRepo := repository.NewNoteRepository(database.Queries)
 
 	// Set up services
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, reminderRepo)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo)
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 
 	// Set up handlers

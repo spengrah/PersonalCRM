@@ -276,7 +276,7 @@ export function ContactForm({
             type="date"
             error={errors.birthday?.message}
             disabled={isLoading}
-            helpText="Optional - for birthday reminders"
+            helpText="Optional - for birthday tracking"
           />
         </div>
 

@@ -8,13 +8,6 @@ SET contact_id = sqlc.arg(target_contact_id),
     updated_at = NOW()
 WHERE contact_id = sqlc.arg(source_contact_id);
 
--- name: TransferReminders :exec
--- Transfer reminders from source to target contact
-UPDATE reminder
-SET contact_id = sqlc.arg(target_contact_id)
-WHERE contact_id = sqlc.arg(source_contact_id)
-  AND deleted_at IS NULL;
-
 -- name: TransferInteractions :exec
 -- Transfer interactions from source to target contact
 UPDATE interaction
@@ -76,11 +69,6 @@ WHERE sqlc.arg(target_contact_id)::uuid = ANY(matched_contact_ids)
 -- Count contact methods for a contact (for merge preview)
 SELECT COUNT(*) FROM contact_method
 WHERE contact_id = $1;
-
--- name: CountMergeReminders :one
--- Count active reminders for a contact (for merge preview)
-SELECT COUNT(*) FROM reminder
-WHERE contact_id = $1 AND deleted_at IS NULL;
 
 -- name: CountMergeInteractions :one
 -- Count interactions for a contact (for merge preview)

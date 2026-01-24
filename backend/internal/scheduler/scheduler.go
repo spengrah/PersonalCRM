@@ -4,17 +4,15 @@ import (
 	"context"
 
 	"personal-crm/backend/internal/logger"
-	"personal-crm/backend/internal/reminder"
 	"personal-crm/backend/internal/service"
 
 	"github.com/robfig/cron/v3"
 )
 
 type Scheduler struct {
-	cron            *cron.Cron
-	reminderService *service.ReminderService
-	syncService     *service.SyncService
-	syncEnabled     bool
+	cron        *cron.Cron
+	syncService *service.SyncService
+	syncEnabled bool
 }
 
 // zerologCronAdapter adapts zerolog to cron.Logger interface
@@ -41,7 +39,6 @@ func (z zerologCronAdapter) Error(err error, msg string, keysAndValues ...interf
 }
 
 func NewScheduler(
-	reminderService *service.ReminderService,
 	syncService *service.SyncService,
 	syncEnabled bool,
 ) *Scheduler {
@@ -52,36 +49,14 @@ func NewScheduler(
 	)
 
 	return &Scheduler{
-		cron:            c,
-		reminderService: reminderService,
-		syncService:     syncService,
-		syncEnabled:     syncEnabled,
+		cron:        c,
+		syncService: syncService,
+		syncEnabled: syncEnabled,
 	}
 }
 
 func (s *Scheduler) Start() error {
 	logger.Info().Msg("starting scheduler")
-
-	// Get environment-aware cron specification
-	cronSpec := reminder.GetSchedulerCronSpec()
-	logger.Info().Str("cron_spec", cronSpec).Msg("using scheduler cron spec")
-
-	// Schedule reminder generation job with environment-aware timing
-	_, err := s.cron.AddFunc(cronSpec, func() {
-		ctx := context.Background()
-		logger.Info().Msg("running scheduled reminder generation job")
-
-		if err := s.reminderService.GenerateRemindersForOverdueContacts(ctx); err != nil {
-			logger.Error().Err(err).Msg("error in scheduled reminder generation")
-		}
-	})
-	if err != nil {
-		return err
-	}
-
-	// Optional: Schedule a cleanup job (only in production to avoid noise in testing)
-	// Skip cleanup job in testing environments
-	// In testing mode, we want to see all activity and avoid confusion
 
 	// Schedule external sync check job (every 5 minutes)
 	if s.syncEnabled && s.syncService != nil {
@@ -111,14 +86,6 @@ func (s *Scheduler) Stop() {
 	logger.Info().Msg("stopping scheduler")
 	s.cron.Stop()
 	logger.Info().Msg("scheduler stopped")
-}
-
-// RunReminderGenerationNow triggers the reminder generation job immediately
-// This is useful for testing or manual triggering
-func (s *Scheduler) RunReminderGenerationNow() error {
-	ctx := context.Background()
-	logger.Info().Msg("running reminder generation job manually")
-	return s.reminderService.GenerateRemindersForOverdueContacts(ctx)
 }
 
 // GetScheduledJobs returns information about scheduled jobs

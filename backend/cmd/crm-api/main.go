@@ -85,12 +85,10 @@ func main() {
 	// Initialize repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
-	reminderRepo := repository.NewReminderRepository(database.Queries)
 	noteRepo := repository.NewNoteRepository(database.Queries)
 
 	// Initialize services
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, reminderRepo)
-	reminderService := service.NewReminderService(reminderRepo, contactRepo)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo)
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 	importMatchService := service.NewImportMatchService(contactRepo)
 
@@ -172,12 +170,11 @@ func main() {
 
 	// Initialize handlers
 	contactHandler := handlers.NewContactHandler(contactService)
-	reminderHandler := handlers.NewReminderHandler(reminderService)
 	noteHandler := handlers.NewNoteHandler(noteService)
-	systemHandler := handlers.NewSystemHandler(contactRepo, reminderRepo, cfg.Runtime)
+	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
 
 	// Initialize and start scheduler
-	cronScheduler := scheduler.NewScheduler(reminderService, syncService, cfg.Features.EnableExternalSync)
+	cronScheduler := scheduler.NewScheduler(syncService, cfg.Features.EnableExternalSync)
 	if err := cronScheduler.Start(); err != nil {
 		logger.Fatal().Err(err).Msg("failed to start scheduler")
 	}
@@ -219,22 +216,11 @@ func main() {
 			contacts.PUT("/:id", contactHandler.UpdateContact)
 			contacts.DELETE("/:id", contactHandler.DeleteContact)
 			contacts.PATCH("/:id/last-contacted", contactHandler.UpdateContactLastContacted)
-			contacts.GET("/:id/reminders", reminderHandler.GetRemindersByContact)
 			contacts.GET("/:id/notes", noteHandler.GetContactNotepad)
 			contacts.PUT("/:id/notes", noteHandler.SaveContactNotepad)
 			// Merge routes
 			contacts.GET("/:id/merge/preview", contactHandler.GetMergePreview)
 			contacts.POST("/:id/merge", contactHandler.MergeContacts)
-		}
-
-		// Reminder routes
-		reminders := v1.Group("/reminders")
-		{
-			reminders.POST("", reminderHandler.CreateReminder)
-			reminders.GET("", reminderHandler.GetReminders)
-			reminders.GET("/stats", reminderHandler.GetReminderStats)
-			reminders.PATCH("/:id/complete", reminderHandler.CompleteReminder)
-			reminders.DELETE("/:id", reminderHandler.DeleteReminder)
 		}
 
 		// System routes

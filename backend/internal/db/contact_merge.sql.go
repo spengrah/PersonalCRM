@@ -63,19 +63,6 @@ func (q *Queries) CountMergeNotes(ctx context.Context, contactID pgtype.UUID) (i
 	return count, err
 }
 
-const CountMergeReminders = `-- name: CountMergeReminders :one
-SELECT COUNT(*) FROM reminder
-WHERE contact_id = $1 AND deleted_at IS NULL
-`
-
-// Count active reminders for a contact (for merge preview)
-func (q *Queries) CountMergeReminders(ctx context.Context, contactID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, CountMergeReminders, contactID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const DeduplicateCalendarEventContacts = `-- name: DeduplicateCalendarEventContacts :exec
 UPDATE calendar_event
 SET matched_contact_ids = (
@@ -354,23 +341,5 @@ type TransferNotesParams struct {
 // Transfer notes from source to target contact
 func (q *Queries) TransferNotes(ctx context.Context, arg TransferNotesParams) error {
 	_, err := q.db.Exec(ctx, TransferNotes, arg.TargetContactID, arg.SourceContactID)
-	return err
-}
-
-const TransferReminders = `-- name: TransferReminders :exec
-UPDATE reminder
-SET contact_id = $1
-WHERE contact_id = $2
-  AND deleted_at IS NULL
-`
-
-type TransferRemindersParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
-}
-
-// Transfer reminders from source to target contact
-func (q *Queries) TransferReminders(ctx context.Context, arg TransferRemindersParams) error {
-	_, err := q.db.Exec(ctx, TransferReminders, arg.TargetContactID, arg.SourceContactID)
 	return err
 }

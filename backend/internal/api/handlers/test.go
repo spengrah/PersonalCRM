@@ -8,8 +8,8 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
+	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/db"
-	"personal-crm/backend/internal/reminder"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -232,7 +232,7 @@ func (h *TestHandler) SeedContacts(c *gin.Context) {
 		// Uses environment-scaled days (GetCadenceDuration returns different values per CRM_ENV)
 		lastContacted := now
 		if input.LastContactedDaysAgo > 0 {
-			weeklyDuration := reminder.GetCadenceDuration(reminder.CadenceWeekly)
+			weeklyDuration := cadence.GetCadenceDuration(cadence.CadenceWeekly)
 			scaledDayDuration := weeklyDuration / 7
 			lastContacted = now.Add(-time.Duration(input.LastContactedDaysAgo) * scaledDayDuration)
 		}
@@ -321,7 +321,7 @@ func (h *TestHandler) SeedOverdueContacts(c *gin.Context) {
 
 	for _, input := range req.Contacts {
 		// Parse cadence type
-		cadenceType, err := reminder.ParseCadence(input.Cadence)
+		cadenceType, err := cadence.ParseCadence(input.Cadence)
 		if err != nil {
 			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid cadence", err.Error())
 			return
@@ -330,8 +330,8 @@ func (h *TestHandler) SeedOverdueContacts(c *gin.Context) {
 		// Calculate backdated last_contacted time
 		// It should be: now - cadence_duration - days_overdue
 		// Use scaled days based on environment (in testing mode, 1 "day" = weekly_cadence / 7)
-		cadenceDuration := reminder.GetCadenceDuration(cadenceType)
-		weeklyDuration := reminder.GetCadenceDuration(reminder.CadenceWeekly)
+		cadenceDuration := cadence.GetCadenceDuration(cadenceType)
+		weeklyDuration := cadence.GetCadenceDuration(cadence.CadenceWeekly)
 		scaledDayDuration := weeklyDuration / 7 // 1 "day" in current environment
 		daysOverdueDuration := time.Duration(input.DaysOverdue) * scaledDayDuration
 		lastContacted := now.Add(-cadenceDuration).Add(-daysOverdueDuration)

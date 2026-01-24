@@ -1,11 +1,11 @@
-package reminder
+package cadence
 
 import (
 	"fmt"
 	"time"
 )
 
-// CadenceType represents different reminder cadences
+// CadenceType represents different contact cadences
 type CadenceType string
 
 const (
@@ -95,17 +95,4 @@ func GetDaysUntilDue(cadence CadenceType, lastContacted *time.Time, createdAt ti
 	nextDue := CalculateNextDueDate(cadence, lastContacted, createdAt)
 	duration := nextDue.Sub(now)
 	return int(duration.Hours() / 24)
-}
-
-// GenerateReminderTitle creates a descriptive title for a reminder
-func GenerateReminderTitle(contactName string, cadence CadenceType) string {
-	return fmt.Sprintf("Follow up with %s (%s cadence)", contactName, string(cadence))
-}
-
-// GenerateReminderDescription creates a descriptive text for a reminder
-func GenerateReminderDescription(contactName string, cadence CadenceType, daysSinceLastContact int) string {
-	if daysSinceLastContact <= 0 {
-		return fmt.Sprintf("Time to reach out to %s as part of your %s follow-up schedule.", contactName, string(cadence))
-	}
-	return fmt.Sprintf("Time to reach out to %s as part of your %s follow-up schedule. It's been %d days since your last contact.", contactName, string(cadence), daysSinceLastContact)
 }

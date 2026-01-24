@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/db"
-	"personal-crm/backend/internal/reminder"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -34,15 +34,13 @@ type ContactService struct {
 	database          *db.Database
 	contactRepo       *repository.ContactRepository
 	contactMethodRepo *repository.ContactMethodRepository
-	reminderRepo      *repository.ReminderRepository
 }
 
-func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository, reminderRepo *repository.ReminderRepository) *ContactService {
+func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository) *ContactService {
 	return &ContactService{
 		database:          database,
 		contactRepo:       contactRepo,
 		contactMethodRepo: contactMethodRepo,
-		reminderRepo:      reminderRepo,
 	}
 }
 
@@ -223,11 +221,6 @@ func (s *ContactService) DeleteContact(ctx context.Context, id uuid.UUID) error 
 		return err
 	}
 
-	// Soft-delete all reminders for this contact before deleting the contact
-	if err := s.reminderRepo.SoftDeleteRemindersForContact(ctx, id); err != nil {
-		return err
-	}
-
 	return s.contactRepo.SoftDeleteContact(ctx, id)
 }
 
@@ -246,12 +239,6 @@ func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid
 	}
 
 	if err := s.contactRepo.UpdateContactLastContacted(ctx, id, dateToSet); err != nil {
-		return nil, err
-	}
-
-	// Complete auto-generated reminders for this contact when marked as contacted
-	// Manual reminders are preserved since they may be unrelated to the contact cadence
-	if err := s.reminderRepo.CompleteAutoRemindersForContact(ctx, id); err != nil {
 		return nil, err
 	}
 
@@ -284,14 +271,14 @@ func (s *ContactService) ListOverdueContacts(ctx context.Context) ([]OverdueCont
 			continue
 		}
 
-		cadence, err := reminder.ParseCadence(*contact.Cadence)
+		contactCadence, err := cadence.ParseCadence(*contact.Cadence)
 		if err != nil {
 			continue
 		}
 
-		if reminder.IsOverdueWithConfig(cadence, contact.LastContacted, contact.CreatedAt, now) {
-			daysOverdue := reminder.GetOverdueDaysWithConfig(cadence, contact.LastContacted, contact.CreatedAt, now)
-			nextDue := reminder.CalculateNextDueDateWithConfig(cadence, contact.LastContacted, contact.CreatedAt)
+		if cadence.IsOverdueWithConfig(contactCadence, contact.LastContacted, contact.CreatedAt, now) {
+			daysOverdue := cadence.GetOverdueDaysWithConfig(contactCadence, contact.LastContacted, contact.CreatedAt, now)
+			nextDue := cadence.CalculateNextDueDateWithConfig(contactCadence, contact.LastContacted, contact.CreatedAt)
 
 			suggestedAction := suggestedActionForOverdueDays(daysOverdue)
 
@@ -429,7 +416,6 @@ type MergePreview struct {
 	DuplicateMethods       int64               `json:"duplicate_methods"`
 	NotesToTransfer        int64               `json:"notes_to_transfer"`
 	InteractionsToTransfer int64               `json:"interactions_to_transfer"`
-	RemindersToTransfer    int64               `json:"reminders_to_transfer"`
 	CalendarEventsToUpdate int64               `json:"calendar_events_to_update"`
 }
 
@@ -498,11 +484,6 @@ func (s *ContactService) GetMergePreview(ctx context.Context, sourceID, targetID
 		return nil, fmt.Errorf("count source interactions: %w", err)
 	}
 
-	sourceReminders, err := s.database.Queries.CountMergeReminders(ctx, uuidToPgUUID(sourceID))
-	if err != nil {
-		return nil, fmt.Errorf("count source reminders: %w", err)
-	}
-
 	sourceCalendarEvents, err := s.database.Queries.CountMergeCalendarEvents(ctx, uuidToPgUUID(sourceID))
 	if err != nil {
 		return nil, fmt.Errorf("count source calendar events: %w", err)
@@ -515,7 +496,6 @@ func (s *ContactService) GetMergePreview(ctx context.Context, sourceID, targetID
 		DuplicateMethods:       int64(len(duplicates)),
 		NotesToTransfer:        sourceNotes,
 		InteractionsToTransfer: sourceInteractions,
-		RemindersToTransfer:    sourceReminders,
 		CalendarEventsToUpdate: sourceCalendarEvents,
 	}, nil
 }
@@ -645,15 +625,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("transfer interactions: %w", err)
 	}
 
-	// 5. Transfer reminders
-	if err := txQueries.TransferReminders(ctx, db.TransferRemindersParams{
-		SourceContactID: sourceUUID,
-		TargetContactID: targetUUID,
-	}); err != nil {
-		return nil, fmt.Errorf("transfer reminders: %w", err)
-	}
-
-	// 6. Delete connections between source and target (would be self-referential after merge)
+	// 5. Delete connections between source and target (would be self-referential after merge)
 	if err := txQueries.DeleteDuplicateConnections(ctx, db.DeleteDuplicateConnectionsParams{
 		SourceContactID: sourceUUID,
 		TargetContactID: targetUUID,
@@ -661,7 +633,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("delete duplicate connections: %w", err)
 	}
 
-	// 6b. Delete source's connections to third parties that target already connects to
+	// 5b. Delete source's connections to third parties that target already connects to
 	// This prevents duplicate rows after transfer when both connect to the same person
 	if err := txQueries.DeleteDuplicateThirdPartyConnectionsA(ctx, db.DeleteDuplicateThirdPartyConnectionsAParams{
 		SourceContactID: sourceUUID,
@@ -677,7 +649,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("delete duplicate third party connections (contact_b): %w", err)
 	}
 
-	// 7. Transfer connections (both directions)
+	// 6. Transfer connections (both directions)
 	if err := txQueries.TransferConnectionsAsContactA(ctx, db.TransferConnectionsAsContactAParams{
 		SourceContactID: sourceUUID,
 		TargetContactID: targetUUID,
@@ -692,7 +664,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("transfer connections as contact_b: %w", err)
 	}
 
-	// 8. Update calendar events
+	// 7. Update calendar events
 	if err := txQueries.ReplaceContactInCalendarEvents(ctx, db.ReplaceContactInCalendarEventsParams{
 		SourceContactID: sourceUUID,
 		TargetContactID: targetUUID,
@@ -700,12 +672,12 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("replace contact in calendar events: %w", err)
 	}
 
-	// 9. Deduplicate calendar event contact arrays
+	// 8. Deduplicate calendar event contact arrays
 	if err := txQueries.DeduplicateCalendarEventContacts(ctx, targetUUID); err != nil {
 		return nil, fmt.Errorf("deduplicate calendar event contacts: %w", err)
 	}
 
-	// 10. Update target contact with field selections and optional new name
+	// 9. Update target contact with field selections and optional new name
 	txContactRepo := repository.NewContactRepository(txQueries)
 	updateReq := buildMergeUpdateRequest(targetContact, sourceContact, req)
 	mergedContact, err = txContactRepo.UpdateContact(ctx, req.TargetContactID, updateReq)
@@ -713,7 +685,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("update target contact: %w", err)
 	}
 
-	// 11. Soft delete source contact
+	// 10. Soft delete source contact
 	if err := txQueries.SoftDeleteContact(ctx, sourceUUID); err != nil {
 		return nil, fmt.Errorf("soft delete source contact: %w", err)
 	}

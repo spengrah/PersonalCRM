@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"personal-crm/backend/internal/reminder"
+	"personal-crm/backend/internal/cadence"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,15 +14,15 @@ import (
 func TestParseCadence(t *testing.T) {
 	tests := []struct {
 		input    string
-		expected reminder.CadenceType
+		expected cadence.CadenceType
 		hasError bool
 	}{
-		{"weekly", reminder.CadenceWeekly, false},
-		{"biweekly", reminder.CadenceBiweekly, false},
-		{"monthly", reminder.CadenceMonthly, false},
-		{"quarterly", reminder.CadenceQuarterly, false},
-		{"biannual", reminder.CadenceBiannual, false},
-		{"annual", reminder.CadenceAnnual, false},
+		{"weekly", cadence.CadenceWeekly, false},
+		{"biweekly", cadence.CadenceBiweekly, false},
+		{"monthly", cadence.CadenceMonthly, false},
+		{"quarterly", cadence.CadenceQuarterly, false},
+		{"biannual", cadence.CadenceBiannual, false},
+		{"annual", cadence.CadenceAnnual, false},
 		{"invalid", "", true},
 		{"", "", true},
 		{"WEEKLY", "", true}, // Case sensitive
@@ -30,7 +30,7 @@ func TestParseCadence(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.input, func(t *testing.T) {
-			result, err := reminder.ParseCadence(test.input)
+			result, err := cadence.ParseCadence(test.input)
 
 			if test.hasError {
 				assert.Error(t, err)
@@ -48,56 +48,56 @@ func TestCalculateNextDueDate(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		cadence      reminder.CadenceType
+		cadence      cadence.CadenceType
 		lastContact  *time.Time
 		created      time.Time
 		expectedDays int // Days from base date
 	}{
 		{
 			name:         "Weekly with last contact",
-			cadence:      reminder.CadenceWeekly,
+			cadence:      cadence.CadenceWeekly,
 			lastContact:  &baseDate,
 			created:      baseDate.AddDate(0, 0, -30),
 			expectedDays: 7,
 		},
 		{
 			name:         "Monthly without last contact",
-			cadence:      reminder.CadenceMonthly,
+			cadence:      cadence.CadenceMonthly,
 			lastContact:  nil,
 			created:      baseDate,
 			expectedDays: 31, // January has 31 days
 		},
 		{
 			name:         "Biweekly with last contact",
-			cadence:      reminder.CadenceBiweekly,
+			cadence:      cadence.CadenceBiweekly,
 			lastContact:  &baseDate,
 			created:      baseDate,
 			expectedDays: 14,
 		},
 		{
 			name:         "Quarterly with last contact",
-			cadence:      reminder.CadenceQuarterly,
+			cadence:      cadence.CadenceQuarterly,
 			lastContact:  &baseDate,
 			created:      baseDate,
 			expectedDays: 90, // Approximately 3 months
 		},
 		{
 			name:         "Biannual with last contact",
-			cadence:      reminder.CadenceBiannual,
+			cadence:      cadence.CadenceBiannual,
 			lastContact:  &baseDate,
 			created:      baseDate,
 			expectedDays: 181, // 6 months from Jan 1
 		},
 		{
 			name:         "Annual with last contact",
-			cadence:      reminder.CadenceAnnual,
+			cadence:      cadence.CadenceAnnual,
 			lastContact:  &baseDate,
 			created:      baseDate,
 			expectedDays: 366, // 2024 is a leap year
 		},
 		{
 			name:         "Month-end edge case - Jan 31 + 1 month",
-			cadence:      reminder.CadenceMonthly,
+			cadence:      cadence.CadenceMonthly,
 			lastContact:  timePtr(time.Date(2024, 1, 31, 12, 0, 0, 0, time.UTC)),
 			created:      time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
 			expectedDays: 0, // Go normalizes to Feb 29 (2024 is leap year) or Mar 2/3
@@ -106,7 +106,7 @@ func TestCalculateNextDueDate(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := reminder.CalculateNextDueDate(test.cadence, test.lastContact, test.created)
+			result := cadence.CalculateNextDueDate(test.cadence, test.lastContact, test.created)
 
 			var expectedDate time.Time
 			if test.lastContact != nil {
@@ -117,17 +117,17 @@ func TestCalculateNextDueDate(t *testing.T) {
 
 			// Calculate expected date based on cadence
 			switch test.cadence {
-			case reminder.CadenceWeekly:
+			case cadence.CadenceWeekly:
 				expectedDate = expectedDate.AddDate(0, 0, 7)
-			case reminder.CadenceBiweekly:
+			case cadence.CadenceBiweekly:
 				expectedDate = expectedDate.AddDate(0, 0, 14)
-			case reminder.CadenceMonthly:
+			case cadence.CadenceMonthly:
 				expectedDate = expectedDate.AddDate(0, 1, 0)
-			case reminder.CadenceQuarterly:
+			case cadence.CadenceQuarterly:
 				expectedDate = expectedDate.AddDate(0, 3, 0)
-			case reminder.CadenceBiannual:
+			case cadence.CadenceBiannual:
 				expectedDate = expectedDate.AddDate(0, 6, 0)
-			case reminder.CadenceAnnual:
+			case cadence.CadenceAnnual:
 				expectedDate = expectedDate.AddDate(1, 0, 0)
 			}
 
@@ -142,35 +142,35 @@ func TestIsOverdue(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		cadence     reminder.CadenceType
+		cadence     cadence.CadenceType
 		lastContact *time.Time
 		created     time.Time
 		expected    bool
 	}{
 		{
 			name:        "Weekly overdue",
-			cadence:     reminder.CadenceWeekly,
+			cadence:     cadence.CadenceWeekly,
 			lastContact: timePtr(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)), // 14 days ago
 			created:     time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			expected:    true, // Should be due Jan 8, now is Jan 15
 		},
 		{
 			name:        "Weekly not overdue",
-			cadence:     reminder.CadenceWeekly,
+			cadence:     cadence.CadenceWeekly,
 			lastContact: timePtr(time.Date(2024, 1, 10, 12, 0, 0, 0, time.UTC)), // 5 days ago
 			created:     time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			expected:    false, // Should be due Jan 17, now is Jan 15
 		},
 		{
 			name:        "Biweekly overdue",
-			cadence:     reminder.CadenceBiweekly,
+			cadence:     cadence.CadenceBiweekly,
 			lastContact: timePtr(time.Date(2023, 12, 25, 12, 0, 0, 0, time.UTC)), // 21 days ago
 			created:     time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			expected:    true, // Should be due Jan 8, now is Jan 15
 		},
 		{
 			name:        "Biweekly not overdue",
-			cadence:     reminder.CadenceBiweekly,
+			cadence:     cadence.CadenceBiweekly,
 			lastContact: timePtr(time.Date(2024, 1, 5, 12, 0, 0, 0, time.UTC)), // 10 days ago
 			created:     time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			expected:    false, // Should be due Jan 19, now is Jan 15
@@ -184,14 +184,14 @@ func TestIsOverdue(t *testing.T) {
 		},
 		{
 			name:        "Monthly overdue with no last contact",
-			cadence:     reminder.CadenceMonthly,
+			cadence:     cadence.CadenceMonthly,
 			lastContact: nil,
 			created:     time.Date(2023, 11, 1, 12, 0, 0, 0, time.UTC), // 2+ months ago
 			expected:    true,
 		},
 		{
 			name:        "Annual not yet due",
-			cadence:     reminder.CadenceAnnual,
+			cadence:     cadence.CadenceAnnual,
 			lastContact: timePtr(time.Date(2023, 2, 1, 12, 0, 0, 0, time.UTC)), // ~11.5 months ago
 			created:     time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
 			expected:    false,
@@ -200,7 +200,7 @@ func TestIsOverdue(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := reminder.IsOverdue(test.cadence, test.lastContact, test.created, now)
+			result := cadence.IsOverdue(test.cadence, test.lastContact, test.created, now)
 			assert.Equal(t, test.expected, result)
 		})
 	}
@@ -212,28 +212,28 @@ func TestGetOverdueDays(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		cadence      reminder.CadenceType
+		cadence      cadence.CadenceType
 		lastContact  *time.Time
 		created      time.Time
 		expectedDays int
 	}{
 		{
 			name:         "Weekly 7 days overdue",
-			cadence:      reminder.CadenceWeekly,
+			cadence:      cadence.CadenceWeekly,
 			lastContact:  timePtr(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)), // Due Jan 8, now Jan 15
 			created:      time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			expectedDays: 7,
 		},
 		{
 			name:         "Biweekly 7 days overdue",
-			cadence:      reminder.CadenceBiweekly,
+			cadence:      cadence.CadenceBiweekly,
 			lastContact:  timePtr(time.Date(2023, 12, 25, 12, 0, 0, 0, time.UTC)), // Due Jan 8, now Jan 15
 			created:      time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			expectedDays: 7,
 		},
 		{
 			name:         "Not overdue returns 0",
-			cadence:      reminder.CadenceWeekly,
+			cadence:      cadence.CadenceWeekly,
 			lastContact:  timePtr(time.Date(2024, 1, 10, 12, 0, 0, 0, time.UTC)), // Due Jan 17, now Jan 15
 			created:      time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			expectedDays: 0,
@@ -249,7 +249,7 @@ func TestGetOverdueDays(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := reminder.GetOverdueDays(test.cadence, test.lastContact, test.created, now)
+			result := cadence.GetOverdueDays(test.cadence, test.lastContact, test.created, now)
 			assert.Equal(t, test.expectedDays, result)
 		})
 	}
@@ -261,28 +261,28 @@ func TestGetDaysUntilDue(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		cadence      reminder.CadenceType
+		cadence      cadence.CadenceType
 		lastContact  *time.Time
 		created      time.Time
 		expectedDays int
 	}{
 		{
 			name:         "Weekly 2 days until due",
-			cadence:      reminder.CadenceWeekly,
+			cadence:      cadence.CadenceWeekly,
 			lastContact:  timePtr(time.Date(2024, 1, 10, 12, 0, 0, 0, time.UTC)), // Due Jan 17, now Jan 15
 			created:      time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			expectedDays: 2,
 		},
 		{
 			name:         "Weekly overdue returns negative",
-			cadence:      reminder.CadenceWeekly,
+			cadence:      cadence.CadenceWeekly,
 			lastContact:  timePtr(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)), // Due Jan 8, now Jan 15
 			created:      time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			expectedDays: -7,
 		},
 		{
 			name:         "Biweekly 4 days until due",
-			cadence:      reminder.CadenceBiweekly,
+			cadence:      cadence.CadenceBiweekly,
 			lastContact:  timePtr(time.Date(2024, 1, 5, 12, 0, 0, 0, time.UTC)), // Due Jan 19, now Jan 15
 			created:      time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			expectedDays: 4,
@@ -298,93 +298,8 @@ func TestGetDaysUntilDue(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := reminder.GetDaysUntilDue(test.cadence, test.lastContact, test.created, now)
+			result := cadence.GetDaysUntilDue(test.cadence, test.lastContact, test.created, now)
 			assert.Equal(t, test.expectedDays, result)
-		})
-	}
-}
-
-// TestGenerateReminderTitle tests reminder title generation
-func TestGenerateReminderTitle(t *testing.T) {
-	tests := []struct {
-		name        string
-		contactName string
-		cadence     reminder.CadenceType
-		expected    string
-	}{
-		{
-			name:        "Weekly cadence",
-			contactName: "John Doe",
-			cadence:     reminder.CadenceWeekly,
-			expected:    "Follow up with John Doe (weekly cadence)",
-		},
-		{
-			name:        "Monthly cadence",
-			contactName: "Jane Smith",
-			cadence:     reminder.CadenceMonthly,
-			expected:    "Follow up with Jane Smith (monthly cadence)",
-		},
-		{
-			name:        "Biweekly cadence",
-			contactName: "Bob Johnson",
-			cadence:     reminder.CadenceBiweekly,
-			expected:    "Follow up with Bob Johnson (biweekly cadence)",
-		},
-		{
-			name:        "Annual cadence",
-			contactName: "Alice Brown",
-			cadence:     reminder.CadenceAnnual,
-			expected:    "Follow up with Alice Brown (annual cadence)",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result := reminder.GenerateReminderTitle(test.contactName, test.cadence)
-			assert.Equal(t, test.expected, result)
-		})
-	}
-}
-
-// TestGenerateReminderDescription tests reminder description generation
-func TestGenerateReminderDescription(t *testing.T) {
-	tests := []struct {
-		name                 string
-		contactName          string
-		cadence              reminder.CadenceType
-		daysSinceLastContact int
-		expectedToContain    []string
-	}{
-		{
-			name:                 "Recent contact",
-			contactName:          "John Doe",
-			cadence:              reminder.CadenceWeekly,
-			daysSinceLastContact: 0,
-			expectedToContain:    []string{"John Doe", "weekly", "reach out"},
-		},
-		{
-			name:                 "Old contact",
-			contactName:          "Jane Smith",
-			cadence:              reminder.CadenceMonthly,
-			daysSinceLastContact: 45,
-			expectedToContain:    []string{"Jane Smith", "monthly", "45 days"},
-		},
-		{
-			name:                 "Quarterly with moderate gap",
-			contactName:          "Bob Johnson",
-			cadence:              reminder.CadenceQuarterly,
-			daysSinceLastContact: 100,
-			expectedToContain:    []string{"Bob Johnson", "quarterly", "100 days"},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result := reminder.GenerateReminderDescription(test.contactName, test.cadence, test.daysSinceLastContact)
-
-			for _, expected := range test.expectedToContain {
-				assert.Contains(t, result, expected)
-			}
 		})
 	}
 }
@@ -437,7 +352,7 @@ func TestGetCadenceConfig(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("CRM_ENV", test.envValue)
 
-			config := reminder.GetCadenceConfig()
+			config := cadence.GetCadenceConfig()
 			assert.Equal(t, test.checkWeekly, config.Weekly)
 		})
 	}
@@ -449,32 +364,32 @@ func TestGetCadenceDuration(t *testing.T) {
 
 	tests := []struct {
 		name             string
-		cadenceType      reminder.CadenceType
+		cadenceType      cadence.CadenceType
 		expectedDuration time.Duration
 	}{
 		{
 			name:             "Weekly in production",
-			cadenceType:      reminder.CadenceWeekly,
+			cadenceType:      cadence.CadenceWeekly,
 			expectedDuration: 7 * 24 * time.Hour,
 		},
 		{
 			name:             "Monthly in production",
-			cadenceType:      reminder.CadenceMonthly,
+			cadenceType:      cadence.CadenceMonthly,
 			expectedDuration: 30 * 24 * time.Hour,
 		},
 		{
 			name:             "Quarterly in production",
-			cadenceType:      reminder.CadenceQuarterly,
+			cadenceType:      cadence.CadenceQuarterly,
 			expectedDuration: 90 * 24 * time.Hour,
 		},
 		{
 			name:             "Biannual in production",
-			cadenceType:      reminder.CadenceBiannual,
+			cadenceType:      cadence.CadenceBiannual,
 			expectedDuration: 180 * 24 * time.Hour,
 		},
 		{
 			name:             "Annual in production",
-			cadenceType:      reminder.CadenceAnnual,
+			cadenceType:      cadence.CadenceAnnual,
 			expectedDuration: 365 * 24 * time.Hour,
 		},
 		{
@@ -486,7 +401,7 @@ func TestGetCadenceDuration(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := reminder.GetCadenceDuration(test.cadenceType)
+			result := cadence.GetCadenceDuration(test.cadenceType)
 			assert.Equal(t, test.expectedDuration, result)
 		})
 	}
@@ -497,7 +412,7 @@ func TestIsOverdueWithConfig(t *testing.T) {
 	tests := []struct {
 		name        string
 		env         string
-		cadence     reminder.CadenceType
+		cadence     cadence.CadenceType
 		lastContact *time.Time
 		created     time.Time
 		checkTime   time.Time
@@ -506,7 +421,7 @@ func TestIsOverdueWithConfig(t *testing.T) {
 		{
 			name:        "Production - weekly overdue",
 			env:         "production",
-			cadence:     reminder.CadenceWeekly,
+			cadence:     cadence.CadenceWeekly,
 			lastContact: timePtr(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)),
 			created:     time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			checkTime:   time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC), // 14 days later
@@ -515,7 +430,7 @@ func TestIsOverdueWithConfig(t *testing.T) {
 		{
 			name:        "Test env - weekly overdue (2 min cadence)",
 			env:         "test",
-			cadence:     reminder.CadenceWeekly,
+			cadence:     cadence.CadenceWeekly,
 			lastContact: timePtr(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)),
 			created:     time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			checkTime:   time.Date(2024, 1, 1, 12, 3, 0, 0, time.UTC), // 3 minutes later
@@ -524,7 +439,7 @@ func TestIsOverdueWithConfig(t *testing.T) {
 		{
 			name:        "Staging - monthly not overdue (1 hour cadence)",
 			env:         "staging",
-			cadence:     reminder.CadenceMonthly,
+			cadence:     cadence.CadenceMonthly,
 			lastContact: timePtr(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)),
 			created:     time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			checkTime:   time.Date(2024, 1, 1, 12, 30, 0, 0, time.UTC), // 30 minutes later
@@ -536,7 +451,7 @@ func TestIsOverdueWithConfig(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("CRM_ENV", test.env)
 
-			result := reminder.IsOverdueWithConfig(test.cadence, test.lastContact, test.created, test.checkTime)
+			result := cadence.IsOverdueWithConfig(test.cadence, test.lastContact, test.created, test.checkTime)
 			assert.Equal(t, test.expected, result)
 		})
 	}
@@ -547,7 +462,7 @@ func TestGetOverdueDaysWithConfig(t *testing.T) {
 	tests := []struct {
 		name         string
 		env          string
-		cadence      reminder.CadenceType
+		cadence      cadence.CadenceType
 		lastContact  *time.Time
 		created      time.Time
 		checkTime    time.Time
@@ -556,7 +471,7 @@ func TestGetOverdueDaysWithConfig(t *testing.T) {
 		{
 			name:         "Production - 7 days overdue",
 			env:          "production",
-			cadence:      reminder.CadenceWeekly,
+			cadence:      cadence.CadenceWeekly,
 			lastContact:  timePtr(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)),
 			created:      time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			checkTime:    time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC), // Due Jan 8, now Jan 15
@@ -565,7 +480,7 @@ func TestGetOverdueDaysWithConfig(t *testing.T) {
 		{
 			name:         "Not overdue returns 0",
 			env:          "production",
-			cadence:      reminder.CadenceWeekly,
+			cadence:      cadence.CadenceWeekly,
 			lastContact:  timePtr(time.Date(2024, 1, 10, 12, 0, 0, 0, time.UTC)),
 			created:      time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			checkTime:    time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC), // Due Jan 17, now Jan 15
@@ -577,62 +492,8 @@ func TestGetOverdueDaysWithConfig(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("CRM_ENV", test.env)
 
-			result := reminder.GetOverdueDaysWithConfig(test.cadence, test.lastContact, test.created, test.checkTime)
+			result := cadence.GetOverdueDaysWithConfig(test.cadence, test.lastContact, test.created, test.checkTime)
 			assert.Equal(t, test.expectedDays, result)
-		})
-	}
-}
-
-// TestGetSchedulerCronSpec tests cron specification per environment
-func TestGetSchedulerCronSpec(t *testing.T) {
-	tests := []struct {
-		name     string
-		env      string
-		expected string
-	}{
-		{
-			name:     "Test environment - every 30s",
-			env:      "test",
-			expected: "@every 30s",
-		},
-		{
-			name:     "Testing environment - every 30s",
-			env:      "testing",
-			expected: "@every 30s",
-		},
-		{
-			name:     "Staging environment - every 5m",
-			env:      "staging",
-			expected: "@every 5m",
-		},
-		{
-			name:     "Accelerated environment - every 5m",
-			env:      "accelerated",
-			expected: "@every 5m",
-		},
-		{
-			name:     "Production environment - daily at 8 AM",
-			env:      "production",
-			expected: "0 0 8 * * *",
-		},
-		{
-			name:     "Prod environment - daily at 8 AM",
-			env:      "prod",
-			expected: "0 0 8 * * *",
-		},
-		{
-			name:     "Empty defaults to production",
-			env:      "",
-			expected: "0 0 8 * * *",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Setenv("CRM_ENV", test.env)
-
-			result := reminder.GetSchedulerCronSpec()
-			assert.Equal(t, test.expected, result)
 		})
 	}
 }
@@ -644,29 +505,29 @@ func TestBiweeklyCadenceComprehensive(t *testing.T) {
 	created := time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC)
 
 	t.Run("Parse biweekly", func(t *testing.T) {
-		cadence, err := reminder.ParseCadence("biweekly")
+		cad, err := cadence.ParseCadence("biweekly")
 		require.NoError(t, err)
-		assert.Equal(t, reminder.CadenceBiweekly, cadence)
+		assert.Equal(t, cadence.CadenceBiweekly, cad)
 	})
 
 	t.Run("Calculate next due date", func(t *testing.T) {
-		nextDue := reminder.CalculateNextDueDate(reminder.CadenceBiweekly, &lastContact, created)
+		nextDue := cadence.CalculateNextDueDate(cadence.CadenceBiweekly, &lastContact, created)
 		expected := lastContact.AddDate(0, 0, 14) // 14 days after last contact
 		assert.Equal(t, expected, nextDue)
 	})
 
 	t.Run("Is overdue", func(t *testing.T) {
-		overdue := reminder.IsOverdue(reminder.CadenceBiweekly, &lastContact, created, now)
+		overdue := cadence.IsOverdue(cadence.CadenceBiweekly, &lastContact, created, now)
 		assert.True(t, overdue) // 21 days > 14 days
 	})
 
 	t.Run("Get overdue days", func(t *testing.T) {
-		days := reminder.GetOverdueDays(reminder.CadenceBiweekly, &lastContact, created, now)
+		days := cadence.GetOverdueDays(cadence.CadenceBiweekly, &lastContact, created, now)
 		assert.Equal(t, 7, days) // 21 - 14 = 7 days overdue
 	})
 
 	t.Run("Get days until due", func(t *testing.T) {
-		days := reminder.GetDaysUntilDue(reminder.CadenceBiweekly, &lastContact, created, now)
+		days := cadence.GetDaysUntilDue(cadence.CadenceBiweekly, &lastContact, created, now)
 		assert.Equal(t, -7, days) // Negative means overdue
 	})
 }

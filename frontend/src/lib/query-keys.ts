@@ -11,7 +11,6 @@
 
 import type { ContactListParams } from '@/types/contact'
 import type { ImportCandidatesListParams } from '@/types/import'
-import type { ReminderListParams } from '@/types/reminder'
 
 // Contact query keys
 export const contactKeys = {
@@ -30,15 +29,6 @@ export const importKeys = {
   list: (params: ImportCandidatesListParams) => [...importKeys.lists(), params] as const,
   details: () => [...importKeys.all, 'detail'] as const,
   detail: (id: string) => [...importKeys.details(), id] as const,
-}
-
-// Reminder query keys
-export const reminderKeys = {
-  all: ['reminders'] as const,
-  lists: () => [...reminderKeys.all, 'list'] as const,
-  list: (params: ReminderListParams) => [...reminderKeys.lists(), params] as const,
-  stats: () => [...reminderKeys.all, 'stats'] as const,
-  byContact: (contactId: string) => [...reminderKeys.all, 'contact', contactId] as const,
 }
 
 // System query keys
