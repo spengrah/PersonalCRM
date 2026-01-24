@@ -8,7 +8,13 @@ allowed-tools: Bash Read Edit Glob Skill
 
 Capture insights so problems become patterns, mistakes become rules, techniques become skills.
 
+## Arguments
+
+- `--review-only`: Skip extraction, go directly to review. Use when extraction already ran (e.g., from pre-push hook).
+
 ## 1. Run Extraction
+
+**Skip this step if invoked with `--review-only`.**
 
 ```bash
 ./.ai/skills/learnings/extract-learnings.sh --trigger manual

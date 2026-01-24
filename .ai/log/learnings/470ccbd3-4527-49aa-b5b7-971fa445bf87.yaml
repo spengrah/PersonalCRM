@@ -38,3 +38,27 @@ detail: |
   When running headless Claude CLI commands (like in extract-learnings.py), add `--permission-mode bypassPermissions` to the command arguments to allow tools like Read to execute without user approval. This is essential for automated extraction scripts that run in hooks.
 actionable: true
 
+---
+timestamp: "2026-01-24T15:46:36.922307"
+type: gotcha
+summary: git diff --quiet only detects tracked files, not new untracked files
+detail: |
+  When checking for new files in a directory with git diff --quiet, untracked files won't be detected. Use git ls-files --others --exclude-standard to check for untracked files in addition to git diff. Example: if git diff --quiet .ai/log/learnings/ 2>/dev/null && [[ -z "$(git ls-files --others --exclude-standard .ai/log/learnings/)" ]]; then
+actionable: true
+
+---
+timestamp: "2026-01-24T15:46:36.922307"
+type: documentation_gap
+summary: Learnings extraction happened but review workflow wasn't triggered
+detail: |
+  The pre-push hook runs learnings extraction automatically, but the /learnings skill defines a 5-step workflow (extract, self-reflection, review, apply, commit). The hook only runs step 1, and there's no automatic trigger for the agent to complete steps 2-5. The hook's informational message about reviewing learnings was ignored because the push succeeded. Gap: The connection between automated extraction and the manual review workflow needs to be clearer - either the hook should block until review is complete, or it should automatically invoke the skill, or the agent needs stronger instructions to recognize extraction output as a blocker.
+actionable: true
+
+---
+timestamp: "2026-01-24T15:46:36.922307"
+type: gotcha
+summary: Successful git push signals 'all done' even when hook prints warnings
+detail: |
+  When a pre-push hook prints informational messages like 'AGENT: LEARNINGS EXTRACTED - Before pushing, you should...' but still exits with success (allowing the push), agents will treat the successful push as completion and ignore the informational output. Hooks must block (exit non-zero) if they want to enforce agent action. Informational messages in successful hook runs are treated as FYI, not actionable blockers.
+actionable: true
+
