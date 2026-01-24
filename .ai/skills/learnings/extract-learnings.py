@@ -19,7 +19,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator
@@ -89,9 +88,7 @@ LEARNINGS_SCHEMA = {
 
 def is_claude_code_session() -> bool:
     """Check if we're running under Claude Code (vs Codex, Cursor, etc.)."""
-    # This env var must be set in .claude/settings.json:
-    #   { "env": { "CLAUDE_CODE": "1" } }
-    # Claude Code doesn't set it automatically.
+    # Claude Code sets this environment variable
     return os.environ.get("CLAUDE_CODE") == "1"
 
 
@@ -330,6 +327,7 @@ def extract_with_claude(transcript_path: Path, session_id: str, model: str = "cl
         "--no-session-persistence",
         "--mcp-config", '{"mcpServers":{}}',  # Empty config - no MCP servers
         "--strict-mcp-config",  # Ignore project MCP configs
+        "--permission-mode", "bypassPermissions",  # Allow headless Read without approval
     ]
 
     result = subprocess.run(
