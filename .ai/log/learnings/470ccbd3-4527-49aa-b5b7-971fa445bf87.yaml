@@ -62,3 +62,35 @@ detail: |
   When a pre-push hook prints informational messages like 'AGENT: LEARNINGS EXTRACTED - Before pushing, you should...' but still exits with success (allowing the push), agents will treat the successful push as completion and ignore the informational output. Hooks must block (exit non-zero) if they want to enforce agent action. Informational messages in successful hook runs are treated as FYI, not actionable blockers.
 actionable: true
 
+---
+timestamp: "2026-01-24T16:02:21.999940"
+type: gotcha
+summary: Learnings skill workflow split between hook and skill invocation
+detail: |
+  The pre-push hook runs extract-learnings.sh directly, but the full learnings workflow (self-reflection, classification, routing to /extract-skill) lives in the /learnings SKILL.md. Without explicitly invoking /learnings, agents only see the hook's message telling them what to do, but not the detailed prompts and instructions on how to do it. The fix was adding a --review-only flag so the hook message says 'Run: /learnings --review-only' to bridge the gap.
+actionable: true
+
+---
+timestamp: "2026-01-24T16:02:21.999940"
+type: architecture
+summary: Skills can accept arguments to modify their behavior
+detail: |
+  Skills defined in SKILL.md can document argument support (like --review-only) in an Arguments section. When invoking via the Skill tool, args are passed as a string. The skill's instructions then check for these args and modify execution flow accordingly. This allows skills to handle different contexts (e.g., skip extraction step when it already ran from a hook).
+actionable: true
+
+---
+timestamp: "2026-01-24T16:02:21.999940"
+type: distinction
+summary: Incremental extraction tracks state per-session in extraction-state.json
+detail: |
+  The extract-learnings.py script maintains state in .ai/log/extraction-state.json with session_id, last_extracted_timestamp, and last_extracted_line. Running extraction multiple times is safe because it only processes new content since last_extracted_line. This means calling /learnings after hook extraction would be a quick no-op on the extraction step, not truly redundant but unnecessary overhead.
+actionable: true
+
+---
+timestamp: "2026-01-24T16:02:21.999940"
+type: documentation_gap
+summary: Hook messaging didn't reference the skill, causing workflow disconnect
+detail: |
+  The pre-push hook printed manual instructions ('you should: 1. Read learnings 2. Apply them') but didn't tell the agent to invoke the /learnings skill where the detailed workflow lives. Agents following the hook message would miss the self-reflection prompts and /extract-skill routing instructions. The hook message should reference the skill directly: 'Run: /learnings --review-only'. This reveals that hook messages should point to relevant skills rather than duplicating their instructions.
+actionable: true
+
