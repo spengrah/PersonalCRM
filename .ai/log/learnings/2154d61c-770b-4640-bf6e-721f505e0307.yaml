@@ -62,3 +62,51 @@ detail: |
   When issue explicitly says 'follow the existing Google OAuth pattern', implement by mirroring the structure even if it creates duplication (todoist/oauth.go mirrors google/oauth.go structure). Code reviewers will flag DRY violations, but this is intentional - the spec prioritizes consistency over abstraction. Refactoring to generic provider system would be separate work. Document this decision if questioned.
 actionable: true
 
+---
+timestamp: "2026-01-25T15:22:57.644050"
+type: gotcha
+summary: OAuth callback routes must be registered BEFORE auth middleware
+detail: |
+  OAuth provider callbacks (e.g., /api/v1/auth/todoist/callback) are invoked by external providers' redirects and cannot include API keys. They must be registered before v1.Use(auth.APIKeyMiddleware) in main.go, otherwise they'll get blocked by the middleware requiring authentication that external providers can't provide.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:22:57.644050"
+type: rule
+summary: Use url.Values for OAuth redirect URLs, not string concatenation
+detail: |
+  When constructing OAuth callback redirect URLs with query parameters (success=true, error=xyz), use url.Values{}.Encode() instead of string concatenation or manual url.QueryEscape() for individual params. This ensures ALL parameters are properly encoded and prevents injection vulnerabilities. Pattern: redirectURL.RawQuery = url.Values{"success": {"true"}, "provider": {"todoist"}}.Encode()
+actionable: true
+
+---
+timestamp: "2026-01-25T15:22:57.644050"
+type: distinction
+summary: E2E tests verify UI presence, not OAuth flows themselves
+detail: |
+  E2E tests for OAuth features should verify UI elements (settings sections, connect buttons, configuration instructions) are visible and correctly displayed. Don't attempt to test actual OAuth flows in E2E since they require external provider interaction. Use httptest servers in backend unit tests for OAuth HTTP operations instead.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:22:57.644050"
+type: gotcha
+summary: Test-map.json must be updated when adding new hooks in settings
+detail: |
+  When adding new React Query hooks for settings features (like use-todoist-accounts.ts), they must be registered in frontend/tests/e2e/test-map.json with the @area:settings tag. Otherwise, E2E test diff selection won't properly track changes to those hooks as requiring settings tests to run.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:22:57.644050"
+type: documentation_gap
+summary: E2E test heading expectations not validated against actual component
+detail: |
+  Initial E2E test looked for 'Todoist Accounts' heading when component actually used 'Todoist'. The test was written without checking the actual component implementation first. Guidance existed in core.md to 'NEVER propose changes to code you haven't read' but wasn't applied to test expectations. Should strengthen: before writing UI tests that check for specific text/elements, always read the component file first to verify exact wording and structure.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:22:57.644050"
+type: architecture
+summary: Code review feedback drives iterative PR improvements
+detail: |
+  Claude Code Review check in CI provides structured feedback on security, testing, and code quality. When review fails, extract specific issues from PR comments (gh pr view --comments), address each systematically, then push fixes. The review check will re-run automatically. Pattern: review fails → read comments → fix issues → commit → push → review re-runs.
+actionable: true
+
