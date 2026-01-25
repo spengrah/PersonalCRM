@@ -117,22 +117,42 @@ fi
 #############################################
 echo_step "Checking PostgreSQL..."
 
-if command -v pg_ctlcluster &> /dev/null; then
-    PG_VERSION=$(pg_lsclusters -h 2>/dev/null | grep -E "^[0-9]+" | head -1 | awk '{print $1}')
-    echo_ok "PostgreSQL $PG_VERSION installed"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS - check via Homebrew
+    if command -v psql &> /dev/null; then
+        PG_VERSION=$(psql --version | awk '{print $3}' | cut -d. -f1)
+        echo_ok "PostgreSQL $PG_VERSION installed"
 
-    # Check for pgvector
-    if dpkg -l | grep -q "postgresql-${PG_VERSION}-pgvector"; then
-        echo_ok "pgvector extension installed"
+        # Check for pgvector via Homebrew
+        if brew list pgvector &> /dev/null 2>&1; then
+            echo_ok "pgvector extension installed"
+        else
+            echo_warn "pgvector extension not found"
+            MANUAL_STEPS+=("Install pgvector: brew install pgvector")
+        fi
     else
-        echo_warn "pgvector extension not found"
-        MANUAL_STEPS+=("Install pgvector: sudo apt install postgresql-${PG_VERSION}-pgvector")
+        echo_warn "PostgreSQL not found"
+        MANUAL_STEPS+=("Install PostgreSQL: brew install postgresql@16 pgvector")
     fi
-elif command -v psql &> /dev/null; then
-    echo_ok "PostgreSQL client installed (server may be external)"
 else
-    echo_warn "PostgreSQL not found"
-    MANUAL_STEPS+=("Install PostgreSQL: sudo apt install postgresql postgresql-16-pgvector")
+    # Linux - use Debian/Ubuntu detection
+    if command -v pg_ctlcluster &> /dev/null; then
+        PG_VERSION=$(pg_lsclusters -h 2>/dev/null | grep -E "^[0-9]+" | head -1 | awk '{print $1}')
+        echo_ok "PostgreSQL $PG_VERSION installed"
+
+        # Check for pgvector
+        if dpkg -l | grep -q "postgresql-${PG_VERSION}-pgvector"; then
+            echo_ok "pgvector extension installed"
+        else
+            echo_warn "pgvector extension not found"
+            MANUAL_STEPS+=("Install pgvector: sudo apt install postgresql-${PG_VERSION}-pgvector")
+        fi
+    elif command -v psql &> /dev/null; then
+        echo_ok "PostgreSQL client installed (server may be external)"
+    else
+        echo_warn "PostgreSQL not found"
+        MANUAL_STEPS+=("Install PostgreSQL: sudo apt install postgresql postgresql-16-pgvector")
+    fi
 fi
 
 #############################################
