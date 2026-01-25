@@ -145,13 +145,16 @@ export function ImportLinkModal({
 
   // Clamp currentIndex when candidates array shrinks (after import/link/ignore)
   useEffect(() => {
-    if (candidates.length > 0 && currentIndex >= candidates.length) {
-      setCurrentIndex(candidates.length - 1)
+    if (currentIndex >= candidates.length) {
+      setCurrentIndex(Math.max(0, candidates.length - 1))
     }
   }, [candidates.length, currentIndex])
 
   // Initialize method selections when candidate changes
   useEffect(() => {
+    // Guard against undefined candidate (can happen during cache invalidation race conditions)
+    if (!candidate) return
+
     const selections = new Map<string, MethodSelection>()
 
     // Add emails with inferred types
