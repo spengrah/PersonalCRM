@@ -14,7 +14,7 @@ export default defineConfig({
     }
 
     const cpuCount = os.cpus().length || 1
-    const maxWorkers = process.env.CI ? 2 : cpuCount >= 8 ? 4 : cpuCount >= 4 ? 3 : 2
+    const maxWorkers = cpuCount >= 8 ? 4 : cpuCount >= 4 ? 3 : 2
     return Math.max(1, Math.min(maxWorkers, cpuCount))
   })(),
   reporter: [['html', { open: 'never' }], ['list']],
