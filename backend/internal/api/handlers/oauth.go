@@ -152,24 +152,39 @@ func (h *OAuthHandler) GoogleCallback(c *gin.Context) {
 
 	// Handle errors from Google
 	if errorParam != "" {
-		c.Redirect(http.StatusFound, redirectBase+"?auth=error&provider=google&message="+url.QueryEscape(errorParam))
+		params := url.Values{}
+		params.Set("auth", "error")
+		params.Set("provider", "google")
+		params.Set("message", errorParam)
+		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 		return
 	}
 
 	// Validate state (CSRF protection)
 	if !h.validateState(state) {
-		c.Redirect(http.StatusFound, redirectBase+"?auth=error&provider=google&message=invalid_state")
+		params := url.Values{}
+		params.Set("auth", "error")
+		params.Set("provider", "google")
+		params.Set("message", "invalid_state")
+		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 		return
 	}
 
 	// Exchange code for tokens
 	_, err := h.googleOAuth.ExchangeCode(c.Request.Context(), code)
 	if err != nil {
-		c.Redirect(http.StatusFound, redirectBase+"?auth=error&provider=google&message=exchange_failed")
+		params := url.Values{}
+		params.Set("auth", "error")
+		params.Set("provider", "google")
+		params.Set("message", "exchange_failed")
+		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 		return
 	}
 
-	c.Redirect(http.StatusFound, redirectBase+"?auth=success&provider=google")
+	params := url.Values{}
+	params.Set("auth", "success")
+	params.Set("provider", "google")
+	c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 }
 
 // ListGoogleAccounts returns all connected Google accounts
@@ -346,24 +361,39 @@ func (h *OAuthHandler) TodoistCallback(c *gin.Context) {
 
 	// Handle errors from Todoist
 	if errorParam != "" {
-		c.Redirect(http.StatusFound, redirectBase+"?auth=error&provider=todoist&message="+url.QueryEscape(errorParam))
+		params := url.Values{}
+		params.Set("auth", "error")
+		params.Set("provider", "todoist")
+		params.Set("message", errorParam)
+		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 		return
 	}
 
 	// Validate state (CSRF protection)
 	if !h.validateState(state) {
-		c.Redirect(http.StatusFound, redirectBase+"?auth=error&provider=todoist&message=invalid_state")
+		params := url.Values{}
+		params.Set("auth", "error")
+		params.Set("provider", "todoist")
+		params.Set("message", "invalid_state")
+		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 		return
 	}
 
 	// Exchange code for tokens
 	_, err := h.todoistOAuth.ExchangeCode(c.Request.Context(), code)
 	if err != nil {
-		c.Redirect(http.StatusFound, redirectBase+"?auth=error&provider=todoist&message=exchange_failed")
+		params := url.Values{}
+		params.Set("auth", "error")
+		params.Set("provider", "todoist")
+		params.Set("message", "exchange_failed")
+		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 		return
 	}
 
-	c.Redirect(http.StatusFound, redirectBase+"?auth=success&provider=todoist")
+	params := url.Values{}
+	params.Set("auth", "success")
+	params.Set("provider", "todoist")
+	c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 }
 
 // ListTodoistAccounts returns all connected Todoist accounts

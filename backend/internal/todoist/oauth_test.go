@@ -266,3 +266,121 @@ func TestRevokeToken_NoContent(t *testing.T) {
 	err := service.revokeTokenWithURL(ctx, "test-access-token", server.URL)
 	require.NoError(t, err)
 }
+
+// TestExchangeCodeForToken_MissingAccessToken tests handling of missing access token in response
+func TestExchangeCodeForToken_MissingAccessToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Return response without access_token
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"token_type": "Bearer",
+		})
+	}))
+	defer server.Close()
+
+	service := &OAuthService{
+		clientID:     "test-client-id",
+		clientSecret: "test-client-secret",
+		redirectURL:  "http://localhost:8080/callback",
+		httpClient:   server.Client(),
+	}
+
+	ctx := context.Background()
+	token, err := service.exchangeCodeForTokenWithURL(ctx, "test-auth-code", server.URL)
+	// Empty access token should be returned - caller should validate
+	require.NoError(t, err)
+	assert.Empty(t, token.AccessToken)
+}
+
+// TestExchangeCodeForToken_InvalidJSON tests handling of invalid JSON response
+func TestExchangeCodeForToken_InvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{invalid json`))
+	}))
+	defer server.Close()
+
+	service := &OAuthService{
+		clientID:     "test-client-id",
+		clientSecret: "test-client-secret",
+		redirectURL:  "http://localhost:8080/callback",
+		httpClient:   server.Client(),
+	}
+
+	ctx := context.Background()
+	_, err := service.exchangeCodeForTokenWithURL(ctx, "test-auth-code", server.URL)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "decode token response")
+}
+
+// TestGetUserInfo_InvalidJSON tests handling of invalid JSON response
+func TestGetUserInfo_InvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`not valid json`))
+	}))
+	defer server.Close()
+
+	service := &OAuthService{
+		httpClient: server.Client(),
+	}
+
+	ctx := context.Background()
+	_, err := service.getUserInfoWithURL(ctx, "test-access-token", server.URL)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "decode user info")
+}
+
+// TestGetAuthURL_RedirectURLEncoding verifies redirect URL is properly encoded
+func TestGetAuthURL_RedirectURLEncoding(t *testing.T) {
+	service := &OAuthService{
+		clientID:    "test-client-id",
+		redirectURL: "http://localhost:8080/api/v1/auth/todoist/callback",
+	}
+
+	authURL := service.GetAuthURL("test-state")
+	parsedURL, err := url.Parse(authURL)
+	require.NoError(t, err)
+
+	redirectURI := parsedURL.Query().Get("redirect_uri")
+	assert.Equal(t, "http://localhost:8080/api/v1/auth/todoist/callback", redirectURI)
+}
+
+// TestExchangeCodeForToken_HTTPStatusCodes tests various HTTP status codes
+func TestExchangeCodeForToken_HTTPStatusCodes(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		expectErr  bool
+	}{
+		{"Forbidden", http.StatusForbidden, true},
+		{"Not Found", http.StatusNotFound, true},
+		{"Server Error", http.StatusInternalServerError, true},
+		{"Service Unavailable", http.StatusServiceUnavailable, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(`{"error": "some_error"}`))
+			}))
+			defer server.Close()
+
+			service := &OAuthService{
+				clientID:     "test-client-id",
+				clientSecret: "test-client-secret",
+				redirectURL:  "http://localhost:8080/callback",
+				httpClient:   server.Client(),
+			}
+
+			ctx := context.Background()
+			_, err := service.exchangeCodeForTokenWithURL(ctx, "test-auth-code", server.URL)
+			if tc.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

@@ -1,6 +1,25 @@
 import { test, expect } from '@playwright/test'
 
 test.describe('Settings Page @area:settings', () => {
+  test('should display Todoist accounts section', async ({ page }) => {
+    await page.goto('/settings', { waitUntil: 'networkidle' })
+    await page.reload({ waitUntil: 'networkidle' })
+
+    // Check Todoist section heading is visible (in the card header)
+    await expect(page.getByRole('heading', { name: 'Todoist', exact: true })).toBeVisible()
+
+    // Check for either Connect button or configuration instructions
+    // (depends on whether backend has TODOIST_* env vars configured)
+    const connectButton = page.getByRole('button', { name: /Connect Todoist/i })
+    const configMessage = page.getByText(/configure your Todoist OAuth credentials/i)
+
+    // One of these should be visible
+    const hasConnectButton = await connectButton.isVisible().catch(() => false)
+    const hasConfigMessage = await configMessage.isVisible().catch(() => false)
+
+    expect(hasConnectButton || hasConfigMessage).toBe(true)
+  })
+
   test('should display settings page with export and import sections', async ({ page }) => {
     await page.goto('/settings')
 
