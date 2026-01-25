@@ -110,3 +110,51 @@ detail: |
   The .claude/CLAUDE.md mentions running `make setup` but doesn't warn about environment prerequisites (PATH sourcing, permissions, PostgreSQL installation). The agent spent significant time debugging why go/golangci-lint weren't found, permission errors, and missing PostgreSQL - all of which should be documented upfront or handled by a more robust setup script. The documentation should either: (1) Clearly state prerequisites before make setup, or (2) Make the setup script more defensive with better error messages about missing dependencies.
 actionable: true
 
+---
+timestamp: "2026-01-24T18:59:34.837838"
+type: documentation_gap
+summary: Feature removal gotcha wasn't in Common Gotchas until this session
+detail: |
+  The rule 'Feature removal only grepping source files → Grep ALL file types (tests, docs, comments) for feature name to catch all references' was discovered during this session when the agent had to do a second pass to clean up test files. This was added to core.md during the session, showing the documentation was missing this critical guidance. Future agents would have benefited from this being present upfront.
+actionable: false
+
+---
+timestamp: "2026-01-24T18:59:34.837838"
+type: gotcha
+summary: Go version should be read from go.mod, not hardcoded in setup scripts
+detail: |
+  The setup-dev.sh script initially hardcoded 'Go 1.24+' in the requirements check. The user pointed out it should be read from go.mod instead to ensure consistency. When creating environment setup scripts, always extract version requirements from the project's lockfiles/config (go.mod, package.json, etc.) rather than duplicating version constraints.
+actionable: true
+
+---
+timestamp: "2026-01-24T18:59:34.837838"
+type: rule
+summary: Pre-push learnings extraction requires review and commit before retry
+detail: |
+  When the pre-push hook blocks due to new learnings extraction, the workflow is: (1) Read the learnings file, (2) Classify each learning and determine where to apply it, (3) Apply actionable learnings to appropriate project docs (.ai/rules/, .ai/patterns/, etc.), (4) Commit both the applied changes AND the learnings files, (5) Push again. The agent successfully demonstrated this workflow by reading learnings, applying the feature removal gotcha to core.md, and committing everything together.
+actionable: true
+
+---
+timestamp: "2026-01-24T18:59:34.837838"
+type: rule
+summary: The /learnings skill requires self-reflection before reviewing extracted learnings
+detail: |
+  When invoking /learnings with --review-only, the skill instructions explicitly require a self-reflection step before classification. The agent should ask: What did I discover that wasn't obvious? What would I wish I knew if facing this again? Did I find workarounds through trial-and-error? This reflection helps surface insights the automated extraction might have missed. The agent demonstrated this correctly by doing structured self-reflection before reviewing the learnings file.
+actionable: true
+
+---
+timestamp: "2026-01-24T18:59:34.837838"
+type: distinction
+summary: set -o pipefail catches failed curl downloads that set -e alone misses
+detail: |
+  The Codex reviewer caught that the setup script used 'set -e' but not 'set -o pipefail'. Without pipefail, a failed curl command in a pipeline (e.g., 'curl ... | tar') would not cause the script to exit because only the rightmost command's exit status is checked. Adding 'set -o pipefail' ensures the script fails if ANY command in a pipeline fails, which is critical for catching download errors in setup scripts.
+actionable: true
+
+---
+timestamp: "2026-01-24T18:59:34.837838"
+type: gotcha
+summary: Guard Go tool installations when Go itself might be missing
+detail: |
+  The Codex reviewer pointed out that the setup script tried to install sqlc (a Go tool) before verifying Go was installed. If Go is missing, the sqlc install would fail cryptically. The fix is to guard Go tool installations with 'command -v go >/dev/null 2>&1 || skip_with_warning'. This graceful degradation allows the setup script to continue and report what's missing rather than failing partway through.
+actionable: true
+
