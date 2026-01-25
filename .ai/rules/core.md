@@ -107,7 +107,6 @@ PostgreSQL
 | Feature removal only grepping source files | Grep ALL file types (tests, docs, comments) for feature name to catch all references |
 | Editing `.claude/CLAUDE.md` directly | It's a symlink to `AGENTS.md` - stage `AGENTS.md` for git commits |
 | Outdated Go version in docs | Search `go1\.2[0-9]\.` and update all references to match go.mod |
-| E2E test using `domcontentloaded` | Use `networkidle` + `page.reload()` to ensure API data loads |
 
 ## Anti-Patterns
 
