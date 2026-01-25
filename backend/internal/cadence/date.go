@@ -63,8 +63,9 @@ func CalculateContactBy(base time.Time, cadenceType CadenceType) time.Time {
 }
 
 // IsContactByOverdue checks if a contact_by date is overdue relative to the given time.
-// In production: returns true if contact_by < today (date comparison)
-// In testing mode: returns true if now > contact_by (timestamp comparison for accelerated time)
+// In production: uses date comparison where contact_by < today.
+// In testing mode: uses timestamp comparison (now > contact_by) because accelerated
+// cadences are sub-day, and DATE column precision is insufficient.
 func IsContactByOverdue(contactBy time.Time, now time.Time) bool {
 	if IsTestingMode() {
 		// In testing mode, use timestamp comparison for accelerated cadences

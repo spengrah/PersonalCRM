@@ -496,14 +496,14 @@ LIMIT $2
 `
 
 type ListOverdueContactsParams struct {
-	Column1 pgtype.Date `json:"column_1"`
-	Limit   int32       `json:"limit"`
+	Today      pgtype.Date `json:"today"`
+	LimitCount int32       `json:"limit_count"`
 }
 
 // Lists contacts whose contact_by date is before today (overdue).
 // Returns contacts ordered by how overdue they are (most overdue first).
 func (q *Queries) ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error) {
-	rows, err := q.db.Query(ctx, ListOverdueContacts, arg.Column1, arg.Limit)
+	rows, err := q.db.Query(ctx, ListOverdueContacts, arg.Today, arg.LimitCount)
 	if err != nil {
 		return nil, err
 	}

@@ -1,3 +1,10 @@
+// Package tests contains integration tests for contact_by functionality.
+//
+// Design Note: contact_by is an internal field used for overdue calculation.
+// It is NOT displayed in the frontend UI - users see "last_contacted" and
+// "cadence" instead. The overdue status badge and sorting are derived from
+// contact_by on the backend and returned to the frontend as part of the
+// overdue contacts API response.
 package tests
 
 import (
@@ -283,6 +290,143 @@ func TestContactBy_UpdateContactLastContactedIfLater(t *testing.T) {
 		updatedContact, err := contactRepo.GetContact(ctx, contact.ID)
 		require.NoError(t, err)
 		assert.Nil(t, updatedContact.ContactBy)
+	})
+
+	// Note: Empty string cadence is rejected by the database check constraint
+	// (contact_cadence_check). The API layer should treat empty string as nil,
+	// which is tested in handler validation tests. The SQL in
+	// UpdateContactLastContactedIfLater correctly handles the case where
+	// cadence != '' in its CASE statement, ensuring empty string is treated
+	// as no cadence if it somehow got into the database.
+}
+
+// TestContactBy_CadenceStateTransitions verifies contact_by behavior when cadence changes.
+func TestContactBy_CadenceStateTransitions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	if err != nil {
+		t.Skipf("Could not connect to database: %v", err)
+	}
+	defer database.Close()
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+
+	t.Run("set cadence -> clear cadence -> set cadence", func(t *testing.T) {
+		weeklyStr := "weekly"
+		monthlyStr := "monthly"
+
+		// Step 1: Create contact WITH cadence
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Test Cadence State Transitions",
+			Cadence:  &weeklyStr,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
+
+		// Verify contact_by is set initially
+		require.NotNil(t, contact.ContactBy, "contact_by should be set when cadence is set")
+		initialContactBy := *contact.ContactBy
+
+		// Step 2: Update contact to CLEAR cadence (set to nil)
+		// Note: We need to update via the full UpdateContact method which handles contact_by
+		updatedContact, err := contactRepo.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+			FullName:  contact.FullName,
+			Cadence:   nil, // Clear cadence
+			ContactBy: nil, // contact_by should also be cleared
+		})
+		require.NoError(t, err)
+		assert.Nil(t, updatedContact.ContactBy, "contact_by should be nil when cadence is cleared")
+
+		// Verify by re-fetching
+		fetchedContact, err := contactRepo.GetContact(ctx, contact.ID)
+		require.NoError(t, err)
+		assert.Nil(t, fetchedContact.ContactBy, "contact_by should remain nil after fetch")
+
+		// Step 3: Update contact to SET cadence again (different cadence)
+		// Calculate new contact_by based on now (since last_contacted may be nil)
+		now := accelerated.GetCurrentTime()
+		newContactBy := cadence.CalculateContactBy(now, cadence.CadenceMonthly)
+		updatedContact, err = contactRepo.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+			FullName:  contact.FullName,
+			Cadence:   &monthlyStr,
+			ContactBy: &newContactBy,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, updatedContact.ContactBy, "contact_by should be set when cadence is re-enabled")
+
+		// Verify the new contact_by is different from the initial one
+		// (it should be based on monthly cadence now, not weekly)
+		assert.NotEqual(t, initialContactBy.Day(), updatedContact.ContactBy.Day(),
+			"new contact_by should differ from initial (different cadence)")
+	})
+
+	t.Run("no cadence -> set cadence", func(t *testing.T) {
+		weeklyStr := "weekly"
+
+		// Create contact WITHOUT cadence
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "Test No Cadence To Set",
+			Cadence:  nil,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
+
+		assert.Nil(t, contact.ContactBy, "contact_by should be nil initially")
+
+		// Update to add cadence
+		now := accelerated.GetCurrentTime()
+		newContactBy := cadence.CalculateContactBy(now, cadence.CadenceWeekly)
+		updatedContact, err := contactRepo.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+			FullName:  contact.FullName,
+			Cadence:   &weeklyStr,
+			ContactBy: &newContactBy,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, updatedContact.ContactBy, "contact_by should be set when cadence is added")
+	})
+
+	t.Run("change cadence type updates contact_by accordingly", func(t *testing.T) {
+		weeklyStr := "weekly"
+		annualStr := "annual"
+		lastContacted := time.Date(2024, 6, 15, 12, 0, 0, 0, time.Local)
+
+		// Create with weekly cadence
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName:      "Test Change Cadence Type",
+			Cadence:       &weeklyStr,
+			LastContacted: &lastContacted,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
+
+		require.NotNil(t, contact.ContactBy)
+		weeklyContactBy := *contact.ContactBy
+
+		// Change to annual cadence
+		annualContactBy := cadence.CalculateContactBy(lastContacted, cadence.CadenceAnnual)
+		updatedContact, err := contactRepo.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+			FullName:  contact.FullName,
+			Cadence:   &annualStr,
+			ContactBy: &annualContactBy,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, updatedContact.ContactBy)
+
+		// Annual contact_by should be much later than weekly
+		daysDiff := updatedContact.ContactBy.Sub(weeklyContactBy).Hours() / 24
+		assert.Greater(t, daysDiff, float64(300), "annual contact_by should be ~358 days later than weekly")
 	})
 }
 

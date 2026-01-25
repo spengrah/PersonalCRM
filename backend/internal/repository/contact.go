@@ -520,8 +520,8 @@ func (r *ContactRepository) FindSimilarContactsBatch(
 // The today parameter should be the current date in server timezone (use cadence.Today()).
 func (r *ContactRepository) ListOverdueContacts(ctx context.Context, today time.Time, limit int32) ([]Contact, error) {
 	dbContacts, err := r.queries.ListOverdueContacts(ctx, db.ListOverdueContactsParams{
-		Column1: pgtype.Date{Time: today, Valid: true},
-		Limit:   limit,
+		Today:      pgtype.Date{Time: today, Valid: true},
+		LimitCount: limit,
 	})
 	if err != nil {
 		return nil, err

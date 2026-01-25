@@ -249,9 +249,9 @@ ORDER BY cn.candidate_id, similarity(c.full_name, cn.candidate_name) DESC;
 SELECT * FROM contact
 WHERE deleted_at IS NULL
   AND contact_by IS NOT NULL
-  AND contact_by < $1::date
+  AND contact_by < sqlc.arg(today)::date
 ORDER BY contact_by ASC
-LIMIT $2;
+LIMIT sqlc.arg(limit_count);
 
 -- name: ListContactsWithContactBy :many
 -- Lists contacts that have a contact_by date set (used for testing mode filtering).
