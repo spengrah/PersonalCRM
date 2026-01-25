@@ -283,12 +283,20 @@ func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid
 }
 
 // ListOverdueContacts retrieves contacts whose contact_by date is in the past.
-// Uses the persistent contact_by field rather than computing overdue status on the fly.
+// In production, uses the persistent contact_by field with database-level filtering.
+// In testing mode with accelerated cadences, falls back to in-memory calculation
+// since the DATE column loses precision needed for sub-day cadences.
 func (s *ContactService) ListOverdueContacts(ctx context.Context) ([]OverdueContact, error) {
 	now := accelerated.GetCurrentTime()
-	today := cadence.Today(now)
 
-	// Query contacts where contact_by < today
+	// In testing mode, use in-memory calculation because the DATE column
+	// loses precision needed for accelerated (sub-day) cadences
+	if cadence.IsTestingMode() {
+		return s.listOverdueContactsInMemory(ctx, now)
+	}
+
+	// In production, use the persistent contact_by field with database filtering
+	today := cadence.Today(now)
 	contacts, err := s.contactRepo.ListOverdueContacts(ctx, today, 1000)
 	if err != nil {
 		return nil, err
@@ -310,6 +318,59 @@ func (s *ContactService) ListOverdueContacts(ctx context.Context) ([]OverdueCont
 			Contact:         contact,
 			DaysOverdue:     daysOverdue,
 			NextDueDate:     *contact.ContactBy, // contact_by is the next due date
+			SuggestedAction: suggestedAction,
+		})
+	}
+
+	// Sort by most overdue first (highest days_overdue)
+	sort.Slice(overdueContacts, func(i, j int) bool {
+		return overdueContacts[i].DaysOverdue > overdueContacts[j].DaysOverdue
+	})
+
+	return overdueContacts, nil
+}
+
+// listOverdueContactsInMemory computes overdue status using last_contacted + cadence_duration.
+// This is the fallback for testing mode where DATE precision is insufficient.
+func (s *ContactService) listOverdueContactsInMemory(ctx context.Context, now time.Time) ([]OverdueContact, error) {
+	// Fetch all contacts with a cadence set
+	allContacts, err := s.contactRepo.ListContactsWithContactBy(ctx, 1000)
+	if err != nil {
+		return nil, err
+	}
+
+	overdueContacts := make([]OverdueContact, 0)
+
+	for _, contact := range allContacts {
+		// Skip contacts without cadence
+		if contact.Cadence == nil || *contact.Cadence == "" {
+			continue
+		}
+
+		cadenceType, err := cadence.ParseCadence(*contact.Cadence)
+		if err != nil {
+			continue
+		}
+
+		// Calculate overdue using in-memory timestamp comparison
+		if !cadence.IsOverdueWithConfig(cadenceType, contact.LastContacted, contact.CreatedAt, now) {
+			continue
+		}
+
+		// Attach methods
+		if err := s.attachMethods(ctx, &contact); err != nil {
+			return nil, err
+		}
+
+		// Calculate days overdue
+		daysOverdue := cadence.GetOverdueDaysWithConfig(cadenceType, contact.LastContacted, contact.CreatedAt, now)
+		suggestedAction := suggestedActionForOverdueDays(daysOverdue)
+		nextDueDate := cadence.CalculateNextDueDateWithConfig(cadenceType, contact.LastContacted, contact.CreatedAt)
+
+		overdueContacts = append(overdueContacts, OverdueContact{
+			Contact:         contact,
+			DaysOverdue:     daysOverdue,
+			NextDueDate:     nextDueDate,
 			SuggestedAction: suggestedAction,
 		})
 	}

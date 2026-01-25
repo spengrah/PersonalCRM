@@ -534,3 +534,19 @@ func (r *ContactRepository) ListOverdueContacts(ctx context.Context, today time.
 
 	return contacts, nil
 }
+
+// ListContactsWithContactBy retrieves contacts that have a contact_by date set.
+// Used primarily in testing mode to do in-memory timestamp filtering.
+func (r *ContactRepository) ListContactsWithContactBy(ctx context.Context, limit int32) ([]Contact, error) {
+	dbContacts, err := r.queries.ListContactsWithContactBy(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	contacts := make([]Contact, len(dbContacts))
+	for i, dbContact := range dbContacts {
+		contacts[i] = convertDbContact(dbContact)
+	}
+
+	return contacts, nil
+}

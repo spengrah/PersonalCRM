@@ -158,6 +158,9 @@ type Querier interface {
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error)
 	ListContactsSorted(ctx context.Context, arg ListContactsSortedParams) ([]*Contact, error)
+	// Lists contacts that have a contact_by date set (used for testing mode filtering).
+	// Returns contacts ordered by contact_by (soonest first).
+	ListContactsWithContactBy(ctx context.Context, limit int32) ([]*Contact, error)
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListEnrichmentsBySource(ctx context.Context, arg ListEnrichmentsBySourceParams) ([]*ContactEnrichment, error)

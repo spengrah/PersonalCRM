@@ -252,3 +252,12 @@ WHERE deleted_at IS NULL
   AND contact_by < $1::date
 ORDER BY contact_by ASC
 LIMIT $2;
+
+-- name: ListContactsWithContactBy :many
+-- Lists contacts that have a contact_by date set (used for testing mode filtering).
+-- Returns contacts ordered by contact_by (soonest first).
+SELECT * FROM contact
+WHERE deleted_at IS NULL
+  AND contact_by IS NOT NULL
+ORDER BY contact_by ASC
+LIMIT $1;
