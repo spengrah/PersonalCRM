@@ -206,3 +206,51 @@ detail: |
   Temporary files created during GitHub Actions workflows (like /home/runner/work/_temp/claude-prompts/claude-prompt.txt) are ephemeral and deleted when the runner terminates. They are NOT automatically available as artifacts or in caches. To retrieve these files for debugging, you must add an explicit upload-artifact step in the workflow. However, you CAN retrieve the content if it was echoed to the job logs—use `gh run view <run_id> --log --job=<job_id>` and grep for the relevant content. In this session, the Claude Code Review prompt was found in the logs even though the temp file was gone.
 actionable: false
 
+---
+timestamp: "2026-01-25T13:03:04.680478"
+type: architecture
+summary: Test-aware staleTime via window.__PLAYWRIGHT__ eliminates page.reload() workarounds
+detail: |
+  React Query caching issues in E2E tests can be solved at the architecture level: (1) Create a Playwright fixture that injects window.__PLAYWRIGHT__ = true via addInitScript, (2) Modify query-client.ts to detect this flag and set staleTime: 0 in test mode, (3) This eliminates ALL page.reload() calls, saving 2-3s per reload on slow hardware. This is cleaner than per-test workarounds because it addresses the root cause (stale cache) rather than symptoms. Implementation: ~15 lines total (fixture + query-client change + fixture exports).
+actionable: true
+
+---
+timestamp: "2026-01-25T13:03:04.680478"
+type: distinction
+summary: Playwright custom fixtures extend base test once, avoiding per-test boilerplate
+detail: |
+  When you need to inject setup for all tests (like addInitScript), create a custom fixture file that extends the base test, then have test files import from the fixture instead of @playwright/test. This is cleaner than: (1) Adding beforeEach to every test file, (2) Using global setup (complex), (3) Config-level injection (not possible with page methods). Pattern: fixtures.ts exports extended test + expect + types → test files import from './fixtures' → automatic setup for all tests.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:03:04.680478"
+type: gotcha
+summary: Playwright fixtures must re-export types (like Locator) for TypeScript imports
+detail: |
+  When creating a custom Playwright fixture that re-exports test and expect, you must also re-export any types that test files import (e.g., Locator, APIRequestContext). TypeScript imports won't fall through to @playwright/test automatically. Fix: Add 'export type { Locator } from "@playwright/test"' to fixtures.ts so test files can import both runtime values and types from the same source.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:03:04.680478"
+type: rule
+summary: Don't add features/optimizations without user request—wait for explicit approval
+detail: |
+  When user asks 'what approaches are there for X?', they want options, not implementation. Present the options clearly (test-aware staleTime, webkit browser, etc.), explain tradeoffs, then WAIT for user to say 'proceed with option 2'. Do not implement proactively. User may want to test some options themselves (like trying webkit on Pi) before committing to code changes.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:03:04.680478"
+type: architecture
+summary: "E2E performance on constrained hardware: fix N small cuts, not one big refactor"
+detail: |
+  Optimizing E2E tests for Raspberry Pi involved multiple incremental improvements: (1) Remove unnecessary page.reload() calls (saved ~22-33s), (2) Use element-based waits instead of reload workarounds (saved ~5-10s), (3) Add test-aware staleTime to eliminate remaining reloads (architectural fix). Each step shaved time without radical changes. The pattern: profile → identify repeated expensive operations → eliminate or replace with cheaper alternatives → measure again. Avoid 'rewrite everything' when incremental fixes compound.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:03:04.680478"
+type: gotcha
+summary: Pi 5 E2E slower with 2 workers than 1 worker—memory/CPU contention beats parallelism
+detail: |
+  On Raspberry Pi 5: 1 worker = 4:44, 2 workers = 5:15. This counterintuitive result (slower with parallelism) indicates resource constraints where contention overhead exceeds parallelism gains. Contrast with M2 Max (28s with 4 workers) and GitHub Actions (2:30 with 4 workers). On constrained hardware, fewer workers can be faster. Don't assume 'more workers = faster' universally—measure and tune per environment.
+actionable: false
+
