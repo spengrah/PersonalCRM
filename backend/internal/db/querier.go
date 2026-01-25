@@ -158,6 +158,9 @@ type Querier interface {
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error)
 	ListContactsSorted(ctx context.Context, arg ListContactsSortedParams) ([]*Contact, error)
+	// Lists contacts that have a contact_by date set (used for testing mode filtering).
+	// Returns contacts ordered by contact_by (soonest first).
+	ListContactsWithContactBy(ctx context.Context, limit int32) ([]*Contact, error)
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListEnrichmentsBySource(ctx context.Context, arg ListEnrichmentsBySourceParams) ([]*ContactEnrichment, error)
@@ -173,6 +176,9 @@ type Querier interface {
 	ListOAuthCredentialStatuses(ctx context.Context, provider string) ([]*ListOAuthCredentialStatusesRow, error)
 	// List all OAuth credentials for a provider
 	ListOAuthCredentials(ctx context.Context, provider string) ([]*OauthCredential, error)
+	// Lists contacts whose contact_by date is before today (overdue).
+	// Returns contacts ordered by how overdue they are (most overdue first).
+	ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error)
 	// List past events that haven't updated last_contacted yet
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
 	ListRecentInteractions(ctx context.Context, limit int32) ([]*ListRecentInteractionsRow, error)
@@ -217,6 +223,9 @@ type Querier interface {
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
+	// Updates last_contacted and contact_by only if the new date is later.
+	// contact_by is recalculated from the new last_contacted date using the contact's existing cadence.
+	// Cadence day mappings: weekly=7, biweekly=14, monthly=30, quarterly=90, biannual=180, annual=365
 	UpdateContactLastContactedIfLater(ctx context.Context, arg UpdateContactLastContactedIfLaterParams) error
 	UpdateContactMethodValue(ctx context.Context, arg UpdateContactMethodValueParams) (*ContactMethod, error)
 	UpdateExternalContactDuplicate(ctx context.Context, arg UpdateExternalContactDuplicateParams) error

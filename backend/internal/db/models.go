@@ -53,6 +53,7 @@ type Contact struct {
 	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ContactBy     pgtype.Date        `json:"contact_by"`
 }
 
 type ContactEnrichment struct {

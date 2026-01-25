@@ -24,6 +24,7 @@ export interface Contact {
   birthday?: string
   cadence?: string
   last_contacted?: string
+  contact_by?: string
   created_at: string
   updated_at: string
   deleted_at?: string

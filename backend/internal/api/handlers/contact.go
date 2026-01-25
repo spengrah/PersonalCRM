@@ -83,6 +83,7 @@ type ContactResponse struct {
 	HowMet        *string                 `json:"how_met,omitempty" example:"Met at tech conference"`
 	Cadence       *string                 `json:"cadence,omitempty" example:"monthly" enums:"weekly,monthly,quarterly,biannual,annual"`
 	LastContacted *time.Time              `json:"last_contacted,omitempty" example:"2024-01-15T10:30:00Z"`
+	ContactBy     *time.Time              `json:"contact_by,omitempty" example:"2024-02-15T00:00:00Z"`
 	ProfilePhoto  *string                 `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
 	CreatedAt     time.Time               `json:"created_at" example:"2024-01-01T00:00:00Z"`
 	UpdatedAt     time.Time               `json:"updated_at" example:"2024-01-15T10:30:00Z"`
@@ -183,6 +184,7 @@ func contactToResponse(contact *repository.Contact) ContactResponse {
 		HowMet:        contact.HowMet,
 		Cadence:       contact.Cadence,
 		LastContacted: contact.LastContacted,
+		ContactBy:     contact.ContactBy,
 		ProfilePhoto:  contact.ProfilePhoto,
 		CreatedAt:     contact.CreatedAt,
 		UpdatedAt:     contact.UpdatedAt,

@@ -255,7 +255,33 @@ type Contact struct {
 4. Cherry-pick or reimplement
 5. Submit PR
 
-### 6. Tauri Desktop Wrapper
+### 6. Persisted contact_by for Overdue Calculation
+
+**Problem:** Computing overdue contacts on-the-fly requires loading all contacts and filtering in memory, which doesn't scale and makes database-level sorting/filtering impossible.
+
+**Solution:** Store `contact_by DATE` on the contact record.
+
+**How it works:**
+- `contact_by` = next date by which contact should be reached
+- Calculated as `last_contacted + cadence_days` (or `created_at + cadence_days` for new contacts)
+- Updated automatically on: create, update cadence, mark as contacted
+- Overdue query: `WHERE contact_by < today`
+
+**Why DATE not TIMESTAMP?**
+- Cadences are day-based (weekly=7 days, monthly=30 days)
+- Date-only comparison is simpler and timezone-safe
+- Exception: Testing mode uses in-memory timestamp comparison for accelerated cadences
+
+**UI Exposure:**
+- `contact_by` is an **internal field** NOT displayed in the frontend
+- Users see `last_contacted` and `cadence` instead
+- Frontend receives overdue status via the overdue contacts API
+
+**Trade-offs:**
+- Must keep `contact_by` in sync on every write path
+- But: Enables efficient database queries for overdue contacts
+
+### 7. Tauri Desktop Wrapper
 
 **Decision:** Optional Tauri app for native Mac experience.
 
