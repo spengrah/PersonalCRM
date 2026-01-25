@@ -26,14 +26,25 @@ export async function navigateModalToCandidate(
   // Check if already showing correct candidate
   if (await isTargetVisible()) return
 
+  // Helper to wait for heading to change after navigation
+  const waitForHeadingChange = async (previousHeading: string | null) => {
+    if (previousHeading) {
+      // Wait for the heading text to change (indicates navigation completed)
+      await expect(modal.getByRole('heading', { level: 3 }))
+        .not.toHaveText(previousHeading, { timeout: 2000 })
+        .catch(() => {}) // Ignore timeout if heading doesn't change
+    }
+  }
+
   // Phase 1: Go to start (click prev until disabled)
   for (let i = 0; i < maxNavigations; i++) {
     const prevVisible = await prevButton.isVisible({ timeout: 300 }).catch(() => false)
     if (!prevVisible) break
     const prevDisabled = await prevButton.isDisabled()
     if (prevDisabled) break
+    const headingBefore = await modal.getByRole('heading', { level: 3 }).textContent()
     await prevButton.click()
-    await page.waitForTimeout(150)
+    await waitForHeadingChange(headingBefore)
     if (await isTargetVisible()) return
   }
 
@@ -43,8 +54,9 @@ export async function navigateModalToCandidate(
     if (!nextVisible) break
     const nextDisabled = await nextButton.isDisabled()
     if (nextDisabled) break
+    const headingBefore = await modal.getByRole('heading', { level: 3 }).textContent()
     await nextButton.click()
-    await page.waitForTimeout(150)
+    await waitForHeadingChange(headingBefore)
     if (await isTargetVisible()) return
   }
 

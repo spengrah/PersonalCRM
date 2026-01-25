@@ -142,10 +142,6 @@ test.describe('Imports Actions @area:imports', () => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Reload to ensure we get fresh data after seeding
-      await page.reload()
-      await page.waitForLoadState('networkidle')
-
       const displayName = `${testApi.prefix}-Ignore Test Contact`
 
       // Find our seeded candidate (may need to paginate)
@@ -199,7 +195,8 @@ test.describe('Imports Actions @area:imports', () => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Reload to ensure we get fresh data after seeding
+      // This test seeds both external contacts AND overdue contacts in beforeEach
+      // which can cause a timing issue where the candidates don't appear immediately
       await page.reload()
       await page.waitForLoadState('networkidle')
 
@@ -242,7 +239,7 @@ test.describe('Imports Actions @area:imports', () => {
 
       // Wait for the candidate card to disappear from the list
       // This is the definitive signal that THIS contact was linked (not another worker's)
-      await expect(page.getByText(candidateName)).not.toBeVisible({ timeout: 15000 })
+      await expect(candidateCard).not.toBeVisible({ timeout: 15000 })
     })
   })
 })

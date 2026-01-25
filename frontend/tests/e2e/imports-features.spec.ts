@@ -58,10 +58,6 @@ test.describe('Imports Features @area:imports', () => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Reload to ensure we get fresh data after seeding
-      await page.reload()
-      await page.waitForLoadState('networkidle')
-
       // Find our seeded candidate (may need to paginate)
       const displayName = `${testApi.prefix}-Unique Nomatch Person`
       await findCandidateByName(page, displayName)
@@ -96,10 +92,6 @@ test.describe('Imports Features @area:imports', () => {
       ])
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
-
-      // Reload to ensure we get fresh data after seeding
-      await page.reload()
       await page.waitForLoadState('networkidle')
 
       // Find our seeded candidate (may need to paginate)
@@ -141,10 +133,6 @@ test.describe('Imports Features @area:imports', () => {
       ])
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
-
-      // Reload to ensure we get fresh data after seeding
-      await page.reload()
       await page.waitForLoadState('networkidle')
 
       // Find our seeded candidate (may need to paginate)

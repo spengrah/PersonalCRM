@@ -316,6 +316,11 @@ test.describe('Imports Modal @area:imports', () => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
+      // This test seeds both external contacts AND overdue contacts
+      // which can cause a timing issue where the candidates don't appear immediately
+      await page.reload()
+      await page.waitForLoadState('networkidle')
+
       const displayName = `${testApi.prefix}-Link Cadence Update Test`
 
       // Find our seeded candidate (may need to paginate)
@@ -453,10 +458,6 @@ test.describe('Imports Modal @area:imports', () => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Reload to ensure we get fresh data after seeding
-      await page.reload()
-      await page.waitForLoadState('networkidle')
-
       // Find our seeded candidate (may need to paginate)
       await findCandidateByName(page, displayName)
 
@@ -490,10 +491,6 @@ test.describe('Imports Modal @area:imports', () => {
       const displayName = `${testApi.prefix}-Click Edit Test`
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
-
-      // Reload to ensure we get fresh data after seeding
-      await page.reload()
       await page.waitForLoadState('networkidle')
 
       // Find our seeded candidate (may need to paginate)
@@ -538,10 +535,6 @@ test.describe('Imports Modal @area:imports', () => {
       const displayName = `${testApi.prefix}-Enter Key Test`
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
-
-      // Reload to ensure we get fresh data after seeding
-      await page.reload()
       await page.waitForLoadState('networkidle')
 
       // Find our seeded candidate (may need to paginate)
@@ -591,10 +584,6 @@ test.describe('Imports Modal @area:imports', () => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Reload to ensure we get fresh data after seeding
-      await page.reload()
-      await page.waitForLoadState('networkidle')
-
       // Find our seeded candidate (may need to paginate)
       await findCandidateByName(page, displayName)
 
@@ -638,10 +627,6 @@ test.describe('Imports Modal @area:imports', () => {
       ])
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
-
-      // Reload to ensure we get fresh data after seeding
-      await page.reload()
       await page.waitForLoadState('networkidle')
 
       const displayName = `${testApi.prefix}-Original Import Name`
@@ -725,10 +710,6 @@ test.describe('Imports Modal @area:imports', () => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Reload to ensure we get fresh data after seeding
-      await page.reload()
-      await page.waitForLoadState('networkidle')
-
       // Open import modal
       const candidateCard = page
         .locator('[class*="border-gray-200"]')
@@ -761,10 +742,6 @@ test.describe('Imports Modal @area:imports', () => {
       ])
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
-
-      // Reload to ensure we get fresh data after seeding
-      await page.reload()
       await page.waitForLoadState('networkidle')
 
       // Open import modal
@@ -801,10 +778,6 @@ test.describe('Imports Modal @area:imports', () => {
       ])
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
-
-      // Reload to ensure we get fresh data after seeding
-      await page.reload()
       await page.waitForLoadState('networkidle')
 
       // Open import modal
