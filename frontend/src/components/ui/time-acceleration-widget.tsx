@@ -193,7 +193,7 @@ export function TimeAccelerationWidget({
           {isAccelerated && (
             <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
               <strong>Testing Mode:</strong> Time is running {accelerationFactor}x faster than
-              normal. Perfect for testing birthday calculations and reminder cadences!
+              normal. Perfect for testing birthday calculations and contact cadences!
             </div>
           )}
         </div>

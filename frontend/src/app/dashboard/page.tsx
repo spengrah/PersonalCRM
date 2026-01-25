@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { CheckCircle, Clock, AlertCircle, User, Calendar, Plus } from 'lucide-react'
+import { CheckCircle, Clock, AlertCircle, User, Plus } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
 import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
@@ -210,12 +210,6 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="mt-6 flex space-x-3 md:mt-0 md:ml-4">
-            <Link href="/reminders">
-              <Button variant="outline">
-                <Calendar className="w-4 h-4 mr-2" />
-                View Reminders
-              </Button>
-            </Link>
             <Link href="/contacts/new">
               <Button>
                 <Plus className="w-4 h-4 mr-2" />

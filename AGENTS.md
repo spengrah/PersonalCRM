@@ -20,6 +20,7 @@ frontend/src/{app, components, hooks}
 From project root:
 
 ```bash
+make setup          # First-time setup (install deps, git hooks)
 make dev            # Start dev server
 make test           # All backend tests
 make test-e2e       # Playwright E2E (for ci)

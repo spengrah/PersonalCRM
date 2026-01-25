@@ -739,7 +739,6 @@ type MergePreviewResponse struct {
 	DuplicateMethods       int64           `json:"duplicate_methods" example:"1"`
 	NotesToTransfer        int64           `json:"notes_to_transfer" example:"5"`
 	InteractionsToTransfer int64           `json:"interactions_to_transfer" example:"12"`
-	RemindersToTransfer    int64           `json:"reminders_to_transfer" example:"2"`
 	CalendarEventsToUpdate int64           `json:"calendar_events_to_update" example:"3"`
 }
 
@@ -793,7 +792,6 @@ func (h *ContactHandler) GetMergePreview(c *gin.Context) {
 		DuplicateMethods:       preview.DuplicateMethods,
 		NotesToTransfer:        preview.NotesToTransfer,
 		InteractionsToTransfer: preview.InteractionsToTransfer,
-		RemindersToTransfer:    preview.RemindersToTransfer,
 		CalendarEventsToUpdate: preview.CalendarEventsToUpdate,
 	}
 

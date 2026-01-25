@@ -1,0 +1,48 @@
+---
+timestamp: "2026-01-24T19:28:18.053078"
+type: gotcha
+summary: AGENTS.md and .claude/CLAUDE.md are symlinked
+detail: |
+  .claude/CLAUDE.md is a symlink to AGENTS.md in the project root. Edits to either file modify AGENTS.md. When staging changes, use 'AGENTS.md' not '.claude/CLAUDE.md' since git tracks the actual file, not the symlink.
+actionable: true
+
+---
+timestamp: "2026-01-24T19:28:18.053078"
+type: architecture
+summary: Dev-sandbox has persistent volume architecture for Go tools
+detail: |
+  The dev-sandbox container (Pi-based) uses persistent volumes: /home/dev/go (for GOPATH, modules, and go-installed binaries), /home/dev/workspace (for project files), and /home/dev/.cache (for Playwright). Setup scripts that use $GOPATH (defaulting to $HOME/go) correctly store to these volumes. The Go installation at /usr/local/go is baked into the Dockerfile, not a volume.
+actionable: true
+
+---
+timestamp: "2026-01-24T19:28:18.053078"
+type: gotcha
+summary: Platform detection needed for PostgreSQL in setup scripts
+detail: |
+  PostgreSQL installation and detection differs significantly by platform: macOS uses Homebrew (brew install postgresql@16 pgvector, psql --version for detection), while Linux uses apt and pg_ctlcluster/pg_lsclusters. Setup scripts must use OSTYPE detection to provide platform-appropriate commands. The dev-sandbox is Linux-based, so Debian/Ubuntu detection applies there.
+actionable: true
+
+---
+timestamp: "2026-01-24T19:28:18.053078"
+type: gotcha
+summary: imports.spec.ts dominates E2E runtime due to serial mode
+detail: |
+  The imports.spec.ts file contains 35 tests (37% of total E2E suite) and uses test.describe.configure({ mode: 'serial' }), forcing sequential execution. Even with 4 workers on high-CPU machines, parallelism is limited because this large test file cannot run tests concurrently. This is intentional (likely due to shared database state), but agents should understand that E2E runtime is dominated by this serial bottleneck.
+actionable: false
+
+---
+timestamp: "2026-01-24T19:28:18.053078"
+type: documentation_gap
+summary: make setup was not prominently documented for first-time setup
+detail: |
+  Before this session, AGENTS.md/.claude/CLAUDE.md didn't list 'make setup' in the Commands section, and README.md Quick Start jumped straight to 'make docker-up' and 'make dev' without mentioning first-time setup. This could cause agents to miss installing Go tools, git hooks, and frontend dependencies. The documentation now correctly lists 'make setup' as the first command in both files, with explicit '(install deps, git hooks)' annotation.
+actionable: false
+
+---
+timestamp: "2026-01-24T19:28:18.053078"
+type: rule
+summary: Go version references must match go.mod requirements
+detail: |
+  Documentation files (README.md, deployment guides) had outdated Go version references (1.22, 1.23) that didn't match go.mod's requirement for Go 1.24. When updating Go version requirements, search and update ALL references including: Prerequisites sections, installation examples (wget urls, brew install commands), and version verification examples. Use grep to find: 'go1\.2[0-9]\.' pattern.
+actionable: true
+

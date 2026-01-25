@@ -194,7 +194,7 @@ export class TestAPI {
 
   /**
    * Seeds contacts with backdated last_contacted timestamps so they appear as overdue.
-   * Useful for testing dashboard, overdue lists, and reminder features.
+   * Useful for testing dashboard and overdue contact lists.
    */
   async seedOverdueContacts(
     contacts: SeedOverdueContactInput[]

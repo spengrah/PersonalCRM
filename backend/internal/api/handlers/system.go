@@ -15,16 +15,14 @@ import (
 )
 
 type SystemHandler struct {
-	contactRepo  *repository.ContactRepository
-	reminderRepo *repository.ReminderRepository
-	runtimeCfg   config.RuntimeConfig
+	contactRepo *repository.ContactRepository
+	runtimeCfg  config.RuntimeConfig
 }
 
-func NewSystemHandler(contactRepo *repository.ContactRepository, reminderRepo *repository.ReminderRepository, runtimeCfg config.RuntimeConfig) *SystemHandler {
+func NewSystemHandler(contactRepo *repository.ContactRepository, runtimeCfg config.RuntimeConfig) *SystemHandler {
 	return &SystemHandler{
-		contactRepo:  contactRepo,
-		reminderRepo: reminderRepo,
-		runtimeCfg:   runtimeCfg,
+		contactRepo: contactRepo,
+		runtimeCfg:  runtimeCfg,
 	}
 }
 
@@ -140,27 +138,11 @@ func (h *SystemHandler) ExportData(c *gin.Context) {
 		return
 	}
 
-	// Get all reminders
-	reminders, err := h.reminderRepo.ListReminders(ctx, repository.ListRemindersParams{
-		Limit: 1000, // Large limit to get all
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error": gin.H{
-				"code":    "DATABASE_ERROR",
-				"message": "Failed to fetch reminders",
-			},
-		})
-		return
-	}
-
 	exportData := gin.H{
 		"exported_at": accelerated.GetCurrentTime(),
 		"version":     "1.0",
 		"data": gin.H{
-			"contacts":  contacts,
-			"reminders": reminders,
+			"contacts": contacts,
 		},
 	}
 
@@ -174,7 +156,7 @@ func (h *SystemHandler) ExportData(c *gin.Context) {
 // ImportData imports CRM data from JSON
 func (h *SystemHandler) ImportData(c *gin.Context) {
 	// This is a placeholder - full implementation would parse uploaded file
-	// and import contacts/reminders
+	// and import contacts
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{

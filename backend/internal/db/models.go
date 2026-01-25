@@ -220,19 +220,6 @@ type PromptQuery struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
-type Reminder struct {
-	ID          pgtype.UUID        `json:"id"`
-	ContactID   pgtype.UUID        `json:"contact_id"`
-	Title       string             `json:"title"`
-	Description pgtype.Text        `json:"description"`
-	DueDate     pgtype.Timestamptz `json:"due_date"`
-	Completed   pgtype.Bool        `json:"completed"`
-	CompletedAt pgtype.Timestamptz `json:"completed_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
-	Source      pgtype.Text        `json:"source"`
-}
-
 type Tag struct {
 	ID        pgtype.UUID        `json:"id"`
 	Name      string             `json:"name"`

@@ -13,15 +13,12 @@ import (
 type Querier interface {
 	AddContactTag(ctx context.Context, arg AddContactTagParams) error
 	BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error
-	CompleteAutoRemindersForContact(ctx context.Context, contactID pgtype.UUID) error
-	CompleteReminder(ctx context.Context, id pgtype.UUID) (*Reminder, error)
 	CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContacts(ctx context.Context) (int64, error)
 	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
-	CountDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) (int64, error)
 	// Count events for a specific contact
 	CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
@@ -34,11 +31,8 @@ type Querier interface {
 	CountMergeInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	// Count notes for a contact (for merge preview)
 	CountMergeNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
-	// Count active reminders for a contact (for merge preview)
-	CountMergeReminders(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
-	CountReminders(ctx context.Context) (int64, error)
 	CountSearchContacts(ctx context.Context, plaintoTsquery string) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error)
@@ -50,7 +44,6 @@ type Querier interface {
 	CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error)
 	// Create a note with a specific created_at timestamp (for migrations)
 	CreateNoteWithTimestamp(ctx context.Context, arg CreateNoteWithTimestampParams) (*Note, error)
-	CreateReminder(ctx context.Context, arg CreateReminderParams) (*Reminder, error)
 	// External Sync Log Queries
 	CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error)
 	CreateSyncState(ctx context.Context, arg CreateSyncStateParams) (*ExternalSyncState, error)
@@ -141,7 +134,6 @@ type Querier interface {
 	GetOAuthCredentialByID(ctx context.Context, id pgtype.UUID) (*OauthCredential, error)
 	// Get non-sensitive credential info for display
 	GetOAuthCredentialStatus(ctx context.Context, id pgtype.UUID) (*GetOAuthCredentialStatusRow, error)
-	GetReminder(ctx context.Context, id pgtype.UUID) (*Reminder, error)
 	GetSyncLog(ctx context.Context, id pgtype.UUID) (*ExternalSyncLog, error)
 	// External Sync State Queries
 	GetSyncState(ctx context.Context, id pgtype.UUID) (*ExternalSyncState, error)
@@ -150,7 +142,6 @@ type Querier interface {
 	GetTag(ctx context.Context, id pgtype.UUID) (*Tag, error)
 	GetTagByName(ctx context.Context, name string) (*Tag, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
-	HardDeleteReminder(ctx context.Context, id pgtype.UUID) error
 	HasEnrichmentForField(ctx context.Context, arg HasEnrichmentForFieldParams) (bool, error)
 	IgnoreExternalContact(ctx context.Context, id pgtype.UUID) error
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
@@ -167,7 +158,6 @@ type Querier interface {
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error)
 	ListContactsSorted(ctx context.Context, arg ListContactsSortedParams) ([]*Contact, error)
-	ListDueReminders(ctx context.Context, dueDate pgtype.Timestamptz) ([]*ListDueRemindersRow, error)
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListEnrichmentsBySource(ctx context.Context, arg ListEnrichmentsBySourceParams) ([]*ContactEnrichment, error)
@@ -187,8 +177,6 @@ type Querier interface {
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
 	ListRecentInteractions(ctx context.Context, limit int32) ([]*ListRecentInteractionsRow, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
-	ListReminders(ctx context.Context, arg ListRemindersParams) ([]*Reminder, error)
-	ListRemindersByContact(ctx context.Context, contactID pgtype.UUID) ([]*Reminder, error)
 	ListSyncLogsByState(ctx context.Context, arg ListSyncLogsByStateParams) ([]*ExternalSyncLog, error)
 	ListSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListTags(ctx context.Context) ([]*Tag, error)
@@ -213,8 +201,6 @@ type Querier interface {
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
 	SetContactMethodPrimary(ctx context.Context, arg SetContactMethodPrimaryParams) error
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
-	SoftDeleteReminder(ctx context.Context, id pgtype.UUID) error
-	SoftDeleteRemindersForContact(ctx context.Context, contactID pgtype.UUID) error
 	// Transfer connections where source is contact_a to use target instead
 	// This handles the bidirectional relationship table
 	TransferConnectionsAsContactA(ctx context.Context, arg TransferConnectionsAsContactAParams) error
@@ -228,8 +214,6 @@ type Querier interface {
 	TransferInteractions(ctx context.Context, arg TransferInteractionsParams) error
 	// Transfer notes from source to target contact
 	TransferNotes(ctx context.Context, arg TransferNotesParams) error
-	// Transfer reminders from source to target contact
-	TransferReminders(ctx context.Context, arg TransferRemindersParams) error
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
@@ -244,7 +228,6 @@ type Querier interface {
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
 	// Update only the token data (for token refresh)
 	UpdateOAuthCredentialTokens(ctx context.Context, arg UpdateOAuthCredentialTokensParams) (*OauthCredential, error)
-	UpdateReminder(ctx context.Context, arg UpdateReminderParams) (*Reminder, error)
 	UpdateSyncStateCursor(ctx context.Context, arg UpdateSyncStateCursorParams) error
 	UpdateSyncStateEnabled(ctx context.Context, arg UpdateSyncStateEnabledParams) (*ExternalSyncState, error)
 	UpdateSyncStateMetadata(ctx context.Context, arg UpdateSyncStateMetadataParams) (*ExternalSyncState, error)

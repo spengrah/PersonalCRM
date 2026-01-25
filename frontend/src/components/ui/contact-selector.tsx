@@ -36,7 +36,7 @@ export function ContactSelector({
   placeholder = 'Search contacts...',
   disabled = false,
   error,
-  noContactLabel = 'No contact (standalone reminder)',
+  noContactLabel = 'No contact',
   showNoContactOption = true,
 }: ContactSelectorProps) {
   const [isOpen, setIsOpen] = useState(false)

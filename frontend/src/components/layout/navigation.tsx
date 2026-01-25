@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useIsMutating } from '@tanstack/react-query'
-import { Users, Calendar, Bell, Settings, Cake, CloudDownload } from 'lucide-react'
+import { Users, Calendar, Settings, Cake, CloudDownload } from 'lucide-react'
 import { clsx } from 'clsx'
 import { TimeAccelerationWidget } from '@/components/ui/time-acceleration-widget'
 import { useSyncStates, getAggregateSyncStatus, getSyncIconClasses } from '@/hooks/use-sync-states'
@@ -13,7 +13,6 @@ const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: Calendar },
   { name: 'Contacts', href: '/contacts', icon: Users },
   { name: 'Birthdays', href: '/birthdays', icon: Cake },
-  { name: 'Reminders', href: '/reminders', icon: Bell },
   { name: 'Imports', href: '/imports', icon: CloudDownload },
   { name: 'Settings', href: '/settings', icon: Settings },
 ]

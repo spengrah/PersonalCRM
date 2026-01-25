@@ -81,7 +81,7 @@ export default function SettingsPage() {
 
       const result = await response.json()
       alert(
-        `Import validation successful! Found ${result.data?.metadata?.contacts_count || 0} contacts and ${result.data?.metadata?.reminders_count || 0} reminders.`
+        `Import validation successful! Found ${result.data?.metadata?.contacts_count || 0} contacts.`
       )
     } catch (error) {
       console.error('Import error:', error)
@@ -150,7 +150,7 @@ export default function SettingsPage() {
               <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                 <p className="text-sm text-blue-800">
                   <strong>Testing Mode Active:</strong> Time is accelerated for testing purposes.
-                  Birthday calculations and contact reminders are running faster than normal.
+                  Birthday calculations and contact cadences are running faster than normal.
                 </p>
               </div>
             )}
@@ -181,8 +181,7 @@ export default function SettingsPage() {
             <div className="mb-8">
               <h3 className="text-lg font-medium text-gray-900 mb-3">Export Data</h3>
               <p className="text-gray-600 mb-4">
-                Download a complete backup of your CRM data including contacts, reminders, notes,
-                and settings.
+                Download a complete backup of your CRM data including contacts, notes, and settings.
               </p>
 
               <Button
@@ -195,7 +194,7 @@ export default function SettingsPage() {
               </Button>
 
               <div className="mt-3 text-sm text-gray-500">
-                <p>• Backup includes all contacts, reminders, interactions, and notes</p>
+                <p>• Backup includes all contacts, interactions, and notes</p>
                 <p>• File format: JSON (human-readable)</p>
                 <p>• Recommended frequency: Weekly or before major changes</p>
               </div>
@@ -323,7 +322,7 @@ export default function SettingsPage() {
               <div>
                 <p className="text-gray-600">Features</p>
                 <p className="font-medium text-gray-900">
-                  Contacts • Reminders • Birthdays • Time Acceleration
+                  Contacts • Birthdays • Time Acceleration
                 </p>
               </div>
             </div>

@@ -12,7 +12,6 @@ export interface MergePreview {
   duplicate_methods: number
   notes_to_transfer: number
   interactions_to_transfer: number
-  reminders_to_transfer: number
   calendar_events_to_update: number
 }
 

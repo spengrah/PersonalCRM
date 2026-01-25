@@ -3,14 +3,14 @@
  *
  * This module defines the mapping between domain events and the query keys
  * that should be invalidated when those events occur. This ensures that
- * cross-domain side effects (e.g., marking a contact as contacted also
- * completes auto-reminders) are properly reflected in the UI.
+ * cross-domain side effects (e.g., merging contacts updates overdue lists)
+ * are properly reflected in the UI.
  *
  * @see docs/FRONTEND_STATE.md for full documentation
  */
 
 import { queryClient } from './query-client'
-import { contactKeys, importKeys, reminderKeys, syncKeys } from './query-keys'
+import { contactKeys, importKeys, syncKeys } from './query-keys'
 
 /**
  * Domain events that trigger query invalidations.
@@ -30,10 +30,6 @@ export type DomainEvent =
   | 'import:linked' // linked to existing contact
   | 'import:ignored' // marked as ignored
   | 'import:synced' // sync completed
-  // Reminder events
-  | 'reminder:created'
-  | 'reminder:completed'
-  | 'reminder:deleted'
 
 /**
  * Invalidation rules mapping domain events to affected query keys.
@@ -49,12 +45,9 @@ const invalidationRules: Record<DomainEvent, readonly unknown[][]> = {
   // Contact events
   'contact:created': [contactKeys.lists()],
   'contact:updated': [contactKeys.lists()],
-  // Backend soft-deletes reminders when contact is deleted
-  'contact:deleted': [contactKeys.lists(), reminderKeys.all],
-  // Backend completes auto-reminders when contact is marked as contacted
-  'contact:touched': [contactKeys.lists(), contactKeys.overdue(), reminderKeys.all],
-  // Merge deletes source contact and updates target
-  'contact:merged': [contactKeys.lists(), contactKeys.overdue(), reminderKeys.all],
+  'contact:deleted': [contactKeys.lists()],
+  'contact:touched': [contactKeys.lists(), contactKeys.overdue()],
+  'contact:merged': [contactKeys.lists(), contactKeys.overdue()],
 
   // Import events
   // Importing creates a new contact, so invalidate both imports and contacts
@@ -65,11 +58,6 @@ const invalidationRules: Record<DomainEvent, readonly unknown[][]> = {
   'import:ignored': [importKeys.lists()],
   // Sync trigger updates sync states; completion may add new candidates
   'import:synced': [importKeys.lists(), syncKeys.states()],
-
-  // Reminder events (all invalidate the entire reminders domain)
-  'reminder:created': [reminderKeys.all],
-  'reminder:completed': [reminderKeys.all],
-  'reminder:deleted': [reminderKeys.all],
 }
 
 /**
@@ -95,4 +83,4 @@ export function invalidateFor(event: DomainEvent): void {
 }
 
 // Re-export keys for convenience (avoids needing two imports)
-export { contactKeys, importKeys, reminderKeys, systemKeys, syncKeys } from './query-keys'
+export { contactKeys, importKeys, systemKeys, syncKeys } from './query-keys'

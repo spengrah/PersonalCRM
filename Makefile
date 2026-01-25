@@ -62,23 +62,10 @@ help:
 	@echo "  setup-pi - One-time Pi setup (create user, directories)"
 	@echo "  deploy   - Build and deploy to Pi (requires setup-pi first)"
 
-# Setup development environment
+# Setup development environment (installs all dev dependencies)
+# Run this first when setting up a new development environment
 setup:
-	@echo "Setting up development environment..."
-	@echo ""
-	@echo "→ Installing frontend dependencies..."
-	@cd frontend && bun install
-	@echo "✓ Frontend dependencies installed"
-	@echo ""
-	@echo "→ Installing git hooks..."
-	@./scripts/install-git-hooks.sh
-	@echo ""
-	@echo "✓ Development environment setup complete!"
-	@echo ""
-	@echo "Next steps:"
-	@echo "  1. Copy .env.example to .env and configure"
-	@echo "  2. Start database: make docker-up"
-	@echo "  3. Start dev server: make dev"
+	@bash scripts/setup-dev.sh
 
 # Create logs directory
 logs:

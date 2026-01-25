@@ -6,8 +6,9 @@ A single-user, local-first customer relationship management system with AI-power
 
 ## Quick Start
 
-1. **Clone and setup environment**:
+1. **First-time setup** (installs Go tools, git hooks, frontend deps):
    ```bash
+   make setup
    cp .env.example .env
    # Edit .env with your configuration
    ```
@@ -26,7 +27,7 @@ A single-user, local-first customer relationship management system with AI-power
 ## Prerequisites
 
 - Docker and Docker Compose
-- Go 1.22+
+- Go 1.24+
 - Bun 1.0+ (for frontend)
 - Make
 
@@ -159,10 +160,10 @@ Deploy PersonalCRM as a systemd service on Raspberry Pi for automatic startup on
    curl -sSL https://get.docker.com | sh
    sudo usermod -aG docker $USER
    ```
-3. **Go 1.22+**:
+3. **Go 1.24+**:
    ```bash
-   wget https://go.dev/dl/go1.23.0.linux-arm64.tar.gz
-   sudo tar -C /usr/local -xzf go1.23.0.linux-arm64.tar.gz
+   wget https://go.dev/dl/go1.24.0.linux-arm64.tar.gz
+   sudo tar -C /usr/local -xzf go1.24.0.linux-arm64.tar.gz
    export PATH=$PATH:/usr/local/go/bin
    ```
 4. **Bun**:
@@ -661,7 +662,7 @@ The application uses PostgreSQL with the pgvector extension for vector similarit
 
 ## Development Phases
 
-- **Phase 1**: Core CRM (Contacts, Notes, Reminders) - *In Progress*
+- **Phase 1**: Core CRM (Contacts, Notes) - *In Progress*
 - **Phase 2**: AI Agent v0 (Embeddings, RAG, Chat UI)
 - **Phase 3**: AI Agent v1 (Advanced features, Graph view, Export)
 

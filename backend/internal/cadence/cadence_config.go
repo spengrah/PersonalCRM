@@ -1,4 +1,4 @@
-package reminder
+package cadence
 
 import (
 	"os"
@@ -113,26 +113,6 @@ func IsOverdueWithConfig(cadenceType CadenceType, lastContacted *time.Time, crea
 
 	nextContactDue := lastContactTime.Add(duration)
 	return checkTime.After(nextContactDue)
-}
-
-// GetSchedulerCronSpec returns the cron specification for the scheduler based on environment
-func GetSchedulerCronSpec() string {
-	env := os.Getenv("CRM_ENV")
-
-	switch env {
-	case "test", "testing":
-		// Ultra-fast testing: every 30 seconds
-		return "@every 30s"
-	case "staging", "accelerated":
-		// Fast staging: every 5 minutes
-		return "@every 5m"
-	case "production", "prod", "":
-		// Production: daily at 8:00 AM
-		return "0 0 8 * * *"
-	default:
-		// Default to production for safety
-		return "0 0 8 * * *"
-	}
 }
 
 // GetOverdueDaysWithConfig returns how many "days" overdue

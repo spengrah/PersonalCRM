@@ -430,68 +430,6 @@ func TestQueryValidation_Order(t *testing.T) {
 	}
 }
 
-// TestReminderValidation_Title tests Reminder title validation
-func TestReminderValidation_Title(t *testing.T) {
-	type Reminder struct {
-		Title string `validate:"required,max=255"`
-	}
-
-	tests := []struct {
-		name      string
-		title     string
-		wantError bool
-	}{
-		{"Valid title", "Follow up with John", false},
-		{"Empty title fails", "", true},
-		{"Max length 255", strings.Repeat("a", 255), false},
-		{"Exceeds max length", strings.Repeat("a", 256), true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reminder := Reminder{Title: tt.title}
-			err := validate.Struct(reminder)
-
-			if tt.wantError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
-// TestReminderValidation_Description tests Reminder description validation
-func TestReminderValidation_Description(t *testing.T) {
-	type Reminder struct {
-		Description *string `validate:"omitempty,max=1000"`
-	}
-
-	tests := []struct {
-		name      string
-		desc      *string
-		wantError bool
-	}{
-		{"Valid description", strPtr("Check in about project"), false},
-		{"Nil description valid", nil, false},
-		{"Max length 1000", strPtr(strings.Repeat("a", 1000)), false},
-		{"Exceeds max length", strPtr(strings.Repeat("a", 1001)), true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reminder := Reminder{Description: tt.desc}
-			err := validate.Struct(reminder)
-
-			if tt.wantError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
 // TestComplexValidation_MultipleFields tests validation with multiple fields
 func TestComplexValidation_MultipleFields(t *testing.T) {
 	type Contact struct {

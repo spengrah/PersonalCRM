@@ -13,7 +13,6 @@ import {
   useDeleteContact,
   useUpdateLastContacted,
 } from '@/hooks/use-contacts'
-import { useRemindersByContact } from '@/hooks/use-reminders'
 import { useContactNote, useSaveContactNote } from '@/hooks/use-contact-note'
 import { useKeyboardNavigation } from '@/hooks/use-keyboard-navigation'
 import { ContactNavigationBar } from '@/components/contacts/contact-navigation-bar'
@@ -24,7 +23,6 @@ import {
   MessageCircle,
   MapPin,
   Calendar,
-  Bell,
   Clock,
   ChevronDown,
   Pencil,
@@ -69,7 +67,6 @@ export default function ContactDetailPage() {
   }
 
   const { data: contact, isLoading, error } = useContact(contactId)
-  const { data: reminders } = useRemindersByContact(contactId)
   const { data: contactNote } = useContactNote(contactId)
   const { data: navigationData, isLoading: isLoadingIDs } = useContactIDs(listContext)
   const updateContactMutation = useUpdateContact()
@@ -575,60 +572,6 @@ export default function ContactDetailPage() {
         <div className="mt-8">
           <Meetings contactId={contactId} />
         </div>
-
-        {/* Reminders Section */}
-        {reminders && reminders.length > 0 && (
-          <div className="mt-8 bg-white shadow overflow-hidden sm:rounded-lg">
-            <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-              <h3 className="text-lg leading-6 font-medium text-gray-900 flex items-center">
-                <Bell className="w-5 h-5 mr-2 text-gray-400" />
-                Reminders ({reminders.length})
-              </h3>
-              <p className="mt-1 max-w-2xl text-sm text-gray-500">
-                Active reminders for this contact
-              </p>
-            </div>
-            <div className="divide-y divide-gray-200">
-              {reminders.map(reminder => {
-                const isOverdue = new Date(reminder.due_date) < new Date() && !reminder.completed
-
-                return (
-                  <div key={reminder.id} className="px-4 py-4 sm:px-6">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-start space-x-3">
-                        <div
-                          className={`w-2 h-2 rounded-full mt-2 ${
-                            reminder.completed
-                              ? 'bg-green-500'
-                              : isOverdue
-                                ? 'bg-red-500'
-                                : 'bg-yellow-500'
-                          }`}
-                        />
-                        <div>
-                          <h4 className="text-sm font-medium text-gray-900">{reminder.title}</h4>
-                          {reminder.description && (
-                            <p className="text-sm text-gray-600 mt-1">{reminder.description}</p>
-                          )}
-                          <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
-                            <div className="flex items-center space-x-1">
-                              <Clock className="w-4 h-4" />
-                              <span>Due {new Date(reminder.due_date).toLocaleDateString()}</span>
-                            </div>
-                            {isOverdue && <span className="text-red-600 font-medium">Overdue</span>}
-                            {reminder.completed && (
-                              <span className="text-green-600 font-medium">Completed</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        )}
 
         {/* Merge success/error message */}
         {mergeMessage && (

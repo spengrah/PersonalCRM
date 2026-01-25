@@ -51,12 +51,11 @@ func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository
 	// Create repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
-	reminderRepo := repository.NewReminderRepository(database.Queries)
 	externalRepo := repository.NewExternalContactRepository(database.Queries)
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 
 	// Create services
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, reminderRepo)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo)
 	matchService := service.NewImportMatchService(contactRepo)
 	enrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
 
