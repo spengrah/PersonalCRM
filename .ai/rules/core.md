@@ -104,6 +104,7 @@ PostgreSQL
 | Building multi-step wizard modals | Use single-view scrollable modals (like ImportLinkModal) - all steps visible in one view |
 | Using `\n` in `gh` CLI body/comment strings (renders as literal `\n`) | Use a heredoc or multi-line string for `gh pr create/edit/comment` |
 | `git diff --quiet` to detect new files | Only sees tracked files; add `git ls-files --others --exclude-standard` for untracked |
+| Feature removal only grepping source files | Grep ALL file types (tests, docs, comments) for feature name to catch all references |
 
 ## Anti-Patterns
 

@@ -11,6 +11,7 @@
 # Run this once when setting up a new development environment.
 
 set -e
+set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -27,6 +28,18 @@ echo_step() { echo -e "${BLUE}==>${NC} $1"; }
 echo_ok() { echo -e "${GREEN}✓${NC} $1"; }
 echo_warn() { echo -e "${YELLOW}⚠${NC} $1"; }
 echo_err() { echo -e "${RED}✗${NC} $1"; }
+
+# Get required Go version from go.mod
+get_required_go_version() {
+    if [ -f "backend/go.mod" ]; then
+        grep "^go " backend/go.mod | awk '{print $2}' | head -1
+    else
+        echo "1.24"  # fallback
+    fi
+}
+
+REQUIRED_GO_VERSION=$(get_required_go_version)
+GO_AVAILABLE=false
 
 echo ""
 echo "========================================"
@@ -45,9 +58,10 @@ echo_step "Checking Go installation..."
 if command -v go &> /dev/null; then
     GO_VERSION=$(go version | awk '{print $3}')
     echo_ok "Go installed: $GO_VERSION"
+    GO_AVAILABLE=true
 else
     echo_err "Go is not installed"
-    MANUAL_STEPS+=("Install Go 1.24+: https://go.dev/doc/install")
+    MANUAL_STEPS+=("Install Go ${REQUIRED_GO_VERSION}+: https://go.dev/doc/install")
 fi
 
 #############################################
@@ -58,29 +72,44 @@ echo_step "Installing Go tools..."
 GOPATH="${GOPATH:-$HOME/go}"
 mkdir -p "$GOPATH/bin"
 
-# golangci-lint v2
+# golangci-lint v2 (installed via curl, not go install, for version compatibility)
 if command -v golangci-lint &> /dev/null || [ -f "$GOPATH/bin/golangci-lint" ]; then
     LINT_VERSION=$("$GOPATH/bin/golangci-lint" --version 2>/dev/null | head -1 || golangci-lint --version 2>/dev/null | head -1)
     if [[ "$LINT_VERSION" == *"version 2"* ]]; then
         echo_ok "golangci-lint v2 already installed"
     else
         echo_warn "golangci-lint v1 found, upgrading to v2..."
-        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$GOPATH/bin" latest
-        echo_ok "golangci-lint v2 installed"
+        if curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$GOPATH/bin" latest; then
+            echo_ok "golangci-lint v2 installed"
+        else
+            echo_err "Failed to install golangci-lint"
+            MANUAL_STEPS+=("Install golangci-lint: https://golangci-lint.run/welcome/install/")
+        fi
     fi
 else
     echo "   Installing golangci-lint v2..."
-    curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$GOPATH/bin" latest
-    echo_ok "golangci-lint v2 installed"
+    if curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$GOPATH/bin" latest; then
+        echo_ok "golangci-lint v2 installed"
+    else
+        echo_err "Failed to install golangci-lint"
+        MANUAL_STEPS+=("Install golangci-lint: https://golangci-lint.run/welcome/install/")
+    fi
 fi
 
-# sqlc
+# sqlc (requires Go)
 if command -v sqlc &> /dev/null || [ -f "$GOPATH/bin/sqlc" ]; then
     echo_ok "sqlc already installed"
-else
+elif [ "$GO_AVAILABLE" = true ]; then
     echo "   Installing sqlc..."
-    go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
-    echo_ok "sqlc installed"
+    if go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest; then
+        echo_ok "sqlc installed"
+    else
+        echo_err "Failed to install sqlc"
+        MANUAL_STEPS+=("Install sqlc: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest")
+    fi
+else
+    echo_warn "Skipped sqlc (Go not available)"
+    MANUAL_STEPS+=("After installing Go, run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest")
 fi
 
 #############################################
@@ -173,7 +202,7 @@ fi
 #############################################
 echo_step "Downloading Go modules..."
 
-if [ -d "backend" ] && command -v go &> /dev/null; then
+if [ -d "backend" ] && [ "$GO_AVAILABLE" = true ]; then
     cd backend
     go mod download
     echo_ok "Go modules downloaded"

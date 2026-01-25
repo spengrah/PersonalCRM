@@ -156,7 +156,7 @@ func (h *SystemHandler) ExportData(c *gin.Context) {
 // ImportData imports CRM data from JSON
 func (h *SystemHandler) ImportData(c *gin.Context) {
 	// This is a placeholder - full implementation would parse uploaded file
-	// and import contacts/reminders
+	// and import contacts
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
