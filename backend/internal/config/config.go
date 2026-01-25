@@ -18,6 +18,7 @@ type Config struct {
 	Runtime  RuntimeConfig
 	External ExternalConfig
 	Google   GoogleConfig
+	Todoist  TodoistConfig
 }
 
 // DatabaseConfig holds database connection settings
@@ -84,6 +85,13 @@ type GoogleConfig struct {
 	ClientID     string // GOOGLE_CLIENT_ID
 	ClientSecret string // GOOGLE_CLIENT_SECRET
 	RedirectURL  string // GOOGLE_REDIRECT_URL (default: http://localhost:8080/api/v1/auth/google/callback)
+}
+
+// TodoistConfig holds Todoist OAuth2 configuration
+type TodoistConfig struct {
+	ClientID     string // TODOIST_CLIENT_ID
+	ClientSecret string // TODOIST_CLIENT_SECRET
+	RedirectURL  string // TODOIST_REDIRECT_URL (default: http://localhost:8080/api/v1/auth/todoist/callback)
 }
 
 // ValidationError represents a configuration validation error
@@ -180,6 +188,11 @@ func Load() (*Config, error) {
 			ClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 			ClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
 			RedirectURL:  getEnv("GOOGLE_REDIRECT_URL", "http://localhost:8080/api/v1/auth/google/callback"),
+		},
+		Todoist: TodoistConfig{
+			ClientID:     getEnv("TODOIST_CLIENT_ID", ""),
+			ClientSecret: getEnv("TODOIST_CLIENT_SECRET", ""),
+			RedirectURL:  getEnv("TODOIST_REDIRECT_URL", "http://localhost:8080/api/v1/auth/todoist/callback"),
 		},
 	}
 
@@ -391,6 +404,11 @@ func TestConfig() *Config {
 			ClientID:     "test-client-id",
 			ClientSecret: "test-client-secret",
 			RedirectURL:  "http://localhost:8080/api/v1/auth/google/callback",
+		},
+		Todoist: TodoistConfig{
+			ClientID:     "test-todoist-client-id",
+			ClientSecret: "test-todoist-client-secret",
+			RedirectURL:  "http://localhost:8080/api/v1/auth/todoist/callback",
 		},
 	}
 }

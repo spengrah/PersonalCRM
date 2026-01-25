@@ -1,0 +1,112 @@
+---
+timestamp: "2026-01-25T15:04:27.565859"
+type: gotcha
+summary: OAuth handler constructors don't accept nil services - use conditional registration instead
+detail: |
+  When adding a new OAuth provider (like Todoist) to the existing OAuthHandler, don't modify NewOAuthHandler() to accept nil services. Instead, conditionally register routes only when services are initialized. The pattern in main.go shows: initialize service if config present, then conditionally register routes with nil checks. This avoids handler constructor complexity and keeps route registration flexible.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:04:27.565859"
+type: architecture
+summary: OAuth callback routes must be registered OUTSIDE auth middleware
+detail: |
+  OAuth provider callbacks (e.g., /api/v1/auth/google/callback, /api/v1/auth/todoist/callback) are called by the external provider's redirect and cannot include API keys. These routes MUST be registered before the v1.Use(auth.APIKeyMiddleware) group, otherwise callbacks will fail with 401. All other OAuth routes (auth URL, list accounts, revoke) go inside the authenticated group.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:04:27.565859"
+type: rule
+summary: OAuth error parameters in redirects must be URL-encoded to prevent injection
+detail: |
+  When redirecting to frontend with error messages from OAuth providers (e.g., redirectBase+'?auth=error&message='+errorParam), ALWAYS use url.QueryEscape() on the error parameter. Unescaped error parameters create open redirect vulnerabilities. Pattern: url.QueryEscape(errorParam). This applies to both success and error callback redirects.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:04:27.565859"
+type: distinction
+summary: Test HTTP interactions with httptest servers, not repository mocking
+detail: |
+  For OAuth service testing, focus unit tests on HTTP interactions (token exchange, user info fetch, revocation) using httptest.NewServer() rather than mocking repositories. The repository layer uses concrete types (not interfaces), making mocking difficult. Test auth URL generation and scope formatting without external dependencies, and use httptest servers to verify HTTP request/response handling. Integration tests would require real DB setup.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:04:27.565859"
+type: gotcha
+summary: OAuth endpoints should be package variables not constants for test flexibility
+detail: |
+  Define OAuth endpoints as package variables (var AuthorizationEndpoint = 'https://...') not constants, enabling test helpers to override them with httptest server URLs. Add test helper methods like exchangeCodeForTokenWithURL() that accept custom endpoint URLs. This pattern allows offline testing without mocking the entire HTTP stack while keeping production code simple.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:04:27.565859"
+type: rule
+summary: Test files must check all error returns to pass errcheck linter
+detail: |
+  In test HTTP handlers, ALL error-returning operations must be checked, including json.NewEncoder().Encode() and w.Write(). Pattern for test servers: 'err := json.NewEncoder(w).Encode(data); require.NoError(t, err)' or '_, err := w.Write([]byte(data)); require.NoError(t, err)'. The errcheck linter fails the build on unchecked errors even in test code.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:04:27.565859"
+type: architecture
+summary: "Frontend OAuth sections follow consistent pattern: settings section component + dedicated hook + oauth-api functions"
+detail: |
+  When adding OAuth provider UI, create: (1) settings section component (e.g., todoist-accounts-section.tsx) mirroring google-accounts-section structure, (2) dedicated hook file (use-todoist-accounts.ts) with query/mutation hooks, (3) API functions in oauth-api.ts. Import section component into settings/page.tsx with Suspense wrapper. Use useSearchParams() to detect OAuth callback success/error state. All providers share the sync state integration via use-sync-states.ts.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:04:27.565859"
+type: distinction
+summary: Issue spec 'follow existing pattern' means intentional duplication, not refactoring opportunity
+detail: |
+  When issue explicitly says 'follow the existing Google OAuth pattern', implement by mirroring the structure even if it creates duplication (todoist/oauth.go mirrors google/oauth.go structure). Code reviewers will flag DRY violations, but this is intentional - the spec prioritizes consistency over abstraction. Refactoring to generic provider system would be separate work. Document this decision if questioned.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:22:57.644050"
+type: gotcha
+summary: OAuth callback routes must be registered BEFORE auth middleware
+detail: |
+  OAuth provider callbacks (e.g., /api/v1/auth/todoist/callback) are invoked by external providers' redirects and cannot include API keys. They must be registered before v1.Use(auth.APIKeyMiddleware) in main.go, otherwise they'll get blocked by the middleware requiring authentication that external providers can't provide.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:22:57.644050"
+type: rule
+summary: Use url.Values for OAuth redirect URLs, not string concatenation
+detail: |
+  When constructing OAuth callback redirect URLs with query parameters (success=true, error=xyz), use url.Values{}.Encode() instead of string concatenation or manual url.QueryEscape() for individual params. This ensures ALL parameters are properly encoded and prevents injection vulnerabilities. Pattern: redirectURL.RawQuery = url.Values{"success": {"true"}, "provider": {"todoist"}}.Encode()
+actionable: true
+
+---
+timestamp: "2026-01-25T15:22:57.644050"
+type: distinction
+summary: E2E tests verify UI presence, not OAuth flows themselves
+detail: |
+  E2E tests for OAuth features should verify UI elements (settings sections, connect buttons, configuration instructions) are visible and correctly displayed. Don't attempt to test actual OAuth flows in E2E since they require external provider interaction. Use httptest servers in backend unit tests for OAuth HTTP operations instead.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:22:57.644050"
+type: gotcha
+summary: Test-map.json must be updated when adding new hooks in settings
+detail: |
+  When adding new React Query hooks for settings features (like use-todoist-accounts.ts), they must be registered in frontend/tests/e2e/test-map.json with the @area:settings tag. Otherwise, E2E test diff selection won't properly track changes to those hooks as requiring settings tests to run.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:22:57.644050"
+type: documentation_gap
+summary: E2E test heading expectations not validated against actual component
+detail: |
+  Initial E2E test looked for 'Todoist Accounts' heading when component actually used 'Todoist'. The test was written without checking the actual component implementation first. Guidance existed in core.md to 'NEVER propose changes to code you haven't read' but wasn't applied to test expectations. Should strengthen: before writing UI tests that check for specific text/elements, always read the component file first to verify exact wording and structure.
+actionable: true
+
+---
+timestamp: "2026-01-25T15:22:57.644050"
+type: architecture
+summary: Code review feedback drives iterative PR improvements
+detail: |
+  Claude Code Review check in CI provides structured feedback on security, testing, and code quality. When review fails, extract specific issues from PR comments (gh pr view --comments), address each systematically, then push fixes. The review check will re-run automatically. Pattern: review fails → read comments → fix issues → commit → push → review re-runs.
+actionable: true
+

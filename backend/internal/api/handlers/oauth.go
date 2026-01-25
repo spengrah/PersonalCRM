@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/google"
+	"personal-crm/backend/internal/todoist"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -17,7 +19,8 @@ import (
 
 // OAuthHandler handles OAuth-related HTTP requests
 type OAuthHandler struct {
-	googleOAuth google.OAuthServiceInterface
+	googleOAuth  google.OAuthServiceInterface
+	todoistOAuth todoist.OAuthServiceInterface
 	// State store for CSRF protection (in-memory, expires after 10 minutes)
 	stateStore   map[string]time.Time
 	stateStoreMu sync.RWMutex
@@ -36,6 +39,16 @@ func NewOAuthHandler(googleOAuth google.OAuthServiceInterface, frontendURL strin
 	go h.cleanupExpiredStates()
 
 	return h
+}
+
+// SetTodoistOAuth sets the Todoist OAuth service (allows adding after construction)
+func (h *OAuthHandler) SetTodoistOAuth(todoistOAuth todoist.OAuthServiceInterface) {
+	h.todoistOAuth = todoistOAuth
+}
+
+// HasTodoistOAuth returns true if Todoist OAuth is configured
+func (h *OAuthHandler) HasTodoistOAuth() bool {
+	return h.todoistOAuth != nil
 }
 
 // cleanupExpiredStates removes expired states from the store
@@ -139,24 +152,39 @@ func (h *OAuthHandler) GoogleCallback(c *gin.Context) {
 
 	// Handle errors from Google
 	if errorParam != "" {
-		c.Redirect(http.StatusFound, redirectBase+"?auth=error&provider=google&message="+errorParam)
+		params := url.Values{}
+		params.Set("auth", "error")
+		params.Set("provider", "google")
+		params.Set("message", errorParam)
+		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 		return
 	}
 
 	// Validate state (CSRF protection)
 	if !h.validateState(state) {
-		c.Redirect(http.StatusFound, redirectBase+"?auth=error&provider=google&message=invalid_state")
+		params := url.Values{}
+		params.Set("auth", "error")
+		params.Set("provider", "google")
+		params.Set("message", "invalid_state")
+		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 		return
 	}
 
 	// Exchange code for tokens
 	_, err := h.googleOAuth.ExchangeCode(c.Request.Context(), code)
 	if err != nil {
-		c.Redirect(http.StatusFound, redirectBase+"?auth=error&provider=google&message=exchange_failed")
+		params := url.Values{}
+		params.Set("auth", "error")
+		params.Set("provider", "google")
+		params.Set("message", "exchange_failed")
+		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 		return
 	}
 
-	c.Redirect(http.StatusFound, redirectBase+"?auth=success&provider=google")
+	params := url.Values{}
+	params.Set("auth", "success")
+	params.Set("provider", "google")
+	c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 }
 
 // ListGoogleAccounts returns all connected Google accounts
@@ -269,5 +297,214 @@ func (h *OAuthHandler) RevokeGoogleAccount(c *gin.Context) {
 
 	api.SendSuccess(c, http.StatusOK, map[string]string{
 		"message": "Google account disconnected successfully",
+	}, nil)
+}
+
+// GetTodoistAuthURLResponse is the response for getting the Todoist auth URL
+type GetTodoistAuthURLResponse struct {
+	URL   string `json:"url"`
+	State string `json:"state"`
+}
+
+// TodoistAccountResponse represents a connected Todoist account
+type TodoistAccountResponse struct {
+	ID          string   `json:"id"`
+	AccountID   string   `json:"account_id"`
+	AccountName *string  `json:"account_name,omitempty"`
+	ExpiresAt   *string  `json:"expires_at,omitempty"`
+	Scopes      []string `json:"scopes,omitempty"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
+}
+
+// GetTodoistAuthURL returns the authorization URL for Todoist OAuth
+// @Summary Get Todoist OAuth authorization URL
+// @Description Get the URL to redirect user to for Todoist authorization
+// @Tags auth
+// @Produce json
+// @Success 200 {object} api.APIResponse{data=GetTodoistAuthURLResponse}
+// @Failure 500 {object} api.APIResponse{error=api.APIError}
+// @Router /auth/todoist [get]
+func (h *OAuthHandler) GetTodoistAuthURL(c *gin.Context) {
+	state, err := google.GenerateState() // Reuse state generation from google package
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to generate state", err.Error())
+		return
+	}
+
+	// Store state for CSRF validation
+	h.storeState(state)
+
+	url := h.todoistOAuth.GetAuthURL(state)
+
+	api.SendSuccess(c, http.StatusOK, GetTodoistAuthURLResponse{
+		URL:   url,
+		State: state,
+	}, nil)
+}
+
+// TodoistCallback handles the OAuth callback from Todoist
+// @Summary Todoist OAuth callback
+// @Description Handle the OAuth callback from Todoist (redirects to frontend)
+// @Tags auth
+// @Param code query string false "Authorization code"
+// @Param state query string false "State for CSRF protection"
+// @Param error query string false "Error from Todoist"
+// @Success 302 "Redirect to frontend"
+// @Router /auth/todoist/callback [get]
+func (h *OAuthHandler) TodoistCallback(c *gin.Context) {
+	code := c.Query("code")
+	state := c.Query("state")
+	errorParam := c.Query("error")
+
+	redirectBase := h.frontendURL + "/settings"
+
+	// Handle errors from Todoist
+	if errorParam != "" {
+		params := url.Values{}
+		params.Set("auth", "error")
+		params.Set("provider", "todoist")
+		params.Set("message", errorParam)
+		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
+		return
+	}
+
+	// Validate state (CSRF protection)
+	if !h.validateState(state) {
+		params := url.Values{}
+		params.Set("auth", "error")
+		params.Set("provider", "todoist")
+		params.Set("message", "invalid_state")
+		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
+		return
+	}
+
+	// Exchange code for tokens
+	_, err := h.todoistOAuth.ExchangeCode(c.Request.Context(), code)
+	if err != nil {
+		params := url.Values{}
+		params.Set("auth", "error")
+		params.Set("provider", "todoist")
+		params.Set("message", "exchange_failed")
+		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
+		return
+	}
+
+	params := url.Values{}
+	params.Set("auth", "success")
+	params.Set("provider", "todoist")
+	c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
+}
+
+// ListTodoistAccounts returns all connected Todoist accounts
+// @Summary List connected Todoist accounts
+// @Description Get list of all connected Todoist accounts
+// @Tags auth
+// @Produce json
+// @Success 200 {object} api.APIResponse{data=[]TodoistAccountResponse}
+// @Failure 500 {object} api.APIResponse{error=api.APIError}
+// @Router /auth/todoist/accounts [get]
+func (h *OAuthHandler) ListTodoistAccounts(c *gin.Context) {
+	accounts, err := h.todoistOAuth.ListAccounts(c.Request.Context())
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list accounts", err.Error())
+		return
+	}
+
+	responses := make([]TodoistAccountResponse, len(accounts))
+	for i, acc := range accounts {
+		responses[i] = TodoistAccountResponse{
+			ID:          acc.ID.String(),
+			AccountID:   acc.AccountID,
+			AccountName: acc.AccountName,
+			Scopes:      acc.Scopes,
+			CreatedAt:   acc.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:   acc.UpdatedAt.Format(time.RFC3339),
+		}
+		if acc.ExpiresAt != nil {
+			expiresStr := acc.ExpiresAt.Format(time.RFC3339)
+			responses[i].ExpiresAt = &expiresStr
+		}
+	}
+
+	api.SendSuccess(c, http.StatusOK, responses, nil)
+}
+
+// GetTodoistAccountStatus returns the status of a specific Todoist account
+// @Summary Get Todoist account status
+// @Description Get the status of a specific connected Todoist account
+// @Tags auth
+// @Produce json
+// @Param id path string true "Account UUID"
+// @Success 200 {object} api.APIResponse{data=TodoistAccountResponse}
+// @Failure 400 {object} api.APIResponse{error=api.APIError}
+// @Failure 404 {object} api.APIResponse{error=api.APIError}
+// @Failure 500 {object} api.APIResponse{error=api.APIError}
+// @Router /auth/todoist/accounts/{id}/status [get]
+func (h *OAuthHandler) GetTodoistAccountStatus(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid account ID", err.Error())
+		return
+	}
+
+	status, err := h.todoistOAuth.GetAccountStatus(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			api.SendError(c, http.StatusNotFound, api.ErrCodeNotFound, "Account not found", "")
+			return
+		}
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get account status", err.Error())
+		return
+	}
+
+	response := TodoistAccountResponse{
+		ID:          status.ID.String(),
+		AccountID:   status.AccountID,
+		AccountName: status.AccountName,
+		Scopes:      status.Scopes,
+		CreatedAt:   status.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   status.UpdatedAt.Format(time.RFC3339),
+	}
+	if status.ExpiresAt != nil {
+		expiresStr := status.ExpiresAt.Format(time.RFC3339)
+		response.ExpiresAt = &expiresStr
+	}
+
+	api.SendSuccess(c, http.StatusOK, response, nil)
+}
+
+// RevokeTodoistAccount disconnects a Todoist account
+// @Summary Revoke Todoist account
+// @Description Disconnect a Todoist account and revoke OAuth tokens
+// @Tags auth
+// @Produce json
+// @Param id path string true "Account UUID"
+// @Success 200 {object} api.APIResponse{data=map[string]string}
+// @Failure 400 {object} api.APIResponse{error=api.APIError}
+// @Failure 404 {object} api.APIResponse{error=api.APIError}
+// @Failure 500 {object} api.APIResponse{error=api.APIError}
+// @Router /auth/todoist/accounts/{id}/revoke [post]
+func (h *OAuthHandler) RevokeTodoistAccount(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid account ID", err.Error())
+		return
+	}
+
+	err = h.todoistOAuth.RevokeAccount(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			api.SendError(c, http.StatusNotFound, api.ErrCodeNotFound, "Account not found", "")
+			return
+		}
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to revoke account", err.Error())
+		return
+	}
+
+	api.SendSuccess(c, http.StatusOK, map[string]string{
+		"message": "Todoist account disconnected successfully",
 	}, nil)
 }

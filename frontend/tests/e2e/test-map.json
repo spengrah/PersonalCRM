@@ -136,6 +136,10 @@
     "tags": ["@area:settings"]
   },
   {
+    "pattern": "^frontend/src/hooks/use-todoist-accounts\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
     "pattern": "^frontend/src/hooks/use-sync-states\\.ts$",
     "tags": ["@area:settings"]
   },

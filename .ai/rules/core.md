@@ -108,6 +108,9 @@ PostgreSQL
 | Editing `.claude/CLAUDE.md` directly | It's a symlink to `AGENTS.md` - stage `AGENTS.md` for git commits |
 | Outdated Go version in docs | Search `go1\.2[0-9]\.` and update all references to match go.mod |
 | E2E test using `domcontentloaded` | Use `networkidle` + `page.reload()` to ensure API data loads |
+| OAuth callback routes inside auth middleware | Register callback routes BEFORE `v1.Use(auth.APIKeyMiddleware)` - external providers can't include API keys |
+| String concat for OAuth redirect params | Use `url.Values{}.Encode()` for ALL redirect query params - prevents injection vulnerabilities |
+| Adding settings hooks without test-map entry | Add new hooks (e.g., use-todoist-accounts.ts) to `frontend/tests/e2e/test-map.json` with `@area:settings` |
 
 ## Anti-Patterns
 

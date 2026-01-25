@@ -5,6 +5,7 @@ import { Download, Upload, Settings, Database, Shield, Clock } from 'lucide-reac
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
 import { GoogleAccountsSection } from '@/components/settings/google-accounts-section'
+import { TodoistAccountsSection } from '@/components/settings/todoist-accounts-section'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import { FORM_CONTROL_BASE } from '@/lib/form-classes'
 import { clsx } from 'clsx'
@@ -168,6 +169,20 @@ export default function SettingsPage() {
             }
           >
             <GoogleAccountsSection />
+          </Suspense>
+
+          {/* Todoist */}
+          <Suspense
+            fallback={
+              <section className="bg-white rounded-lg shadow-sm border p-6">
+                <div className="animate-pulse">
+                  <div className="h-6 bg-gray-200 rounded w-1/4 mb-4"></div>
+                  <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                </div>
+              </section>
+            }
+          >
+            <TodoistAccountsSection />
           </Suspense>
 
           {/* Data Backup & Restore */}
