@@ -166,3 +166,43 @@ detail: |
   Don't assume modals close after every action. The ImportLinkModal is designed for batch processing: it only closes when candidates.length <= 1 (last candidate processed). Tests should verify the specific candidate's state changed (removed from list, status updated) rather than checking for modal closure. This pattern applies to any batch-processing UI component.
 actionable: true
 
+---
+timestamp: "2026-01-25T12:20:42.686406"
+type: gotcha
+summary: React Query staleTime causes E2E tests to see cached data from previous tests
+detail: |
+  React Query is configured with a 5-minute staleTime in query-client.ts. When parallel E2E tests navigate to the same route (e.g., /imports), React Query serves cached data from previous tests instead of fetching fresh seeded data. This causes test flakiness where seeded data doesn't appear. The root cause is that React Query's cache key is based on the URL path, not the data version, so navigating to the same route retrieves stale cached responses. Solutions: (1) Use cache-busting query params like `page.goto("/imports?_t=${Date.now()}")`, (2) Wait for specific seeded elements with longer timeouts instead of relying on page load states, or (3) Avoid page.reload() which doubles page load time.
+actionable: true
+
+---
+timestamp: "2026-01-25T12:20:42.686406"
+type: architecture
+summary: E2E performance optimization requires balancing parallelism with resource constraints
+detail: |
+  Different environments have vastly different performance profiles: MacBook M2 Max runs E2E suite in ~28s with 4 workers, GitHub Actions takes ~1.4min with 4 workers, and Raspberry Pi 5 takes 5min with 3 workers. The key bottleneck on resource-constrained devices (Pi) is not just CPU but also: (1) Memory pressure from multiple browser contexts causing swapping, (2) Database connection contention when all workers hit Postgres simultaneously, (3) Page load overhead that compounds with each reload. On Pi, reducing from 3 workers to 1-2 workers or eliminating unnecessary page.reload() calls can significantly improve total runtime despite reduced parallelism. The optimal architecture uses environment-aware worker counts and minimizes redundant operations (especially page reloads) that have outsized impact on slow hardware.
+actionable: true
+
+---
+timestamp: "2026-01-25T12:20:42.686406"
+type: rule
+summary: Avoid page.reload() in E2E tests—use cache-busting or element-based waits instead
+detail: |
+  Using page.reload() to work around React Query caching doubles the page load time for each test. In this session, 13 page.reload() calls added ~30-40 seconds of overhead on Raspberry Pi (2-3s per reload). Better approaches: (1) Append timestamp query params to bust cache: `page.goto('/imports?_t=${Date.now()}')` - React Query sees different URL = cache miss = fresh fetch, (2) Wait for specific seeded element to appear with generous timeout: `await expect(page.getByText(displayName)).toBeVisible({ timeout: 10000 })`, (3) Replace arbitrary `waitForTimeout(150)` with element-based waits: `await expect(modalHeading).toBeVisible()`. These approaches are faster (1 page load vs 2) while maintaining reliability across all environments.
+actionable: true
+
+---
+timestamp: "2026-01-25T12:20:42.686406"
+type: distinction
+summary: Test-map.json patterns must be updated when splitting spec files
+detail: |
+  The test-map.json file maps file paths to @area tags for diff-selected E2E testing via `make test-e2e-diff`. When a single spec file (e.g., imports.spec.ts) is split into multiple files (imports-actions.spec.ts, imports-features.spec.ts, etc.), the test-map.json pattern must be updated from exact match `^frontend/tests/e2e/imports\.spec\.ts$` to pattern match `^frontend/tests/e2e/imports(-[a-z]+)?\.spec\.ts$`. Otherwise, changes to the new split files won't trigger the @area:imports tag, causing `make test-e2e-diff` to fall back to @smoke and skip the imports suite—a regression in diff-selected E2E coverage. This must be checked whenever refactoring splits test files.
+actionable: true
+
+---
+timestamp: "2026-01-25T12:20:42.686406"
+type: gotcha
+summary: GitHub Actions artifacts don't include temp files unless explicitly uploaded
+detail: |
+  Temporary files created during GitHub Actions workflows (like /home/runner/work/_temp/claude-prompts/claude-prompt.txt) are ephemeral and deleted when the runner terminates. They are NOT automatically available as artifacts or in caches. To retrieve these files for debugging, you must add an explicit upload-artifact step in the workflow. However, you CAN retrieve the content if it was echoed to the job logs—use `gh run view <run_id> --log --job=<job_id>` and grep for the relevant content. In this session, the Claude Code Review prompt was found in the logs even though the temp file was gone.
+actionable: false
+
