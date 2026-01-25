@@ -43,6 +43,7 @@ import (
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/sync"
+	"personal-crm/backend/internal/todoist"
 
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
@@ -100,6 +101,7 @@ func main() {
 	var importHandler *handlers.ImportHandler
 	var calendarHandler *handlers.CalendarHandler
 	var googleOAuthService *google.OAuthService
+	var todoistOAuthService *todoist.OAuthService
 	var externalContactRepo *repository.ExternalContactRepository
 
 	if cfg.Features.EnableExternalSync {
@@ -120,6 +122,27 @@ func main() {
 			}
 		} else {
 			logger.Info().Msg("Google OAuth not configured (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET required)")
+		}
+
+		// Initialize Todoist OAuth service if configured
+		if cfg.Todoist.ClientID != "" && cfg.Todoist.ClientSecret != "" {
+			var err error
+			todoistOAuthService, err = todoist.NewOAuthService(cfg, oauthRepo, syncRepo)
+			if err != nil {
+				logger.Warn().Err(err).Msg("failed to initialize Todoist OAuth service")
+			} else {
+				// If OAuth handler exists (from Google), add Todoist to it
+				// Otherwise create a new handler with nil Google service
+				if oauthHandler != nil {
+					oauthHandler.SetTodoistOAuth(todoistOAuthService)
+				} else {
+					oauthHandler = handlers.NewOAuthHandler(nil, cfg.CORS.FrontendURL)
+					oauthHandler.SetTodoistOAuth(todoistOAuthService)
+				}
+				logger.Info().Msg("Todoist OAuth service initialized")
+			}
+		} else {
+			logger.Info().Msg("Todoist OAuth not configured (TODOIST_CLIENT_ID and TODOIST_CLIENT_SECRET required)")
 		}
 
 		// Initialize external contact and enrichment repositories
@@ -197,9 +220,14 @@ func main() {
 	healthChecker := health.NewHealthChecker(database, cfg.Database.HealthTimeout)
 	router.GET("/health", healthChecker.Handler)
 
-	// OAuth callback route (no auth - called by Google redirect)
+	// OAuth callback routes (no auth - called by provider redirects)
 	if oauthHandler != nil {
-		router.GET("/api/v1/auth/google/callback", oauthHandler.GoogleCallback)
+		if googleOAuthService != nil {
+			router.GET("/api/v1/auth/google/callback", oauthHandler.GoogleCallback)
+		}
+		if oauthHandler.HasTodoistOAuth() {
+			router.GET("/api/v1/auth/todoist/callback", oauthHandler.TodoistCallback)
+		}
 	}
 
 	// API routes
@@ -234,11 +262,21 @@ func main() {
 		if oauthHandler != nil {
 			authRoutes := v1.Group("/auth")
 			{
-				// Google OAuth
-				authRoutes.GET("/google", oauthHandler.GetGoogleAuthURL)
-				authRoutes.GET("/google/accounts", oauthHandler.ListGoogleAccounts)
-				authRoutes.GET("/google/accounts/:id/status", oauthHandler.GetGoogleAccountStatus)
-				authRoutes.POST("/google/accounts/:id/revoke", oauthHandler.RevokeGoogleAccount)
+				// Google OAuth (only if configured)
+				if googleOAuthService != nil {
+					authRoutes.GET("/google", oauthHandler.GetGoogleAuthURL)
+					authRoutes.GET("/google/accounts", oauthHandler.ListGoogleAccounts)
+					authRoutes.GET("/google/accounts/:id/status", oauthHandler.GetGoogleAccountStatus)
+					authRoutes.POST("/google/accounts/:id/revoke", oauthHandler.RevokeGoogleAccount)
+				}
+
+				// Todoist OAuth (only if configured)
+				if oauthHandler.HasTodoistOAuth() {
+					authRoutes.GET("/todoist", oauthHandler.GetTodoistAuthURL)
+					authRoutes.GET("/todoist/accounts", oauthHandler.ListTodoistAccounts)
+					authRoutes.GET("/todoist/accounts/:id/status", oauthHandler.GetTodoistAccountStatus)
+					authRoutes.POST("/todoist/accounts/:id/revoke", oauthHandler.RevokeTodoistAccount)
+				}
 			}
 		}
 
