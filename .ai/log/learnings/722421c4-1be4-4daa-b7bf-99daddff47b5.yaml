@@ -254,3 +254,35 @@ detail: |
   On Raspberry Pi 5: 1 worker = 4:44, 2 workers = 5:15. This counterintuitive result (slower with parallelism) indicates resource constraints where contention overhead exceeds parallelism gains. Contrast with M2 Max (28s with 4 workers) and GitHub Actions (2:30 with 4 workers). On constrained hardware, fewer workers can be faster. Don't assume 'more workers = faster' universally—measure and tune per environment.
 actionable: false
 
+---
+timestamp: "2026-01-25T13:23:16.669067"
+type: gotcha
+summary: os.arch() === 'arm64' matches both Raspberry Pi AND Apple Silicon Macs
+detail: |
+  When detecting Raspberry Pi for performance optimization, checking only `os.arch() === 'arm64'` is insufficient because Apple Silicon Macs also return 'arm64'. Must combine with `os.platform() === 'linux'` to specifically detect Pi (Linux arm64) vs Mac (darwin arm64). This prevents accidentally applying Pi-specific optimizations to fast Apple hardware.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:23:16.669067"
+type: architecture
+summary: Raspberry Pi 5 runs E2E tests faster with 1 worker than 2 due to resource contention
+detail: |
+  Performance measurements on Raspberry Pi 5 showed 1 worker (4:46) is ~30 seconds faster than 2 workers (5:16) for the E2E test suite. The Pi's limited memory and CPU make parallel execution slower due to contention. This is opposite to more powerful hardware where parallelism helps. Configure platform-specific worker counts based on actual measurements rather than assuming more workers is always better.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:23:16.669067"
+type: architecture
+summary: Test-aware staleTime eliminates need for page.reload() in E2E tests
+detail: |
+  React Query's staleTime causes E2E tests to see cached data after backend seeding. Instead of adding expensive page.reload() calls (2-3s each on Pi), use Playwright fixtures with addInitScript to inject window.__PLAYWRIGHT__ flag and set staleTime: 0 only during tests. This architectural approach eliminated all 13 reload() calls, saving 25-40s on Pi while keeping production caching behavior intact.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:23:16.669067"
+type: rule
+summary: Import from './fixtures' not '@playwright/test' when using custom test fixtures
+detail: |
+  When using Playwright custom fixtures (like the test-aware staleTime fixture), all test files must import { test, expect } from './fixtures' instead of '@playwright/test'. Importing from the wrong source means the fixture doesn't apply and tests won't get the custom setup (e.g., the __PLAYWRIGHT__ flag won't be injected). This must be consistent across all E2E test files.
+actionable: true
+
