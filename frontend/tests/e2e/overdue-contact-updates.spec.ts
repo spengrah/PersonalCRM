@@ -145,7 +145,13 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     // Go to contact detail and mark as contacted
     await page.goto(`/contacts/${contactId}`)
     await expect(page.getByRole('heading', { name: contactName, level: 2 })).toBeVisible()
+
+    // Wait for the API call to complete when clicking Mark as Contacted
+    const responsePromise = page.waitForResponse(
+      resp => resp.url().includes('/last-contacted') && resp.request().method() === 'PATCH'
+    )
     await page.getByRole('button', { name: /Mark as Contacted/i }).click()
+    await responsePromise
 
     // Last contacted should update to today (use first() as date may appear multiple times)
     const today = getTodayUTC()
