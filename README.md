@@ -662,7 +662,7 @@ The application uses PostgreSQL with the pgvector extension for vector similarit
 
 ## Development Phases
 
-- **Phase 1**: Core CRM (Contacts, Notes, Reminders) - *In Progress*
+- **Phase 1**: Core CRM (Contacts, Notes) - *In Progress*
 - **Phase 2**: AI Agent v0 (Embeddings, RAG, Chat UI)
 - **Phase 3**: AI Agent v1 (Advanced features, Graph view, Export)
 
