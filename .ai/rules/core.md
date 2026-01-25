@@ -108,6 +108,8 @@ PostgreSQL
 | Editing `.claude/CLAUDE.md` directly | It's a symlink to `AGENTS.md` - stage `AGENTS.md` for git commits |
 | Outdated Go version in docs | Search `go1\.2[0-9]\.` and update all references to match go.mod |
 | E2E test using `domcontentloaded` | Use `networkidle` + `page.reload()` to ensure API data loads |
+| OAuth callback routes inside auth middleware | Register callback routes BEFORE `v1.Use(auth.APIKeyMiddleware)` - external providers can't include API keys |
+| Unescaped error params in OAuth redirects | Use `url.QueryEscape(errorParam)` to prevent open redirect vulnerabilities |
 
 ## Anti-Patterns
 
