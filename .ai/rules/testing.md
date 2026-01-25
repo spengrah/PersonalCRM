@@ -187,6 +187,44 @@ test.describe.configure({ mode: 'serial' })
 | `seedContacts()` | Create contacts directly |
 | `cleanup()` | Remove all data with this test's prefix |
 
+### Parallel E2E Testing Gotchas
+
+**Shared Database**: All workers share the same database. Tests can see other workers' data, causing pagination and unexpected elements.
+
+**No page.reload() needed**: Import tests use a custom fixture (`./fixtures`) that sets `window.__PLAYWRIGHT__`, which tells React Query to use `staleTime: 0`. This ensures tests always get fresh data after seeding—no reload workarounds needed.
+
+```typescript
+// Import from fixtures instead of @playwright/test
+import { test, expect } from './fixtures'
+
+// Then just navigate and wait - React Query fetches fresh data automatically
+await page.goto('/imports')
+await page.waitForLoadState('networkidle')
+await findCandidateByName(page, displayName)  // waits + paginates
+```
+
+**Pagination handling**: Other workers' data can push your contact to page 2. Use `findCandidateByName()` helper to paginate until found.
+
+**Modal navigation**: When opening a modal, parallel tests may cause it to show another candidate. Use `navigateModalToCandidate()` helper which uses element-based waits (not fixed timeouts) to navigate to your candidate.
+
+**Target specific elements**: Never use `.first()` on candidate cards—target your prefixed contact name:
+```typescript
+// ❌ WRONG - may click another worker's data
+page.getByRole('button', { name: /Import/i }).first().click()
+
+// ✅ CORRECT - targets your prefixed data
+const card = page.locator('[class*="border-gray-200"]').filter({ hasText: displayName })
+await card.getByRole('button', { name: /Import/i }).click()
+```
+
+**Wait for visibility**: Always wait before interacting with seeded data:
+```typescript
+await expect(candidateCard).toBeVisible({ timeout: 10000 })
+await candidateCard.getByRole('button', { name: /Import/i }).click()
+```
+
+**Modal stays open**: ImportLinkModal only closes when `candidates.length <= 1`. After importing, verify the card disappeared—don't wait for modal to close.
+
 ## Writing Good Tests
 
 ### Integration Test Template

@@ -46,3 +46,243 @@ detail: |
   Documentation files (README.md, deployment guides) had outdated Go version references (1.22, 1.23) that didn't match go.mod's requirement for Go 1.24. When updating Go version requirements, search and update ALL references including: Prerequisites sections, installation examples (wget urls, brew install commands), and version verification examples. Use grep to find: 'go1\.2[0-9]\.' pattern.
 actionable: true
 
+---
+timestamp: "2026-01-25T10:23:57.883794"
+type: gotcha
+summary: Notification assertions in parallel E2E tests match other workers' notifications
+detail: |
+  When running Playwright tests in parallel with multiple workers, generic notification patterns like `page.getByText(/imported successfully/i)` can match notifications from OTHER workers' operations. This causes false positives where a test thinks its operation succeeded because it saw another worker's success notification. Fix: Include the prefixed contact name in the notification pattern (e.g., `page.getByText(new RegExp(\`${displayName} imported successfully\`, 'i'))`) or wait for a more specific signal like the candidate card disappearing or modal closing.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:23:57.883794"
+type: gotcha
+summary: candidateCard locators can match modal content after modal opens
+detail: |
+  When using `page.locator('[class*="rounded-lg"]').filter({ hasText: displayName })` to target a candidate card, the locator can match BOTH the card in the list AND the modal content after the modal opens (since the modal also shows the contact name and may have rounded-lg classes). Using `candidateCard.getByRole('button', { name: /Import/i })` then matches multiple buttons (candidate card button + modal buttons), causing 'strict mode violation' errors. Fix: Wait for the modal to close by checking `expect(page.getByRole('button', { name: 'Import as New', exact: true })).not.toBeVisible()` instead of checking if the candidate card's button disappeared.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:23:57.883794"
+type: gotcha
+summary: domcontentloaded doesn't wait for API data to load in Next.js pages
+detail: |
+  Using `page.waitForLoadState('domcontentloaded')` in Playwright E2E tests only waits for the HTML DOM to render, NOT for React Query/API calls to complete. This causes race conditions where tests try to interact with data that hasn't loaded yet, especially on the /contacts page which shows 'Loading contacts...' while fetching. Fix: Use `page.waitForLoadState('networkidle')` or explicitly wait for loading indicators to disappear: `await expect(page.getByText('Loading contacts...')).not.toBeVisible({ timeout: 10000 })`
+actionable: true
+
+---
+timestamp: "2026-01-25T10:23:57.883794"
+type: gotcha
+summary: Shared beforeEach data can cause test interference in parallel execution
+detail: |
+  When multiple tests in a describe block use beforeEach to seed shared test data (e.g., Contact A, B, C), and one test IMPORTS one of those contacts, parallel execution can cause failures. Even though beforeEach runs per-test, if tests execute actions that consume shared data (importing removes the candidate), subsequent or parallel tests may not find the expected data. Fix: Either (1) have each test seed its own uniquely-named contact instead of relying on shared beforeEach data, or (2) move tests that consume/modify data to their own isolated describe blocks with separate beforeEach/afterEach.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:23:57.883794"
+type: distinction
+summary: Import notifications include contact name, but link notifications don't
+detail: |
+  The frontend shows different notification formats for import vs link actions: Import shows `${contactName} imported successfully!` (includes name), while Link shows generic `Contact linked successfully!` (no name). This means import tests can use name-specific notification patterns for parallel test isolation, but link tests cannot rely on the notification and must use other signals like waiting for the candidate to disappear or modal to close.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:23:57.883794"
+type: rule
+summary: Don't use `.first()` on candidate cards in parallel E2E tests
+detail: |
+  Using `.first()` to select candidate cards in imports tests (e.g., `page.getByRole('button', { name: /Import/i }).first().click()`) will click on whichever candidate appears first in the DOM, which could be another worker's seeded data when running in parallel. This causes tests to operate on the wrong data and fail assertions. Always target specific prefixed contact names: `page.locator('[class*="rounded-lg"]').filter({ hasText: displayName })` to ensure each test only interacts with its own data.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:23:57.883794"
+type: gotcha
+summary: Visibility waits needed before interacting with seeded E2E test data
+detail: |
+  After seeding test data via API, the data may not be immediately visible on the page even after page.goto() completes. Always add visibility waits before clicking: `await expect(candidateCard).toBeVisible({ timeout: 10000 })` before `candidateCard.click()`. Without this, tests can race against data loading and fail intermittently in parallel execution.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:34:53.538830"
+type: gotcha
+summary: E2E tests with parallel workers share the same database and see each other's test data
+detail: |
+  When running Playwright E2E tests in parallel with multiple workers, all workers seed data into the same database. Tests can see data from other workers' tests, causing issues like pagination (21+ contacts from one test pushing another test's contact to page 2). Tests must handle finding their prefixed contacts across pages or filtering UI to show only their data.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:34:53.538830"
+type: gotcha
+summary: ImportLinkModal only closes when candidates.length <= 1, not after every import
+detail: |
+  The modal is designed to stay open when multiple candidates exist, allowing batch processing. After importing one candidate, if others remain, the modal shows the next candidate instead of closing. Tests checking for modal closure (await expect(page.getByRole('button', { name: 'Import as New', exact: true })).not.toBeVisible()) will fail when other tests' candidates exist in the database. Tests should verify the specific candidate was removed from the list, not that the modal closed.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:34:53.538830"
+type: rule
+summary: E2E tests must handle pagination when searching for their seeded data
+detail: |
+  With parallel test execution, tests cannot assume their seeded contact appears on the first page. A pagination helper function is needed: async function findCandidateByName(page: Page, displayName: string, maxPages = 5) that iterates through pages clicking 'Next' until the contact is found. This must be called before interacting with any candidate card.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:34:53.538830"
+type: gotcha
+summary: Changing waitForLoadState from 'domcontentloaded' to 'networkidle' alone doesn't fix race conditions
+detail: |
+  While 'networkidle' waits for API calls to complete, it doesn't guarantee the UI has rendered the fetched data or that React Query has updated the component state. Tests still need explicit waits for specific elements (await expect(page.getByText(displayName)).toBeVisible({ timeout: 10000 })) or pagination handling to ensure the expected data is actually visible before interacting with it.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:34:53.538830"
+type: architecture
+summary: Parallel E2E test isolation requires per-test data scoping, not just cleanup
+detail: |
+  The TestAPI uses worker-scoped prefixes (w{workerIndex}-{timestamp}) for data isolation, but this only prevents collisions during seeding. Tests must actively filter/search for their prefixed data in the UI because other tests' data persists until their cleanup runs. Cleanup in afterEach only removes the current test's prefix, leaving other workers' data visible. Tests can't rely on having a clean database—they must be resilient to other tests' data being present.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:34:53.538830"
+type: gotcha
+summary: "Test isolation issues manifest as different failures: modal not opening vs. not closing"
+detail: |
+  When tests see data from other workers: (1) If test expects only its candidate but page shows 20+ from another test, the modal might open on the wrong contact. (2) If test imports its candidate but 19+ remain from other tests, modal stays open instead of closing. (3) If pagination test runs first, it seeds 21 contacts that push all other tests' contacts to page 2. Each failure mode requires understanding the multi-candidate modal behavior and pagination logic.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:34:53.538830"
+type: distinction
+summary: Flaky tests passing on retry vs tests that need pagination handling
+detail: |
+  Tests that pass on retry often indicate race conditions (data not loaded yet, modal state from previous test not cleared). Tests that consistently fail when pagination tests run indicate missing pagination handling. The fix differs: race conditions need better waits (networkidle + explicit element visibility), while pagination issues need findCandidateByName() helper. Both can manifest as 'flaky' in test output.
+actionable: true
+
+---
+timestamp: "2026-01-25T10:34:53.538830"
+type: rule
+summary: Verify test assertions match actual modal behavior in batch-processing UIs
+detail: |
+  Don't assume modals close after every action. The ImportLinkModal is designed for batch processing: it only closes when candidates.length <= 1 (last candidate processed). Tests should verify the specific candidate's state changed (removed from list, status updated) rather than checking for modal closure. This pattern applies to any batch-processing UI component.
+actionable: true
+
+---
+timestamp: "2026-01-25T12:20:42.686406"
+type: gotcha
+summary: React Query staleTime causes E2E tests to see cached data from previous tests
+detail: |
+  React Query is configured with a 5-minute staleTime in query-client.ts. When parallel E2E tests navigate to the same route (e.g., /imports), React Query serves cached data from previous tests instead of fetching fresh seeded data. This causes test flakiness where seeded data doesn't appear. The root cause is that React Query's cache key is based on the URL path, not the data version, so navigating to the same route retrieves stale cached responses. Solutions: (1) Use cache-busting query params like `page.goto("/imports?_t=${Date.now()}")`, (2) Wait for specific seeded elements with longer timeouts instead of relying on page load states, or (3) Avoid page.reload() which doubles page load time.
+actionable: true
+
+---
+timestamp: "2026-01-25T12:20:42.686406"
+type: architecture
+summary: E2E performance optimization requires balancing parallelism with resource constraints
+detail: |
+  Different environments have vastly different performance profiles: MacBook M2 Max runs E2E suite in ~28s with 4 workers, GitHub Actions takes ~1.4min with 4 workers, and Raspberry Pi 5 takes 5min with 3 workers. The key bottleneck on resource-constrained devices (Pi) is not just CPU but also: (1) Memory pressure from multiple browser contexts causing swapping, (2) Database connection contention when all workers hit Postgres simultaneously, (3) Page load overhead that compounds with each reload. On Pi, reducing from 3 workers to 1-2 workers or eliminating unnecessary page.reload() calls can significantly improve total runtime despite reduced parallelism. The optimal architecture uses environment-aware worker counts and minimizes redundant operations (especially page reloads) that have outsized impact on slow hardware.
+actionable: true
+
+---
+timestamp: "2026-01-25T12:20:42.686406"
+type: rule
+summary: Avoid page.reload() in E2E tests—use cache-busting or element-based waits instead
+detail: |
+  Using page.reload() to work around React Query caching doubles the page load time for each test. In this session, 13 page.reload() calls added ~30-40 seconds of overhead on Raspberry Pi (2-3s per reload). Better approaches: (1) Append timestamp query params to bust cache: `page.goto('/imports?_t=${Date.now()}')` - React Query sees different URL = cache miss = fresh fetch, (2) Wait for specific seeded element to appear with generous timeout: `await expect(page.getByText(displayName)).toBeVisible({ timeout: 10000 })`, (3) Replace arbitrary `waitForTimeout(150)` with element-based waits: `await expect(modalHeading).toBeVisible()`. These approaches are faster (1 page load vs 2) while maintaining reliability across all environments.
+actionable: true
+
+---
+timestamp: "2026-01-25T12:20:42.686406"
+type: distinction
+summary: Test-map.json patterns must be updated when splitting spec files
+detail: |
+  The test-map.json file maps file paths to @area tags for diff-selected E2E testing via `make test-e2e-diff`. When a single spec file (e.g., imports.spec.ts) is split into multiple files (imports-actions.spec.ts, imports-features.spec.ts, etc.), the test-map.json pattern must be updated from exact match `^frontend/tests/e2e/imports\.spec\.ts$` to pattern match `^frontend/tests/e2e/imports(-[a-z]+)?\.spec\.ts$`. Otherwise, changes to the new split files won't trigger the @area:imports tag, causing `make test-e2e-diff` to fall back to @smoke and skip the imports suite—a regression in diff-selected E2E coverage. This must be checked whenever refactoring splits test files.
+actionable: true
+
+---
+timestamp: "2026-01-25T12:20:42.686406"
+type: gotcha
+summary: GitHub Actions artifacts don't include temp files unless explicitly uploaded
+detail: |
+  Temporary files created during GitHub Actions workflows (like /home/runner/work/_temp/claude-prompts/claude-prompt.txt) are ephemeral and deleted when the runner terminates. They are NOT automatically available as artifacts or in caches. To retrieve these files for debugging, you must add an explicit upload-artifact step in the workflow. However, you CAN retrieve the content if it was echoed to the job logs—use `gh run view <run_id> --log --job=<job_id>` and grep for the relevant content. In this session, the Claude Code Review prompt was found in the logs even though the temp file was gone.
+actionable: false
+
+---
+timestamp: "2026-01-25T13:03:04.680478"
+type: architecture
+summary: Test-aware staleTime via window.__PLAYWRIGHT__ eliminates page.reload() workarounds
+detail: |
+  React Query caching issues in E2E tests can be solved at the architecture level: (1) Create a Playwright fixture that injects window.__PLAYWRIGHT__ = true via addInitScript, (2) Modify query-client.ts to detect this flag and set staleTime: 0 in test mode, (3) This eliminates ALL page.reload() calls, saving 2-3s per reload on slow hardware. This is cleaner than per-test workarounds because it addresses the root cause (stale cache) rather than symptoms. Implementation: ~15 lines total (fixture + query-client change + fixture exports).
+actionable: true
+
+---
+timestamp: "2026-01-25T13:03:04.680478"
+type: distinction
+summary: Playwright custom fixtures extend base test once, avoiding per-test boilerplate
+detail: |
+  When you need to inject setup for all tests (like addInitScript), create a custom fixture file that extends the base test, then have test files import from the fixture instead of @playwright/test. This is cleaner than: (1) Adding beforeEach to every test file, (2) Using global setup (complex), (3) Config-level injection (not possible with page methods). Pattern: fixtures.ts exports extended test + expect + types → test files import from './fixtures' → automatic setup for all tests.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:03:04.680478"
+type: gotcha
+summary: Playwright fixtures must re-export types (like Locator) for TypeScript imports
+detail: |
+  When creating a custom Playwright fixture that re-exports test and expect, you must also re-export any types that test files import (e.g., Locator, APIRequestContext). TypeScript imports won't fall through to @playwright/test automatically. Fix: Add 'export type { Locator } from "@playwright/test"' to fixtures.ts so test files can import both runtime values and types from the same source.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:03:04.680478"
+type: rule
+summary: Don't add features/optimizations without user request—wait for explicit approval
+detail: |
+  When user asks 'what approaches are there for X?', they want options, not implementation. Present the options clearly (test-aware staleTime, webkit browser, etc.), explain tradeoffs, then WAIT for user to say 'proceed with option 2'. Do not implement proactively. User may want to test some options themselves (like trying webkit on Pi) before committing to code changes.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:03:04.680478"
+type: architecture
+summary: "E2E performance on constrained hardware: fix N small cuts, not one big refactor"
+detail: |
+  Optimizing E2E tests for Raspberry Pi involved multiple incremental improvements: (1) Remove unnecessary page.reload() calls (saved ~22-33s), (2) Use element-based waits instead of reload workarounds (saved ~5-10s), (3) Add test-aware staleTime to eliminate remaining reloads (architectural fix). Each step shaved time without radical changes. The pattern: profile → identify repeated expensive operations → eliminate or replace with cheaper alternatives → measure again. Avoid 'rewrite everything' when incremental fixes compound.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:03:04.680478"
+type: gotcha
+summary: Pi 5 E2E slower with 2 workers than 1 worker—memory/CPU contention beats parallelism
+detail: |
+  On Raspberry Pi 5: 1 worker = 4:44, 2 workers = 5:15. This counterintuitive result (slower with parallelism) indicates resource constraints where contention overhead exceeds parallelism gains. Contrast with M2 Max (28s with 4 workers) and GitHub Actions (2:30 with 4 workers). On constrained hardware, fewer workers can be faster. Don't assume 'more workers = faster' universally—measure and tune per environment.
+actionable: false
+
+---
+timestamp: "2026-01-25T13:23:16.669067"
+type: gotcha
+summary: os.arch() === 'arm64' matches both Raspberry Pi AND Apple Silicon Macs
+detail: |
+  When detecting Raspberry Pi for performance optimization, checking only `os.arch() === 'arm64'` is insufficient because Apple Silicon Macs also return 'arm64'. Must combine with `os.platform() === 'linux'` to specifically detect Pi (Linux arm64) vs Mac (darwin arm64). This prevents accidentally applying Pi-specific optimizations to fast Apple hardware.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:23:16.669067"
+type: architecture
+summary: Raspberry Pi 5 runs E2E tests faster with 1 worker than 2 due to resource contention
+detail: |
+  Performance measurements on Raspberry Pi 5 showed 1 worker (4:46) is ~30 seconds faster than 2 workers (5:16) for the E2E test suite. The Pi's limited memory and CPU make parallel execution slower due to contention. This is opposite to more powerful hardware where parallelism helps. Configure platform-specific worker counts based on actual measurements rather than assuming more workers is always better.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:23:16.669067"
+type: architecture
+summary: Test-aware staleTime eliminates need for page.reload() in E2E tests
+detail: |
+  React Query's staleTime causes E2E tests to see cached data after backend seeding. Instead of adding expensive page.reload() calls (2-3s each on Pi), use Playwright fixtures with addInitScript to inject window.__PLAYWRIGHT__ flag and set staleTime: 0 only during tests. This architectural approach eliminated all 13 reload() calls, saving 25-40s on Pi while keeping production caching behavior intact.
+actionable: true
+
+---
+timestamp: "2026-01-25T13:23:16.669067"
+type: rule
+summary: Import from './fixtures' not '@playwright/test' when using custom test fixtures
+detail: |
+  When using Playwright custom fixtures (like the test-aware staleTime fixture), all test files must import { test, expect } from './fixtures' instead of '@playwright/test'. Importing from the wrong source means the fixture doesn't apply and tests won't get the custom setup (e.g., the __PLAYWRIGHT__ flag won't be injected). This must be consistent across all E2E test files.
+actionable: true
+
