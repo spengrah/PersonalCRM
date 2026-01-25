@@ -99,6 +99,7 @@ func NewOAuthService(cfg *config.Config, repo *repository.OAuthRepository, syncR
 func (s *OAuthService) GetAuthURL(state string) string {
 	params := url.Values{}
 	params.Set("client_id", s.clientID)
+	params.Set("redirect_uri", s.redirectURL)
 	params.Set("scope", strings.Join(Scopes, ","))
 	params.Set("state", state)
 
