@@ -7,10 +7,17 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   // Allow safe parallelism; override with PLAYWRIGHT_WORKERS if needed
+  // Pi (arm64) runs faster with 1 worker due to resource contention
   workers: (() => {
     const configured = Number.parseInt(process.env.PLAYWRIGHT_WORKERS || '', 10)
     if (Number.isFinite(configured) && configured > 0) {
       return configured
+    }
+
+    // Raspberry Pi (Linux arm64): 1 worker is faster than parallel due to memory/CPU contention
+    // Apple Silicon Macs (darwin arm64) are fast enough for parallel
+    if (os.arch() === 'arm64' && os.platform() === 'linux') {
+      return 1
     }
 
     const cpuCount = os.cpus().length || 1
