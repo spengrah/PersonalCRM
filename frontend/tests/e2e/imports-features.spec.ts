@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import { navigateModalToCandidate, findCandidateByName } from './helpers/imports-helpers'
 

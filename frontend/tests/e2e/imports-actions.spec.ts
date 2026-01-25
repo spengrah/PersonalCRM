@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import { navigateModalToCandidate, findCandidateByName } from './helpers/imports-helpers'
 
@@ -193,11 +193,6 @@ test.describe('Imports Actions @area:imports', () => {
 
     test('should link candidate to existing contact', async ({ page }) => {
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
-
-      // This test seeds both external contacts AND overdue contacts in beforeEach
-      // which can cause a timing issue where the candidates don't appear immediately
-      await page.reload()
       await page.waitForLoadState('networkidle')
 
       const candidateName = `${testApi.prefix}-Link Test Contact`

@@ -1,4 +1,4 @@
-import { test, expect, Locator } from '@playwright/test'
+import { test, expect, Locator } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import { navigateModalToCandidate, findCandidateByName } from './helpers/imports-helpers'
 
@@ -314,11 +314,6 @@ test.describe('Imports Modal @area:imports', () => {
       ])
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
-
-      // This test seeds both external contacts AND overdue contacts
-      // which can cause a timing issue where the candidates don't appear immediately
-      await page.reload()
       await page.waitForLoadState('networkidle')
 
       const displayName = `${testApi.prefix}-Link Cadence Update Test`
