@@ -191,23 +191,16 @@ test.describe.configure({ mode: 'serial' })
 
 **Shared Database**: All workers share the same database. Tests can see other workers' data, causing pagination and unexpected elements.
 
-**Avoid unnecessary page.reload()**: Each reload adds 2-3s on slow hardware (Pi). Most tests work without reload if you:
-1. Wait for specific seeded elements with generous timeouts
-2. Use `findCandidateByName()` helper which handles pagination and waits
-3. Use `navigateModalToCandidate()` to find your candidate in modals
+**No page.reload() needed**: Import tests use a custom fixture (`./fixtures`) that sets `window.__PLAYWRIGHT__`, which tells React Query to use `staleTime: 0`. This ensures tests always get fresh data after seeding—no reload workarounds needed.
 
 ```typescript
-// ✅ PREFERRED - element-based waits (no reload needed)
+// Import from fixtures instead of @playwright/test
+import { test, expect } from './fixtures'
+
+// Then just navigate and wait - React Query fetches fresh data automatically
 await page.goto('/imports')
 await page.waitForLoadState('networkidle')
 await findCandidateByName(page, displayName)  // waits + paginates
-
-// ⚠️ ONLY when needed - tests seeding BOTH external AND overdue contacts
-// may need reload due to timing issues with multiple seed types
-await page.goto('/imports')
-await page.waitForLoadState('networkidle')
-await page.reload()
-await page.waitForLoadState('networkidle')
 ```
 
 **Pagination handling**: Other workers' data can push your contact to page 2. Use `findCandidateByName()` helper to paginate until found.
