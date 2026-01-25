@@ -179,9 +179,27 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	contactRepo := repository.NewContactRepository(txQueries)
 	contactMethodRepo := repository.NewContactMethodRepository(txQueries)
 
-	_, err = contactRepo.GetContact(ctx, id)
+	existingContact, err := contactRepo.GetContact(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+
+	// Calculate contact_by based on cadence change
+	// If cadence is cleared, contact_by should be NULL
+	// If cadence is set/changed, recompute contact_by from last_contacted || created_at
+	if req.Cadence == nil || *req.Cadence == "" {
+		// Cadence is being cleared - set contact_by to NULL
+		req.ContactBy = nil
+	} else {
+		// Cadence is being set/changed - compute contact_by
+		if cadenceType, err := cadence.ParseCadence(*req.Cadence); err == nil {
+			base := existingContact.CreatedAt
+			if existingContact.LastContacted != nil {
+				base = *existingContact.LastContacted
+			}
+			contactByTime := cadence.CalculateContactBy(base, cadenceType)
+			req.ContactBy = &contactByTime
+		}
 	}
 
 	contact, err = contactRepo.UpdateContact(ctx, id, req)
@@ -226,8 +244,9 @@ func (s *ContactService) DeleteContact(ctx context.Context, id uuid.UUID) error 
 
 // UpdateContactLastContacted updates the last contacted date for a contact.
 // If lastContacted is nil, the current time is used.
+// Also updates contact_by based on the new last_contacted date and the contact's cadence.
 func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted *time.Time) (*repository.Contact, error) {
-	_, err := s.contactRepo.GetContact(ctx, id)
+	contact, err := s.contactRepo.GetContact(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -238,11 +257,20 @@ func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid
 		dateToSet = *lastContacted
 	}
 
-	if err := s.contactRepo.UpdateContactLastContacted(ctx, id, dateToSet); err != nil {
+	// Calculate contact_by based on cadence
+	var contactBy *time.Time
+	if contact.Cadence != nil && *contact.Cadence != "" {
+		if cadenceType, err := cadence.ParseCadence(*contact.Cadence); err == nil {
+			contactByTime := cadence.CalculateContactBy(dateToSet, cadenceType)
+			contactBy = &contactByTime
+		}
+	}
+
+	if err := s.contactRepo.UpdateContactLastContacted(ctx, id, dateToSet, contactBy); err != nil {
 		return nil, err
 	}
 
-	contact, err := s.contactRepo.GetContact(ctx, id)
+	contact, err = s.contactRepo.GetContact(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -254,43 +282,39 @@ func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid
 	return contact, nil
 }
 
+// ListOverdueContacts retrieves contacts whose contact_by date is in the past.
+// Uses the persistent contact_by field rather than computing overdue status on the fly.
 func (s *ContactService) ListOverdueContacts(ctx context.Context) ([]OverdueContact, error) {
-	contacts, err := s.ListContacts(ctx, repository.ListContactsParams{
-		Limit:  1000,
-		Offset: 0,
-	})
+	now := accelerated.GetCurrentTime()
+	today := cadence.Today(now)
+
+	// Query contacts where contact_by < today
+	contacts, err := s.contactRepo.ListOverdueContacts(ctx, today, 1000)
 	if err != nil {
 		return nil, err
 	}
 
-	now := accelerated.GetCurrentTime()
-	var overdueContacts []OverdueContact
+	overdueContacts := make([]OverdueContact, 0, len(contacts))
 
 	for _, contact := range contacts {
-		if contact.Cadence == nil || *contact.Cadence == "" {
-			continue
+		// Attach methods to each contact
+		if err := s.attachMethods(ctx, &contact); err != nil {
+			return nil, err
 		}
 
-		contactCadence, err := cadence.ParseCadence(*contact.Cadence)
-		if err != nil {
-			continue
-		}
+		// contact_by is guaranteed non-nil since the query filters for it
+		daysOverdue := cadence.GetContactByOverdueDays(*contact.ContactBy, now)
+		suggestedAction := suggestedActionForOverdueDays(daysOverdue)
 
-		if cadence.IsOverdueWithConfig(contactCadence, contact.LastContacted, contact.CreatedAt, now) {
-			daysOverdue := cadence.GetOverdueDaysWithConfig(contactCadence, contact.LastContacted, contact.CreatedAt, now)
-			nextDue := cadence.CalculateNextDueDateWithConfig(contactCadence, contact.LastContacted, contact.CreatedAt)
-
-			suggestedAction := suggestedActionForOverdueDays(daysOverdue)
-
-			overdueContacts = append(overdueContacts, OverdueContact{
-				Contact:         contact,
-				DaysOverdue:     daysOverdue,
-				NextDueDate:     nextDue,
-				SuggestedAction: suggestedAction,
-			})
-		}
+		overdueContacts = append(overdueContacts, OverdueContact{
+			Contact:         contact,
+			DaysOverdue:     daysOverdue,
+			NextDueDate:     *contact.ContactBy, // contact_by is the next due date
+			SuggestedAction: suggestedAction,
+		})
 	}
 
+	// Sort by most overdue first (highest days_overdue)
 	sort.Slice(overdueContacts, func(i, j int) bool {
 		return overdueContacts[i].DaysOverdue > overdueContacts[j].DaysOverdue
 	})

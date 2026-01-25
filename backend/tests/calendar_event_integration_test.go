@@ -215,7 +215,7 @@ func TestUpdateContactLastContactedIfLater_OnlyUpdatesWhenLater(t *testing.T) {
 	later := initial.Add(2 * time.Hour)
 	earlier := initial.Add(-2 * time.Hour)
 
-	err = contactRepo.UpdateContactLastContacted(ctx, contact.ID, initial)
+	err = contactRepo.UpdateContactLastContacted(ctx, contact.ID, initial, nil)
 	require.NoError(t, err)
 
 	err = contactRepo.UpdateContactLastContactedIfLater(ctx, contact.ID, earlier)

@@ -42,10 +42,10 @@ func (q *Queries) CountSearchContacts(ctx context.Context, plaintoTsquery string
 
 const CreateContact = `-- name: CreateContact :one
 INSERT INTO contact (
-  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, created_at
+  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, created_at, contact_by
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8
-) RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at
+  $1, $2, $3, $4, $5, $6, $7, $8, $9
+) RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by
 `
 
 type CreateContactParams struct {
@@ -57,6 +57,7 @@ type CreateContactParams struct {
 	LastContacted pgtype.Timestamptz `json:"last_contacted"`
 	ProfilePhoto  pgtype.Text        `json:"profile_photo"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ContactBy     pgtype.Date        `json:"contact_by"`
 }
 
 func (q *Queries) CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error) {
@@ -69,6 +70,7 @@ func (q *Queries) CreateContact(ctx context.Context, arg CreateContactParams) (*
 		arg.LastContacted,
 		arg.ProfilePhoto,
 		arg.CreatedAt,
+		arg.ContactBy,
 	)
 	var i Contact
 	err := row.Scan(
@@ -83,6 +85,7 @@ func (q *Queries) CreateContact(ctx context.Context, arg CreateContactParams) (*
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContactBy,
 	)
 	return &i, err
 }
@@ -236,7 +239,7 @@ func (q *Queries) FindSimilarContactsBatch(ctx context.Context, arg FindSimilarC
 
 const GetContact = `-- name: GetContact :one
 
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact 
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by FROM contact 
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -256,6 +259,7 @@ func (q *Queries) GetContact(ctx context.Context, id pgtype.UUID) (*Contact, err
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContactBy,
 	)
 	return &i, err
 }
@@ -336,7 +340,7 @@ func (q *Queries) ListContactIDsSorted(ctx context.Context, arg ListContactIDsSo
 }
 
 const ListContacts = `-- name: ListContacts :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact 
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by FROM contact 
 WHERE deleted_at IS NULL
 LIMIT $1 OFFSET $2
 `
@@ -367,6 +371,7 @@ func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContactBy,
 		); err != nil {
 			return nil, err
 		}
@@ -379,7 +384,7 @@ func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*
 }
 
 const ListContactsSorted = `-- name: ListContactsSorted :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by FROM contact
 WHERE deleted_at IS NULL
 ORDER BY
   CASE WHEN $1 = 'name' AND $2 = 'asc' THEN full_name END ASC,
@@ -426,6 +431,56 @@ func (q *Queries) ListContactsSorted(ctx context.Context, arg ListContactsSorted
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContactBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListOverdueContacts = `-- name: ListOverdueContacts :many
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by FROM contact
+WHERE deleted_at IS NULL
+  AND contact_by IS NOT NULL
+  AND contact_by < $1::date
+ORDER BY contact_by ASC
+LIMIT $2
+`
+
+type ListOverdueContactsParams struct {
+	Column1 pgtype.Date `json:"column_1"`
+	Limit   int32       `json:"limit"`
+}
+
+// Lists contacts whose contact_by date is before today (overdue).
+// Returns contacts ordered by how overdue they are (most overdue first).
+func (q *Queries) ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error) {
+	rows, err := q.db.Query(ctx, ListOverdueContacts, arg.Column1, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*Contact{}
+	for rows.Next() {
+		var i Contact
+		if err := rows.Scan(
+			&i.ID,
+			&i.FullName,
+			&i.Location,
+			&i.Birthday,
+			&i.HowMet,
+			&i.Cadence,
+			&i.LastContacted,
+			&i.ProfilePhoto,
+			&i.DeletedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ContactBy,
 		); err != nil {
 			return nil, err
 		}
@@ -521,7 +576,7 @@ func (q *Queries) SearchContactIDsSorted(ctx context.Context, arg SearchContactI
 }
 
 const SearchContacts = `-- name: SearchContacts :many
-SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at FROM contact c
+SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.contact_by FROM contact c
 LEFT JOIN (
   SELECT contact_id, string_agg(value, ' ') AS method_values
   FROM contact_method
@@ -563,6 +618,7 @@ func (q *Queries) SearchContacts(ctx context.Context, arg SearchContactsParams) 
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContactBy,
 		); err != nil {
 			return nil, err
 		}
@@ -575,7 +631,7 @@ func (q *Queries) SearchContacts(ctx context.Context, arg SearchContactsParams) 
 }
 
 const SearchContactsSorted = `-- name: SearchContactsSorted :many
-SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at FROM contact c
+SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.contact_by FROM contact c
 LEFT JOIN (
   SELECT contact_id, string_agg(value, ' ') AS method_values
   FROM contact_method
@@ -630,6 +686,7 @@ func (q *Queries) SearchContactsSorted(ctx context.Context, arg SearchContactsSo
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ContactBy,
 		); err != nil {
 			return nil, err
 		}
@@ -661,9 +718,10 @@ UPDATE contact SET
   how_met = $5,
   cadence = $6,
   profile_photo = $7,
+  contact_by = $8,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at
+RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by
 `
 
 type UpdateContactParams struct {
@@ -674,6 +732,7 @@ type UpdateContactParams struct {
 	HowMet       pgtype.Text `json:"how_met"`
 	Cadence      pgtype.Text `json:"cadence"`
 	ProfilePhoto pgtype.Text `json:"profile_photo"`
+	ContactBy    pgtype.Date `json:"contact_by"`
 }
 
 func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error) {
@@ -685,6 +744,7 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 		arg.HowMet,
 		arg.Cadence,
 		arg.ProfilePhoto,
+		arg.ContactBy,
 	)
 	var i Contact
 	err := row.Scan(
@@ -699,6 +759,7 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ContactBy,
 	)
 	return &i, err
 }
@@ -706,6 +767,7 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 const UpdateContactLastContacted = `-- name: UpdateContactLastContacted :exec
 UPDATE contact SET
   last_contacted = $2,
+  contact_by = $3,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
 `
@@ -713,16 +775,31 @@ WHERE id = $1 AND deleted_at IS NULL
 type UpdateContactLastContactedParams struct {
 	ID            pgtype.UUID        `json:"id"`
 	LastContacted pgtype.Timestamptz `json:"last_contacted"`
+	ContactBy     pgtype.Date        `json:"contact_by"`
 }
 
 func (q *Queries) UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error {
-	_, err := q.db.Exec(ctx, UpdateContactLastContacted, arg.ID, arg.LastContacted)
+	_, err := q.db.Exec(ctx, UpdateContactLastContacted, arg.ID, arg.LastContacted, arg.ContactBy)
 	return err
 }
 
 const UpdateContactLastContactedIfLater = `-- name: UpdateContactLastContactedIfLater :exec
 UPDATE contact SET
   last_contacted = GREATEST(COALESCE(last_contacted, '1970-01-01'::timestamptz), $2),
+  contact_by = CASE
+    WHEN $2 > COALESCE(last_contacted, '1970-01-01'::timestamptz) AND cadence IS NOT NULL AND cadence != '' THEN
+      ($2::date + CASE cadence
+        WHEN 'weekly' THEN 7
+        WHEN 'biweekly' THEN 14
+        WHEN 'monthly' THEN 30
+        WHEN 'quarterly' THEN 90
+        WHEN 'biannual' THEN 180
+        WHEN 'annual' THEN 365
+        ELSE 0
+      END)
+    WHEN $2 > COALESCE(last_contacted, '1970-01-01'::timestamptz) THEN NULL
+    ELSE contact_by
+  END,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
 `
@@ -732,6 +809,9 @@ type UpdateContactLastContactedIfLaterParams struct {
 	LastContacted pgtype.Timestamptz `json:"last_contacted"`
 }
 
+// Updates last_contacted and contact_by only if the new date is later.
+// contact_by is recalculated from the new last_contacted date using the contact's existing cadence.
+// Cadence day mappings: weekly=7, biweekly=14, monthly=30, quarterly=90, biannual=180, annual=365
 func (q *Queries) UpdateContactLastContactedIfLater(ctx context.Context, arg UpdateContactLastContactedIfLaterParams) error {
 	_, err := q.db.Exec(ctx, UpdateContactLastContactedIfLater, arg.ID, arg.LastContacted)
 	return err

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/logger"
 
@@ -34,6 +35,7 @@ type Contact struct {
 	HowMet        *string         `json:"how_met,omitempty"`
 	Cadence       *string         `json:"cadence,omitempty"`
 	LastContacted *time.Time      `json:"last_contacted,omitempty"`
+	ContactBy     *time.Time      `json:"contact_by,omitempty"`
 	ProfilePhoto  *string         `json:"profile_photo,omitempty"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
@@ -57,6 +59,7 @@ type UpdateContactRequest struct {
 	Birthday     *time.Time `json:"birthday,omitempty"`
 	HowMet       *string    `json:"how_met,omitempty"`
 	Cadence      *string    `json:"cadence,omitempty"`
+	ContactBy    *time.Time `json:"contact_by,omitempty"`
 	ProfilePhoto *string    `json:"profile_photo,omitempty"`
 }
 
@@ -116,6 +119,10 @@ func convertDbContact(dbContact *db.Contact) Contact {
 	}
 	if dbContact.ProfilePhoto.Valid {
 		contact.ProfilePhoto = &dbContact.ProfilePhoto.String
+	}
+	if dbContact.ContactBy.Valid {
+		contactBy := dbContact.ContactBy.Time
+		contact.ContactBy = &contactBy
 	}
 
 	return contact
@@ -206,6 +213,20 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 	// Use accelerated time for created_at to ensure consistency with time acceleration
 	createdAt := accelerated.GetCurrentTime()
 
+	// Calculate contact_by if cadence is set
+	var contactBy pgtype.Date
+	if req.Cadence != nil && *req.Cadence != "" {
+		if cadenceType, err := cadence.ParseCadence(*req.Cadence); err == nil {
+			// Use created_at as base since last_contacted is typically nil for new contacts
+			base := createdAt
+			if req.LastContacted != nil {
+				base = *req.LastContacted
+			}
+			contactByTime := cadence.CalculateContactBy(base, cadenceType)
+			contactBy = pgtype.Date{Time: contactByTime, Valid: true}
+		}
+	}
+
 	dbContact, err := r.queries.CreateContact(ctx, db.CreateContactParams{
 		FullName:      req.FullName,
 		Location:      stringToPgText(req.Location),
@@ -215,6 +236,7 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 		LastContacted: timeToPgTimestamptz(req.LastContacted),
 		ProfilePhoto:  stringToPgText(req.ProfilePhoto),
 		CreatedAt:     pgtype.Timestamptz{Time: createdAt, Valid: true},
+		ContactBy:     contactBy,
 	})
 	if err != nil {
 		return nil, err
@@ -234,6 +256,7 @@ func (r *ContactRepository) UpdateContact(ctx context.Context, id uuid.UUID, req
 		HowMet:       stringToPgText(req.HowMet),
 		Cadence:      stringToPgText(req.Cadence),
 		ProfilePhoto: stringToPgText(req.ProfilePhoto),
+		ContactBy:    timeToPgDate(req.ContactBy),
 	})
 	if err != nil {
 		return nil, err
@@ -243,16 +266,19 @@ func (r *ContactRepository) UpdateContact(ctx context.Context, id uuid.UUID, req
 	return &contact, nil
 }
 
-// UpdateContactLastContacted updates the last contacted date for a contact
-func (r *ContactRepository) UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted time.Time) error {
+// UpdateContactLastContacted updates the last contacted date and contact_by for a contact.
+// contactBy should be the newly calculated next due date based on lastContacted + cadence.
+func (r *ContactRepository) UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted time.Time, contactBy *time.Time) error {
 	return r.queries.UpdateContactLastContacted(ctx, db.UpdateContactLastContactedParams{
 		ID:            uuidToPgUUID(id),
 		LastContacted: pgtype.Timestamptz{Time: lastContacted, Valid: true},
+		ContactBy:     timeToPgDate(contactBy),
 	})
 }
 
 // UpdateContactLastContactedIfLater updates last_contacted to the later of the current value or the provided value.
 // This prevents last_contacted from moving backward when events are processed out of order.
+// The contact_by date is automatically recalculated in SQL using the contact's existing cadence.
 func (r *ContactRepository) UpdateContactLastContactedIfLater(ctx context.Context, id uuid.UUID, lastContacted time.Time) error {
 	return r.queries.UpdateContactLastContactedIfLater(ctx, db.UpdateContactLastContactedIfLaterParams{
 		ID:            uuidToPgUUID(id),
@@ -488,4 +514,23 @@ func (r *ContactRepository) FindSimilarContactsBatch(
 	}
 
 	return results, nil
+}
+
+// ListOverdueContacts retrieves contacts whose contact_by date is before today.
+// The today parameter should be the current date in server timezone (use cadence.Today()).
+func (r *ContactRepository) ListOverdueContacts(ctx context.Context, today time.Time, limit int32) ([]Contact, error) {
+	dbContacts, err := r.queries.ListOverdueContacts(ctx, db.ListOverdueContactsParams{
+		Column1: pgtype.Date{Time: today, Valid: true},
+		Limit:   limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	contacts := make([]Contact, len(dbContacts))
+	for i, dbContact := range dbContacts {
+		contacts[i] = convertDbContact(dbContact)
+	}
+
+	return contacts, nil
 }

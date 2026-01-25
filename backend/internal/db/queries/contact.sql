@@ -60,9 +60,9 @@ LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: CreateContact :one
 INSERT INTO contact (
-  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, created_at
+  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, created_at, contact_by
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8
+  $1, $2, $3, $4, $5, $6, $7, $8, $9
 ) RETURNING *;
 
 -- name: UpdateContact :one
@@ -73,6 +73,7 @@ UPDATE contact SET
   how_met = $5,
   cadence = $6,
   profile_photo = $7,
+  contact_by = $8,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
@@ -80,12 +81,30 @@ RETURNING *;
 -- name: UpdateContactLastContacted :exec
 UPDATE contact SET
   last_contacted = $2,
+  contact_by = $3,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: UpdateContactLastContactedIfLater :exec
+-- Updates last_contacted and contact_by only if the new date is later.
+-- contact_by is recalculated from the new last_contacted date using the contact's existing cadence.
+-- Cadence day mappings: weekly=7, biweekly=14, monthly=30, quarterly=90, biannual=180, annual=365
 UPDATE contact SET
   last_contacted = GREATEST(COALESCE(last_contacted, '1970-01-01'::timestamptz), $2),
+  contact_by = CASE
+    WHEN $2 > COALESCE(last_contacted, '1970-01-01'::timestamptz) AND cadence IS NOT NULL AND cadence != '' THEN
+      ($2::date + CASE cadence
+        WHEN 'weekly' THEN 7
+        WHEN 'biweekly' THEN 14
+        WHEN 'monthly' THEN 30
+        WHEN 'quarterly' THEN 90
+        WHEN 'biannual' THEN 180
+        WHEN 'annual' THEN 365
+        ELSE 0
+      END)
+    WHEN $2 > COALESCE(last_contacted, '1970-01-01'::timestamptz) THEN NULL
+    ELSE contact_by
+  END,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL;
 
@@ -223,3 +242,13 @@ CROSS JOIN LATERAL (
 LEFT JOIN contact_method cm ON c.id = cm.contact_id
 GROUP BY cn.candidate_id, cn.candidate_name, c.id, c.full_name
 ORDER BY cn.candidate_id, similarity(c.full_name, cn.candidate_name) DESC;
+
+-- name: ListOverdueContacts :many
+-- Lists contacts whose contact_by date is before today (overdue).
+-- Returns contacts ordered by how overdue they are (most overdue first).
+SELECT * FROM contact
+WHERE deleted_at IS NULL
+  AND contact_by IS NOT NULL
+  AND contact_by < $1::date
+ORDER BY contact_by ASC
+LIMIT $2;
