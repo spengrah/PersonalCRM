@@ -63,20 +63,12 @@ See `.ai/rules/code-review.md` for details
 ## Layered Architecture
 
 ```
-HTTP Request
-    ↓
-Handler (HTTP concerns, validation, status codes)
-    ↓
-Service (business logic, orchestration)
-    ↓
-Repository (data access, type conversion)
-    ↓
-sqlc-generated DB layer (type-safe SQL)
-    ↓
-PostgreSQL
+Handler → Service → Repository → sqlc → PostgreSQL
 ```
 
 **Key Rule:** Never skip layers. Handlers should not call DB directly.
+
+See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full sequence.
 
 ## Common Gotchas
 
