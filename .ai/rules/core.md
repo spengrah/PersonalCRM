@@ -111,6 +111,10 @@ PostgreSQL
 | OAuth callback routes inside auth middleware | Register callback routes BEFORE `v1.Use(auth.APIKeyMiddleware)` - external providers can't include API keys |
 | String concat for OAuth redirect params | Use `url.Values{}.Encode()` for ALL redirect query params - prevents injection vulnerabilities |
 | Adding settings hooks without test-map entry | Add new hooks (e.g., use-todoist-accounts.ts) to `frontend/tests/e2e/test-map.json` with `@area:settings` |
+| Accessing `cfg.Frontend.URL` | Use `cfg.CORS.FrontendURL` - there is no `Frontend` config section |
+| Redefining helper functions in new repository files | Use existing helpers from `repository/conversions.go` (uuidToPgUUID, stringToPgText, timeToPgTimestamptz) |
+| Using embedded field selectors like `result.EmbeddedType.Field` | Use `result.Field` - Go promotes embedded fields and staticcheck QF1008 prefers the shorter form |
+| Capitalizing Go error messages | Use lowercase: `fmt.Errorf("todoist settings not configured")` per ST1005 |
 
 ## Anti-Patterns
 

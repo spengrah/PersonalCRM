@@ -2,25 +2,15 @@
 
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import {
-  Mail,
-  Plus,
-  Trash2,
-  CheckCircle,
-  AlertCircle,
-  Info,
-  RefreshCw,
-  RefreshCcw,
-} from 'lucide-react'
+import { Mail, Plus, Trash2, CheckCircle, AlertCircle, Info, RefreshCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { SyncBadge, PermissionBadge } from '@/components/settings/sync-badge'
 import { useGoogleAccounts, useRevokeGoogleAccount } from '@/hooks/use-google-accounts'
 import {
   useSyncStates,
   getSyncStateForAccount,
-  formatSyncTime,
   accountNeedsReconnection,
 } from '@/hooks/use-sync-states'
-import type { SyncState } from '@/types/sync'
 import { useTriggerSync } from '@/hooks/use-imports'
 import { startGoogleOAuthFlow, GoogleAccount } from '@/lib/oauth-api'
 
@@ -30,39 +20,6 @@ function formatDate(dateString: string): string {
     month: 'short',
     day: 'numeric',
   })
-}
-
-// Compact sync badge component (Option B style)
-function SyncBadge({
-  label,
-  syncState,
-  onSync,
-  loading,
-}: {
-  label: string
-  syncState?: SyncState
-  onSync: () => void
-  loading: boolean
-}) {
-  const lastSyncText = formatSyncTime(syncState?.last_successful_sync_at ?? null)
-  const isSyncing = syncState?.status === 'syncing'
-  const hasError = syncState?.status === 'error'
-
-  return (
-    <div className="inline-flex items-center rounded-md text-xs font-medium bg-white border border-gray-200 overflow-hidden">
-      <span className="px-2.5 py-1 text-gray-700 border-r border-gray-200">{label}</span>
-      <span className={`px-2 py-1 bg-gray-50 ${hasError ? 'text-red-600' : 'text-gray-500'}`}>
-        {isSyncing ? 'Syncing...' : hasError ? 'Error' : lastSyncText}
-      </span>
-      <button
-        onClick={onSync}
-        disabled={loading || isSyncing}
-        className="px-2 py-1 text-blue-600 hover:bg-blue-50 border-l border-gray-200 disabled:opacity-50"
-      >
-        <RefreshCw className={`w-3 h-3 ${loading || isSyncing ? 'animate-spin' : ''}`} />
-      </button>
-    </div>
-  )
 }
 
 export function GoogleAccountsSection() {
@@ -329,9 +286,7 @@ export function GoogleAccountsSection() {
                 <div className="flex flex-wrap gap-2">
                   {/* Gmail - simple badge (no sync) */}
                   {account.scopes?.includes('https://www.googleapis.com/auth/gmail.readonly') && (
-                    <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-white border border-gray-200 text-gray-700">
-                      Gmail (read)
-                    </span>
+                    <PermissionBadge label="Gmail (read)" />
                   )}
                   {/* Calendar - sync badge */}
                   {account.scopes?.includes(

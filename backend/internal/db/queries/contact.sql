@@ -261,3 +261,19 @@ WHERE deleted_at IS NULL
   AND contact_by IS NOT NULL
 ORDER BY contact_by ASC
 LIMIT $1;
+
+-- name: UpdateContactBy :exec
+-- Updates just the contact_by field (for Todoist deadline sync).
+UPDATE contact SET
+  contact_by = $2,
+  updated_at = NOW()
+WHERE id = $1 AND deleted_at IS NULL;
+
+-- name: ListContactsWithCadence :many
+-- Lists contacts that have a cadence set (used for Todoist sync reconciliation).
+SELECT * FROM contact
+WHERE deleted_at IS NULL
+  AND cadence IS NOT NULL
+  AND cadence != ''
+ORDER BY full_name ASC
+LIMIT $1;

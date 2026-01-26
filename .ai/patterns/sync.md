@@ -58,3 +58,27 @@ function getAggregateSyncStatus(states: SyncState[]): 'synced' | 'syncing' | 'er
 ```
 
 This ensures active operations are visible first, then errors, then normal state.
+
+## Adding Sync Status for a New Provider
+
+Displaying sync status in settings requires two pieces:
+
+1. **Backend:** A `SyncProvider` registered with `providerRegistry` using a consistent source name (e.g., `todoist`)
+2. **Frontend:** A `SyncBadge` component that fetches sync state and triggers syncs via the API
+
+The source name must match exactly between the UI code (`useSyncStates`, `triggerSync`) and the backend provider registration. If the UI is added before the provider exists, disable the sync button to avoid "provider not found" errors.
+
+```typescript
+// Frontend: SyncBadge for a provider
+<SyncBadge
+  label="Tasks"
+  syncState={getSyncStateForAccount(syncStates, 'todoist', accountId)}
+  onSync={() => handleSync('todoist', accountId)}
+  loading={isSyncing}
+/>
+```
+
+```go
+// Backend: Register the provider
+registry.Register(todoistProvider) // provider.Config().Name must be "todoist"
+```

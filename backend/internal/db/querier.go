@@ -17,6 +17,7 @@ type Querier interface {
 	CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error)
 	CountContacts(ctx context.Context) (int64, error)
 	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	// Count events for a specific contact
@@ -39,6 +40,7 @@ type Querier interface {
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
 	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
+	CreateContactTask(ctx context.Context, arg CreateContactTaskParams) (*ContactTask, error)
 	CreateEnrichment(ctx context.Context, arg CreateEnrichmentParams) (*ContactEnrichment, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
 	CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error)
@@ -56,6 +58,11 @@ type Querier interface {
 	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
 	// Delete a note for a contact by category
 	DeleteContactNoteByCategory(ctx context.Context, arg DeleteContactNoteByCategoryParams) error
+	DeleteContactTask(ctx context.Context, id pgtype.UUID) error
+	// Delete task link for a contact+provider+kind (e.g., when cadence is disabled)
+	DeleteContactTaskByContact(ctx context.Context, arg DeleteContactTaskByContactParams) error
+	// Delete all tasks for a provider (e.g., when disconnecting Todoist)
+	DeleteContactTasksByProvider(ctx context.Context, provider string) error
 	// Test data management queries
 	// These queries are used by the test API endpoints to seed and cleanup test data
 	DeleteContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
@@ -114,6 +121,14 @@ type Querier interface {
 	// Get a single note for a contact by category (e.g., 'notepad')
 	GetContactNoteByCategory(ctx context.Context, arg GetContactNoteByCategoryParams) (*Note, error)
 	GetContactTags(ctx context.Context, contactID pgtype.UUID) ([]*Tag, error)
+	// Contact Task Queries (for Todoist cadence sync)
+	GetContactTask(ctx context.Context, id pgtype.UUID) (*ContactTask, error)
+	// Get the task for a specific contact+provider+kind combination
+	GetContactTaskByContact(ctx context.Context, arg GetContactTaskByContactParams) (*ContactTask, error)
+	// Look up a task by its external provider ID
+	GetContactTaskByExternalID(ctx context.Context, arg GetContactTaskByExternalIDParams) (*ContactTask, error)
+	// Find a task by its pending temp ID in metadata (for mapping temp IDs to real Todoist IDs)
+	GetContactTaskByPendingTempID(ctx context.Context, arg GetContactTaskByPendingTempIDParams) (*ContactTask, error)
 	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
 	// Contact Enrichment queries
 	GetEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactEnrichment, error)
@@ -156,8 +171,14 @@ type Querier interface {
 	// Contact method queries
 	ListContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactMethod, error)
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
+	// List all tasks for a contact
+	ListContactTasksByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
+	// List all tasks for a provider (optionally filtered by state)
+	ListContactTasksByProvider(ctx context.Context, arg ListContactTasksByProviderParams) ([]*ContactTask, error)
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error)
 	ListContactsSorted(ctx context.Context, arg ListContactsSortedParams) ([]*Contact, error)
+	// Lists contacts that have a cadence set (used for Todoist sync reconciliation).
+	ListContactsWithCadence(ctx context.Context, limit int32) ([]*Contact, error)
 	// Lists contacts that have a contact_by date set (used for testing mode filtering).
 	// Returns contacts ordered by contact_by (soonest first).
 	ListContactsWithContactBy(ctx context.Context, limit int32) ([]*Contact, error)
@@ -172,6 +193,8 @@ type Querier interface {
 	ListExternalContactsForCRMContact(ctx context.Context, crmContactID pgtype.UUID) ([]*ExternalContact, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
 	ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error)
+	// List all managed tasks for a provider (for reconciliation)
+	ListManagedContactTasks(ctx context.Context, provider string) ([]*ListManagedContactTasksRow, error)
 	// List non-sensitive credential info for all credentials of a provider
 	ListOAuthCredentialStatuses(ctx context.Context, provider string) ([]*ListOAuthCredentialStatusesRow, error)
 	// List all OAuth credentials for a provider
@@ -222,12 +245,18 @@ type Querier interface {
 	TransferNotes(ctx context.Context, arg TransferNotesParams) error
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
+	// Updates just the contact_by field (for Todoist deadline sync).
+	UpdateContactBy(ctx context.Context, arg UpdateContactByParams) error
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
 	// Updates last_contacted and contact_by only if the new date is later.
 	// contact_by is recalculated from the new last_contacted date using the contact's existing cadence.
 	// Cadence day mappings: weekly=7, biweekly=14, monthly=30, quarterly=90, biannual=180, annual=365
 	UpdateContactLastContactedIfLater(ctx context.Context, arg UpdateContactLastContactedIfLaterParams) error
 	UpdateContactMethodValue(ctx context.Context, arg UpdateContactMethodValueParams) (*ContactMethod, error)
+	// Update the external task ID (when creating a new Todoist task)
+	UpdateContactTaskExternalID(ctx context.Context, arg UpdateContactTaskExternalIDParams) (*ContactTask, error)
+	UpdateContactTaskMetadata(ctx context.Context, arg UpdateContactTaskMetadataParams) (*ContactTask, error)
+	UpdateContactTaskState(ctx context.Context, arg UpdateContactTaskStateParams) (*ContactTask, error)
 	UpdateExternalContactDuplicate(ctx context.Context, arg UpdateExternalContactDuplicateParams) error
 	UpdateExternalContactMatch(ctx context.Context, arg UpdateExternalContactMatchParams) (*ExternalContact, error)
 	UpdateIdentityMessageCount(ctx context.Context, arg UpdateIdentityMessageCountParams) (*ExternalIdentity, error)
@@ -252,6 +281,8 @@ type Querier interface {
 	// Insert or update a note for a contact by category (atomic operation for concurrent safety)
 	// Note: This uses the unique index on (contact_id) WHERE category = 'notepad'
 	UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error)
+	// Upsert a contact task (update external_task_id if exists)
+	UpsertContactTask(ctx context.Context, arg UpsertContactTaskParams) (*ContactTask, error)
 	UpsertExternalContact(ctx context.Context, arg UpsertExternalContactParams) (*ExternalContact, error)
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
 	// Insert or update an OAuth credential

@@ -443,6 +443,49 @@ func (q *Queries) ListContactsSorted(ctx context.Context, arg ListContactsSorted
 	return items, nil
 }
 
+const ListContactsWithCadence = `-- name: ListContactsWithCadence :many
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by FROM contact
+WHERE deleted_at IS NULL
+  AND cadence IS NOT NULL
+  AND cadence != ''
+ORDER BY full_name ASC
+LIMIT $1
+`
+
+// Lists contacts that have a cadence set (used for Todoist sync reconciliation).
+func (q *Queries) ListContactsWithCadence(ctx context.Context, limit int32) ([]*Contact, error) {
+	rows, err := q.db.Query(ctx, ListContactsWithCadence, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*Contact{}
+	for rows.Next() {
+		var i Contact
+		if err := rows.Scan(
+			&i.ID,
+			&i.FullName,
+			&i.Location,
+			&i.Birthday,
+			&i.HowMet,
+			&i.Cadence,
+			&i.LastContacted,
+			&i.ProfilePhoto,
+			&i.DeletedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ContactBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListContactsWithContactBy = `-- name: ListContactsWithContactBy :many
 SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by FROM contact
 WHERE deleted_at IS NULL
@@ -805,6 +848,24 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 		&i.ContactBy,
 	)
 	return &i, err
+}
+
+const UpdateContactBy = `-- name: UpdateContactBy :exec
+UPDATE contact SET
+  contact_by = $2,
+  updated_at = NOW()
+WHERE id = $1 AND deleted_at IS NULL
+`
+
+type UpdateContactByParams struct {
+	ID        pgtype.UUID `json:"id"`
+	ContactBy pgtype.Date `json:"contact_by"`
+}
+
+// Updates just the contact_by field (for Todoist deadline sync).
+func (q *Queries) UpdateContactBy(ctx context.Context, arg UpdateContactByParams) error {
+	_, err := q.db.Exec(ctx, UpdateContactBy, arg.ID, arg.ContactBy)
+	return err
 }
 
 const UpdateContactLastContacted = `-- name: UpdateContactLastContacted :exec

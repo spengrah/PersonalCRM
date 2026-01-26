@@ -286,6 +286,14 @@ func (r *ContactRepository) UpdateContactLastContactedIfLater(ctx context.Contex
 	})
 }
 
+// UpdateContactBy updates just the contact_by field (used by Todoist sync for deadline changes)
+func (r *ContactRepository) UpdateContactBy(ctx context.Context, id uuid.UUID, contactBy time.Time) error {
+	return r.queries.UpdateContactBy(ctx, db.UpdateContactByParams{
+		ID:        uuidToPgUUID(id),
+		ContactBy: timeToPgDate(&contactBy),
+	})
+}
+
 // SoftDeleteContact soft deletes a contact
 func (r *ContactRepository) SoftDeleteContact(ctx context.Context, id uuid.UUID) error {
 	return r.queries.SoftDeleteContact(ctx, uuidToPgUUID(id))

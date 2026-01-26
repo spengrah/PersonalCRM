@@ -92,6 +92,18 @@ type ContactTag struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type ContactTask struct {
+	ID             pgtype.UUID        `json:"id"`
+	ContactID      pgtype.UUID        `json:"contact_id"`
+	Provider       string             `json:"provider"`
+	Kind           string             `json:"kind"`
+	ExternalTaskID string             `json:"external_task_id"`
+	State          string             `json:"state"`
+	Metadata       []byte             `json:"metadata"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ExternalContact struct {
 	ID            pgtype.UUID        `json:"id"`
 	Source        string             `json:"source"`
