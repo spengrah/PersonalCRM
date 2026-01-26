@@ -308,8 +308,11 @@ func (p *CadenceSyncProvider) processItem(
 	if item.Deadline != nil && contact.ContactBy != nil {
 		todoistDeadline, err := time.Parse("2006-01-02", item.Deadline.Date)
 		if err == nil {
-			crmContactBy := cadence.Today(*contact.ContactBy)
-			if !todoistDeadline.Equal(crmContactBy) {
+			// Compare dates using UTC year/month/day to avoid timezone issues
+			// time.Parse returns UTC midnight, PostgreSQL DATE loads as UTC
+			tY, tM, tD := todoistDeadline.UTC().Date()
+			cY, cM, cD := contact.ContactBy.UTC().Date()
+			if tY != cY || tM != cM || tD != cD {
 				// Update CRM contact_by to match Todoist
 				if err := p.contactRepo.UpdateContactBy(ctx, contact.ID, todoistDeadline); err != nil {
 					logger.Warn().Err(err).Msg("failed to update contact_by from Todoist deadline")

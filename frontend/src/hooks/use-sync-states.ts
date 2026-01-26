@@ -7,12 +7,21 @@ import type { SyncState } from '@/types/sync'
 export { syncKeys }
 
 // Get all sync states
+// Note: Sync trigger returns 202 immediately while sync runs in background.
+// Polling at 3s while syncing provides reasonable UX for typical syncs (10-60s).
+// Error states may have up to 3s delay before appearing in UI, which is acceptable
+// since sync errors are not time-critical and users can retry.
 export function useSyncStates() {
   return useQuery({
     queryKey: syncKeys.states(),
     queryFn: () => syncApi.getSyncStates(),
-    staleTime: 1000 * 30, // 30 seconds
-    refetchInterval: 1000 * 60, // Refetch every minute
+    staleTime: 1000 * 5, // 5 seconds
+    refetchInterval: query => {
+      // Poll faster (3s) when any sync is in progress, slower (30s) when idle
+      const states = query.state.data as SyncState[] | undefined
+      const hasSyncing = states?.some(s => s.status === 'syncing')
+      return hasSyncing ? 1000 * 3 : 1000 * 30
+    },
   })
 }
 

@@ -46,3 +46,99 @@ detail: |
   When installing Claude Code plugins at project scope via /plugin command, the plugin files are cached at ~/.claude/plugins/cache/[org]/[plugin]/[hash]/ (global location), not in the project directory. The project's .claude/settings.json gets an enabledPlugins entry to reference it. This means project-scoped plugins are not truly isolated - they share the same cached plugin code. For true project-specific MCP server configuration, use .mcp.json in project root instead of the plugin marketplace.
 actionable: false
 
+---
+timestamp: "2026-01-26T15:59:06.704897"
+type: gotcha
+summary: All sync providers use fetch_all strategy despite docs mentioning contact_driven
+detail: |
+  Documentation mentioned 'contact_driven' strategy for some providers (gcal, todoist), but code inspection revealed ALL providers (gcontacts, gcal, todoist) use `SyncStrategyFetchAll`. The 'contact_driven' strategy exists in the codebase but isn't actually used by any current provider. When documenting or implementing sync features, verify actual strategy usage in provider code rather than assuming from strategy names.
+actionable: true
+
+---
+timestamp: "2026-01-26T15:59:06.704897"
+type: distinction
+summary: Todoist sync uses direct link table (contact_task), NOT identity matching
+detail: |
+  Critical distinction in sync data flow: gcontacts and gcal use identity matching (MatchOrCreate) to link external entities to contacts, but Todoist uses a pre-existing link table (contact_task) with external_task_id lookups. When working on sync features, understand which pattern applies: identity matching for discovery/unknown entities vs direct link lookup for explicitly linked entities. This affects how you handle unmatched entities and what database tables are involved.
+actionable: true
+
+---
+timestamp: "2026-01-26T15:59:06.704897"
+type: architecture
+summary: "Sync diagram placement: implementation details belong in pattern docs, not architecture overview"
+detail: |
+  During session, sync data flow diagram was initially placed in architecture.md (high-level overview), but user correctly suggested moving it to .ai/patterns/sync.md since it shows implementation-specific details. Architecture.md should contain high-level system overview diagrams, while detailed flow diagrams belong in their respective pattern/guide files (.ai/patterns/sync.md for sync details). Keep architecture.md as the entry point with links to detailed diagrams elsewhere.
+actionable: true
+
+---
+timestamp: "2026-01-26T15:59:06.704897"
+type: documentation_gap
+summary: Mermaid diagrams improve understanding but create duplication with text-based diagrams
+detail: |
+  Core.md had text-based layered architecture diagram that duplicated the Mermaid sequence diagram added to architecture.md. When adding visual diagrams, search for existing text-based representations and replace with links to avoid maintaining duplicate content. This was caught during the session and fixed by replacing core.md's text diagram with a link to the visual diagram in architecture.md.
+actionable: true
+
+---
+timestamp: "2026-01-26T15:59:06.704897"
+type: rule
+summary: Verify actual implementation when documenting architecture, don't rely on variable names
+detail: |
+  Initial sync diagram incorrectly showed different strategies for different providers based on documentation text and strategy enum names. User questioned 'we do discovery sync for gcal as well, don't we?' which prompted code inspection revealing the truth: all providers use fetch_all. New rule: when creating architecture diagrams or documentation, grep for actual usage patterns in code (e.g., `grep -rn 'SyncStrategy' backend/internal/`) rather than inferring from enum definitions or existing docs which may be outdated.
+actionable: true
+
+---
+timestamp: "2026-01-26T15:59:06.704897"
+type: gotcha
+summary: Cross-file documentation links prevent duplication and maintain single source of truth
+detail: |
+  Session revealed opportunity to use markdown links instead of duplicating content across multiple doc files. When multiple docs reference the same architecture concept (like layered architecture or sync flow), maintain ONE detailed diagram/explanation and link to it from other docs using anchor links. This was applied by: (1) replacing core.md text diagram with link to architecture.md Mermaid diagram, (2) adding links from testing.md to request flow diagram, (3) planning to add link from sync.md to sync data flow diagram. Pattern to follow: detail in one place, links everywhere else.
+actionable: true
+
+---
+timestamp: "2026-01-26T16:45:50.571463"
+type: gotcha
+summary: Todoist Sync API temp ID mappings lost if reconciliation command execution times out
+detail: |
+  When Todoist tasks are created via reconciliation commands with temp UUIDs, the Sync API returns a temp_id_mapping in the response. If the HTTP request times out before processing this mapping, the contact_task records retain temp UUIDs as external_task_id instead of real Todoist task IDs (numeric strings). This breaks all subsequent syncs because items from Todoist won't match the UUID-format IDs in the database. The sync will process 0 items indefinitely. Solution: Run syncs with background goroutines and adequate timeout (5+ minutes), or implement temp ID mapping persistence separately from the main sync response.
+actionable: true
+
+---
+timestamp: "2026-01-26T16:45:50.571463"
+type: architecture
+summary: Background goroutines in HTTP handlers require explicit variable capture for loop/param variables
+detail: |
+  When spawning background goroutines in Gin handlers that reference request parameters or variables, those variables must be explicitly captured to avoid race conditions. The `source := c.Param('source')` variable used directly in a goroutine can be modified by subsequent requests. Pattern: `srcName := source // explicit capture for goroutine` then use `srcName` inside the goroutine. This applies to all request-scoped variables including parsed request bodies.
+actionable: true
+
+---
+timestamp: "2026-01-26T16:45:50.571463"
+type: gotcha
+summary: React Query dynamic refetchInterval callback receives query object, not just data
+detail: |
+  When using a function for refetchInterval in useQuery, the callback receives the full query object, not the data directly. Access data via `query.state.data`. Example: `refetchInterval: query => { const states = query.state.data as SyncState[]; return states?.some(s => s.status === 'syncing') ? 3000 : 30000 }`. This allows polling frequency to adapt based on current query state.
+actionable: true
+
+---
+timestamp: "2026-01-26T16:45:50.571463"
+type: gotcha
+summary: PostgreSQL DATE columns and timezone conversion can shift dates by one day
+detail: |
+  When comparing dates from Todoist (parsed as UTC midnight via time.Parse('2006-01-02', dateStr)) with PostgreSQL DATE values loaded as time.Time, applying timezone conversions like cadence.Today() can shift the date backward by one day. If contact_by is stored as 2026-01-28 (DATE in DB, loaded as UTC midnight) and converted to PST via DateOnly(), it becomes 2026-01-27 PST. Solution: Compare date components directly in UTC using year/month/day extraction: `tY, tM, tD := todoistDeadline.UTC().Date()` and `cY, cM, cD := contactBy.UTC().Date()`, then compare components.
+actionable: true
+
+---
+timestamp: "2026-01-26T16:45:50.571463"
+type: architecture
+summary: Handler testability requires interface extraction for concrete service dependencies
+detail: |
+  Handlers in this codebase use concrete service types (e.g., *service.SyncService) which makes unit testing difficult without full database setup. To enable handler unit tests with mocks, define service interfaces in the handlers package (e.g., type SyncService interface { ... }) and use the interface type in the handler struct instead of the concrete type. The concrete service implementation automatically satisfies the interface. This allows tests to provide mock implementations without changing production code structure.
+actionable: true
+
+---
+timestamp: "2026-01-26T16:45:50.571463"
+type: gotcha
+summary: Gin ShouldBindJSON fails with 'invalid request' not 'EOF' for requests with no body and no Content-Type
+detail: |
+  When testing Gin handlers that use c.ShouldBindJSON(), sending http.NewRequest with nil body causes ShouldBindJSON to return error 'invalid request' rather than 'EOF'. The handler check `err.Error() != 'EOF'` won't catch this. Solution: In tests, always send proper Content-Type header and empty JSON body: `req.Header.Set('Content-Type', 'application/json')` with `strings.NewReader('{}')` as body, even for requests with no actual payload.
+actionable: true
+
