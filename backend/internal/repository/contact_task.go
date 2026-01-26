@@ -390,5 +390,22 @@ func (r *ContactTaskRepository) CountContactTasksByProvider(ctx context.Context,
 	})
 }
 
+// GetContactTaskByPendingTempID finds a contact task by its pending temp ID in metadata
+func (r *ContactTaskRepository) GetContactTaskByPendingTempID(ctx context.Context, provider, tempID string) (*ContactTask, error) {
+	dbTask, err := r.queries.GetContactTaskByPendingTempID(ctx, db.GetContactTaskByPendingTempIDParams{
+		Provider: provider,
+		TempID:   tempID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
 // Note: Helper functions (stringToPgText, uuidToPgUUID, timeToPgTimestamptz)
 // are defined in conversions.go

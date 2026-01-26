@@ -198,6 +198,34 @@ func (q *Queries) GetContactTaskByExternalID(ctx context.Context, arg GetContact
 	return &i, err
 }
 
+const GetContactTaskByPendingTempID = `-- name: GetContactTaskByPendingTempID :one
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+WHERE provider = $1 AND metadata->>'pending_temp_id' = $2::text
+`
+
+type GetContactTaskByPendingTempIDParams struct {
+	Provider string `json:"provider"`
+	TempID   string `json:"temp_id"`
+}
+
+// Find a task by its pending temp ID in metadata (for mapping temp IDs to real Todoist IDs)
+func (q *Queries) GetContactTaskByPendingTempID(ctx context.Context, arg GetContactTaskByPendingTempIDParams) (*ContactTask, error) {
+	row := q.db.QueryRow(ctx, GetContactTaskByPendingTempID, arg.Provider, arg.TempID)
+	var i ContactTask
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Provider,
+		&i.Kind,
+		&i.ExternalTaskID,
+		&i.State,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}
+
 const ListContactTasksByContact = `-- name: ListContactTasksByContact :many
 SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
 WHERE contact_id = $1

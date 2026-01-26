@@ -115,3 +115,8 @@ WHERE provider = $1;
 -- name: CountContactTasksByProvider :one
 SELECT COUNT(*) FROM contact_task
 WHERE provider = $1 AND state = $2;
+
+-- name: GetContactTaskByPendingTempID :one
+-- Find a task by its pending temp ID in metadata (for mapping temp IDs to real Todoist IDs)
+SELECT * FROM contact_task
+WHERE provider = @provider AND metadata->>'pending_temp_id' = @temp_id::text;

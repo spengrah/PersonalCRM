@@ -163,9 +163,11 @@ func (p *CadenceSyncProvider) Sync(
 	// If we have commands to execute, send them
 	if len(commands) > 0 {
 		for _, batch := range BatchCommands(commands, 100) {
-			_, err := client.Sync(ctx, syncResp.SyncToken, []string{}, batch)
+			cmdResp, err := client.Sync(ctx, syncResp.SyncToken, []string{}, batch)
 			if err != nil {
 				logger.Warn().Err(err).Int("commands", len(batch)).Msg("failed to execute Todoist commands")
+			} else if cmdResp != nil {
+				p.processTempIDMappings(ctx, cmdResp.TempIDMap)
 			}
 		}
 	}
@@ -187,9 +189,11 @@ func (p *CadenceSyncProvider) Sync(
 	reconcileCommands := p.reconcileContactTasks(ctx, client, settings, accountID)
 	if len(reconcileCommands) > 0 {
 		for _, batch := range BatchCommands(reconcileCommands, 100) {
-			_, err := client.Sync(ctx, result.NewCursor, []string{}, batch)
+			cmdResp, err := client.Sync(ctx, result.NewCursor, []string{}, batch)
 			if err != nil {
 				logger.Warn().Err(err).Int("commands", len(batch)).Msg("failed to execute reconciliation commands")
+			} else if cmdResp != nil {
+				p.processTempIDMappings(ctx, cmdResp.TempIDMap)
 			}
 		}
 	}
@@ -355,8 +359,11 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 	if contact.Cadence != nil && *contact.Cadence != "" {
 		cadenceType, err := cadence.ParseCadence(*contact.Cadence)
 		if err == nil {
-			// Use Todoist user's timezone for date calculation
-			nextContactBy := cadence.CalculateContactBy(completedAt, cadenceType)
+			// Use date-based cadence for Todoist deadlines
+			// This ensures consistent behavior regardless of CRM_ENV
+			days := cadence.CadenceDays(cadenceType)
+			today := cadence.Today(completedAt)
+			nextContactBy := today.AddDate(0, 0, days)
 
 			// Update contact_by
 			if err := p.contactRepo.UpdateContactBy(ctx, contact.ID, nextContactBy); err != nil {
@@ -394,18 +401,25 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 	if contact.Cadence != nil && *contact.Cadence != "" {
 		cadenceType, err := cadence.ParseCadence(*contact.Cadence)
 		if err == nil {
-			// Skip to next upcoming due date
+			// Skip pushes deadline out by a full cadence period
+			// Use the later of: (skipped contact_by + cadence) or (today + cadence)
+			days := cadence.CadenceDays(cadenceType)
 			now := accelerated.GetCurrentTime()
-			base := contact.CreatedAt
-			if contact.LastContacted != nil {
-				base = *contact.LastContacted
+			today := cadence.Today(now)
+
+			// Option 1: today + cadence
+			fromToday := today.AddDate(0, 0, days)
+
+			// Option 2: skipped contact_by + cadence
+			fromSkipped := fromToday // fallback if no contact_by
+			if contact.ContactBy != nil {
+				fromSkipped = contact.ContactBy.AddDate(0, 0, days)
 			}
 
-			// Calculate the next contact_by that's strictly in the future
-			nextContactBy := cadence.CalculateContactBy(base, cadenceType)
-			today := cadence.Today(now)
-			for !nextContactBy.After(today) {
-				nextContactBy = cadence.CalculateContactBy(nextContactBy, cadenceType)
+			// Use whichever is farther in the future
+			nextContactBy := fromToday
+			if fromSkipped.After(fromToday) {
+				nextContactBy = fromSkipped
 			}
 
 			// Update contact_by
@@ -522,6 +536,49 @@ func (p *CadenceSyncProvider) createTaskCommand(contact *repository.Contact, set
 		[]string{settings.LabelName},
 		deadline,
 	)
+}
+
+// processTempIDMappings updates contact_task records with real Todoist task IDs
+func (p *CadenceSyncProvider) processTempIDMappings(ctx context.Context, tempIDMap map[string]string) {
+	if len(tempIDMap) == 0 {
+		return
+	}
+
+	for tempID, realID := range tempIDMap {
+		// Find the task by pending_temp_id
+		task, err := p.contactTaskRepo.GetContactTaskByPendingTempID(ctx, SourceName, tempID)
+		if err != nil {
+			// Not found is expected if this temp_id wasn't from us
+			continue
+		}
+
+		// Update with real Todoist task ID
+		_, err = p.contactTaskRepo.UpdateContactTaskExternalID(ctx, task.ID, realID)
+		if err != nil {
+			logger.Warn().
+				Err(err).
+				Str("tempId", tempID).
+				Str("realId", realID).
+				Msg("failed to update external task ID")
+			continue
+		}
+
+		// Clear pending_temp_id from metadata
+		metadata := task.Metadata
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		delete(metadata, "pending_temp_id")
+		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+			logger.Warn().Err(err).Msg("failed to clear pending_temp_id from metadata")
+		}
+
+		logger.Debug().
+			Str("tempId", tempID).
+			Str("realId", realID).
+			Str("contactTaskId", task.ID.String()).
+			Msg("updated contact task with real Todoist ID")
+	}
 }
 
 // handleSyncError classifies and returns appropriate error

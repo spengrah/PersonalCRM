@@ -127,6 +127,8 @@ type Querier interface {
 	GetContactTaskByContact(ctx context.Context, arg GetContactTaskByContactParams) (*ContactTask, error)
 	// Look up a task by its external provider ID
 	GetContactTaskByExternalID(ctx context.Context, arg GetContactTaskByExternalIDParams) (*ContactTask, error)
+	// Find a task by its pending temp ID in metadata (for mapping temp IDs to real Todoist IDs)
+	GetContactTaskByPendingTempID(ctx context.Context, arg GetContactTaskByPendingTempIDParams) (*ContactTask, error)
 	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
 	// Contact Enrichment queries
 	GetEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactEnrichment, error)
