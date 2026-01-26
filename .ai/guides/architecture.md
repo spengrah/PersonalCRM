@@ -86,6 +86,35 @@ PostgreSQL
 - Atomic transactions across relational + vector data
 - Good enough performance for single-user use
 
+**Database Tables:**
+
+| Table | Purpose | Key Relations |
+|-------|---------|---------------|
+| **Core** | | |
+| `contact` | People in CRM | Parent of most entities |
+| `contact_method` | Email, phone, social handles | → contact |
+| `note` | Freeform notes | → contact |
+| `tag` | Contact categorization | ↔ contact (via contact_tag) |
+| **Sync & Identity** | | |
+| `external_sync_state` | Sync status per provider/account | |
+| `external_sync_log` | Audit log of sync runs | → external_sync_state |
+| `external_identity` | Maps external IDs to contacts | → contact |
+| `external_contact` | Import candidates from Google/iCloud | → contact (optional) |
+| `contact_enrichment` | Tracks field enrichment sources | → contact, external_contact |
+| `oauth_credential` | OAuth tokens for Google/Todoist | |
+| **Calendar** | | |
+| `calendar_event` | Synced calendar events | |
+| `calendar_event_attendee` | Event attendees | → calendar_event, contact |
+| **Tasks** | | |
+| `contact_task` | Todoist tasks linked to contacts | → contact |
+| **Future/Unused** | | |
+| `interaction` | Interaction logging (not yet used) | → contact |
+| `connection` | Contact-to-contact relationships | → contact × 2 |
+| `note_embedding` | Vector embeddings (future AI) | → note |
+| `contact_summary` | AI summaries (future) | → contact |
+
+Schema in `backend/migrations/`. Run `make sqlc` after SQL changes.
+
 ### Query Layer: sqlc (NOT an ORM)
 
 **Why sqlc?**

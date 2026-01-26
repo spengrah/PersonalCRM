@@ -314,6 +314,43 @@ v1 := router.Group("/api/v1")
 }
 ```
 
+### Current API Routes
+
+| Group | Endpoint | Method | Handler | Description |
+|-------|----------|--------|---------|-------------|
+| **Contacts** | `/contacts` | POST | ContactHandler | Create contact |
+| | `/contacts` | GET | ContactHandler | List contacts |
+| | `/contacts/overdue` | GET | ContactHandler | List overdue contacts |
+| | `/contacts/:id` | GET/PUT/DELETE | ContactHandler | CRUD by ID |
+| | `/contacts/:id/last-contacted` | PATCH | ContactHandler | Mark as contacted |
+| | `/contacts/:id/notes` | GET/PUT | NoteHandler | Contact notepad |
+| | `/contacts/:id/merge/preview` | GET | ContactHandler | Merge preview |
+| | `/contacts/:id/merge` | POST | ContactHandler | Execute merge |
+| | `/contacts/:id/events` | GET | CalendarHandler | Contact's events |
+| | `/contacts/:id/identities` | GET | IdentityHandler | Contact's identities |
+| **Auth** | `/auth/google` | GET | OAuthHandler | Google auth URL |
+| | `/auth/google/accounts` | GET | OAuthHandler | List Google accounts |
+| | `/auth/google/accounts/:id/revoke` | POST | OAuthHandler | Revoke account |
+| | `/auth/todoist` | GET | OAuthHandler | Todoist auth URL |
+| | `/auth/todoist/accounts` | GET | OAuthHandler | List Todoist accounts |
+| **Sync** | `/sync/status` | GET | SyncHandler | All sync states |
+| | `/sync/providers` | GET | SyncHandler | Available providers |
+| | `/sync/:source/trigger` | POST | SyncHandler | Trigger sync |
+| | `/sync/states/:id/enable` | PATCH | SyncHandler | Enable/disable sync |
+| **Identities** | `/identities/unmatched` | GET | IdentityHandler | Unmatched identities |
+| | `/identities/:id/link` | POST | IdentityHandler | Link to contact |
+| **Imports** | `/imports/candidates` | GET | ImportHandler | Import candidates |
+| | `/imports/:id/import` | POST | ImportHandler | Import as new contact |
+| | `/imports/:id/link` | POST | ImportHandler | Link to existing |
+| **Todoist** | `/todoist/settings` | GET/PATCH | TodoistHandler | Todoist settings |
+| | `/todoist/projects` | GET | TodoistHandler | List projects |
+| | `/todoist/labels` | GET | TodoistHandler | List labels |
+| **System** | `/system/time` | GET | SystemHandler | Current time |
+| | `/export` | POST | SystemHandler | Export data |
+| | `/import` | POST | SystemHandler | Import data |
+
+Routes defined in `backend/cmd/crm-api/main.go`.
+
 ---
 
 ## 7. Write Tests
