@@ -1,0 +1,56 @@
+---
+timestamp: "2026-01-25T21:23:24.864049"
+type: gotcha
+summary: Config.Frontend field doesn't exist - use Config.CORS.FrontendURL instead
+detail: |
+  When accessing the frontend URL in backend code, it's in `cfg.CORS.FrontendURL` not `cfg.Frontend.URL` (which doesn't exist). This is non-obvious because other service configs have their own top-level fields like `cfg.Google` and `cfg.Todoist`.
+actionable: true
+
+---
+timestamp: "2026-01-25T21:23:24.864049"
+type: gotcha
+summary: Helper functions (uuidToPgUUID, stringToPgText, timeToPgTimestamptz) already exist in conversions.go
+detail: |
+  When creating new repository files, don't redefine helper functions like `uuidToPgUUID`, `stringToPgText`, and `timeToPgTimestamptz` - they already exist in `backend/internal/repository/conversions.go` and will cause redeclaration errors.
+actionable: true
+
+---
+timestamp: "2026-01-25T21:23:24.864049"
+type: rule
+summary: Use accelerated.GetCurrentTime() in tests, not time.Now()
+detail: |
+  Tests must use `accelerated.GetCurrentTime()` instead of `time.Now()` for time acceleration support. The linter (forbidigo) will catch this, but it's caught late in the process. This is already documented in core.md but easy to miss when writing tests.
+actionable: true
+
+---
+timestamp: "2026-01-25T21:23:24.864049"
+type: gotcha
+summary: Embedded field selectors trigger QF1008 staticcheck lint error
+detail: |
+  When a struct embeds another struct (e.g., ContactTaskWithContact embeds ContactTask), accessing fields via `result.ContactTask.ID` triggers staticcheck QF1008 error. Use `result.ID` instead since the embedded field is promoted. This is subtle because both syntaxes are valid Go, but the linter prefers the shorter form.
+actionable: true
+
+---
+timestamp: "2026-01-25T21:23:24.864049"
+type: architecture
+summary: SyncProvider pattern stores settings in external_sync_state.metadata as JSONB
+detail: |
+  When implementing a new SyncProvider, provider-specific settings (like Todoist's project_id and label_id) are stored in the `external_sync_state.metadata` JSONB column, not in a separate settings table. Settings are read/written via helper functions like `getSettingsFromMetadata()` and passed through the handler's UpdateSyncStateMetadata call.
+actionable: true
+
+---
+timestamp: "2026-01-25T21:23:24.864049"
+type: architecture
+summary: SyncProvider registration happens in main.go after provider initialization
+detail: |
+  New sync providers must be: 1) initialized with their dependencies, 2) registered with providerRegistry using Register(), and 3) have their routes added to the router. This three-step setup is non-obvious from reading just the provider code. Look at Google Calendar integration in main.go as the reference pattern.
+actionable: true
+
+---
+timestamp: "2026-01-25T21:23:24.864049"
+type: gotcha
+summary: Go error messages should be lowercase per ST1005 staticcheck rule
+detail: |
+  Go convention requires error strings to not be capitalized (ST1005). Use `fmt.Errorf("todoist settings not configured")` not `fmt.Errorf("Todoist settings not configured")`. This is caught by staticcheck but easy to miss during implementation.
+actionable: true
+

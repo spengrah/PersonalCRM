@@ -512,6 +512,26 @@ type SyncProvider interface {
 
 Providers are registered with the sync service and can be triggered via API or scheduler.
 
+**Provider Settings Storage:**
+
+Provider-specific settings (e.g., Todoist project_id, label_id) are stored in `external_sync_state.metadata` JSONB column, not in separate settings tables. This keeps all provider state in one place and simplifies the schema.
+
+```go
+// Settings read/write via helper functions
+settings := getSettingsFromMetadata(state.Metadata)
+settings.ProjectID = "12345"
+syncRepo.UpdateSyncStateMetadata(ctx, accountID, providerName, settingsToMetadata(settings))
+```
+
+**Provider Registration (main.go):**
+
+New providers require three steps in main.go:
+1. Initialize provider with dependencies
+2. Register with `providerRegistry.Register()`
+3. Add routes to router
+
+See Google Calendar or Todoist providers as reference implementations.
+
 ---
 
 ## AI/LLM Architecture (Future)
