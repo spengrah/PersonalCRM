@@ -11,8 +11,13 @@ export function useSyncStates() {
   return useQuery({
     queryKey: syncKeys.states(),
     queryFn: () => syncApi.getSyncStates(),
-    staleTime: 1000 * 30, // 30 seconds
-    refetchInterval: 1000 * 60, // Refetch every minute
+    staleTime: 1000 * 5, // 5 seconds
+    refetchInterval: query => {
+      // Poll faster (3s) when any sync is in progress, slower (30s) when idle
+      const states = query.state.data as SyncState[] | undefined
+      const hasSyncing = states?.some(s => s.status === 'syncing')
+      return hasSyncing ? 1000 * 3 : 1000 * 30
+    },
   })
 }
 
