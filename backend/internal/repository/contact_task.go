@@ -107,22 +107,22 @@ func convertDbContactTaskWithContact(dbRow *db.ListManagedContactTasksRow) Conta
 	}
 
 	if dbRow.ID.Valid {
-		result.ContactTask.ID = uuid.UUID(dbRow.ID.Bytes)
+		result.ID = uuid.UUID(dbRow.ID.Bytes)
 	}
 	if dbRow.ContactID.Valid {
-		result.ContactTask.ContactID = uuid.UUID(dbRow.ContactID.Bytes)
+		result.ContactID = uuid.UUID(dbRow.ContactID.Bytes)
 	}
 	if dbRow.CreatedAt.Valid {
-		result.ContactTask.CreatedAt = dbRow.CreatedAt.Time
+		result.CreatedAt = dbRow.CreatedAt.Time
 	}
 	if dbRow.UpdatedAt.Valid {
-		result.ContactTask.UpdatedAt = dbRow.UpdatedAt.Time
+		result.UpdatedAt = dbRow.UpdatedAt.Time
 	}
 
 	if len(dbRow.Metadata) > 0 {
 		var metadata map[string]any
 		if err := json.Unmarshal(dbRow.Metadata, &metadata); err == nil {
-			result.ContactTask.Metadata = metadata
+			result.Metadata = metadata
 		}
 	}
 

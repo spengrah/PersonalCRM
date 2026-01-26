@@ -95,7 +95,7 @@ func (p *CadenceSyncProvider) Sync(
 	// Validate settings are configured
 	settings := getSettingsFromMetadata(state.Metadata)
 	if settings.ProjectID == "" || settings.LabelID == "" {
-		return nil, fmt.Errorf("Todoist settings not configured: missing project_id or label_id")
+		return nil, fmt.Errorf("todoist settings not configured: missing project_id or label_id")
 	}
 
 	// Get access token

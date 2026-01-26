@@ -8,7 +8,6 @@ import (
 	"context"
 	"os"
 	"testing"
-	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
@@ -296,7 +295,7 @@ func TestContactTask_CountByProvider(t *testing.T) {
 	// Create test contacts
 	var contacts []uuid.UUID
 	for i := 0; i < 3; i++ {
-		now := time.Now()
+		now := accelerated.GetCurrentTime()
 		cadence := "weekly"
 		c, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName:      "Test Contact " + uuid.New().String()[:8],
