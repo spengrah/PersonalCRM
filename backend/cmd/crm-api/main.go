@@ -100,6 +100,7 @@ func main() {
 	var oauthHandler *handlers.OAuthHandler
 	var importHandler *handlers.ImportHandler
 	var calendarHandler *handlers.CalendarHandler
+	var todoistHandler *handlers.TodoistHandler
 	var googleOAuthService *google.OAuthService
 	var todoistOAuthService *todoist.OAuthService
 	var externalContactRepo *repository.ExternalContactRepository
@@ -139,6 +140,10 @@ func main() {
 					oauthHandler = handlers.NewOAuthHandler(nil, cfg.CORS.FrontendURL)
 					oauthHandler.SetTodoistOAuth(todoistOAuthService)
 				}
+
+				// Initialize Todoist settings handler
+				todoistHandler = handlers.NewTodoistHandler(todoistOAuthService, syncRepo)
+
 				logger.Info().Msg("Todoist OAuth service initialized")
 			}
 		} else {
@@ -178,6 +183,20 @@ func main() {
 
 			// Initialize calendar handler
 			calendarHandler = handlers.NewCalendarHandler(calendarRepo)
+		}
+
+		// Register Todoist Cadence provider if OAuth is configured
+		if todoistOAuthService != nil {
+			contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+			todoistProvider := todoist.NewCadenceSyncProvider(
+				todoistOAuthService,
+				contactTaskRepo,
+				contactRepo,
+				syncRepo,
+				cfg,
+			)
+			providerRegistry.Register(todoistProvider)
+			logger.Info().Msg("Todoist Cadence sync provider registered")
 		}
 
 		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
@@ -277,6 +296,17 @@ func main() {
 					authRoutes.GET("/todoist/accounts/:id/status", oauthHandler.GetTodoistAccountStatus)
 					authRoutes.POST("/todoist/accounts/:id/revoke", oauthHandler.RevokeTodoistAccount)
 				}
+			}
+		}
+
+		// Todoist settings routes (only if Todoist is configured)
+		if todoistHandler != nil {
+			todoistRoutes := v1.Group("/todoist")
+			{
+				todoistRoutes.GET("/settings", todoistHandler.GetSettings)
+				todoistRoutes.PATCH("/settings", todoistHandler.UpdateSettings)
+				todoistRoutes.GET("/projects", todoistHandler.ListProjects)
+				todoistRoutes.GET("/labels", todoistHandler.ListLabels)
 			}
 		}
 
