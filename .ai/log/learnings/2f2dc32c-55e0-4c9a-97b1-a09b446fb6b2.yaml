@@ -1,0 +1,40 @@
+---
+timestamp: "2026-01-25T20:44:46.910066"
+type: gotcha
+summary: Todoist App Console redirect URL must be saved explicitly
+detail: |
+  When configuring OAuth redirect URLs in the Todoist App Console, the URL must be explicitly saved (clicking Save button) even though it appears filled in. Users commonly forget this step, resulting in 'redirect_uri_not_configured' errors. This is especially tricky because the URL field appears to accept the value, but the change isn't persisted until explicitly saved.
+actionable: true
+
+---
+timestamp: "2026-01-25T20:44:46.910066"
+type: gotcha
+summary: OAuth tokens in Todoist App Console are NOT needed for OAuth flow
+detail: |
+  The Todoist App Console offers multiple token types that can confuse developers: (1) Verification Token - only for webhooks, NOT OAuth, (2) Test Token/'Install for Me' - creates a personal API token, NOT needed for OAuth flow. For OAuth implementation, ONLY Client ID, Client Secret, and OAuth redirect URL configuration are required. The OAuth flow handles token generation automatically upon user authorization.
+actionable: true
+
+---
+timestamp: "2026-01-25T20:44:46.910066"
+type: architecture
+summary: Sync status UI requires both SyncProvider registration and UI component
+detail: |
+  Displaying sync status in settings requires two pieces: (1) UI component showing last sync time and manual trigger button (SyncBadge), (2) Backend SyncProvider registered with providerRegistry. The UI can be added before the provider exists, but the sync button should be disabled to avoid confusing 'provider not found' errors. The source name for registration must match between UI code and backend provider registration (e.g., 'todoist' not 'todoist_tasks').
+actionable: true
+
+---
+timestamp: "2026-01-25T20:44:46.910066"
+type: rule
+summary: Always verify spec naming conventions before implementing
+detail: |
+  When implementing features from specifications, verify exact naming conventions (especially for provider/source names) before proceeding. In this session, the developer initially suggested 'todoist_tasks' as the source name but the spec clearly defined 'source=todoist'. Catching this discrepancy during planning prevented rework. Always cross-reference implementation details against the authoritative spec document.
+actionable: true
+
+---
+timestamp: "2026-01-25T20:44:46.910066"
+type: distinction
+summary: OAuth connection testing vs sync functionality are separate concerns
+detail: |
+  Testing OAuth connection (authorization flow, token storage, account display) is independent from testing sync functionality (provider registration, data fetching, sync state tracking). OAuth can work perfectly while sync functionality doesn't exist yet. The OAuth failure detection mechanism specifically detects auth token failures during sync operations, so it requires both OAuth AND sync to be implemented to test comprehensively.
+actionable: true
+
