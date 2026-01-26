@@ -72,18 +72,37 @@ graph TB
 
 The backend follows a strict layered architecture to maintain separation of concerns and testability:
 
-```
-HTTP Request
-    ↓
-Handler (HTTP concerns, validation, status codes)
-    ↓
-Service (business logic, orchestration)
-    ↓
-Repository (data access, type conversion)
-    ↓
-sqlc-generated DB layer (type-safe SQL)
-    ↓
-PostgreSQL
+```mermaid
+sequenceDiagram
+    participant Client as Frontend
+    participant H as Handler
+    participant S as Service
+    participant R as Repository
+    participant Q as sqlc Queries
+    participant DB as PostgreSQL
+
+    Client->>H: POST /api/v1/contacts
+    Note over H: Validate request<br/>Parse JSON
+
+    H->>S: CreateContact(ctx, req)
+    Note over S: Business logic<br/>Orchestration
+
+    S->>R: CreateContact(ctx, params)
+    Note over R: Convert to DB types<br/>(pgtype.Text, etc.)
+
+    R->>Q: CreateContact(ctx, args)
+    Note over Q: Type-safe SQL<br/>INSERT ... RETURNING *
+
+    Q->>DB: Execute SQL
+    DB-->>Q: Row data
+
+    Q-->>R: db.Contact
+    R-->>S: repository.Contact
+    Note over R: Convert to domain types
+
+    S-->>H: *Contact, nil
+    H-->>Client: 201 Created + JSON
+    Note over H: api.SendSuccess()
 ```
 
 **Benefits:**
