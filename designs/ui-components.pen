@@ -433,8 +433,8 @@
             {
               "type": "note",
               "id": "n6mUB",
-              "x": 550,
-              "y": 380,
+              "x": 410,
+              "y": 295,
               "name": "Animation Note",
               "width": 280,
               "height": 120,
@@ -525,7 +525,7 @@
               "type": "frame",
               "id": "R5LCq",
               "x": 0,
-              "y": 250,
+              "y": 0,
               "name": "SyncIcon/Synced",
               "reusable": true,
               "width": 18,
@@ -548,8 +548,8 @@
             {
               "type": "frame",
               "id": "oIcIf",
-              "x": 40,
-              "y": 250,
+              "x": 0,
+              "y": 0,
               "name": "SyncIcon/Syncing",
               "reusable": true,
               "width": 18,
@@ -572,8 +572,8 @@
             {
               "type": "frame",
               "id": "vrObe",
-              "x": 80,
-              "y": 250,
+              "x": 0,
+              "y": 0,
               "name": "SyncIcon/Error",
               "reusable": true,
               "width": 18,
@@ -597,7 +597,7 @@
               "type": "frame",
               "id": "48InZ",
               "x": 0,
-              "y": 290,
+              "y": 0,
               "name": "NavLink/Imports/Default",
               "reusable": true,
               "height": 56,
@@ -628,8 +628,8 @@
             {
               "type": "frame",
               "id": "o5MjR",
-              "x": 120,
-              "y": 290,
+              "x": 0,
+              "y": 0,
               "name": "NavLink/Imports/Syncing",
               "reusable": true,
               "height": 56,
@@ -660,8 +660,8 @@
             {
               "type": "frame",
               "id": "LCtVF",
-              "x": 240,
-              "y": 290,
+              "x": 0,
+              "y": 0,
               "name": "NavLink/Imports/Error",
               "reusable": true,
               "height": 56,
@@ -693,7 +693,7 @@
               "type": "frame",
               "id": "ZoPso",
               "x": 0,
-              "y": 380,
+              "y": 300,
               "name": "Sync Status Showcase",
               "layout": "vertical",
               "gap": 16,
@@ -791,127 +791,10 @@
                           "name": "state3Nav"
                         }
                       ]
-                    },
-                    {
-                      "type": "frame",
-                      "id": "v3ZES",
-                      "name": "activeState",
-                      "layout": "vertical",
-                      "gap": 8,
-                      "alignItems": "center",
-                      "children": [
-                        {
-                          "type": "text",
-                          "id": "nDBjJ",
-                          "name": "stateLabel",
-                          "fill": "$--gray-400",
-                          "content": "Active (Current Page)",
-                          "fontFamily": "$--font-secondary",
-                          "fontSize": 12,
-                          "fontWeight": "normal"
-                        },
-                        {
-                          "id": "MajHC",
-                          "type": "ref",
-                          "ref": "tozPI"
-                        }
-                      ]
                     }
                   ]
                 }
               ]
-            },
-            {
-              "type": "frame",
-              "id": "cAvVQ",
-              "x": 120,
-              "y": 250,
-              "name": "SyncIcon/Active",
-              "reusable": true,
-              "width": 18,
-              "height": 18,
-              "justifyContent": "center",
-              "alignItems": "center",
-              "children": [
-                {
-                  "type": "icon_font",
-                  "id": "3JYAI",
-                  "name": "icon",
-                  "width": 18,
-                  "height": 18,
-                  "iconFontName": "cloud-download",
-                  "iconFontFamily": "lucide",
-                  "fill": "$--primary"
-                }
-              ]
-            },
-            {
-              "type": "frame",
-              "id": "tozPI",
-              "x": 360,
-              "y": 290,
-              "name": "NavLink/Imports/Active",
-              "reusable": true,
-              "height": 56,
-              "stroke": {
-                "align": "inside",
-                "thickness": {
-                  "bottom": 2
-                },
-                "fill": "$--primary"
-              },
-              "gap": 8,
-              "padding": [
-                0,
-                16
-              ],
-              "alignItems": "center",
-              "children": [
-                {
-                  "id": "Qif4n",
-                  "type": "ref",
-                  "ref": "R5LCq",
-                  "descendants": {
-                    "8BNnv": {
-                      "fill": "$--primary"
-                    }
-                  }
-                },
-                {
-                  "type": "text",
-                  "id": "fyGGq",
-                  "name": "label",
-                  "fill": "$--primary",
-                  "content": "Imports",
-                  "fontFamily": "$--font-primary",
-                  "fontSize": 14,
-                  "fontWeight": "500"
-                }
-              ]
-            },
-            {
-              "type": "text",
-              "id": "me7UI",
-              "x": 0,
-              "y": 232,
-              "name": "syncIconLabel",
-              "fill": "$--gray-400",
-              "content": "SyncIcon variants:",
-              "fontFamily": "$--font-secondary",
-              "fontSize": 11,
-              "fontWeight": "normal"
-            },
-            {
-              "type": "text",
-              "id": "N4GrV",
-              "x": 0,
-              "y": 272,
-              "name": "navLinkImportsLabel",
-              "fill": "$--gray-400",
-              "content": "NavLink/Imports variants:",
-              "fontFamily": "$--font-secondary",
-              "fontSize": 11,
-              "fontWeight": "normal"
             }
           ]
         },
@@ -3294,10 +3177,18 @@
                   }
                 },
                 {
-                  "id": "PV0CY",
+                  "id": "JKFc1",
                   "type": "ref",
-                  "ref": "48InZ",
-                  "name": "dLink4"
+                  "ref": "0jkIw",
+                  "name": "dLink4",
+                  "descendants": {
+                    "3qgK3": {
+                      "iconFontName": "download"
+                    },
+                    "XIVEk": {
+                      "content": "Imports"
+                    }
+                  }
                 },
                 {
                   "id": "UeofD",
@@ -4516,10 +4407,18 @@
                   }
                 },
                 {
-                  "id": "ogWVn",
+                  "id": "T2FVl",
                   "type": "ref",
-                  "ref": "48InZ",
-                  "name": "ncLink4"
+                  "ref": "0jkIw",
+                  "name": "ncLink4",
+                  "descendants": {
+                    "3qgK3": {
+                      "iconFontName": "download"
+                    },
+                    "XIVEk": {
+                      "content": "Imports"
+                    }
+                  }
                 },
                 {
                   "id": "Pt6Sm",
@@ -5427,10 +5326,18 @@
                   }
                 },
                 {
-                  "id": "1lEgm",
+                  "id": "I55sx",
                   "type": "ref",
-                  "ref": "tozPI",
-                  "name": "iLink4"
+                  "ref": "J8vpP",
+                  "name": "iLink4",
+                  "descendants": {
+                    "NMM4g": {
+                      "iconFontName": "download"
+                    },
+                    "yhxij": {
+                      "content": "Imports"
+                    }
+                  }
                 },
                 {
                   "id": "6eNtg",
@@ -6522,7 +6429,7 @@
       "type": "frame",
       "id": "04U1m",
       "x": 0,
-      "y": 5588,
+      "y": 5582,
       "name": "Settings",
       "width": 1280,
       "fill": "$--gray-50",
@@ -6582,10 +6489,18 @@
                   }
                 },
                 {
-                  "id": "ho7Oq",
+                  "id": "jORbk",
                   "type": "ref",
-                  "ref": "48InZ",
-                  "name": "sLink4"
+                  "ref": "0jkIw",
+                  "name": "sLink4",
+                  "descendants": {
+                    "3qgK3": {
+                      "iconFontName": "download"
+                    },
+                    "XIVEk": {
+                      "content": "Imports"
+                    }
+                  }
                 },
                 {
                   "id": "PdNjP",
@@ -6837,398 +6752,47 @@
               ]
             },
             {
-              "type": "frame",
-              "id": "Zhg87",
+              "id": "rVmeb",
+              "type": "ref",
+              "ref": "C00Ig",
               "name": "googleSection",
+              "width": "fill_container"
+            },
+            {
+              "id": "ekyem",
+              "type": "ref",
+              "ref": "C00Ig",
+              "name": "todoistSection",
               "width": "fill_container",
-              "fill": "$--card",
-              "cornerRadius": 8,
-              "stroke": {
-                "align": "inside",
-                "thickness": 1,
-                "fill": "$--card-border"
-              },
-              "effect": {
-                "type": "shadow",
-                "shadowType": "outer",
-                "color": "#0000000D",
-                "offset": {
-                  "x": 0,
-                  "y": 1
+              "descendants": {
+                "GucRH": {
+                  "iconFontName": "square-check"
                 },
-                "blur": 4
-              },
-              "layout": "vertical",
-              "children": [
-                {
-                  "type": "frame",
-                  "id": "Wjc0D",
-                  "name": "googleHeader",
-                  "width": "fill_container",
-                  "gap": 12,
-                  "padding": [
-                    24,
-                    24,
-                    16,
-                    24
-                  ],
-                  "justifyContent": "space_between",
-                  "alignItems": "center",
-                  "children": [
-                    {
-                      "type": "icon_font",
-                      "id": "E8Hut",
-                      "name": "icon",
-                      "width": 24,
-                      "height": 24,
-                      "iconFontName": "mail",
-                      "iconFontFamily": "lucide",
-                      "fill": "#dc2626"
-                    },
-                    {
-                      "type": "text",
-                      "id": "VMXhy",
-                      "name": "googleTitle",
-                      "fill": "$--foreground",
-                      "content": "Google Accounts",
-                      "fontFamily": "$--font-primary",
-                      "fontSize": 20,
-                      "fontWeight": "600"
-                    },
-                    {
-                      "id": "pqb74",
-                      "type": "ref",
-                      "ref": "K87ZP",
-                      "name": "addAccountBtn",
-                      "descendants": {
-                        "33b2T": {
-                          "content": "+ Add Account"
-                        }
-                      }
-                    }
-                  ]
+                "cRsHd": {
+                  "content": "Todoist"
                 },
-                {
-                  "type": "text",
-                  "id": "f1Ho2",
-                  "name": "description",
-                  "fill": "$--gray-600",
-                  "content": "Connect your Google accounts to sync emails, calendar events, and contacts. You can connect multiple accounts (e.g., personal and work).",
-                  "fontFamily": "Inter",
-                  "fontSize": 14,
-                  "fontWeight": "normal"
+                "xZP9m/33b2T": {
+                  "content": "+ Connect Account"
                 },
-                {
-                  "type": "frame",
-                  "id": "X1J4f",
-                  "name": "googleBody",
-                  "width": "fill_container",
-                  "layout": "vertical",
-                  "gap": 12,
-                  "padding": [
-                    16,
-                    24,
-                    24,
-                    24
-                  ],
-                  "children": [
-                    {
-                      "type": "frame",
-                      "id": "rDL8s",
-                      "name": "accountCard",
-                      "width": "fill_container",
-                      "fill": "$--gray-50",
-                      "cornerRadius": 8,
-                      "stroke": {
-                        "align": "inside",
-                        "thickness": 1,
-                        "fill": "$--gray-200"
-                      },
-                      "layout": "vertical",
-                      "gap": 16,
-                      "padding": 16,
-                      "children": [
-                        {
-                          "type": "frame",
-                          "id": "N4dI0",
-                          "name": "headerRow",
-                          "width": "fill_container",
-                          "justifyContent": "space_between",
-                          "children": [
-                            {
-                              "type": "frame",
-                              "id": "pf34l",
-                              "name": "leftInfo",
-                              "layout": "vertical",
-                              "gap": 2,
-                              "children": [
-                                {
-                                  "type": "frame",
-                                  "id": "2L0qU",
-                                  "name": "emailRow",
-                                  "gap": 8,
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "EmuAw",
-                                      "name": "emailText",
-                                      "fill": "$--gray-900",
-                                      "content": "spencer@hatsprotocol.xyz",
-                                      "fontFamily": "Inter",
-                                      "fontSize": 14,
-                                      "fontWeight": "500"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "A0yPB",
-                                      "name": "connectedDate",
-                                      "fill": "$--gray-500",
-                                      "content": "Connected Jan 12, 2026",
-                                      "fontFamily": "Inter",
-                                      "fontSize": 12,
-                                      "fontWeight": "normal"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "type": "text",
-                                  "id": "XKCm5",
-                                  "name": "userName",
-                                  "fill": "$--gray-600",
-                                  "content": "Spencer Graham",
-                                  "fontFamily": "Inter",
-                                  "fontSize": 14,
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "L1S3A",
-                              "name": "rightActions",
-                              "gap": 8,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "frame",
-                                  "id": "y5xlA",
-                                  "name": "reconnectBtn",
-                                  "fill": "$--background",
-                                  "cornerRadius": 6,
-                                  "stroke": {
-                                    "align": "inside",
-                                    "thickness": 1,
-                                    "fill": "#000000"
-                                  },
-                                  "gap": 6,
-                                  "padding": [
-                                    6,
-                                    12
-                                  ],
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "icon_font",
-                                      "id": "w2S7p",
-                                      "name": "reconnectIcon",
-                                      "width": 14,
-                                      "height": 14,
-                                      "iconFontName": "refresh-ccw",
-                                      "iconFontFamily": "lucide",
-                                      "fill": "#000000"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "lT9bd",
-                                      "name": "reconnectLabel",
-                                      "fill": "#000000",
-                                      "content": "Reconnect",
-                                      "fontFamily": "Inter",
-                                      "fontSize": 13,
-                                      "fontWeight": "500"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "0SpUf",
-                                  "name": "trashBtn",
-                                  "padding": 6,
-                                  "children": [
-                                    {
-                                      "type": "icon_font",
-                                      "id": "yOdeC",
-                                      "name": "trashIcon",
-                                      "width": 16,
-                                      "height": 16,
-                                      "iconFontName": "trash-2",
-                                      "iconFontFamily": "lucide",
-                                      "fill": "$--destructive"
-                                    }
-                                  ]
-                                }
-                              ]
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "ieciq",
-                          "name": "permSection",
-                          "width": "fill_container",
-                          "stroke": {
-                            "align": "inside",
-                            "thickness": {
-                              "top": 1
-                            },
-                            "fill": "$--gray-200"
-                          },
-                          "layout": "vertical",
-                          "gap": 8,
-                          "padding": [
-                            16,
-                            0,
-                            0,
-                            0
-                          ],
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "XnOLu",
-                              "name": "permLabel",
-                              "fill": "$--gray-500",
-                              "content": "PERMISSIONS & SYNC",
-                              "fontFamily": "Inter",
-                              "fontSize": 10,
-                              "fontWeight": "500",
-                              "letterSpacing": 0.5
-                            },
-                            {
-                              "type": "frame",
-                              "id": "ZferH",
-                              "name": "badgesRow",
-                              "gap": 8,
-                              "children": [
-                                {
-                                  "type": "frame",
-                                  "id": "4kXJf",
-                                  "name": "gmailBadge",
-                                  "fill": "$--background",
-                                  "cornerRadius": 4,
-                                  "stroke": {
-                                    "align": "inside",
-                                    "thickness": 1,
-                                    "fill": "$--gray-200"
-                                  },
-                                  "gap": 4,
-                                  "padding": [
-                                    4,
-                                    10
-                                  ],
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "uwJa4",
-                                      "name": "gmailText",
-                                      "fill": "$--gray-700",
-                                      "content": "Gmail (read)",
-                                      "fontFamily": "Inter",
-                                      "fontSize": 12,
-                                      "fontWeight": "500"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "fGtzP",
-                                  "name": "calBadge",
-                                  "fill": "$--red-50",
-                                  "cornerRadius": 4,
-                                  "stroke": {
-                                    "align": "inside",
-                                    "thickness": 1,
-                                    "fill": "#000000"
-                                  },
-                                  "gap": 4,
-                                  "padding": [
-                                    4,
-                                    10
-                                  ],
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "QcBlS",
-                                      "name": "calLabel",
-                                      "fill": "$--red-700",
-                                      "content": "Calendar",
-                                      "fontFamily": "Inter",
-                                      "fontSize": 12,
-                                      "fontWeight": "500"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "Iz6hH",
-                                      "name": "calStatus",
-                                      "fill": "$--red-500",
-                                      "content": "Error",
-                                      "fontFamily": "Inter",
-                                      "fontSize": 12,
-                                      "fontWeight": "500"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "type": "frame",
-                                  "id": "1EtfL",
-                                  "name": "contactsBadge",
-                                  "fill": "$--red-50",
-                                  "cornerRadius": 4,
-                                  "stroke": {
-                                    "align": "inside",
-                                    "thickness": 1,
-                                    "fill": "#000000"
-                                  },
-                                  "gap": 4,
-                                  "padding": [
-                                    4,
-                                    10
-                                  ],
-                                  "alignItems": "center",
-                                  "children": [
-                                    {
-                                      "type": "text",
-                                      "id": "dYlPI",
-                                      "name": "contactsLabel",
-                                      "fill": "$--red-700",
-                                      "content": "Contacts",
-                                      "fontFamily": "Inter",
-                                      "fontSize": 12,
-                                      "fontWeight": "500"
-                                    },
-                                    {
-                                      "type": "text",
-                                      "id": "A3jlU",
-                                      "name": "contactsStatus",
-                                      "fill": "$--red-500",
-                                      "content": "Error",
-                                      "fontFamily": "Inter",
-                                      "fontSize": 12,
-                                      "fontWeight": "500"
-                                    }
-                                  ]
-                                }
-                              ]
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
+                "lzJ6W": {
+                  "content": "Connect your Todoist account to sync contact cadence tasks."
+                },
+                "plq83/ZzLcR": {
+                  "content": "user@todoist.com"
+                },
+                "plq83/LrJyw/HnSQj": {
+                  "content": "Read & Write"
+                },
+                "plq83/NphQd/3B3ZY": {
+                  "content": "Tasks"
+                },
+                "plq83/NphQd/z1w8y": {
+                  "content": "Never"
+                },
+                "plq83/px1Dn": {
+                  "enabled": false
                 }
-              ]
+              }
             },
             {
               "type": "frame",
@@ -7703,13 +7267,966 @@
       ]
     },
     {
-      "type": "note",
-      "id": "dP2pa",
-      "x": 1317.3859054717773,
-      "y": 5955.485149412963,
-      "width": 250,
-      "height": 219,
-      "content": "Reconnect button only displays when oauth refresh token has expired and needs to be reconnected"
+      "type": "frame",
+      "id": "x7EnW",
+      "x": 5486,
+      "y": -525,
+      "name": "SyncBadge",
+      "reusable": true,
+      "fill": "$--card",
+      "cornerRadius": 6,
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "$--gray-200"
+      },
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "sKUak",
+          "name": "labelWrap",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "right": 1
+            },
+            "fill": "$--gray-200"
+          },
+          "padding": [
+            4,
+            10
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "3B3ZY",
+              "name": "label",
+              "fill": "$--gray-700",
+              "content": "Calendar",
+              "fontFamily": "$--font-secondary",
+              "fontSize": 12,
+              "fontWeight": "500"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "wIZcC",
+          "name": "timeWrap",
+          "fill": "$--gray-50",
+          "padding": [
+            4,
+            8
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "bTNx7",
+              "name": "time",
+              "fill": "$--gray-500",
+              "content": "16m ago",
+              "fontFamily": "$--font-secondary",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "WVvgc",
+          "name": "refreshBtn",
+          "fill": "transparent",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "left": 1
+            },
+            "fill": "$--gray-200"
+          },
+          "padding": [
+            4,
+            8
+          ],
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "iMJqc",
+              "name": "icon",
+              "width": 12,
+              "height": 12,
+              "iconFontName": "refresh-cw",
+              "iconFontFamily": "lucide",
+              "fill": "$--blue-600"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "MWmrn",
+      "type": "ref",
+      "ref": "x7EnW",
+      "name": "SyncBadge/Syncing",
+      "y": -479,
+      "descendants": {
+        "wIZcC": {
+          "content": "Syncing..."
+        }
+      }
+    },
+    {
+      "id": "uvgV3",
+      "type": "ref",
+      "ref": "x7EnW",
+      "name": "SyncBadge/Error",
+      "y": -433,
+      "descendants": {
+        "wIZcC": {
+          "content": "Error",
+          "fill": "$--red-600"
+        }
+      }
+    },
+    {
+      "id": "hFxvn",
+      "type": "ref",
+      "ref": "x7EnW",
+      "name": "SyncBadge/Never",
+      "y": -387,
+      "descendants": {
+        "wIZcC": {
+          "content": "Never",
+          "fill": "$--gray-400"
+        }
+      }
+    },
+    {
+      "type": "frame",
+      "id": "r4OqO",
+      "x": 5486,
+      "y": -300,
+      "name": "PermissionBadge",
+      "reusable": true,
+      "fill": "$--card",
+      "cornerRadius": 6,
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "$--gray-200"
+      },
+      "padding": [
+        4,
+        10
+      ],
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "HnSQj",
+          "name": "label",
+          "fill": "$--gray-700",
+          "content": "Gmail (read)",
+          "fontFamily": "$--font-secondary",
+          "fontSize": 12,
+          "fontWeight": "500"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "yYzI4",
+      "x": 5486,
+      "y": -200,
+      "name": "OAuthAccountCard",
+      "reusable": true,
+      "width": 600,
+      "fill": "$--gray-50",
+      "cornerRadius": 8,
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "$--gray-200"
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "No0gU",
+          "name": "accountRow",
+          "width": "fill_container",
+          "padding": 16,
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "cfGww",
+              "name": "accountInfo",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "XpFD8",
+                  "name": "avatar",
+                  "width": 40,
+                  "height": 40,
+                  "fill": "$--gray-200",
+                  "cornerRadius": 20,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "PYe0v",
+                      "name": "avatarIcon",
+                      "width": 20,
+                      "height": 20,
+                      "iconFontName": "user",
+                      "iconFontFamily": "lucide",
+                      "fill": "$--gray-400"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "nzEfb",
+                  "name": "accountDetails",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ZzLcR",
+                      "name": "email",
+                      "fill": "$--foreground",
+                      "content": "user@gmail.com",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "jIot3",
+                      "name": "connectedDate",
+                      "fill": "$--gray-500",
+                      "content": "Connected Jan 25, 2026",
+                      "fontFamily": "$--font-secondary",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "MwTDq",
+              "name": "actions",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "WGl3y",
+                  "name": "reconnectBtn",
+                  "enabled": false,
+                  "fill": "transparent",
+                  "cornerRadius": 6,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#000000"
+                  },
+                  "gap": 6,
+                  "padding": [
+                    6,
+                    12
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "x33oB",
+                      "name": "reconnectIcon",
+                      "width": 14,
+                      "height": 14,
+                      "iconFontName": "refresh-ccw",
+                      "iconFontFamily": "lucide",
+                      "fill": "#000000"
+                    },
+                    {
+                      "type": "text",
+                      "id": "PONSl",
+                      "name": "reconnectLabel",
+                      "fill": "#000000",
+                      "content": "Reconnect",
+                      "fontFamily": "$--font-secondary",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "S7hLV",
+                  "name": "disconnectBtn",
+                  "fill": "transparent",
+                  "cornerRadius": 6,
+                  "padding": [
+                    6,
+                    8
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "CJJtp",
+                      "name": "disconnectIcon",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "trash-2",
+                      "iconFontFamily": "lucide",
+                      "fill": "$--red-600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "ah8UW",
+          "name": "permSyncSection",
+          "width": "fill_container",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "$--gray-200"
+          },
+          "layout": "vertical",
+          "gap": 8,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "zb2Rz",
+              "name": "sectionLabel",
+              "fill": "$--gray-500",
+              "content": "PERMISSIONS & SYNC",
+              "fontFamily": "$--font-secondary",
+              "fontSize": 11,
+              "fontWeight": "500",
+              "letterSpacing": 0.5
+            },
+            {
+              "type": "frame",
+              "id": "PIDig",
+              "name": "badgesRow",
+              "gap": 8,
+              "children": [
+                {
+                  "id": "LrJyw",
+                  "type": "ref",
+                  "ref": "r4OqO",
+                  "name": "permBadge1",
+                  "descendants": {
+                    "HnSQj": {
+                      "content": "Gmail (read)"
+                    }
+                  }
+                },
+                {
+                  "id": "NphQd",
+                  "type": "ref",
+                  "ref": "x7EnW",
+                  "name": "syncBadge1",
+                  "descendants": {
+                    "sKUak": {
+                      "content": "Calendar"
+                    },
+                    "wIZcC": {
+                      "content": "16m ago"
+                    }
+                  }
+                },
+                {
+                  "id": "px1Dn",
+                  "type": "ref",
+                  "ref": "x7EnW",
+                  "name": "syncBadge2",
+                  "descendants": {
+                    "sKUak": {
+                      "content": "Contacts"
+                    },
+                    "3B3ZY": {
+                      "content": "Contacts"
+                    },
+                    "wIZcC": {
+                      "content": "3h ago"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "EXx6V",
+      "type": "ref",
+      "ref": "yYzI4",
+      "name": "OAuthAccountCard/NeedsReconnect",
+      "y": -10,
+      "descendants": {
+        "WGl3y": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "type": "frame",
+      "id": "C00Ig",
+      "x": 5486,
+      "y": 150,
+      "name": "OAuthSection",
+      "reusable": true,
+      "width": 700,
+      "fill": "$--card",
+      "cornerRadius": 8,
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "$--card-border"
+      },
+      "effect": {
+        "type": "shadow",
+        "shadowType": "outer",
+        "color": "#0000000D",
+        "offset": {
+          "x": 0,
+          "y": 1
+        },
+        "blur": 4
+      },
+      "layout": "vertical",
+      "padding": 24,
+      "children": [
+        {
+          "type": "frame",
+          "id": "bzFgx",
+          "name": "header",
+          "width": "fill_container",
+          "padding": [
+            20,
+            0
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "psegM",
+              "name": "headerLeft",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "GucRH",
+                  "name": "icon",
+                  "width": 24,
+                  "height": 24,
+                  "iconFontName": "mail",
+                  "iconFontFamily": "lucide",
+                  "fill": "$--red-500"
+                },
+                {
+                  "type": "text",
+                  "id": "cRsHd",
+                  "name": "title",
+                  "fill": "$--foreground",
+                  "content": "Google Accounts",
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 20,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "id": "xZP9m",
+              "type": "ref",
+              "ref": "K87ZP",
+              "name": "addBtn",
+              "descendants": {
+                "33b2T": {
+                  "content": "+ Add Account"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "lzJ6W",
+          "name": "description",
+          "fill": "$--gray-600",
+          "textGrowth": "fixed-width-height",
+          "width": 493,
+          "height": 29,
+          "content": "Connect your Google accounts to sync emails, calendar events, and contacts.",
+          "fontFamily": "$--font-secondary",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "qKb0L",
+          "name": "accountsContainer",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 12,
+          "children": [
+            {
+              "id": "plq83",
+              "type": "ref",
+              "ref": "yYzI4",
+              "width": "fill_container",
+              "name": "exampleCard"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "wgj6p",
+      "type": "ref",
+      "ref": "C00Ig",
+      "name": "TodoistSection",
+      "y": 472,
+      "descendants": {
+        "GucRH": {
+          "iconFontName": "square-check",
+          "fill": "$--red-500"
+        },
+        "cRsHd": {
+          "content": "Todoist"
+        },
+        "xZP9m/33b2T": {
+          "content": "+ Connect Account"
+        },
+        "lzJ6W": {
+          "content": "Connect your Todoist account to sync contact cadence tasks."
+        },
+        "plq83/ZzLcR": {
+          "content": "user@todoist.com"
+        },
+        "plq83/LrJyw/HnSQj": {
+          "content": "Read & Write"
+        },
+        "plq83/NphQd/3B3ZY": {
+          "content": "Tasks"
+        },
+        "plq83/NphQd/z1w8y": {
+          "content": "Never"
+        },
+        "plq83/px1Dn": {
+          "enabled": false
+        },
+        "plq83/px1Dn/z1w8y": {
+          "enabled": false
+        },
+        "plq83/px1Dn/WVvgc": {
+          "enabled": false
+        }
+      }
+    },
+    {
+      "type": "frame",
+      "id": "Vd4DH",
+      "x": 5486,
+      "y": 800,
+      "name": "TodoistConfigSection",
+      "reusable": true,
+      "width": 600,
+      "fill": "$--gray-50",
+      "cornerRadius": 8,
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "$--gray-200"
+      },
+      "layout": "vertical",
+      "gap": 16,
+      "padding": 16,
+      "children": [
+        {
+          "type": "text",
+          "id": "uxsL5",
+          "name": "title",
+          "fill": "$--foreground",
+          "content": "Sync Configuration",
+          "fontFamily": "$--font-primary",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "J6UXb",
+          "name": "description",
+          "fill": "$--gray-500",
+          "content": "Select the Todoist project and label to use for cadence tasks.",
+          "fontFamily": "$--font-secondary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "nCAFO",
+          "name": "fields",
+          "width": "fill_container",
+          "gap": 16,
+          "children": [
+            {
+              "type": "frame",
+              "id": "IY7xo",
+              "name": "projectField",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 6,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "okrV8",
+                  "name": "label",
+                  "fill": "$--gray-700",
+                  "content": "Project",
+                  "fontFamily": "$--font-secondary",
+                  "fontSize": 13,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "frame",
+                  "id": "DZqiq",
+                  "name": "select",
+                  "width": "fill_container",
+                  "fill": "$--card",
+                  "cornerRadius": 6,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--gray-300"
+                  },
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "cif47",
+                      "name": "value",
+                      "fill": "$--foreground",
+                      "content": "#CRM",
+                      "fontFamily": "$--font-secondary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "3pEDU",
+                      "name": "chevron",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "chevron-down",
+                      "iconFontFamily": "lucide",
+                      "fill": "$--gray-400"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "WgdJL",
+              "name": "labelField",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 6,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "TMMbM",
+                  "name": "label",
+                  "fill": "$--gray-700",
+                  "content": "Label",
+                  "fontFamily": "$--font-secondary",
+                  "fontSize": 13,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "frame",
+                  "id": "Cng1o",
+                  "name": "select",
+                  "width": "fill_container",
+                  "fill": "$--card",
+                  "cornerRadius": 6,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--gray-300"
+                  },
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "cf0Z9",
+                      "name": "value",
+                      "fill": "$--foreground",
+                      "content": "CRM",
+                      "fontFamily": "$--font-secondary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "94dIm",
+                      "name": "chevron",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "chevron-down",
+                      "iconFontFamily": "lucide",
+                      "fill": "$--gray-400"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "ddTrf",
+      "x": 5486,
+      "y": 1617,
+      "name": "OAuthEmptyState",
+      "reusable": true,
+      "width": 600,
+      "fill": "$--gray-50",
+      "cornerRadius": 8,
+      "stroke": {
+        "align": "inside",
+        "thickness": 2,
+        "fill": "$--gray-200"
+      },
+      "layout": "vertical",
+      "gap": 16,
+      "padding": [
+        48,
+        24
+      ],
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "aAUJk",
+          "name": "iconCircle",
+          "width": 64,
+          "height": 64,
+          "fill": "$--gray-100",
+          "cornerRadius": 32,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "8h1Th",
+              "name": "icon",
+              "width": 32,
+              "height": 32,
+              "iconFontName": "square-check",
+              "iconFontFamily": "lucide",
+              "fill": "$--gray-400"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "CjQx0",
+          "name": "title",
+          "fill": "$--foreground",
+          "content": "No Todoist account connected",
+          "textAlign": "center",
+          "fontFamily": "$--font-primary",
+          "fontSize": 18,
+          "fontWeight": "500"
+        },
+        {
+          "type": "text",
+          "id": "o2kfH",
+          "name": "description",
+          "fill": "$--gray-500",
+          "content": "Connect your Todoist account to start syncing cadence tasks.",
+          "textAlign": "center",
+          "fontFamily": "$--font-secondary",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "id": "jb2UP",
+          "type": "ref",
+          "ref": "K87ZP",
+          "name": "connectBtn",
+          "descendants": {
+            "33b2T": {
+              "content": "Connect Todoist Account"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "y9MkK",
+      "x": 6286,
+      "y": 472,
+      "name": "Todoist (with Config)",
+      "width": 700,
+      "fill": "$--card",
+      "cornerRadius": 8,
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "$--card-border"
+      },
+      "effect": {
+        "type": "shadow",
+        "shadowType": "outer",
+        "color": "#0000000D",
+        "offset": {
+          "x": 0,
+          "y": 1
+        },
+        "blur": 4
+      },
+      "layout": "vertical",
+      "gap": 16,
+      "padding": 24,
+      "children": [
+        {
+          "type": "frame",
+          "id": "FLHli",
+          "name": "header",
+          "width": "fill_container",
+          "padding": [
+            20,
+            0
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "iAm44",
+              "name": "headerLeft",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "SPBf3",
+                  "name": "icon",
+                  "width": 24,
+                  "height": 24,
+                  "iconFontName": "square-check",
+                  "iconFontFamily": "lucide",
+                  "fill": "$--red-500"
+                },
+                {
+                  "type": "text",
+                  "id": "3WMG1",
+                  "name": "title",
+                  "fill": "$--foreground",
+                  "content": "Todoist",
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 20,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "id": "hcYrU",
+              "type": "ref",
+              "ref": "K87ZP",
+              "name": "btn",
+              "descendants": {
+                "33b2T": {
+                  "content": "+ Connect Account"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "T3FbM",
+          "name": "desc",
+          "fill": "$--gray-600",
+          "content": "Connect your Todoist account to sync contact cadence tasks.",
+          "fontFamily": "$--font-secondary",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "id": "dGsmG",
+          "type": "ref",
+          "ref": "yYzI4",
+          "width": "fill_container",
+          "name": "card",
+          "descendants": {
+            "ZzLcR": {
+              "content": "user@todoist.com"
+            },
+            "LrJyw/HnSQj": {
+              "content": "Read & Write"
+            },
+            "NphQd/3B3ZY": {
+              "content": "Tasks"
+            },
+            "NphQd/z1w8y": {
+              "content": "Never"
+            },
+            "px1Dn": {
+              "enabled": false
+            }
+          }
+        },
+        {
+          "id": "MO3rY",
+          "type": "ref",
+          "ref": "Vd4DH",
+          "width": "fill_container",
+          "name": "config"
+        }
+      ]
     }
   ],
   "variables": {
