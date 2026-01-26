@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/db"
@@ -12,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 // SyncHandler handles sync-related HTTP requests
@@ -127,10 +130,19 @@ func (h *SyncHandler) TriggerSync(c *gin.Context) {
 		return
 	}
 
-	if err := h.syncService.TriggerSync(c.Request.Context(), source, req.AccountID); err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to trigger sync", err.Error())
-		return
-	}
+	// Run sync in background goroutine with detached context
+	// This prevents the HTTP request timeout from cancelling the sync
+	accountID := req.AccountID
+	go func() {
+		// Use background context with 5-minute timeout for the sync operation
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		if err := h.syncService.TriggerSync(ctx, source, accountID); err != nil {
+			// Log error - can't return to client since request already responded
+			log.Error().Err(err).Str("source", source).Msg("background sync failed")
+		}
+	}()
 
 	api.SendSuccess(c, http.StatusAccepted, map[string]string{
 		"message": "Sync triggered successfully",
