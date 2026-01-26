@@ -8,6 +8,54 @@ Understanding why things are built the way they are.
 
 **Personal CRM** is designed as a single-user, local-first system optimized for personal use on constrained hardware (Raspberry Pi).
 
+### System Architecture
+
+```mermaid
+graph TB
+    subgraph Frontend["Frontend (Next.js 15)"]
+        UI[React Components]
+        RQ[React Query]
+        API_CLIENT[API Client]
+    end
+
+    subgraph Backend["Backend (Go + Gin)"]
+        HANDLERS[Handlers]
+        SERVICES[Services]
+        REPOS[Repositories]
+        SCHEDULER[Scheduler<br/>robfig/cron]
+
+        subgraph Sync["Sync Providers"]
+            GCONTACTS[Google Contacts]
+            GCAL[Google Calendar]
+            TODOIST_SYNC[Todoist]
+        end
+    end
+
+    subgraph Database["PostgreSQL 16"]
+        SQLC[sqlc Queries]
+        TABLES[(Tables)]
+        PGVECTOR[pgvector]
+    end
+
+    subgraph External["External Services"]
+        GOOGLE[Google APIs<br/>OAuth + Contacts + Calendar]
+        TODOIST[Todoist API<br/>OAuth + Tasks]
+    end
+
+    UI --> RQ --> API_CLIENT
+    API_CLIENT -->|HTTP| HANDLERS
+    HANDLERS --> SERVICES
+    SERVICES --> REPOS
+    REPOS --> SQLC --> TABLES
+
+    SCHEDULER -->|triggers| SERVICES
+
+    SERVICES --> Sync
+    GCONTACTS --> GOOGLE
+    GCAL --> GOOGLE
+    TODOIST_SYNC --> TODOIST
+```
+
 ### Guiding Principles
 
 1. **Single-user, desktop-first** — No multi-tenant complexity
@@ -24,18 +72,37 @@ Understanding why things are built the way they are.
 
 The backend follows a strict layered architecture to maintain separation of concerns and testability:
 
-```
-HTTP Request
-    ↓
-Handler (HTTP concerns, validation, status codes)
-    ↓
-Service (business logic, orchestration)
-    ↓
-Repository (data access, type conversion)
-    ↓
-sqlc-generated DB layer (type-safe SQL)
-    ↓
-PostgreSQL
+```mermaid
+sequenceDiagram
+    participant Client as Frontend
+    participant H as Handler
+    participant S as Service
+    participant R as Repository
+    participant Q as sqlc Queries
+    participant DB as PostgreSQL
+
+    Client->>H: POST /api/v1/contacts
+    Note over H: Validate request<br/>Parse JSON
+
+    H->>S: CreateContact(ctx, req)
+    Note over S: Business logic<br/>Orchestration
+
+    S->>R: CreateContact(ctx, params)
+    Note over R: Convert to DB types<br/>(pgtype.Text, etc.)
+
+    R->>Q: CreateContact(ctx, args)
+    Note over Q: Type-safe SQL<br/>INSERT ... RETURNING *
+
+    Q->>DB: Execute SQL
+    DB-->>Q: Row data
+
+    Q-->>R: db.Contact
+    R-->>S: repository.Contact
+    Note over R: Convert to domain types
+
+    S-->>H: *Contact, nil
+    H-->>Client: 201 Created + JSON
+    Note over H: api.SendSuccess()
 ```
 
 **Benefits:**
@@ -86,6 +153,35 @@ PostgreSQL
 - Atomic transactions across relational + vector data
 - Good enough performance for single-user use
 
+**Database Tables:**
+
+| Table | Purpose | Key Relations |
+|-------|---------|---------------|
+| **Core** | | |
+| `contact` | People in CRM | Parent of most entities |
+| `contact_method` | Email, phone, social handles | → contact |
+| `note` | Freeform notes | → contact |
+| `tag` | Contact categorization | ↔ contact (via contact_tag) |
+| **Sync & Identity** | | |
+| `external_sync_state` | Sync status per provider/account | |
+| `external_sync_log` | Audit log of sync runs | → external_sync_state |
+| `external_identity` | Maps external IDs to contacts | → contact |
+| `external_contact` | Import candidates from Google/iCloud | → contact (optional) |
+| `contact_enrichment` | Tracks field enrichment sources | → contact, external_contact |
+| `oauth_credential` | OAuth tokens for Google/Todoist | |
+| **Calendar** | | |
+| `calendar_event` | Synced calendar events | |
+| `calendar_event_attendee` | Event attendees | → calendar_event, contact |
+| **Tasks** | | |
+| `contact_task` | Todoist tasks linked to contacts | → contact |
+| **Future/Unused** | | |
+| `interaction` | Interaction logging (not yet used) | → contact |
+| `connection` | Contact-to-contact relationships | → contact × 2 |
+| `note_embedding` | Vector embeddings (future AI) | → note |
+| `contact_summary` | AI summaries (future) | → contact |
+
+Schema in `backend/migrations/`. Run `make sqlc` after SQL changes.
+
 ### Query Layer: sqlc (NOT an ORM)
 
 **Why sqlc?**
@@ -133,6 +229,13 @@ PostgreSQL
 - Decision deferred until Pi deployment
 
 ### Scheduler: robfig/cron
+
+**Location:** `backend/internal/scheduler/scheduler.go`
+
+**Current Jobs:**
+| Job | Schedule | Description |
+|-----|----------|-------------|
+| External sync check | Every 5 min | Runs `syncService.RunDueSyncs()` to check for due provider syncs |
 
 **Why cron in-process?**
 - Simple: no external scheduler needed
@@ -280,21 +383,6 @@ type Contact struct {
 **Trade-offs:**
 - Must keep `contact_by` in sync on every write path
 - But: Enables efficient database queries for overdue contacts
-
-### 7. Tauri Desktop Wrapper
-
-**Decision:** Optional Tauri app for native Mac experience.
-
-**Rationale:**
-- Native app feel (dock icon, cmd+tab)
-- Manages backend lifecycle (start/stop Go binary)
-- Finds free port automatically
-- Better than Electron (smaller, faster)
-
-**Trade-off:**
-- Rust build toolchain required
-- More complex build process
-- But: optional (can use browser)
 
 ---
 
@@ -454,6 +542,8 @@ External sync connects the CRM to external data sources (Gmail, iMessage, Google
 - Track interactions across platforms
 - Import contact data from external sources
 
+See [Sync Data Flow Diagram](../patterns/sync.md#sync-data-flow-diagram) for the full Mermaid diagram.
+
 ### Two Sync Strategies
 
 **Contact-Driven Sync (Gmail, iMessage, Calendar):**
@@ -534,54 +624,6 @@ See Google Calendar or Todoist providers as reference implementations.
 
 ---
 
-## AI/LLM Architecture (Future)
-
-### Hybrid Compute Model
-
-**Problem:** Pi can't run 70B parameter LLMs.
-
-**Solution:** Pi queues tasks, Mac processes them.
-
-```mermaid
-graph LR
-    A[Pi Backend] -->|Queue Task| B[(Pi PostgreSQL)]
-    C[Mac Worker] -->|Poll for Tasks| B
-    C -->|Run LLM| D[Ollama]
-    C -->|Write Results| B
-    A -->|Serve Results| E[Frontend]
-```
-
-**Design:**
-1. User action creates LLM task in `llm_task` table
-2. Mac worker polls Pi for pending tasks
-3. Worker runs Ollama (local LLM)
-4. Worker writes results back to Pi
-5. Pi serves results to frontend
-
-**Benefits:**
-- Pi stays always-on source of truth
-- Powerful Mac only needed occasionally
-- No cloud API costs (after initial embeddings)
-- Privacy preserved
-
-**Trade-offs:**
-- Features only work when Mac online
-- But: async design means no blocking
-
-### Embedding Strategy
-
-**Claude for Initial Embeddings:**
-- High quality
-- Fast batch API
-- One-time cost for existing data
-
-**Local Embeddings for New Data:**
-- Use smaller local model (e.g., `nomic-embed-text`)
-- Good enough for similarity search
-- Free after setup
-
----
-
 ## Testing Philosophy
 
 ### Test Pyramid
@@ -590,12 +632,12 @@ graph LR
          E2E (Playwright)
         - Full workflows
        - Slow, brittle
-      - Run pre-deploy
+      - Run pre-push (diff-selected) and in CI (full)
 
        Integration Tests
       - DB + Repository
-     - Docker required
-    - Run in CI
+     - Postgres required
+    - Run pre-push and in CI
 
       Unit Tests
      - Fast, isolated
@@ -637,18 +679,7 @@ make dev
 
 ### Production (Pi)
 
-**Option A: Docker Compose (Current)**
-```yaml
-services:
-  postgres:
-    image: pgvector/pgvector:pg16
-  backend:
-    image: crm-backend:latest
-  frontend:
-    image: nginx:alpine  # serves static export
-```
-
-**Option B: Systemd Services (Future)**
+**Systemd Services**
 ```ini
 [Unit]
 Description=Personal CRM Backend
@@ -657,11 +688,6 @@ Description=Personal CRM Backend
 ExecStart=/home/pi/crm-api
 Restart=always
 ```
-
-**Trade-offs:**
-- Docker: easier, consistent
-- Systemd: lighter, faster boot
-- Decision: Start with Docker, optimize later
 
 ---
 
@@ -689,10 +715,6 @@ Restart=always
 
 ---
 
-## Lessons Learned (To Be Updated)
-
-*This section will be updated as the project evolves.*
-
 ---
 
 *For feature development process, see [`.ai/guides/feature-development.md`](./feature-development.md)*
@@ -700,6 +722,3 @@ Restart=always
 *For common code patterns, see [`.ai/patterns/`](../patterns/)*
 
 *For current development rules, see [`.ai/rules/core.md`](../rules/core.md)*
-
-*For historical context, see [`PLAN.md`](../../PLAN.md) (may be outdated)*
-

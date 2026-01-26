@@ -1,0 +1,48 @@
+---
+timestamp: "2026-01-26T14:28:12.007660"
+type: gotcha
+summary: Serena plugin marketplace version lacks --project-from-cwd flag
+detail: |
+  The official Serena plugin (serena@claude-plugins-official) does not include the --project-from-cwd flag that enables automatic project detection from working directory. This means installing via plugin marketplace may require manual project selection on each session. For single-project usage, maintaining a custom .mcp.json with the --project-from-cwd flag provides better UX than the marketplace plugin. The marketplace version is cached at ~/.claude/plugins/cache/claude-plugins-official/serena/[hash]/.mcp.json and edits may be overwritten on updates.
+actionable: true
+
+---
+timestamp: "2026-01-26T14:28:12.007660"
+type: architecture
+summary: Serena --context claude-code flag reduces token usage for Claude Code environments
+detail: |
+  When running Serena MCP server in Claude Code environments, adding --context claude-code to the args disables tools that duplicate Claude Code's built-in capabilities, reducing token consumption. This is similar to how --context ide is used for VSCode/Cursor. The context flag should be set in .mcp.json args array. Single-project contexts (ide, claude-code) limit tools to project requirements when a project is specified at startup.
+actionable: true
+
+---
+timestamp: "2026-01-26T14:28:12.007660"
+type: documentation_gap
+summary: Agent discovery requires explicit location tables and symbol search patterns
+detail: |
+  Documentation existed in .ai/guides/ and .ai/patterns/ but lacked quick-reference tables for finding code by role. Agents struggled to answer questions like 'where are all handlers?' or 'what sync providers exist?' without searching. Adding Quick Symbol Searches (patterns like `type *Handler struct`) and Key File Locations tables to AGENTS.md plus inventories (sync providers, React hooks, scheduler jobs, API routes) dramatically improves agent efficiency. Cross-cutting concerns tables ('When You Change X, Check Y') prevent agents from fixing only one instance of a pattern. This guidance should be in the top-level agent entry point (AGENTS.md) not buried in sub-guides.
+actionable: true
+
+---
+timestamp: "2026-01-26T14:28:12.007660"
+type: architecture
+summary: Mermaid diagrams in markdown provide version-controlled architecture visualization
+detail: |
+  For developer documentation, Mermaid diagrams embedded in markdown files provide several advantages: renders natively in GitHub, version controlled as text (no binary files), easy to update alongside code changes, and no external tooling required. Useful for system architecture, data flow (sync processes), and request flow (layered architecture) diagrams. Place in .ai/guides/architecture.md and cross-reference from other docs.
+actionable: true
+
+---
+timestamp: "2026-01-26T14:28:12.007660"
+type: rule
+summary: PLAN.md files become outdated and should be removed after implementation
+detail: |
+  Project had a PLAN.md that outlined future sync architecture work but was never updated as features were implemented. This caused confusion as agents would read outdated plans that contradicted actual implementation. After completing planned work, either delete the PLAN.md or move completed items to actual documentation (architecture.md, patterns docs). Don't maintain parallel planning documents that duplicate or contradict current state documentation.
+actionable: true
+
+---
+timestamp: "2026-01-26T14:28:12.007660"
+type: distinction
+summary: Project-scoped plugin installs still use global cache directory
+detail: |
+  When installing Claude Code plugins at project scope via /plugin command, the plugin files are cached at ~/.claude/plugins/cache/[org]/[plugin]/[hash]/ (global location), not in the project directory. The project's .claude/settings.json gets an enabledPlugins entry to reference it. This means project-scoped plugins are not truly isolated - they share the same cached plugin code. For true project-specific MCP server configuration, use .mcp.json in project root instead of the plugin marketplace.
+actionable: false
+

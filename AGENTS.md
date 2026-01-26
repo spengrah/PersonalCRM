@@ -39,6 +39,25 @@ Load as needed, not upfront:
 - Testing rules: `.ai/rules/testing.md`
 - Code review standards: `.ai/rules/code-review.md`
 
+## Quick Symbol Searches
+
+Find all instances of a layer:
+- All handlers: `type *Handler struct`
+- All services: `type *Service struct`
+- All repositories: `type *Repository struct`
+- All sync providers: `providerRegistry.Register`
+
+## Key File Locations
+
+| What | Where |
+|------|-------|
+| API routes | `backend/cmd/crm-api/main.go` (search for `v1.Group`) |
+| Scheduler/cron jobs | `backend/internal/scheduler/scheduler.go` |
+| Time acceleration | `backend/internal/accelerated/time.go` |
+| Query invalidation | `frontend/src/lib/query-invalidation.ts` |
+| Query keys | `frontend/src/lib/query-keys.ts` |
+| Fuzzy matching | `backend/internal/matching/` |
+
 ## Session Hints
 
 - Run `make test && make test-e2e-diff` to verify changes work (also runs automatically on push)

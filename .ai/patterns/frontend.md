@@ -2,6 +2,26 @@
 
 Reusable React/TypeScript patterns for consistency across the frontend codebase.
 
+## React Query Hooks Inventory
+
+| Hook | Domain | File |
+|------|--------|------|
+| `useContacts`, `useContact`, `useCreateContact`, etc. | Contacts | `use-contacts.ts` |
+| `useContactNote`, `useCreateNote`, etc. | Notes | `use-contact-note.ts` |
+| `useCalendarEvents`, `useCreateCalendarEvent` | Calendar | `use-calendar.ts` |
+| `useImportCandidates`, `useImportContact` | Imports | `use-imports.ts` |
+| `useMergeContacts` | Contact merge | `use-merge.ts` |
+| `useSyncStates`, `useTriggerSync` | Sync status | `use-sync-states.ts` |
+| `useGoogleAccounts`, `useConnectGoogle` | Google OAuth | `use-google-accounts.ts` |
+| `useTodoistAccounts`, `useConnectTodoist` | Todoist OAuth | `use-todoist-accounts.ts` |
+| `useTodoistSettings`, `useUpdateTodoistSettings` | Todoist config | `use-todoist-settings.ts` |
+| `useAcceleratedTime` | Time acceleration | `use-accelerated-time.ts` |
+| `useKeyboardNavigation` | Keyboard nav | `use-keyboard-navigation.ts` |
+
+All hooks are in `frontend/src/hooks/`.
+
+---
+
 ## Loading Pattern
 
 ```typescript

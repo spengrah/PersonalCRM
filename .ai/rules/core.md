@@ -63,20 +63,12 @@ See `.ai/rules/code-review.md` for details
 ## Layered Architecture
 
 ```
-HTTP Request
-    ↓
-Handler (HTTP concerns, validation, status codes)
-    ↓
-Service (business logic, orchestration)
-    ↓
-Repository (data access, type conversion)
-    ↓
-sqlc-generated DB layer (type-safe SQL)
-    ↓
-PostgreSQL
+Handler → Service → Repository → sqlc → PostgreSQL
 ```
 
 **Key Rule:** Never skip layers. Handlers should not call DB directly.
+
+See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full sequence.
 
 ## Common Gotchas
 
@@ -172,3 +164,21 @@ if errors.Is(err, db.ErrNotFound) {
 All queries must filter `WHERE deleted_at IS NULL`. This is enforced in sqlc queries.
 
 **Important:** Soft-delete (`UPDATE deleted_at = NOW()`) does NOT trigger FK cascades. When soft-deleting a parent record (e.g., contact), you must explicitly delete or reassign related records (e.g., contact_methods, notes) first. The ON DELETE CASCADE constraint only fires on actual DELETE statements.
+
+## When You Change X, Check Y
+
+Cross-cutting concerns that require checking multiple locations:
+
+| When You Change | Also Check/Update |
+|-----------------|-------------------|
+| Contact soft-delete logic | Identity cleanup, note cascade, contact_method cascade |
+| Sync provider implementation | Provider registry table in `.ai/patterns/sync.md` |
+| New React Query hook | Hooks inventory in `.ai/patterns/frontend.md` |
+| New API endpoint | API routes table in `.ai/guides/feature-development.md` |
+| Query invalidation rules | `frontend/src/lib/query-invalidation.ts` domain events |
+| New database table | Database tables in `.ai/guides/architecture.md` |
+| OAuth flow changes | Both callback route AND auth URL endpoint |
+| Contact method types | `contact_method` CHECK constraint + `identity.IdentifierType` enum |
+| Cadence options | `contact` CHECK constraint + frontend dropdown options |
+| E2E test file patterns | `frontend/tests/e2e/test-map.json` tag mappings |
+| Scheduled job changes | Scheduler section in `.ai/guides/architecture.md` |

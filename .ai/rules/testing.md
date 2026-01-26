@@ -30,6 +30,8 @@ CI runs the full E2E suite; local runs use diff selection for speed.
    - Fastest, run frequently
 ```
 
+See [Layered Architecture](../guides/architecture.md#why-layered) for how these layers interact.
+
 ## When to Write What
 
 **Unit Tests:**

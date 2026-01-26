@@ -11,41 +11,27 @@ Complete step-by-step guide for implementing new features in the Personal CRM.
 ```bash
 # First time setup
 make setup                  # Install dependencies and git hooks
-make start-local            # Start all services in production mode
+make dev                    # Start all services in dev mode
 ```
 
 ### Development Cycle
 
 ```bash
 # Make code changes, then:
-make reload                 # ⚠️ ALWAYS use this after code changes
+make dev-restart             # ⚠️ ALWAYS use this after code changes
 
 # NOT just `make build` - that doesn't restart services!
+# NOT just `make dev` - could create port conflicts!
 ```
-
-### Why `make reload` is Critical
-
-When running in production mode (`make start-local`), the frontend and backend run as detached processes. Unlike `make dev` which has hot-reload:
-
-- **Frontend**: Next.js embeds `NEXT_PUBLIC_*` env vars at build time
-- **Backend**: Go binaries must be rebuilt to pick up changes
-- **Old processes**: Keep running with stale code if not killed
-
-`make reload` does:
-1. Rebuilds both frontend and backend
-2. Kills existing processes on ports 3001 and 8080
-3. Starts new processes with the fresh build
-4. Verifies startup success and BUILD_ID
 
 ### Quick Reference
 
 | Scenario | Command |
 |----------|---------|
-| Start fresh | `make start-local` |
-| After code changes | `make reload` |
-| Full restart (inc. DB) | `make restart` |
+| Start fresh | `make dev` |
+| Full restart (inc. DB) | `make dev-restart` |
 | Check status | `make status` |
-| Stop everything | `make stop` |
+| Stop everything | `make dev-stop` |
 
 ---
 
@@ -314,6 +300,43 @@ v1 := router.Group("/api/v1")
 }
 ```
 
+### Current API Routes
+
+| Group | Endpoint | Method | Handler | Description |
+|-------|----------|--------|---------|-------------|
+| **Contacts** | `/contacts` | POST | ContactHandler | Create contact |
+| | `/contacts` | GET | ContactHandler | List contacts |
+| | `/contacts/overdue` | GET | ContactHandler | List overdue contacts |
+| | `/contacts/:id` | GET/PUT/DELETE | ContactHandler | CRUD by ID |
+| | `/contacts/:id/last-contacted` | PATCH | ContactHandler | Mark as contacted |
+| | `/contacts/:id/notes` | GET/PUT | NoteHandler | Contact notepad |
+| | `/contacts/:id/merge/preview` | GET | ContactHandler | Merge preview |
+| | `/contacts/:id/merge` | POST | ContactHandler | Execute merge |
+| | `/contacts/:id/events` | GET | CalendarHandler | Contact's events |
+| | `/contacts/:id/identities` | GET | IdentityHandler | Contact's identities |
+| **Auth** | `/auth/google` | GET | OAuthHandler | Google auth URL |
+| | `/auth/google/accounts` | GET | OAuthHandler | List Google accounts |
+| | `/auth/google/accounts/:id/revoke` | POST | OAuthHandler | Revoke account |
+| | `/auth/todoist` | GET | OAuthHandler | Todoist auth URL |
+| | `/auth/todoist/accounts` | GET | OAuthHandler | List Todoist accounts |
+| **Sync** | `/sync/status` | GET | SyncHandler | All sync states |
+| | `/sync/providers` | GET | SyncHandler | Available providers |
+| | `/sync/:source/trigger` | POST | SyncHandler | Trigger sync |
+| | `/sync/states/:id/enable` | PATCH | SyncHandler | Enable/disable sync |
+| **Identities** | `/identities/unmatched` | GET | IdentityHandler | Unmatched identities |
+| | `/identities/:id/link` | POST | IdentityHandler | Link to contact |
+| **Imports** | `/imports/candidates` | GET | ImportHandler | Import candidates |
+| | `/imports/:id/import` | POST | ImportHandler | Import as new contact |
+| | `/imports/:id/link` | POST | ImportHandler | Link to existing |
+| **Todoist** | `/todoist/settings` | GET/PATCH | TodoistHandler | Todoist settings |
+| | `/todoist/projects` | GET | TodoistHandler | List projects |
+| | `/todoist/labels` | GET | TodoistHandler | List labels |
+| **System** | `/system/time` | GET | SystemHandler | Current time |
+| | `/export` | POST | SystemHandler | Export data |
+| | `/import` | POST | SystemHandler | Import data |
+
+Routes defined in `backend/cmd/crm-api/main.go`.
+
 ---
 
 ## 7. Write Tests
@@ -471,29 +494,6 @@ ENABLE_VECTOR_SEARCH=false
 TELEGRAM_BOT_TOKEN=your-token-here
 ENABLE_TELEGRAM_BOT=false
 ```
-
----
-
-## AI/LLM Features (Future)
-
-### Current State
-- Database has `note_embedding` and `interaction_embedding` tables (unused)
-- pgvector extension enabled
-- No embedding generation yet
-
-### Planned Architecture
-- **Embedding generation:** Run on MacBook M2 Max
-- **Storage:** PostgreSQL with pgvector
-- **LLM inference:** Ollama on Mac (Llama 3.1 70B)
-- **Worker pattern:** Mac polls Pi for pending tasks
-
-### When Implementing AI Features
-
-1. **Create LLM task queue table** (check GitHub Issues for LLM implementation tasks)
-2. **Build worker that polls Pi** (runs on Mac)
-3. **Generate embeddings asynchronously** (don't block API)
-4. **Store results in existing embedding tables**
-5. **Keep Pi as source of truth** (Mac is just compute)
 
 ---
 
