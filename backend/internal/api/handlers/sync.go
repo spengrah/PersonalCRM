@@ -9,7 +9,8 @@ import (
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/db"
-	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
@@ -17,14 +18,27 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// SyncService defines the interface for sync operations used by the handler.
+// This allows for easier testing with mock implementations.
+type SyncService interface {
+	TriggerSync(ctx context.Context, source string, accountID *string) error
+	GetSyncStatus(ctx context.Context) ([]repository.SyncState, error)
+	GetSyncStateBySource(ctx context.Context, source string, accountID *string) (*repository.SyncState, error)
+	EnableSync(ctx context.Context, id uuid.UUID, enabled bool) (*repository.SyncState, error)
+	GetSyncLogs(ctx context.Context, syncStateID uuid.UUID, limit, offset int32) ([]repository.SyncLog, error)
+	CountSyncLogs(ctx context.Context, syncStateID uuid.UUID) (int64, error)
+	GetRecentSyncLogs(ctx context.Context, limit int32) ([]repository.SyncLog, error)
+	GetAvailableProviders() []sync.SourceConfig
+}
+
 // SyncHandler handles sync-related HTTP requests
 type SyncHandler struct {
-	syncService *service.SyncService
+	syncService SyncService
 	validator   *validator.Validate
 }
 
 // NewSyncHandler creates a new sync handler
-func NewSyncHandler(syncService *service.SyncService) *SyncHandler {
+func NewSyncHandler(syncService SyncService) *SyncHandler {
 	return &SyncHandler{
 		syncService: syncService,
 		validator:   validator.New(),
@@ -133,14 +147,17 @@ func (h *SyncHandler) TriggerSync(c *gin.Context) {
 	// Run sync in background goroutine with detached context
 	// This prevents the HTTP request timeout from cancelling the sync
 	accountID := req.AccountID
+	srcName := source // explicit capture for goroutine
 	go func() {
-		// Use background context with 5-minute timeout for the sync operation
+		// Use background context with 5-minute timeout for the sync operation.
+		// 5 minutes is sufficient for ~500 contacts with Todoist API rate limits (~100 req/min).
+		// For larger datasets, consider making this configurable via environment variable.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
-		if err := h.syncService.TriggerSync(ctx, source, accountID); err != nil {
+		if err := h.syncService.TriggerSync(ctx, srcName, accountID); err != nil {
 			// Log error - can't return to client since request already responded
-			log.Error().Err(err).Str("source", source).Msg("background sync failed")
+			log.Error().Err(err).Str("source", srcName).Msg("background sync failed")
 		}
 	}()
 
