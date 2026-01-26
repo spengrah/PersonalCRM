@@ -69,6 +69,7 @@ Create your `.env` file from the appropriate template (`.env.example` for develo
 ```bash
 # Development mode (hot reload)
 make dev                # Start with hot reload (recommended for active development)
+make dev-restart        # Restart full dev app, including backend
 
 # Production mode (local)
 make start-local        # Start production build locally
@@ -80,7 +81,9 @@ make status             # Check service status
 make build              # Build without restart (⚠️ won't update running services)
 
 # Run tests
-make test
+make test               # Unit and integration tests
+make test-e2e           # Full E2E test suite
+make test-e2e-diff      # Diff-selected E2E tests (recommendated for local)
 
 # Docker operations
 make docker-up          # Start database
@@ -666,7 +669,7 @@ The application uses PostgreSQL with the pgvector extension for vector similarit
 - **Phase 2**: AI Agent v0 (Embeddings, RAG, Chat UI)
 - **Phase 3**: AI Agent v1 (Advanced features, Graph view, Export)
 
-See `docs/PLAN.md` for detailed architecture and implementation roadmap.
+See `.ai/guides/architecture.md` for architecture and `.ai/guides/feature-development.md` for the current development process.
 
 ## Contributing
 
