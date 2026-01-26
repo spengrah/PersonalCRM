@@ -8,6 +8,54 @@ Understanding why things are built the way they are.
 
 **Personal CRM** is designed as a single-user, local-first system optimized for personal use on constrained hardware (Raspberry Pi).
 
+### System Architecture
+
+```mermaid
+graph TB
+    subgraph Frontend["Frontend (Next.js 15)"]
+        UI[React Components]
+        RQ[React Query]
+        API_CLIENT[API Client]
+    end
+
+    subgraph Backend["Backend (Go + Gin)"]
+        HANDLERS[Handlers]
+        SERVICES[Services]
+        REPOS[Repositories]
+        SCHEDULER[Scheduler<br/>robfig/cron]
+
+        subgraph Sync["Sync Providers"]
+            GCONTACTS[Google Contacts]
+            GCAL[Google Calendar]
+            TODOIST_SYNC[Todoist]
+        end
+    end
+
+    subgraph Database["PostgreSQL 16"]
+        SQLC[sqlc Queries]
+        TABLES[(Tables)]
+        PGVECTOR[pgvector]
+    end
+
+    subgraph External["External Services"]
+        GOOGLE[Google APIs<br/>OAuth + Contacts + Calendar]
+        TODOIST[Todoist API<br/>OAuth + Tasks]
+    end
+
+    UI --> RQ --> API_CLIENT
+    API_CLIENT -->|HTTP| HANDLERS
+    HANDLERS --> SERVICES
+    SERVICES --> REPOS
+    REPOS --> SQLC --> TABLES
+
+    SCHEDULER -->|triggers| SERVICES
+
+    SERVICES --> Sync
+    GCONTACTS --> GOOGLE
+    GCAL --> GOOGLE
+    TODOIST_SYNC --> TODOIST
+```
+
 ### Guiding Principles
 
 1. **Single-user, desktop-first** — No multi-tenant complexity
@@ -317,21 +365,6 @@ type Contact struct {
 - Must keep `contact_by` in sync on every write path
 - But: Enables efficient database queries for overdue contacts
 
-### 7. Tauri Desktop Wrapper
-
-**Decision:** Optional Tauri app for native Mac experience.
-
-**Rationale:**
-- Native app feel (dock icon, cmd+tab)
-- Manages backend lifecycle (start/stop Go binary)
-- Finds free port automatically
-- Better than Electron (smaller, faster)
-
-**Trade-off:**
-- Rust build toolchain required
-- More complex build process
-- But: optional (can use browser)
-
 ---
 
 ## Frontend State Management
@@ -570,54 +603,6 @@ See Google Calendar or Todoist providers as reference implementations.
 
 ---
 
-## AI/LLM Architecture (Future)
-
-### Hybrid Compute Model
-
-**Problem:** Pi can't run 70B parameter LLMs.
-
-**Solution:** Pi queues tasks, Mac processes them.
-
-```mermaid
-graph LR
-    A[Pi Backend] -->|Queue Task| B[(Pi PostgreSQL)]
-    C[Mac Worker] -->|Poll for Tasks| B
-    C -->|Run LLM| D[Ollama]
-    C -->|Write Results| B
-    A -->|Serve Results| E[Frontend]
-```
-
-**Design:**
-1. User action creates LLM task in `llm_task` table
-2. Mac worker polls Pi for pending tasks
-3. Worker runs Ollama (local LLM)
-4. Worker writes results back to Pi
-5. Pi serves results to frontend
-
-**Benefits:**
-- Pi stays always-on source of truth
-- Powerful Mac only needed occasionally
-- No cloud API costs (after initial embeddings)
-- Privacy preserved
-
-**Trade-offs:**
-- Features only work when Mac online
-- But: async design means no blocking
-
-### Embedding Strategy
-
-**Claude for Initial Embeddings:**
-- High quality
-- Fast batch API
-- One-time cost for existing data
-
-**Local Embeddings for New Data:**
-- Use smaller local model (e.g., `nomic-embed-text`)
-- Good enough for similarity search
-- Free after setup
-
----
-
 ## Testing Philosophy
 
 ### Test Pyramid
@@ -626,12 +611,12 @@ graph LR
          E2E (Playwright)
         - Full workflows
        - Slow, brittle
-      - Run pre-deploy
+      - Run pre-push (diff-selected) and in CI (full)
 
        Integration Tests
       - DB + Repository
-     - Docker required
-    - Run in CI
+     - Postgres required
+    - Run pre-push and in CI
 
       Unit Tests
      - Fast, isolated
@@ -673,18 +658,7 @@ make dev
 
 ### Production (Pi)
 
-**Option A: Docker Compose (Current)**
-```yaml
-services:
-  postgres:
-    image: pgvector/pgvector:pg16
-  backend:
-    image: crm-backend:latest
-  frontend:
-    image: nginx:alpine  # serves static export
-```
-
-**Option B: Systemd Services (Future)**
+**Systemd Services**
 ```ini
 [Unit]
 Description=Personal CRM Backend
@@ -693,11 +667,6 @@ Description=Personal CRM Backend
 ExecStart=/home/pi/crm-api
 Restart=always
 ```
-
-**Trade-offs:**
-- Docker: easier, consistent
-- Systemd: lighter, faster boot
-- Decision: Start with Docker, optimize later
 
 ---
 
@@ -725,10 +694,6 @@ Restart=always
 
 ---
 
-## Lessons Learned (To Be Updated)
-
-*This section will be updated as the project evolves.*
-
 ---
 
 *For feature development process, see [`.ai/guides/feature-development.md`](./feature-development.md)*
@@ -738,4 +703,3 @@ Restart=always
 *For current development rules, see [`.ai/rules/core.md`](../rules/core.md)*
 
 *For historical context, see [`PLAN.md`](../../PLAN.md) (may be outdated)*
-
