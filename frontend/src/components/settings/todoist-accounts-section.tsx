@@ -2,10 +2,33 @@
 
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { CheckSquare, Plus, Trash2, CheckCircle, AlertCircle, Info, RefreshCcw } from 'lucide-react'
+import {
+  CheckSquare,
+  Plus,
+  Trash2,
+  CheckCircle,
+  AlertCircle,
+  Info,
+  RefreshCcw,
+  RefreshCw,
+  Settings,
+  ChevronDown,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTodoistAccounts, useRevokeTodoistAccount } from '@/hooks/use-todoist-accounts'
-import { useSyncStates, accountNeedsReconnection } from '@/hooks/use-sync-states'
+import {
+  useTodoistSettings,
+  useUpdateTodoistSettings,
+  useTodoistProjects,
+  useTodoistLabels,
+} from '@/hooks/use-todoist-settings'
+import {
+  useSyncStates,
+  accountNeedsReconnection,
+  getSyncStateForAccount,
+  formatSyncTime,
+} from '@/hooks/use-sync-states'
+import { useTriggerSync } from '@/hooks/use-imports'
 import { startTodoistOAuthFlow, TodoistAccount } from '@/lib/oauth-api'
 
 function formatDate(dateString: string): string {
@@ -21,11 +44,93 @@ export function TodoistAccountsSection() {
   const { data: accounts, isLoading, error, refetch } = useTodoistAccounts()
   const { data: syncStates } = useSyncStates()
   const revokeMutation = useRevokeTodoistAccount()
+  const triggerSyncMutation = useTriggerSync()
   const [isConnecting, setIsConnecting] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
   const [notification, setNotification] = useState<{
     type: 'success' | 'error'
     message: string
   } | null>(null)
+
+  // Settings state
+  const hasAccount = !isLoading && !error && accounts && accounts.length > 0
+  const {
+    data: settings,
+    isLoading: settingsLoading,
+    refetch: refetchSettings,
+  } = useTodoistSettings(hasAccount)
+  const { data: projects, isLoading: projectsLoading } = useTodoistProjects(hasAccount)
+  const { data: labels, isLoading: labelsLoading } = useTodoistLabels(hasAccount)
+  const updateSettingsMutation = useUpdateTodoistSettings()
+
+  // Local state for selectors
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('')
+  const [selectedLabelId, setSelectedLabelId] = useState<string>('')
+
+  // Update local state when settings load
+  useEffect(() => {
+    if (settings) {
+      setSelectedProjectId(settings.project_id || '')
+      setSelectedLabelId(settings.label_id || '')
+    }
+  }, [settings])
+
+  // Save settings when selection changes
+  const handleProjectChange = async (projectId: string) => {
+    setSelectedProjectId(projectId)
+    try {
+      await updateSettingsMutation.mutateAsync({ project_id: projectId })
+      setNotification({
+        type: 'success',
+        message: 'Project updated successfully',
+      })
+    } catch {
+      setNotification({
+        type: 'error',
+        message: 'Failed to update project',
+      })
+    }
+  }
+
+  const handleLabelChange = async (labelId: string) => {
+    setSelectedLabelId(labelId)
+    try {
+      await updateSettingsMutation.mutateAsync({ label_id: labelId })
+      setNotification({
+        type: 'success',
+        message: 'Label updated successfully',
+      })
+    } catch {
+      setNotification({
+        type: 'error',
+        message: 'Failed to update label',
+      })
+    }
+  }
+
+  const handleTriggerSync = async () => {
+    if (!accounts?.[0]) return
+    setIsSyncing(true)
+    try {
+      await triggerSyncMutation.mutateAsync({
+        source: 'todoist',
+        accountId: accounts[0].account_id,
+      })
+      setNotification({
+        type: 'success',
+        message: 'Todoist sync started!',
+      })
+      refetchSettings()
+    } catch (err) {
+      console.error('Todoist sync error:', err)
+      setNotification({
+        type: 'error',
+        message: 'Failed to start sync',
+      })
+    } finally {
+      setIsSyncing(false)
+    }
+  }
 
   // Handle OAuth callback query params
   useEffect(() => {
@@ -105,6 +210,17 @@ export function TodoistAccountsSection() {
   // Show empty state when no accounts or when there's an error (feature not configured)
   const showEmptyState = !isLoading && (error || accounts?.length === 0)
   const hasAccounts = !isLoading && !error && accounts && accounts.length > 0
+
+  // Check if settings are configured
+  const isConfigured = settings?.project_id && settings?.label_id
+
+  // Get sync state for status display
+  const syncState = hasAccounts
+    ? getSyncStateForAccount(syncStates, 'todoist', accounts[0].account_id)
+    : undefined
+  const lastSyncText = formatSyncTime(syncState?.last_successful_sync_at ?? null)
+  const isSyncInProgress = syncState?.status === 'syncing'
+  const hasError = syncState?.status === 'error'
 
   return (
     <section className="bg-white rounded-lg shadow-sm border p-6">
@@ -224,6 +340,109 @@ export function TodoistAccountsSection() {
                   >
                     <Trash2 className="w-4 h-4" />
                   </Button>
+                </div>
+              </div>
+
+              {/* Cadence Sync Settings */}
+              <div className="mt-4 pt-4 border-t border-gray-200">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center space-x-2">
+                    <Settings className="w-4 h-4 text-gray-500" />
+                    <p className="text-sm font-medium text-gray-700">Cadence Sync Settings</p>
+                  </div>
+                  {/* Sync status badge */}
+                  <div className="flex items-center space-x-2">
+                    <span
+                      className={`text-xs px-2 py-1 rounded ${
+                        hasError
+                          ? 'bg-red-100 text-red-700'
+                          : isSyncInProgress
+                            ? 'bg-blue-100 text-blue-700'
+                            : isConfigured
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-gray-100 text-gray-500'
+                      }`}
+                    >
+                      {hasError
+                        ? 'Error'
+                        : isSyncInProgress
+                          ? 'Syncing...'
+                          : isConfigured
+                            ? `Last: ${lastSyncText}`
+                            : 'Not configured'}
+                    </span>
+                    {isConfigured && (
+                      <button
+                        onClick={handleTriggerSync}
+                        disabled={isSyncing || isSyncInProgress}
+                        className="p-1 text-blue-600 hover:bg-blue-50 rounded disabled:opacity-50"
+                      >
+                        <RefreshCw
+                          className={`w-4 h-4 ${isSyncing || isSyncInProgress ? 'animate-spin' : ''}`}
+                        />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {/* Project selector */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Project for cadence tasks
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={selectedProjectId}
+                        onChange={e => handleProjectChange(e.target.value)}
+                        disabled={projectsLoading || updateSettingsMutation.isPending}
+                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md bg-white appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                      >
+                        <option value="">Select a project...</option>
+                        {projects?.map(project => (
+                          <option key={project.id} value={project.id}>
+                            {project.name}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                    </div>
+                  </div>
+
+                  {/* Label selector */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Label for cadence tasks
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={selectedLabelId}
+                        onChange={e => handleLabelChange(e.target.value)}
+                        disabled={labelsLoading || updateSettingsMutation.isPending}
+                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md bg-white appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                      >
+                        <option value="">Select a label...</option>
+                        {labels?.map(label => (
+                          <option key={label.id} value={label.id}>
+                            {label.name}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                    </div>
+                  </div>
+
+                  {/* Status info */}
+                  {!isConfigured && (
+                    <p className="text-xs text-amber-600 bg-amber-50 p-2 rounded">
+                      Select both a project and label to enable cadence sync
+                    </p>
+                  )}
+                  {isConfigured && (
+                    <p className="text-xs text-green-600 bg-green-50 p-2 rounded">
+                      Cadence sync is active. Tasks will be created for contacts with cadence set.
+                    </p>
+                  )}
                 </div>
               </div>
 

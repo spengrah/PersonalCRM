@@ -140,6 +140,10 @@
     "tags": ["@area:settings"]
   },
   {
+    "pattern": "^frontend/src/hooks/use-todoist-settings\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
     "pattern": "^frontend/src/hooks/use-sync-states\\.ts$",
     "tags": ["@area:settings"]
   },
@@ -342,6 +346,26 @@
   },
   {
     "pattern": "^backend/internal/db/queries/external_sync\\.sql$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/contact_task\\.sql$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/repository/contact_task\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/todoist/",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/todoist\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/lib/todoist-api\\.ts$",
     "tags": ["@area:settings"]
   }
 ]
