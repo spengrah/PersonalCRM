@@ -134,6 +134,13 @@ PostgreSQL
 
 ### Scheduler: robfig/cron
 
+**Location:** `backend/internal/scheduler/scheduler.go`
+
+**Current Jobs:**
+| Job | Schedule | Description |
+|-----|----------|-------------|
+| External sync check | Every 5 min | Runs `syncService.RunDueSyncs()` to check for due provider syncs |
+
 **Why cron in-process?**
 - Simple: no external scheduler needed
 - Reliable: proven library

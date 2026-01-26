@@ -1,5 +1,17 @@
 # Sync Patterns
 
+## Registered Sync Providers
+
+| Provider | Source Name | File |
+|----------|-------------|------|
+| Google Contacts | `gcontacts` | `backend/internal/sync/gcontacts/` |
+| Google Calendar | `gcal` | `backend/internal/sync/gcal/` |
+| Todoist | `todoist` | `backend/internal/sync/todoist/` |
+
+Providers are registered in `backend/cmd/crm-api/main.go` via `providerRegistry.Register()`.
+
+---
+
 ## Normalize External Schemas at the Boundary
 
 Fix external API quirks where data enters the system, not in business logic.

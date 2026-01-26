@@ -5,7 +5,8 @@
       "args": [
         "--from", "git+https://github.com/oraios/serena",
         "serena", "start-mcp-server",
-        "--project-from-cwd"
+        "--project-from-cwd",
+        "--context", "claude-code"
       ]
     }
   }
