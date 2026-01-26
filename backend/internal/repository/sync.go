@@ -377,6 +377,32 @@ func (r *SyncRepository) DeleteSyncStatesByAccountID(ctx context.Context, accoun
 	return r.queries.DeleteSyncStatesByAccountID(ctx, pgtype.Text{String: accountID, Valid: true})
 }
 
+// UpdateSyncStateMetadata updates just the metadata field of a sync state
+func (r *SyncRepository) UpdateSyncStateMetadata(ctx context.Context, id uuid.UUID, metadata map[string]any) (*SyncState, error) {
+	var metadataBytes []byte
+	if metadata != nil {
+		var err error
+		metadataBytes, err = json.Marshal(metadata)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	dbState, err := r.queries.UpdateSyncStateMetadata(ctx, db.UpdateSyncStateMetadataParams{
+		ID:       uuidToPgUUID(id),
+		Metadata: metadataBytes,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+
+	state := convertDbSyncState(dbState)
+	return &state, nil
+}
+
 // CreateSyncLog creates a new sync log entry
 func (r *SyncRepository) CreateSyncLog(ctx context.Context, state *SyncState) (*SyncLog, error) {
 	// Convert metadata to JSON
