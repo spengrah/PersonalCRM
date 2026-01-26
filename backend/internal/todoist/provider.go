@@ -138,8 +138,8 @@ func (p *CadenceSyncProvider) Sync(
 	}
 
 	// Update user timezone from sync response
-	if syncResp.User != nil && syncResp.User.Timezone != "" {
-		settings.UserTimezone = syncResp.User.Timezone
+	if syncResp.User != nil && syncResp.User.TzInfo != nil && syncResp.User.TzInfo.Timezone != "" {
+		settings.UserTimezone = syncResp.User.TzInfo.Timezone
 		// Update metadata with timezone
 		if err := p.updateSyncStateMetadata(ctx, state.ID, settings); err != nil {
 			logger.Warn().Err(err).Msg("failed to update timezone in metadata")

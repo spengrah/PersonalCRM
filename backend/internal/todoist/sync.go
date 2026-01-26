@@ -116,13 +116,16 @@ type SyncUser struct {
 	ID       string  `json:"id"`
 	Email    string  `json:"email"`
 	FullName string  `json:"full_name"`
-	Timezone string  `json:"tz_info,omitempty"`
-	TzInfo   *TzInfo `json:"tz_info_object,omitempty"`
+	TzInfo   *TzInfo `json:"tz_info,omitempty"`
 }
 
-// TzInfo represents timezone information
+// TzInfo represents timezone information from the Sync API
 type TzInfo struct {
-	Timezone string `json:"timezone"`
+	Timezone  string `json:"timezone"`
+	GMTString string `json:"gmt_string,omitempty"`
+	Hours     int    `json:"hours,omitempty"`
+	Minutes   int    `json:"minutes,omitempty"`
+	IsDST     int    `json:"is_dst,omitempty"`
 }
 
 // SyncError represents an error response from the Sync API
