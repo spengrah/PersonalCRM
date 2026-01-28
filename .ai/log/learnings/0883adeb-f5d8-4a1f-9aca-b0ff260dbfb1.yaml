@@ -1,0 +1,40 @@
+---
+timestamp: "2026-01-28T09:29:15.626676"
+type: gotcha
+summary: Default sort mismatch breaks keyboard navigation
+detail: |
+  When the contacts list page displays with no explicit sort (causing arbitrary DB order), but buildContactUrl() and keyboard navigation use a different default sort, navigation becomes inconsistent - contacts appear at different visual positions vs navigation positions. Both the list display AND navigation IDs must use identical sort parameters. Fix: Apply consistent default sort to both initial list params AND buildContactUrl().
+actionable: true
+
+---
+timestamp: "2026-01-28T09:29:15.626676"
+type: gotcha
+summary: SQL queries without ORDER BY return arbitrary order
+detail: |
+  The ListContactIDs and ListContacts queries had no ORDER BY clause when sort_field was empty, returning contacts in arbitrary database order (effectively insertion order). This caused unpredictable ordering. Even 'unsorted' queries need a deterministic ORDER BY (e.g., created_at, id) or frontend must always provide explicit sort params.
+actionable: true
+
+---
+timestamp: "2026-01-28T09:29:15.626676"
+type: architecture
+summary: Frequency-based sorting requires CASE mapping to numeric values
+detail: |
+  To sort cadence by frequency (weekly=most frequent, annual=least frequent), use CASE statements to map text values to numeric ranks: weekly=1, biweekly=2, monthly=3, quarterly=4, biannual=5, annual=6, null=7. For desc (most frequent first), sort ASC on numeric value. For asc (least frequent first), sort DESC. Add secondary sort by full_name ASC to break ties deterministically.
+actionable: true
+
+---
+timestamp: "2026-01-28T09:29:15.626676"
+type: rule
+summary: Secondary sort required for non-unique primary sort fields
+detail: |
+  When sorting by a field with many duplicates (like cadence), always add a secondary sort by a unique or more granular field (like full_name ASC) to ensure deterministic, predictable ordering. Without this, contacts with the same cadence may appear in arbitrary order, causing navigation inconsistency.
+actionable: true
+
+---
+timestamp: "2026-01-28T09:29:15.626676"
+type: distinction
+summary: Frontend default constants vs buildContactUrl defaults
+detail: |
+  Define DEFAULT_SORT_FIELD and DEFAULT_SORT_ORDER constants at module level and use them in THREE places: (1) initial useState for params, (2) buildContactUrl fallback, (3) any other navigation context. This ensures consistency. Before this fix, buildContactUrl had hardcoded 'last_contacted'/'desc' while list had no defaults, causing mismatch.
+actionable: true
+

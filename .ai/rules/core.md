@@ -107,6 +107,8 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Redefining helper functions in new repository files | Use existing helpers from `repository/conversions.go` (uuidToPgUUID, stringToPgText, timeToPgTimestamptz) |
 | Using embedded field selectors like `result.EmbeddedType.Field` | Use `result.Field` - Go promotes embedded fields and staticcheck QF1008 prefers the shorter form |
 | Capitalizing Go error messages | Use lowercase: `fmt.Errorf("todoist settings not configured")` per ST1005 |
+| List display and navigation use different sort defaults | Extract DEFAULT_SORT_FIELD/ORDER constants; use in useState, buildContactUrl, and detail page listContext |
+| SQL queries without ORDER BY for "unsorted" case | Always provide deterministic ordering; arbitrary DB order breaks navigation consistency |
 
 ## Anti-Patterns
 
