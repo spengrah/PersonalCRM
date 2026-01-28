@@ -8,6 +8,7 @@ import { ContactSelector } from '@/components/ui/contact-selector'
 import { useContacts } from '@/hooks/use-contacts'
 import { useMergePreview, useMergeContacts, type MergeFieldSelections } from '@/hooks/use-merge'
 import type { Contact } from '@/types/contact'
+import { formatCadence as formatCadenceBase } from '@/lib/utils'
 
 interface MergeContactModalProps {
   /** The target contact (will receive merged data) */
@@ -156,10 +157,10 @@ export function MergeContactModal({
     })
   }
 
-  // Format cadence for display
+  // Format cadence for display (uses shared formatter, but shows 'Not set' for merge context)
   const formatCadence = (cadence: string | undefined | null) => {
     if (!cadence) return 'Not set'
-    return cadence.charAt(0).toUpperCase() + cadence.slice(1)
+    return formatCadenceBase(cadence)
   }
 
   return (
