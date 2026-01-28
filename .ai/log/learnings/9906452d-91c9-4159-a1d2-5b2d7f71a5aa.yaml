@@ -1,0 +1,48 @@
+---
+timestamp: "2026-01-28T12:04:28.403354"
+type: gotcha
+summary: Sync reconciliation only creates tasks, doesn't update existing ones
+detail: |
+  The Todoist sync's reconcileContactTasks() function only creates tasks for contacts without one - it doesn't check if existing tasks need updating when CRM data changes. When contact_by is updated in the CRM (via last_contacted changes), the existing Todoist task keeps its old deadline because it won't appear in incremental sync responses (Todoist didn't change it). Solution: Track synced_deadline in metadata and compare during reconciliation to detect drift.
+actionable: true
+
+---
+timestamp: "2026-01-28T12:04:28.403354"
+type: gotcha
+summary: Metadata updates must preserve existing keys, not replace wholesale
+detail: |
+  When updating contact_task metadata (via UpdateContactTaskMetadata), always read existing metadata first, modify specific keys, then write back. Creating a new map loses other metadata keys. Pattern: metadata := task.Metadata; if metadata == nil { metadata = make(map[string]any) }; metadata[key] = value; UpdateContactTaskMetadata(). This is critical because multiple systems may store different keys in the same metadata field.
+actionable: true
+
+---
+timestamp: "2026-01-28T12:04:28.403354"
+type: distinction
+summary: contact_by changes have two origins requiring different handling
+detail: |
+  contact_by can change from: (1) CRM updates (last_contacted changed) → CRM should win, update Todoist, or (2) Todoist deadline edits → Todoist wins (existing processItem logic). Can't distinguish without tracking. The assumption 'contact_by == todoist.deadline' breaks when CRM changes but sync hasn't run yet. Must track synced_deadline to detect which side changed and handle appropriately.
+actionable: true
+
+---
+timestamp: "2026-01-28T12:04:28.403354"
+type: rule
+summary: Poll-based sync can't detect CRM-initiated changes without state tracking
+detail: |
+  Incremental sync only returns items changed on Todoist's side. When CRM updates contact_by, the Todoist task doesn't appear in sync response. Without tracking previous state (like synced_deadline), there's no way to detect drift. For bidirectional sync, always track what was last synced to each side to detect changes from either direction. Synchronous updates (triggering Todoist immediately on CRM change) were rejected to avoid coupling.
+actionable: true
+
+---
+timestamp: "2026-01-28T12:04:28.403354"
+type: architecture
+summary: Date-only metadata should use YYYY-MM-DD format for consistency
+detail: |
+  When storing dates in contact_task metadata (JSONB), use YYYY-MM-DD string format to match: (1) Todoist's deadline format, (2) PostgreSQL DATE precision (day-level, not timestamp), (3) comparison logic that extracts year/month/day. Parse with time.Parse('2006-01-02', str). Avoids timezone issues and matches domain precision. Storing full RFC3339 timestamps for date-only fields adds unnecessary complexity.
+actionable: true
+
+---
+timestamp: "2026-01-28T12:04:28.403354"
+type: gotcha
+summary: Helper functions need defensive empty string checks, not just nil
+detail: |
+  In isPendingTempID(), checking if pendingTempID (string) == task.ExternalTaskID should include 'if pendingTempID == "" { return false }' before comparison. Empty strings from malformed metadata could incorrectly match empty ExternalTaskID on newly created tasks. Always validate string values aren't empty when they should represent meaningful IDs.
+actionable: true
+
