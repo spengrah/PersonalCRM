@@ -188,15 +188,34 @@ func TestIsPendingTempIDLogic(t *testing.T) {
 			metadata:       map[string]any{"pending_temp_id": 123},
 			expectPending:  false,
 		},
+		{
+			name:           "empty external_task_id",
+			externalTaskID: "",
+			metadata:       map[string]any{"pending_temp_id": "temp-uuid-123"},
+			expectPending:  false,
+		},
+		{
+			name:           "empty pending_temp_id from malformed metadata",
+			externalTaskID: "temp-uuid-123",
+			metadata:       map[string]any{"pending_temp_id": ""},
+			expectPending:  false,
+		},
+		{
+			name:           "both external_task_id and pending_temp_id are empty",
+			externalTaskID: "",
+			metadata:       map[string]any{"pending_temp_id": ""},
+			expectPending:  false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Inline the isPendingTempID logic (since it's not exported)
+			// This matches the updated implementation in provider.go
 			isPending := false
-			if tt.metadata != nil {
+			if tt.metadata != nil && tt.externalTaskID != "" {
 				pendingTempID, ok := tt.metadata["pending_temp_id"].(string)
-				if ok {
+				if ok && pendingTempID != "" {
 					isPending = pendingTempID == tt.externalTaskID
 				}
 			}

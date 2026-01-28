@@ -48,6 +48,9 @@ const (
 	MetadataKeySyncedDeadline = "synced_deadline"
 )
 
+// DateFormat is the date format used for Todoist deadlines and synced_deadline metadata (YYYY-MM-DD)
+const DateFormat = "2006-01-02"
+
 // CadenceSyncProvider implements SyncProvider for Todoist cadence tasks
 type CadenceSyncProvider struct {
 	oauthService    *OAuthService
@@ -317,7 +320,7 @@ func (p *CadenceSyncProvider) processItem(
 
 	// Check for deadline edit (Todoist wins)
 	if item.Deadline != nil && contact.ContactBy != nil {
-		todoistDeadline, err := time.Parse("2006-01-02", item.Deadline.Date)
+		todoistDeadline, err := time.Parse(DateFormat, item.Deadline.Date)
 		if err == nil {
 			// Compare dates using UTC year/month/day to avoid timezone issues
 			// time.Parse returns UTC midnight, PostgreSQL DATE loads as UTC
@@ -328,10 +331,22 @@ func (p *CadenceSyncProvider) processItem(
 				if err := p.contactRepo.UpdateContactBy(ctx, contact.ID, todoistDeadline); err != nil {
 					logger.Warn().Err(err).Msg("failed to update contact_by from Todoist deadline")
 				} else {
+					// Also update synced_deadline to prevent reconciliation from treating
+					// this Todoist-originated edit as CRM-initiated drift
+					newDeadlineStr := todoistDeadline.Format(DateFormat)
+					metadata := task.Metadata
+					if metadata == nil {
+						metadata = make(map[string]any)
+					}
+					metadata[MetadataKeySyncedDeadline] = newDeadlineStr
+					if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+						logger.Warn().Err(err).Msg("failed to update synced_deadline from Todoist deadline edit")
+					}
+
 					logger.Info().
 						Str("contactId", contact.ID.String()).
 						Time("newContactBy", todoistDeadline).
-						Msg("updated contact_by from Todoist deadline edit")
+						Msg("updated contact_by and synced_deadline from Todoist deadline edit")
 				}
 			}
 		}
@@ -385,7 +400,7 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 			}
 
 			// Create next task
-			deadlineStr := nextContactBy.Format("2006-01-02")
+			deadlineStr := nextContactBy.Format(DateFormat)
 			cmd := p.createTaskCommand(contact, settings, &deadlineStr)
 			commands = append(commands, cmd)
 
@@ -397,7 +412,7 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 			metadata[MetadataKeyPendingTempID] = cmd.TempID
 			metadata[MetadataKeySyncedDeadline] = deadlineStr
 			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
-				logger.Warn().Err(err).Msg("failed to store task metadata")
+				logger.Warn().Err(err).Msg("failed to store pending_temp_id and synced_deadline in task metadata")
 			}
 		}
 	}
@@ -446,7 +461,7 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 			}
 
 			// Create new task
-			deadlineStr := nextContactBy.Format("2006-01-02")
+			deadlineStr := nextContactBy.Format(DateFormat)
 			cmd := p.createTaskCommand(contact, settings, &deadlineStr)
 			commands = append(commands, cmd)
 
@@ -458,7 +473,7 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 			metadata[MetadataKeyPendingTempID] = cmd.TempID
 			metadata[MetadataKeySyncedDeadline] = deadlineStr
 			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
-				logger.Warn().Err(err).Msg("failed to store task metadata")
+				logger.Warn().Err(err).Msg("failed to store pending_temp_id and synced_deadline in task metadata")
 			}
 
 			logger.Info().
@@ -499,7 +514,7 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 			continue
 		}
 
-		currentDeadline := contact.ContactBy.Format("2006-01-02")
+		currentDeadline := contact.ContactBy.Format(DateFormat)
 
 		// Check if contact has a managed task
 		task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contact.ID, SourceName, TaskKindCadence)
@@ -615,6 +630,10 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 // (i.e., the real Todoist ID hasn't been assigned yet).
 func isPendingTempID(task *repository.ContactTask) bool {
 	if task.Metadata == nil {
+		return false
+	}
+	// Check for empty ExternalTaskID first - if empty, we can't compare
+	if task.ExternalTaskID == "" {
 		return false
 	}
 	pendingTempID, ok := task.Metadata[MetadataKeyPendingTempID].(string)
