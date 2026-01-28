@@ -98,3 +98,110 @@ func TestTodoistDeadlineDateComparisonOldVsNew(t *testing.T) {
 	// The old code used cadence.Today() which converts to local timezone.
 	// This test verifies our fix works correctly regardless of local timezone.
 }
+
+// TestSyncedDeadlineComparison tests the synced_deadline comparison logic
+// used to detect when contact_by has changed and the Todoist task needs updating.
+func TestSyncedDeadlineComparison(t *testing.T) {
+	tests := []struct {
+		name           string
+		syncedDeadline string // stored in metadata (YYYY-MM-DD)
+		contactByTime  time.Time
+		expectDrift    bool
+	}{
+		{
+			name:           "deadlines match",
+			syncedDeadline: "2026-02-15",
+			contactByTime:  time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC),
+			expectDrift:    false,
+		},
+		{
+			name:           "contact_by moved forward (user updated last_contacted)",
+			syncedDeadline: "2026-01-15",
+			contactByTime:  time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC),
+			expectDrift:    true,
+		},
+		{
+			name:           "contact_by moved backward (edge case)",
+			syncedDeadline: "2026-03-15",
+			contactByTime:  time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC),
+			expectDrift:    true,
+		},
+		{
+			name:           "same date different time component",
+			syncedDeadline: "2026-02-15",
+			contactByTime:  time.Date(2026, 2, 15, 12, 30, 0, 0, time.UTC),
+			expectDrift:    false, // Only date matters
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Format contact_by the same way the provider does
+			currentDeadline := tt.contactByTime.Format("2006-01-02")
+
+			// Compare strings (how reconcileExistingTask does it)
+			hasDrift := tt.syncedDeadline != currentDeadline
+
+			assert.Equal(t, tt.expectDrift, hasDrift,
+				"syncedDeadline=%s, currentDeadline=%s",
+				tt.syncedDeadline, currentDeadline)
+		})
+	}
+}
+
+// TestIsPendingTempIDLogic tests the logic for detecting if a task's
+// external ID is still a pending temp ID (not yet resolved to real Todoist ID).
+func TestIsPendingTempIDLogic(t *testing.T) {
+	tests := []struct {
+		name           string
+		externalTaskID string
+		metadata       map[string]any
+		expectPending  bool
+	}{
+		{
+			name:           "nil metadata",
+			externalTaskID: "temp-uuid-123",
+			metadata:       nil,
+			expectPending:  false,
+		},
+		{
+			name:           "no pending_temp_id in metadata",
+			externalTaskID: "12345678",
+			metadata:       map[string]any{"synced_deadline": "2026-02-15"},
+			expectPending:  false,
+		},
+		{
+			name:           "pending_temp_id matches external_task_id",
+			externalTaskID: "temp-uuid-123",
+			metadata:       map[string]any{"pending_temp_id": "temp-uuid-123"},
+			expectPending:  true,
+		},
+		{
+			name:           "pending_temp_id does not match (resolved)",
+			externalTaskID: "12345678",
+			metadata:       map[string]any{"pending_temp_id": "temp-uuid-123"},
+			expectPending:  false,
+		},
+		{
+			name:           "pending_temp_id is not a string",
+			externalTaskID: "temp-uuid-123",
+			metadata:       map[string]any{"pending_temp_id": 123},
+			expectPending:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Inline the isPendingTempID logic (since it's not exported)
+			isPending := false
+			if tt.metadata != nil {
+				pendingTempID, ok := tt.metadata["pending_temp_id"].(string)
+				if ok {
+					isPending = pendingTempID == tt.externalTaskID
+				}
+			}
+
+			assert.Equal(t, tt.expectPending, isPending)
+		})
+	}
+}
