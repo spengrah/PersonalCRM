@@ -46,3 +46,51 @@ detail: |
   In isPendingTempID(), checking if pendingTempID (string) == task.ExternalTaskID should include 'if pendingTempID == "" { return false }' before comparison. Empty strings from malformed metadata could incorrectly match empty ExternalTaskID on newly created tasks. Always validate string values aren't empty when they should represent meaningful IDs.
 actionable: true
 
+---
+timestamp: "2026-01-28T12:19:21.331927"
+type: gotcha
+summary: Update synced metadata when processing external changes
+detail: |
+  When sync provider processes external changes (e.g., Todoist deadline edits) that update CRM state, also update any sync-tracking metadata (e.g., synced_deadline). Otherwise reconciliation logic will see the metadata mismatch and incorrectly treat the external-originated change as CRM-initiated drift, triggering unnecessary operations. Pattern: processItem updates contact_by → must also update synced_deadline metadata.
+actionable: true
+
+---
+timestamp: "2026-01-28T12:19:21.331927"
+type: gotcha
+summary: Magic date format strings should be extracted as constants
+detail: |
+  Go's time format string "2006-01-02" appears throughout sync code for parsing/formatting dates. Extract as a named constant (e.g., DateFormat) to ensure consistency, improve readability, and enable easier updates. Using magic strings makes it easy to introduce typos or inconsistencies across the codebase.
+actionable: true
+
+---
+timestamp: "2026-01-28T12:19:21.331927"
+type: documentation_gap
+summary: Core.md gotchas table missed during initial implementation
+detail: |
+  The Common Gotchas table in .ai/rules/core.md exists to prevent recurring mistakes, but wasn't consulted during the initial implementation. Two gotchas were violated: (1) "Replacing JSONB metadata wholesale on update" - the initial PR replaced metadata maps instead of preserving existing keys; (2) The date format pattern wasn't documented as something to extract. This reveals the gotchas table needs stronger visibility - perhaps a pre-implementation checklist or automated reminder. Future improvement: Add a planning step that explicitly reviews the gotchas table before coding.
+actionable: true
+
+---
+timestamp: "2026-01-28T12:19:21.331927"
+type: rule
+summary: Defensive string checks must cover both sides of comparison
+detail: |
+  When comparing two string values where either could be empty/malformed (e.g., pendingTempID == task.ExternalTaskID), add early returns for BOTH empty string scenarios, not just one side. Even if logically one check suffices, explicit dual checks make the code more obviously correct and prevent future refactoring bugs. Pattern: `if externalTaskID == "" || pendingTempID == "" { return false }` before comparison.
+actionable: true
+
+---
+timestamp: "2026-01-28T12:19:21.331927"
+type: architecture
+summary: Sync reconciliation detects drift via stored state snapshots
+detail: |
+  Poll-based sync providers can't detect CRM-initiated changes through incremental sync responses (external service only reports its own changes). Solution: Store snapshots of synced state in metadata (e.g., synced_deadline) during task creation/updates. Reconciliation compares current CRM state to stored snapshot to detect drift, regardless of change origin. This pattern generalizes to any poll-based sync: track "last known synced value" in metadata for fields that can change in CRM.
+actionable: false
+
+---
+timestamp: "2026-01-28T12:19:21.331927"
+type: gotcha
+summary: Test coverage gaps discovered by code review, not tests
+detail: |
+  The initial implementation had comprehensive tests for the happy path and basic edge cases, but code review identified missing test cases (empty ExternalTaskID with various metadata states). This reveals a pattern: when adding defensive checks to production code, explicitly add corresponding test cases that verify the defensive behavior. Don't assume existing tests cover new defensive logic - add explicit tests that would fail if the defensive check were removed.
+actionable: true
+

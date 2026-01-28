@@ -155,3 +155,33 @@ The source name must match exactly between the UI code (`useSyncStates`, `trigge
 // Backend: Register the provider
 registry.Register(todoistProvider) // provider.Config().Name must be "todoist"
 ```
+
+## Tracking Synced State for Bidirectional Sync
+
+Poll-based sync providers only receive changes from the external service. When CRM updates a synced field, the external task won't appear in the next sync response.
+
+**Solution:** Track synced state snapshots in metadata to detect drift.
+
+```go
+// Store what was synced
+metadata[MetadataKeySyncedDeadline] = deadline // e.g., "2026-02-15"
+
+// During reconciliation, compare current CRM state to stored snapshot
+if syncedDeadline != currentDeadline {
+    // Drift detected - CRM changed since last sync
+}
+```
+
+**Key rule:** When processing external changes that update CRM state, also update the synced metadata:
+
+```go
+// ❌ Wrong: Only update CRM
+if err := contactRepo.UpdateContactBy(ctx, contactID, newDeadline); err != nil { ... }
+
+// ✅ Right: Update both CRM and synced metadata
+if err := contactRepo.UpdateContactBy(ctx, contactID, newDeadline); err != nil { ... }
+metadata[MetadataKeySyncedDeadline] = newDeadlineStr
+contactTaskRepo.UpdateContactTaskMetadata(ctx, taskID, metadata)
+```
+
+Without this, reconciliation treats the external-originated change as CRM drift and triggers unnecessary operations (e.g., completing and recreating tasks).
