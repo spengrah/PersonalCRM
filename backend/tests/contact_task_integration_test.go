@@ -340,3 +340,108 @@ func TestContactTask_CountByProvider(t *testing.T) {
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, unmanagedCount, int64(1))
 }
+
+// TestContactTask_SyncedDeadlineMetadata verifies the synced_deadline metadata
+// behavior used for detecting when contact_by drifts from the Todoist task deadline.
+func TestContactTask_SyncedDeadlineMetadata(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	if err != nil {
+		t.Skipf("Could not connect to database: %v", err)
+	}
+	defer database.Close()
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+
+	// Create a test contact
+	now := accelerated.GetCurrentTime()
+	cadence := "weekly"
+	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		FullName:      "Test Contact for SyncedDeadline",
+		Cadence:       &cadence,
+		LastContacted: &now,
+	})
+	require.NoError(t, err)
+	defer func() {
+		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+	}()
+
+	t.Run("create task with synced_deadline metadata", func(t *testing.T) {
+		// Create task with synced_deadline in metadata (simulating what reconciliation does)
+		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           "cadence",
+			ExternalTaskID: "temp-uuid-123",
+			State:          "managed",
+			Metadata: map[string]any{
+				"pending_temp_id": "temp-uuid-123",
+				"synced_deadline": "2026-02-15",
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "temp-uuid-123", task.Metadata["pending_temp_id"])
+		assert.Equal(t, "2026-02-15", task.Metadata["synced_deadline"])
+
+		// Update metadata to simulate temp_id resolution (clear pending, keep synced_deadline)
+		metadata := task.Metadata
+		delete(metadata, "pending_temp_id")
+		updated, err := contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata)
+		require.NoError(t, err)
+		assert.Nil(t, updated.Metadata["pending_temp_id"])
+		assert.Equal(t, "2026-02-15", updated.Metadata["synced_deadline"])
+
+		// Update synced_deadline when deadline changes (simulating reconciliation update)
+		metadata["synced_deadline"] = "2026-03-15"
+		metadata["pending_temp_id"] = "new-temp-uuid"
+		updated2, err := contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata)
+		require.NoError(t, err)
+		assert.Equal(t, "2026-03-15", updated2.Metadata["synced_deadline"])
+		assert.Equal(t, "new-temp-uuid", updated2.Metadata["pending_temp_id"])
+
+		// Clean up
+		err = contactTaskRepo.DeleteContactTask(ctx, task.ID)
+		require.NoError(t, err)
+	})
+
+	t.Run("backfill synced_deadline for existing task", func(t *testing.T) {
+		// Create task without synced_deadline (simulating pre-existing task)
+		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           "cadence",
+			ExternalTaskID: "12345678",
+			State:          "managed",
+			Metadata:       map[string]any{}, // No synced_deadline
+		})
+		require.NoError(t, err)
+		assert.Nil(t, task.Metadata["synced_deadline"])
+
+		// Backfill synced_deadline (simulating what reconciliation does)
+		metadata := task.Metadata
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		metadata["synced_deadline"] = "2026-02-15"
+		updated, err := contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata)
+		require.NoError(t, err)
+		assert.Equal(t, "2026-02-15", updated.Metadata["synced_deadline"])
+
+		// Clean up
+		err = contactTaskRepo.DeleteContactTask(ctx, task.ID)
+		require.NoError(t, err)
+	})
+}

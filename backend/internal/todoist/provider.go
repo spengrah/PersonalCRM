@@ -37,6 +37,20 @@ const (
 	MetadataKeyUserTimezone        = "user_timezone"
 )
 
+// Contact task metadata keys
+const (
+	// MetadataKeyPendingTempID stores the temp ID used when creating a Todoist task,
+	// before the real ID is returned from the API.
+	MetadataKeyPendingTempID = "pending_temp_id"
+	// MetadataKeySyncedDeadline stores the deadline (YYYY-MM-DD) that was last synced
+	// to Todoist. Used to detect when contact_by changes in the CRM and the Todoist
+	// task needs to be updated.
+	MetadataKeySyncedDeadline = "synced_deadline"
+)
+
+// DateFormat is the date format used for Todoist deadlines and synced_deadline metadata (YYYY-MM-DD)
+const DateFormat = "2006-01-02"
+
 // CadenceSyncProvider implements SyncProvider for Todoist cadence tasks
 type CadenceSyncProvider struct {
 	oauthService    *OAuthService
@@ -306,7 +320,7 @@ func (p *CadenceSyncProvider) processItem(
 
 	// Check for deadline edit (Todoist wins)
 	if item.Deadline != nil && contact.ContactBy != nil {
-		todoistDeadline, err := time.Parse("2006-01-02", item.Deadline.Date)
+		todoistDeadline, err := time.Parse(DateFormat, item.Deadline.Date)
 		if err == nil {
 			// Compare dates using UTC year/month/day to avoid timezone issues
 			// time.Parse returns UTC midnight, PostgreSQL DATE loads as UTC
@@ -317,10 +331,22 @@ func (p *CadenceSyncProvider) processItem(
 				if err := p.contactRepo.UpdateContactBy(ctx, contact.ID, todoistDeadline); err != nil {
 					logger.Warn().Err(err).Msg("failed to update contact_by from Todoist deadline")
 				} else {
+					// Also update synced_deadline to prevent reconciliation from treating
+					// this Todoist-originated edit as CRM-initiated drift
+					newDeadlineStr := todoistDeadline.Format(DateFormat)
+					metadata := task.Metadata
+					if metadata == nil {
+						metadata = make(map[string]any)
+					}
+					metadata[MetadataKeySyncedDeadline] = newDeadlineStr
+					if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+						logger.Warn().Err(err).Msg("failed to update synced_deadline from Todoist deadline edit")
+					}
+
 					logger.Info().
 						Str("contactId", contact.ID.String()).
 						Time("newContactBy", todoistDeadline).
-						Msg("updated contact_by from Todoist deadline edit")
+						Msg("updated contact_by and synced_deadline from Todoist deadline edit")
 				}
 			}
 		}
@@ -374,15 +400,19 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 			}
 
 			// Create next task
-			deadlineStr := nextContactBy.Format("2006-01-02")
+			deadlineStr := nextContactBy.Format(DateFormat)
 			cmd := p.createTaskCommand(contact, settings, &deadlineStr)
 			commands = append(commands, cmd)
 
-			// We'll need to update the task link with the new temp_id -> real_id mapping
-			// For now, store the temp_id in metadata
-			metadata := map[string]any{"pending_temp_id": cmd.TempID}
+			// Update metadata with temp_id and synced_deadline (preserving existing keys)
+			metadata := task.Metadata
+			if metadata == nil {
+				metadata = make(map[string]any)
+			}
+			metadata[MetadataKeyPendingTempID] = cmd.TempID
+			metadata[MetadataKeySyncedDeadline] = deadlineStr
 			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
-				logger.Warn().Err(err).Msg("failed to store pending temp_id")
+				logger.Warn().Err(err).Msg("failed to store pending_temp_id and synced_deadline in task metadata")
 			}
 		}
 	}
@@ -431,14 +461,19 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 			}
 
 			// Create new task
-			deadlineStr := nextContactBy.Format("2006-01-02")
+			deadlineStr := nextContactBy.Format(DateFormat)
 			cmd := p.createTaskCommand(contact, settings, &deadlineStr)
 			commands = append(commands, cmd)
 
-			// Store pending temp_id
-			metadata := map[string]any{"pending_temp_id": cmd.TempID}
+			// Update metadata with temp_id and synced_deadline (preserving existing keys)
+			metadata := task.Metadata
+			if metadata == nil {
+				metadata = make(map[string]any)
+			}
+			metadata[MetadataKeyPendingTempID] = cmd.TempID
+			metadata[MetadataKeySyncedDeadline] = deadlineStr
 			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
-				logger.Warn().Err(err).Msg("failed to store pending temp_id")
+				logger.Warn().Err(err).Msg("failed to store pending_temp_id and synced_deadline in task metadata")
 			}
 
 			logger.Info().
@@ -452,6 +487,7 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 }
 
 // reconcileContactTasks ensures all contacts with cadence have managed tasks
+// and that existing tasks have deadlines matching the contact's contact_by.
 func (p *CadenceSyncProvider) reconcileContactTasks(
 	ctx context.Context,
 	client *SyncClient,
@@ -473,6 +509,13 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 			continue
 		}
 
+		// Skip contacts without contact_by (nothing to sync)
+		if contact.ContactBy == nil {
+			continue
+		}
+
+		currentDeadline := contact.ContactBy.Format(DateFormat)
+
 		// Check if contact has a managed task
 		task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contact.ID, SourceName, TaskKindCadence)
 		if err != nil {
@@ -480,22 +523,20 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 				continue
 			}
 			// No task exists - create one
-			var deadlineStr *string
-			if contact.ContactBy != nil {
-				d := contact.ContactBy.Format("2006-01-02")
-				deadlineStr = &d
-			}
-			cmd := p.createTaskCommand(&contact, settings, deadlineStr)
+			cmd := p.createTaskCommand(&contact, settings, &currentDeadline)
 			commands = append(commands, cmd)
 
-			// Create task link (with temp_id for now)
+			// Create task link (with temp_id and synced_deadline)
 			_, err := p.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 				ContactID:      contact.ID,
 				Provider:       SourceName,
 				Kind:           TaskKindCadence,
 				ExternalTaskID: cmd.TempID, // Will be updated on sync response
 				State:          string(repository.ContactTaskStateManaged),
-				Metadata:       map[string]any{"pending_temp_id": cmd.TempID},
+				Metadata: map[string]any{
+					MetadataKeyPendingTempID:  cmd.TempID,
+					MetadataKeySyncedDeadline: currentDeadline,
+				},
 			})
 			if err != nil {
 				logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to create contact task")
@@ -507,9 +548,119 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 		if task.State != repository.ContactTaskStateManaged {
 			continue
 		}
+
+		// Task exists and is managed - check if deadline needs updating
+		cmds := p.reconcileExistingTask(ctx, task, &contact, settings, currentDeadline)
+		commands = append(commands, cmds...)
 	}
 
 	return commands
+}
+
+// reconcileExistingTask checks if an existing managed task's deadline matches contact_by.
+// If not, it completes the old task and creates a new one with the updated deadline.
+//
+// Race condition note: There's a small window between sync fetch and command execution where
+// a user could edit the Todoist task's deadline. If this happens, the close+create commands
+// will overwrite the user's manual edit. This is acceptable because:
+//  1. The window is extremely narrow (milliseconds within the same sync operation)
+//  2. CRM is authoritative for contact_by - manual Todoist edits outside the sync flow
+//     should use processItem which runs before reconciliation
+//  3. Preventing this would require fetching fresh state before each close operation,
+//     adding significant complexity and latency
+func (p *CadenceSyncProvider) reconcileExistingTask(
+	ctx context.Context,
+	task *repository.ContactTask,
+	contact *repository.Contact,
+	settings Settings,
+	currentDeadline string,
+) []SyncCommand {
+	var commands []SyncCommand
+
+	// Get synced_deadline from metadata
+	syncedDeadline, hasSyncedDeadline := task.Metadata[MetadataKeySyncedDeadline].(string)
+
+	if !hasSyncedDeadline {
+		// Backfill: No synced_deadline stored yet, assume task is in sync.
+		// Note: If actual Todoist deadline differs from currentDeadline, this assumption
+		// is incorrect and drift will remain undetected. This is acceptable for migration
+		// of existing tasks - any actual drift will be corrected on the next contact_by update.
+		logger.Warn().
+			Str("contactId", contact.ID.String()).
+			Str("externalTaskId", task.ExternalTaskID).
+			Str("assumedDeadline", currentDeadline).
+			Msg("backfilling synced_deadline - assuming current CRM state matches Todoist")
+
+		metadata := task.Metadata
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		metadata[MetadataKeySyncedDeadline] = currentDeadline
+		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+			logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_deadline")
+		}
+		return commands
+	}
+
+	// Check if deadline has drifted
+	if syncedDeadline == currentDeadline {
+		// Deadlines match, nothing to do
+		return commands
+	}
+
+	// Deadline has changed in CRM - complete old task and create new one
+	logger.Info().
+		Str("contactId", contact.ID.String()).
+		Str("oldDeadline", syncedDeadline).
+		Str("newDeadline", currentDeadline).
+		Msg("contact_by changed, completing old task and creating new one")
+
+	// Complete the old task in Todoist (if we have a real external ID)
+	if task.ExternalTaskID != "" && !isPendingTempID(task) {
+		commands = append(commands, NewItemCloseCommand(task.ExternalTaskID))
+	}
+
+	// Create new task with updated deadline
+	cmd := p.createTaskCommand(contact, settings, &currentDeadline)
+	commands = append(commands, cmd)
+
+	// Update task record with new temp_id and synced_deadline.
+	// Note: If this metadata update fails but the commands above succeed when sent to Todoist,
+	// we'll have an orphaned task (no pending_temp_id to map). This is logged but not fatal
+	// because the sync is async - we can't roll back Todoist commands. The orphaned task
+	// will be cleaned up on the next full sync when it appears in items without a linked contact.
+	metadata := task.Metadata
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	metadata[MetadataKeyPendingTempID] = cmd.TempID
+	metadata[MetadataKeySyncedDeadline] = currentDeadline
+	if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+		logger.Error().
+			Err(err).
+			Str("contactId", contact.ID.String()).
+			Str("tempId", cmd.TempID).
+			Msg("failed to store pending_temp_id after queuing commands - may result in orphaned Todoist task")
+	}
+
+	return commands
+}
+
+// isPendingTempID checks if the task's external ID is still a pending temp ID
+// (i.e., the real Todoist ID hasn't been assigned yet).
+func isPendingTempID(task *repository.ContactTask) bool {
+	if task.Metadata == nil {
+		return false
+	}
+	// Check for empty ExternalTaskID first - if empty, we can't compare
+	if task.ExternalTaskID == "" {
+		return false
+	}
+	pendingTempID, ok := task.Metadata[MetadataKeyPendingTempID].(string)
+	if !ok || pendingTempID == "" {
+		return false
+	}
+	return pendingTempID == task.ExternalTaskID
 }
 
 // createTaskCommand creates a Todoist task creation command
@@ -566,12 +717,12 @@ func (p *CadenceSyncProvider) processTempIDMappings(ctx context.Context, tempIDM
 			continue
 		}
 
-		// Clear pending_temp_id from metadata
+		// Clear pending_temp_id from metadata (preserves synced_deadline and other keys)
 		metadata := task.Metadata
 		if metadata == nil {
 			metadata = make(map[string]any)
 		}
-		delete(metadata, "pending_temp_id")
+		delete(metadata, MetadataKeyPendingTempID)
 		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 			logger.Warn().Err(err).Msg("failed to clear pending_temp_id from metadata")
 		}
