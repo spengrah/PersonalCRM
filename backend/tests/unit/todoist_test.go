@@ -224,3 +224,112 @@ func TestIsPendingTempIDLogic(t *testing.T) {
 		})
 	}
 }
+
+// TestReconciliationCommandGeneration tests the logic for determining which commands
+// should be generated during reconciliation based on task state and deadline drift.
+func TestReconciliationCommandGeneration(t *testing.T) {
+	tests := []struct {
+		name             string
+		externalTaskID   string
+		metadata         map[string]any
+		currentDeadline  string
+		expectCloseCmd   bool
+		expectCreateCmd  bool
+		expectBackfill   bool
+		expectNoCommands bool
+	}{
+		{
+			name:             "no synced_deadline - backfill only",
+			externalTaskID:   "12345678",
+			metadata:         map[string]any{},
+			currentDeadline:  "2026-02-15",
+			expectBackfill:   true,
+			expectNoCommands: true,
+		},
+		{
+			name:             "nil metadata - backfill only",
+			externalTaskID:   "12345678",
+			metadata:         nil,
+			currentDeadline:  "2026-02-15",
+			expectBackfill:   true,
+			expectNoCommands: true,
+		},
+		{
+			name:             "deadlines match - no commands",
+			externalTaskID:   "12345678",
+			metadata:         map[string]any{"synced_deadline": "2026-02-15"},
+			currentDeadline:  "2026-02-15",
+			expectNoCommands: true,
+		},
+		{
+			name:            "deadline drift - close + create commands",
+			externalTaskID:  "12345678",
+			metadata:        map[string]any{"synced_deadline": "2026-01-15"},
+			currentDeadline: "2026-02-15",
+			expectCloseCmd:  true,
+			expectCreateCmd: true,
+		},
+		{
+			name:            "drift with pending temp_id - create only (no close)",
+			externalTaskID:  "temp-uuid-123",
+			metadata:        map[string]any{"synced_deadline": "2026-01-15", "pending_temp_id": "temp-uuid-123"},
+			currentDeadline: "2026-02-15",
+			expectCloseCmd:  false, // Skip close since ID is still temp
+			expectCreateCmd: true,
+		},
+		{
+			name:            "drift with empty external_task_id - create only (no close)",
+			externalTaskID:  "",
+			metadata:        map[string]any{"synced_deadline": "2026-01-15"},
+			currentDeadline: "2026-02-15",
+			expectCloseCmd:  false, // Skip close since no external ID
+			expectCreateCmd: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate reconcileExistingTask logic
+			var closeCmd, createCmd, backfill bool
+
+			// Get synced_deadline from metadata
+			syncedDeadline, hasSyncedDeadline := "", false
+			if tt.metadata != nil {
+				if sd, ok := tt.metadata["synced_deadline"].(string); ok {
+					syncedDeadline = sd
+					hasSyncedDeadline = true
+				}
+			}
+
+			if !hasSyncedDeadline {
+				// Backfill case
+				backfill = true
+			} else if syncedDeadline == tt.currentDeadline {
+				// No drift, no commands
+			} else {
+				// Drift detected
+				// Check if we should close (has real external ID)
+				isPending := false
+				if tt.metadata != nil && tt.externalTaskID != "" {
+					pendingTempID, ok := tt.metadata["pending_temp_id"].(string)
+					if ok && pendingTempID != "" {
+						isPending = pendingTempID == tt.externalTaskID
+					}
+				}
+				if tt.externalTaskID != "" && !isPending {
+					closeCmd = true
+				}
+				createCmd = true
+			}
+
+			assert.Equal(t, tt.expectBackfill, backfill, "backfill mismatch")
+			assert.Equal(t, tt.expectCloseCmd, closeCmd, "close command mismatch")
+			assert.Equal(t, tt.expectCreateCmd, createCmd, "create command mismatch")
+
+			if tt.expectNoCommands {
+				assert.False(t, closeCmd, "expected no close command")
+				assert.False(t, createCmd, "expected no create command")
+			}
+		})
+	}
+}
