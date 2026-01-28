@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseDateOnly, formatDateOnly } from '../utils'
+import { parseDateOnly, formatDateOnly, formatCadence } from '../utils'
 
 describe('parseDateOnly', () => {
   it('parses YYYY-MM-DD format correctly', () => {
@@ -77,5 +77,48 @@ describe('formatDateOnly', () => {
   it('handles empty string input', () => {
     const result = formatDateOnly('')
     expect(result).toBe('')
+  })
+})
+
+describe('formatCadence', () => {
+  it('formats weekly correctly', () => {
+    expect(formatCadence('weekly')).toBe('Weekly')
+  })
+
+  it('formats biweekly with hyphen', () => {
+    expect(formatCadence('biweekly')).toBe('Bi-weekly')
+  })
+
+  it('formats monthly correctly', () => {
+    expect(formatCadence('monthly')).toBe('Monthly')
+  })
+
+  it('formats quarterly correctly', () => {
+    expect(formatCadence('quarterly')).toBe('Quarterly')
+  })
+
+  it('formats biannual with hyphen', () => {
+    expect(formatCadence('biannual')).toBe('Bi-annual')
+  })
+
+  it('formats annual correctly', () => {
+    expect(formatCadence('annual')).toBe('Annual')
+  })
+
+  it('returns dash for null input', () => {
+    expect(formatCadence(null)).toBe('-')
+  })
+
+  it('returns dash for undefined input', () => {
+    expect(formatCadence(undefined)).toBe('-')
+  })
+
+  it('returns dash for empty string', () => {
+    expect(formatCadence('')).toBe('-')
+  })
+
+  it('returns original value for unknown cadence', () => {
+    expect(formatCadence('daily')).toBe('daily')
+    expect(formatCadence('unknown')).toBe('unknown')
   })
 })
