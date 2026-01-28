@@ -94,3 +94,43 @@ detail: |
   The initial implementation had comprehensive tests for the happy path and basic edge cases, but code review identified missing test cases (empty ExternalTaskID with various metadata states). This reveals a pattern: when adding defensive checks to production code, explicitly add corresponding test cases that verify the defensive behavior. Don't assume existing tests cover new defensive logic - add explicit tests that would fail if the defensive check were removed.
 actionable: true
 
+---
+timestamp: "2026-01-28T12:32:49.723443"
+type: gotcha
+summary: Code review cycle must be fully resolved before analysis
+detail: |
+  When a code review identifies multiple issues and some are fixed in a follow-up commit, the agent must address ALL remaining issues that the reviewer explicitly calls out. In this session, the review identified 9 issues, 3 were fixed, and the agent needed to address the remaining 6 (race condition documentation, backfill warning, partial failure handling, test coverage). Don't assume 'most issues fixed' is sufficient - the reviewer expects all issues to be addressed or explicitly discussed as out-of-scope.
+actionable: true
+
+---
+timestamp: "2026-01-28T12:32:49.723443"
+type: distinction
+summary: item_update vs close+create for deadline changes has semantic implications
+detail: |
+  When Todoist task deadlines need updating due to CRM changes, there are two approaches: (1) item_update preserves the same task and ID, suitable for simple deadline adjustments; (2) close+create completes the old task and creates a new one, semantically representing a completed cycle. The choice depends on user requirements - if updating last_contacted signals cycle completion, close+create is semantically correct even though it has a narrow race condition window. Always check if the user explicitly stated their preference (e.g., 'task should be removed... and a new one should be created').
+actionable: true
+
+---
+timestamp: "2026-01-28T12:32:49.723443"
+type: gotcha
+summary: Race condition windows in poll-based sync are acceptable if documented
+detail: |
+  In poll-based sync providers (like Todoist), there's an inherent race window between fetching current state and executing commands. For Todoist specifically: reconciliation runs within the same sync call, so external edits between fetch and command execution are extremely unlikely. If the CRM is authoritative and the window is narrow (microseconds within single API call), documenting as a known limitation is acceptable. The key insight: processItem (handling external changes) runs BEFORE reconciliation, so most edit conflicts are already resolved before reconciliation even checks for drift.
+actionable: true
+
+---
+timestamp: "2026-01-28T12:32:49.723443"
+type: rule
+summary: Backfill operations should log assumptions for debugging
+detail: |
+  When backfilling metadata fields (like synced_deadline) for existing records without that field, always log a warning with the assumed value. This helps debugging if the assumption is wrong. Example: 'log.Warn().Str("assumed_deadline", currentDeadline).Msg("Backfilling synced_deadline - assuming task currently in sync")'. The log makes the backfill visible and helps trace issues if tasks were actually out of sync.
+actionable: true
+
+---
+timestamp: "2026-01-28T12:32:49.723443"
+type: architecture
+summary: Test unexported reconciliation logic by mimicking behavior
+detail: |
+  When reconciliation functions are unexported (like reconcileExistingTask), test them by mimicking the logic in unit tests that verify command generation patterns. Create table-driven tests with different metadata states (no synced_deadline, nil metadata, matching deadlines, drift) and assert expected command patterns (no commands, backfill only, close+create, create only). This validates the decision tree without requiring integration tests or exporting internal functions.
+actionable: true
+
