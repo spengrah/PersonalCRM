@@ -61,7 +61,7 @@ export default function ContactDetailPage() {
 
   // Extract list context from URL params (or use defaults)
   const listContext = {
-    sort: searchParams.get('sort') || 'last_contacted',
+    sort: searchParams.get('sort') || 'cadence',
     order: (searchParams.get('order') as 'asc' | 'desc') || 'desc',
     search: searchParams.get('search') || undefined,
   }

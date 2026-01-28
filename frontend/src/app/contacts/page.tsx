@@ -24,10 +24,14 @@ import {
   getPrimaryAndSecondaryMethods,
 } from '@/lib/contact-methods'
 import { FORM_CONTROL_WITH_ICON } from '@/lib/form-classes'
-import { formatDateOnly } from '@/lib/utils'
+import { formatDateOnly, formatCadence } from '@/lib/utils'
 import type { Contact, ContactListParams, ContactMethod } from '@/types/contact'
 
-type SortField = 'name' | 'location' | 'birthday' | 'last_contacted'
+type SortField = 'name' | 'location' | 'birthday' | 'last_contacted' | 'cadence'
+
+// Default sort configuration
+const DEFAULT_SORT_FIELD: SortField = 'cadence'
+const DEFAULT_SORT_ORDER: 'asc' | 'desc' = 'desc'
 
 function ContactsTable({
   contacts,
@@ -70,11 +74,11 @@ function ContactsTable({
   }
 
   // Build URL with navigation context params
-  // Always include sort/order (default to last_contacted desc) so navigation order matches list order
+  // Always include sort/order so navigation order matches list order
   const buildContactUrl = (contactId: string) => {
     const params = new URLSearchParams()
-    params.set('sort', sortBy || 'last_contacted')
-    params.set('order', sortOrder || 'desc')
+    params.set('sort', sortBy || DEFAULT_SORT_FIELD)
+    params.set('order', sortOrder || DEFAULT_SORT_ORDER)
     if (searchTerm) params.set('search', searchTerm)
     return `/contacts/${contactId}?${params.toString()}`
   }
@@ -165,6 +169,15 @@ function ContactsTable({
             </th>
             <th
               className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              onClick={() => onSort('cadence')}
+            >
+              <div className="flex items-center">
+                Cadence
+                {getSortIcon('cadence')}
+              </div>
+            </th>
+            <th
+              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               onClick={() => onSort('location')}
             >
               <div className="flex items-center">
@@ -217,9 +230,6 @@ function ContactsTable({
                         {contact.full_name}
                       </Link>
                     </div>
-                    {contact.cadence && (
-                      <div className="text-sm text-gray-700">Cadence: {contact.cadence}</div>
-                    )}
                   </div>
                 </div>
               </td>
@@ -265,6 +275,9 @@ function ContactsTable({
                     </div>
                   )
                 })()}
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                {formatCadence(contact.cadence)}
               </td>
               {/* Location column: max-w-[200px] balances table layout with readability.
                   Truncated text shows full value via native title tooltip (desktop only). */}
@@ -349,6 +362,8 @@ export default function ContactsPage() {
   const [params, setParams] = useState<ContactListParams>({
     page: 1,
     limit: 20,
+    sort: DEFAULT_SORT_FIELD,
+    order: DEFAULT_SORT_ORDER,
   })
 
   const { data, isLoading, error } = useContacts({
@@ -371,11 +386,11 @@ export default function ContactsPage() {
           page: 1, // Reset to first page when sorting
         }
       }
-      // If clicking a new field, default to ascending
+      // If clicking a new field, default to ascending (except cadence defaults to desc for "most frequent first")
       return {
         ...prev,
         sort: field,
-        order: 'asc',
+        order: field === 'cadence' ? 'desc' : 'asc',
         page: 1,
       }
     })

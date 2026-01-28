@@ -35,3 +35,22 @@ export function formatDateOnly(
   if (!date) return ''
   return date.toLocaleDateString(undefined, options)
 }
+
+/**
+ * Format a cadence value for display.
+ *
+ * @param cadence - Cadence value (weekly, biweekly, monthly, quarterly, biannual, annual)
+ * @returns Formatted cadence string with proper capitalization
+ */
+export function formatCadence(cadence: string | undefined | null): string {
+  if (!cadence) return '-'
+  const labels: Record<string, string> = {
+    weekly: 'Weekly',
+    biweekly: 'Bi-weekly',
+    monthly: 'Monthly',
+    quarterly: 'Quarterly',
+    biannual: 'Bi-annual',
+    annual: 'Annual',
+  }
+  return labels[cadence] || cadence
+}

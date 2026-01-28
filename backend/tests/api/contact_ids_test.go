@@ -264,4 +264,155 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		// Deleted contact should NOT be in the list
 		assert.NotContains(t, resp.IDs, id)
 	})
+
+	t.Run("sorts by cadence frequency descending (most frequent first)", func(t *testing.T) {
+		// Create contacts with different cadences
+		// We need to use the full API to set cadence, so use raw request
+		createContactWithCadence := func(name, cadence string) string {
+			body := fmt.Sprintf(`{"full_name": "%s", "cadence": "%s"}`, name, cadence)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/contacts", bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			require.Equal(t, http.StatusCreated, w.Code)
+
+			var resp api.APIResponse
+			err := json.Unmarshal(w.Body.Bytes(), &resp)
+			require.NoError(t, err)
+			contactData := resp.Data.(map[string]interface{})
+			return contactData["id"].(string)
+		}
+
+		// Create contacts with specific cadences (using unique prefix for isolation)
+		idWeekly := createContactWithCadence("CadSort Weekly Test", "weekly")
+		idMonthly := createContactWithCadence("CadSort Monthly Test", "monthly")
+		idAnnual := createContactWithCadence("CadSort Annual Test", "annual")
+		defer deleteContact(idWeekly)
+		defer deleteContact(idMonthly)
+		defer deleteContact(idAnnual)
+
+		// Get IDs sorted by cadence descending (most frequent first)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=CadSort&sort=cadence&order=desc", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		resp := parseIDsResponse(w.Body.Bytes())
+
+		// Find positions
+		posWeekly, posMonthly, posAnnual := -1, -1, -1
+		for i, id := range resp.IDs {
+			if id == idWeekly {
+				posWeekly = i
+			}
+			if id == idMonthly {
+				posMonthly = i
+			}
+			if id == idAnnual {
+				posAnnual = i
+			}
+		}
+
+		// Weekly (most frequent) should come before Monthly, which should come before Annual
+		assert.NotEqual(t, -1, posWeekly, "Weekly contact should be in results")
+		assert.NotEqual(t, -1, posMonthly, "Monthly contact should be in results")
+		assert.NotEqual(t, -1, posAnnual, "Annual contact should be in results")
+		assert.Less(t, posWeekly, posMonthly, "Weekly should come before Monthly in desc order")
+		assert.Less(t, posMonthly, posAnnual, "Monthly should come before Annual in desc order")
+	})
+
+	t.Run("sorts by cadence frequency ascending (least frequent first)", func(t *testing.T) {
+		createContactWithCadence := func(name, cadence string) string {
+			body := fmt.Sprintf(`{"full_name": "%s", "cadence": "%s"}`, name, cadence)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/contacts", bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			require.Equal(t, http.StatusCreated, w.Code)
+
+			var resp api.APIResponse
+			err := json.Unmarshal(w.Body.Bytes(), &resp)
+			require.NoError(t, err)
+			contactData := resp.Data.(map[string]interface{})
+			return contactData["id"].(string)
+		}
+
+		idWeekly := createContactWithCadence("CadAsc Weekly Test", "weekly")
+		idAnnual := createContactWithCadence("CadAsc Annual Test", "annual")
+		defer deleteContact(idWeekly)
+		defer deleteContact(idAnnual)
+
+		// Get IDs sorted by cadence ascending (least frequent first)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=CadAsc&sort=cadence&order=asc", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		resp := parseIDsResponse(w.Body.Bytes())
+
+		posWeekly, posAnnual := -1, -1
+		for i, id := range resp.IDs {
+			if id == idWeekly {
+				posWeekly = i
+			}
+			if id == idAnnual {
+				posAnnual = i
+			}
+		}
+
+		// Annual (least frequent) should come before Weekly in ascending order
+		assert.NotEqual(t, -1, posWeekly, "Weekly contact should be in results")
+		assert.NotEqual(t, -1, posAnnual, "Annual contact should be in results")
+		assert.Less(t, posAnnual, posWeekly, "Annual should come before Weekly in asc order")
+	})
+
+	t.Run("null cadence appears after all cadences in descending order", func(t *testing.T) {
+		createContactWithCadence := func(name, cadence string) string {
+			var body string
+			if cadence == "" {
+				body = fmt.Sprintf(`{"full_name": "%s"}`, name)
+			} else {
+				body = fmt.Sprintf(`{"full_name": "%s", "cadence": "%s"}`, name, cadence)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/contacts", bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			require.Equal(t, http.StatusCreated, w.Code)
+
+			var resp api.APIResponse
+			err := json.Unmarshal(w.Body.Bytes(), &resp)
+			require.NoError(t, err)
+			contactData := resp.Data.(map[string]interface{})
+			return contactData["id"].(string)
+		}
+
+		idWeekly := createContactWithCadence("CadNull Weekly Test", "weekly")
+		idNoCadence := createContactWithCadence("CadNull NoCadence Test", "")
+		defer deleteContact(idWeekly)
+		defer deleteContact(idNoCadence)
+
+		// Get IDs sorted by cadence descending
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=CadNull&sort=cadence&order=desc", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		resp := parseIDsResponse(w.Body.Bytes())
+
+		posWeekly, posNoCadence := -1, -1
+		for i, id := range resp.IDs {
+			if id == idWeekly {
+				posWeekly = i
+			}
+			if id == idNoCadence {
+				posNoCadence = i
+			}
+		}
+
+		// Weekly should come before null cadence in descending order
+		assert.NotEqual(t, -1, posWeekly, "Weekly contact should be in results")
+		assert.NotEqual(t, -1, posNoCadence, "No-cadence contact should be in results")
+		assert.Less(t, posWeekly, posNoCadence, "Weekly should come before null cadence in desc order")
+	})
 }

@@ -1,0 +1,88 @@
+---
+timestamp: "2026-01-28T09:29:15.626676"
+type: gotcha
+summary: Default sort mismatch breaks keyboard navigation
+detail: |
+  When the contacts list page displays with no explicit sort (causing arbitrary DB order), but buildContactUrl() and keyboard navigation use a different default sort, navigation becomes inconsistent - contacts appear at different visual positions vs navigation positions. Both the list display AND navigation IDs must use identical sort parameters. Fix: Apply consistent default sort to both initial list params AND buildContactUrl().
+actionable: true
+
+---
+timestamp: "2026-01-28T09:29:15.626676"
+type: gotcha
+summary: SQL queries without ORDER BY return arbitrary order
+detail: |
+  The ListContactIDs and ListContacts queries had no ORDER BY clause when sort_field was empty, returning contacts in arbitrary database order (effectively insertion order). This caused unpredictable ordering. Even 'unsorted' queries need a deterministic ORDER BY (e.g., created_at, id) or frontend must always provide explicit sort params.
+actionable: true
+
+---
+timestamp: "2026-01-28T09:29:15.626676"
+type: architecture
+summary: Frequency-based sorting requires CASE mapping to numeric values
+detail: |
+  To sort cadence by frequency (weekly=most frequent, annual=least frequent), use CASE statements to map text values to numeric ranks: weekly=1, biweekly=2, monthly=3, quarterly=4, biannual=5, annual=6, null=7. For desc (most frequent first), sort ASC on numeric value. For asc (least frequent first), sort DESC. Add secondary sort by full_name ASC to break ties deterministically.
+actionable: true
+
+---
+timestamp: "2026-01-28T09:29:15.626676"
+type: rule
+summary: Secondary sort required for non-unique primary sort fields
+detail: |
+  When sorting by a field with many duplicates (like cadence), always add a secondary sort by a unique or more granular field (like full_name ASC) to ensure deterministic, predictable ordering. Without this, contacts with the same cadence may appear in arbitrary order, causing navigation inconsistency.
+actionable: true
+
+---
+timestamp: "2026-01-28T09:29:15.626676"
+type: distinction
+summary: Frontend default constants vs buildContactUrl defaults
+detail: |
+  Define DEFAULT_SORT_FIELD and DEFAULT_SORT_ORDER constants at module level and use them in THREE places: (1) initial useState for params, (2) buildContactUrl fallback, (3) any other navigation context. This ensures consistency. Before this fix, buildContactUrl had hardcoded 'last_contacted'/'desc' while list had no defaults, causing mismatch.
+actionable: true
+
+---
+timestamp: "2026-01-28T09:44:42.428632"
+type: architecture
+summary: Frequency-based sorting requires CASE mapping and order inversion
+detail: |
+  To sort cadence by frequency (weekly first, annual last), map text values to numeric frequency ranks using CASE statements: weekly=1, biweekly=2, monthly=3, quarterly=4, biannual=5, annual=6, null=7. For 'desc' (most frequent first), use ASC on the numeric values; for 'asc' (least frequent first), use DESC. This inversion is necessary because lower numbers represent higher frequencies. Always include secondary sort by name for deterministic ordering when primary field has duplicates.
+actionable: true
+
+---
+timestamp: "2026-01-28T09:44:42.428632"
+type: gotcha
+summary: Variable type inference lint errors with multi-assignment
+detail: |
+  When declaring multiple variables with the same initial value, staticcheck QF1011 requires using short variable declaration (:=) instead of explicit type: Use `posA, posB := -1, -1` not `var posA, posB int = -1, -1`. The type is inferred from the right-hand side values.
+actionable: true
+
+---
+timestamp: "2026-01-28T09:44:42.428632"
+type: documentation_gap
+summary: Missing guidance on extracting shared utilities early
+detail: |
+  The code review caught duplicate formatCadence implementations across multiple files. The agent should have proactively extracted the utility function when the second usage appeared. Existing docs don't emphasize 'extract on second use' as a pattern. Strengthen .ai/rules/core.md 'Code Quality' section to explicitly state: 'Extract shared utilities immediately on second usage - don't wait for code review to catch duplication.'
+actionable: true
+
+---
+timestamp: "2026-01-28T09:56:25.652763"
+type: gotcha
+summary: E2E assertions on text values fail with multiple matches when DB contains existing data from previous runs
+detail: |
+  E2E test used `page.getByText('Weekly', { exact: true })` which failed in strict mode because multiple contacts had 'Weekly' cadence from previous test runs or seed data. Solution: Use `.first()` to check at least one exists, or scope queries to specific test-created rows. This is a common pattern when testing list/table displays that don't clean DB state between runs.
+actionable: true
+
+---
+timestamp: "2026-01-28T09:56:25.652763"
+type: gotcha
+summary: Makefile GREP parameter expects PLAYWRIGHT_GREP not GREP environment variable
+detail: |
+  Running `make test-e2e-local GREP="pattern"` silently ignores the GREP parameter because the Makefile looks for `PLAYWRIGHT_GREP` environment variable instead. Correct usage: `PLAYWRIGHT_GREP="pattern" make test-e2e-local` or use test-e2e-diff which auto-detects changed files.
+actionable: true
+
+---
+timestamp: "2026-01-28T09:56:25.652763"
+type: gotcha
+summary: Running Playwright tests directly without make targets fails with 401 INVALID_API_KEY
+detail: |
+  Running `bunx playwright test` directly bypasses the Makefile's environment setup which sets API_KEY and creates frontend/.env.local. Tests fail with 401 errors because the test API endpoint requires authentication. Always use `make test-e2e-diff` or `make test-e2e-local` which properly configure the test environment with API keys and database URLs.
+actionable: true
+
