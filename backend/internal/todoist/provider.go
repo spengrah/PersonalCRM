@@ -35,6 +35,7 @@ const (
 	MetadataKeyProjectID           = "project_id"
 	MetadataKeyLabelID             = "label_id"
 	MetadataKeyLabelName           = "label_name"
+	MetadataKeyProjectName         = "project_name"
 	MetadataKeyIntegrationInstance = "integration_instance_id"
 	MetadataKeyUserTimezone        = "user_timezone"
 )
@@ -132,9 +133,25 @@ func (p *CadenceSyncProvider) Sync(
 	}
 
 	// Perform sync
-	syncResp, err := client.Sync(ctx, syncToken, []string{"items", "labels", "user"}, nil)
+	syncResp, err := client.Sync(ctx, syncToken, []string{"items", "labels", "projects", "user"}, nil)
 	if err != nil {
 		return result, p.handleSyncError(err)
+	}
+
+	// Update project name from sync response (in case of project rename)
+	if len(syncResp.Projects) > 0 {
+		for _, project := range syncResp.Projects {
+			if project.ID == settings.ProjectID && !project.IsDeleted {
+				if project.Name != settings.ProjectName {
+					settings.ProjectName = project.Name
+					// Update metadata with new project name
+					if err := p.updateSyncStateMetadata(ctx, state.ID, settings); err != nil {
+						logger.Warn().Err(err).Msg("failed to update project name in metadata")
+					}
+				}
+				break
+			}
+		}
 	}
 
 	// Update label name from sync response (in case of label rename)
@@ -827,6 +844,7 @@ func (p *CadenceSyncProvider) handleSyncError(err error) error {
 func (p *CadenceSyncProvider) updateSyncStateMetadata(ctx context.Context, stateID uuid.UUID, settings Settings) error {
 	metadata := map[string]any{
 		MetadataKeyProjectID:           settings.ProjectID,
+		MetadataKeyProjectName:         settings.ProjectName,
 		MetadataKeyLabelID:             settings.LabelID,
 		MetadataKeyLabelName:           settings.LabelName,
 		MetadataKeyIntegrationInstance: settings.IntegrationInstanceID,
@@ -840,6 +858,7 @@ func (p *CadenceSyncProvider) updateSyncStateMetadata(ctx context.Context, state
 // Settings holds Todoist integration settings
 type Settings struct {
 	ProjectID             string `json:"project_id"`
+	ProjectName           string `json:"project_name"`
 	LabelID               string `json:"label_id"`
 	LabelName             string `json:"label_name"`
 	IntegrationInstanceID string `json:"integration_instance_id"`
@@ -855,6 +874,9 @@ func getSettingsFromMetadata(metadata map[string]any) Settings {
 
 	if v, ok := metadata[MetadataKeyProjectID].(string); ok {
 		settings.ProjectID = v
+	}
+	if v, ok := metadata[MetadataKeyProjectName].(string); ok {
+		settings.ProjectName = v
 	}
 	if v, ok := metadata[MetadataKeyLabelID].(string); ok {
 		settings.LabelID = v

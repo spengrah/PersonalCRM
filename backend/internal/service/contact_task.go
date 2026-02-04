@@ -89,16 +89,19 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
 
-	// Build the Quick Add text with contact name link prefix and CRM label
+	// Build the Quick Add text with contact name link prefix, project, and label
 	contactLink := fmt.Sprintf("%s/contacts/%s", s.frontendURL, contact.ID.String())
 	quickAddText := fmt.Sprintf("[%s](%s): %s", contact.FullName, contactLink, req.Text)
+
+	// Add default project if user didn't specify one with #
+	if settings.ProjectName != "" && !strings.Contains(req.Text, "#") {
+		quickAddText = fmt.Sprintf("%s #%s", quickAddText, settings.ProjectName)
+	}
+
+	// Add CRM label if not already specified
 	if settings.LabelName != "" && !strings.Contains(strings.ToLower(req.Text), "@"+strings.ToLower(settings.LabelName)) {
 		quickAddText = fmt.Sprintf("%s @%s", quickAddText, settings.LabelName)
 	}
-
-	// Note: Quick Add API doesn't support project_id parameter directly.
-	// Tasks will go to inbox unless user specifies #project in their text.
-	// This is acceptable UX - users have full control via natural language syntax.
 
 	// Build the task description (CRM link is in content, so just notes + marker here)
 	var descBuilder strings.Builder
@@ -127,16 +130,11 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 		return nil, fmt.Errorf("todoist quick add: %w", err)
 	}
 
-	// Step 2: Update task description (and project if not specified) via Sync API
+	// Step 2: Update task description via Sync API
 	// QuickAdd's "note" param creates comments, not descriptions
-	updates := map[string]any{
+	updateCmd := todoist.NewItemUpdateCommand(task.ID, map[string]any{
 		"description": descBuilder.String(),
-	}
-	// Default to configured project if user didn't specify one with #
-	if settings.ProjectID != "" && !strings.Contains(req.Text, "#") {
-		updates["project_id"] = settings.ProjectID
-	}
-	updateCmd := todoist.NewItemUpdateCommand(task.ID, updates)
+	})
 	_, err = client.Sync(ctx, "*", []string{}, []todoist.SyncCommand{updateCmd})
 	if err != nil {
 		// Log but don't fail - task was created, just missing description/project
@@ -249,6 +247,9 @@ func (s *ContactTaskService) getTodoistSettings(ctx context.Context) (*todoist.S
 		if v, ok := state.Metadata[todoist.MetadataKeyProjectID].(string); ok {
 			settings.ProjectID = v
 		}
+		if v, ok := state.Metadata[todoist.MetadataKeyProjectName].(string); ok {
+			settings.ProjectName = v
+		}
 		if v, ok := state.Metadata[todoist.MetadataKeyLabelID].(string); ok {
 			settings.LabelID = v
 		}
@@ -262,6 +263,23 @@ func (s *ContactTaskService) getTodoistSettings(ctx context.Context) (*todoist.S
 
 	if settings.LabelID == "" {
 		return nil, "", ErrTodoistMissingLabel
+	}
+
+	// Fetch project name from Todoist if missing but project ID exists
+	if settings.ProjectID != "" && settings.ProjectName == "" {
+		accessToken, err := s.oauthService.GetAccessToken(ctx, accountID)
+		if err == nil {
+			client := todoist.NewSyncClient(accessToken)
+			syncResp, err := client.Sync(ctx, "*", []string{"projects"}, nil)
+			if err == nil {
+				for _, project := range syncResp.Projects {
+					if project.ID == settings.ProjectID && !project.IsDeleted {
+						settings.ProjectName = project.Name
+						break
+					}
+				}
+			}
+		}
 	}
 
 	return &settings, accountID, nil

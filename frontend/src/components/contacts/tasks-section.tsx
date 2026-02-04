@@ -8,6 +8,23 @@ import { AddTaskModal } from './add-task-modal'
 import { formatDateOnly } from '@/lib/utils'
 import type { ContactTask } from '@/types/contact-task'
 
+/**
+ * Strips the markdown contact link prefix from task content.
+ * Task content format: "[Contact Name](https://...): actual task content"
+ * Returns just "actual task content"
+ */
+function stripContactPrefix(content: string | undefined): string {
+  if (!content) return 'Untitled task'
+
+  // Match markdown link followed by colon: [text](url):
+  const match = content.match(/^\[.+?\]\(.+?\):\s*(.*)$/)
+  if (match) {
+    return match[1] || 'Untitled task'
+  }
+
+  return content
+}
+
 interface TasksSectionProps {
   contactId: string
   contactName: string
@@ -132,7 +149,7 @@ function TaskRow({ task, contactId, completed }: TaskRowProps) {
         <p
           className={`text-sm truncate ${completed ? 'text-gray-400 line-through' : 'text-gray-900'}`}
         >
-          {task.content || 'Untitled task'}
+          {stripContactPrefix(task.content)}
         </p>
       </div>
 
