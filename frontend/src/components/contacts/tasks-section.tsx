@@ -1,33 +1,32 @@
 'use client'
 
 import { useState } from 'react'
-import { useContactTasks, useDeleteTaskLink } from '@/hooks/use-contact-tasks'
+import { useDeleteTaskLink } from '@/hooks/use-contact-tasks'
 import { Button } from '@/components/ui/button'
 import { Plus, Circle, CheckCircle2, ExternalLink, X } from 'lucide-react'
 import { AddTaskModal } from './add-task-modal'
 import { formatDateOnly } from '@/lib/utils'
+import type { ContactTask } from '@/types/contact-task'
 
 interface TasksSectionProps {
   contactId: string
   contactName: string
+  activeTasks: ContactTask[]
+  completedTasks: ContactTask[]
+  loadingActive: boolean
+  loadingCompleted: boolean
 }
 
-export function TasksSection({ contactId, contactName }: TasksSectionProps) {
+export function TasksSection({
+  contactId,
+  contactName,
+  activeTasks,
+  completedTasks,
+  loadingActive,
+  loadingCompleted,
+}: TasksSectionProps) {
   const [showAddModal, setShowAddModal] = useState(false)
   const [showCompleted, setShowCompleted] = useState(false)
-
-  // Fetch managed tasks (active)
-  const { data: activeTasks = [], isLoading: loadingActive } = useContactTasks(contactId, {
-    state: 'managed',
-    kind: 'action',
-  })
-
-  // Fetch completed tasks (always fetch to show count in toggle, but don't block loading)
-  const { data: completedTasks = [], isLoading: loadingCompleted } = useContactTasks(
-    contactId,
-    { state: 'completed', kind: 'action' },
-    { enabled: true } // Always fetch so we can show the toggle with count
-  )
 
   const isLoading = loadingActive || (showCompleted && loadingCompleted)
   // Show empty state only when both lists are truly empty

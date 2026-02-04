@@ -14,6 +14,7 @@ import {
   useUpdateLastContacted,
 } from '@/hooks/use-contacts'
 import { useContactNote, useSaveContactNote } from '@/hooks/use-contact-note'
+import { useContactTasks } from '@/hooks/use-contact-tasks'
 import { useKeyboardNavigation } from '@/hooks/use-keyboard-navigation'
 import { ContactNavigationBar } from '@/components/contacts/contact-navigation-bar'
 import { formatDateOnly } from '@/lib/utils'
@@ -72,6 +73,16 @@ export default function ContactDetailPage() {
   const { data: navigationData, isLoading: isLoadingIDs } = useContactIDs(listContext)
   const updateContactMutation = useUpdateContact()
   const saveContactNoteMutation = useSaveContactNote()
+
+  // Fetch tasks at page level to start loading in parallel with contact
+  const { data: activeTasks = [], isLoading: loadingActiveTasks } = useContactTasks(contactId, {
+    state: 'managed',
+    kind: 'action',
+  })
+  const { data: completedTasks = [], isLoading: loadingCompletedTasks } = useContactTasks(
+    contactId,
+    { state: 'completed', kind: 'action' }
+  )
 
   // Build URL preserving list context params
   const buildNavigationUrl = useCallback(
@@ -571,7 +582,14 @@ export default function ContactDetailPage() {
 
         {/* Tasks Section */}
         <div className="mt-8">
-          <TasksSection contactId={contactId} contactName={contact.full_name} />
+          <TasksSection
+            contactId={contactId}
+            contactName={contact.full_name}
+            activeTasks={activeTasks}
+            completedTasks={completedTasks}
+            loadingActive={loadingActiveTasks}
+            loadingCompleted={loadingCompletedTasks}
+          />
         </div>
 
         {/* Meetings Section */}

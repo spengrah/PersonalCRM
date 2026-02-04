@@ -89,7 +89,7 @@ export function AddTaskModal({ contactId, contactName, onClose }: AddTaskModalPr
                 value={text}
                 onChange={e => setText(e.target.value)}
                 placeholder="Follow up about surgery next tuesday p2"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-sm"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-sm text-gray-900 placeholder-gray-400"
               />
               <p className="mt-1 text-xs text-gray-500">Supports: dates, #project, @label, p1-p4</p>
             </div>
@@ -113,7 +113,7 @@ export function AddTaskModal({ contactId, contactName, onClose }: AddTaskModalPr
                   onChange={e => setNotes(e.target.value)}
                   placeholder="Additional context for this task..."
                   rows={3}
-                  className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-sm text-gray-900 placeholder-gray-400"
                 />
               )}
             </div>
