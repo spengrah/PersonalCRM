@@ -19,11 +19,13 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
       // Navigate to contact detail page
       await page.goto(`/contacts/${ids[0]}`)
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Tasks section may or may not be visible depending on Todoist configuration
       // This is a smoke test - just verify the page loads without errors
-      await expect(page.locator('h1').first()).toContainText('Task Test Contact')
+      await expect(page.getByRole('heading', { name: 'Task Test Contact' })).toBeVisible({
+        timeout: 15000,
+      })
     })
   })
 
@@ -32,7 +34,10 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       const { ids } = await testApi.seedContacts([{ full_name: 'Modal Test Contact' }])
 
       await page.goto(`/contacts/${ids[0]}`)
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
+      await expect(page.getByRole('heading', { name: 'Modal Test Contact' })).toBeVisible({
+        timeout: 15000,
+      })
 
       // Look for the "Add Task" button (only visible when Todoist configured)
       const addTaskButton = page.locator('button:has-text("Add Task")')
@@ -60,7 +65,10 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       const { ids } = await testApi.seedContacts([{ full_name: 'Validation Test Contact' }])
 
       await page.goto(`/contacts/${ids[0]}`)
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
+      await expect(page.getByRole('heading', { name: 'Validation Test Contact' })).toBeVisible({
+        timeout: 15000,
+      })
 
       const addTaskButton = page.locator('button:has-text("Add Task")')
       const buttonCount = await addTaskButton.count()
