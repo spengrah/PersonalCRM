@@ -10,6 +10,7 @@ import (
 
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/todoist"
 
@@ -88,24 +89,23 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
 
-	// Build the Quick Add text with CRM label appended
-	quickAddText := req.Text
+	// Build the Quick Add text with contact name link prefix and CRM label
+	contactLink := fmt.Sprintf("%s/contacts/%s", s.frontendURL, contact.ID.String())
+	quickAddText := fmt.Sprintf("[%s](%s): %s", contact.FullName, contactLink, req.Text)
 	if settings.LabelName != "" && !strings.Contains(strings.ToLower(req.Text), "@"+strings.ToLower(settings.LabelName)) {
-		quickAddText = fmt.Sprintf("%s @%s", req.Text, settings.LabelName)
+		quickAddText = fmt.Sprintf("%s @%s", quickAddText, settings.LabelName)
 	}
 
 	// Note: Quick Add API doesn't support project_id parameter directly.
 	// Tasks will go to inbox unless user specifies #project in their text.
 	// This is acceptable UX - users have full control via natural language syntax.
 
-	// Build the task description (note)
-	var noteBuilder strings.Builder
+	// Build the task description (CRM link is in content, so just notes + marker here)
+	var descBuilder strings.Builder
 	if req.Notes != "" {
-		noteBuilder.WriteString(req.Notes)
-		noteBuilder.WriteString("\n\n")
+		descBuilder.WriteString(req.Notes)
+		descBuilder.WriteString("\n\n---\n")
 	}
-	noteBuilder.WriteString(fmt.Sprintf("[See context in CRM](%s/contacts/%s)\n\n", s.frontendURL, contact.ID.String()))
-	noteBuilder.WriteString("---\n")
 
 	// Add CRM marker for sync identification (use json.Marshal for safety)
 	marker := map[string]any{
@@ -118,13 +118,29 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 	if err != nil {
 		return nil, fmt.Errorf("marshal marker: %w", err)
 	}
-	noteBuilder.Write(markerJSON)
+	descBuilder.Write(markerJSON)
 
-	// Call Todoist Quick Add API
+	// Step 1: Call Todoist Quick Add API (for natural language parsing)
 	client := todoist.NewSyncClient(accessToken)
-	task, err := client.QuickAdd(ctx, quickAddText, noteBuilder.String())
+	task, err := client.QuickAdd(ctx, quickAddText, "")
 	if err != nil {
 		return nil, fmt.Errorf("todoist quick add: %w", err)
+	}
+
+	// Step 2: Update task description (and project if not specified) via Sync API
+	// QuickAdd's "note" param creates comments, not descriptions
+	updates := map[string]any{
+		"description": descBuilder.String(),
+	}
+	// Default to configured project if user didn't specify one with #
+	if settings.ProjectID != "" && !strings.Contains(req.Text, "#") {
+		updates["project_id"] = settings.ProjectID
+	}
+	updateCmd := todoist.NewItemUpdateCommand(task.ID, updates)
+	_, err = client.Sync(ctx, "*", []string{}, []todoist.SyncCommand{updateCmd})
+	if err != nil {
+		// Log but don't fail - task was created, just missing description/project
+		logger.Warn().Err(err).Str("task_id", task.ID).Msg("failed to update task")
 	}
 
 	// Build metadata for the contact_task record

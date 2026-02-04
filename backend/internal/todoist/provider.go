@@ -736,12 +736,12 @@ func isPendingTempID(task *repository.ContactTask) bool {
 
 // createTaskCommand creates a Todoist task creation command
 func (p *CadenceSyncProvider) createTaskCommand(contact *repository.Contact, settings Settings, deadline *string) SyncCommand {
-	title := fmt.Sprintf("Reach out to %s", contact.FullName)
+	// Embed CRM link in contact name for easy navigation
+	contactLink := fmt.Sprintf("%s/contacts/%s", p.frontendURL, contact.ID.String())
+	title := fmt.Sprintf("Reach out to [%s](%s)", contact.FullName, contactLink)
 
-	// Build description with CRM link and marker
+	// Build description with CRM marker (link is in title)
 	var descBuilder strings.Builder
-	descBuilder.WriteString(fmt.Sprintf("[See context in CRM](%s/contacts/%s)\n\n", p.frontendURL, contact.ID.String()))
-	descBuilder.WriteString("---\n")
 
 	marker := map[string]any{
 		"crm":        true,
