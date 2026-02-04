@@ -206,3 +206,83 @@ detail: |
   When asserting that a contact name appears on a detail page, use `page.getByRole('heading', { name: contactName })` with explicit timeout rather than checking h1 text content. This is more robust and follows the pattern established in contacts.spec.ts. Example: `await expect(page.getByRole('heading', { name: 'Task Test Contact' })).toBeVisible({ timeout: 15000 })`
 actionable: true
 
+---
+timestamp: "2026-02-04T15:33:01.561389"
+type: gotcha
+summary: Second code review has different issues than first
+detail: |
+  Claude Code Review may request changes multiple times with different issues each iteration. The first review caught critical issues (auth headers, error handling, missing tests). The second review caught code quality issues (JSON construction with fmt.Sprintf, null-safety, unused exports, ignored errors). Don't assume passing the first review means the code is production-ready - be prepared for multiple rounds addressing progressively subtler issues.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:33:01.561389"
+type: rule
+summary: Use json.Marshal for JSON construction, never string formatting
+detail: |
+  When building JSON markers or structured data, always use json.Marshal instead of fmt.Sprintf. String formatting like `fmt.Sprintf('{"key":"%s"}', value)` breaks if values contain quotes or special characters, creating injection vulnerabilities. The codebase already does this correctly in provider.go line 752 - follow that pattern. Even if it seems like "just a marker", malformed JSON can break sync.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:33:01.561389"
+type: architecture
+summary: TodoistHandler vs ContactTaskHandler separation of concerns
+detail: |
+  TodoistHandler (todoist.go) manages GLOBAL Todoist configuration: settings (project, label), OAuth, listing available projects/labels from the API. Routes: /todoist/settings, /todoist/projects, /todoist/labels. ContactTaskHandler (contact_task.go) manages PER-CONTACT task operations: create/list/delete task links for specific contacts. Routes: /contacts/{id}/tasks. Think of it as: TodoistHandler = 'which Todoist project/label to use', ContactTaskHandler = 'create/manage tasks linked to people'.
+actionable: false
+
+---
+timestamp: "2026-02-04T15:33:01.561389"
+type: rule
+summary: Add null-safety checks on external API responses
+detail: |
+  When consuming external API responses (like Todoist), always add defensive null checks: `response?.data || []` instead of assuming `response.data` exists. External APIs may return unexpected structures during errors, rate limiting, or schema changes. This prevents runtime errors when the API returns null/undefined data fields.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:33:01.561389"
+type: rule
+summary: Use React Query enabled option to prevent unnecessary queries
+detail: |
+  When a query should only run conditionally (like fetching completed tasks only when the toggle is on), add an `enabled` parameter to the hook's options and pass the condition: `enabled: !!contactId && showCompleted`. Without this, React Query fetches data on mount even when it won't be displayed, wasting API calls and potentially causing UI glitches when the data arrives.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:33:01.561389"
+type: gotcha
+summary: hasNoTasks logic must account for filtered views
+detail: |
+  When calculating 'no tasks' state for UI, consider ALL tasks, not just visible ones. If showing `hasNoTasks = activeTasks.length === 0 && completedTasks.length === 0` with showCompleted=false, users with only completed tasks see 'No tasks' but can't access the toggle to reveal them. Fix: Check total tasks across states, or always show the toggle if ANY tasks exist regardless of current filter.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:33:01.561389"
+type: rule
+summary: Check errors.Is before wrapping repository errors
+detail: |
+  When calling repository methods that return sentinel errors (like db.ErrNotFound), check with errors.Is() before wrapping the error. Pattern: `if errors.Is(err, db.ErrNotFound) { return ErrTodoistNotConfigured }` otherwise `else { return fmt.Errorf("get sync state: %w", err) }`. This preserves error context while still allowing specific handling of known error types.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:33:01.561389"
+type: rule
+summary: Never ignore json.Marshal errors even for simple types
+detail: |
+  Even when marshaling simple map[string]any that 'should never fail', handle or at least log the error from json.Marshal. Pattern: `markerJSON, err := json.Marshal(marker); if err != nil { logger.Warn().Err(err).Msg("failed to marshal marker") }`. While unlikely, marshal can fail on edge cases (circular references, unsupported types added later) and silent failures are hard to debug.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:33:01.561389"
+type: gotcha
+summary: Unused exported hook triggers code review failure
+detail: |
+  If you export a hook like useDeleteTaskLink() but never use it, code reviews will flag it as dead code. Either: (1) remove the hook if not needed, or (2) implement the UI that uses it. In this case, delete functionality was in the original design (endpoint exists), so implementing the UI (delete button in TaskRow) was the right fix rather than removing the hook.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:33:01.561389"
+type: gotcha
+summary: Integration tests fail locally without database, pass in CI
+detail: |
+  In sandcastle environments, integration tests that require PostgreSQL will fail with 'connection refused' because the test database isn't running. This is expected - the CI environment has the database. When testing locally, run `make test-unit` to verify Go logic without needing the database. The pre-push hook and CI will catch integration test failures.
+actionable: false
+

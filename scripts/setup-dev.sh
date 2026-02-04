@@ -136,6 +136,19 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     fi
 else
     # Linux - use Debian/Ubuntu detection
+    install_postgres_linux() {
+        echo "   Installing PostgreSQL 16 with pgvector..."
+        # Add PostgreSQL APT repository for PG 16
+        if ! grep -q "apt.postgresql.org" /etc/apt/sources.list.d/*.list 2>/dev/null; then
+            sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+            wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add - 2>/dev/null || \
+                curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+        fi
+        sudo apt-get update -qq
+        sudo apt-get install -y postgresql-16 postgresql-16-pgvector
+        echo_ok "PostgreSQL 16 with pgvector installed"
+    }
+
     if command -v pg_ctlcluster &> /dev/null; then
         PG_VERSION=$(pg_lsclusters -h 2>/dev/null | grep -E "^[0-9]+" | head -1 | awk '{print $1}')
         echo_ok "PostgreSQL $PG_VERSION installed"
@@ -144,14 +157,24 @@ else
         if dpkg -l | grep -q "postgresql-${PG_VERSION}-pgvector"; then
             echo_ok "pgvector extension installed"
         else
-            echo_warn "pgvector extension not found"
-            MANUAL_STEPS+=("Install pgvector: sudo apt install postgresql-${PG_VERSION}-pgvector")
+            echo "   Installing pgvector extension..."
+            if sudo apt-get install -y "postgresql-${PG_VERSION}-pgvector" 2>/dev/null; then
+                echo_ok "pgvector extension installed"
+            else
+                echo_warn "pgvector extension not found"
+                MANUAL_STEPS+=("Install pgvector: sudo apt install postgresql-${PG_VERSION}-pgvector")
+            fi
         fi
     elif command -v psql &> /dev/null; then
         echo_ok "PostgreSQL client installed (server may be external)"
     else
-        echo_warn "PostgreSQL not found"
-        MANUAL_STEPS+=("Install PostgreSQL: sudo apt install postgresql postgresql-16-pgvector")
+        # Try to auto-install PostgreSQL
+        if command -v apt-get &> /dev/null && command -v sudo &> /dev/null; then
+            install_postgres_linux
+        else
+            echo_warn "PostgreSQL not found"
+            MANUAL_STEPS+=("Install PostgreSQL: sudo apt install postgresql postgresql-16-pgvector")
+        fi
     fi
 fi
 
