@@ -109,7 +109,7 @@ interface TaskRowProps {
 }
 
 function TaskRow({ task, contactId, completed }: TaskRowProps) {
-  const todoistUrl = `https://todoist.com/app/task/${task.external_task_id}`
+  const todoistUrl = `https://app.todoist.com/app/task/${task.external_task_id}`
   const deleteTaskLink = useDeleteTaskLink()
 
   const handleUnlink = () => {
