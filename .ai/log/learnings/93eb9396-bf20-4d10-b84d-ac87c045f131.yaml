@@ -126,3 +126,67 @@ detail: |
   The Todoist API documentation doesn't clearly explain: (1) QuickAdd 'note' parameter creates comments not descriptions, (2) item_update cannot move tasks between projects, (3) URL field availability differences between SDK and raw API, (4) web URL format changes with v1 API. These required extensive trial-and-error testing and web searches to discover. Future work should document these in a 'Todoist API Gotchas' guide.
 actionable: true
 
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: gotcha
+summary: Todoist QuickAdd project assignment requires exact project name matching, not pattern matching
+detail: |
+  When using `#ProjectName` in Todoist QuickAdd text to assign tasks to projects, the project name must match exactly (case-sensitive, no partial matches). The `#` syntax works anywhere in the text, but markdown link syntax and complex formatting before the project marker may affect parsing reliability. Position of `#ProjectName` in the text matters - earlier placement tends to be more reliable.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: distinction
+summary: Todoist v1 API uses alphanumeric IDs instead of v9 numeric IDs
+detail: |
+  The Todoist v9 Sync API used numeric IDs (e.g., `2366110704`) while v1 API uses alphanumeric IDs (e.g., `6fqf24XFphm3R24w`). When migrating from v9 to v1, stored project/task IDs in database metadata become invalid and won't match API responses. This requires either re-saving settings through the UI or manually updating the database with new ID format. The migration affects all entity types (projects, tasks, labels).
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: architecture
+summary: Store both entity ID and human-readable name for Todoist resources in metadata
+detail: |
+  When storing Todoist settings (project, label, etc.), always persist both the ID (for API calls) and the Name (for QuickAdd syntax). QuickAdd uses `#ProjectName` syntax while Sync API uses project_id. Having both avoids expensive on-demand API lookups and provides fallback when one format becomes invalid (like during API migrations). This pattern should apply to all external entity references.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: gotcha
+summary: Task content prefix stripping must handle both action and cadence task content patterns
+detail: |
+  Action tasks embed contact links as prefix: `[Name](url): task content`, while cadence tasks embed inline: `Reach out to [Name](url)`. A function that only strips leading markdown links will fail for cadence tasks, showing raw markdown in the UI. The cleaning function must handle both patterns: strip leading `[text](url): ` prefix AND replace any remaining `[text](url)` with just `text`.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: rule
+summary: Fail entire task creation operation if Sync API update fails after QuickAdd
+detail: |
+  When creating tasks via QuickAdd + Sync API (two-step: QuickAdd for parsing, Sync for description/metadata), if the Sync step fails, the task exists in Todoist without the CRM marker in description. This orphaned task breaks sync reconciliation since it has no `{{crm:...}}` identifier. Either fail the entire operation and clean up the QuickAdd task, or implement retry logic. Logging and continuing leaves system in inconsistent state.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: rule
+summary: Don't fetch missing metadata inline during request handling - fix at source
+detail: |
+  Adding fallback logic to fetch project names from Todoist API when metadata is incomplete adds latency to every task creation request. Instead of patching with inline API calls, require metadata to be complete before operations or fail fast with actionable error message. Missing metadata indicates configuration issue (settings not saved, sync not run) that should be resolved at source, not worked around.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: gotcha
+summary: Check database schema before writing raw SQL - table names may differ from repository references
+detail: |
+  The actual database table name is `external_sync_state`, not `sync_state`, even though code references might use shorter names. Always verify table names with `\dt` command before writing raw SQL queries. This particularly applies when accessing the database directly for debugging or quick fixes instead of going through repository layer.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: gotcha
+summary: Use Info level for temporary diagnostic logging, not Debug level
+detail: |
+  When adding temporary logging to diagnose production issues, `logger.Debug()` calls won't appear in logs if the production log level is set to INFO or higher. Use `logger.Info()` for diagnostic logging that needs to be visible immediately, then remove or downgrade to Debug after issue is resolved. This avoids the deploy-test-no-output cycle.
+actionable: true
+
