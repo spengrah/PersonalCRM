@@ -3,10 +3,27 @@
 import { useState } from 'react'
 import { useDeleteTaskLink } from '@/hooks/use-contact-tasks'
 import { Button } from '@/components/ui/button'
-import { Plus, Circle, CheckCircle2, ExternalLink, X } from 'lucide-react'
+import { Plus, Circle, CheckCircle2, ExternalLink, X, ListTodo } from 'lucide-react'
 import { AddTaskModal } from './add-task-modal'
 import { formatDateOnly } from '@/lib/utils'
 import type { ContactTask } from '@/types/contact-task'
+
+/**
+ * Cleans markdown links from task content for display in CRM UI.
+ * - Action tasks: "[Name](url): task" → "task"
+ * - Cadence tasks: "Reach out to [Name](url)" → "Reach out to Name"
+ */
+function cleanTaskContent(content: string | undefined): string {
+  if (!content) return 'Untitled task'
+
+  // First, strip leading markdown link prefix with colon
+  let cleaned = content.replace(/^\[([^\]]+)\]\([^)]+\):\s*/, '')
+
+  // Then replace any remaining markdown links with just their text
+  cleaned = cleaned.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+
+  return cleaned.trim() || 'Untitled task'
+}
 
 interface TasksSectionProps {
   contactId: string
@@ -35,7 +52,10 @@ export function TasksSection({
   return (
     <div className="bg-white shadow overflow-hidden sm:rounded-lg">
       <div className="px-4 py-5 sm:px-6 border-b border-gray-200 flex items-center justify-between">
-        <h3 className="text-lg leading-6 font-medium text-gray-900">Tasks</h3>
+        <div className="flex items-center gap-2">
+          <ListTodo className="w-5 h-5 text-gray-400" />
+          <h3 className="text-lg leading-6 font-medium text-gray-900">Tasks</h3>
+        </div>
         <Button variant="outline" size="sm" onClick={() => setShowAddModal(true)}>
           <Plus className="w-4 h-4 mr-1" />
           Add
@@ -132,7 +152,7 @@ function TaskRow({ task, contactId, completed }: TaskRowProps) {
         <p
           className={`text-sm truncate ${completed ? 'text-gray-400 line-through' : 'text-gray-900'}`}
         >
-          {task.content || 'Untitled task'}
+          {cleanTaskContent(task.content)}
         </p>
       </div>
 

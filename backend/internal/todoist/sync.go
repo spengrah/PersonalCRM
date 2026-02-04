@@ -19,6 +19,20 @@ import (
 var SyncEndpoint = "https://api.todoist.com/api/v1/sync"
 var QuickAddEndpoint = "https://api.todoist.com/api/v1/tasks/quick"
 
+// Client interface for Todoist operations (enables testing with mocks)
+type Client interface {
+	QuickAdd(ctx context.Context, text string, note string) (*QuickAddTask, error)
+	Sync(ctx context.Context, syncToken string, resourceTypes []string, commands []SyncCommand) (*SyncResponse, error)
+}
+
+// ClientFactory creates Todoist clients
+type ClientFactory func(accessToken string) Client
+
+// DefaultClientFactory creates real SyncClient instances
+func DefaultClientFactory(accessToken string) Client {
+	return NewSyncClient(accessToken)
+}
+
 // SyncClient handles Todoist Sync API operations
 type SyncClient struct {
 	httpClient  *http.Client

@@ -25,11 +25,14 @@ var (
 
 // ContactTaskService handles business logic for contact tasks
 type ContactTaskService struct {
-	contactTaskRepo *repository.ContactTaskRepository
-	contactRepo     *repository.ContactRepository
-	syncRepo        *repository.SyncRepository
-	oauthService    *todoist.OAuthService
-	frontendURL     string
+	contactTaskRepo   *repository.ContactTaskRepository
+	contactRepo       *repository.ContactRepository
+	syncRepo          *repository.SyncRepository
+	oauthService      *todoist.OAuthService
+	frontendURL       string
+	todoistClientFunc todoist.ClientFactory
+	// testAccessToken bypasses OAuth lookup when set (for testing)
+	testAccessToken string
 }
 
 // NewContactTaskService creates a new contact task service
@@ -41,11 +44,35 @@ func NewContactTaskService(
 	cfg *config.Config,
 ) *ContactTaskService {
 	return &ContactTaskService{
-		contactTaskRepo: contactTaskRepo,
-		contactRepo:     contactRepo,
-		syncRepo:        syncRepo,
-		oauthService:    oauthService,
-		frontendURL:     cfg.CORS.FrontendURL,
+		contactTaskRepo:   contactTaskRepo,
+		contactRepo:       contactRepo,
+		syncRepo:          syncRepo,
+		oauthService:      oauthService,
+		frontendURL:       cfg.CORS.FrontendURL,
+		todoistClientFunc: todoist.DefaultClientFactory,
+	}
+}
+
+// SetTodoistClientFactory allows overriding the Todoist client factory (for testing)
+func (s *ContactTaskService) SetTodoistClientFactory(factory todoist.ClientFactory) {
+	s.todoistClientFunc = factory
+}
+
+// NewContactTaskServiceForTest creates a service for testing without OAuth dependency.
+// The service's todoistClientFunc must be set via SetTodoistClientFactory before use.
+func NewContactTaskServiceForTest(
+	contactTaskRepo *repository.ContactTaskRepository,
+	contactRepo *repository.ContactRepository,
+	syncRepo *repository.SyncRepository,
+	frontendURL string,
+) *ContactTaskService {
+	return &ContactTaskService{
+		contactTaskRepo:   contactTaskRepo,
+		contactRepo:       contactRepo,
+		syncRepo:          syncRepo,
+		frontendURL:       frontendURL,
+		todoistClientFunc: todoist.DefaultClientFactory,
+		testAccessToken:   "test-token", // Bypass OAuth lookup
 	}
 }
 
@@ -76,36 +103,49 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 		return nil, fmt.Errorf("get contact: %w", err)
 	}
 
-	// Get Todoist settings
-	settings, accountID, err := s.getTodoistSettings(ctx)
-	if err != nil {
-		return nil, err
+	// Get Todoist settings and access token
+	var settings *todoist.Settings
+	var accessToken string
+	if s.testAccessToken != "" {
+		// Test mode: use test token and get settings from sync state directly
+		accessToken = s.testAccessToken
+		settings, _, err = s.getTodoistSettingsFromSyncState(ctx)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Production mode: get settings and token via OAuth
+		var accountID string
+		settings, accountID, err = s.getTodoistSettings(ctx)
+		if err != nil {
+			return nil, err
+		}
+		accessToken, err = s.oauthService.GetAccessToken(ctx, accountID)
+		if err != nil {
+			return nil, fmt.Errorf("get access token: %w", err)
+		}
 	}
 
-	// Get access token
-	accessToken, err := s.oauthService.GetAccessToken(ctx, accountID)
-	if err != nil {
-		return nil, fmt.Errorf("get access token: %w", err)
+	// Build the Quick Add text with contact name link prefix, project, and label
+	contactLink := fmt.Sprintf("%s/contacts/%s", s.frontendURL, contact.ID.String())
+	quickAddText := fmt.Sprintf("[%s](%s): %s", contact.FullName, contactLink, req.Text)
+
+	// Add default project if user didn't specify one with #
+	if settings.ProjectName != "" && !strings.Contains(req.Text, "#") {
+		quickAddText = fmt.Sprintf("%s #%s", quickAddText, settings.ProjectName)
 	}
 
-	// Build the Quick Add text with CRM label appended
-	quickAddText := req.Text
+	// Add CRM label if not already specified
 	if settings.LabelName != "" && !strings.Contains(strings.ToLower(req.Text), "@"+strings.ToLower(settings.LabelName)) {
-		quickAddText = fmt.Sprintf("%s @%s", req.Text, settings.LabelName)
+		quickAddText = fmt.Sprintf("%s @%s", quickAddText, settings.LabelName)
 	}
 
-	// Note: Quick Add API doesn't support project_id parameter directly.
-	// Tasks will go to inbox unless user specifies #project in their text.
-	// This is acceptable UX - users have full control via natural language syntax.
-
-	// Build the task description (note)
-	var noteBuilder strings.Builder
+	// Build the task description (CRM link is in content, so just notes + marker here)
+	var descBuilder strings.Builder
 	if req.Notes != "" {
-		noteBuilder.WriteString(req.Notes)
-		noteBuilder.WriteString("\n\n")
+		descBuilder.WriteString(req.Notes)
+		descBuilder.WriteString("\n\n---\n")
 	}
-	noteBuilder.WriteString(fmt.Sprintf("[See context in CRM](%s/contacts/%s)\n\n", s.frontendURL, contact.ID.String()))
-	noteBuilder.WriteString("---\n")
 
 	// Add CRM marker for sync identification (use json.Marshal for safety)
 	marker := map[string]any{
@@ -118,13 +158,27 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 	if err != nil {
 		return nil, fmt.Errorf("marshal marker: %w", err)
 	}
-	noteBuilder.Write(markerJSON)
+	descBuilder.Write(markerJSON)
 
-	// Call Todoist Quick Add API
-	client := todoist.NewSyncClient(accessToken)
-	task, err := client.QuickAdd(ctx, quickAddText, noteBuilder.String())
+	// Step 1: Call Todoist Quick Add API (for natural language parsing)
+	client := s.todoistClientFunc(accessToken)
+	task, err := client.QuickAdd(ctx, quickAddText, "")
 	if err != nil {
 		return nil, fmt.Errorf("todoist quick add: %w", err)
+	}
+
+	// Step 2: Update task description via Sync API
+	// QuickAdd's "note" param creates comments, not descriptions.
+	// Description contains CRM marker needed for sync reconciliation - fail if update fails.
+	updateCmd := todoist.NewItemUpdateCommand(task.ID, map[string]any{
+		"description": descBuilder.String(),
+	})
+	_, err = client.Sync(ctx, "*", []string{}, []todoist.SyncCommand{updateCmd})
+	if err != nil {
+		// Delete the task since it won't have CRM marker for sync
+		deleteCmd := todoist.NewItemDeleteCommand(task.ID)
+		_, _ = client.Sync(ctx, "*", []string{}, []todoist.SyncCommand{deleteCmd})
+		return nil, fmt.Errorf("update task description: %w", err)
 	}
 
 	// Build metadata for the contact_task record
@@ -205,6 +259,57 @@ func (s *ContactTaskService) DeleteTaskLink(ctx context.Context, contactID uuid.
 	return s.contactTaskRepo.DeleteContactTask(ctx, taskID)
 }
 
+// getTodoistSettingsFromSyncState retrieves settings directly from sync state (for testing)
+func (s *ContactTaskService) getTodoistSettingsFromSyncState(ctx context.Context) (*todoist.Settings, string, error) {
+	// Find any Todoist sync state (test mode doesn't need specific account)
+	allStates, err := s.syncRepo.ListSyncStates(ctx)
+	if err != nil {
+		return nil, "", fmt.Errorf("list sync states: %w", err)
+	}
+
+	// Filter to Todoist states
+	var state *repository.SyncState
+	for i := range allStates {
+		if allStates[i].Source == todoist.SourceName {
+			state = &allStates[i]
+			break
+		}
+	}
+
+	if state == nil {
+		return nil, "", ErrTodoistNotConfigured
+	}
+	accountID := ""
+	if state.AccountID != nil {
+		accountID = *state.AccountID
+	}
+
+	settings := todoist.Settings{}
+	if state.Metadata != nil {
+		if v, ok := state.Metadata[todoist.MetadataKeyProjectID].(string); ok {
+			settings.ProjectID = v
+		}
+		if v, ok := state.Metadata[todoist.MetadataKeyProjectName].(string); ok {
+			settings.ProjectName = v
+		}
+		if v, ok := state.Metadata[todoist.MetadataKeyLabelID].(string); ok {
+			settings.LabelID = v
+		}
+		if v, ok := state.Metadata[todoist.MetadataKeyLabelName].(string); ok {
+			settings.LabelName = v
+		}
+		if v, ok := state.Metadata[todoist.MetadataKeyIntegrationInstance].(string); ok {
+			settings.IntegrationInstanceID = v
+		}
+	}
+
+	if settings.LabelID == "" {
+		return nil, "", ErrTodoistMissingLabel
+	}
+
+	return &settings, accountID, nil
+}
+
 // getTodoistSettings retrieves the Todoist settings from sync state
 func (s *ContactTaskService) getTodoistSettings(ctx context.Context) (*todoist.Settings, string, error) {
 	// Get Todoist accounts
@@ -232,6 +337,9 @@ func (s *ContactTaskService) getTodoistSettings(ctx context.Context) (*todoist.S
 	if state.Metadata != nil {
 		if v, ok := state.Metadata[todoist.MetadataKeyProjectID].(string); ok {
 			settings.ProjectID = v
+		}
+		if v, ok := state.Metadata[todoist.MetadataKeyProjectName].(string); ok {
+			settings.ProjectName = v
 		}
 		if v, ok := state.Metadata[todoist.MetadataKeyLabelID].(string); ok {
 			settings.LabelID = v

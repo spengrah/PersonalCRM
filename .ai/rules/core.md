@@ -118,6 +118,8 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Form inputs without explicit text color | Add `text-gray-900 placeholder-gray-400` - browser defaults appear washed out |
 | Service verifying entity exists before query | Skip if FK constraints guarantee validity - adds unnecessary latency |
 | React Query hooks in child components | Move to parent level to enable parallel loading - child mounting creates waterfall |
+| Todoist QuickAdd `note` parameter for descriptions | `note` creates comments, not descriptions - use two-step: QuickAdd then Sync API `item_update` |
+| Todoist v9 numeric IDs with v1 API | v1 returns alphanumeric IDs (e.g., `6fw9cQQ5JppCp7qX`) - update stored IDs after migration |
 
 ## Anti-Patterns
 

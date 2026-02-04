@@ -62,3 +62,195 @@ detail: |
   The contact-tasks-api.ts was implemented with a different URL construction pattern than existing API modules (contacts-api.ts, sync-api.ts, etc.). There's no documented standard for 'how to create a new API module' that specifies: (1) use shared apiClient, (2) include /api/v1 in endpoint paths, (3) don't manage base URLs independently. Without this guidance, new API modules risk reimplementing infrastructure inconsistently. Should add a patterns doc or code template for new API modules.
 actionable: true
 
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: gotcha
+summary: Todoist QuickAdd note parameter creates comments, not descriptions
+detail: |
+  The Todoist Quick Add API's 'note' parameter creates task comments, not the description field. To set a task description, you must use a two-step process: (1) QuickAdd to create the task with natural language parsing, (2) Sync API with item_update to set the description field. This is not documented clearly and causes confusion when trying to add notes/descriptions to tasks created via QuickAdd.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: gotcha
+summary: Todoist QuickAdd doesn't return URL field despite TypeScript SDK transform
+detail: |
+  The TypeScript SDK documentation suggests tasks have a 'url' field added via transform, but the actual QuickAdd API response does not include this field. The URL must be constructed manually using the returned task ID. Testing revealed that while the SDK adds this field client-side, the raw API response doesn't contain it.
+actionable: false
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: distinction
+summary: Todoist v1 API uses alphanumeric IDs, web URLs changed format
+detail: |
+  Todoist API v1 returns alphanumeric task IDs (e.g., '6fw9cQQ5JppCp7qX') instead of numeric IDs. The correct web URL format is 'app.todoist.com/app/task/{id}', not 'todoist.com/app/task/{id}' or 'todoist.com/showTask?id={id}'. However, deep links use 'todoist://task?id={id}' for native app integration, which works across desktop and mobile.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: gotcha
+summary: Todoist item_update cannot move tasks between projects
+detail: |
+  The Sync API's item_update command cannot change a task's project_id to move it between projects. You must use item_move command instead. However, a better approach is to use QuickAdd's natural language syntax with '#ProjectName' in the task text, which requires storing ProjectName (not just ProjectID) in settings.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: architecture
+summary: Settings struct requires both ID and Name for Todoist entities
+detail: |
+  For Todoist integration settings, store both the ID and Name for entities like labels and projects. Labels already follow this pattern (LabelID + LabelName). When adding project support, ProjectName must be added alongside ProjectID because QuickAdd uses natural language syntax (#ProjectName) while other APIs use IDs. Settings are synced and refreshed during cadence sync to handle renames.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: rule
+summary: Always sync 'projects' resource type when using ProjectName
+detail: |
+  When the Todoist provider syncs data, it must include 'projects' in the resource types array alongside 'items', 'labels', and 'user'. This ensures the project name is refreshed when projects are renamed in Todoist. The sync response provides Projects array that should be iterated to update settings.ProjectName when the project ID matches.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: gotcha
+summary: New settings fields require sync run before being populated
+detail: |
+  When adding new fields to Todoist Settings (like ProjectName), they won't be populated in existing sync states until the next sync run. The cadence sync provider fetches and updates these fields, so either trigger a sync or wait for the next scheduled sync. Tasks created before the field is populated will fail to use the feature (e.g., tasks going to Inbox instead of configured project).
+actionable: true
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: documentation_gap
+summary: Todoist API behavior differences not clear in documentation
+detail: |
+  The Todoist API documentation doesn't clearly explain: (1) QuickAdd 'note' parameter creates comments not descriptions, (2) item_update cannot move tasks between projects, (3) URL field availability differences between SDK and raw API, (4) web URL format changes with v1 API. These required extensive trial-and-error testing and web searches to discover. Future work should document these in a 'Todoist API Gotchas' guide.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: gotcha
+summary: Todoist QuickAdd project assignment requires exact project name matching, not pattern matching
+detail: |
+  When using `#ProjectName` in Todoist QuickAdd text to assign tasks to projects, the project name must match exactly (case-sensitive, no partial matches). The `#` syntax works anywhere in the text, but markdown link syntax and complex formatting before the project marker may affect parsing reliability. Position of `#ProjectName` in the text matters - earlier placement tends to be more reliable.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: distinction
+summary: Todoist v1 API uses alphanumeric IDs instead of v9 numeric IDs
+detail: |
+  The Todoist v9 Sync API used numeric IDs (e.g., `2366110704`) while v1 API uses alphanumeric IDs (e.g., `6fqf24XFphm3R24w`). When migrating from v9 to v1, stored project/task IDs in database metadata become invalid and won't match API responses. This requires either re-saving settings through the UI or manually updating the database with new ID format. The migration affects all entity types (projects, tasks, labels).
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: architecture
+summary: Store both entity ID and human-readable name for Todoist resources in metadata
+detail: |
+  When storing Todoist settings (project, label, etc.), always persist both the ID (for API calls) and the Name (for QuickAdd syntax). QuickAdd uses `#ProjectName` syntax while Sync API uses project_id. Having both avoids expensive on-demand API lookups and provides fallback when one format becomes invalid (like during API migrations). This pattern should apply to all external entity references.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: gotcha
+summary: Task content prefix stripping must handle both action and cadence task content patterns
+detail: |
+  Action tasks embed contact links as prefix: `[Name](url): task content`, while cadence tasks embed inline: `Reach out to [Name](url)`. A function that only strips leading markdown links will fail for cadence tasks, showing raw markdown in the UI. The cleaning function must handle both patterns: strip leading `[text](url): ` prefix AND replace any remaining `[text](url)` with just `text`.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: rule
+summary: Fail entire task creation operation if Sync API update fails after QuickAdd
+detail: |
+  When creating tasks via QuickAdd + Sync API (two-step: QuickAdd for parsing, Sync for description/metadata), if the Sync step fails, the task exists in Todoist without the CRM marker in description. This orphaned task breaks sync reconciliation since it has no `{{crm:...}}` identifier. Either fail the entire operation and clean up the QuickAdd task, or implement retry logic. Logging and continuing leaves system in inconsistent state.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: rule
+summary: Don't fetch missing metadata inline during request handling - fix at source
+detail: |
+  Adding fallback logic to fetch project names from Todoist API when metadata is incomplete adds latency to every task creation request. Instead of patching with inline API calls, require metadata to be complete before operations or fail fast with actionable error message. Missing metadata indicates configuration issue (settings not saved, sync not run) that should be resolved at source, not worked around.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: gotcha
+summary: Check database schema before writing raw SQL - table names may differ from repository references
+detail: |
+  The actual database table name is `external_sync_state`, not `sync_state`, even though code references might use shorter names. Always verify table names with `\dt` command before writing raw SQL queries. This particularly applies when accessing the database directly for debugging or quick fixes instead of going through repository layer.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:29:37.201787"
+type: gotcha
+summary: Use Info level for temporary diagnostic logging, not Debug level
+detail: |
+  When adding temporary logging to diagnose production issues, `logger.Debug()` calls won't appear in logs if the production log level is set to INFO or higher. Use `logger.Info()` for diagnostic logging that needs to be visible immediately, then remove or downgrade to Debug after issue is resolved. This avoids the deploy-test-no-output cycle.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: gotcha
+summary: Testing service layer with external API dependencies requires client factory injection
+detail: |
+  When writing tests for CreateActionTask service method, the service creates the Todoist SyncClient directly inside the method: client := todoist.NewSyncClient(accessToken). This makes testing impossible without refactoring. Solution: (1) Create TodoistClient interface, (2) Add ClientFactory function type to service, (3) Provide SetTodoistClientFactory() for tests, (4) Create NewContactTaskServiceForTest() constructor that bypasses OAuth. Without this pattern, you can't test service logic that calls external APIs - especially complex two-step flows like QuickAdd + Sync.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: gotcha
+summary: Mock objects returning same value across subtests creates database constraint violations
+detail: |
+  Each subtest instance had its own mock with counter starting at 0, generating duplicate external IDs (test-task-id-1, test-task-id-1, ...). Both tried to insert into contact_task with same external_task_id, causing duplicate key constraint violation. Fix: Use UUIDs to ensure globally unique IDs: taskID := "test-task-" + uuid.New().String()[:8]. When mocking responses that create database records, always generate unique IDs rather than hardcoded or counter-based values.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: gotcha
+summary: Test data persistence across runs requires proactive cleanup or unique identifiers
+detail: |
+  Sequential test runs using same hardcoded account IDs fail on second run with constraint violations. Running tests twice: (1) First run creates sync_state with account_id="test-account-123", (2) Cleanup deletes sync_state, (3) Second run tries to create sync_state with same account_id - constraint violation. Tests that work once but fail on second run are debugging nightmares. Either use UUIDs to guarantee uniqueness, or implement comprehensive cleanup in reverse order. For this project, UUIDs are preferred.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: distinction
+summary: "Two-step Todoist API pattern: QuickAdd creates but can't set description; Sync API updates it"
+detail: |
+  Creating tasks with CRM metadata requires: (1) QuickAdd API call accepts natural language, handles #ProjectName syntax, returns task object, (2) Sync API item_update sets description with CRM marker JSON. Critical constraints: QuickAdd's note parameter creates comments NOT description (major gotcha), Sync item_update cannot move tasks between projects, if Sync fails after QuickAdd succeeds task exists without CRM marker (orphaned, breaks sync reconciliation). When adding description/metadata to Todoist tasks, always use QuickAdd (for parsing) + Sync update (for metadata).
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: rule
+summary: Fail entire operation and clean up if critical API call fails after side effect
+detail: |
+  Code initially handled Sync API failure by logging warning and continuing, creating orphaned tasks: task created in Todoist (QuickAdd) but CRM marker update failed (Sync). Task exists without {{crm:...}} marker in description, sync reconciliation can't identify it as CRM-managed. Fix: treat Sync failure as fatal, delete the task since it won't have CRM marker. Apply this pattern whenever: (1) first API call succeeds, (2) second API call fails, (3) rollback is possible/necessary. Don't leave side effects in inconsistent state.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: documentation_gap
+summary: Service testing patterns not documented - causing repeated test setup mistakes
+detail: |
+  Session tried multiple approaches before landing on right pattern: (1) Try to mock OAuthService - too complex, (2) Create dependencies but leave OAuthService nil - nil pointer dereference, (3) Add testAccessToken field - works but discovered late. Challenge: How to test service needing accessToken from OAuth when testing logic not OAuth flow? Solution in project's guides wasn't obvious enough. Add to .ai/patterns/testing.md: When service depends on OAuth for access tokens, add testAccessToken field and NewServiceForTest() constructor. Set testAccessToken to bypass OAuth in tests. Factory injection allows mocking external clients.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: architecture
+summary: Mock objects need to track call history for assertions, not just return values
+detail: |
+  Mock implementations tracked calls in slices (quickAddCalls []quickAddCall, syncCalls []syncCall) allowing tests to verify: QuickAdd called with correct text including contact link prefix, Sync called with correct commands (item_update with description containing CRM marker), commands used correct task IDs. Without this tracking, you can only verify final result not intermediate operations. When testing orchestration/workflow logic (QuickAdd then Sync, handle failure by delete), you need to verify each step's inputs not just final outputs. Document mock structure pattern: include call history slices for each method, populate during calls, allow custom func override, use in assertions.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: rule
+summary: Test assertions must use captured/computed values when mocks generate them, not hardcoded values
+detail: |
+  Initial assertions hardcoded expected task IDs: assert.Equal(t, "test-task-id", cmd.Args["id"]) broke when mock updated to generate unique IDs. Fix: capture from mock's call history: taskID := mock.quickAddCalls[0].TaskID; assert.Equal(t, taskID, cmd.Args["id"]). Tests that hardcode expected values become brittle. When test mocks generate values (IDs, timestamps), always: (1) Capture those values from mock call history, (2) Use captured values in assertions, (3) Never hardcode expected values unless they're constant across all runs.
+actionable: true
+
