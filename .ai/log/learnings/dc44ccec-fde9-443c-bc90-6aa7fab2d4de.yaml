@@ -1,0 +1,80 @@
+---
+timestamp: "2026-02-04T00:55:42.765801"
+type: gotcha
+summary: sqlc not in PATH after go install in sandbox environment
+detail: |
+  In the Sprites.dev sandcastle environment, `go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest` installs to `/.sprite/languages/go/workspace/bin/sqlc`, not `~/go/bin/sqlc` as the Makefile expects. Must either run `PATH="$(go env GOPATH)/bin:$PATH" sqlc generate` from backend directory, or update Makefile sqlc target to use $(go env GOPATH)/bin dynamically. Gotcha: GOPATH varies by environment - can't hardcode ~/go/bin.
+actionable: true
+
+---
+timestamp: "2026-02-04T00:55:42.765801"
+type: gotcha
+summary: Empty if blocks trigger staticcheck SA9003 lint error
+detail: |
+  Staticcheck SA9003 flags empty if blocks even if they contain only comments explaining why nothing is done. Example: `if condition { // comment explaining why we skip }` will fail lint. Fix by either: (1) removing the empty block and converting to standalone comment, or (2) adding a placeholder statement like `_ = variable`. Option 1 (remove block) is cleaner and preferred.
+actionable: true
+
+---
+timestamp: "2026-02-04T00:55:42.765801"
+type: architecture
+summary: "Quick Add API choice: dedicated endpoint vs Sync API command"
+detail: |
+  Todoist offers two ways to use Quick Add: (1) dedicated `/sync/v9/quick/add` endpoint that returns task directly (~40 lines), or (2) `/sync/v9/sync` with `item_quick_add` command that uses temp_id mapping. For single-task creation (not batch), dedicated endpoint is simpler and more direct. Alternative would require ~200+ lines to manually parse natural language dates, project syntax (#project), labels (@label), priorities (p1-p4). Architectural decision: use dedicated endpoints for simple operations, Sync API for batch operations.
+actionable: true
+
+---
+timestamp: "2026-02-04T00:55:42.765801"
+type: rule
+summary: Partial unique constraints for polymorphic behavior in same table
+detail: |
+  When a table has different 'kinds' of records with different uniqueness rules, use partial unique indexes with WHERE clauses instead of blanket constraints. Example: contact_task allows multiple 'action' tasks but only one 'cadence' task per contact+provider. Implementation: `CREATE UNIQUE INDEX unique_contact_provider_cadence ON contact_task (contact_id, provider, kind) WHERE kind = 'cadence';` This allows flexible constraints per record type in the same table.
+actionable: true
+
+---
+timestamp: "2026-02-04T00:55:42.765801"
+type: distinction
+summary: Action task vs cadence task lifecycle differences
+detail: |
+  Action tasks and cadence tasks use the same contact_task table but have fundamentally different lifecycles. Cadence tasks: on completion → update last_contacted, calculate next contact_by, create new task (perpetual cycle). Action tasks: on completion → update last_contacted, set state='completed', NO new task (one-off). On label removal or deletion: cadence tasks → skip trigger logic, action tasks → simply mark unmanaged. This distinction must be maintained in sync provider processItem logic by branching on task.Kind.
+actionable: true
+
+---
+timestamp: "2026-02-04T00:55:42.765801"
+type: documentation_gap
+summary: Core rules about empty branches not explicit enough
+detail: |
+  The `.ai/rules/core.md` file has extensive anti-patterns for time.Now(), raw SQL, layer skipping, but doesn't mention staticcheck SA9003 (empty branch) which is a common lint error. Agent wrote empty if block with explanatory comments, which failed lint. Rule should explicitly state: 'Never leave empty if/else blocks even with comments - either implement logic or remove the block entirely.' This would have prevented the lint error proactively.
+actionable: true
+
+---
+timestamp: "2026-02-04T00:55:42.765801"
+type: gotcha
+summary: Integration/E2E tests require database in CI but not local sandbox
+detail: |
+  make test runs unit tests + integration tests. Integration tests skip with 'Skipping integration test in short mode' when DATABASE_URL not set. E2E tests (make test-e2e-diff) require PostgreSQL running and fail with 'Docker is not installed; falling back to native PostgreSQL... PostgreSQL is not installed' in sandcastle. Gotcha: Don't expect integration/E2E to pass locally in sandbox - these are CI-only. Unit tests are the only reliable pre-commit verification in sandbox environments.
+actionable: true
+
+---
+timestamp: "2026-02-04T00:55:42.765801"
+type: architecture
+summary: ContactTaskService uses composition over expanding CadenceSyncProvider
+detail: |
+  When adding action tasks (distinct lifecycle from cadence), could have expanded existing CadenceSyncProvider or created new ActionTaskSyncProvider. Instead, implementation used a shared ContactTaskService for API operations and branched processItem/handleTaskCompletion in CadenceSyncProvider based on task.Kind. This composition approach: (1) avoids code duplication, (2) keeps sync logic centralized, (3) uses conditional branching for behavior differences. Trade-off: more complex conditional logic vs duplicate providers. For similar feature extensions with shared infrastructure but different business rules, prefer conditional branching in single provider over multiple parallel providers.
+actionable: true
+
+---
+timestamp: "2026-02-04T00:55:42.765801"
+type: rule
+summary: test-map.json must include all new frontend files with area tags
+detail: |
+  When adding new frontend files, ALWAYS update `frontend/tests/e2e/test-map.json` with pattern and tags. Example: new hooks/use-contact-tasks.ts, components/contacts/tasks-section.tsx, lib/contact-tasks-api.ts all need entries with appropriate @area tags. Missing entries mean E2E diff detection won't run tests for those files. Tags should cover both specific (@area:tasks) and general (@area:contacts) to ensure proper test coverage triggering.
+actionable: true
+
+---
+timestamp: "2026-02-04T00:55:42.765801"
+type: gotcha
+summary: Git remote HTTPS fails in sandcastle, must use SSH
+detail: |
+  Sandbox environment repos clone with HTTPS remote (`https://github.com/...`) which fails on push with 'could not read Username for https://github.com: No such device or address'. Fix: `git remote set-url origin git@github.com:user/repo.git` to switch to SSH. This happens because sandcastle has SSH keys configured but no credential helper for HTTPS. Always verify `git remote -v` and switch to SSH before first push in new sandcastle sessions.
+actionable: true
+

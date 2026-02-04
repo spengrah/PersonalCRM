@@ -113,6 +113,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | `make test-e2e-local GREP="..."` ignored | Use `PLAYWRIGHT_GREP="..." make test-e2e-local` (Makefile expects environment variable, not Make variable) |
 | `bunx playwright test` directly fails with 401 | Use `make test-e2e-diff` or `make test-e2e-local` which set up API keys and environment |
 | Replacing JSONB metadata wholesale on update | Read existing metadata first, modify keys, then write back - prevents losing other keys |
+| Empty if blocks with only comments | Staticcheck SA9003 flags empty branches - remove block entirely or add actual code |
 
 ## Anti-Patterns
 
