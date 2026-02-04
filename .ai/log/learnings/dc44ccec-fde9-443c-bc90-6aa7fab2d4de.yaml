@@ -158,3 +158,27 @@ detail: |
   The codebase uses X-API-Key for all API authentication, but this pattern isn't documented in feature-development.md or patterns/frontend.md. When creating contact-tasks-api.ts, the pattern of `Authorization: Bearer` was used (common in REST APIs) instead of the project standard. Guidance existed implicitly in api-client.ts but wasn't obvious. Should document: 'All API clients must use X-API-Key header (see api-client.ts), never Authorization Bearer' in frontend patterns or create an API client template.
 actionable: true
 
+---
+timestamp: "2026-02-04T01:23:00.403832"
+type: gotcha
+summary: E2E tests must use @playwright/test, not custom test-fixtures
+detail: |
+  The E2E test file contact-tasks.spec.ts was created importing from './helpers/test-fixtures' which doesn't exist. All E2E tests in this codebase use standard '@playwright/test' imports with the TestAPI pattern from './helpers/test-api'. Pattern: import { test, expect } from '@playwright/test' and create testApi via createTestAPI(request, testInfo) in beforeEach. The test-fixtures pattern exists in some Playwright projects for custom fixtures, but this codebase doesn't use it.
+actionable: true
+
+---
+timestamp: "2026-02-04T01:23:00.403832"
+type: gotcha
+summary: E2E test structure requires TestAPI pattern with beforeEach/afterEach
+detail: |
+  All E2E tests follow the same structure: (1) import test/expect from @playwright/test, (2) import createTestAPI and TestAPI from ./helpers/test-api, (3) declare testApi variable, (4) initialize in beforeEach with createTestAPI(request, testInfo), (5) call testApi.cleanup() in afterEach. This pattern ensures proper test isolation and cleanup. Custom fixtures or page objects passed as test parameters are NOT used in this codebase - tests receive standard Playwright fixtures (page, request) only.
+actionable: true
+
+---
+timestamp: "2026-02-04T01:23:00.403832"
+type: documentation_gap
+summary: E2E test patterns not documented, causing incorrect test structure
+detail: |
+  When creating the contact-tasks E2E test, the agent used a custom test-fixtures pattern with page objects as fixtures (contactDetailPage parameter), which doesn't exist in this codebase. The correct TestAPI pattern is visible in contacts.spec.ts and other E2E tests, but isn't documented in .ai/rules/testing.md or .ai/patterns/. Should add: 'E2E tests use standard @playwright/test with TestAPI helper pattern. See contacts.spec.ts for structure. Do NOT create custom fixtures or test-fixtures.ts.' This would have prevented the CI failure.
+actionable: true
+
