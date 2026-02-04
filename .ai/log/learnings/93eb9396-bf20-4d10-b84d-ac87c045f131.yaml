@@ -62,3 +62,67 @@ detail: |
   The contact-tasks-api.ts was implemented with a different URL construction pattern than existing API modules (contacts-api.ts, sync-api.ts, etc.). There's no documented standard for 'how to create a new API module' that specifies: (1) use shared apiClient, (2) include /api/v1 in endpoint paths, (3) don't manage base URLs independently. Without this guidance, new API modules risk reimplementing infrastructure inconsistently. Should add a patterns doc or code template for new API modules.
 actionable: true
 
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: gotcha
+summary: Todoist QuickAdd note parameter creates comments, not descriptions
+detail: |
+  The Todoist Quick Add API's 'note' parameter creates task comments, not the description field. To set a task description, you must use a two-step process: (1) QuickAdd to create the task with natural language parsing, (2) Sync API with item_update to set the description field. This is not documented clearly and causes confusion when trying to add notes/descriptions to tasks created via QuickAdd.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: gotcha
+summary: Todoist QuickAdd doesn't return URL field despite TypeScript SDK transform
+detail: |
+  The TypeScript SDK documentation suggests tasks have a 'url' field added via transform, but the actual QuickAdd API response does not include this field. The URL must be constructed manually using the returned task ID. Testing revealed that while the SDK adds this field client-side, the raw API response doesn't contain it.
+actionable: false
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: distinction
+summary: Todoist v1 API uses alphanumeric IDs, web URLs changed format
+detail: |
+  Todoist API v1 returns alphanumeric task IDs (e.g., '6fw9cQQ5JppCp7qX') instead of numeric IDs. The correct web URL format is 'app.todoist.com/app/task/{id}', not 'todoist.com/app/task/{id}' or 'todoist.com/showTask?id={id}'. However, deep links use 'todoist://task?id={id}' for native app integration, which works across desktop and mobile.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: gotcha
+summary: Todoist item_update cannot move tasks between projects
+detail: |
+  The Sync API's item_update command cannot change a task's project_id to move it between projects. You must use item_move command instead. However, a better approach is to use QuickAdd's natural language syntax with '#ProjectName' in the task text, which requires storing ProjectName (not just ProjectID) in settings.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: architecture
+summary: Settings struct requires both ID and Name for Todoist entities
+detail: |
+  For Todoist integration settings, store both the ID and Name for entities like labels and projects. Labels already follow this pattern (LabelID + LabelName). When adding project support, ProjectName must be added alongside ProjectID because QuickAdd uses natural language syntax (#ProjectName) while other APIs use IDs. Settings are synced and refreshed during cadence sync to handle renames.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: rule
+summary: Always sync 'projects' resource type when using ProjectName
+detail: |
+  When the Todoist provider syncs data, it must include 'projects' in the resource types array alongside 'items', 'labels', and 'user'. This ensures the project name is refreshed when projects are renamed in Todoist. The sync response provides Projects array that should be iterated to update settings.ProjectName when the project ID matches.
+actionable: true
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: gotcha
+summary: New settings fields require sync run before being populated
+detail: |
+  When adding new fields to Todoist Settings (like ProjectName), they won't be populated in existing sync states until the next sync run. The cadence sync provider fetches and updates these fields, so either trigger a sync or wait for the next scheduled sync. Tasks created before the field is populated will fail to use the feature (e.g., tasks going to Inbox instead of configured project).
+actionable: true
+
+---
+timestamp: "2026-02-04T16:16:08.898184"
+type: documentation_gap
+summary: Todoist API behavior differences not clear in documentation
+detail: |
+  The Todoist API documentation doesn't clearly explain: (1) QuickAdd 'note' parameter creates comments not descriptions, (2) item_update cannot move tasks between projects, (3) URL field availability differences between SDK and raw API, (4) web URL format changes with v1 API. These required extensive trial-and-error testing and web searches to discover. Future work should document these in a 'Todoist API Gotchas' guide.
+actionable: true
+
