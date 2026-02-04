@@ -25,11 +25,14 @@ var (
 
 // ContactTaskService handles business logic for contact tasks
 type ContactTaskService struct {
-	contactTaskRepo *repository.ContactTaskRepository
-	contactRepo     *repository.ContactRepository
-	syncRepo        *repository.SyncRepository
-	oauthService    *todoist.OAuthService
-	frontendURL     string
+	contactTaskRepo   *repository.ContactTaskRepository
+	contactRepo       *repository.ContactRepository
+	syncRepo          *repository.SyncRepository
+	oauthService      *todoist.OAuthService
+	frontendURL       string
+	todoistClientFunc todoist.ClientFactory
+	// testAccessToken bypasses OAuth lookup when set (for testing)
+	testAccessToken string
 }
 
 // NewContactTaskService creates a new contact task service
@@ -41,11 +44,35 @@ func NewContactTaskService(
 	cfg *config.Config,
 ) *ContactTaskService {
 	return &ContactTaskService{
-		contactTaskRepo: contactTaskRepo,
-		contactRepo:     contactRepo,
-		syncRepo:        syncRepo,
-		oauthService:    oauthService,
-		frontendURL:     cfg.CORS.FrontendURL,
+		contactTaskRepo:   contactTaskRepo,
+		contactRepo:       contactRepo,
+		syncRepo:          syncRepo,
+		oauthService:      oauthService,
+		frontendURL:       cfg.CORS.FrontendURL,
+		todoistClientFunc: todoist.DefaultClientFactory,
+	}
+}
+
+// SetTodoistClientFactory allows overriding the Todoist client factory (for testing)
+func (s *ContactTaskService) SetTodoistClientFactory(factory todoist.ClientFactory) {
+	s.todoistClientFunc = factory
+}
+
+// NewContactTaskServiceForTest creates a service for testing without OAuth dependency.
+// The service's todoistClientFunc must be set via SetTodoistClientFactory before use.
+func NewContactTaskServiceForTest(
+	contactTaskRepo *repository.ContactTaskRepository,
+	contactRepo *repository.ContactRepository,
+	syncRepo *repository.SyncRepository,
+	frontendURL string,
+) *ContactTaskService {
+	return &ContactTaskService{
+		contactTaskRepo:   contactTaskRepo,
+		contactRepo:       contactRepo,
+		syncRepo:          syncRepo,
+		frontendURL:       frontendURL,
+		todoistClientFunc: todoist.DefaultClientFactory,
+		testAccessToken:   "test-token", // Bypass OAuth lookup
 	}
 }
 
@@ -76,16 +103,27 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 		return nil, fmt.Errorf("get contact: %w", err)
 	}
 
-	// Get Todoist settings
-	settings, accountID, err := s.getTodoistSettings(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get access token
-	accessToken, err := s.oauthService.GetAccessToken(ctx, accountID)
-	if err != nil {
-		return nil, fmt.Errorf("get access token: %w", err)
+	// Get Todoist settings and access token
+	var settings *todoist.Settings
+	var accessToken string
+	if s.testAccessToken != "" {
+		// Test mode: use test token and get settings from sync state directly
+		accessToken = s.testAccessToken
+		settings, _, err = s.getTodoistSettingsFromSyncState(ctx)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Production mode: get settings and token via OAuth
+		var accountID string
+		settings, accountID, err = s.getTodoistSettings(ctx)
+		if err != nil {
+			return nil, err
+		}
+		accessToken, err = s.oauthService.GetAccessToken(ctx, accountID)
+		if err != nil {
+			return nil, fmt.Errorf("get access token: %w", err)
+		}
 	}
 
 	// Build the Quick Add text with contact name link prefix, project, and label
@@ -123,7 +161,7 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 	descBuilder.Write(markerJSON)
 
 	// Step 1: Call Todoist Quick Add API (for natural language parsing)
-	client := todoist.NewSyncClient(accessToken)
+	client := s.todoistClientFunc(accessToken)
 	task, err := client.QuickAdd(ctx, quickAddText, "")
 	if err != nil {
 		return nil, fmt.Errorf("todoist quick add: %w", err)
@@ -219,6 +257,57 @@ func (s *ContactTaskService) DeleteTaskLink(ctx context.Context, contactID uuid.
 	}
 
 	return s.contactTaskRepo.DeleteContactTask(ctx, taskID)
+}
+
+// getTodoistSettingsFromSyncState retrieves settings directly from sync state (for testing)
+func (s *ContactTaskService) getTodoistSettingsFromSyncState(ctx context.Context) (*todoist.Settings, string, error) {
+	// Find any Todoist sync state (test mode doesn't need specific account)
+	allStates, err := s.syncRepo.ListSyncStates(ctx)
+	if err != nil {
+		return nil, "", fmt.Errorf("list sync states: %w", err)
+	}
+
+	// Filter to Todoist states
+	var state *repository.SyncState
+	for i := range allStates {
+		if allStates[i].Source == todoist.SourceName {
+			state = &allStates[i]
+			break
+		}
+	}
+
+	if state == nil {
+		return nil, "", ErrTodoistNotConfigured
+	}
+	accountID := ""
+	if state.AccountID != nil {
+		accountID = *state.AccountID
+	}
+
+	settings := todoist.Settings{}
+	if state.Metadata != nil {
+		if v, ok := state.Metadata[todoist.MetadataKeyProjectID].(string); ok {
+			settings.ProjectID = v
+		}
+		if v, ok := state.Metadata[todoist.MetadataKeyProjectName].(string); ok {
+			settings.ProjectName = v
+		}
+		if v, ok := state.Metadata[todoist.MetadataKeyLabelID].(string); ok {
+			settings.LabelID = v
+		}
+		if v, ok := state.Metadata[todoist.MetadataKeyLabelName].(string); ok {
+			settings.LabelName = v
+		}
+		if v, ok := state.Metadata[todoist.MetadataKeyIntegrationInstance].(string); ok {
+			settings.IntegrationInstanceID = v
+		}
+	}
+
+	if settings.LabelID == "" {
+		return nil, "", ErrTodoistMissingLabel
+	}
+
+	return &settings, accountID, nil
 }
 
 // getTodoistSettings retrieves the Todoist settings from sync state
