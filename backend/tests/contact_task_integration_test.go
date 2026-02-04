@@ -101,20 +101,24 @@ func TestContactTask_CRUD(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           "cadence",
 			ExternalTaskID: "11111",
+			State:          string(repository.ContactTaskStateManaged),
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "11111", task1.ExternalTaskID)
+		assert.Equal(t, repository.ContactTaskStateManaged, task1.State)
 
-		// Upsert again (should update)
+		// Upsert again with same external_task_id (should update state)
 		task2, err := contactTaskRepo.UpsertContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
 			Kind:           "cadence",
-			ExternalTaskID: "22222",
+			ExternalTaskID: "11111", // Same external ID
+			State:          string(repository.ContactTaskStateUnmanaged),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, task1.ID, task2.ID)            // Same ID
-		assert.Equal(t, "22222", task2.ExternalTaskID) // Updated external ID
+		assert.Equal(t, task1.ID, task2.ID)                                // Same ID (upsert matched)
+		assert.Equal(t, "11111", task2.ExternalTaskID)                     // Same external ID (it's the key)
+		assert.Equal(t, repository.ContactTaskStateUnmanaged, task2.State) // State was updated
 
 		// Clean up
 		err = contactTaskRepo.DeleteContactTask(ctx, task1.ID)

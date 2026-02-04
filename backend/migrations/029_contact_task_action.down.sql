@@ -3,6 +3,9 @@
 -- Drop the partial unique index
 DROP INDEX IF EXISTS unique_contact_provider_cadence;
 
+-- Drop the unique constraint on external_task_id
+ALTER TABLE contact_task DROP CONSTRAINT IF EXISTS unique_external_task_id;
+
 -- Drop the state check constraint
 ALTER TABLE contact_task DROP CONSTRAINT IF EXISTS contact_task_state_check;
 

@@ -517,8 +517,7 @@ INSERT INTO contact_task (
     $4,
     COALESCE($5, 'managed'),
     COALESCE($6::jsonb, '{}'::jsonb)
-) ON CONFLICT (contact_id, provider, kind) DO UPDATE SET
-    external_task_id = EXCLUDED.external_task_id,
+) ON CONFLICT (external_task_id) DO UPDATE SET
     state = EXCLUDED.state,
     metadata = EXCLUDED.metadata,
     updated_at = NOW()
@@ -534,7 +533,7 @@ type UpsertContactTaskParams struct {
 	Metadata       []byte      `json:"metadata"`
 }
 
-// Upsert a contact task (update external_task_id if exists)
+// Upsert a contact task by external_task_id (Todoist task IDs are globally unique)
 func (q *Queries) UpsertContactTask(ctx context.Context, arg UpsertContactTaskParams) (*ContactTask, error) {
 	row := q.db.QueryRow(ctx, UpsertContactTask,
 		arg.ContactID,

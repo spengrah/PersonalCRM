@@ -6,16 +6,17 @@
 -- Drop existing unique constraint
 ALTER TABLE contact_task DROP CONSTRAINT unique_contact_provider_kind;
 
--- Add partial unique constraint for cadence only (one cadence task per contact per provider)
+-- Add partial unique index for cadence only (one cadence task per contact per provider)
 CREATE UNIQUE INDEX unique_contact_provider_cadence
 ON contact_task (contact_id, provider, kind)
 WHERE kind = 'cadence';
 
--- Action tasks have no uniqueness constraint (multiple allowed per contact)
+-- Add unique constraint on external_task_id (Todoist task IDs are globally unique)
+-- This allows upsert to work via ON CONFLICT (external_task_id)
+ALTER TABLE contact_task
+ADD CONSTRAINT unique_external_task_id UNIQUE (external_task_id);
 
 -- Add CHECK constraint for state to include 'completed'
--- First drop any existing check constraint on state (if any)
--- Then add the new one
 ALTER TABLE contact_task
 ADD CONSTRAINT contact_task_state_check
 CHECK (state IN ('managed', 'unmanaged', 'completed'));

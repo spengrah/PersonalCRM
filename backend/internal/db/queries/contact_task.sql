@@ -61,7 +61,7 @@ INSERT INTO contact_task (
 ) RETURNING *;
 
 -- name: UpsertContactTask :one
--- Upsert a contact task (update external_task_id if exists)
+-- Upsert a contact task by external_task_id (Todoist task IDs are globally unique)
 INSERT INTO contact_task (
     contact_id,
     provider,
@@ -76,8 +76,7 @@ INSERT INTO contact_task (
     @external_task_id,
     COALESCE(@state, 'managed'),
     COALESCE(@metadata::jsonb, '{}'::jsonb)
-) ON CONFLICT (contact_id, provider, kind) DO UPDATE SET
-    external_task_id = EXCLUDED.external_task_id,
+) ON CONFLICT (external_task_id) DO UPDATE SET
     state = EXCLUDED.state,
     metadata = EXCLUDED.metadata,
     updated_at = NOW()
