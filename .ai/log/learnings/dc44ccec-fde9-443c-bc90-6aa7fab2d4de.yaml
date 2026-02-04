@@ -118,3 +118,43 @@ detail: |
   The session encountered staticcheck SA9003 errors (empty if blocks) and added this to core.md gotchas table. However, this suggests the gotcha wasn't prominent enough in existing documentation, or agents aren't checking the anti-patterns section before writing code. Consider: (1) moving SA9003 to the Anti-Patterns section with a code example, (2) adding a reference in the Code Quality section, or (3) creating a pre-code-writing checklist that includes 'avoid empty branches'.
 actionable: true
 
+---
+timestamp: "2026-02-04T01:18:34.077021"
+type: gotcha
+summary: Contact-tasks-api.ts used Bearer auth instead of X-API-Key header
+detail: |
+  When implementing the contact tasks API client (contact-tasks-api.ts), the file was created with `Authorization: Bearer` header instead of using `X-API-Key` like the rest of the codebase (api-client.ts). This inconsistency went undetected until code review. The codebase standardizes on `X-API-Key: <key>` for all API authentication. Before implementing new API clients, check existing API client files for auth patterns.
+actionable: true
+
+---
+timestamp: "2026-02-04T01:18:34.077021"
+type: rule
+summary: Use sentinel errors with errors.Is() instead of string comparison
+detail: |
+  The initial implementation used `err.Error() == "string"` to check for specific error conditions (no todoist account, settings not configured). This is fragile and anti-pattern in Go. Instead: (1) Define sentinel errors in service layer: `var ErrNoTodoistAccount = errors.New("...")`, (2) Return sentinel errors from service methods, (3) Use `errors.Is(err, service.ErrXxx)` in handlers. This makes error handling type-safe and refactor-friendly.
+actionable: true
+
+---
+timestamp: "2026-02-04T01:18:34.077021"
+type: gotcha
+summary: Test-map.json references can create phantom E2E test requirements
+detail: |
+  When adding a test-map.json entry for E2E tests (e.g., `contact-tasks.spec.ts`), the entry creates an expectation that the file exists even if tests aren't written yet. Code review will flag missing files referenced in test-map.json. Either: (1) create the E2E test file when adding the entry, or (2) don't add the test-map.json entry until the test file exists. Placeholder test files with basic structure are acceptable if full implementation is deferred.
+actionable: true
+
+---
+timestamp: "2026-02-04T01:18:34.077021"
+type: gotcha
+summary: Unused queryClient variables in mutation hooks go undetected by TypeScript
+detail: |
+  When using the invalidateFor pattern for cache invalidation, mutation hooks may still declare `const queryClient = useQueryClient()` but never use it (since invalidateFor handles everything). TypeScript doesn't catch this as an error. Code review will flag these. Pattern: if using invalidateFor in onSuccess, remove both the useQueryClient import and the queryClient variable declaration.
+actionable: true
+
+---
+timestamp: "2026-02-04T01:18:34.077021"
+type: documentation_gap
+summary: Auth header pattern not documented in API client creation guide
+detail: |
+  The codebase uses X-API-Key for all API authentication, but this pattern isn't documented in feature-development.md or patterns/frontend.md. When creating contact-tasks-api.ts, the pattern of `Authorization: Bearer` was used (common in REST APIs) instead of the project standard. Guidance existed implicitly in api-client.ts but wasn't obvious. Should document: 'All API clients must use X-API-Key header (see api-client.ts), never Authorization Bearer' in frontend patterns or create an API client template.
+actionable: true
+
