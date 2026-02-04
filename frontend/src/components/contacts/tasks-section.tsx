@@ -9,20 +9,20 @@ import { formatDateOnly } from '@/lib/utils'
 import type { ContactTask } from '@/types/contact-task'
 
 /**
- * Strips the markdown contact link prefix from task content.
- * Task content format: "[Contact Name](https://...): actual task content"
- * Returns just "actual task content"
+ * Cleans markdown links from task content for display in CRM UI.
+ * - Action tasks: "[Name](url): task" → "task"
+ * - Cadence tasks: "Reach out to [Name](url)" → "Reach out to Name"
  */
-function stripContactPrefix(content: string | undefined): string {
+function cleanTaskContent(content: string | undefined): string {
   if (!content) return 'Untitled task'
 
-  // Match markdown link followed by colon: [text](url):
-  const match = content.match(/^\[.+?\]\(.+?\):\s*(.*)$/)
-  if (match) {
-    return match[1] || 'Untitled task'
-  }
+  // First, strip leading markdown link prefix with colon
+  let cleaned = content.replace(/^\[([^\]]+)\]\([^)]+\):\s*/, '')
 
-  return content
+  // Then replace any remaining markdown links with just their text
+  cleaned = cleaned.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+
+  return cleaned.trim() || 'Untitled task'
 }
 
 interface TasksSectionProps {
@@ -152,7 +152,7 @@ function TaskRow({ task, contactId, completed }: TaskRowProps) {
         <p
           className={`text-sm truncate ${completed ? 'text-gray-400 line-through' : 'text-gray-900'}`}
         >
-          {stripContactPrefix(task.content)}
+          {cleanTaskContent(task.content)}
         </p>
       </div>
 

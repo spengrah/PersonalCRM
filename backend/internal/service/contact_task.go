@@ -10,7 +10,6 @@ import (
 
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
-	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/todoist"
 
@@ -131,14 +130,17 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 	}
 
 	// Step 2: Update task description via Sync API
-	// QuickAdd's "note" param creates comments, not descriptions
+	// QuickAdd's "note" param creates comments, not descriptions.
+	// Description contains CRM marker needed for sync reconciliation - fail if update fails.
 	updateCmd := todoist.NewItemUpdateCommand(task.ID, map[string]any{
 		"description": descBuilder.String(),
 	})
 	_, err = client.Sync(ctx, "*", []string{}, []todoist.SyncCommand{updateCmd})
 	if err != nil {
-		// Log but don't fail - task was created, just missing description/project
-		logger.Warn().Err(err).Str("task_id", task.ID).Msg("failed to update task")
+		// Delete the task since it won't have CRM marker for sync
+		deleteCmd := todoist.NewItemDeleteCommand(task.ID)
+		_, _ = client.Sync(ctx, "*", []string{}, []todoist.SyncCommand{deleteCmd})
+		return nil, fmt.Errorf("update task description: %w", err)
 	}
 
 	// Build metadata for the contact_task record
@@ -263,23 +265,6 @@ func (s *ContactTaskService) getTodoistSettings(ctx context.Context) (*todoist.S
 
 	if settings.LabelID == "" {
 		return nil, "", ErrTodoistMissingLabel
-	}
-
-	// Fetch project name from Todoist if missing but project ID exists
-	if settings.ProjectID != "" && settings.ProjectName == "" {
-		accessToken, err := s.oauthService.GetAccessToken(ctx, accountID)
-		if err == nil {
-			client := todoist.NewSyncClient(accessToken)
-			syncResp, err := client.Sync(ctx, "*", []string{"projects"}, nil)
-			if err == nil {
-				for _, project := range syncResp.Projects {
-					if project.ID == settings.ProjectID && !project.IsDeleted {
-						settings.ProjectName = project.Name
-						break
-					}
-				}
-			}
-		}
 	}
 
 	return &settings, accountID, nil
