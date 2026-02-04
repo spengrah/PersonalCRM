@@ -18,6 +18,7 @@ type ContactTaskState string
 const (
 	ContactTaskStateManaged   ContactTaskState = "managed"
 	ContactTaskStateUnmanaged ContactTaskState = "unmanaged"
+	ContactTaskStateCompleted ContactTaskState = "completed"
 )
 
 // ContactTask represents a link between a contact and an external task provider
@@ -212,6 +213,25 @@ func (r *ContactTaskRepository) ListContactTasksByProvider(ctx context.Context, 
 // ListContactTasksByContact retrieves all contact tasks for a contact
 func (r *ContactTaskRepository) ListContactTasksByContact(ctx context.Context, contactID uuid.UUID) ([]ContactTask, error) {
 	dbTasks, err := r.queries.ListContactTasksByContact(ctx, uuidToPgUUID(contactID))
+	if err != nil {
+		return nil, err
+	}
+
+	tasks := make([]ContactTask, len(dbTasks))
+	for i, dbTask := range dbTasks {
+		tasks[i] = convertDbContactTask(dbTask)
+	}
+
+	return tasks, nil
+}
+
+// ListContactTasksFiltered retrieves contact tasks for a contact with optional filters
+func (r *ContactTaskRepository) ListContactTasksFiltered(ctx context.Context, contactID uuid.UUID, state *string, kind *string) ([]ContactTask, error) {
+	dbTasks, err := r.queries.ListContactTasksByContactFiltered(ctx, db.ListContactTasksByContactFilteredParams{
+		ContactID: uuidToPgUUID(contactID),
+		State:     stringToPgText(state),
+		Kind:      stringToPgText(kind),
+	})
 	if err != nil {
 		return nil, err
 	}

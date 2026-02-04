@@ -101,6 +101,7 @@ func main() {
 	var importHandler *handlers.ImportHandler
 	var calendarHandler *handlers.CalendarHandler
 	var todoistHandler *handlers.TodoistHandler
+	var contactTaskHandler *handlers.ContactTaskHandler
 	var googleOAuthService *google.OAuthService
 	var todoistOAuthService *todoist.OAuthService
 	var externalContactRepo *repository.ExternalContactRepository
@@ -197,6 +198,17 @@ func main() {
 			)
 			providerRegistry.Register(todoistProvider)
 			logger.Info().Msg("Todoist Cadence sync provider registered")
+
+			// Initialize contact task service and handler for action tasks
+			contactTaskService := service.NewContactTaskService(
+				contactTaskRepo,
+				contactRepo,
+				syncRepo,
+				todoistOAuthService,
+				cfg,
+			)
+			contactTaskHandler = handlers.NewContactTaskHandler(contactTaskService)
+			logger.Info().Msg("Contact task handler initialized")
 		}
 
 		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
@@ -337,6 +349,13 @@ func main() {
 
 			// Add identity route to contacts
 			contacts.GET("/:id/identities", identityHandler.ListIdentitiesForContact)
+
+			// Add contact task routes (action tasks) if Todoist is configured
+			if contactTaskHandler != nil {
+				contacts.GET("/:id/tasks", contactTaskHandler.ListContactTasks)
+				contacts.POST("/:id/tasks", contactTaskHandler.CreateActionTask)
+				contacts.DELETE("/:id/tasks/:taskId", contactTaskHandler.DeleteTaskLink)
+			}
 
 			// Add calendar event routes to contacts if calendar handler is initialized
 			if calendarHandler != nil {

@@ -40,6 +40,7 @@ import {
 } from '@/lib/contact-methods'
 import type { ContactFormData } from '@/lib/validations/contact'
 import { MergeContactModal } from '@/components/contacts/merge-contact-modal'
+import { TasksSection } from '@/components/contacts/tasks-section'
 
 export default function ContactDetailPage() {
   const params = useParams()
@@ -566,6 +567,11 @@ export default function ContactDetailPage() {
               )}
             </dl>
           </div>
+        </div>
+
+        {/* Tasks Section */}
+        <div className="mt-8">
+          <TasksSection contactId={contactId} contactName={contact.full_name} />
         </div>
 
         {/* Meetings Section */}

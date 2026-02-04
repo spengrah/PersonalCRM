@@ -44,3 +44,11 @@ export const syncKeys = {
   state: (source: string, accountId?: string) =>
     [...syncKeys.all, 'state', source, accountId] as const,
 }
+
+// Contact task query keys
+export const contactTaskKeys = {
+  all: ['contact-tasks'] as const,
+  lists: () => [...contactTaskKeys.all, 'list'] as const,
+  list: (contactId: string, params?: { state?: string; kind?: string }) =>
+    [...contactTaskKeys.lists(), contactId, params] as const,
+}

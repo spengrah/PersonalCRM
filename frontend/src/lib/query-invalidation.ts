@@ -10,7 +10,7 @@
  */
 
 import { queryClient } from './query-client'
-import { contactKeys, importKeys, syncKeys } from './query-keys'
+import { contactKeys, importKeys, syncKeys, contactTaskKeys } from './query-keys'
 
 /**
  * Domain events that trigger query invalidations.
@@ -30,6 +30,9 @@ export type DomainEvent =
   | 'import:linked' // linked to existing contact
   | 'import:ignored' // marked as ignored
   | 'import:synced' // sync completed
+  // Contact task events
+  | 'task:created' // action task created
+  | 'task:deleted' // task link removed
 
 /**
  * Invalidation rules mapping domain events to affected query keys.
@@ -58,6 +61,10 @@ const invalidationRules: Record<DomainEvent, readonly unknown[][]> = {
   'import:ignored': [importKeys.lists()],
   // Sync trigger updates sync states; completion may add new candidates
   'import:synced': [importKeys.lists(), syncKeys.states()],
+
+  // Contact task events
+  'task:created': [contactTaskKeys.lists()],
+  'task:deleted': [contactTaskKeys.lists()],
 }
 
 /**
@@ -83,4 +90,4 @@ export function invalidateFor(event: DomainEvent): void {
 }
 
 // Re-export keys for convenience (avoids needing two imports)
-export { contactKeys, importKeys, systemKeys, syncKeys } from './query-keys'
+export { contactKeys, importKeys, systemKeys, syncKeys, contactTaskKeys } from './query-keys'

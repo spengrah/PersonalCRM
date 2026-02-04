@@ -15,8 +15,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// Todoist Sync API endpoint
+// Todoist Sync API endpoints
 var SyncEndpoint = "https://api.todoist.com/sync/v9/sync"
+var QuickAddEndpoint = "https://api.todoist.com/sync/v9/quick/add"
 
 // SyncClient handles Todoist Sync API operations
 type SyncClient struct {
@@ -387,4 +388,62 @@ func BatchCommands(commands []SyncCommand, maxSize int) [][]SyncCommand {
 	}
 
 	return batches
+}
+
+// QuickAddTask represents a task returned from the Quick Add API
+type QuickAddTask struct {
+	ID          string    `json:"id"`
+	ProjectID   string    `json:"project_id"`
+	Content     string    `json:"content"`
+	Description string    `json:"description"`
+	Due         *SyncDue  `json:"due,omitempty"`
+	Deadline    *SyncDate `json:"deadline,omitempty"`
+	Labels      []string  `json:"labels"`
+	Priority    int       `json:"priority"`
+}
+
+// QuickAdd creates a task using Todoist's Quick Add API with natural language parsing.
+// The text parameter supports dates ("tomorrow", "next tuesday"), #project, @label, and p1-p4 priority.
+func (c *SyncClient) QuickAdd(ctx context.Context, text string, note string) (*QuickAddTask, error) {
+	// Build request body as form data
+	data := url.Values{}
+	data.Set("text", text)
+	if note != "" {
+		data.Set("note", note)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, QuickAddEndpoint, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+c.accessToken)
+	req.Header.Set("X-Request-Id", uuid.New().String())
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("quick add request: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Warn().Err(err).Msg("failed to close quick add response body")
+		}
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+
+	// Handle error responses
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.handleErrorResponse(resp.StatusCode, body)
+	}
+
+	var task QuickAddTask
+	if err := json.Unmarshal(body, &task); err != nil {
+		return nil, fmt.Errorf("decode quick add response: %w", err)
+	}
+
+	return &task, nil
 }

@@ -173,6 +173,8 @@ type Querier interface {
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
 	// List all tasks for a contact
 	ListContactTasksByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
+	// List tasks for a contact with optional state and kind filters
+	ListContactTasksByContactFiltered(ctx context.Context, arg ListContactTasksByContactFilteredParams) ([]*ContactTask, error)
 	// List all tasks for a provider (optionally filtered by state)
 	ListContactTasksByProvider(ctx context.Context, arg ListContactTasksByProviderParams) ([]*ContactTask, error)
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error)

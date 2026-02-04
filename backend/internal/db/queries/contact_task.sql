@@ -27,6 +27,14 @@ SELECT * FROM contact_task
 WHERE contact_id = $1
 ORDER BY provider, kind;
 
+-- name: ListContactTasksByContactFiltered :many
+-- List tasks for a contact with optional state and kind filters
+SELECT * FROM contact_task
+WHERE contact_id = $1
+  AND (sqlc.narg('state')::text IS NULL OR state = sqlc.narg('state')::text)
+  AND (sqlc.narg('kind')::text IS NULL OR kind = sqlc.narg('kind')::text)
+ORDER BY created_at DESC;
+
 -- name: ListManagedContactTasks :many
 -- List all managed tasks for a provider (for reconciliation)
 SELECT ct.*, c.full_name, c.cadence, c.contact_by, c.last_contacted
