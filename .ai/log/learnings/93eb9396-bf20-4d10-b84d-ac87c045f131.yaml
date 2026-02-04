@@ -1,0 +1,64 @@
+---
+timestamp: "2026-02-04T15:09:39.209761"
+type: gotcha
+summary: contact-tasks-api.ts constructed URLs differently than other API modules
+detail: |
+  The contact-tasks-api.ts used its own URL construction with `API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1'`, which caused 404s when NEXT_PUBLIC_API_URL was set to `http://localhost:8080` (without /api/v1). Other API modules like contacts-api.ts include `/api/v1` in the endpoint path itself and use the shared apiClient. This pattern mismatch caused silent failures when env vars were configured. Future API modules should always use the shared apiClient for consistency.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:09:39.209761"
+type: gotcha
+summary: Form inputs missing text-gray-900 class appear light/washed out
+detail: |
+  The add-task-modal inputs were missing `text-gray-900` and `placeholder-gray-400` classes that are standard in FORM_CONTROL_BASE. Without explicit text color, browser default styling made the input text appear too light. All custom form inputs should include `text-gray-900` for proper contrast, not just rely on browser defaults.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:09:39.209761"
+type: gotcha
+summary: React Query hooks in child components create waterfall loading
+detail: |
+  The tasks-section component called useContactTasks hooks, which only fired after the component mounted. This created a waterfall: contact loads → page renders → TasksSection mounts → tasks fetch starts. Moving query hooks to page level (where contact is fetched) allows parallel execution. For related data that should load together, fetch at the same component level.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:09:39.209761"
+type: gotcha
+summary: Third-party API deprecations can silently break integrations
+detail: |
+  Todoist deprecated their v9 Sync API (removing it 2026-02-10) and started returning 404s. The integration appeared to work locally but failed in production. External API integrations should: (1) use versioned endpoints explicitly, (2) monitor for deprecation notices, (3) log API version information, and (4) consider version-specific error handling for smoother migrations.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:09:39.209761"
+type: distinction
+summary: API endpoint changes between Todoist v9 and v1
+detail: |
+  Todoist Sync API migration required URL changes: v9 used `api.todoist.com/sync/v9/sync` and `api.todoist.com/sync/v9/quick/add`, while v1 uses `api.todoist.com/api/v1/sync` and `api.todoist.com/api/v1/tasks/quick_add`. The v1 endpoint also changed the request/response format (error went from 404 to 400 BAD_REQUEST), requiring data structure updates beyond just URL changes.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:09:39.209761"
+type: architecture
+summary: Deploy script builds from working directory, not git commits
+detail: |
+  The PersonalCRM deploy script runs `make ci-build` from the working directory and rsyncs the resulting binary, meaning uncommitted changes are included in deployments. This is non-obvious since 'ci-build' sounds like it would use committed code. When debugging deployment issues, always verify which code version is actually running, not just which commit was referenced.
+actionable: false
+
+---
+timestamp: "2026-02-04T15:09:39.209761"
+type: rule
+summary: Performance investigation revealed unnecessary contact verification query
+detail: |
+  The ContactTaskService.ListContactTasks method verified contact existence with GetContact() before listing tasks, adding ~50-100ms per API call. This verification is unnecessary because: (1) foreign key constraints ensure tasks only exist for valid contacts, (2) the contact is already loaded by the frontend, (3) empty task list is semantically correct for non-existent contacts. Services should avoid defensive existence checks when database constraints provide the same guarantee.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:09:39.209761"
+type: documentation_gap
+summary: API module patterns not documented, leading to inconsistent implementations
+detail: |
+  The contact-tasks-api.ts was implemented with a different URL construction pattern than existing API modules (contacts-api.ts, sync-api.ts, etc.). There's no documented standard for 'how to create a new API module' that specifies: (1) use shared apiClient, (2) include /api/v1 in endpoint paths, (3) don't manage base URLs independently. Without this guidance, new API modules risk reimplementing infrastructure inconsistently. Should add a patterns doc or code template for new API modules.
+actionable: true
+

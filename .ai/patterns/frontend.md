@@ -17,8 +17,36 @@ Reusable React/TypeScript patterns for consistency across the frontend codebase.
 | `useTodoistSettings`, `useUpdateTodoistSettings` | Todoist config | `use-todoist-settings.ts` |
 | `useAcceleratedTime` | Time acceleration | `use-accelerated-time.ts` |
 | `useKeyboardNavigation` | Keyboard nav | `use-keyboard-navigation.ts` |
+| `useContactTasks`, `useCreateActionTask`, `useDeleteTaskLink` | Contact tasks | `use-contact-tasks.ts` |
 
 All hooks are in `frontend/src/hooks/`.
+
+---
+
+## Parallel Data Loading Pattern
+
+Fetch related data at the same component level to avoid waterfall loading:
+
+```typescript
+// ❌ WRONG - Child component fetches create waterfall
+function ContactPage({ id }: Props) {
+  const { data: contact } = useContact(id)  // Fetch 1
+  return <TasksSection contactId={id} />    // Mounts after contact loads
+}
+
+function TasksSection({ contactId }: Props) {
+  const { data: tasks } = useContactTasks(contactId)  // Fetch 2 (waits for mount)
+  // ...
+}
+
+// ✅ CORRECT - Parent fetches all data in parallel
+function ContactPage({ id }: Props) {
+  const { data: contact } = useContact(id)           // Fetch 1
+  const { data: tasks } = useContactTasks(id)        // Fetch 2 (parallel!)
+
+  return <TasksSection tasks={tasks} />              // Pass as props
+}
+```
 
 ---
 
@@ -203,6 +231,31 @@ export function useUpdateLastContacted() {
 | `reminder:created` | New reminder | All reminders |
 | `reminder:completed` | Reminder done | All reminders |
 | `reminder:deleted` | Reminder removed | All reminders |
+
+## API Module Pattern
+
+When creating new API modules, **always use the shared `apiClient`**:
+
+```typescript
+// ✅ CORRECT - Use shared apiClient
+import { apiClient } from './api-client'
+
+export const myFeatureApi = {
+  async list(): Promise<MyType[]> {
+    return apiClient.get<MyType[]>('/api/v1/my-feature')
+  },
+
+  async create(data: CreateRequest): Promise<MyType> {
+    return apiClient.post<MyType>('/api/v1/my-feature', data)
+  },
+}
+
+// ❌ WRONG - Independent URL construction
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1'
+// This breaks when env var is set without /api/v1 suffix
+```
+
+---
 
 ## API Client Pattern
 

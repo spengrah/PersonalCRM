@@ -114,6 +114,10 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | `bunx playwright test` directly fails with 401 | Use `make test-e2e-diff` or `make test-e2e-local` which set up API keys and environment |
 | Replacing JSONB metadata wholesale on update | Read existing metadata first, modify keys, then write back - prevents losing other keys |
 | Empty if blocks with only comments | Staticcheck SA9003 flags empty branches - remove block entirely or add actual code |
+| New API module with custom URL construction | Use shared `apiClient` from `lib/api-client.ts` - include `/api/v1` in endpoint paths |
+| Form inputs without explicit text color | Add `text-gray-900 placeholder-gray-400` - browser defaults appear washed out |
+| Service verifying entity exists before query | Skip if FK constraints guarantee validity - adds unnecessary latency |
+| React Query hooks in child components | Move to parent level to enable parallel loading - child mounting creates waterfall |
 
 ## Anti-Patterns
 
