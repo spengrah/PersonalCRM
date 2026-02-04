@@ -29,16 +29,24 @@ echo "🐘 Setting up native PostgreSQL..."
 
 # Check if PostgreSQL is installed
 if ! command -v pg_ctlcluster &> /dev/null; then
-    echo "❌ PostgreSQL is not installed. Install with: sudo apt install postgresql postgresql-16-pgvector"
+    echo "❌ PostgreSQL is not installed. Run: make setup"
     exit 1
 fi
 
+# Auto-detect PostgreSQL version (get the highest available version with a 'main' cluster)
+PG_VERSION=$(pg_lsclusters -h | grep "main" | awk '{print $1}' | sort -rn | head -1)
+if [ -z "$PG_VERSION" ]; then
+    echo "❌ No PostgreSQL cluster found. Run: make setup"
+    exit 1
+fi
+echo "🔍 Detected PostgreSQL version: $PG_VERSION"
+
 # Check cluster status and start if needed
-CLUSTER_STATUS=$(pg_lsclusters -h | grep "^16.*main" | awk '{print $4}')
+CLUSTER_STATUS=$(pg_lsclusters -h | grep "^$PG_VERSION.*main" | awk '{print $4}')
 
 if [ "$CLUSTER_STATUS" != "online" ]; then
-    echo "📦 Starting PostgreSQL cluster..."
-    sudo pg_ctlcluster 16 main start
+    echo "📦 Starting PostgreSQL $PG_VERSION cluster..."
+    sudo pg_ctlcluster "$PG_VERSION" main start
 
     # Wait for PostgreSQL to be ready
     echo "⏳ Waiting for PostgreSQL to be ready..."

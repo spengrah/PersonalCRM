@@ -137,16 +137,42 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
 else
     # Linux - use Debian/Ubuntu detection
     install_postgres_linux() {
-        echo "   Installing PostgreSQL 16 with pgvector..."
-        # Add PostgreSQL APT repository for PG 16
-        if ! grep -q "apt.postgresql.org" /etc/apt/sources.list.d/*.list 2>/dev/null; then
-            sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-            wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add - 2>/dev/null || \
-                curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+        echo "   Installing PostgreSQL with pgvector..."
+
+        # Get Ubuntu/Debian codename from /etc/os-release (more reliable than lsb_release)
+        CODENAME=""
+        if [ -f /etc/os-release ]; then
+            CODENAME=$(grep "^VERSION_CODENAME=" /etc/os-release | cut -d= -f2)
         fi
+
+        # First, try default repos (newer distros have recent PG)
         sudo apt-get update -qq
-        sudo apt-get install -y postgresql-16 postgresql-16-pgvector
-        echo_ok "PostgreSQL 16 with pgvector installed"
+
+        # Find the latest available PostgreSQL version in repos
+        PG_AVAILABLE=$(apt-cache search "^postgresql-[0-9]+$" 2>/dev/null | grep -oP "postgresql-\K[0-9]+" | sort -rn | head -1)
+
+        if [ -n "$PG_AVAILABLE" ] && [ "$PG_AVAILABLE" -ge 16 ]; then
+            echo "   Found PostgreSQL $PG_AVAILABLE in default repos"
+            sudo apt-get install -y "postgresql-$PG_AVAILABLE" "postgresql-$PG_AVAILABLE-pgvector" 2>/dev/null
+            echo_ok "PostgreSQL $PG_AVAILABLE with pgvector installed"
+            return 0
+        fi
+
+        # Fallback: Add PostgreSQL APT repository for PG 16
+        if [ -n "$CODENAME" ]; then
+            if ! grep -q "apt.postgresql.org" /etc/apt/sources.list.d/*.list 2>/dev/null; then
+                echo "   Adding PostgreSQL APT repository..."
+                sudo sh -c "echo 'deb http://apt.postgresql.org/pub/repos/apt ${CODENAME}-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
+                curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg 2>/dev/null || \
+                    wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add - 2>/dev/null
+            fi
+            sudo apt-get update -qq
+            sudo apt-get install -y postgresql-16 postgresql-16-pgvector
+            echo_ok "PostgreSQL 16 with pgvector installed"
+        else
+            echo_err "Could not determine OS codename for PostgreSQL repository"
+            return 1
+        fi
     }
 
     if command -v pg_ctlcluster &> /dev/null; then
