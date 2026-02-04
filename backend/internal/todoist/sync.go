@@ -15,9 +15,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// Todoist Sync API endpoints
-var SyncEndpoint = "https://api.todoist.com/sync/v9/sync"
-var QuickAddEndpoint = "https://api.todoist.com/sync/v9/quick/add"
+// Todoist API v1 endpoints (v9 deprecated Feb 2026)
+var SyncEndpoint = "https://api.todoist.com/api/v1/sync"
+var QuickAddEndpoint = "https://api.todoist.com/api/v1/tasks/quick"
 
 // SyncClient handles Todoist Sync API operations
 type SyncClient struct {
@@ -405,18 +405,24 @@ type QuickAddTask struct {
 // QuickAdd creates a task using Todoist's Quick Add API with natural language parsing.
 // The text parameter supports dates ("tomorrow", "next tuesday"), #project, @label, and p1-p4 priority.
 func (c *SyncClient) QuickAdd(ctx context.Context, text string, note string) (*QuickAddTask, error) {
-	// Build request body as form data
-	data := url.Values{}
-	data.Set("text", text)
+	// Build request body as JSON (v1 API)
+	requestBody := map[string]string{
+		"text": text,
+	}
 	if note != "" {
-		data.Set("note", note)
+		requestBody["note"] = note
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, QuickAddEndpoint, strings.NewReader(data.Encode()))
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, QuickAddEndpoint, strings.NewReader(string(jsonBody)))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.accessToken)
 	req.Header.Set("X-Request-Id", uuid.New().String())
 
