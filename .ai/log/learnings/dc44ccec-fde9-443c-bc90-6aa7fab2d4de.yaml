@@ -286,3 +286,67 @@ detail: |
   In sandcastle environments, integration tests that require PostgreSQL will fail with 'connection refused' because the test database isn't running. This is expected - the CI environment has the database. When testing locally, run `make test-unit` to verify Go logic without needing the database. The pre-push hook and CI will catch integration test failures.
 actionable: false
 
+---
+timestamp: "2026-02-04T15:45:00.718141"
+type: gotcha
+summary: PostgreSQL version varies by environment - don't hardcode
+detail: |
+  Setup scripts and Makefiles hardcoded PostgreSQL 16, but Ubuntu 25.04 (used in Sprites.dev sandcastles) ships with PG17 in default repos. Scripts failed when trying to use pg_ctlcluster with hardcoded version '16 main'. Solution: Auto-detect installed version using `pg_lsclusters` and dynamically use the detected version. Similarly, don't hardcode GOPATH as ~/go/bin - use `$(go env GOPATH)/bin` instead since GOPATH varies (Sprites.dev uses /.sprite/languages/go/workspace/bin).
+actionable: true
+
+---
+timestamp: "2026-02-04T15:45:00.718141"
+type: gotcha
+summary: Test database requires pg_hba.conf IPv6 entries
+detail: |
+  PostgreSQL connection from localhost may resolve to IPv6 (::1) instead of IPv4 (127.0.0.1). If pg_hba.conf only has IPv4 md5 auth entry, connections fail with 'no pg_hba.conf entry for host'. Need to add both: 'host all all 127.0.0.1/32 md5' AND 'host all all ::1/128 md5' (or ::0/0 for all IPv6). Note that order matters - first matching rule wins, and scram-sha-256 entries may take precedence over md5 if they appear earlier.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:45:00.718141"
+type: gotcha
+summary: Integration tests fail with dirty migration state on interrupted runs
+detail: |
+  When integration tests are interrupted (Ctrl+C, failed migration, etc.), the schema_migrations table is left in 'dirty' state, causing all subsequent test runs to fail with 'Dirty database version N. Fix and force version.' Simple fix: DROP SCHEMA public CASCADE; CREATE SCHEMA public; then re-grant permissions and recreate extensions. Better prevention: integration test setup should always start with clean schema or handle dirty state gracefully.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:45:00.718141"
+type: gotcha
+summary: Test database needs manual creation and extension setup
+detail: |
+  Integration tests require 'personal_crm_test' database to exist with uuid-ossp and vector extensions installed. Unlike the dev database (created by postgres-native script), test database isn't auto-created by setup. Tests fail silently with 'database does not exist' or 'relation does not exist' if schema isn't migrated. The make test-integration target sets DATABASE_URL but assumes database exists. Setup script should create test database or document manual creation.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:45:00.718141"
+type: documentation_gap
+summary: Sandcastle environment setup requires additional PostgreSQL configuration
+detail: |
+  The CLAUDE.md and setup documentation don't mention that sandcastle environments need: (1) PostgreSQL installed via make setup (not just Docker), (2) pg_hba.conf IPv6 entries for localhost connections, (3) personal_crm_test database manually created before running tests, (4) clean schema state for integration tests. Agents hitting 'PostgreSQL not installed' errors don't know these are expected setup steps for native/sandcastle mode. Should document: 'For sandcastle/non-Docker environments: run make setup first, then manually create test DB with extensions'.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:45:00.718141"
+type: architecture
+summary: Integration tests have inconsistent migration handling patterns
+detail: |
+  Some integration test files (calendar_event_integration_test.go, identity_integration_test.go) explicitly call db.RunMigrations() in setup, while others (contact_task_integration_test.go) assume schema already exists from previous tests. This creates test order dependencies - if contact_task tests run first or after schema reset, they fail with 'relation does not exist'. Tests should either: (1) all call RunMigrations (idempotent), or (2) use shared test setup that guarantees migrated schema. Current pattern is fragile.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:45:00.718141"
+type: rule
+summary: Use dynamic GOPATH in Makefile, never hardcode ~/go/bin
+detail: |
+  Makefile sqlc target used ~/go/bin/sqlc which breaks in non-standard environments (Sprites.dev uses /.sprite/languages/go/workspace/bin). Pattern: Always use `$(shell go env GOPATH)/bin/<tool>` or add GOPATH/bin to PATH dynamically. This applies to all Go tools (sqlc, golangci-lint, etc.). The gotcha was documented but not applied to Makefile - documentation alone insufficient.
+actionable: true
+
+---
+timestamp: "2026-02-04T15:45:00.718141"
+type: gotcha
+summary: lsb_release not available in minimal container environments
+detail: |
+  Setup script used `lsb_release -cs` to detect Ubuntu codename for PostgreSQL APT repo setup. This command doesn't exist in Sprites.dev sandcastles (Ubuntu 25.04), causing 'lsb_release: not found' error. Portable alternative: parse /etc/os-release which is standard and always present. Extract VERSION_CODENAME field instead of shelling out to lsb_release. This is a common gotcha in container/minimal environments.
+actionable: true
+
