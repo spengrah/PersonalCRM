@@ -182,3 +182,27 @@ detail: |
   When creating the contact-tasks E2E test, the agent used a custom test-fixtures pattern with page objects as fixtures (contactDetailPage parameter), which doesn't exist in this codebase. The correct TestAPI pattern is visible in contacts.spec.ts and other E2E tests, but isn't documented in .ai/rules/testing.md or .ai/patterns/. Should add: 'E2E tests use standard @playwright/test with TestAPI helper pattern. See contacts.spec.ts for structure. Do NOT create custom fixtures or test-fixtures.ts.' This would have prevented the CI failure.
 actionable: true
 
+---
+timestamp: "2026-02-04T01:27:45.907240"
+type: gotcha
+summary: E2E tests should use domcontentloaded not networkidle for page loads
+detail: |
+  The test was using `page.waitForLoadState('networkidle')` which caused timing issues in CI. The correct pattern from the existing codebase is to use `domcontentloaded` with `getByRole` assertions and explicit timeouts (e.g., `{ timeout: 15000 }`). This is consistent with how contacts.spec.ts handles page loads.
+actionable: true
+
+---
+timestamp: "2026-02-04T01:27:45.907240"
+type: documentation_gap
+summary: Core.md E2E gotcha says 'use networkidle + reload' but codebase actually uses domcontentloaded
+detail: |
+  The core.md gotcha states: 'E2E test using `domcontentloaded` | Use `networkidle` + `page.reload()` to ensure API data loads'. However, the actual working pattern in contacts.spec.ts is to use `domcontentloaded` with explicit timeouts, NOT networkidle. The documentation led the agent to use the wrong pattern initially. This gotcha should be updated to match the actual codebase pattern: 'Use domcontentloaded with explicit timeouts for page loads, not networkidle'.
+actionable: true
+
+---
+timestamp: "2026-02-04T01:27:45.907240"
+type: rule
+summary: Use getByRole with timeout for E2E heading assertions instead of getByText
+detail: |
+  When asserting that a contact name appears on a detail page, use `page.getByRole('heading', { name: contactName })` with explicit timeout rather than checking h1 text content. This is more robust and follows the pattern established in contacts.spec.ts. Example: `await expect(page.getByRole('heading', { name: 'Task Test Contact' })).toBeVisible({ timeout: 15000 })`
+actionable: true
+
