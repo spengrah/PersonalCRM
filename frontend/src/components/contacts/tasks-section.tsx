@@ -1,9 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { useContactTasks } from '@/hooks/use-contact-tasks'
+import { useContactTasks, useDeleteTaskLink } from '@/hooks/use-contact-tasks'
 import { Button } from '@/components/ui/button'
-import { Plus, Circle, CheckCircle2, ExternalLink } from 'lucide-react'
+import { Plus, Circle, CheckCircle2, ExternalLink, X } from 'lucide-react'
 import { AddTaskModal } from './add-task-modal'
 import { formatDateOnly } from '@/lib/utils'
 
@@ -22,14 +22,16 @@ export function TasksSection({ contactId, contactName }: TasksSectionProps) {
     kind: 'action',
   })
 
-  // Fetch completed tasks only if toggle is on
-  const { data: completedTasks = [], isLoading: loadingCompleted } = useContactTasks(contactId, {
-    state: 'completed',
-    kind: 'action',
-  })
+  // Fetch completed tasks (always fetch to show count in toggle, but don't block loading)
+  const { data: completedTasks = [], isLoading: loadingCompleted } = useContactTasks(
+    contactId,
+    { state: 'completed', kind: 'action' },
+    { enabled: true } // Always fetch so we can show the toggle with count
+  )
 
   const isLoading = loadingActive || (showCompleted && loadingCompleted)
-  const hasNoTasks = activeTasks.length === 0 && (!showCompleted || completedTasks.length === 0)
+  // Show empty state only when both lists are truly empty
+  const hasNoTasks = activeTasks.length === 0 && completedTasks.length === 0
 
   return (
     <div className="bg-white shadow overflow-hidden sm:rounded-lg">
@@ -60,7 +62,7 @@ export function TasksSection({ contactId, contactName }: TasksSectionProps) {
           <>
             {/* Active tasks */}
             {activeTasks.map(task => (
-              <TaskRow key={task.id} task={task} completed={false} />
+              <TaskRow key={task.id} task={task} contactId={contactId} completed={false} />
             ))}
 
             {/* Completed tasks toggle */}
@@ -77,7 +79,9 @@ export function TasksSection({ contactId, contactName }: TasksSectionProps) {
 
             {/* Completed tasks */}
             {showCompleted &&
-              completedTasks.map(task => <TaskRow key={task.id} task={task} completed={true} />)}
+              completedTasks.map(task => (
+                <TaskRow key={task.id} task={task} contactId={contactId} completed={true} />
+              ))}
           </>
         )}
       </div>
@@ -101,11 +105,19 @@ interface TaskRowProps {
     due_date?: string
     external_task_id: string
   }
+  contactId: string
   completed: boolean
 }
 
-function TaskRow({ task, completed }: TaskRowProps) {
+function TaskRow({ task, contactId, completed }: TaskRowProps) {
   const todoistUrl = `https://todoist.com/app/task/${task.external_task_id}`
+  const deleteTaskLink = useDeleteTaskLink()
+
+  const handleUnlink = () => {
+    if (confirm('Remove this task from CRM? (The task will remain in Todoist)')) {
+      deleteTaskLink.mutate({ contactId, taskId: task.id })
+    }
+  }
 
   return (
     <div className="px-4 py-3 sm:px-6 flex items-center gap-3 group">
@@ -146,6 +158,16 @@ function TaskRow({ task, completed }: TaskRowProps) {
       >
         <ExternalLink className="w-4 h-4" />
       </a>
+
+      {/* Unlink from CRM (visible on hover) */}
+      <button
+        onClick={handleUnlink}
+        disabled={deleteTaskLink.isPending}
+        className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 disabled:opacity-50"
+        title="Remove from CRM (keeps in Todoist)"
+      >
+        <X className="w-4 h-4" />
+      </button>
     </div>
   )
 }

@@ -38,7 +38,7 @@ export const contactTasksApi = {
     const queryString = searchParams.toString()
     const url = `${API_BASE}/contacts/${contactId}/tasks${queryString ? `?${queryString}` : ''}`
     const response = await fetchWithAuth(url)
-    return response.data
+    return response?.data || []
   },
 
   // Create an action task

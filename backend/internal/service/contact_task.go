@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -106,10 +107,18 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 	noteBuilder.WriteString(fmt.Sprintf("[See context in CRM](%s/contacts/%s)\n\n", s.frontendURL, contact.ID.String()))
 	noteBuilder.WriteString("---\n")
 
-	// Add CRM marker for sync identification
-	marker := fmt.Sprintf(`{"crm":true,"contact_id":"%s","kind":"action","instance":"%s"}`,
-		contact.ID.String(), settings.IntegrationInstanceID)
-	noteBuilder.WriteString(marker)
+	// Add CRM marker for sync identification (use json.Marshal for safety)
+	marker := map[string]any{
+		"crm":        true,
+		"contact_id": contact.ID.String(),
+		"kind":       "action",
+		"instance":   settings.IntegrationInstanceID,
+	}
+	markerJSON, err := json.Marshal(marker)
+	if err != nil {
+		return nil, fmt.Errorf("marshal marker: %w", err)
+	}
+	noteBuilder.Write(markerJSON)
 
 	// Call Todoist Quick Add API
 	client := todoist.NewSyncClient(accessToken)
@@ -213,7 +222,10 @@ func (s *ContactTaskService) getTodoistSettings(ctx context.Context) (*todoist.S
 	// Get sync state for settings
 	state, err := s.syncRepo.GetSyncStateBySource(ctx, todoist.SourceName, &accountID)
 	if err != nil {
-		return nil, "", ErrTodoistNotConfigured
+		if errors.Is(err, db.ErrNotFound) {
+			return nil, "", ErrTodoistNotConfigured
+		}
+		return nil, "", fmt.Errorf("get sync state: %w", err)
 	}
 
 	settings := todoist.Settings{}

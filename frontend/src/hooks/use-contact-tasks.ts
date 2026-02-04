@@ -4,11 +4,16 @@ import { contactTaskKeys, invalidateFor } from '@/lib/query-invalidation'
 import type { ContactTaskListParams, CreateActionTaskRequest } from '@/types/contact-task'
 
 // List tasks for a contact
-export function useContactTasks(contactId: string, params: ContactTaskListParams = {}) {
+export function useContactTasks(
+  contactId: string,
+  params: ContactTaskListParams = {},
+  options: { enabled?: boolean } = {}
+) {
+  const { enabled = true } = options
   return useQuery({
     queryKey: contactTaskKeys.list(contactId, params),
     queryFn: () => contactTasksApi.listTasks(contactId, params),
-    enabled: !!contactId,
+    enabled: !!contactId && enabled,
     staleTime: 1000 * 60 * 2, // 2 minutes
   })
 }

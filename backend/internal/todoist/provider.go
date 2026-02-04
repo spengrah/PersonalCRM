@@ -749,7 +749,10 @@ func (p *CadenceSyncProvider) createTaskCommand(contact *repository.Contact, set
 		"kind":       TaskKindCadence,
 		"instance":   settings.IntegrationInstanceID,
 	}
-	markerJSON, _ := json.Marshal(marker)
+	markerJSON, err := json.Marshal(marker)
+	if err != nil {
+		logger.Error().Err(err).Str("contactId", contact.ID.String()).Msg("failed to marshal CRM marker - task may not sync properly")
+	}
 	descBuilder.Write(markerJSON)
 
 	description := descBuilder.String()
