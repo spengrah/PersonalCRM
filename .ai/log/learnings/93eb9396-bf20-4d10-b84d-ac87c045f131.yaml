@@ -190,3 +190,67 @@ detail: |
   When adding temporary logging to diagnose production issues, `logger.Debug()` calls won't appear in logs if the production log level is set to INFO or higher. Use `logger.Info()` for diagnostic logging that needs to be visible immediately, then remove or downgrade to Debug after issue is resolved. This avoids the deploy-test-no-output cycle.
 actionable: true
 
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: gotcha
+summary: Testing service layer with external API dependencies requires client factory injection
+detail: |
+  When writing tests for CreateActionTask service method, the service creates the Todoist SyncClient directly inside the method: client := todoist.NewSyncClient(accessToken). This makes testing impossible without refactoring. Solution: (1) Create TodoistClient interface, (2) Add ClientFactory function type to service, (3) Provide SetTodoistClientFactory() for tests, (4) Create NewContactTaskServiceForTest() constructor that bypasses OAuth. Without this pattern, you can't test service logic that calls external APIs - especially complex two-step flows like QuickAdd + Sync.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: gotcha
+summary: Mock objects returning same value across subtests creates database constraint violations
+detail: |
+  Each subtest instance had its own mock with counter starting at 0, generating duplicate external IDs (test-task-id-1, test-task-id-1, ...). Both tried to insert into contact_task with same external_task_id, causing duplicate key constraint violation. Fix: Use UUIDs to ensure globally unique IDs: taskID := "test-task-" + uuid.New().String()[:8]. When mocking responses that create database records, always generate unique IDs rather than hardcoded or counter-based values.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: gotcha
+summary: Test data persistence across runs requires proactive cleanup or unique identifiers
+detail: |
+  Sequential test runs using same hardcoded account IDs fail on second run with constraint violations. Running tests twice: (1) First run creates sync_state with account_id="test-account-123", (2) Cleanup deletes sync_state, (3) Second run tries to create sync_state with same account_id - constraint violation. Tests that work once but fail on second run are debugging nightmares. Either use UUIDs to guarantee uniqueness, or implement comprehensive cleanup in reverse order. For this project, UUIDs are preferred.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: distinction
+summary: "Two-step Todoist API pattern: QuickAdd creates but can't set description; Sync API updates it"
+detail: |
+  Creating tasks with CRM metadata requires: (1) QuickAdd API call accepts natural language, handles #ProjectName syntax, returns task object, (2) Sync API item_update sets description with CRM marker JSON. Critical constraints: QuickAdd's note parameter creates comments NOT description (major gotcha), Sync item_update cannot move tasks between projects, if Sync fails after QuickAdd succeeds task exists without CRM marker (orphaned, breaks sync reconciliation). When adding description/metadata to Todoist tasks, always use QuickAdd (for parsing) + Sync update (for metadata).
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: rule
+summary: Fail entire operation and clean up if critical API call fails after side effect
+detail: |
+  Code initially handled Sync API failure by logging warning and continuing, creating orphaned tasks: task created in Todoist (QuickAdd) but CRM marker update failed (Sync). Task exists without {{crm:...}} marker in description, sync reconciliation can't identify it as CRM-managed. Fix: treat Sync failure as fatal, delete the task since it won't have CRM marker. Apply this pattern whenever: (1) first API call succeeds, (2) second API call fails, (3) rollback is possible/necessary. Don't leave side effects in inconsistent state.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: documentation_gap
+summary: Service testing patterns not documented - causing repeated test setup mistakes
+detail: |
+  Session tried multiple approaches before landing on right pattern: (1) Try to mock OAuthService - too complex, (2) Create dependencies but leave OAuthService nil - nil pointer dereference, (3) Add testAccessToken field - works but discovered late. Challenge: How to test service needing accessToken from OAuth when testing logic not OAuth flow? Solution in project's guides wasn't obvious enough. Add to .ai/patterns/testing.md: When service depends on OAuth for access tokens, add testAccessToken field and NewServiceForTest() constructor. Set testAccessToken to bypass OAuth in tests. Factory injection allows mocking external clients.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: architecture
+summary: Mock objects need to track call history for assertions, not just return values
+detail: |
+  Mock implementations tracked calls in slices (quickAddCalls []quickAddCall, syncCalls []syncCall) allowing tests to verify: QuickAdd called with correct text including contact link prefix, Sync called with correct commands (item_update with description containing CRM marker), commands used correct task IDs. Without this tracking, you can only verify final result not intermediate operations. When testing orchestration/workflow logic (QuickAdd then Sync, handle failure by delete), you need to verify each step's inputs not just final outputs. Document mock structure pattern: include call history slices for each method, populate during calls, allow custom func override, use in assertions.
+actionable: true
+
+---
+timestamp: "2026-02-04T17:16:41.463043"
+type: rule
+summary: Test assertions must use captured/computed values when mocks generate them, not hardcoded values
+detail: |
+  Initial assertions hardcoded expected task IDs: assert.Equal(t, "test-task-id", cmd.Args["id"]) broke when mock updated to generate unique IDs. Fix: capture from mock's call history: taskID := mock.quickAddCalls[0].TaskID; assert.Equal(t, taskID, cmd.Args["id"]). Tests that hardcode expected values become brittle. When test mocks generate values (IDs, timestamps), always: (1) Capture those values from mock call history, (2) Use captured values in assertions, (3) Never hardcode expected values unless they're constant across all runs.
+actionable: true
+

@@ -318,6 +318,89 @@ This applies to all test helpers that call API endpoints.
 3. **Use descriptive test names** - `TestContactRepository_SoftDelete_DoesNotAffectOtherContacts`
 4. **Clean up after tests** - use defer or afterEach hooks
 
+## Service Layer Testing with External APIs
+
+When testing services that call external APIs (Todoist, OAuth, etc.), use the client factory pattern:
+
+### Pattern: Client Factory Injection
+
+```go
+// 1. Define interface matching the external client
+type Client interface {
+    QuickAdd(ctx context.Context, text string) (*Task, error)
+    Sync(ctx context.Context, token string, commands []Command) error
+}
+
+// 2. Add factory to service struct
+type ContactTaskService struct {
+    // ... other deps ...
+    todoistClientFunc ClientFactory
+    testAccessToken   string  // bypasses OAuth in tests
+}
+
+// 3. Create test constructor that bypasses OAuth
+func NewContactTaskServiceForTest(deps..., testToken string) *ContactTaskService {
+    return &ContactTaskService{
+        // ... deps ...
+        todoistClientFunc: DefaultClientFactory,
+        testAccessToken:   testToken,
+    }
+}
+
+// 4. Allow test to override the factory
+func (s *Service) SetClientFactory(factory ClientFactory) {
+    s.clientFunc = factory
+}
+```
+
+### Pattern: Mock with Call History
+
+```go
+type mockClient struct {
+    quickAddCalls []quickAddCall  // track calls for assertions
+    syncCalls     []syncCall
+    quickAddFunc  func(ctx, text, note) (*Task, error)  // custom behavior
+}
+
+func (m *mockClient) QuickAdd(ctx, text, note) (*Task, error) {
+    m.quickAddCalls = append(m.quickAddCalls, quickAddCall{text, note})
+    if m.quickAddFunc != nil {
+        return m.quickAddFunc(ctx, text, note)
+    }
+    // Generate unique ID to avoid constraint violations across subtests
+    taskID := "test-task-" + uuid.New().String()[:8]
+    return &Task{ID: taskID}, nil
+}
+```
+
+### Key Rules
+
+1. **Generate unique IDs** - Use UUIDs, not hardcoded values. Each subtest creates a new mock with counter reset, causing duplicate key violations.
+
+2. **Capture values for assertions** - Don't hardcode expected IDs:
+   ```go
+   // ❌ WRONG - breaks when mock generates dynamic IDs
+   assert.Equal(t, "test-task-id", cmd.Args["id"])
+
+   // ✅ CORRECT - capture from mock
+   assert.Equal(t, capturedTaskID, cmd.Args["id"])
+   ```
+
+3. **Clean up test data proactively** - Delete by account ID before creating:
+   ```go
+   _ = syncRepo.DeleteSyncStatesByAccountID(ctx, "test-account-123")
+   syncState, err := syncRepo.CreateSyncState(ctx, ...)
+   ```
+
+4. **Fail and clean up on API failure** - If step 2 fails after step 1 succeeds, clean up step 1's side effects:
+   ```go
+   if err != nil {
+       deleteCmd := NewItemDeleteCommand(task.ID)
+       _, _ = client.Sync(ctx, "*", []string{}, deleteCmd)
+       return nil, fmt.Errorf("update failed: %w", err)
+   }
+   ```
+
 ## E2E Date Testing
 
 When testing date display in E2E tests, use UTC date components if the backend stores UTC timestamps:
