@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { contactTasksApi } from '@/lib/contact-tasks-api'
 import { contactTaskKeys, invalidateFor } from '@/lib/query-invalidation'
 import type { ContactTaskListParams, CreateActionTaskRequest } from '@/types/contact-task'
@@ -15,8 +15,6 @@ export function useContactTasks(contactId: string, params: ContactTaskListParams
 
 // Create action task mutation
 export function useCreateActionTask() {
-  const queryClient = useQueryClient()
-
   return useMutation({
     mutationFn: ({ contactId, data }: { contactId: string; data: CreateActionTaskRequest }) =>
       contactTasksApi.createTask(contactId, data),
@@ -28,8 +26,6 @@ export function useCreateActionTask() {
 
 // Delete task link mutation
 export function useDeleteTaskLink() {
-  const queryClient = useQueryClient()
-
   return useMutation({
     mutationFn: ({ contactId, taskId }: { contactId: string; taskId: string }) =>
       contactTasksApi.deleteTaskLink(contactId, taskId),

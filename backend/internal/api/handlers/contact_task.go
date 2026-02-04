@@ -101,13 +101,12 @@ func (h *ContactTaskHandler) CreateActionTask(c *gin.Context) {
 			api.SendNotFound(c, "Contact")
 			return
 		}
-		// Check for specific error messages
-		errMsg := err.Error()
-		if errMsg == "no todoist account connected" {
+		// Check for sentinel errors
+		if errors.Is(err, service.ErrNoTodoistAccount) {
 			api.SendError(c, http.StatusBadRequest, api.ErrCodeBadRequest, "No Todoist account connected", "Connect Todoist in Settings")
 			return
 		}
-		if errMsg == "todoist settings not configured" || errMsg == "todoist settings not configured: missing label" {
+		if errors.Is(err, service.ErrTodoistNotConfigured) || errors.Is(err, service.ErrTodoistMissingLabel) {
 			api.SendError(c, http.StatusBadRequest, api.ErrCodeBadRequest, "Todoist settings not configured", "Configure Todoist project and label in Settings")
 			return
 		}

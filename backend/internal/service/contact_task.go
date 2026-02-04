@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,13 @@ import (
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/google/uuid"
+)
+
+// Sentinel errors for contact task operations
+var (
+	ErrNoTodoistAccount     = errors.New("no todoist account connected")
+	ErrTodoistNotConfigured = errors.New("todoist settings not configured")
+	ErrTodoistMissingLabel  = errors.New("todoist settings not configured: missing label")
 )
 
 // ContactTaskService handles business logic for contact tasks
@@ -197,7 +205,7 @@ func (s *ContactTaskService) getTodoistSettings(ctx context.Context) (*todoist.S
 	}
 
 	if len(accounts) == 0 {
-		return nil, "", fmt.Errorf("no todoist account connected")
+		return nil, "", ErrNoTodoistAccount
 	}
 
 	accountID := accounts[0].AccountID
@@ -205,7 +213,7 @@ func (s *ContactTaskService) getTodoistSettings(ctx context.Context) (*todoist.S
 	// Get sync state for settings
 	state, err := s.syncRepo.GetSyncStateBySource(ctx, todoist.SourceName, &accountID)
 	if err != nil {
-		return nil, "", fmt.Errorf("todoist settings not configured")
+		return nil, "", ErrTodoistNotConfigured
 	}
 
 	settings := todoist.Settings{}
@@ -225,7 +233,7 @@ func (s *ContactTaskService) getTodoistSettings(ctx context.Context) (*todoist.S
 	}
 
 	if settings.LabelID == "" {
-		return nil, "", fmt.Errorf("todoist settings not configured: missing label")
+		return nil, "", ErrTodoistMissingLabel
 	}
 
 	return &settings, accountID, nil

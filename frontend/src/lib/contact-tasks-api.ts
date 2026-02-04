@@ -7,12 +7,11 @@ import type {
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1'
 
 async function fetchWithAuth(url: string, options: RequestInit = {}) {
-  const apiKey = process.env.NEXT_PUBLIC_API_KEY || ''
   const response = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      'X-API-Key': process.env.NEXT_PUBLIC_API_KEY || '',
       ...options.headers,
     },
   })
