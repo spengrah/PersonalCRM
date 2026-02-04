@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useDeleteTaskLink } from '@/hooks/use-contact-tasks'
 import { Button } from '@/components/ui/button'
-import { Plus, Circle, CheckCircle2, ExternalLink, X } from 'lucide-react'
+import { Plus, Circle, CheckCircle2, ExternalLink, X, ListTodo } from 'lucide-react'
 import { AddTaskModal } from './add-task-modal'
 import { formatDateOnly } from '@/lib/utils'
 import type { ContactTask } from '@/types/contact-task'
@@ -52,7 +52,10 @@ export function TasksSection({
   return (
     <div className="bg-white shadow overflow-hidden sm:rounded-lg">
       <div className="px-4 py-5 sm:px-6 border-b border-gray-200 flex items-center justify-between">
-        <h3 className="text-lg leading-6 font-medium text-gray-900">Tasks</h3>
+        <div className="flex items-center gap-2">
+          <ListTodo className="w-5 h-5 text-gray-400" />
+          <h3 className="text-lg leading-6 font-medium text-gray-900">Tasks</h3>
+        </div>
         <Button variant="outline" size="sm" onClick={() => setShowAddModal(true)}>
           <Plus className="w-4 h-4 mr-1" />
           Add
