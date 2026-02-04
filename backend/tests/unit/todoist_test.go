@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/todoist"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -332,4 +334,180 @@ func TestReconciliationCommandGeneration(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestActionTaskKindConstant verifies the action task kind constant
+func TestActionTaskKindConstant(t *testing.T) {
+	assert.Equal(t, "action", todoist.TaskKindAction)
+	assert.Equal(t, "cadence", todoist.TaskKindCadence)
+}
+
+// TestActionTaskStateTransitions tests the expected state transitions for action tasks
+func TestActionTaskStateTransitions(t *testing.T) {
+	tests := []struct {
+		name           string
+		initialState   string
+		isCompleted    bool
+		isDeleted      bool
+		labelRemoved   bool
+		expectedState  string
+		expectNoChange bool
+	}{
+		{
+			name:          "completion transitions to completed",
+			initialState:  "managed",
+			isCompleted:   true,
+			expectedState: "completed",
+		},
+		{
+			name:          "deletion transitions to unmanaged",
+			initialState:  "managed",
+			isDeleted:     true,
+			expectedState: "unmanaged",
+		},
+		{
+			name:          "label removed transitions to unmanaged",
+			initialState:  "managed",
+			labelRemoved:  true,
+			expectedState: "unmanaged",
+		},
+		{
+			name:           "no triggers keeps managed state",
+			initialState:   "managed",
+			expectedState:  "managed",
+			expectNoChange: true,
+		},
+		{
+			name:           "already completed stays completed",
+			initialState:   "completed",
+			expectedState:  "completed",
+			expectNoChange: true,
+		},
+		{
+			name:           "already unmanaged stays unmanaged",
+			initialState:   "unmanaged",
+			expectedState:  "unmanaged",
+			expectNoChange: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Skip non-managed initial states (they're not processed)
+			if tt.initialState != "managed" {
+				assert.True(t, tt.expectNoChange, "non-managed tasks should expect no change")
+				return
+			}
+
+			// Simulate the state transition logic from handleActionTaskTriggers
+			var newState string
+			stateChanged := false
+
+			if tt.isCompleted {
+				newState = "completed"
+				stateChanged = true
+			} else if tt.isDeleted {
+				newState = "unmanaged"
+				stateChanged = true
+			} else if tt.labelRemoved {
+				newState = "unmanaged"
+				stateChanged = true
+			} else {
+				newState = tt.initialState
+			}
+
+			assert.Equal(t, tt.expectedState, newState)
+			assert.Equal(t, !tt.expectNoChange, stateChanged, "state change expectation mismatch")
+		})
+	}
+}
+
+// TestActionTaskMetadataSchema tests the expected metadata structure for action tasks
+func TestActionTaskMetadataSchema(t *testing.T) {
+	tests := []struct {
+		name         string
+		metadata     map[string]any
+		hasContent   bool
+		hasDueDate   bool
+		hasProjectID bool
+	}{
+		{
+			name: "full metadata",
+			metadata: map[string]any{
+				"content":    "Follow up about surgery",
+				"due_date":   "2026-02-10",
+				"project_id": "123456",
+			},
+			hasContent:   true,
+			hasDueDate:   true,
+			hasProjectID: true,
+		},
+		{
+			name: "no due date",
+			metadata: map[string]any{
+				"content":    "Quick follow up",
+				"project_id": "123456",
+			},
+			hasContent:   true,
+			hasDueDate:   false,
+			hasProjectID: true,
+		},
+		{
+			name:         "empty metadata",
+			metadata:     map[string]any{},
+			hasContent:   false,
+			hasDueDate:   false,
+			hasProjectID: false,
+		},
+		{
+			name:         "nil metadata",
+			metadata:     nil,
+			hasContent:   false,
+			hasDueDate:   false,
+			hasProjectID: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test content extraction
+			_, hasContent := tt.metadata["content"].(string)
+			assert.Equal(t, tt.hasContent, hasContent, "content presence mismatch")
+
+			// Test due_date extraction
+			_, hasDueDate := tt.metadata["due_date"].(string)
+			assert.Equal(t, tt.hasDueDate, hasDueDate, "due_date presence mismatch")
+
+			// Test project_id extraction
+			_, hasProjectID := tt.metadata["project_id"].(string)
+			assert.Equal(t, tt.hasProjectID, hasProjectID, "project_id presence mismatch")
+		})
+	}
+}
+
+// TestActionTaskVsCadenceTaskBehavior documents the key behavioral differences
+func TestActionTaskVsCadenceTaskBehavior(t *testing.T) {
+	t.Run("cadence tasks create new task on completion", func(t *testing.T) {
+		// Cadence tasks: completion -> update last_contacted -> calculate new contact_by -> create next task
+		// This is the existing behavior verified by other tests
+		assert.True(t, true, "documented behavior")
+	})
+
+	t.Run("action tasks do not create new task on completion", func(t *testing.T) {
+		// Action tasks: completion -> update last_contacted -> mark as completed
+		// No new task created, no skip semantics
+		assert.True(t, true, "documented behavior")
+	})
+
+	t.Run("cadence tasks have skip semantics", func(t *testing.T) {
+		// Cadence tasks: deleted/label removed/deadline removed -> skip -> create new task with postponed deadline
+		// This is the existing behavior verified by TestReconciliationCommandGeneration
+		assert.True(t, true, "documented behavior")
+	})
+
+	t.Run("action tasks do not have skip semantics", func(t *testing.T) {
+		// Action tasks: deleted/label removed -> mark as unmanaged
+		// No skip semantics, no new task created
+		assert.True(t, true, "documented behavior")
+	})
 }

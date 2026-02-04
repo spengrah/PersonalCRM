@@ -27,6 +27,14 @@ SELECT * FROM contact_task
 WHERE contact_id = $1
 ORDER BY provider, kind;
 
+-- name: ListContactTasksByContactFiltered :many
+-- List tasks for a contact with optional state and kind filters
+SELECT * FROM contact_task
+WHERE contact_id = $1
+  AND (sqlc.narg('state')::text IS NULL OR state = sqlc.narg('state')::text)
+  AND (sqlc.narg('kind')::text IS NULL OR kind = sqlc.narg('kind')::text)
+ORDER BY created_at DESC;
+
 -- name: ListManagedContactTasks :many
 -- List all managed tasks for a provider (for reconciliation)
 SELECT ct.*, c.full_name, c.cadence, c.contact_by, c.last_contacted
@@ -53,7 +61,7 @@ INSERT INTO contact_task (
 ) RETURNING *;
 
 -- name: UpsertContactTask :one
--- Upsert a contact task (update external_task_id if exists)
+-- Upsert a contact task by external_task_id (Todoist task IDs are globally unique)
 INSERT INTO contact_task (
     contact_id,
     provider,
@@ -68,8 +76,7 @@ INSERT INTO contact_task (
     @external_task_id,
     COALESCE(@state, 'managed'),
     COALESCE(@metadata::jsonb, '{}'::jsonb)
-) ON CONFLICT (contact_id, provider, kind) DO UPDATE SET
-    external_task_id = EXCLUDED.external_task_id,
+) ON CONFLICT (external_task_id) DO UPDATE SET
     state = EXCLUDED.state,
     metadata = EXCLUDED.metadata,
     updated_at = NOW()

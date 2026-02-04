@@ -293,7 +293,7 @@ ci-test: lint test-unit test-integration test-frontend
 # Code generation
 sqlc:
 	@echo "Generating sqlc code from SQL queries..."
-	@cd backend && ~/go/bin/sqlc generate
+	@cd backend && "$$(go env GOPATH)/bin/sqlc" generate
 	@echo "✅ sqlc code generated"
 
 # API specific commands

@@ -101,20 +101,24 @@ func TestContactTask_CRUD(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           "cadence",
 			ExternalTaskID: "11111",
+			State:          string(repository.ContactTaskStateManaged),
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "11111", task1.ExternalTaskID)
+		assert.Equal(t, repository.ContactTaskStateManaged, task1.State)
 
-		// Upsert again (should update)
+		// Upsert again with same external_task_id (should update state)
 		task2, err := contactTaskRepo.UpsertContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
 			Kind:           "cadence",
-			ExternalTaskID: "22222",
+			ExternalTaskID: "11111", // Same external ID
+			State:          string(repository.ContactTaskStateUnmanaged),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, task1.ID, task2.ID)            // Same ID
-		assert.Equal(t, "22222", task2.ExternalTaskID) // Updated external ID
+		assert.Equal(t, task1.ID, task2.ID)                                // Same ID (upsert matched)
+		assert.Equal(t, "11111", task2.ExternalTaskID)                     // Same external ID (it's the key)
+		assert.Equal(t, repository.ContactTaskStateUnmanaged, task2.State) // State was updated
 
 		// Clean up
 		err = contactTaskRepo.DeleteContactTask(ctx, task1.ID)
@@ -439,6 +443,228 @@ func TestContactTask_SyncedDeadlineMetadata(t *testing.T) {
 		updated, err := contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata)
 		require.NoError(t, err)
 		assert.Equal(t, "2026-02-15", updated.Metadata["synced_deadline"])
+
+		// Clean up
+		err = contactTaskRepo.DeleteContactTask(ctx, task.ID)
+		require.NoError(t, err)
+	})
+}
+
+// TestContactTask_ActionTasks verifies action task operations
+func TestContactTask_ActionTasks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	if err != nil {
+		t.Skipf("Could not connect to database: %v", err)
+	}
+	defer database.Close()
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+
+	// Create a test contact
+	now := accelerated.GetCurrentTime()
+	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		FullName:      "Test Contact for Action Tasks",
+		LastContacted: &now,
+	})
+	require.NoError(t, err)
+	defer func() {
+		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+	}()
+
+	t.Run("multiple action tasks per contact allowed", func(t *testing.T) {
+		// Create first action task
+		task1, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           "action",
+			ExternalTaskID: "action-task-1",
+			State:          "managed",
+			Metadata: map[string]any{
+				"content":  "Follow up about surgery",
+				"due_date": "2026-02-10",
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "action", task1.Kind)
+
+		// Create second action task - should NOT fail (unlike cadence tasks)
+		task2, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           "action",
+			ExternalTaskID: "action-task-2",
+			State:          "managed",
+			Metadata: map[string]any{
+				"content":  "Send contract",
+				"due_date": "2026-02-15",
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "action", task2.Kind)
+		assert.NotEqual(t, task1.ID, task2.ID)
+
+		// Create third action task
+		task3, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           "action",
+			ExternalTaskID: "action-task-3",
+			State:          "managed",
+			Metadata: map[string]any{
+				"content": "No due date task",
+			},
+		})
+		require.NoError(t, err)
+
+		// Clean up
+		err = contactTaskRepo.DeleteContactTask(ctx, task1.ID)
+		require.NoError(t, err)
+		err = contactTaskRepo.DeleteContactTask(ctx, task2.ID)
+		require.NoError(t, err)
+		err = contactTaskRepo.DeleteContactTask(ctx, task3.ID)
+		require.NoError(t, err)
+	})
+
+	t.Run("list tasks with filters", func(t *testing.T) {
+		// Create mix of tasks
+		actionManaged, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           "action",
+			ExternalTaskID: "action-managed",
+			State:          "managed",
+		})
+		require.NoError(t, err)
+
+		actionCompleted, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           "action",
+			ExternalTaskID: "action-completed",
+			State:          "completed",
+		})
+		require.NoError(t, err)
+
+		cadenceManaged, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           "cadence",
+			ExternalTaskID: "cadence-managed",
+			State:          "managed",
+		})
+		require.NoError(t, err)
+
+		// List all tasks for contact
+		allTasks, err := contactTaskRepo.ListContactTasksByContact(ctx, contact.ID)
+		require.NoError(t, err)
+		assert.Len(t, allTasks, 3)
+
+		// Filter by state=managed
+		managed := "managed"
+		managedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &managed, nil)
+		require.NoError(t, err)
+		assert.Len(t, managedTasks, 2) // action-managed and cadence-managed
+
+		// Filter by state=completed
+		completed := "completed"
+		completedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &completed, nil)
+		require.NoError(t, err)
+		assert.Len(t, completedTasks, 1)
+		assert.Equal(t, "action-completed", completedTasks[0].ExternalTaskID)
+
+		// Filter by kind=action
+		action := "action"
+		actionTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, nil, &action)
+		require.NoError(t, err)
+		assert.Len(t, actionTasks, 2) // action-managed and action-completed
+
+		// Filter by kind=action AND state=managed
+		actionManagedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &managed, &action)
+		require.NoError(t, err)
+		assert.Len(t, actionManagedTasks, 1)
+		assert.Equal(t, "action-managed", actionManagedTasks[0].ExternalTaskID)
+
+		// Clean up
+		err = contactTaskRepo.DeleteContactTask(ctx, actionManaged.ID)
+		require.NoError(t, err)
+		err = contactTaskRepo.DeleteContactTask(ctx, actionCompleted.ID)
+		require.NoError(t, err)
+		err = contactTaskRepo.DeleteContactTask(ctx, cadenceManaged.ID)
+		require.NoError(t, err)
+	})
+
+	t.Run("completed state transition", func(t *testing.T) {
+		// Create managed action task
+		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           "action",
+			ExternalTaskID: "task-to-complete",
+			State:          "managed",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, repository.ContactTaskStateManaged, task.State)
+
+		// Transition to completed
+		updated, err := contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateCompleted)
+		require.NoError(t, err)
+		assert.Equal(t, repository.ContactTaskStateCompleted, updated.State)
+
+		// Verify retrieval shows completed state
+		retrieved, err := contactTaskRepo.GetContactTask(ctx, task.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.ContactTaskStateCompleted, retrieved.State)
+
+		// Clean up
+		err = contactTaskRepo.DeleteContactTask(ctx, task.ID)
+		require.NoError(t, err)
+	})
+
+	t.Run("action task metadata schema", func(t *testing.T) {
+		// Create action task with full metadata
+		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           "action",
+			ExternalTaskID: "action-with-metadata",
+			State:          "managed",
+			Metadata: map[string]any{
+				"content":    "Follow up about surgery",
+				"due_date":   "2026-02-10",
+				"project_id": "123456",
+			},
+		})
+		require.NoError(t, err)
+
+		// Verify metadata structure
+		assert.Equal(t, "Follow up about surgery", task.Metadata["content"])
+		assert.Equal(t, "2026-02-10", task.Metadata["due_date"])
+		assert.Equal(t, "123456", task.Metadata["project_id"])
+
+		// Update metadata (e.g., when Todoist task is edited)
+		newMetadata := map[string]any{
+			"content":    "Follow up about knee surgery",
+			"due_date":   "2026-02-12",
+			"project_id": "123456",
+		}
+		updated, err := contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, newMetadata)
+		require.NoError(t, err)
+		assert.Equal(t, "Follow up about knee surgery", updated.Metadata["content"])
+		assert.Equal(t, "2026-02-12", updated.Metadata["due_date"])
 
 		// Clean up
 		err = contactTaskRepo.DeleteContactTask(ctx, task.ID)

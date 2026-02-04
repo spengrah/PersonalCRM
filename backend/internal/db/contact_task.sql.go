@@ -263,6 +263,51 @@ func (q *Queries) ListContactTasksByContact(ctx context.Context, contactID pgtyp
 	return items, nil
 }
 
+const ListContactTasksByContactFiltered = `-- name: ListContactTasksByContactFiltered :many
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+WHERE contact_id = $1
+  AND ($2::text IS NULL OR state = $2::text)
+  AND ($3::text IS NULL OR kind = $3::text)
+ORDER BY created_at DESC
+`
+
+type ListContactTasksByContactFilteredParams struct {
+	ContactID pgtype.UUID `json:"contact_id"`
+	State     pgtype.Text `json:"state"`
+	Kind      pgtype.Text `json:"kind"`
+}
+
+// List tasks for a contact with optional state and kind filters
+func (q *Queries) ListContactTasksByContactFiltered(ctx context.Context, arg ListContactTasksByContactFilteredParams) ([]*ContactTask, error) {
+	rows, err := q.db.Query(ctx, ListContactTasksByContactFiltered, arg.ContactID, arg.State, arg.Kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ContactTask{}
+	for rows.Next() {
+		var i ContactTask
+		if err := rows.Scan(
+			&i.ID,
+			&i.ContactID,
+			&i.Provider,
+			&i.Kind,
+			&i.ExternalTaskID,
+			&i.State,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListContactTasksByProvider = `-- name: ListContactTasksByProvider :many
 SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
 WHERE provider = $1
@@ -472,8 +517,7 @@ INSERT INTO contact_task (
     $4,
     COALESCE($5, 'managed'),
     COALESCE($6::jsonb, '{}'::jsonb)
-) ON CONFLICT (contact_id, provider, kind) DO UPDATE SET
-    external_task_id = EXCLUDED.external_task_id,
+) ON CONFLICT (external_task_id) DO UPDATE SET
     state = EXCLUDED.state,
     metadata = EXCLUDED.metadata,
     updated_at = NOW()
@@ -489,7 +533,7 @@ type UpsertContactTaskParams struct {
 	Metadata       []byte      `json:"metadata"`
 }
 
-// Upsert a contact task (update external_task_id if exists)
+// Upsert a contact task by external_task_id (Todoist task IDs are globally unique)
 func (q *Queries) UpsertContactTask(ctx context.Context, arg UpsertContactTaskParams) (*ContactTask, error) {
 	row := q.db.QueryRow(ctx, UpsertContactTask,
 		arg.ContactID,

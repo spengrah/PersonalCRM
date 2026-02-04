@@ -367,5 +367,33 @@
   {
     "pattern": "^frontend/src/lib/todoist-api\\.ts$",
     "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/hooks/use-contact-tasks\\.ts$",
+    "tags": ["@area:contacts", "@area:tasks"]
+  },
+  {
+    "pattern": "^frontend/src/lib/contact-tasks-api\\.ts$",
+    "tags": ["@area:contacts", "@area:tasks"]
+  },
+  {
+    "pattern": "^frontend/src/components/contacts/tasks-section\\.tsx$",
+    "tags": ["@area:contacts", "@area:tasks"]
+  },
+  {
+    "pattern": "^frontend/src/components/contacts/add-task-modal\\.tsx$",
+    "tags": ["@area:contacts", "@area:tasks"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/contact_task\\.go$",
+    "tags": ["@area:contacts", "@area:tasks"]
+  },
+  {
+    "pattern": "^backend/internal/service/contact_task\\.go$",
+    "tags": ["@area:contacts", "@area:tasks"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/contact-tasks\\.spec\\.ts$",
+    "tags": ["@area:contacts", "@area:tasks"]
   }
 ]

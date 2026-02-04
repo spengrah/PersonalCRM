@@ -24,6 +24,8 @@ const (
 	SourceName = "todoist"
 	// TaskKindCadence is the task kind for contact cadence tasks
 	TaskKindCadence = "cadence"
+	// TaskKindAction is the task kind for one-off action tasks
+	TaskKindAction = "action"
 	// DefaultSyncInterval is the default sync interval (5 minutes)
 	DefaultSyncInterval = 5 * time.Minute
 )
@@ -293,7 +295,12 @@ func (p *CadenceSyncProvider) processItem(
 		return p.handleTaskCompletion(ctx, item, task, contact, settings, accountID)
 	}
 
-	// Check for skip triggers
+	// Handle action tasks vs cadence tasks differently for skip triggers
+	if task.Kind == TaskKindAction {
+		return p.handleActionTaskTriggers(ctx, item, task, settings)
+	}
+
+	// Skip triggers for cadence tasks only
 	skipTriggered := false
 
 	// 1. Task deleted
@@ -381,10 +388,19 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 
 	logger.Info().
 		Str("contactId", contact.ID.String()).
+		Str("taskKind", task.Kind).
 		Time("lastContacted", completedAt).
 		Msg("marked contact as contacted from Todoist completion")
 
-	// Calculate next contact_by
+	// Handle action tasks differently - mark as completed, no new task
+	if task.Kind == TaskKindAction {
+		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateCompleted); err != nil {
+			logger.Warn().Err(err).Msg("failed to update action task state to completed")
+		}
+		return true, nil
+	}
+
+	// Calculate next contact_by for cadence tasks
 	if contact.Cadence != nil && *contact.Cadence != "" {
 		cadenceType, err := cadence.ParseCadence(*contact.Cadence)
 		if err == nil {
@@ -484,6 +500,61 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 	}
 
 	return true, commands
+}
+
+// handleActionTaskTriggers handles unmanagement triggers for action tasks
+// Action tasks are simpler than cadence tasks - they just transition to unmanaged
+// when the label is removed or the task is deleted. No skip semantics.
+func (p *CadenceSyncProvider) handleActionTaskTriggers(
+	ctx context.Context,
+	item SyncItem,
+	task *repository.ContactTask,
+	settings Settings,
+) (bool, []SyncCommand) {
+	// Task deleted - mark as unmanaged
+	if item.IsDeleted {
+		logger.Info().
+			Str("taskId", item.ID).
+			Str("contactTaskId", task.ID.String()).
+			Msg("action task deleted in Todoist, marking as unmanaged")
+		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateUnmanaged); err != nil {
+			logger.Warn().Err(err).Msg("failed to update action task state to unmanaged")
+		}
+		return true, nil
+	}
+
+	// Label removed - mark as unmanaged
+	if !containsLabel(item.Labels, settings.LabelName) {
+		logger.Info().
+			Str("taskId", item.ID).
+			Str("contactTaskId", task.ID.String()).
+			Msg("CRM label removed from action task, marking as unmanaged")
+		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateUnmanaged); err != nil {
+			logger.Warn().Err(err).Msg("failed to update action task state to unmanaged")
+		}
+		return true, nil
+	}
+
+	// Update metadata with current task state (content, due_date, project)
+	metadata := task.Metadata
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	metadata["content"] = item.Content
+	if item.Deadline != nil {
+		metadata["due_date"] = item.Deadline.Date
+	} else if item.Due != nil {
+		metadata["due_date"] = item.Due.Date
+	} else {
+		delete(metadata, "due_date")
+	}
+	metadata["project_id"] = item.ProjectID
+
+	if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+		logger.Warn().Err(err).Msg("failed to update action task metadata")
+	}
+
+	return true, nil
 }
 
 // reconcileContactTasks ensures all contacts with cadence have managed tasks
@@ -678,7 +749,10 @@ func (p *CadenceSyncProvider) createTaskCommand(contact *repository.Contact, set
 		"kind":       TaskKindCadence,
 		"instance":   settings.IntegrationInstanceID,
 	}
-	markerJSON, _ := json.Marshal(marker)
+	markerJSON, err := json.Marshal(marker)
+	if err != nil {
+		logger.Error().Err(err).Str("contactId", contact.ID.String()).Msg("failed to marshal CRM marker - task may not sync properly")
+	}
 	descBuilder.Write(markerJSON)
 
 	description := descBuilder.String()

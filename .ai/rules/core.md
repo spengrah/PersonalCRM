@@ -99,7 +99,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Feature removal only grepping source files | Grep ALL file types (tests, docs, comments) for feature name to catch all references |
 | Editing `.claude/CLAUDE.md` directly | It's a symlink to `AGENTS.md` - stage `AGENTS.md` for git commits |
 | Outdated Go version in docs | Search `go1\.2[0-9]\.` and update all references to match go.mod |
-| E2E test using `domcontentloaded` | Use `networkidle` + `page.reload()` to ensure API data loads |
+| E2E test waiting for page load | Use `domcontentloaded` + `getByRole` with explicit timeout, not `networkidle` |
 | OAuth callback routes inside auth middleware | Register callback routes BEFORE `v1.Use(auth.APIKeyMiddleware)` - external providers can't include API keys |
 | String concat for OAuth redirect params | Use `url.Values{}.Encode()` for ALL redirect query params - prevents injection vulnerabilities |
 | Adding settings hooks without test-map entry | Add new hooks (e.g., use-todoist-accounts.ts) to `frontend/tests/e2e/test-map.json` with `@area:settings` |
@@ -113,6 +113,11 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | `make test-e2e-local GREP="..."` ignored | Use `PLAYWRIGHT_GREP="..." make test-e2e-local` (Makefile expects environment variable, not Make variable) |
 | `bunx playwright test` directly fails with 401 | Use `make test-e2e-diff` or `make test-e2e-local` which set up API keys and environment |
 | Replacing JSONB metadata wholesale on update | Read existing metadata first, modify keys, then write back - prevents losing other keys |
+| Empty if blocks with only comments | Staticcheck SA9003 flags empty branches - remove block entirely or add actual code |
+| New API module with custom URL construction | Use shared `apiClient` from `lib/api-client.ts` - include `/api/v1` in endpoint paths |
+| Form inputs without explicit text color | Add `text-gray-900 placeholder-gray-400` - browser defaults appear washed out |
+| Service verifying entity exists before query | Skip if FK constraints guarantee validity - adds unnecessary latency |
+| React Query hooks in child components | Move to parent level to enable parallel loading - child mounting creates waterfall |
 
 ## Anti-Patterns
 
