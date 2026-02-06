@@ -942,6 +942,17 @@ func (p *CadenceSyncProvider) tryMatchByCRMMarker(ctx context.Context, item Sync
 
 	task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contactID, SourceName, kind)
 	if err != nil {
+		if !errors.Is(err, db.ErrNotFound) {
+			logger.Warn().Err(err).
+				Str("contactId", marker.ContactID).
+				Msg("failed to get contact task by contact for CRM marker fallback")
+		}
+		return nil
+	}
+
+	// Only migrate managed tasks — don't reactivate unmanaged ones since
+	// UpdateContactTaskExternalID also sets state = 'managed'.
+	if task.State != repository.ContactTaskStateManaged {
 		return nil
 	}
 
@@ -957,8 +968,9 @@ func (p *CadenceSyncProvider) tryMatchByCRMMarker(ctx context.Context, item Sync
 			Str("contactId", marker.ContactID).
 			Str("oldExternalId", oldID).
 			Str("newExternalId", item.ID).
-			Msg("failed to migrate external task ID")
-		return nil
+			Msg("failed to migrate external task ID — processing with old ID")
+		// Still return the task so processing continues even if ID migration fails
+		return task
 	}
 
 	task.ExternalTaskID = item.ID
