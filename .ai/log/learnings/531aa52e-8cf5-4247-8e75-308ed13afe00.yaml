@@ -54,3 +54,35 @@ detail: |
   The system had `rg` aliased to Claude Code's embedded ripgrep, but rikugan doctor failed because it needs the actual ripgrep binary in PATH. `which rg` showed the alias, hiding the issue. Had to `brew install ripgrep` to get the real binary for rikugan to work.
 actionable: false
 
+---
+timestamp: "2026-02-06T15:05:42.069798"
+type: gotcha
+summary: Pre-push learnings hook blocks on new extractions, requires review and application
+detail: |
+  The pre-push hook runs learnings extraction and blocks if new learnings are found. Agent must: (1) Read the new learnings file, (2) For each actionable learning, decide if/where to apply it, (3) Commit applied changes plus the learnings files, (4) Push again. The push doesn't automatically succeed after committing learnings - the workflow requires conscious review and application. This is already documented in core.md but agents need to internalize it as part of the push workflow.
+actionable: true
+
+---
+timestamp: "2026-02-06T15:05:42.069798"
+type: rule
+summary: Return matched data even if optional post-processing fails
+detail: |
+  When a function successfully finds/matches data but fails on a subsequent non-critical update (e.g., tryMatchByCRMMarker found the task via CRM marker but UpdateContactTaskExternalID failed), return the matched data anyway rather than nil. This allows the caller to proceed with the main operation rather than losing the successfully matched item due to an ancillary failure. Both code reviewers flagged this pattern - it's critical for graceful degradation.
+actionable: true
+
+---
+timestamp: "2026-02-06T15:05:42.069798"
+type: gotcha
+summary: SQL queries with state-modifying side effects require guards when repurposed
+detail: |
+  UpdateContactTaskExternalID sets state='managed' because it was originally designed for temp_id→real_id flow during task creation. When repurposing it for v9→v1 ID migration, it creates a risk: migrating an unmanaged task would reactivate it. Solution: Add state guard to check task.State == repository.ContactTaskStateManaged before calling. More generally: when repurposing SQL queries for new use cases, audit all columns being SET, not just the target column.
+actionable: true
+
+---
+timestamp: "2026-02-06T15:05:42.069798"
+type: distinction
+summary: Log warnings for non-NotFound repository errors, not just swallow them
+detail: |
+  When calling repository methods in fallback/optional code paths, distinguish between 'not found' (expected, no log needed) and other errors (unexpected, should warn). Pattern: if errors.Is(err, db.ErrNotFound) { return nil } else { p.logger.Warn('...', zap.Error(err)); return nil }. This prevents silent failures that make debugging harder while keeping expected 'not found' cases clean.
+actionable: true
+
