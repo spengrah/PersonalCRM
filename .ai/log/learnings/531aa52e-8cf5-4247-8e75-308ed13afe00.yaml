@@ -1,0 +1,88 @@
+---
+timestamp: "2026-02-06T14:49:57.612612"
+type: gotcha
+summary: Todoist v9→v1 migration changed ID formats (numeric→alphanumeric)
+detail: |
+  When Todoist deprecated the v9 API (2026-02-04), task IDs changed from numeric format (e.g., 9962025942) to alphanumeric v1 format (e.g., 6fw9cQQ5JppCp7qX). Stored external_task_id values became stale, causing sync to silently skip all tasks because GetContactTaskByExternalID lookups failed. The sync appeared to succeed (processed:0) but wasn't matching any tasks. Solution: Add fallback matching via CRM marker in task description when external ID lookup fails, then migrate the stored ID.
+actionable: true
+
+---
+timestamp: "2026-02-06T14:49:57.612612"
+type: gotcha
+summary: OAuth access tokens are encrypted in DB; migration scripts need app crypto
+detail: |
+  The oauth_credential table stores access_token_encrypted with encryption_nonce, not plaintext tokens. Simple Python/SQL scripts cannot call external APIs directly. Solutions: (1) Cross-compile Go binary using app's crypto, (2) Add temporary API endpoint, (3) Modify sync code to handle migration during normal operation. Cannot simply read token from DB for ad-hoc scripts.
+actionable: true
+
+---
+timestamp: "2026-02-06T14:49:57.612612"
+type: architecture
+summary: Todoist sync processes 0 items when incremental cursor misses events
+detail: |
+  Incremental sync (sync_token != '*') only returns changes after the cursor. If completion/update events occurred during API migration window (when v9 was down and v1 had ID mismatches), those events were already in the cursor and won't appear in future syncs. Full sync (sync_token='*') only returns active items, not completed ones. For comprehensive migration, need fallback matching logic + full sync + manual handling of already-completed tasks.
+actionable: true
+
+---
+timestamp: "2026-02-06T14:49:57.612612"
+type: rule
+summary: External API ID changes require fallback matching via stable identifiers
+detail: |
+  When external systems change ID formats, lookup by ID fails silently. Always embed a stable bidirectional reference (CRM marker with contact_id in Todoist description) that can match items even when IDs change. In processItem, when GetByExternalID returns ErrNotFound, parse stable identifier, lookup by that, and migrate the ID. This pattern applies to any external sync integration where the external system controls ID format.
+actionable: true
+
+---
+timestamp: "2026-02-06T14:49:57.612612"
+type: documentation_gap
+summary: Production deployment blocked user before reviewing encrypted credentials approach
+detail: |
+  User said 'i don't want you to read the access token' and stopped SCP deployment before agent could explain the encrypted token situation. Agent should have explained the DB encryption and proposed approaches BEFORE attempting deployment. The guidance about checking with user before risky actions should explicitly cover credential handling - even reading encrypted credentials from production DB warrants user explanation first. Update core.md 'Executing actions with care' section to explicitly mention: 'When dealing with credentials/tokens (even encrypted), explain the approach and ask for approval before reading from production databases or deploying code that accesses them.'
+actionable: true
+
+---
+timestamp: "2026-02-06T14:49:57.612612"
+type: distinction
+summary: GetContactTaskByContact is single-task query, not safe for multi-action contacts
+detail: |
+  GetContactTaskByContact (contact_id + provider + kind) has :one annotation, meaning it expects exactly one result. Works for cadence tasks (one per contact) but unsafe for action tasks where multiple can exist per contact. The fallback matching logic defaults kind='cadence' when missing, which is correct for current use case (migration of cadence tasks created before multi-action support). If extending to action tasks, would need to match by additional stable identifier beyond contact_id+kind.
+actionable: true
+
+---
+timestamp: "2026-02-06T14:49:57.612612"
+type: gotcha
+summary: Rikugan code review requires ripgrep binary, not just rg alias
+detail: |
+  The system had `rg` aliased to Claude Code's embedded ripgrep, but rikugan doctor failed because it needs the actual ripgrep binary in PATH. `which rg` showed the alias, hiding the issue. Had to `brew install ripgrep` to get the real binary for rikugan to work.
+actionable: false
+
+---
+timestamp: "2026-02-06T15:05:42.069798"
+type: gotcha
+summary: Pre-push learnings hook blocks on new extractions, requires review and application
+detail: |
+  The pre-push hook runs learnings extraction and blocks if new learnings are found. Agent must: (1) Read the new learnings file, (2) For each actionable learning, decide if/where to apply it, (3) Commit applied changes plus the learnings files, (4) Push again. The push doesn't automatically succeed after committing learnings - the workflow requires conscious review and application. This is already documented in core.md but agents need to internalize it as part of the push workflow.
+actionable: true
+
+---
+timestamp: "2026-02-06T15:05:42.069798"
+type: rule
+summary: Return matched data even if optional post-processing fails
+detail: |
+  When a function successfully finds/matches data but fails on a subsequent non-critical update (e.g., tryMatchByCRMMarker found the task via CRM marker but UpdateContactTaskExternalID failed), return the matched data anyway rather than nil. This allows the caller to proceed with the main operation rather than losing the successfully matched item due to an ancillary failure. Both code reviewers flagged this pattern - it's critical for graceful degradation.
+actionable: true
+
+---
+timestamp: "2026-02-06T15:05:42.069798"
+type: gotcha
+summary: SQL queries with state-modifying side effects require guards when repurposed
+detail: |
+  UpdateContactTaskExternalID sets state='managed' because it was originally designed for temp_id→real_id flow during task creation. When repurposing it for v9→v1 ID migration, it creates a risk: migrating an unmanaged task would reactivate it. Solution: Add state guard to check task.State == repository.ContactTaskStateManaged before calling. More generally: when repurposing SQL queries for new use cases, audit all columns being SET, not just the target column.
+actionable: true
+
+---
+timestamp: "2026-02-06T15:05:42.069798"
+type: distinction
+summary: Log warnings for non-NotFound repository errors, not just swallow them
+detail: |
+  When calling repository methods in fallback/optional code paths, distinguish between 'not found' (expected, no log needed) and other errors (unexpected, should warn). Pattern: if errors.Is(err, db.ErrNotFound) { return nil } else { p.logger.Warn('...', zap.Error(err)); return nil }. This prevents silent failures that make debugging harder while keeping expected 'not found' cases clean.
+actionable: true
+

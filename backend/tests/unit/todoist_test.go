@@ -1,6 +1,7 @@
 package unit
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -481,6 +482,85 @@ func TestActionTaskMetadataSchema(t *testing.T) {
 			// Test project_id extraction
 			_, hasProjectID := tt.metadata["project_id"].(string)
 			assert.Equal(t, tt.hasProjectID, hasProjectID, "project_id presence mismatch")
+		})
+	}
+}
+
+// TestCRMMarkerParsing tests the CRM marker JSON parsing used for fallback
+// matching when Todoist changes task IDs (e.g., v9 → v1 migration).
+func TestCRMMarkerParsing(t *testing.T) {
+	type marker struct {
+		CRM       bool   `json:"crm"`
+		ContactID string `json:"contact_id"`
+		Kind      string `json:"kind"`
+	}
+
+	tests := []struct {
+		name            string
+		description     string
+		expectMatch     bool
+		expectContactID string
+		expectKind      string
+	}{
+		{
+			name:            "valid cadence marker",
+			description:     `{"crm":true,"contact_id":"ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c","kind":"cadence","instance":"9fd7f60a-c8f5-4531-ae64-48fdc17e02dd"}`,
+			expectMatch:     true,
+			expectContactID: "ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c",
+			expectKind:      "cadence",
+		},
+		{
+			name:            "valid action marker",
+			description:     `{"crm":true,"contact_id":"abc12345-0000-0000-0000-000000000000","kind":"action","instance":"inst-id"}`,
+			expectMatch:     true,
+			expectContactID: "abc12345-0000-0000-0000-000000000000",
+			expectKind:      "action",
+		},
+		{
+			name:            "missing kind defaults to cadence",
+			description:     `{"crm":true,"contact_id":"ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c"}`,
+			expectMatch:     true,
+			expectContactID: "ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c",
+			expectKind:      "",
+		},
+		{
+			name:        "not a CRM task (crm=false)",
+			description: `{"crm":false,"contact_id":"ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c"}`,
+			expectMatch: false,
+		},
+		{
+			name:        "missing contact_id",
+			description: `{"crm":true}`,
+			expectMatch: false,
+		},
+		{
+			name:        "not JSON",
+			description: "Just a plain description",
+			expectMatch: false,
+		},
+		{
+			name:        "empty description",
+			description: "",
+			expectMatch: false,
+		},
+		{
+			name:        "unrelated JSON",
+			description: `{"foo":"bar"}`,
+			expectMatch: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var m marker
+			err := json.Unmarshal([]byte(tt.description), &m)
+			matched := err == nil && m.CRM && m.ContactID != ""
+
+			assert.Equal(t, tt.expectMatch, matched, "match expectation")
+			if tt.expectMatch {
+				assert.Equal(t, tt.expectContactID, m.ContactID)
+				assert.Equal(t, tt.expectKind, m.Kind)
+			}
 		})
 	}
 }
