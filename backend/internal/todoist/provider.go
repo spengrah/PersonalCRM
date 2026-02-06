@@ -273,8 +273,14 @@ func (p *CadenceSyncProvider) processItem(
 	if err != nil {
 		if !errors.Is(err, db.ErrNotFound) {
 			logger.Warn().Err(err).Str("taskId", item.ID).Msg("failed to find contact task")
+			return false, nil
 		}
-		return false, nil // Not a managed task
+		// External ID not found — try fallback matching by CRM marker in description.
+		// This handles Todoist API migrations where task IDs change (e.g., v9 → v1).
+		task = p.tryMatchByCRMMarker(ctx, item)
+		if task == nil {
+			return false, nil // Not a managed task
+		}
 	}
 
 	// Skip unmanaged tasks
@@ -902,4 +908,66 @@ func containsLabel(labels []string, labelName string) bool {
 		}
 	}
 	return false
+}
+
+// tryMatchByCRMMarker attempts to match a Todoist item to a contact task by
+// parsing the CRM marker JSON in the item's description. This handles cases
+// where Todoist changes task IDs (e.g., v9 numeric → v1 alphanumeric migration).
+// If matched, it updates the stored external_task_id to the new ID.
+func (p *CadenceSyncProvider) tryMatchByCRMMarker(ctx context.Context, item SyncItem) *repository.ContactTask {
+	var marker struct {
+		CRM       bool   `json:"crm"`
+		ContactID string `json:"contact_id"`
+		Kind      string `json:"kind"`
+	}
+	if err := json.Unmarshal([]byte(item.Description), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
+		return nil
+	}
+
+	contactID, err := uuid.Parse(marker.ContactID)
+	if err != nil {
+		return nil
+	}
+
+	// Only attempt fallback for cadence tasks. Action tasks can have multiple
+	// per contact (so GetContactTaskByContact may return the wrong one) and their
+	// descriptions include user notes that make the JSON parse fail anyway.
+	kind := marker.Kind
+	if kind == "" {
+		kind = TaskKindCadence
+	}
+	if kind != TaskKindCadence {
+		return nil
+	}
+
+	task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contactID, SourceName, kind)
+	if err != nil {
+		return nil
+	}
+
+	// Already has the correct ID — no migration needed
+	if task.ExternalTaskID == item.ID {
+		return task
+	}
+
+	oldID := task.ExternalTaskID
+
+	if _, err := p.contactTaskRepo.UpdateContactTaskExternalID(ctx, task.ID, item.ID); err != nil {
+		logger.Warn().Err(err).
+			Str("contactId", marker.ContactID).
+			Str("oldExternalId", oldID).
+			Str("newExternalId", item.ID).
+			Msg("failed to migrate external task ID")
+		return nil
+	}
+
+	task.ExternalTaskID = item.ID
+
+	logger.Info().
+		Str("contactId", marker.ContactID).
+		Str("oldExternalId", oldID).
+		Str("newExternalId", item.ID).
+		Msg("migrated external task ID from CRM marker")
+
+	return task
 }
