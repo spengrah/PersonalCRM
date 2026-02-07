@@ -129,6 +129,9 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Adding new struct field used in existing methods | Update all test factory functions (`newTestProvider`, `newTestProviderWithExternal`, etc.) to initialize the field - otherwise nil pointer panics in tests |
 | PostgreSQL `DESC NULLS FIRST` for date columns | Use `NULLS LAST` for both ASC and DESC on date sorts - keeps NULLs at end regardless of direction |
 | E2E sort test comparing row positions with DATE columns | Accelerated cadences make contact_by dates collapse to same day - verify sort via API request params (`page.waitForResponse` with `sort=field&order=direction`), not visual row positions |
+| One-time action query params (e.g., `?action=edit`) left in URL | Clear with `router.replace()` in a mount-only `useEffect` after consuming - prevents re-triggering on page refresh |
+| `PLAYWRIGHT_GREP` patterns with spaces | Makefile passes `--grep $$PLAYWRIGHT_GREP` unquoted - use dot wildcards (e.g., `context.menu`) or single words instead of multi-word patterns |
+| Portal dropdown without ARIA attributes | Add `aria-label`, `aria-haspopup="menu"`, `aria-expanded` on trigger; `role="menu"` on dropdown container |
 
 ## Anti-Patterns
 

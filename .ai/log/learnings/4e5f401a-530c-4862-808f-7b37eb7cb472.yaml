@@ -1,0 +1,56 @@
+---
+timestamp: "2026-02-07T10:35:23.957293"
+type: gotcha
+summary: React createPortal automatically cleans up on unmount - no manual cleanup needed
+detail: |
+  Code reviewer flagged 'memory leak' because dropdown portal wasn't explicitly cleaned up on unmount. This is incorrect - React's createPortal automatically handles cleanup when the component unmounts. Future agents should know this is built-in React behavior and not add unnecessary cleanup effects.
+actionable: false
+
+---
+timestamp: "2026-02-07T10:35:23.957293"
+type: gotcha
+summary: Playwright getByText in strict mode fails with multiple matches - use getByRole instead
+detail: |
+  When testing modal that has both heading 'Merge Contacts' and button 'Merge Contacts', getByText() fails with strict mode violation. Must use getByRole('heading', { name: 'Merge Contacts' }) to disambiguate. Common pattern when element text appears in multiple roles.
+actionable: true
+
+---
+timestamp: "2026-02-07T10:35:23.957293"
+type: gotcha
+summary: PLAYWRIGHT_GREP in Makefile doesn't quote arguments - patterns with spaces fail
+detail: |
+  Makefile passes PLAYWRIGHT_GREP unquoted: `--grep $$PLAYWRIGHT_GREP`. Multi-word patterns like 'should show context menu' break argument parsing. Must use patterns without spaces (e.g., 'context.menu') or fix Makefile quoting. This is a sharp edge when trying to run specific test subsets locally.
+actionable: true
+
+---
+timestamp: "2026-02-07T10:35:23.957293"
+type: rule
+summary: Action query params must be cleared after consumption to prevent re-trigger on refresh
+detail: |
+  When using ?action=edit or ?action=merge to trigger modes on page load, params must be removed from URL after initial consumption via useEffect + router.replace(). Otherwise refreshing the page re-triggers the action unexpectedly. This is a UX bug pattern that applies to any one-time action params.
+actionable: true
+
+---
+timestamp: "2026-02-07T10:35:23.957293"
+type: rule
+summary: Portal dropdowns need ARIA attributes for accessibility
+detail: |
+  When creating portaled dropdowns/menus, add aria-haspopup='true', aria-expanded, aria-controls on trigger button, and role='menu' on dropdown container. These are accessibility requirements for assistive tech. Standard pattern for all custom dropdown implementations.
+actionable: true
+
+---
+timestamp: "2026-02-07T10:35:23.957293"
+type: architecture
+summary: Context menu pattern uses query params to trigger detail page modes
+detail: |
+  Context menu actions (Edit, Merge) navigate to detail page with ?action=edit or ?action=merge query param. Detail page reads param on mount to set initial state (isEditing, isMergeModalOpen), then clears param from URL. This keeps context menu as simple navigation links while detail page handles all mode logic.
+actionable: false
+
+---
+timestamp: "2026-02-07T10:35:23.957293"
+type: gotcha
+summary: Portal positioning requires early return if button ref missing to avoid calculating wrong coordinates
+detail: |
+  When calculating portal position via getBoundingClientRect(), must guard with `if (!button) return` before calling setOpenDropdown(). Otherwise race conditions where ref hasn't mounted yet cause dropdown to open at 0,0 coordinates or throw errors. Move state updates inside the ref existence check.
+actionable: true
+
