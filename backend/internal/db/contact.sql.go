@@ -15,8 +15,8 @@ const CountContacts = `-- name: CountContacts :one
 SELECT COUNT(*) FROM contact
 WHERE deleted_at IS NULL
   AND ($1 = '' OR
-       ($1 = 'has_cadence' AND cadence IS NOT NULL) OR
-       ($1 = 'no_cadence' AND cadence IS NULL))
+       ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
+       ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
 `
 
 func (q *Queries) CountContacts(ctx context.Context, cadenceFilter interface{}) (int64, error) {
@@ -35,8 +35,8 @@ LEFT JOIN (
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
   AND ($1 = '' OR
-       ($1 = 'has_cadence' AND c.cadence IS NOT NULL) OR
-       ($1 = 'no_cadence' AND c.cadence IS NULL))
+       ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $2)
 `
 
@@ -289,8 +289,8 @@ const ListContactIDs = `-- name: ListContactIDs :many
 SELECT id FROM contact
 WHERE deleted_at IS NULL
   AND ($1 = '' OR
-       ($1 = 'has_cadence' AND cadence IS NOT NULL) OR
-       ($1 = 'no_cadence' AND cadence IS NULL))
+       ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
+       ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
 `
 
 // Lightweight query returning only IDs for navigation
@@ -318,8 +318,8 @@ const ListContactIDsSorted = `-- name: ListContactIDsSorted :many
 SELECT id FROM contact
 WHERE deleted_at IS NULL
   AND ($1 = '' OR
-       ($1 = 'has_cadence' AND cadence IS NOT NULL) OR
-       ($1 = 'no_cadence' AND cadence IS NULL))
+       ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
+       ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
 ORDER BY
   CASE WHEN $2 = 'name' AND $3 = 'asc' THEN full_name END ASC,
   CASE WHEN $2 = 'name' AND $3 = 'desc' THEN full_name END DESC,
@@ -373,8 +373,8 @@ const ListContacts = `-- name: ListContacts :many
 SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by FROM contact
 WHERE deleted_at IS NULL
   AND ($1 = '' OR
-       ($1 = 'has_cadence' AND cadence IS NOT NULL) OR
-       ($1 = 'no_cadence' AND cadence IS NULL))
+       ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
+       ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
 LIMIT $3 OFFSET $2
 `
 
@@ -421,8 +421,8 @@ const ListContactsSorted = `-- name: ListContactsSorted :many
 SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by FROM contact
 WHERE deleted_at IS NULL
   AND ($1 = '' OR
-       ($1 = 'has_cadence' AND cadence IS NOT NULL) OR
-       ($1 = 'no_cadence' AND cadence IS NULL))
+       ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
+       ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
 ORDER BY
   CASE WHEN $2 = 'name' AND $3 = 'asc' THEN full_name END ASC,
   CASE WHEN $2 = 'name' AND $3 = 'desc' THEN full_name END DESC,
@@ -638,8 +638,8 @@ LEFT JOIN (
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
   AND ($1 = '' OR
-       ($1 = 'has_cadence' AND c.cadence IS NOT NULL) OR
-       ($1 = 'no_cadence' AND c.cadence IS NULL))
+       ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $2)
 ORDER BY ts_rank(
   to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
@@ -682,8 +682,8 @@ LEFT JOIN (
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
   AND ($1 = '' OR
-       ($1 = 'has_cadence' AND c.cadence IS NOT NULL) OR
-       ($1 = 'no_cadence' AND c.cadence IS NULL))
+       ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $2)
 ORDER BY
   CASE WHEN $3 = 'name' AND $4 = 'asc' THEN c.full_name END ASC,
@@ -749,8 +749,8 @@ LEFT JOIN (
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
   AND ($1 = '' OR
-       ($1 = 'has_cadence' AND c.cadence IS NOT NULL) OR
-       ($1 = 'no_cadence' AND c.cadence IS NULL))
+       ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $2)
 ORDER BY ts_rank(
   to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
@@ -813,8 +813,8 @@ LEFT JOIN (
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
   AND ($1 = '' OR
-       ($1 = 'has_cadence' AND c.cadence IS NOT NULL) OR
-       ($1 = 'no_cadence' AND c.cadence IS NULL))
+       ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $2)
 ORDER BY
   CASE WHEN $3 = 'name' AND $4 = 'asc' THEN c.full_name END ASC,
