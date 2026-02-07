@@ -384,6 +384,8 @@ type ListContactsParams struct {
 	PageLimit     int32       `json:"page_limit"`
 }
 
+// cadence_filter: ” = no filter (Go zero value), 'has_cadence' = non-empty cadence,
+// 'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
 func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error) {
 	rows, err := q.db.Query(ctx, ListContacts, arg.CadenceFilter, arg.PageOffset, arg.PageLimit)
 	if err != nil {

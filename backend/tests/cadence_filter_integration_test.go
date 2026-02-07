@@ -196,4 +196,8 @@ func TestCadenceFilter_Integration(t *testing.T) {
 		assert.False(t, foundWith, "contact with cadence should NOT be in no_cadence IDs")
 		assert.True(t, foundWithout, "contact without cadence should be in no_cadence IDs")
 	})
+
+	// Note: Empty string cadence cannot be tested directly because the
+	// contact_cadence_check constraint only allows valid enum values or NULL.
+	// The cadence != '' check in SQL is a defensive measure for any legacy data.
 }

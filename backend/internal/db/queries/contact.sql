@@ -5,6 +5,8 @@ SELECT * FROM contact
 WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: ListContacts :many
+-- cadence_filter: '' = no filter (Go zero value), 'has_cadence' = non-empty cadence,
+-- 'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
 SELECT * FROM contact
 WHERE deleted_at IS NULL
   AND (sqlc.arg(cadence_filter) = '' OR
