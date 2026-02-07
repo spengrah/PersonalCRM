@@ -712,6 +712,25 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 		return commands
 	}
 
+	// Backfill synced_last_contacted if missing (legacy tasks created before this feature).
+	// Without this, wasContactedSinceSync would always return false for legacy tasks,
+	// meaning non-Todoist contacts would never be detected.
+	if _, hasSyncedLC := task.Metadata[MetadataKeySyncedLastContacted].(string); !hasSyncedLC {
+		if contact.LastContacted != nil {
+			metadata := task.Metadata
+			if metadata == nil {
+				metadata = make(map[string]any)
+			}
+			metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+				logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_last_contacted")
+			} else {
+				// Update task in memory so wasContactedSinceSync can use it this cycle
+				task.Metadata = metadata
+			}
+		}
+	}
+
 	// Check if deadline has drifted
 	if syncedDeadline == currentDeadline {
 		// Deadlines match - but check if the contact was contacted from a non-Todoist

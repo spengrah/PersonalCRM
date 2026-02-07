@@ -494,20 +494,42 @@ func TestReconciliationWithNonTodoistContact(t *testing.T) {
 
 			if !hasSyncedDeadline {
 				backfill = true
-			} else if syncedDeadline == tt.currentDeadline {
-				// Deadlines match - check for non-Todoist contact
-				wasContacted := false
-				if tt.lastContacted != nil {
-					if slc, ok := tt.metadata["synced_last_contacted"].(string); ok && slc != "" {
-						syncedLC, err := time.Parse(time.RFC3339, slc)
-						if err == nil {
-							wasContacted = tt.lastContacted.After(syncedLC)
-						}
+			} else {
+				// Backfill synced_last_contacted if missing (simulates the provider backfill)
+				if _, hasSyncedLC := tt.metadata["synced_last_contacted"].(string); !hasSyncedLC {
+					if tt.lastContacted != nil {
+						tt.metadata["synced_last_contacted"] = tt.lastContacted.Format(time.RFC3339)
 					}
 				}
 
-				if wasContacted {
-					// Contact was contacted via non-Todoist source
+				if syncedDeadline == tt.currentDeadline {
+					// Deadlines match - check for non-Todoist contact
+					wasContacted := false
+					if tt.lastContacted != nil {
+						if slc, ok := tt.metadata["synced_last_contacted"].(string); ok && slc != "" {
+							syncedLC, err := time.Parse(time.RFC3339, slc)
+							if err == nil {
+								wasContacted = tt.lastContacted.After(syncedLC)
+							}
+						}
+					}
+
+					if wasContacted {
+						// Contact was contacted via non-Todoist source
+						isPending := false
+						if tt.metadata != nil && tt.externalTaskID != "" {
+							pendingTempID, ok := tt.metadata["pending_temp_id"].(string)
+							if ok && pendingTempID != "" {
+								isPending = pendingTempID == tt.externalTaskID
+							}
+						}
+						if tt.externalTaskID != "" && !isPending {
+							closeCmd = true
+						}
+						createCmd = true
+					}
+				} else {
+					// Standard deadline drift
 					isPending := false
 					if tt.metadata != nil && tt.externalTaskID != "" {
 						pendingTempID, ok := tt.metadata["pending_temp_id"].(string)
@@ -520,19 +542,6 @@ func TestReconciliationWithNonTodoistContact(t *testing.T) {
 					}
 					createCmd = true
 				}
-			} else {
-				// Standard deadline drift
-				isPending := false
-				if tt.metadata != nil && tt.externalTaskID != "" {
-					pendingTempID, ok := tt.metadata["pending_temp_id"].(string)
-					if ok && pendingTempID != "" {
-						isPending = pendingTempID == tt.externalTaskID
-					}
-				}
-				if tt.externalTaskID != "" && !isPending {
-					closeCmd = true
-				}
-				createCmd = true
 			}
 
 			assert.Equal(t, tt.expectBackfill, backfill, "backfill mismatch")
@@ -545,6 +554,48 @@ func TestReconciliationWithNonTodoistContact(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBackfillSyncedLastContacted verifies that legacy tasks without synced_last_contacted
+// get it backfilled, enabling detection of non-Todoist contacts on subsequent sync cycles.
+func TestBackfillSyncedLastContacted(t *testing.T) {
+	// Simulate two sync cycles:
+	// Cycle 1: Legacy task has synced_deadline but no synced_last_contacted
+	//   → Backfill happens: synced_last_contacted = current last_contacted
+	//   → No commands generated (backfilled value == current value)
+	// Cycle 2: Contact is contacted via calendar (last_contacted advances)
+	//   → synced_last_contacted < last_contacted → complete + create
+
+	t.Run("cycle 1: backfill only, no commands", func(t *testing.T) {
+		metadata := map[string]any{"synced_deadline": "2026-02-15"}
+		lastContacted := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+
+		// Backfill synced_last_contacted
+		_, hasSyncedLC := metadata["synced_last_contacted"].(string)
+		assert.False(t, hasSyncedLC, "should not have synced_last_contacted initially")
+
+		// Backfill stores current last_contacted
+		metadata["synced_last_contacted"] = lastContacted.Format(time.RFC3339)
+
+		// wasContactedSinceSync check
+		syncedLC, _ := time.Parse(time.RFC3339, metadata["synced_last_contacted"].(string))
+		wasContacted := lastContacted.After(syncedLC)
+		assert.False(t, wasContacted, "should not detect contact on first cycle (backfill == current)")
+	})
+
+	t.Run("cycle 2: detect non-Todoist contact after backfill", func(t *testing.T) {
+		// After cycle 1, metadata has synced_last_contacted from backfill
+		metadata := map[string]any{
+			"synced_deadline":       "2026-02-15",
+			"synced_last_contacted": "2026-02-01T12:00:00Z", // Backfilled in cycle 1
+		}
+		// Calendar sync updates last_contacted to a later time
+		lastContacted := time.Date(2026, 2, 8, 14, 30, 0, 0, time.UTC)
+
+		syncedLC, _ := time.Parse(time.RFC3339, metadata["synced_last_contacted"].(string))
+		wasContacted := lastContacted.After(syncedLC)
+		assert.True(t, wasContacted, "should detect contact after backfill when last_contacted advances")
+	})
 }
 
 // TestActionTaskKindConstant verifies the action task kind constant
