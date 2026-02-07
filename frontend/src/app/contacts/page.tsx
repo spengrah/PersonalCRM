@@ -14,18 +14,11 @@ import {
   ArrowDown,
 } from 'lucide-react'
 import { useContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
-import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
 import { Button } from '@/components/ui/button'
 import { Navigation } from '@/components/layout/navigation'
-import {
-  formatContactMethodValue,
-  getContactMethodHref,
-  getContactMethodLabel,
-  getPrimaryAndSecondaryMethods,
-} from '@/lib/contact-methods'
 import { FORM_CONTROL_WITH_ICON } from '@/lib/form-classes'
 import { formatDateOnly, formatCadence } from '@/lib/utils'
-import type { Contact, ContactListParams, ContactMethod } from '@/types/contact'
+import type { Contact, ContactListParams } from '@/types/contact'
 
 type SortField = 'name' | 'location' | 'birthday' | 'last_contacted' | 'contact_by' | 'cadence'
 
@@ -156,7 +149,7 @@ function ContactsTable({
         <thead className="bg-gray-50">
           <tr>
             <th
-              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               onClick={() => onSort('name')}
             >
               <div className="flex items-center">
@@ -164,11 +157,8 @@ function ContactsTable({
                 {getSortIcon('name')}
               </div>
             </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Contact Info
-            </th>
             <th
-              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               onClick={() => onSort('cadence')}
             >
               <div className="flex items-center">
@@ -177,7 +167,7 @@ function ContactsTable({
               </div>
             </th>
             <th
-              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               onClick={() => onSort('location')}
             >
               <div className="flex items-center">
@@ -186,7 +176,7 @@ function ContactsTable({
               </div>
             </th>
             <th
-              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               onClick={() => onSort('birthday')}
             >
               <div className="flex items-center">
@@ -195,16 +185,16 @@ function ContactsTable({
               </div>
             </th>
             <th
-              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               onClick={() => onSort('last_contacted')}
             >
               <div className="flex items-center">
-                Last Contacted
+                Last Contact
                 {getSortIcon('last_contacted')}
               </div>
             </th>
             <th
-              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               onClick={() => onSort('contact_by')}
             >
               <div className="flex items-center">
@@ -212,7 +202,7 @@ function ContactsTable({
                 {getSortIcon('contact_by')}
               </div>
             </th>
-            <th className="relative px-6 py-3">
+            <th className="relative px-4 py-3">
               <span className="sr-only">Actions</span>
             </th>
           </tr>
@@ -224,7 +214,7 @@ function ContactsTable({
               className="hover:bg-gray-50 cursor-pointer"
               onClick={() => handleRowClick(contact.id)}
             >
-              <td className="px-6 py-4 whitespace-nowrap">
+              <td className="px-4 py-4 whitespace-nowrap">
                 <div className="flex items-center">
                   <div className="flex-shrink-0 h-10 w-10">
                     <div className="h-10 w-10 rounded-full bg-gray-300 flex items-center justify-center">
@@ -242,55 +232,12 @@ function ContactsTable({
                   </div>
                 </div>
               </td>
-              <td className="px-6 py-4 whitespace-nowrap">
-                {(() => {
-                  const { primary, secondary } = getPrimaryAndSecondaryMethods(
-                    contact.methods,
-                    contact.primary_method
-                  )
-                  const methods = [primary, secondary].filter(Boolean) as ContactMethod[]
-
-                  if (methods.length === 0) {
-                    return <span className="text-sm text-gray-500">-</span>
-                  }
-
-                  return (
-                    <div className="space-y-1">
-                      {methods.map((method, index) => {
-                        const value = formatContactMethodValue(method.type, method.value)
-                        const href = getContactMethodHref(method.type, method.value)
-                        const label = getContactMethodLabel(method.type)
-                        const key = method.id ?? `${method.type}-${method.value}`
-                        const valueClassName =
-                          index === 0 ? 'font-medium text-gray-900' : 'text-gray-700'
-
-                        return (
-                          <div key={key} className={`flex items-center text-sm ${valueClassName}`}>
-                            <ContactMethodIcon
-                              type={method.type}
-                              className="w-4 h-4 mr-2 text-gray-400"
-                            />
-                            {href ? (
-                              <a href={href} className="hover:text-blue-600">
-                                {value}
-                              </a>
-                            ) : (
-                              <span>{value}</span>
-                            )}
-                            <span className="ml-2 text-xs text-gray-500">{label}</span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )
-                })()}
-              </td>
-              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+              <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
                 {formatCadence(contact.cadence)}
               </td>
               {/* Location column: max-w-[200px] balances table layout with readability.
                   Truncated text shows full value via native title tooltip (desktop only). */}
-              <td className="px-6 py-4 whitespace-nowrap">
+              <td className="px-4 py-4 whitespace-nowrap">
                 {contact.location && (
                   <div
                     className="flex items-center text-sm text-gray-900 max-w-[200px]"
@@ -301,28 +248,34 @@ function ContactsTable({
                   </div>
                 )}
               </td>
-              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                {contact.birthday ? formatDateOnly(contact.birthday) : '-'}
+              <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
+                {contact.birthday
+                  ? formatDateOnly(contact.birthday, {
+                      year: '2-digit',
+                      month: 'numeric',
+                      day: 'numeric',
+                    })
+                  : '-'}
               </td>
-              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+              <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
                 {contact.last_contacted
                   ? formatDateOnly(contact.last_contacted, {
-                      year: 'numeric',
+                      year: '2-digit',
                       month: 'numeric',
                       day: 'numeric',
                     })
                   : 'Never'}
               </td>
-              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+              <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
                 {contact.cadence && contact.contact_by
                   ? formatDateOnly(contact.contact_by, {
-                      year: 'numeric',
+                      year: '2-digit',
                       month: 'numeric',
                       day: 'numeric',
                     })
                   : 'N/A'}
               </td>
-              <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+              <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium">
                 <div className="relative" onClick={handleDropdownClick}>
                   <button
                     ref={el => setButtonRef(contact.id, el)}

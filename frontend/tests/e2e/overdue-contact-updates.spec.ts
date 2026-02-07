@@ -1,6 +1,6 @@
 import { test, expect, APIRequestContext } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import { getTodayUTC } from './helpers/date-utils'
+import { getTodayUTC, getTodayUTCShort } from './helpers/date-utils'
 
 /**
  * Comprehensive E2E tests for overdue contact updates.
@@ -181,11 +181,12 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     const today = getTodayUTC()
     await expect(page.getByText(today).first()).toBeVisible()
 
-    // 2. Contacts List: should show today's date in the row (use first() as date may appear in both Last Contacted and Next Contact columns)
+    // 2. Contacts List: should show today's date in the row (use first() as date may appear in both Last Contact and Next Contact columns)
     await page.goto('/contacts')
     await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible()
     const contactRow = page.locator('tr').filter({ hasText: contactName })
-    await expect(contactRow.getByText(today).first()).toBeVisible()
+    const todayShort = getTodayUTCShort()
+    await expect(contactRow.getByText(todayShort).first()).toBeVisible()
 
     // 3. API: should confirm not overdue
     const stillOverdue = await isContactOverdue(request, contactId)
