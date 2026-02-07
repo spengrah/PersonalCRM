@@ -62,3 +62,27 @@ detail: |
   The contact merge functionality uses TransferInteractions query from contact_merge.sql. When repurposing the interaction table schema, this merge query must be updated for the new column structure, even though it just does a simple UPDATE to reassign contact_id.
 actionable: true
 
+---
+timestamp: "2026-02-06T20:37:33.574778"
+type: gotcha
+summary: Mock factory must include all provider dependencies including new fields
+detail: |
+  When adding a new field to a struct (e.g., interactionRecorder to CalendarSyncProvider), test factories (newTestProvider, newTestProviderWithExternal) must be updated to set that field, even if set to a default mock. Otherwise tests panic with nil pointer dereference when the code calls methods on the new field. This happened when updateLastContactedForPastEvents called p.interactionRecorder.RecordInteraction() but test mocks left interactionRecorder as nil.
+actionable: true
+
+---
+timestamp: "2026-02-06T20:37:33.574778"
+type: gotcha
+summary: Pre-push learnings extraction blocks push until learnings applied
+detail: |
+  The pre-push hook runs learnings extraction automatically. When new learnings are found, the push is blocked and the agent must: (1) read the new learnings file, (2) classify and apply actionable ones to project docs (AGENTS.md, .ai/rules/, .ai/patterns/, etc.), (3) commit both the learnings file and any updated docs, (4) push again. This workflow ensures learnings are captured and applied before code reaches the remote.
+actionable: true
+
+---
+timestamp: "2026-02-06T20:37:33.574778"
+type: documentation_gap
+summary: Gotchas table in core.md needs entry for test mock updates when adding struct fields
+detail: |
+  When a struct gains a new field that existing code uses (like CalendarSyncProvider.interactionRecorder), test factory functions must be updated to initialize that field. The gotchas table should capture this pattern: 'Adding new struct field used in existing methods | Update all test factory functions (newTestX, newMockX) to initialize the field - otherwise nil pointer panics in tests'. Without this guidance, agents may fix the production code but forget to update test infrastructure.
+actionable: true
+

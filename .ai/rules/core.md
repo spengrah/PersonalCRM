@@ -126,6 +126,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Forward-only update semantics for all sources | Manual source must always update (user correction); forward-only is only for automated sources (gcal, todoist) |
 | Creating FK-referencing record without existence check | Check parent exists first and return ErrNotFound - otherwise FK constraint violation returns 500 instead of 404 |
 | Circular dependency between sync providers and service | Move shared request types/constants to `repository` package - providers already depend on it, avoids provider→service→provider cycle |
+| Adding new struct field used in existing methods | Update all test factory functions (`newTestProvider`, `newTestProviderWithExternal`, etc.) to initialize the field - otherwise nil pointer panics in tests |
 
 ## Anti-Patterns
 
