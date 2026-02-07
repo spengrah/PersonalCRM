@@ -128,6 +128,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Circular dependency between sync providers and service | Move shared request types/constants to `repository` package - providers already depend on it, avoids provider→service→provider cycle |
 | Adding new struct field used in existing methods | Update all test factory functions (`newTestProvider`, `newTestProviderWithExternal`, etc.) to initialize the field - otherwise nil pointer panics in tests |
 | PostgreSQL `DESC NULLS FIRST` for date columns | Use `NULLS LAST` for both ASC and DESC on date sorts - keeps NULLs at end regardless of direction |
+| E2E sort test comparing row positions with DATE columns | Accelerated cadences make contact_by dates collapse to same day - verify sort via API request params (`page.waitForResponse` with `sort=field&order=direction`), not visual row positions |
 
 ## Anti-Patterns
 

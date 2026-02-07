@@ -118,3 +118,43 @@ detail: |
   The unit test in validation_test.go has a local Query struct with hardcoded oneof values that must be kept in sync with the actual API handler validation tags. When adding a new sortable field like contact_by, you must update BOTH: (1) the handler's validate tag in ContactListParams, and (2) the test's local Query struct oneof values. These easily drift because the test doesn't import the actual handler struct - it defines its own for testing the validator library.
 actionable: true
 
+---
+timestamp: "2026-02-07T00:49:38.262285"
+type: gotcha
+summary: E2E tests with DATE columns fail sort verification in testing mode
+detail: |
+  In testing mode (CRM_ENV=testing), cadence durations are compressed (weekly=2min, annual=2hr). When contact_by is calculated from last_contacted + cadence and stored as a PostgreSQL DATE column, all contacts created on the same calendar day will have identical contact_by dates regardless of their cadence. This makes visual sort order verification non-deterministic in E2E tests. Solution: Verify sort functionality via API request parameters (query string contains sort=field&order=direction) rather than comparing visual row positions or boundingBox coordinates.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:49:38.262285"
+type: distinction
+summary: PostgreSQL NULLS FIRST vs NULLS LAST affects user experience consistency
+detail: |
+  For date columns, using DESC NULLS FIRST places NULL values at the top of descending sorts, which is inconsistent UX - users expect NULLs at the bottom regardless of sort direction. Use NULLS LAST for both ASC and DESC on all date fields (last_contacted, contact_by, birthday). When changing NULL handling, update ALL 4 sorted queries: ListContactsSorted, SearchContactsSorted, ListContactIDsSorted, SearchContactIDsSorted.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:49:38.262285"
+type: architecture
+summary: Accelerated time in testing affects DATE precision calculations
+detail: |
+  The system uses cadence.GetCadenceDuration() which returns environment-specific durations: production uses real-world intervals (weekly=7 days), testing uses compressed intervals (weekly=2 minutes). When these durations are added to timestamps and stored in DATE columns, testing-mode values often collapse to the same calendar day. This is by design for rapid test execution but means E2E tests cannot rely on visual date differences for sort verification. Backend integration tests work fine because they compare full timestamp values at the DB level before DATE truncation.
+actionable: false
+
+---
+timestamp: "2026-02-07T00:49:38.262285"
+type: rule
+summary: E2E sort tests must verify mechanics not visual outcomes when dates collide
+detail: |
+  When testing sortable columns with DATE precision in environments using accelerated time, verify sort functionality via: (1) API request inspection (page.waitForRequest/Response to check query params), (2) sort icon state changes, (3) column header interactivity. Do NOT rely on comparing row positions (boundingBox, textContent ordering) when the underlying DATE values are identical. Backend integration tests handle actual sort ordering verification; E2E tests should focus on UI-to-API integration.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:49:38.262285"
+type: documentation_gap
+summary: Testing mode DATE precision implications not documented in testing rules
+detail: |
+  The .ai/rules/testing.md and testing-related patterns don't mention that accelerated cadences cause DATE columns to collapse to same-day values, breaking visual sort verification in E2E tests. This led to repeated attempts to verify visual row ordering (first with textContent, then with boundingBox) before discovering the root cause. Should document: 'E2E tests with DATE columns: verify sort via API params, not visual row order - accelerated cadences make same-day dates common.' Add to testing.md under E2E section.
+actionable: true
+
