@@ -158,3 +158,43 @@ detail: |
   The .ai/rules/testing.md and testing-related patterns don't mention that accelerated cadences cause DATE columns to collapse to same-day values, breaking visual sort verification in E2E tests. This led to repeated attempts to verify visual row ordering (first with textContent, then with boundingBox) before discovering the root cause. Should document: 'E2E tests with DATE columns: verify sort via API params, not visual row order - accelerated cadences make same-day dates common.' Add to testing.md under E2E section.
 actionable: true
 
+---
+timestamp: "2026-02-07T01:49:17.744714"
+type: gotcha
+summary: Table padding changes require multiple replace_all operations to catch all variants
+detail: |
+  When reducing table cell/header padding (e.g., px-6 to px-4), you must run multiple Edit operations with replace_all:true to catch all padding class variants (e.g., 'px-6 py-3 text-left...', 'px-6 py-4 whitespace-nowrap', 'px-6 py-4 whitespace-nowrap text-sm...', 'relative px-6 py-3'). A single replace won't catch all permutations because the class combinations vary across headers, cells, and action columns.
+actionable: true
+
+---
+timestamp: "2026-02-07T01:49:17.744714"
+type: gotcha
+summary: E2E date format changes require helper updates when switching from full-year to 2-digit year
+detail: |
+  When changing date display format from year:'numeric' (M/D/YYYY like '2/7/2026') to year:'2-digit' (M/D/YY like '2/7/26'), E2E tests using getTodayUTC() will fail because getByText('2/7/2026') won't match '2/7/26'. Create a getTodayUTCShort() helper that returns M/D/YY format and use it for list view tests while keeping getTodayUTC() for detail view tests that still use full year.
+actionable: true
+
+---
+timestamp: "2026-02-07T01:49:17.744714"
+type: gotcha
+summary: Removing table columns requires updating E2E column index selectors
+detail: |
+  When removing a table column (e.g., Contact Info), all E2E tests that use .nth(N) selectors to find cells by column index must be updated. Column indices shift left after removal. Example: removing Contact Info (column 2) changes 'Next Contact' from nth(6) to nth(5). Search for .nth() calls in E2E tests and update the comment documenting column order.
+actionable: true
+
+---
+timestamp: "2026-02-07T01:49:17.744714"
+type: distinction
+summary: Remove unused imports after removing component features
+detail: |
+  When removing a table column that uses specialized components (ContactMethodIcon, formatContactMethodValue, getContactMethodHref, getContactMethodLabel, getPrimaryAndSecondaryMethods), remove all unused imports from both the component file and type imports (e.g., ContactMethod type). Use Grep to verify each import is only used in the removed section before deleting it.
+actionable: true
+
+---
+timestamp: "2026-02-07T01:49:17.744714"
+type: rule
+summary: User requests to condense UI without horizontal scroll favor removing low-value columns
+detail: |
+  When user says table is too wide and requests no horizontal scroll, prioritize removing columns with redundant information (Contact Info already shown in detail page) over techniques like reducing font size or forcing wrapping. Combine with date format compression (mm/dd/yy vs mm/dd/yyyy) and padding reduction (px-6→px-4) for maximum space savings while maintaining readability.
+actionable: true
+
