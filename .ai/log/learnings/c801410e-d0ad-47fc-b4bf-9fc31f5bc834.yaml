@@ -78,3 +78,27 @@ detail: |
   The GitHub Actions workflow for backend tests creates a PostgreSQL service container (pgvector/pgvector:pg16) with empty database 'personal_crm_test', then immediately runs `go test -v ./tests/...` without any migration step. This differs from local dev environment where docker-compose runs migrations on startup. Integration tests are responsible for their own schema setup via `db.RunMigrations()`. This design allows tests to run against a clean schema every time but requires explicit migration calls in each test's setup.
 actionable: false
 
+---
+timestamp: "2026-02-07T14:29:53.553957"
+type: gotcha
+summary: Empty string cadence values require explicit handling in filter logic
+detail: |
+  The cadence field can have three states: NULL (no value), empty string '' (cleared/legacy), and valid enum values. When filtering for 'no_cadence', must check both IS NULL OR cadence = ''. When filtering for 'has_cadence', must check IS NOT NULL AND cadence != ''. Only checking IS NULL/IS NOT NULL misclassifies empty strings. This pattern exists throughout the codebase (e.g., contact_by computation at contact.sql:353, migration 027).
+actionable: true
+
+---
+timestamp: "2026-02-07T14:29:53.553957"
+type: documentation_gap
+summary: Contact list filter addition checklist needs empty string handling reminder
+detail: |
+  The existing gotcha 'Adding new contact list filter | Must update all 10 SQL queries...' correctly lists all the places to update but doesn't mention that nullable string fields require explicit empty string checks alongside NULL checks. This pattern was missed during initial implementation and caught only during code review. The documentation should explicitly warn about three-state nullable string fields (NULL, '', valid_value) requiring compound conditions.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:29:53.553957"
+type: rule
+summary: Automated code review feedback must be verified against actual codebase patterns
+detail: |
+  The Claude Code Review bot flagged 'Critical Issue #1 & #2' about missing URL state synchronization for the cadence filter. However, this was incorrect - the contacts list page uses React useState for ALL parameters (sort, order, search, page, cadence_filter) with no URL sync on the list page itself. URL params are only used for navigation context when going to detail pages. The review misunderstood the existing architectural pattern. Future agents should verify automated review feedback against the actual codebase implementation patterns before making changes.
+actionable: false
+

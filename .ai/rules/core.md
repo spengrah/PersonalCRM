@@ -138,6 +138,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | E2E `waitForResponse` for param removal | Response may fire before listener is set up when removing a URL param (e.g., resetting filter). Use visibility assertions with timeout instead |
 | Adding new contact list filter | Must update all 10 SQL queries (8 listing + 2 count), plus repository params, service, handler, frontend types, API client, contacts page, and detail page listContext/buildNavigationUrl |
 | Writing new integration test in `backend/tests/` | Must call `db.RunMigrations(databaseURL, getMigrationsPath())` before `db.NewDatabase()` - CI has bare PostgreSQL without pre-existing schema |
+| Filtering nullable string columns (e.g., cadence) with only IS NULL/IS NOT NULL | Must handle three states: NULL, empty string `''`, and valid values. Use `IS NOT NULL AND col != ''` for "has value" and `(IS NULL OR col = '')` for "no value" |
 
 ## Anti-Patterns
 
