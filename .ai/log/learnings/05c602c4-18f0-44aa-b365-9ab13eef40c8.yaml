@@ -22,3 +22,19 @@ detail: |
   When creating pagination controls, the component should use `<nav aria-label="Pagination">` as the container (not a generic div) and include `aria-label` or `aria-labelledby` on the navigation landmark. Individual buttons need `aria-label` describing their action (e.g., 'Go to page 2', 'Previous page', 'Next page') and `aria-current="page"` on the active page button. This accessibility pattern wasn't initially implemented and was caught in code review.
 actionable: true
 
+---
+timestamp: "2026-02-07T11:54:12.615191"
+type: gotcha
+summary: aria-label on buttons with text content breaks getByRole tests
+detail: |
+  When a button has both text content (e.g., 'Previous') and an aria-label (e.g., 'Go to previous page'), the aria-label takes precedence as the accessible name. This breaks existing E2E tests using getByRole('button', { name: 'Previous' }) because the accessible name is now 'Go to previous page', not 'Previous'. Avoid adding aria-label to buttons with meaningful text content—the text itself serves as the accessible name. Only use aria-label for buttons with icons or ambiguous labels (e.g., page number buttons).
+actionable: true
+
+---
+timestamp: "2026-02-07T11:54:12.615191"
+type: rule
+summary: Test backward compatibility before changing ARIA attributes
+detail: |
+  Before adding or modifying ARIA attributes (aria-label, role, aria-expanded, etc.) on existing components, search for E2E tests that use getByRole with the element's current accessible name. ARIA changes can silently break tests because they alter how assistive technologies and testing selectors identify elements. The fix requires either: (1) updating all affected tests, or (2) reconsidering whether the ARIA change is necessary. For buttons with clear text labels, skip redundant aria-labels.
+actionable: true
+
