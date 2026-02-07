@@ -8,7 +8,7 @@ interface PaginationProps {
   noun?: string
 }
 
-function getPageNumbers(current: number, total: number): (number | 'ellipsis')[] {
+export function getPageNumbers(current: number, total: number): (number | 'ellipsis')[] {
   if (total <= 7) {
     return Array.from({ length: total }, (_, i) => i + 1)
   }
@@ -61,7 +61,6 @@ export function Pagination({ page, pages, total, onPageChange, noun = 'items' }:
               size="sm"
               onClick={() => onPageChange(p)}
               className="min-w-[36px]"
-              aria-label={`Go to page ${p}`}
               aria-current={p === page ? 'page' : undefined}
             >
               {p}
