@@ -24,6 +24,12 @@ func TestCadenceFilter_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	// Run migrations first
+	migrationsPath := getMigrationsPath()
+	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+		t.Fatalf("Failed to run migrations: %v", err)
+	}
+
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
