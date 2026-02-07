@@ -87,7 +87,6 @@ type Querier interface {
 	DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) error
 	DeleteIdentity(ctx context.Context, id pgtype.UUID) error
-	DeleteInteraction(ctx context.Context, id pgtype.UUID) error
 	DeleteNote(ctx context.Context, id pgtype.UUID) error
 	// Delete an OAuth credential by ID
 	DeleteOAuthCredential(ctx context.Context, id pgtype.UUID) error
@@ -106,6 +105,10 @@ type Querier interface {
 	FindExternalContactsByEmail(ctx context.Context, dollar_1 []byte) ([]*ExternalContact, error)
 	FindExternalContactsByNormalizedEmail(ctx context.Context, lower string) ([]*ExternalContact, error)
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
+	// Find an existing interaction by contact, source, and source_ref (for deduplication)
+	FindInteractionBySourceRef(ctx context.Context, arg FindInteractionBySourceRefParams) (*Interaction, error)
+	// Find an existing interaction within a time window (for manual deduplication)
+	FindInteractionInWindow(ctx context.Context, arg FindInteractionInWindowParams) (*Interaction, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	FindSimilarContacts(ctx context.Context, arg FindSimilarContactsParams) ([]*FindSimilarContactsRow, error)
 	// Finds similar contacts for multiple candidate names in a single batch query.
@@ -206,7 +209,6 @@ type Querier interface {
 	ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error)
 	// List past events that haven't updated last_contacted yet
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
-	ListRecentInteractions(ctx context.Context, limit int32) ([]*ListRecentInteractionsRow, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
 	ListSyncLogsByState(ctx context.Context, arg ListSyncLogsByStateParams) ([]*ExternalSyncLog, error)
 	ListSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
@@ -232,6 +234,7 @@ type Querier interface {
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
 	SetContactMethodPrimary(ctx context.Context, arg SetContactMethodPrimaryParams) error
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
+	SoftDeleteInteraction(ctx context.Context, id pgtype.UUID) error
 	// Transfer connections where source is contact_a to use target instead
 	// This handles the bidirectional relationship table
 	TransferConnectionsAsContactA(ctx context.Context, arg TransferConnectionsAsContactAParams) error
@@ -241,7 +244,7 @@ type Querier interface {
 	// These queries support merging one contact (source) into another (target)
 	// Transfer contact methods from source to target contact
 	TransferContactMethods(ctx context.Context, arg TransferContactMethodsParams) error
-	// Transfer interactions from source to target contact
+	// Transfer interactions from source to target contact (includes soft-deleted for audit trail)
 	TransferInteractions(ctx context.Context, arg TransferInteractionsParams) error
 	// Transfer notes from source to target contact
 	TransferNotes(ctx context.Context, arg TransferNotesParams) error
@@ -262,7 +265,6 @@ type Querier interface {
 	UpdateExternalContactDuplicate(ctx context.Context, arg UpdateExternalContactDuplicateParams) error
 	UpdateExternalContactMatch(ctx context.Context, arg UpdateExternalContactMatchParams) (*ExternalContact, error)
 	UpdateIdentityMessageCount(ctx context.Context, arg UpdateIdentityMessageCountParams) (*ExternalIdentity, error)
-	UpdateInteraction(ctx context.Context, arg UpdateInteractionParams) (*Interaction, error)
 	// Update the matched contact IDs for an event
 	UpdateMatchedContacts(ctx context.Context, arg UpdateMatchedContactsParams) (*CalendarEvent, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
@@ -283,7 +285,7 @@ type Querier interface {
 	// Insert or update a note for a contact by category (atomic operation for concurrent safety)
 	// Note: This uses the unique index on (contact_id) WHERE category = 'notepad'
 	UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error)
-	// Upsert a contact task (update external_task_id if exists)
+	// Upsert a contact task by external_task_id (Todoist task IDs are globally unique)
 	UpsertContactTask(ctx context.Context, arg UpsertContactTaskParams) (*ContactTask, error)
 	UpsertExternalContact(ctx context.Context, arg UpsertExternalContactParams) (*ExternalContact, error)
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)

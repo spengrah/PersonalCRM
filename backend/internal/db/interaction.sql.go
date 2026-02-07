@@ -12,7 +12,8 @@ import (
 )
 
 const CountContactInteractions = `-- name: CountContactInteractions :one
-SELECT COUNT(*) FROM interaction WHERE contact_id = $1
+SELECT COUNT(*) FROM interaction
+WHERE contact_id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error) {
@@ -23,49 +24,105 @@ func (q *Queries) CountContactInteractions(ctx context.Context, contactID pgtype
 }
 
 const CreateInteraction = `-- name: CreateInteraction :one
-INSERT INTO interaction (contact_id, type, description, interaction_date) 
-VALUES ($1, $2, $3, $4) 
-RETURNING id, contact_id, type, description, interaction_date, created_at
+INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at
 `
 
 type CreateInteractionParams struct {
-	ContactID       pgtype.UUID        `json:"contact_id"`
-	Type            string             `json:"type"`
-	Description     pgtype.Text        `json:"description"`
-	InteractionDate pgtype.Timestamptz `json:"interaction_date"`
+	ContactID   pgtype.UUID        `json:"contact_id"`
+	Source      string             `json:"source"`
+	SourceRef   pgtype.Text        `json:"source_ref"`
+	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
+	Description pgtype.Text        `json:"description"`
 }
 
 func (q *Queries) CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error) {
 	row := q.db.QueryRow(ctx, CreateInteraction,
 		arg.ContactID,
-		arg.Type,
+		arg.Source,
+		arg.SourceRef,
+		arg.OccurredAt,
 		arg.Description,
-		arg.InteractionDate,
 	)
 	var i Interaction
 	err := row.Scan(
 		&i.ID,
 		&i.ContactID,
-		&i.Type,
+		&i.Source,
+		&i.SourceRef,
+		&i.OccurredAt,
 		&i.Description,
-		&i.InteractionDate,
 		&i.CreatedAt,
+		&i.DeletedAt,
 	)
 	return &i, err
 }
 
-const DeleteInteraction = `-- name: DeleteInteraction :exec
-DELETE FROM interaction WHERE id = $1
+const FindInteractionBySourceRef = `-- name: FindInteractionBySourceRef :one
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at FROM interaction
+WHERE contact_id = $1 AND source = $2 AND source_ref = $3 AND deleted_at IS NULL
+LIMIT 1
 `
 
-func (q *Queries) DeleteInteraction(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, DeleteInteraction, id)
-	return err
+type FindInteractionBySourceRefParams struct {
+	ContactID pgtype.UUID `json:"contact_id"`
+	Source    string      `json:"source"`
+	SourceRef pgtype.Text `json:"source_ref"`
+}
+
+// Find an existing interaction by contact, source, and source_ref (for deduplication)
+func (q *Queries) FindInteractionBySourceRef(ctx context.Context, arg FindInteractionBySourceRefParams) (*Interaction, error) {
+	row := q.db.QueryRow(ctx, FindInteractionBySourceRef, arg.ContactID, arg.Source, arg.SourceRef)
+	var i Interaction
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Source,
+		&i.SourceRef,
+		&i.OccurredAt,
+		&i.Description,
+		&i.CreatedAt,
+		&i.DeletedAt,
+	)
+	return &i, err
+}
+
+const FindInteractionInWindow = `-- name: FindInteractionInWindow :one
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at FROM interaction
+WHERE contact_id = $1
+  AND deleted_at IS NULL
+  AND occurred_at BETWEEN $2 AND $3
+ORDER BY occurred_at DESC
+LIMIT 1
+`
+
+type FindInteractionInWindowParams struct {
+	ContactID    pgtype.UUID        `json:"contact_id"`
+	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
+	OccurredAt_2 pgtype.Timestamptz `json:"occurred_at_2"`
+}
+
+// Find an existing interaction within a time window (for manual deduplication)
+func (q *Queries) FindInteractionInWindow(ctx context.Context, arg FindInteractionInWindowParams) (*Interaction, error) {
+	row := q.db.QueryRow(ctx, FindInteractionInWindow, arg.ContactID, arg.OccurredAt, arg.OccurredAt_2)
+	var i Interaction
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Source,
+		&i.SourceRef,
+		&i.OccurredAt,
+		&i.Description,
+		&i.CreatedAt,
+		&i.DeletedAt,
+	)
+	return &i, err
 }
 
 const GetInteraction = `-- name: GetInteraction :one
 
-SELECT id, contact_id, type, description, interaction_date, created_at FROM interaction WHERE id = $1
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at FROM interaction WHERE id = $1 AND deleted_at IS NULL
 `
 
 // Interaction queries
@@ -75,18 +132,20 @@ func (q *Queries) GetInteraction(ctx context.Context, id pgtype.UUID) (*Interact
 	err := row.Scan(
 		&i.ID,
 		&i.ContactID,
-		&i.Type,
+		&i.Source,
+		&i.SourceRef,
+		&i.OccurredAt,
 		&i.Description,
-		&i.InteractionDate,
 		&i.CreatedAt,
+		&i.DeletedAt,
 	)
 	return &i, err
 }
 
 const ListContactInteractions = `-- name: ListContactInteractions :many
-SELECT id, contact_id, type, description, interaction_date, created_at FROM interaction 
-WHERE contact_id = $1
-ORDER BY interaction_date DESC
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at FROM interaction
+WHERE contact_id = $1 AND deleted_at IS NULL
+ORDER BY occurred_at DESC
 LIMIT $2 OFFSET $3
 `
 
@@ -108,10 +167,12 @@ func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactIn
 		if err := rows.Scan(
 			&i.ID,
 			&i.ContactID,
-			&i.Type,
+			&i.Source,
+			&i.SourceRef,
+			&i.OccurredAt,
 			&i.Description,
-			&i.InteractionDate,
 			&i.CreatedAt,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -123,84 +184,12 @@ func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactIn
 	return items, nil
 }
 
-const ListRecentInteractions = `-- name: ListRecentInteractions :many
-SELECT i.id, i.contact_id, i.type, i.description, i.interaction_date, i.created_at, c.full_name as contact_name
-FROM interaction i
-JOIN contact c ON c.id = i.contact_id
-WHERE c.deleted_at IS NULL
-ORDER BY i.interaction_date DESC
-LIMIT $1
+const SoftDeleteInteraction = `-- name: SoftDeleteInteraction :exec
+UPDATE interaction SET deleted_at = NOW()
+WHERE id = $1 AND deleted_at IS NULL
 `
 
-type ListRecentInteractionsRow struct {
-	ID              pgtype.UUID        `json:"id"`
-	ContactID       pgtype.UUID        `json:"contact_id"`
-	Type            string             `json:"type"`
-	Description     pgtype.Text        `json:"description"`
-	InteractionDate pgtype.Timestamptz `json:"interaction_date"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	ContactName     string             `json:"contact_name"`
-}
-
-func (q *Queries) ListRecentInteractions(ctx context.Context, limit int32) ([]*ListRecentInteractionsRow, error) {
-	rows, err := q.db.Query(ctx, ListRecentInteractions, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*ListRecentInteractionsRow{}
-	for rows.Next() {
-		var i ListRecentInteractionsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.ContactID,
-			&i.Type,
-			&i.Description,
-			&i.InteractionDate,
-			&i.CreatedAt,
-			&i.ContactName,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const UpdateInteraction = `-- name: UpdateInteraction :one
-UPDATE interaction SET
-  type = $2,
-  description = $3,
-  interaction_date = $4
-WHERE id = $1
-RETURNING id, contact_id, type, description, interaction_date, created_at
-`
-
-type UpdateInteractionParams struct {
-	ID              pgtype.UUID        `json:"id"`
-	Type            string             `json:"type"`
-	Description     pgtype.Text        `json:"description"`
-	InteractionDate pgtype.Timestamptz `json:"interaction_date"`
-}
-
-func (q *Queries) UpdateInteraction(ctx context.Context, arg UpdateInteractionParams) (*Interaction, error) {
-	row := q.db.QueryRow(ctx, UpdateInteraction,
-		arg.ID,
-		arg.Type,
-		arg.Description,
-		arg.InteractionDate,
-	)
-	var i Interaction
-	err := row.Scan(
-		&i.ID,
-		&i.ContactID,
-		&i.Type,
-		&i.Description,
-		&i.InteractionDate,
-		&i.CreatedAt,
-	)
-	return &i, err
+func (q *Queries) SoftDeleteInteraction(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, SoftDeleteInteraction, id)
+	return err
 }

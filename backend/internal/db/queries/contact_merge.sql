@@ -9,7 +9,7 @@ SET contact_id = sqlc.arg(target_contact_id),
 WHERE contact_id = sqlc.arg(source_contact_id);
 
 -- name: TransferInteractions :exec
--- Transfer interactions from source to target contact
+-- Transfer interactions from source to target contact (includes soft-deleted for audit trail)
 UPDATE interaction
 SET contact_id = sqlc.arg(target_contact_id)
 WHERE contact_id = sqlc.arg(source_contact_id);

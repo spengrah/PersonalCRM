@@ -72,8 +72,12 @@ type calendarRepoInterface interface {
 
 // contactRepoInterface defines the methods needed from contact repository (for testability)
 type contactRepoInterface interface {
-	UpdateContactLastContactedIfLater(ctx context.Context, id uuid.UUID, lastContacted time.Time) error
 	FindSimilarContacts(ctx context.Context, name string, threshold float64, limit int32) ([]repository.ContactMatch, error)
+}
+
+// interactionRecorder defines the method for recording interactions (satisfied by ContactService)
+type interactionRecorder interface {
+	RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error)
 }
 
 // identityServiceInterface defines the methods needed from identity service (for testability)
@@ -103,6 +107,7 @@ type CalendarSyncProvider struct {
 	contactRepo         contactRepoInterface
 	identityService     identityServiceInterface
 	externalContactRepo externalContactRepoInterface
+	interactionRecorder interactionRecorder
 }
 
 // NewCalendarSyncProvider creates a new Google Calendar sync provider
@@ -112,6 +117,7 @@ func NewCalendarSyncProvider(
 	contactRepo *repository.ContactRepository,
 	identityService *service.IdentityService,
 	externalContactRepo *repository.ExternalContactRepository,
+	interactionRecorder interactionRecorder,
 ) *CalendarSyncProvider {
 	return &CalendarSyncProvider{
 		oauthService:        oauthService,
@@ -119,6 +125,7 @@ func NewCalendarSyncProvider(
 		contactRepo:         contactRepo,
 		identityService:     identityService,
 		externalContactRepo: externalContactRepo,
+		interactionRecorder: interactionRecorder,
 	}
 }
 
@@ -712,14 +719,22 @@ func (p *CalendarSyncProvider) updateLastContactedForPastEvents(ctx context.Cont
 	}
 
 	for _, event := range events {
-		// Update last_contacted for each matched contact
+		// Record interaction for each matched contact
+		eventIDStr := event.ID.String()
 		for _, contactID := range event.MatchedContactIDs {
-			if err := p.contactRepo.UpdateContactLastContactedIfLater(ctx, contactID, event.EndTime); err != nil {
+			_, err := p.interactionRecorder.RecordInteraction(ctx, repository.RecordInteractionRequest{
+				ContactID:   contactID,
+				Source:      repository.InteractionSourceGCal,
+				SourceRef:   &eventIDStr,
+				OccurredAt:  event.EndTime,
+				Description: event.Title,
+			})
+			if err != nil {
 				logger.Warn().
 					Err(err).
 					Str("contactId", contactID.String()).
 					Str("eventId", event.ID.String()).
-					Msg("failed to update last_contacted")
+					Msg("failed to record interaction from calendar event")
 				continue
 			}
 
@@ -727,7 +742,7 @@ func (p *CalendarSyncProvider) updateLastContactedForPastEvents(ctx context.Cont
 				Str("contactId", contactID.String()).
 				Str("eventTitle", ptrToStr(event.Title)).
 				Time("endTime", event.EndTime).
-				Msg("updated last_contacted from calendar event")
+				Msg("recorded interaction from calendar event")
 		}
 
 		// Mark event as processed
