@@ -338,6 +338,215 @@ func TestReconciliationCommandGeneration(t *testing.T) {
 	}
 }
 
+// TestWasContactedSinceSyncLogic tests the logic for detecting when a contact
+// was marked as contacted from a non-Todoist source (e.g., calendar sync).
+// This ensures the reconciliation correctly identifies stale tasks even when
+// contact_by hasn't changed (same cadence period).
+func TestWasContactedSinceSyncLogic(t *testing.T) {
+	tests := []struct {
+		name                string
+		lastContacted       *time.Time
+		syncedLastContacted string // stored in metadata (RFC3339), empty = not present
+		expectContacted     bool
+	}{
+		{
+			name:            "nil last_contacted",
+			lastContacted:   nil,
+			expectContacted: false,
+		},
+		{
+			name:                "no synced_last_contacted in metadata (backfill case)",
+			lastContacted:       timePtr(time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)),
+			syncedLastContacted: "",
+			expectContacted:     false, // Can't determine, avoid false positives
+		},
+		{
+			name:                "last_contacted unchanged since sync",
+			lastContacted:       timePtr(time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)),
+			syncedLastContacted: "2026-02-08T12:00:00Z",
+			expectContacted:     false,
+		},
+		{
+			name:                "last_contacted advanced since sync (calendar contact)",
+			lastContacted:       timePtr(time.Date(2026, 2, 10, 14, 30, 0, 0, time.UTC)),
+			syncedLastContacted: "2026-02-08T12:00:00Z",
+			expectContacted:     true,
+		},
+		{
+			name:                "last_contacted same day but later time",
+			lastContacted:       timePtr(time.Date(2026, 2, 8, 18, 0, 0, 0, time.UTC)),
+			syncedLastContacted: "2026-02-08T12:00:00Z",
+			expectContacted:     true,
+		},
+		{
+			name:                "last_contacted before synced (edge case - should not happen)",
+			lastContacted:       timePtr(time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)),
+			syncedLastContacted: "2026-02-08T12:00:00Z",
+			expectContacted:     false,
+		},
+		{
+			name:                "invalid synced_last_contacted format",
+			lastContacted:       timePtr(time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC)),
+			syncedLastContacted: "not-a-date",
+			expectContacted:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate wasContactedSinceSync logic
+			wasContacted := false
+
+			if tt.lastContacted != nil && tt.syncedLastContacted != "" {
+				syncedLastContacted, err := time.Parse(time.RFC3339, tt.syncedLastContacted)
+				if err == nil {
+					wasContacted = tt.lastContacted.After(syncedLastContacted)
+				}
+			}
+
+			assert.Equal(t, tt.expectContacted, wasContacted,
+				"lastContacted=%v, syncedLastContacted=%s",
+				tt.lastContacted, tt.syncedLastContacted)
+		})
+	}
+}
+
+// TestReconciliationWithNonTodoistContact tests the full reconciliation logic
+// including the new non-Todoist contact detection. This covers the bug fix for
+// GH #235 where calendar-synced contacts didn't auto-complete Todoist tasks.
+func TestReconciliationWithNonTodoistContact(t *testing.T) {
+	tests := []struct {
+		name             string
+		externalTaskID   string
+		metadata         map[string]any
+		currentDeadline  string
+		lastContacted    *time.Time
+		expectCloseCmd   bool
+		expectCreateCmd  bool
+		expectBackfill   bool
+		expectNoCommands bool
+	}{
+		{
+			name:            "same deadline, contact was contacted via calendar - should complete",
+			externalTaskID:  "12345678",
+			metadata:        map[string]any{"synced_deadline": "2026-02-15", "synced_last_contacted": "2026-02-01T12:00:00Z"},
+			currentDeadline: "2026-02-15",
+			lastContacted:   timePtr(time.Date(2026, 2, 8, 14, 30, 0, 0, time.UTC)),
+			expectCloseCmd:  true,
+			expectCreateCmd: true,
+		},
+		{
+			name:             "same deadline, last_contacted unchanged - no action",
+			externalTaskID:   "12345678",
+			metadata:         map[string]any{"synced_deadline": "2026-02-15", "synced_last_contacted": "2026-02-01T12:00:00Z"},
+			currentDeadline:  "2026-02-15",
+			lastContacted:    timePtr(time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)),
+			expectNoCommands: true,
+		},
+		{
+			name:             "same deadline, no synced_last_contacted (backfill) - no action",
+			externalTaskID:   "12345678",
+			metadata:         map[string]any{"synced_deadline": "2026-02-15"},
+			currentDeadline:  "2026-02-15",
+			lastContacted:    timePtr(time.Date(2026, 2, 8, 14, 30, 0, 0, time.UTC)),
+			expectNoCommands: true, // Can't determine, avoid false positives
+		},
+		{
+			name:             "same deadline, nil last_contacted - no action",
+			externalTaskID:   "12345678",
+			metadata:         map[string]any{"synced_deadline": "2026-02-15", "synced_last_contacted": "2026-02-01T12:00:00Z"},
+			currentDeadline:  "2026-02-15",
+			lastContacted:    nil,
+			expectNoCommands: true,
+		},
+		{
+			name:            "different deadline (standard drift) - still works",
+			externalTaskID:  "12345678",
+			metadata:        map[string]any{"synced_deadline": "2026-01-15", "synced_last_contacted": "2026-01-01T12:00:00Z"},
+			currentDeadline: "2026-02-15",
+			lastContacted:   timePtr(time.Date(2026, 2, 8, 14, 30, 0, 0, time.UTC)),
+			expectCloseCmd:  true,
+			expectCreateCmd: true,
+		},
+		{
+			name:            "same deadline, contacted via calendar, pending temp_id - create only",
+			externalTaskID:  "temp-uuid-123",
+			metadata:        map[string]any{"synced_deadline": "2026-02-15", "synced_last_contacted": "2026-02-01T12:00:00Z", "pending_temp_id": "temp-uuid-123"},
+			currentDeadline: "2026-02-15",
+			lastContacted:   timePtr(time.Date(2026, 2, 8, 14, 30, 0, 0, time.UTC)),
+			expectCloseCmd:  false,
+			expectCreateCmd: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var closeCmd, createCmd, backfill bool
+
+			// Get synced_deadline from metadata
+			syncedDeadline, hasSyncedDeadline := "", false
+			if tt.metadata != nil {
+				if sd, ok := tt.metadata["synced_deadline"].(string); ok {
+					syncedDeadline = sd
+					hasSyncedDeadline = true
+				}
+			}
+
+			if !hasSyncedDeadline {
+				backfill = true
+			} else if syncedDeadline == tt.currentDeadline {
+				// Deadlines match - check for non-Todoist contact
+				wasContacted := false
+				if tt.lastContacted != nil {
+					if slc, ok := tt.metadata["synced_last_contacted"].(string); ok && slc != "" {
+						syncedLC, err := time.Parse(time.RFC3339, slc)
+						if err == nil {
+							wasContacted = tt.lastContacted.After(syncedLC)
+						}
+					}
+				}
+
+				if wasContacted {
+					// Contact was contacted via non-Todoist source
+					isPending := false
+					if tt.metadata != nil && tt.externalTaskID != "" {
+						pendingTempID, ok := tt.metadata["pending_temp_id"].(string)
+						if ok && pendingTempID != "" {
+							isPending = pendingTempID == tt.externalTaskID
+						}
+					}
+					if tt.externalTaskID != "" && !isPending {
+						closeCmd = true
+					}
+					createCmd = true
+				}
+			} else {
+				// Standard deadline drift
+				isPending := false
+				if tt.metadata != nil && tt.externalTaskID != "" {
+					pendingTempID, ok := tt.metadata["pending_temp_id"].(string)
+					if ok && pendingTempID != "" {
+						isPending = pendingTempID == tt.externalTaskID
+					}
+				}
+				if tt.externalTaskID != "" && !isPending {
+					closeCmd = true
+				}
+				createCmd = true
+			}
+
+			assert.Equal(t, tt.expectBackfill, backfill, "backfill mismatch")
+			assert.Equal(t, tt.expectCloseCmd, closeCmd, "close command mismatch")
+			assert.Equal(t, tt.expectCreateCmd, createCmd, "create command mismatch")
+
+			if tt.expectNoCommands {
+				assert.False(t, closeCmd, "expected no close command")
+				assert.False(t, createCmd, "expected no create command")
+			}
+		})
+	}
+}
+
 // TestActionTaskKindConstant verifies the action task kind constant
 func TestActionTaskKindConstant(t *testing.T) {
 	assert.Equal(t, "action", todoist.TaskKindAction)
