@@ -1,0 +1,80 @@
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: gotcha
+summary: gh API -f vs -F flag for integer parameters
+detail: |
+  GitHub CLI `gh api` requires `-F` (not `-f`) for integer parameters like sub_issue_id. Using `-f` sends the value as a string, causing 422 errors with message 'is not of type integer'. Example: `gh api --method POST /repos/{owner}/{repo}/issues/239/sub_issues -F sub_issue_id="$id"` (correct) vs `-f sub_issue_id="$id"` (wrong).
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: gotcha
+summary: Edit tool requires reading file first
+detail: |
+  The Edit tool returns error 'File has not been read yet. Read it first before writing to it.' if you attempt to edit a file without using Read tool first. Always call Read before Edit, even if you think you know the file contents.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: gotcha
+summary: make commands must run from project root
+detail: |
+  Commands like `make sqlc` and `make test` must be run from the project root directory (/home/dev/workspace/PersonalCRM), not from subdirectories like /backend. Running from wrong directory causes 'No rule to make target' errors.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: rule
+summary: Feature-dev skill requires fully qualified name
+detail: |
+  The /feature-dev skill must be invoked as 'feature-dev:feature-dev' (plugin:skill format), not just 'feature-dev'. This is a plugin-provided skill requiring fully qualified naming.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: architecture
+summary: SQL sort field additions require 4-query pattern
+detail: |
+  Adding a new sortable field (like contact_by) requires updating exactly 4 sorted queries: ListContactsSorted, SearchContactsSorted, ListContactIDsSorted, and SearchContactIDsSorted. The ID-only variants must match the full-data variants for navigation consistency. Each query uses CASE WHEN pattern with sqlc.arg(sort_field) and sqlc.arg(sort_order).
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: architecture
+summary: Sort field type updates span 3 files for consistency
+detail: |
+  When adding a new sortable field, update in exactly this order: (1) handler validation oneof tag in backend/internal/api/handlers/contact.go, (2) SortField type in frontend/src/app/contacts/page.tsx, (3) ContactListParams sort union in frontend/src/types/contact.ts. This ensures type consistency across API validation, UI state, and API client.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: gotcha
+summary: NULLS FIRST vs NULLS LAST in PostgreSQL DESC sorts
+detail: |
+  PostgreSQL DESC sorts default to NULLS FIRST (NULLs appear at top), which is unintuitive for date fields where 'Never' contacts should appear last. Always explicitly specify NULLS LAST for DESC date sorts to keep NULL values at the end regardless of direction.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: architecture
+summary: Frontend sort defaults use ternary in handleSort
+detail: |
+  Default sort direction for new fields is set in handleSort's ternary: `order: (field === 'cadence' || field === 'last_contacted') ? 'desc' : 'asc'`. Add field to the condition if it should default to descending (like most-recent-first), or rely on fallback 'asc' for earliest-first semantics.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: rule
+summary: Test file sharing types via same package, not imports
+detail: |
+  Backend API integration tests in tests/api/ package define local response types (like ContactIDsResponse) rather than importing from handlers package, even though the types are exported. Follow this pattern for consistency - define local types in test files.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: documentation_gap
+summary: Common gotchas table incomplete for multi-file patterns
+detail: |
+  The 'When You Change X, Check Y' table in .ai/rules/core.md doesn't mention that adding sortable fields requires updating handler validation, frontend SortField type, and ContactListParams type in 3 files. This cross-cutting concern should be documented to prevent forgetting one of the 3 required changes.
+actionable: true
+
