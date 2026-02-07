@@ -1,0 +1,56 @@
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: gotcha
+summary: sqlc regeneration changes param struct field names unpredictably
+detail: |
+  When converting SQL queries from positional params ($1, $2) to named params (sqlc.arg(name)), sqlc regeneration changes generated Go struct field names. E.g., ListContacts changed `Limit`/`Offset` to `PageLimit`/`PageOffset`, SearchContacts changed `PlaintoTsquery` to `SearchQuery`. This breaks compilation and requires updating all repository calls. Always run `go build ./cmd/crm-api` after `make sqlc` to catch these before writing repository code.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: gotcha
+summary: E2E waitForResponse can miss already-fired responses
+detail: |
+  When testing URL param changes (e.g., filter reset to All), `page.waitForResponse()` can timeout if the response fires before the listener is set up. For reset-to-default cases where the param is removed from URL, prefer visibility assertions with timeout over response waiting: `await expect(...).toBeVisible({ timeout: 10000 })` instead of `await page.waitForResponse(!resp.url().includes('param'))`.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: architecture
+summary: Cadence filter requires 10 SQL query modifications for completeness
+detail: |
+  Adding a filter to contact listing requires updating all 10 queries: 8 listing queries (list/search × sorted/unsorted × full/IDs-only matrix) PLUS 2 count queries (CountContacts, CountSearchContacts). Forgetting count queries breaks pagination totals. Pattern: `AND (sqlc.arg(filter) = '' OR (sqlc.arg(filter) = 'value' AND condition))` for optional filters.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: rule
+summary: Navigation context params must flow through detail page listContext
+detail: |
+  When adding new list filter params (like cadence_filter), they must be: 1) extracted from URL searchParams in detail page's listContext object, 2) passed to useContactIDs hook, 3) preserved in buildNavigationUrl for prev/next navigation. Missing any of these breaks list→detail→list navigation consistency.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: distinction
+summary: Empty string vs undefined for optional filter query params
+detail: |
+  Backend uses empty string `''` as 'no filter' sentinel in SQL (sqlc.arg(cadence_filter) = '' means skip filtering). Frontend uses `undefined` to omit param from URL entirely. API client spreads with `...(params.cadence_filter && { cadence_filter: params.cadence_filter })` to only send when defined. Never send empty string from frontend - it's a backend-only implementation detail.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: documentation_gap
+summary: CLAUDE.md missing guidance on sqlc param migration strategy
+detail: |
+  When adding params to existing queries, the choice between positional vs named params has cascading effects. The gotchas section warns about sqlc type changes but doesn't explain: 1) when to convert positional→named (answer: when adding params), 2) that ALL params must use same style (can't mix $1 with sqlc.arg), 3) that unsorted queries need explicit names (page_offset not $2). Add to gotchas: 'Adding params to queries → convert all positional to named sqlc.arg() → regenerate → expect field name changes'.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: architecture
+summary: Filter state lives in URL params, not React state
+detail: |
+  The cadence filter is stored in URL searchParams and synchronized via useEffect, not maintained as independent React state. Pattern: read from URL → setParams updates URL → useEffect syncs params → triggers query refetch. This ensures filter state survives page refresh and enables shareable filtered URLs. Contrast with sort/search which follow same pattern.
+actionable: false
+

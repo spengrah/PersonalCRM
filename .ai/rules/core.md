@@ -134,6 +134,9 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Portal dropdown without ARIA attributes | Add `aria-label`, `aria-haspopup="menu"`, `aria-expanded` on trigger; `role="menu"` on dropdown container |
 | Adding `role="menuitem"` without updating tests | `getByRole('button')` no longer matches elements with explicit `role="menuitem"` - update E2E selectors to `getByRole('menuitem')` |
 | Adding `aria-label` to buttons with text content | `aria-label` overrides text content as accessible name - `getByRole('button', { name: 'Previous' })` breaks if `aria-label="Go to previous page"` is added |
+| Adding params to existing sqlc queries | Convert ALL positional params ($1, $2) to named `sqlc.arg()` first - can't mix styles. Expect field name changes in generated structs (e.g., `Limit`→`PageLimit`). Run `go build ./cmd/crm-api` after `make sqlc` |
+| E2E `waitForResponse` for param removal | Response may fire before listener is set up when removing a URL param (e.g., resetting filter). Use visibility assertions with timeout instead |
+| Adding new contact list filter | Must update all 10 SQL queries (8 listing + 2 count), plus repository params, service, handler, frontend types, API client, contacts page, and detail page listContext/buildNavigationUrl |
 
 ## Anti-Patterns
 
@@ -210,3 +213,4 @@ Cross-cutting concerns that require checking multiple locations:
 | E2E test file patterns | `frontend/tests/e2e/test-map.json` tag mappings |
 | Scheduled job changes | Scheduler section in `.ai/guides/architecture.md` |
 | New sortable contact field | 4 SQL sorted queries + handler oneof + `SortField` type + `ContactListParams.sort` |
+| New contact list filter param | 10 SQL queries + repo params + service count calls + handler query struct + frontend types + API client + contacts page + detail page listContext |
