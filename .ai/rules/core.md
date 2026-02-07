@@ -132,6 +132,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | One-time action query params (e.g., `?action=edit`) left in URL | Clear with `router.replace()` in a mount-only `useEffect` after consuming - prevents re-triggering on page refresh |
 | `PLAYWRIGHT_GREP` patterns with spaces | Makefile passes `--grep $$PLAYWRIGHT_GREP` unquoted - use dot wildcards (e.g., `context.menu`) or single words instead of multi-word patterns |
 | Portal dropdown without ARIA attributes | Add `aria-label`, `aria-haspopup="menu"`, `aria-expanded` on trigger; `role="menu"` on dropdown container |
+| Adding `role="menuitem"` without updating tests | `getByRole('button')` no longer matches elements with explicit `role="menuitem"` - update E2E selectors to `getByRole('menuitem')` |
 
 ## Anti-Patterns
 

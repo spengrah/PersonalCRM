@@ -54,3 +54,19 @@ detail: |
   When calculating portal position via getBoundingClientRect(), must guard with `if (!button) return` before calling setOpenDropdown(). Otherwise race conditions where ref hasn't mounted yet cause dropdown to open at 0,0 coordinates or throw errors. Move state updates inside the ref existence check.
 actionable: true
 
+---
+timestamp: "2026-02-07T10:47:57.684624"
+type: gotcha
+summary: Adding role=menuitem changes getByRole query from 'button' to 'menuitem'
+detail: |
+  When you add role="menuitem" to a button element for accessibility, Playwright's getByRole() selector changes. Tests must use getByRole('menuitem') instead of getByRole('button'). This broke all context menu tests after adding proper ARIA roles. Future agents should remember to update test selectors when adding explicit ARIA roles that override default element semantics.
+actionable: true
+
+---
+timestamp: "2026-02-07T10:47:57.684624"
+type: rule
+summary: Always update E2E test selectors when adding explicit ARIA roles to elements
+detail: |
+  When improving accessibility by adding explicit role attributes (like role="menuitem" on buttons), you MUST update corresponding E2E test selectors. The test won't find elements if it queries by the semantic HTML role (button) but the element now has an explicit ARIA role (menuitem). This is a required part of the ARIA implementation work, not a separate follow-up step.
+actionable: true
+
