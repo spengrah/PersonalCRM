@@ -920,8 +920,23 @@ func (p *CadenceSyncProvider) tryMatchByCRMMarker(ctx context.Context, item Sync
 		ContactID string `json:"contact_id"`
 		Kind      string `json:"kind"`
 	}
-	if err := json.Unmarshal([]byte(item.Description), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
-		return nil
+	// The CRM marker JSON may be the entire description or embedded after
+	// a markdown prefix (e.g., "[See context in CRM](...)\n\n---\n{...}").
+	// Try the full description first, then extract the last JSON object.
+	descToTry := item.Description
+	if err := json.Unmarshal([]byte(descToTry), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
+		// Reset and try extracting JSON from the end of description
+		marker = struct {
+			CRM       bool   `json:"crm"`
+			ContactID string `json:"contact_id"`
+			Kind      string `json:"kind"`
+		}{}
+		if idx := strings.LastIndex(item.Description, "{"); idx >= 0 {
+			descToTry = item.Description[idx:]
+		}
+		if err := json.Unmarshal([]byte(descToTry), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
+			return nil
+		}
 	}
 
 	contactID, err := uuid.Parse(marker.ContactID)

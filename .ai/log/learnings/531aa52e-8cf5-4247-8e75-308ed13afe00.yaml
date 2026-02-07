@@ -86,3 +86,54 @@ detail: |
   When calling repository methods in fallback/optional code paths, distinguish between 'not found' (expected, no log needed) and other errors (unexpected, should warn). Pattern: if errors.Is(err, db.ErrNotFound) { return nil } else { p.logger.Warn('...', zap.Error(err)); return nil }. This prevents silent failures that make debugging harder while keeping expected 'not found' cases clean.
 actionable: true
 
+---
+timestamp: "2026-02-06T17:45:01.558358"
+type: gotcha
+summary: Todoist CRM markers embedded in description, not entire description
+detail: |
+  When CRM markers are added to Todoist task descriptions, they're embedded after a markdown prefix: '[See context in CRM](...)
+  
+  ---
+  {"contact_id":"...","crm":true,...}'. The JSON parsing must extract the last JSON object from the description using strings.LastIndex(description, "{") rather than assuming the entire description is JSON. This caused the v9→v1 ID migration fallback to fail silently—full sync returned 143KB of data but processed: 0 because json.Unmarshal failed on every description.
+actionable: true
+
+---
+timestamp: "2026-02-06T17:45:01.558358"
+type: gotcha
+summary: Todoist full sync with '*' cursor returns data but requires correct parsing
+detail: |
+  When resetting Todoist sync cursor to '*' for full sync, the v1 Sync API correctly returns all items with response_keys: ["items", "labels", "projects", "sync_token", ...] and body_len: 143042. However, if item processing silently fails (e.g., CRM marker parsing fails), the sync reports 'processed: 0' even though items were returned. This creates a misleading debugging experience—the API endpoint works correctly, but data processing failures make it appear that no data came back. Always add debug logging for parsing failures within processItem loops.
+actionable: true
+
+---
+timestamp: "2026-02-06T17:45:01.558358"
+type: rule
+summary: When adding fallback matching logic, test with actual production data format
+detail: |
+  The CRM marker fallback was implemented and tested with pure JSON descriptions in unit tests. Production Todoist descriptions contained markdown prefixes that weren't captured in test cases, causing silent failures at scale (117 tasks). When implementing fallback/migration logic for external integrations, extract real production samples via API debugging or logs to ensure test cases match actual data format. Unit tests with synthetic data are insufficient.
+actionable: true
+
+---
+timestamp: "2026-02-06T17:45:01.558358"
+type: architecture
+summary: "Todoist incremental sync pattern: full sync → get cursor → incremental syncs"
+detail: |
+  Todoist v1 Sync API uses a two-phase pattern: (1) Full sync with cursor='*' returns all active items and a new sync_token. (2) Subsequent syncs with that token return only changed items since that token. The cursor remaining as '*' after a sync indicates either: the API returned '*' as the new token (empty response), or cursor update logic failed. In this codebase, sync at :00 with '*' → processed: 0 (parsing failed), sync at :10 with incremental token → processed: 4 (only recent changes). This pattern is important for debugging sync issues—check both API response and item processing separately.
+actionable: false
+
+---
+timestamp: "2026-02-06T17:45:01.558358"
+type: gotcha
+summary: journalctl --since with date strings may not work as expected across SSH
+detail: |
+  When debugging remote logs via SSH, 'journalctl --since "17:04"' or '--since "2026-02-06 17:05:00"' returned '-- No entries --' even though logs existed. Using '--since "1 minute ago"' or '-n 20' (recent N lines) worked reliably. Timezone mismatches or date parsing issues can cause --since filters to miss logs. For remote debugging, prefer relative time specs or fall back to -n with grep filtering.
+actionable: false
+
+---
+timestamp: "2026-02-06T17:45:01.558358"
+type: documentation_gap
+summary: "Common Gotchas table missing: CRM markers are embedded in descriptions"
+detail: |
+  The .ai/rules/core.md Common Gotchas table lists many Todoist-related issues (QuickAdd note parameter, v9→v1 ID migration, etc.) but doesn't document that CRM markers in Todoist descriptions are embedded after markdown prefixes, not standalone JSON. This led to a full reimplementation of tryMatchByCRMMarker when the real issue was JSON extraction. The gotcha should be added: 'Parsing Todoist CRM markers | CRM markers are embedded after markdown prefix ([See context...]\n\n---\n{json}), not as entire description | Use strings.LastIndex to extract JSON block'
+actionable: true
+

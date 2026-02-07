@@ -2,6 +2,7 @@ package unit
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -548,13 +549,41 @@ func TestCRMMarkerParsing(t *testing.T) {
 			description: `{"foo":"bar"}`,
 			expectMatch: false,
 		},
+		{
+			name:            "marker embedded after markdown prefix",
+			description:     "[See context in CRM](http://localhost:3000/contacts/ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c)\n\n---\n{\"contact_id\":\"ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c\",\"crm\":true,\"instance\":\"411cf33d-b6c0-45de-86dc-1371f2461347\",\"kind\":\"cadence\"}",
+			expectMatch:     true,
+			expectContactID: "ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c",
+			expectKind:      "cadence",
+		},
+		{
+			name:            "marker embedded with prefix, no kind",
+			description:     "[See context](http://example.com)\n\n---\n{\"contact_id\":\"abc12345-0000-0000-0000-000000000000\",\"crm\":true}",
+			expectMatch:     true,
+			expectContactID: "abc12345-0000-0000-0000-000000000000",
+			expectKind:      "",
+		},
+	}
+
+	// extractMarker mimics the parsing logic in tryMatchByCRMMarker
+	extractMarker := func(description string) (marker, bool) {
+		var m marker
+		if err := json.Unmarshal([]byte(description), &m); err == nil && m.CRM && m.ContactID != "" {
+			return m, true
+		}
+		// Try extracting JSON from end of description
+		m = marker{}
+		if idx := strings.LastIndex(description, "{"); idx >= 0 {
+			if err := json.Unmarshal([]byte(description[idx:]), &m); err == nil && m.CRM && m.ContactID != "" {
+				return m, true
+			}
+		}
+		return marker{}, false
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var m marker
-			err := json.Unmarshal([]byte(tt.description), &m)
-			matched := err == nil && m.CRM && m.ContactID != ""
+			m, matched := extractMarker(tt.description)
 
 			assert.Equal(t, tt.expectMatch, matched, "match expectation")
 			if tt.expectMatch {
