@@ -273,7 +273,7 @@ function ContactsTable({
                       month: 'numeric',
                       day: 'numeric',
                     })
-                  : 'N/A'}
+                  : '-'}
               </td>
               <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium">
                 <div className="relative" onClick={handleDropdownClick}>

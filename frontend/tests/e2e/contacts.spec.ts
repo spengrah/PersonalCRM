@@ -468,7 +468,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     const weeklyCells = weeklyRow.locator('td')
     // Next Contact is the 6th column (Name, Cadence, Location, Birthday, Last Contact, Next Contact, Actions)
     const weeklyNextContact = weeklyCells.nth(5)
-    await expect(weeklyNextContact).not.toHaveText('N/A')
+    await expect(weeklyNextContact).not.toHaveText('-')
 
     // Contact without cadence should show N/A
     const noCadenceRow = page.locator('tr', {
@@ -477,7 +477,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(noCadenceRow).toBeVisible()
     const noCadenceCells = noCadenceRow.locator('td')
     const noCadenceNextContact = noCadenceCells.nth(5)
-    await expect(noCadenceNextContact).toHaveText('N/A')
+    await expect(noCadenceNextContact).toHaveText('-')
   })
 
   test('should sort by Next Contact column when header clicked', async ({ page }) => {
