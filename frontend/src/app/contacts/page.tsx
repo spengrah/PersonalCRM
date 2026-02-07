@@ -316,11 +316,39 @@ function ContactsTable({
                   {openDropdown === contact.id &&
                     createPortal(
                       <div
+                        ref={el => {
+                          // Auto-focus first menu item when dropdown opens
+                          if (el) {
+                            const first = el.querySelector<HTMLElement>('[role="menuitem"]')
+                            first?.focus()
+                          }
+                        }}
                         style={dropdownStyle}
                         className="w-48 bg-white rounded-md shadow-lg z-50 ring-1 ring-black ring-opacity-5"
                         role="menu"
                         onKeyDown={e => {
+                          const items = (
+                            e.currentTarget as HTMLElement
+                          ).querySelectorAll<HTMLElement>('[role="menuitem"]')
+                          const current = document.activeElement as HTMLElement
+                          const idx = Array.from(items).indexOf(current)
+
                           if (e.key === 'Escape') {
+                            setOpenDropdown(null)
+                            buttonRefs.current.get(contact.id)?.focus()
+                          } else if (e.key === 'ArrowDown') {
+                            e.preventDefault()
+                            items[(idx + 1) % items.length]?.focus()
+                          } else if (e.key === 'ArrowUp') {
+                            e.preventDefault()
+                            items[(idx - 1 + items.length) % items.length]?.focus()
+                          } else if (e.key === 'Home') {
+                            e.preventDefault()
+                            items[0]?.focus()
+                          } else if (e.key === 'End') {
+                            e.preventDefault()
+                            items[items.length - 1]?.focus()
+                          } else if (e.key === 'Tab') {
                             setOpenDropdown(null)
                             buttonRefs.current.get(contact.id)?.focus()
                           }
@@ -329,8 +357,9 @@ function ContactsTable({
                         <div className="py-1">
                           <button
                             role="menuitem"
+                            tabIndex={-1}
                             onClick={e => handleMarkAsContacted(e, contact.id)}
-                            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
                             disabled={updateLastContacted.isPending}
                           >
                             <CheckCircle className="w-4 h-4 mr-2" />
@@ -338,22 +367,24 @@ function ContactsTable({
                           </button>
                           <button
                             role="menuitem"
+                            tabIndex={-1}
                             onClick={e => {
                               e.stopPropagation()
                               router.push(buildContactUrl(contact.id, 'edit'))
                             }}
-                            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
                           >
                             <Edit className="w-4 h-4 mr-2" />
                             Edit
                           </button>
                           <button
                             role="menuitem"
+                            tabIndex={-1}
                             onClick={e => {
                               e.stopPropagation()
                               router.push(buildContactUrl(contact.id, 'merge'))
                             }}
-                            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
                           >
                             <GitMerge className="w-4 h-4 mr-2" />
                             Merge
