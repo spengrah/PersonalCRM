@@ -49,12 +49,25 @@ export default function ContactDetailPage() {
   const searchParams = useSearchParams()
   const contactId = params.id as string
 
-  const [isEditing, setIsEditing] = useState(false)
+  const action = searchParams.get('action')
+  const [isEditing, setIsEditing] = useState(action === 'edit')
   const [notesExpanded, setNotesExpanded] = useState(false)
   const [notesOverflowing, setNotesOverflowing] = useState(false)
   const [isEditingLastContacted, setIsEditingLastContacted] = useState(false)
   const [lastContactedDate, setLastContactedDate] = useState('')
-  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false)
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(action === 'merge')
+
+  // Clear the action param from URL after consuming it (prevents re-triggering on refresh)
+  useEffect(() => {
+    if (action) {
+      const params = new URLSearchParams(searchParams.toString())
+      params.delete('action')
+      const queryString = params.toString()
+      router.replace(`/contacts/${contactId}${queryString ? `?${queryString}` : ''}`)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Run only on mount
+
   const [mergeMessage, setMergeMessage] = useState<{
     type: 'success' | 'error'
     text: string
