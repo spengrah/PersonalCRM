@@ -483,13 +483,8 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
   test('should sort by Next Contact column when header clicked', async ({ page }) => {
     await testApi.seedContacts([
       {
-        full_name: 'SortNext Weekly',
+        full_name: 'SortNext Contact',
         cadence: 'weekly',
-        last_contacted_days_ago: 3,
-      },
-      {
-        full_name: 'SortNext Annual',
-        cadence: 'annual',
         last_contacted_days_ago: 3,
       },
     ])
@@ -497,12 +492,31 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
 
-    // Click Next Contact header to sort
-    const nextContactHeader = page.getByRole('columnheader').filter({ hasText: 'Next Contact' })
-    await nextContactHeader.click()
-    await page.waitForLoadState('networkidle')
+    // Search for our test contact to isolate it
+    const searchInput = page.getByPlaceholder('Search contacts...')
+    await searchInput.fill(`${testApi.prefix}-SortNext`)
+    await searchInput.press('Enter')
+    await expect(page.getByText(`${testApi.prefix}-SortNext Contact`)).toBeVisible()
 
-    // Verify sort icon appears (indicating active sort)
+    // Click Next Contact header - verify sort=contact_by&order=asc is sent to API
+    const nextContactHeader = page.getByRole('columnheader').filter({ hasText: 'Next Contact' })
+    const ascResponse = page.waitForResponse(
+      resp => resp.url().includes('sort=contact_by') && resp.url().includes('order=asc')
+    )
+    await nextContactHeader.click()
+    await ascResponse
+
+    // Verify sort icon appears
     await expect(nextContactHeader.locator('svg')).toBeVisible()
+
+    // Click again to toggle to descending - verify sort=contact_by&order=desc
+    const descResponse = page.waitForResponse(
+      resp => resp.url().includes('sort=contact_by') && resp.url().includes('order=desc')
+    )
+    await nextContactHeader.click()
+    await descResponse
+
+    // Contact should still be visible after sort toggling
+    await expect(page.getByText(`${testApi.prefix}-SortNext Contact`)).toBeVisible()
   })
 })

@@ -404,7 +404,8 @@ export default function ContactsPage() {
           page: 1, // Reset to first page when sorting
         }
       }
-      // If clicking a new field, default to ascending (except cadence and last_contacted default to desc)
+      // Default sort: cadence/last_contacted → desc (most frequent/recent first)
+      // contact_by/birthday/name/location → asc (soonest due/alphabetical first)
       return {
         ...prev,
         sort: field,
