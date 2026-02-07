@@ -1,0 +1,88 @@
+---
+timestamp: "2026-02-06T19:06:08.472935"
+type: gotcha
+summary: synced_last_contacted requires nil check only when contact.LastContacted might be nil
+detail: |
+  When storing synced_last_contacted metadata, always check if contact.LastContacted != nil before calling .Format(). However, inside conditional blocks that already guard against nil (like wasContactedSinceSync returning false when nil), the nil check is technically redundant but should still be added for code consistency and clarity - future refactors might remove the guard.
+actionable: true
+
+---
+timestamp: "2026-02-06T19:06:08.472935"
+type: distinction
+summary: Use timePtr helper from cadence_test.go, not duplicate helpers in test files
+detail: |
+  The unit test package already has a timePtr helper function in cadence_test.go. When writing tests in todoist_test.go (same package), reuse this existing helper instead of declaring a duplicate. Attempting to redeclare will cause a 'redeclared in this block' compilation error.
+actionable: true
+
+---
+timestamp: "2026-02-06T19:06:08.472935"
+type: architecture
+summary: "Todoist metadata backfill pattern: store current state when key missing"
+detail: |
+  When adding new metadata keys to existing tasks, the reconciliation logic should detect missing keys and backfill them with the current CRM state. This prevents treating pre-migration tasks as requiring immediate action. Pattern: check if metadata[key] exists, if not, store current value and log a warning about backfilling. Example: synced_deadline and synced_last_contacted both use this pattern.
+actionable: true
+
+---
+timestamp: "2026-02-06T19:06:08.472935"
+type: rule
+summary: Store timestamps in metadata using RFC3339 format, dates using YYYY-MM-DD
+detail: |
+  Todoist provider has established conventions: deadlines use DateFormat const (YYYY-MM-DD), timestamps like synced_last_contacted use RFC3339. This allows proper parsing and comparison. When adding new timestamp metadata, use time.RFC3339 format; for date-only metadata, use DateFormat const.
+actionable: true
+
+---
+timestamp: "2026-02-06T19:06:08.472935"
+type: architecture
+summary: Todoist reconciliation has multiple task creation paths that all need metadata updates
+detail: |
+  When adding new metadata keys to track task state, must update ALL task creation points: (1) reconcileContactTasks (new task), (2) handleTaskCompletion (next task), (3) handleSkipTrigger (skipped task), (4) reconcileExistingTask (drift replacement), (5) backfill path in reconcileExistingTask. Missing any path causes inconsistent metadata state.
+actionable: true
+
+---
+timestamp: "2026-02-06T19:06:08.472935"
+type: gotcha
+summary: Todoist deadline edit from UI updates CRM contact_by but should NOT update synced_last_contacted
+detail: |
+  In processItem(), when Todoist deadline differs from CRM, the code updates contact_by to match and updates synced_deadline metadata. However, synced_last_contacted should NOT be updated because last_contacted hasn't changed - only the deadline was edited. The existing synced_last_contacted remains valid and prevents false positives in wasContactedSinceSync.
+actionable: true
+
+---
+timestamp: "2026-02-06T19:17:03.485294"
+type: gotcha
+summary: Backfill logic must run even when primary metadata exists
+detail: |
+  When adding new metadata keys to existing sync patterns, you must add explicit backfill for the new key even if the primary metadata (e.g., synced_deadline) already exists. The original backfill block only runs when the primary key is missing, so legacy records that have the primary key but lack the new key will never get backfilled. This was the exact issue caught by Codex review: tasks with synced_deadline from PR #227 would never get synced_last_contacted backfilled because the original backfill block (line ~690) only runs when synced_deadline is missing.
+actionable: true
+
+---
+timestamp: "2026-02-06T19:17:03.485294"
+type: documentation_gap
+summary: 5-path metadata update rule not followed during initial implementation
+detail: |
+  The core.md gotcha table already documents: 'Adding new Todoist task metadata key to only one path | Must update ALL 5 task creation/update paths: reconcileContactTasks, handleTaskCompletion, handleSkipTrigger, reconcileExistingTask (drift + backfill)'. However, during the initial fix, synced_last_contacted was only added to 4 paths - the reconcileExistingTask backfill path was missed. This was only caught during code review. The documentation exists but either wasn't consulted or wasn't prominent enough. Consider: (1) Adding this to the code review checklist explicitly, (2) Adding a code comment at the top of each of the 5 functions referencing this rule.
+actionable: true
+
+---
+timestamp: "2026-02-06T19:17:03.485294"
+type: architecture
+summary: Backfill creates two-cycle delay for legacy task detection
+detail: |
+  When backfilling metadata for detection logic, the first sync cycle after backfill will NOT trigger detection because the backfilled value equals the current value. Detection only works on the NEXT sync cycle when the monitored field advances beyond the backfilled value. Example: Cycle 1 backfills synced_last_contacted=2026-02-01 (current value), so wasContactedSinceSync returns false. Only in Cycle 2, after a calendar contact updates last_contacted to 2026-02-08, does wasContactedSinceSync return true. This is expected behavior but must be understood when writing tests and verifying fixes in production.
+actionable: true
+
+---
+timestamp: "2026-02-06T19:17:03.485294"
+type: rule
+summary: Always add backfill tests showing the two-cycle behavior
+detail: |
+  When adding backfill logic for detection metadata, always add a test (like TestBackfillSyncedLastContacted) that explicitly demonstrates the two-cycle behavior: Cycle 1 shows backfill occurs but detection returns false (because backfilled value == current value), and Cycle 2 shows detection returns true after the monitored field advances. This prevents confusion about whether the backfill is 'working' and documents the expected delay for legacy tasks.
+actionable: true
+
+---
+timestamp: "2026-02-06T19:17:03.485294"
+type: gotcha
+summary: Test loop simulation must replicate provider backfill logic
+detail: |
+  When testing reconciliation logic that includes backfill, the test loop must simulate the backfill by mutating tt.metadata before running the detection logic. Without this, test cases for 'missing synced_last_contacted' scenarios would fail even though the provider code works correctly. The test at line 498-503 adds: if _, hasSyncedLC := tt.metadata['synced_last_contacted'].(string); !hasSyncedLC { tt.metadata['synced_last_contacted'] = tt.lastContacted.Format(time.RFC3339) }. This simulates the backfill that would happen in the provider code before the wasContactedSinceSync check runs.
+actionable: true
+

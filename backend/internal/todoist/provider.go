@@ -49,6 +49,11 @@ const (
 	// to Todoist. Used to detect when contact_by changes in the CRM and the Todoist
 	// task needs to be updated.
 	MetadataKeySyncedDeadline = "synced_deadline"
+	// MetadataKeySyncedLastContacted stores the last_contacted timestamp (RFC3339) at the
+	// time the task was created or last synced. Used to detect when a contact is marked
+	// as contacted from a non-Todoist source (e.g., calendar sync), even when contact_by
+	// doesn't change (same cadence period).
+	MetadataKeySyncedLastContacted = "synced_last_contacted"
 )
 
 // DateFormat is the date format used for Todoist deadlines and synced_deadline metadata (YYYY-MM-DD)
@@ -443,13 +448,14 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 			cmd := p.createTaskCommand(contact, settings, &deadlineStr)
 			commands = append(commands, cmd)
 
-			// Update metadata with temp_id and synced_deadline (preserving existing keys)
+			// Update metadata with temp_id, synced_deadline, and synced_last_contacted (preserving existing keys)
 			metadata := task.Metadata
 			if metadata == nil {
 				metadata = make(map[string]any)
 			}
 			metadata[MetadataKeyPendingTempID] = cmd.TempID
 			metadata[MetadataKeySyncedDeadline] = deadlineStr
+			metadata[MetadataKeySyncedLastContacted] = completedAt.Format(time.RFC3339)
 			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 				logger.Warn().Err(err).Msg("failed to store pending_temp_id and synced_deadline in task metadata")
 			}
@@ -504,13 +510,16 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 			cmd := p.createTaskCommand(contact, settings, &deadlineStr)
 			commands = append(commands, cmd)
 
-			// Update metadata with temp_id and synced_deadline (preserving existing keys)
+			// Update metadata with temp_id, synced_deadline, and synced_last_contacted (preserving existing keys)
 			metadata := task.Metadata
 			if metadata == nil {
 				metadata = make(map[string]any)
 			}
 			metadata[MetadataKeyPendingTempID] = cmd.TempID
 			metadata[MetadataKeySyncedDeadline] = deadlineStr
+			if contact.LastContacted != nil {
+				metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+			}
 			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 				logger.Warn().Err(err).Msg("failed to store pending_temp_id and synced_deadline in task metadata")
 			}
@@ -620,17 +629,21 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 			cmd := p.createTaskCommand(&contact, settings, &currentDeadline)
 			commands = append(commands, cmd)
 
-			// Create task link (with temp_id and synced_deadline)
+			// Create task link (with temp_id, synced_deadline, and synced_last_contacted)
+			taskMetadata := map[string]any{
+				MetadataKeyPendingTempID:  cmd.TempID,
+				MetadataKeySyncedDeadline: currentDeadline,
+			}
+			if contact.LastContacted != nil {
+				taskMetadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+			}
 			_, err := p.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 				ContactID:      contact.ID,
 				Provider:       SourceName,
 				Kind:           TaskKindCadence,
 				ExternalTaskID: cmd.TempID, // Will be updated on sync response
 				State:          string(repository.ContactTaskStateManaged),
-				Metadata: map[string]any{
-					MetadataKeyPendingTempID:  cmd.TempID,
-					MetadataKeySyncedDeadline: currentDeadline,
-				},
+				Metadata:       taskMetadata,
 			})
 			if err != nil {
 				logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to create contact task")
@@ -690,15 +703,87 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 			metadata = make(map[string]any)
 		}
 		metadata[MetadataKeySyncedDeadline] = currentDeadline
+		if contact.LastContacted != nil {
+			metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+		}
 		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 			logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_deadline")
 		}
 		return commands
 	}
 
+	// Backfill synced_last_contacted if missing (legacy tasks created before this feature).
+	// Without this, wasContactedSinceSync would always return false for legacy tasks,
+	// meaning non-Todoist contacts would never be detected.
+	if _, hasSyncedLC := task.Metadata[MetadataKeySyncedLastContacted].(string); !hasSyncedLC {
+		if contact.LastContacted != nil {
+			metadata := task.Metadata
+			if metadata == nil {
+				metadata = make(map[string]any)
+			}
+			metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+				logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_last_contacted")
+			} else {
+				// Update task in memory so wasContactedSinceSync can use it this cycle
+				task.Metadata = metadata
+			}
+		}
+	}
+
 	// Check if deadline has drifted
 	if syncedDeadline == currentDeadline {
-		// Deadlines match, nothing to do
+		// Deadlines match - but check if the contact was contacted from a non-Todoist
+		// source (e.g., calendar sync). This handles the case where last_contacted was
+		// updated and contact_by was recalculated to the same date (same cadence period).
+		if p.wasContactedSinceSync(contact, task) {
+			logger.Info().
+				Str("contactId", contact.ID.String()).
+				Str("deadline", currentDeadline).
+				Msg("contact was contacted since last sync (non-Todoist source), completing task and creating new one")
+
+			// Complete the old task in Todoist
+			if task.ExternalTaskID != "" && !isPendingTempID(task) {
+				commands = append(commands, NewItemCloseCommand(task.ExternalTaskID))
+			}
+
+			// Calculate the next contact_by from the current last_contacted
+			if contact.Cadence != nil && *contact.Cadence != "" {
+				cadenceType, err := cadence.ParseCadence(*contact.Cadence)
+				if err == nil {
+					days := cadence.CadenceDays(cadenceType)
+					today := cadence.Today(*contact.LastContacted)
+					nextContactBy := today.AddDate(0, 0, days)
+
+					// Update contact_by
+					if err := p.contactRepo.UpdateContactBy(ctx, contact.ID, nextContactBy); err != nil {
+						logger.Warn().Err(err).Msg("failed to update contact_by after non-Todoist contact")
+					}
+
+					// Create new task with updated deadline
+					deadlineStr := nextContactBy.Format(DateFormat)
+					cmd := p.createTaskCommand(contact, settings, &deadlineStr)
+					commands = append(commands, cmd)
+
+					// Update metadata
+					metadata := task.Metadata
+					if metadata == nil {
+						metadata = make(map[string]any)
+					}
+					metadata[MetadataKeyPendingTempID] = cmd.TempID
+					metadata[MetadataKeySyncedDeadline] = deadlineStr
+					if contact.LastContacted != nil {
+						metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+					}
+					if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+						logger.Warn().Err(err).Msg("failed to update metadata after non-Todoist contact")
+					}
+				}
+			}
+
+			return commands
+		}
+
 		return commands
 	}
 
@@ -729,6 +814,9 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 	}
 	metadata[MetadataKeyPendingTempID] = cmd.TempID
 	metadata[MetadataKeySyncedDeadline] = currentDeadline
+	if contact.LastContacted != nil {
+		metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+	}
 	if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 		logger.Error().
 			Err(err).
@@ -738,6 +826,32 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 	}
 
 	return commands
+}
+
+// wasContactedSinceSync checks if the contact's last_contacted has advanced since the
+// task was last synced. This detects non-Todoist contact events (e.g., calendar sync)
+// that should trigger task completion even when contact_by doesn't change.
+func (p *CadenceSyncProvider) wasContactedSinceSync(contact *repository.Contact, task *repository.ContactTask) bool {
+	if contact.LastContacted == nil {
+		return false
+	}
+
+	syncedLastContactedStr, ok := task.Metadata[MetadataKeySyncedLastContacted].(string)
+	if !ok || syncedLastContactedStr == "" {
+		// No synced_last_contacted stored - can't determine if contacted since sync.
+		// This happens for tasks created before this feature. We don't auto-complete
+		// to avoid false positives; the metadata will be backfilled on the next
+		// task creation or completion cycle.
+		return false
+	}
+
+	syncedLastContacted, err := time.Parse(time.RFC3339, syncedLastContactedStr)
+	if err != nil {
+		logger.Warn().Err(err).Str("value", syncedLastContactedStr).Msg("failed to parse synced_last_contacted")
+		return false
+	}
+
+	return contact.LastContacted.After(syncedLastContacted)
 }
 
 // isPendingTempID checks if the task's external ID is still a pending temp ID
