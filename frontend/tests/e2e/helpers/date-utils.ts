@@ -10,3 +10,14 @@ export function getTodayUTC(): string {
   const now = new Date()
   return `${now.getUTCMonth() + 1}/${now.getUTCDate()}/${now.getUTCFullYear()}`
 }
+
+/**
+ * Get today's date in UTC formatted as M/D/YY (2-digit year).
+ *
+ * Use this when comparing dates displayed in the contacts table,
+ * which uses 2-digit year format to save column width.
+ */
+export function getTodayUTCShort(): string {
+  const now = new Date()
+  return `${now.getUTCMonth() + 1}/${now.getUTCDate()}/${String(now.getUTCFullYear()).slice(-2)}`
+}

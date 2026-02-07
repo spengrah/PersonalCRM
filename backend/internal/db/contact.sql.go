@@ -308,9 +308,11 @@ ORDER BY
   CASE WHEN $1 = 'location' AND $2 = 'asc' THEN COALESCE(location, '') END ASC,
   CASE WHEN $1 = 'location' AND $2 = 'desc' THEN COALESCE(location, '') END DESC,
   CASE WHEN $1 = 'birthday' AND $2 = 'asc' THEN birthday END ASC NULLS LAST,
-  CASE WHEN $1 = 'birthday' AND $2 = 'desc' THEN birthday END DESC NULLS FIRST,
+  CASE WHEN $1 = 'birthday' AND $2 = 'desc' THEN birthday END DESC NULLS LAST,
   CASE WHEN $1 = 'last_contacted' AND $2 = 'asc' THEN last_contacted END ASC NULLS LAST,
-  CASE WHEN $1 = 'last_contacted' AND $2 = 'desc' THEN last_contacted END DESC NULLS FIRST,
+  CASE WHEN $1 = 'last_contacted' AND $2 = 'desc' THEN last_contacted END DESC NULLS LAST,
+  CASE WHEN $1 = 'contact_by' AND $2 = 'asc' THEN contact_by END ASC NULLS LAST,
+  CASE WHEN $1 = 'contact_by' AND $2 = 'desc' THEN contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
   CASE WHEN $1 = 'cadence' AND $2 = 'desc' THEN
     CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
@@ -401,9 +403,11 @@ ORDER BY
   CASE WHEN $1 = 'location' AND $2 = 'asc' THEN COALESCE(location, '') END ASC,
   CASE WHEN $1 = 'location' AND $2 = 'desc' THEN COALESCE(location, '') END DESC,
   CASE WHEN $1 = 'birthday' AND $2 = 'asc' THEN birthday END ASC NULLS LAST,
-  CASE WHEN $1 = 'birthday' AND $2 = 'desc' THEN birthday END DESC NULLS FIRST,
+  CASE WHEN $1 = 'birthday' AND $2 = 'desc' THEN birthday END DESC NULLS LAST,
   CASE WHEN $1 = 'last_contacted' AND $2 = 'asc' THEN last_contacted END ASC NULLS LAST,
-  CASE WHEN $1 = 'last_contacted' AND $2 = 'desc' THEN last_contacted END DESC NULLS FIRST,
+  CASE WHEN $1 = 'last_contacted' AND $2 = 'desc' THEN last_contacted END DESC NULLS LAST,
+  CASE WHEN $1 = 'contact_by' AND $2 = 'asc' THEN contact_by END ASC NULLS LAST,
+  CASE WHEN $1 = 'contact_by' AND $2 = 'desc' THEN contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
   -- 'desc' = most frequent first (ASC on number), 'asc' = least frequent first (DESC on number)
   CASE WHEN $1 = 'cadence' AND $2 = 'desc' THEN
@@ -648,9 +652,11 @@ ORDER BY
   CASE WHEN $2 = 'location' AND $3 = 'asc' THEN COALESCE(c.location, '') END ASC,
   CASE WHEN $2 = 'location' AND $3 = 'desc' THEN COALESCE(c.location, '') END DESC,
   CASE WHEN $2 = 'birthday' AND $3 = 'asc' THEN c.birthday END ASC NULLS LAST,
-  CASE WHEN $2 = 'birthday' AND $3 = 'desc' THEN c.birthday END DESC NULLS FIRST,
+  CASE WHEN $2 = 'birthday' AND $3 = 'desc' THEN c.birthday END DESC NULLS LAST,
   CASE WHEN $2 = 'last_contacted' AND $3 = 'asc' THEN c.last_contacted END ASC NULLS LAST,
-  CASE WHEN $2 = 'last_contacted' AND $3 = 'desc' THEN c.last_contacted END DESC NULLS FIRST,
+  CASE WHEN $2 = 'last_contacted' AND $3 = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN $2 = 'contact_by' AND $3 = 'asc' THEN c.contact_by END ASC NULLS LAST,
+  CASE WHEN $2 = 'contact_by' AND $3 = 'desc' THEN c.contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
   CASE WHEN $2 = 'cadence' AND $3 = 'desc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
@@ -759,9 +765,11 @@ ORDER BY
   CASE WHEN $2 = 'location' AND $3 = 'asc' THEN COALESCE(c.location, '') END ASC,
   CASE WHEN $2 = 'location' AND $3 = 'desc' THEN COALESCE(c.location, '') END DESC,
   CASE WHEN $2 = 'birthday' AND $3 = 'asc' THEN c.birthday END ASC NULLS LAST,
-  CASE WHEN $2 = 'birthday' AND $3 = 'desc' THEN c.birthday END DESC NULLS FIRST,
+  CASE WHEN $2 = 'birthday' AND $3 = 'desc' THEN c.birthday END DESC NULLS LAST,
   CASE WHEN $2 = 'last_contacted' AND $3 = 'asc' THEN c.last_contacted END ASC NULLS LAST,
-  CASE WHEN $2 = 'last_contacted' AND $3 = 'desc' THEN c.last_contacted END DESC NULLS FIRST,
+  CASE WHEN $2 = 'last_contacted' AND $3 = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN $2 = 'contact_by' AND $3 = 'asc' THEN c.contact_by END ASC NULLS LAST,
+  CASE WHEN $2 = 'contact_by' AND $3 = 'desc' THEN c.contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
   CASE WHEN $2 = 'cadence' AND $3 = 'desc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END

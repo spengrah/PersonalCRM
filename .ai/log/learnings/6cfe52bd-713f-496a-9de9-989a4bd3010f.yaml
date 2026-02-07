@@ -1,0 +1,200 @@
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: gotcha
+summary: gh API -f vs -F flag for integer parameters
+detail: |
+  GitHub CLI `gh api` requires `-F` (not `-f`) for integer parameters like sub_issue_id. Using `-f` sends the value as a string, causing 422 errors with message 'is not of type integer'. Example: `gh api --method POST /repos/{owner}/{repo}/issues/239/sub_issues -F sub_issue_id="$id"` (correct) vs `-f sub_issue_id="$id"` (wrong).
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: gotcha
+summary: Edit tool requires reading file first
+detail: |
+  The Edit tool returns error 'File has not been read yet. Read it first before writing to it.' if you attempt to edit a file without using Read tool first. Always call Read before Edit, even if you think you know the file contents.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: gotcha
+summary: make commands must run from project root
+detail: |
+  Commands like `make sqlc` and `make test` must be run from the project root directory (/home/dev/workspace/PersonalCRM), not from subdirectories like /backend. Running from wrong directory causes 'No rule to make target' errors.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: rule
+summary: Feature-dev skill requires fully qualified name
+detail: |
+  The /feature-dev skill must be invoked as 'feature-dev:feature-dev' (plugin:skill format), not just 'feature-dev'. This is a plugin-provided skill requiring fully qualified naming.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: architecture
+summary: SQL sort field additions require 4-query pattern
+detail: |
+  Adding a new sortable field (like contact_by) requires updating exactly 4 sorted queries: ListContactsSorted, SearchContactsSorted, ListContactIDsSorted, and SearchContactIDsSorted. The ID-only variants must match the full-data variants for navigation consistency. Each query uses CASE WHEN pattern with sqlc.arg(sort_field) and sqlc.arg(sort_order).
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: architecture
+summary: Sort field type updates span 3 files for consistency
+detail: |
+  When adding a new sortable field, update in exactly this order: (1) handler validation oneof tag in backend/internal/api/handlers/contact.go, (2) SortField type in frontend/src/app/contacts/page.tsx, (3) ContactListParams sort union in frontend/src/types/contact.ts. This ensures type consistency across API validation, UI state, and API client.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: gotcha
+summary: NULLS FIRST vs NULLS LAST in PostgreSQL DESC sorts
+detail: |
+  PostgreSQL DESC sorts default to NULLS FIRST (NULLs appear at top), which is unintuitive for date fields where 'Never' contacts should appear last. Always explicitly specify NULLS LAST for DESC date sorts to keep NULL values at the end regardless of direction.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: architecture
+summary: Frontend sort defaults use ternary in handleSort
+detail: |
+  Default sort direction for new fields is set in handleSort's ternary: `order: (field === 'cadence' || field === 'last_contacted') ? 'desc' : 'asc'`. Add field to the condition if it should default to descending (like most-recent-first), or rely on fallback 'asc' for earliest-first semantics.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: rule
+summary: Test file sharing types via same package, not imports
+detail: |
+  Backend API integration tests in tests/api/ package define local response types (like ContactIDsResponse) rather than importing from handlers package, even though the types are exported. Follow this pattern for consistency - define local types in test files.
+actionable: true
+
+---
+timestamp: "2026-02-06T23:55:42.350699"
+type: documentation_gap
+summary: Common gotchas table incomplete for multi-file patterns
+detail: |
+  The 'When You Change X, Check Y' table in .ai/rules/core.md doesn't mention that adding sortable fields requires updating handler validation, frontend SortField type, and ContactListParams type in 3 files. This cross-cutting concern should be documented to prevent forgetting one of the 3 required changes.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:09:02.320991"
+type: gotcha
+summary: E2E test strict mode violation with duplicate text in new columns
+detail: |
+  When adding new columns to a table that may display the same values as existing columns (e.g., both 'Last Contacted' and 'Next Contact' showing '2/7/2026'), existing E2E tests using getByText() will fail with strict mode violations ('resolved to 2 elements'). Pre-existing tests that search for dates/text in table rows must be updated to use .first() when the value may appear in multiple columns. This is not obvious until CI fails - local diff-based E2E may not catch all affected tests.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:09:02.320991"
+type: gotcha
+summary: API createContact always sets last_contacted to now()
+detail: |
+  The contact creation handler automatically sets last_contacted to accelerated.GetCurrentTime() for all new contacts, meaning you cannot create a contact with NULL last_contacted through the API. This makes it impossible to test NULLS LAST behavior through API-based integration tests. When testing NULL sorting behavior, you must either: (1) test sorting with known non-null dates, or (2) rely on SQL-level guarantees since the NULL case cannot be reached via the API. Tests that assume newly-created contacts will have NULL last_contacted will fail.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:09:02.320991"
+type: architecture
+summary: SQL sorting requires 4-query pattern for search + pagination
+detail: |
+  Adding a sortable field to contacts requires updating exactly 4 sorted queries in contact.sql: ListContactsPaginatedSorted, SearchContactIDsSorted, GetContactsSortedByIDs, and ListContactsIDsFullSorted. Each query has a CASE WHEN chain for each sortable field + direction. This pattern exists because: (1) search uses ID lookup, (2) pagination needs efficient sorted queries, (3) detail page navigation needs the same sort for prev/next. Missing any query breaks specific code paths (e.g., search without sort update breaks search results ordering).
+actionable: true
+
+---
+timestamp: "2026-02-07T00:09:02.320991"
+type: gotcha
+summary: PostgreSQL NULLS FIRST is default for DESC sorts
+detail: |
+  PostgreSQL defaults to NULLS LAST for ASC but NULLS FIRST for DESC. For date columns like last_contacted and contact_by, this creates unintuitive behavior where never-contacted (NULL) contacts appear FIRST in descending sorts. The fix is to explicitly add 'NULLS LAST' to both ASC and DESC CASE WHEN clauses in all 4 sorted queries. Without this, NULL values will appear at the top of DESC-sorted lists instead of at the bottom where users expect them.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:09:02.320991"
+type: rule
+summary: Validation test oneof enums must match API handler validation
+detail: |
+  The unit test in validation_test.go has a local Query struct with hardcoded oneof values that must be kept in sync with the actual API handler validation tags. When adding a new sortable field like contact_by, you must update BOTH: (1) the handler's validate tag in ContactListParams, and (2) the test's local Query struct oneof values. These easily drift because the test doesn't import the actual handler struct - it defines its own for testing the validator library.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:49:38.262285"
+type: gotcha
+summary: E2E tests with DATE columns fail sort verification in testing mode
+detail: |
+  In testing mode (CRM_ENV=testing), cadence durations are compressed (weekly=2min, annual=2hr). When contact_by is calculated from last_contacted + cadence and stored as a PostgreSQL DATE column, all contacts created on the same calendar day will have identical contact_by dates regardless of their cadence. This makes visual sort order verification non-deterministic in E2E tests. Solution: Verify sort functionality via API request parameters (query string contains sort=field&order=direction) rather than comparing visual row positions or boundingBox coordinates.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:49:38.262285"
+type: distinction
+summary: PostgreSQL NULLS FIRST vs NULLS LAST affects user experience consistency
+detail: |
+  For date columns, using DESC NULLS FIRST places NULL values at the top of descending sorts, which is inconsistent UX - users expect NULLs at the bottom regardless of sort direction. Use NULLS LAST for both ASC and DESC on all date fields (last_contacted, contact_by, birthday). When changing NULL handling, update ALL 4 sorted queries: ListContactsSorted, SearchContactsSorted, ListContactIDsSorted, SearchContactIDsSorted.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:49:38.262285"
+type: architecture
+summary: Accelerated time in testing affects DATE precision calculations
+detail: |
+  The system uses cadence.GetCadenceDuration() which returns environment-specific durations: production uses real-world intervals (weekly=7 days), testing uses compressed intervals (weekly=2 minutes). When these durations are added to timestamps and stored in DATE columns, testing-mode values often collapse to the same calendar day. This is by design for rapid test execution but means E2E tests cannot rely on visual date differences for sort verification. Backend integration tests work fine because they compare full timestamp values at the DB level before DATE truncation.
+actionable: false
+
+---
+timestamp: "2026-02-07T00:49:38.262285"
+type: rule
+summary: E2E sort tests must verify mechanics not visual outcomes when dates collide
+detail: |
+  When testing sortable columns with DATE precision in environments using accelerated time, verify sort functionality via: (1) API request inspection (page.waitForRequest/Response to check query params), (2) sort icon state changes, (3) column header interactivity. Do NOT rely on comparing row positions (boundingBox, textContent ordering) when the underlying DATE values are identical. Backend integration tests handle actual sort ordering verification; E2E tests should focus on UI-to-API integration.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:49:38.262285"
+type: documentation_gap
+summary: Testing mode DATE precision implications not documented in testing rules
+detail: |
+  The .ai/rules/testing.md and testing-related patterns don't mention that accelerated cadences cause DATE columns to collapse to same-day values, breaking visual sort verification in E2E tests. This led to repeated attempts to verify visual row ordering (first with textContent, then with boundingBox) before discovering the root cause. Should document: 'E2E tests with DATE columns: verify sort via API params, not visual row order - accelerated cadences make same-day dates common.' Add to testing.md under E2E section.
+actionable: true
+
+---
+timestamp: "2026-02-07T01:49:17.744714"
+type: gotcha
+summary: Table padding changes require multiple replace_all operations to catch all variants
+detail: |
+  When reducing table cell/header padding (e.g., px-6 to px-4), you must run multiple Edit operations with replace_all:true to catch all padding class variants (e.g., 'px-6 py-3 text-left...', 'px-6 py-4 whitespace-nowrap', 'px-6 py-4 whitespace-nowrap text-sm...', 'relative px-6 py-3'). A single replace won't catch all permutations because the class combinations vary across headers, cells, and action columns.
+actionable: true
+
+---
+timestamp: "2026-02-07T01:49:17.744714"
+type: gotcha
+summary: E2E date format changes require helper updates when switching from full-year to 2-digit year
+detail: |
+  When changing date display format from year:'numeric' (M/D/YYYY like '2/7/2026') to year:'2-digit' (M/D/YY like '2/7/26'), E2E tests using getTodayUTC() will fail because getByText('2/7/2026') won't match '2/7/26'. Create a getTodayUTCShort() helper that returns M/D/YY format and use it for list view tests while keeping getTodayUTC() for detail view tests that still use full year.
+actionable: true
+
+---
+timestamp: "2026-02-07T01:49:17.744714"
+type: gotcha
+summary: Removing table columns requires updating E2E column index selectors
+detail: |
+  When removing a table column (e.g., Contact Info), all E2E tests that use .nth(N) selectors to find cells by column index must be updated. Column indices shift left after removal. Example: removing Contact Info (column 2) changes 'Next Contact' from nth(6) to nth(5). Search for .nth() calls in E2E tests and update the comment documenting column order.
+actionable: true
+
+---
+timestamp: "2026-02-07T01:49:17.744714"
+type: distinction
+summary: Remove unused imports after removing component features
+detail: |
+  When removing a table column that uses specialized components (ContactMethodIcon, formatContactMethodValue, getContactMethodHref, getContactMethodLabel, getPrimaryAndSecondaryMethods), remove all unused imports from both the component file and type imports (e.g., ContactMethod type). Use Grep to verify each import is only used in the removed section before deleting it.
+actionable: true
+
+---
+timestamp: "2026-02-07T01:49:17.744714"
+type: rule
+summary: User requests to condense UI without horizontal scroll favor removing low-value columns
+detail: |
+  When user says table is too wide and requests no horizontal scroll, prioritize removing columns with redundant information (Contact Info already shown in detail page) over techniques like reducing font size or forcing wrapping. Combine with date format compression (mm/dd/yy vs mm/dd/yyyy) and padding reduction (px-6→px-4) for maximum space savings while maintaining readability.
+actionable: true
+

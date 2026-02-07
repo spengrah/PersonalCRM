@@ -127,6 +127,8 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Creating FK-referencing record without existence check | Check parent exists first and return ErrNotFound - otherwise FK constraint violation returns 500 instead of 404 |
 | Circular dependency between sync providers and service | Move shared request types/constants to `repository` package - providers already depend on it, avoids provider→service→provider cycle |
 | Adding new struct field used in existing methods | Update all test factory functions (`newTestProvider`, `newTestProviderWithExternal`, etc.) to initialize the field - otherwise nil pointer panics in tests |
+| PostgreSQL `DESC NULLS FIRST` for date columns | Use `NULLS LAST` for both ASC and DESC on date sorts - keeps NULLs at end regardless of direction |
+| E2E sort test comparing row positions with DATE columns | Accelerated cadences make contact_by dates collapse to same day - verify sort via API request params (`page.waitForResponse` with `sort=field&order=direction`), not visual row positions |
 
 ## Anti-Patterns
 
@@ -202,3 +204,4 @@ Cross-cutting concerns that require checking multiple locations:
 | Cadence options | `contact` CHECK constraint + frontend dropdown options |
 | E2E test file patterns | `frontend/tests/e2e/test-map.json` tag mappings |
 | Scheduled job changes | Scheduler section in `.ai/guides/architecture.md` |
+| New sortable contact field | 4 SQL sorted queries + handler oneof + `SortField` type + `ContactListParams.sort` |

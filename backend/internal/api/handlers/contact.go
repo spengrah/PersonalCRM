@@ -135,7 +135,7 @@ type ListContactsQuery struct {
 	Page    int    `form:"page" validate:"omitempty,min=1" example:"1"`
 	Limit   int    `form:"limit" validate:"omitempty,min=1,max=1000" example:"20"`
 	Search  string `form:"search" validate:"omitempty,max=255" example:"john"`
-	Sort    string `form:"sort" validate:"omitempty,oneof=name location birthday last_contacted cadence" example:"name"`
+	Sort    string `form:"sort" validate:"omitempty,oneof=name location birthday last_contacted contact_by cadence" example:"name"`
 	Order   string `form:"order" validate:"omitempty,oneof=asc desc" example:"asc"`
 	IDsOnly bool   `form:"ids_only" example:"false"`
 }
