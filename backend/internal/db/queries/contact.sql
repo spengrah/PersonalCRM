@@ -5,13 +5,21 @@ SELECT * FROM contact
 WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: ListContacts :many
-SELECT * FROM contact 
+-- cadence_filter: '' = no filter (Go zero value), 'has_cadence' = non-empty cadence,
+-- 'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
+SELECT * FROM contact
 WHERE deleted_at IS NULL
-LIMIT $1 OFFSET $2;
+  AND (sqlc.arg(cadence_filter) = '' OR
+       (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
+       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
+LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: ListContactsSorted :many
 SELECT * FROM contact
 WHERE deleted_at IS NULL
+  AND (sqlc.arg(cadence_filter) = '' OR
+       (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
+       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
 ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN full_name END ASC,
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'desc' THEN full_name END DESC,
@@ -43,12 +51,15 @@ LEFT JOIN (
   GROUP BY contact_id
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
+  AND (sqlc.arg(cadence_filter) = '' OR
+       (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
 ORDER BY ts_rank(
   to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
-  plainto_tsquery('english', $1)
+  plainto_tsquery('english', sqlc.arg(search_query))
 ) DESC
-LIMIT $2 OFFSET $3;
+LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: SearchContactsSorted :many
 SELECT c.* FROM contact c
@@ -58,6 +69,9 @@ LEFT JOIN (
   GROUP BY contact_id
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
+  AND (sqlc.arg(cadence_filter) = '' OR
+       (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
 ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN c.full_name END ASC,
@@ -141,17 +155,27 @@ WHERE id = $1 AND deleted_at IS NULL;
 DELETE FROM contact WHERE id = $1;
 
 -- name: CountContacts :one
-SELECT COUNT(*) FROM contact WHERE deleted_at IS NULL;
+SELECT COUNT(*) FROM contact
+WHERE deleted_at IS NULL
+  AND (sqlc.arg(cadence_filter) = '' OR
+       (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
+       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')));
 
 -- name: ListContactIDs :many
 -- Lightweight query returning only IDs for navigation
 SELECT id FROM contact
-WHERE deleted_at IS NULL;
+WHERE deleted_at IS NULL
+  AND (sqlc.arg(cadence_filter) = '' OR
+       (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
+       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')));
 
 -- name: ListContactIDsSorted :many
 -- Lightweight query returning only IDs with sorting for navigation
 SELECT id FROM contact
 WHERE deleted_at IS NULL
+  AND (sqlc.arg(cadence_filter) = '' OR
+       (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
+       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
 ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN full_name END ASC,
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'desc' THEN full_name END DESC,
@@ -182,10 +206,13 @@ LEFT JOIN (
   GROUP BY contact_id
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
+  AND (sqlc.arg(cadence_filter) = '' OR
+       (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
 ORDER BY ts_rank(
   to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
-  plainto_tsquery('english', $1)
+  plainto_tsquery('english', sqlc.arg(search_query))
 ) DESC;
 
 -- name: SearchContactIDsSorted :many
@@ -197,6 +224,9 @@ LEFT JOIN (
   GROUP BY contact_id
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
+  AND (sqlc.arg(cadence_filter) = '' OR
+       (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
 ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN c.full_name END ASC,
@@ -227,7 +257,10 @@ LEFT JOIN (
   GROUP BY contact_id
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1);
+  AND (sqlc.arg(cadence_filter) = '' OR
+       (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query));
 
 -- name: FindSimilarContacts :many
 SELECT

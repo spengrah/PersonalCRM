@@ -24,6 +24,7 @@ export interface ContactIDsParams {
   sort?: string
   order?: 'asc' | 'desc'
   search?: string
+  cadence_filter?: 'has_cadence' | 'no_cadence'
 }
 
 export interface UpdateLastContactedRequest {
@@ -39,6 +40,7 @@ export const contactsApi = {
       ...(params.search && { search: params.search }),
       ...(params.sort && { sort: params.sort }),
       ...(params.order && { order: params.order }),
+      ...(params.cadence_filter && { cadence_filter: params.cadence_filter }),
     }
 
     const response = await apiClient.getWithMeta<Contact[]>('/api/v1/contacts', queryParams)
@@ -92,6 +94,7 @@ export const contactsApi = {
       ...(params.sort && { sort: params.sort }),
       ...(params.order && { order: params.order }),
       ...(params.search && { search: params.search }),
+      ...(params.cadence_filter && { cadence_filter: params.cadence_filter }),
     }
 
     return apiClient.get<ContactIDsResponse>('/api/v1/contacts', queryParams)

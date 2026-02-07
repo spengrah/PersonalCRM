@@ -79,6 +79,8 @@ export default function ContactDetailPage() {
     sort: searchParams.get('sort') || 'cadence',
     order: (searchParams.get('order') as 'asc' | 'desc') || 'desc',
     search: searchParams.get('search') || undefined,
+    cadence_filter:
+      (searchParams.get('cadence_filter') as 'has_cadence' | 'no_cadence') || undefined,
   }
 
   const { data: contact, isLoading, error } = useContact(contactId)
@@ -104,11 +106,12 @@ export default function ContactDetailPage() {
       if (listContext.sort) params.set('sort', listContext.sort)
       if (listContext.order) params.set('order', listContext.order)
       if (listContext.search) params.set('search', listContext.search)
+      if (listContext.cadence_filter) params.set('cadence_filter', listContext.cadence_filter)
       const queryString = params.toString()
       const path = newId ? `/contacts/${newId}` : '/contacts'
       return `${path}${queryString ? `?${queryString}` : ''}`
     },
-    [listContext.sort, listContext.order, listContext.search]
+    [listContext.sort, listContext.order, listContext.search, listContext.cadence_filter]
   )
 
   // Keyboard navigation

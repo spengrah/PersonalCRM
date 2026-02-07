@@ -132,12 +132,13 @@ type UpdateContactRequest struct {
 
 // ListContactsQuery represents query parameters for listing contacts
 type ListContactsQuery struct {
-	Page    int    `form:"page" validate:"omitempty,min=1" example:"1"`
-	Limit   int    `form:"limit" validate:"omitempty,min=1,max=1000" example:"20"`
-	Search  string `form:"search" validate:"omitempty,max=255" example:"john"`
-	Sort    string `form:"sort" validate:"omitempty,oneof=name location birthday last_contacted contact_by cadence" example:"name"`
-	Order   string `form:"order" validate:"omitempty,oneof=asc desc" example:"asc"`
-	IDsOnly bool   `form:"ids_only" example:"false"`
+	Page          int    `form:"page" validate:"omitempty,min=1" example:"1"`
+	Limit         int    `form:"limit" validate:"omitempty,min=1,max=1000" example:"20"`
+	Search        string `form:"search" validate:"omitempty,max=255" example:"john"`
+	Sort          string `form:"sort" validate:"omitempty,oneof=name location birthday last_contacted contact_by cadence" example:"name"`
+	Order         string `form:"order" validate:"omitempty,oneof=asc desc" example:"asc"`
+	IDsOnly       bool   `form:"ids_only" example:"false"`
+	CadenceFilter string `form:"cadence_filter" validate:"omitempty,oneof=has_cadence no_cadence" example:"has_cadence"`
 }
 
 // ContactIDsResponse represents the response for ID-only queries
@@ -366,9 +367,10 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 	// Handle IDs-only request (lightweight response for navigation)
 	if query.IDsOnly {
 		ids, err := h.contactService.ListContactIDs(c.Request.Context(), repository.ListContactIDsParams{
-			Sort:   query.Sort,
-			Order:  query.Order,
-			Search: query.Search,
+			Sort:          query.Sort,
+			Order:         query.Order,
+			Search:        query.Search,
+			CadenceFilter: query.CadenceFilter,
 		})
 		if err != nil {
 			api.SendInternalError(c, "Failed to retrieve contact IDs")
@@ -400,18 +402,20 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 
 	if query.Search != "" {
 		contacts, total, err = h.contactService.SearchContactsPage(c.Request.Context(), repository.SearchContactsParams{
-			Query:  query.Search,
-			Limit:  limit,
-			Offset: offset,
-			Sort:   query.Sort,
-			Order:  query.Order,
+			Query:         query.Search,
+			Limit:         limit,
+			Offset:        offset,
+			Sort:          query.Sort,
+			Order:         query.Order,
+			CadenceFilter: query.CadenceFilter,
 		})
 	} else {
 		contacts, total, err = h.contactService.ListContactsPage(c.Request.Context(), repository.ListContactsParams{
-			Limit:  limit,
-			Offset: offset,
-			Sort:   query.Sort,
-			Order:  query.Order,
+			Limit:         limit,
+			Offset:        offset,
+			Sort:          query.Sort,
+			Order:         query.Order,
+			CadenceFilter: query.CadenceFilter,
 		})
 	}
 

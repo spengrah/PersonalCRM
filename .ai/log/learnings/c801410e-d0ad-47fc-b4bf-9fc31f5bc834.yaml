@@ -1,0 +1,152 @@
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: gotcha
+summary: sqlc regeneration changes param struct field names unpredictably
+detail: |
+  When converting SQL queries from positional params ($1, $2) to named params (sqlc.arg(name)), sqlc regeneration changes generated Go struct field names. E.g., ListContacts changed `Limit`/`Offset` to `PageLimit`/`PageOffset`, SearchContacts changed `PlaintoTsquery` to `SearchQuery`. This breaks compilation and requires updating all repository calls. Always run `go build ./cmd/crm-api` after `make sqlc` to catch these before writing repository code.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: gotcha
+summary: E2E waitForResponse can miss already-fired responses
+detail: |
+  When testing URL param changes (e.g., filter reset to All), `page.waitForResponse()` can timeout if the response fires before the listener is set up. For reset-to-default cases where the param is removed from URL, prefer visibility assertions with timeout over response waiting: `await expect(...).toBeVisible({ timeout: 10000 })` instead of `await page.waitForResponse(!resp.url().includes('param'))`.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: architecture
+summary: Cadence filter requires 10 SQL query modifications for completeness
+detail: |
+  Adding a filter to contact listing requires updating all 10 queries: 8 listing queries (list/search × sorted/unsorted × full/IDs-only matrix) PLUS 2 count queries (CountContacts, CountSearchContacts). Forgetting count queries breaks pagination totals. Pattern: `AND (sqlc.arg(filter) = '' OR (sqlc.arg(filter) = 'value' AND condition))` for optional filters.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: rule
+summary: Navigation context params must flow through detail page listContext
+detail: |
+  When adding new list filter params (like cadence_filter), they must be: 1) extracted from URL searchParams in detail page's listContext object, 2) passed to useContactIDs hook, 3) preserved in buildNavigationUrl for prev/next navigation. Missing any of these breaks list→detail→list navigation consistency.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: distinction
+summary: Empty string vs undefined for optional filter query params
+detail: |
+  Backend uses empty string `''` as 'no filter' sentinel in SQL (sqlc.arg(cadence_filter) = '' means skip filtering). Frontend uses `undefined` to omit param from URL entirely. API client spreads with `...(params.cadence_filter && { cadence_filter: params.cadence_filter })` to only send when defined. Never send empty string from frontend - it's a backend-only implementation detail.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: documentation_gap
+summary: CLAUDE.md missing guidance on sqlc param migration strategy
+detail: |
+  When adding params to existing queries, the choice between positional vs named params has cascading effects. The gotchas section warns about sqlc type changes but doesn't explain: 1) when to convert positional→named (answer: when adding params), 2) that ALL params must use same style (can't mix $1 with sqlc.arg), 3) that unsorted queries need explicit names (page_offset not $2). Add to gotchas: 'Adding params to queries → convert all positional to named sqlc.arg() → regenerate → expect field name changes'.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:08:43.015484"
+type: architecture
+summary: Filter state lives in URL params, not React state
+detail: |
+  The cadence filter is stored in URL searchParams and synchronized via useEffect, not maintained as independent React state. Pattern: read from URL → setParams updates URL → useEffect syncs params → triggers query refetch. This ensures filter state survives page refresh and enables shareable filtered URLs. Contrast with sort/search which follow same pattern.
+actionable: false
+
+---
+timestamp: "2026-02-07T14:17:45.313554"
+type: gotcha
+summary: Integration tests in CI require explicit db.RunMigrations() call
+detail: |
+  CI runs integration tests against a bare PostgreSQL service (pgvector/pgvector:pg16) without pre-existing schema. Unlike local dev where migrations run automatically via docker-compose, CI integration tests must call `db.RunMigrations(databaseURL, getMigrationsPath())` before `db.NewDatabase()`. Missing this causes "relation does not exist" errors in CI even when tests pass locally. Pattern: check DATABASE_URL, run migrations, then connect - used by all integration tests in backend/tests package.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:17:45.313554"
+type: documentation_gap
+summary: Integration test template not documented, leading to missing migrations
+detail: |
+  The session shows an agent creating an integration test without the required `db.RunMigrations()` call, which worked locally but failed in CI with "relation 'contact' does not exist". The agent had to reverse-engineer the pattern by reading other integration test files. This reveals a documentation gap: there's no template or guide for writing integration tests. Should add to `.ai/patterns/testing.md` or create `.ai/templates/integration-test.go` showing the required setup: DATABASE_URL check → getMigrationsPath() → db.RunMigrations() → db.NewDatabase().
+actionable: true
+
+---
+timestamp: "2026-02-07T14:17:45.313554"
+type: architecture
+summary: CI test database is bare PostgreSQL without pre-run migrations
+detail: |
+  The GitHub Actions workflow for backend tests creates a PostgreSQL service container (pgvector/pgvector:pg16) with empty database 'personal_crm_test', then immediately runs `go test -v ./tests/...` without any migration step. This differs from local dev environment where docker-compose runs migrations on startup. Integration tests are responsible for their own schema setup via `db.RunMigrations()`. This design allows tests to run against a clean schema every time but requires explicit migration calls in each test's setup.
+actionable: false
+
+---
+timestamp: "2026-02-07T14:29:53.553957"
+type: gotcha
+summary: Empty string cadence values require explicit handling in filter logic
+detail: |
+  The cadence field can have three states: NULL (no value), empty string '' (cleared/legacy), and valid enum values. When filtering for 'no_cadence', must check both IS NULL OR cadence = ''. When filtering for 'has_cadence', must check IS NOT NULL AND cadence != ''. Only checking IS NULL/IS NOT NULL misclassifies empty strings. This pattern exists throughout the codebase (e.g., contact_by computation at contact.sql:353, migration 027).
+actionable: true
+
+---
+timestamp: "2026-02-07T14:29:53.553957"
+type: documentation_gap
+summary: Contact list filter addition checklist needs empty string handling reminder
+detail: |
+  The existing gotcha 'Adding new contact list filter | Must update all 10 SQL queries...' correctly lists all the places to update but doesn't mention that nullable string fields require explicit empty string checks alongside NULL checks. This pattern was missed during initial implementation and caught only during code review. The documentation should explicitly warn about three-state nullable string fields (NULL, '', valid_value) requiring compound conditions.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:29:53.553957"
+type: rule
+summary: Automated code review feedback must be verified against actual codebase patterns
+detail: |
+  The Claude Code Review bot flagged 'Critical Issue #1 & #2' about missing URL state synchronization for the cadence filter. However, this was incorrect - the contacts list page uses React useState for ALL parameters (sort, order, search, page, cadence_filter) with no URL sync on the list page itself. URL params are only used for navigation context when going to detail pages. The review misunderstood the existing architectural pattern. Future agents should verify automated review feedback against the actual codebase implementation patterns before making changes.
+actionable: false
+
+---
+timestamp: "2026-02-07T14:40:26.603774"
+type: rule
+summary: Always document SQL sentinel patterns in query comments
+detail: |
+  When SQL queries use sentinel values (like empty string '' to mean 'no filter'), this must be documented in a comment at the query definition. The session shows the agent initially wrote filtering logic without explaining the empty string sentinel, which was flagged in code review. Adding a comment like '-- cadence_filter: "" = no filter (Go zero value)' makes the pattern immediately clear to future maintainers. This is especially important for sqlc queries where the SQL is the source of truth.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:40:26.603774"
+type: rule
+summary: Add integration tests for edge cases that motivated the fix
+detail: |
+  When fixing a bug involving edge case values (like empty string vs NULL in nullable columns), always add an integration test specifically covering that edge case. The session shows the agent fixing empty string handling but initially only testing NULL and valid values. The code review correctly identified this gap - the core edge case (empty string cadence values) wasn't tested. Tests should directly verify the behavior that was broken/fixed, not just related functionality.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:40:26.603774"
+type: gotcha
+summary: Empty string sentinel in Go handlers propagates from omitempty zero values
+detail: |
+  When Go handler structs use `omitempty` tags on string fields, the repository/SQL layer receives empty string "" as the zero value when the frontend omits the parameter. This creates a three-way distinction in nullable string columns: NULL (never set), "" (cleared/legacy or omitted param), and valid values. SQL queries must treat "" appropriately - either as a sentinel for 'no filter' in query params, or as equivalent to NULL for data values. The session shows this pattern for cadence_filter where "" means 'don't filter', while in the cadence column itself "" is treated like NULL (no cadence set).
+actionable: true
+
+---
+timestamp: "2026-02-07T14:44:48.831664"
+type: gotcha
+summary: CHECK constraints prevent empty strings even though column is nullable
+detail: |
+  The `contact_cadence_check` constraint only allows specific cadence values (weekly, biweekly, monthly, quarterly, biannual, annual) OR NULL. It rejects empty strings even though the column is nullable. This means defensive SQL filters checking `cadence != ''` are purely for hypothetical legacy data that bypassed constraints, not a realistic scenario. Integration tests attempting to create contacts with empty string cadence will fail with constraint violation.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:44:48.831664"
+type: gotcha
+summary: Integration tests in backend/tests/ need migration step before db.NewDatabase()
+detail: |
+  When writing integration tests in `backend/tests/`, must call `db.RunMigrations(databaseURL, getMigrationsPath())` before `db.NewDatabase()`. CI runs against bare PostgreSQL without pre-existing schema, so migrations must be applied in the test setup. Local tests may pass if developer's database already has schema applied, masking this CI failure.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:44:48.831664"
+type: documentation_gap
+summary: Empty string nullable column gotcha needs CHECK constraint caveat
+detail: |
+  The existing gotcha 'Filtering nullable string columns (e.g., cadence) with only IS NULL/IS NOT NULL' documents handling three states (NULL, empty string, valid values). However, it doesn't mention that CHECK constraints may prevent empty strings from being stored, making the empty string case defensive-only. This led to writing an integration test that violated the constraint. The gotcha should clarify: 'Check for CHECK constraints first - they may prevent empty strings even in nullable columns, making defensive empty-string filters unnecessary except for legacy data.'
+actionable: true
+

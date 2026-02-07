@@ -15,12 +15,13 @@ import {
   ArrowDown,
   Edit,
   GitMerge,
+  ListFilter,
 } from 'lucide-react'
 import { useContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
 import { Button } from '@/components/ui/button'
 import { Pagination } from '@/components/ui/pagination'
 import { Navigation } from '@/components/layout/navigation'
-import { FORM_CONTROL_WITH_ICON } from '@/lib/form-classes'
+import { FORM_CONTROL_WITH_ICON, FORM_SELECT_BASE } from '@/lib/form-classes'
 import { formatDateOnly, formatCadence } from '@/lib/utils'
 import type { Contact, ContactListParams } from '@/types/contact'
 
@@ -36,6 +37,7 @@ function ContactsTable({
   sortBy,
   sortOrder,
   searchTerm,
+  cadenceFilter,
   onSort,
 }: {
   contacts: Contact[]
@@ -43,6 +45,7 @@ function ContactsTable({
   sortBy?: SortField
   sortOrder?: 'asc' | 'desc'
   searchTerm?: string
+  cadenceFilter?: 'has_cadence' | 'no_cadence'
   onSort: (field: SortField) => void
 }) {
   const router = useRouter()
@@ -77,6 +80,7 @@ function ContactsTable({
     params.set('sort', sortBy || DEFAULT_SORT_FIELD)
     params.set('order', sortOrder || DEFAULT_SORT_ORDER)
     if (searchTerm) params.set('search', searchTerm)
+    if (cadenceFilter) params.set('cadence_filter', cadenceFilter)
     if (action) params.set('action', action)
     return `/contacts/${contactId}?${params.toString()}`
   }
@@ -469,9 +473,9 @@ export default function ContactsPage() {
           </div>
         </div>
 
-        {/* Search */}
-        <div className="mb-6">
-          <form onSubmit={handleSearch} className="max-w-md">
+        {/* Search and Filter */}
+        <div className="mb-6 flex gap-3 items-start">
+          <form onSubmit={handleSearch} className="flex-1 max-w-md">
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <Search className="h-5 w-5 text-gray-400" />
@@ -485,6 +489,28 @@ export default function ContactsPage() {
               />
             </div>
           </form>
+          <div className="relative">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <ListFilter className="h-5 w-5 text-gray-400" />
+            </div>
+            <select
+              value={params.cadence_filter || ''}
+              onChange={e =>
+                setParams(prev => ({
+                  ...prev,
+                  cadence_filter:
+                    (e.target.value as ContactListParams['cadence_filter']) || undefined,
+                  page: 1,
+                }))
+              }
+              className={FORM_SELECT_BASE + ' pl-10 w-auto'}
+              aria-label="Filter by cadence"
+            >
+              <option value="">All Contacts</option>
+              <option value="has_cadence">With Cadence</option>
+              <option value="no_cadence">No Cadence</option>
+            </select>
+          </div>
         </div>
 
         {/* Top Pagination */}
@@ -531,6 +557,7 @@ export default function ContactsPage() {
             sortBy={params.sort}
             sortOrder={params.order}
             searchTerm={searchTerm || undefined}
+            cadenceFilter={params.cadence_filter}
             onSort={handleSort}
           />
         </div>
