@@ -102,3 +102,51 @@ detail: |
   The Claude Code Review bot flagged 'Critical Issue #1 & #2' about missing URL state synchronization for the cadence filter. However, this was incorrect - the contacts list page uses React useState for ALL parameters (sort, order, search, page, cadence_filter) with no URL sync on the list page itself. URL params are only used for navigation context when going to detail pages. The review misunderstood the existing architectural pattern. Future agents should verify automated review feedback against the actual codebase implementation patterns before making changes.
 actionable: false
 
+---
+timestamp: "2026-02-07T14:40:26.603774"
+type: rule
+summary: Always document SQL sentinel patterns in query comments
+detail: |
+  When SQL queries use sentinel values (like empty string '' to mean 'no filter'), this must be documented in a comment at the query definition. The session shows the agent initially wrote filtering logic without explaining the empty string sentinel, which was flagged in code review. Adding a comment like '-- cadence_filter: "" = no filter (Go zero value)' makes the pattern immediately clear to future maintainers. This is especially important for sqlc queries where the SQL is the source of truth.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:40:26.603774"
+type: rule
+summary: Add integration tests for edge cases that motivated the fix
+detail: |
+  When fixing a bug involving edge case values (like empty string vs NULL in nullable columns), always add an integration test specifically covering that edge case. The session shows the agent fixing empty string handling but initially only testing NULL and valid values. The code review correctly identified this gap - the core edge case (empty string cadence values) wasn't tested. Tests should directly verify the behavior that was broken/fixed, not just related functionality.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:40:26.603774"
+type: gotcha
+summary: Empty string sentinel in Go handlers propagates from omitempty zero values
+detail: |
+  When Go handler structs use `omitempty` tags on string fields, the repository/SQL layer receives empty string "" as the zero value when the frontend omits the parameter. This creates a three-way distinction in nullable string columns: NULL (never set), "" (cleared/legacy or omitted param), and valid values. SQL queries must treat "" appropriately - either as a sentinel for 'no filter' in query params, or as equivalent to NULL for data values. The session shows this pattern for cadence_filter where "" means 'don't filter', while in the cadence column itself "" is treated like NULL (no cadence set).
+actionable: true
+
+---
+timestamp: "2026-02-07T14:44:48.831664"
+type: gotcha
+summary: CHECK constraints prevent empty strings even though column is nullable
+detail: |
+  The `contact_cadence_check` constraint only allows specific cadence values (weekly, biweekly, monthly, quarterly, biannual, annual) OR NULL. It rejects empty strings even though the column is nullable. This means defensive SQL filters checking `cadence != ''` are purely for hypothetical legacy data that bypassed constraints, not a realistic scenario. Integration tests attempting to create contacts with empty string cadence will fail with constraint violation.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:44:48.831664"
+type: gotcha
+summary: Integration tests in backend/tests/ need migration step before db.NewDatabase()
+detail: |
+  When writing integration tests in `backend/tests/`, must call `db.RunMigrations(databaseURL, getMigrationsPath())` before `db.NewDatabase()`. CI runs against bare PostgreSQL without pre-existing schema, so migrations must be applied in the test setup. Local tests may pass if developer's database already has schema applied, masking this CI failure.
+actionable: true
+
+---
+timestamp: "2026-02-07T14:44:48.831664"
+type: documentation_gap
+summary: Empty string nullable column gotcha needs CHECK constraint caveat
+detail: |
+  The existing gotcha 'Filtering nullable string columns (e.g., cadence) with only IS NULL/IS NOT NULL' documents handling three states (NULL, empty string, valid values). However, it doesn't mention that CHECK constraints may prevent empty strings from being stored, making the empty string case defensive-only. This led to writing an integration test that violated the constraint. The gotcha should clarify: 'Check for CHECK constraints first - they may prevent empty strings even in nullable columns, making defensive empty-string filters unnecessary except for legacy data.'
+actionable: true
+
