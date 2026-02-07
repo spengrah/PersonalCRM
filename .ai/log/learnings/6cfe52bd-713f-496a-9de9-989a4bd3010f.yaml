@@ -78,3 +78,43 @@ detail: |
   The 'When You Change X, Check Y' table in .ai/rules/core.md doesn't mention that adding sortable fields requires updating handler validation, frontend SortField type, and ContactListParams type in 3 files. This cross-cutting concern should be documented to prevent forgetting one of the 3 required changes.
 actionable: true
 
+---
+timestamp: "2026-02-07T00:09:02.320991"
+type: gotcha
+summary: E2E test strict mode violation with duplicate text in new columns
+detail: |
+  When adding new columns to a table that may display the same values as existing columns (e.g., both 'Last Contacted' and 'Next Contact' showing '2/7/2026'), existing E2E tests using getByText() will fail with strict mode violations ('resolved to 2 elements'). Pre-existing tests that search for dates/text in table rows must be updated to use .first() when the value may appear in multiple columns. This is not obvious until CI fails - local diff-based E2E may not catch all affected tests.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:09:02.320991"
+type: gotcha
+summary: API createContact always sets last_contacted to now()
+detail: |
+  The contact creation handler automatically sets last_contacted to accelerated.GetCurrentTime() for all new contacts, meaning you cannot create a contact with NULL last_contacted through the API. This makes it impossible to test NULLS LAST behavior through API-based integration tests. When testing NULL sorting behavior, you must either: (1) test sorting with known non-null dates, or (2) rely on SQL-level guarantees since the NULL case cannot be reached via the API. Tests that assume newly-created contacts will have NULL last_contacted will fail.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:09:02.320991"
+type: architecture
+summary: SQL sorting requires 4-query pattern for search + pagination
+detail: |
+  Adding a sortable field to contacts requires updating exactly 4 sorted queries in contact.sql: ListContactsPaginatedSorted, SearchContactIDsSorted, GetContactsSortedByIDs, and ListContactsIDsFullSorted. Each query has a CASE WHEN chain for each sortable field + direction. This pattern exists because: (1) search uses ID lookup, (2) pagination needs efficient sorted queries, (3) detail page navigation needs the same sort for prev/next. Missing any query breaks specific code paths (e.g., search without sort update breaks search results ordering).
+actionable: true
+
+---
+timestamp: "2026-02-07T00:09:02.320991"
+type: gotcha
+summary: PostgreSQL NULLS FIRST is default for DESC sorts
+detail: |
+  PostgreSQL defaults to NULLS LAST for ASC but NULLS FIRST for DESC. For date columns like last_contacted and contact_by, this creates unintuitive behavior where never-contacted (NULL) contacts appear FIRST in descending sorts. The fix is to explicitly add 'NULLS LAST' to both ASC and DESC CASE WHEN clauses in all 4 sorted queries. Without this, NULL values will appear at the top of DESC-sorted lists instead of at the bottom where users expect them.
+actionable: true
+
+---
+timestamp: "2026-02-07T00:09:02.320991"
+type: rule
+summary: Validation test oneof enums must match API handler validation
+detail: |
+  The unit test in validation_test.go has a local Query struct with hardcoded oneof values that must be kept in sync with the actual API handler validation tags. When adding a new sortable field like contact_by, you must update BOTH: (1) the handler's validate tag in ContactListParams, and (2) the test's local Query struct oneof values. These easily drift because the test doesn't import the actual handler struct - it defines its own for testing the validator library.
+actionable: true
+
