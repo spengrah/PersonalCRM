@@ -67,6 +67,7 @@ export default function ContactDetailPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // Run only on mount
+
   const [mergeMessage, setMergeMessage] = useState<{
     type: 'success' | 'error'
     text: string

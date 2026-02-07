@@ -319,9 +319,16 @@ function ContactsTable({
                         style={dropdownStyle}
                         className="w-48 bg-white rounded-md shadow-lg z-50 ring-1 ring-black ring-opacity-5"
                         role="menu"
+                        onKeyDown={e => {
+                          if (e.key === 'Escape') {
+                            setOpenDropdown(null)
+                            buttonRefs.current.get(contact.id)?.focus()
+                          }
+                        }}
                       >
                         <div className="py-1">
                           <button
+                            role="menuitem"
                             onClick={e => handleMarkAsContacted(e, contact.id)}
                             className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
                             disabled={updateLastContacted.isPending}
@@ -330,6 +337,7 @@ function ContactsTable({
                             {updateLastContacted.isPending ? 'Marking...' : 'Mark as Contacted'}
                           </button>
                           <button
+                            role="menuitem"
                             onClick={e => {
                               e.stopPropagation()
                               router.push(buildContactUrl(contact.id, 'edit'))
@@ -340,6 +348,7 @@ function ContactsTable({
                             Edit
                           </button>
                           <button
+                            role="menuitem"
                             onClick={e => {
                               e.stopPropagation()
                               router.push(buildContactUrl(contact.id, 'merge'))

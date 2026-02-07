@@ -270,12 +270,12 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await actionButton.click()
 
     // Verify the dropdown menu is visible and not clipped
-    const menuItem = page.getByRole('button', { name: 'Mark as Contacted' }).first()
+    const menuItem = page.getByRole('menuitem', { name: 'Mark as Contacted' })
     await expect(menuItem).toBeVisible()
 
     // Verify Edit and Merge items are also present
-    await expect(page.getByRole('button', { name: 'Edit' }).first()).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Merge' }).first()).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Edit' })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Merge' })).toBeVisible()
   })
 
   test('should navigate to edit mode via context menu Edit action', async ({ page }) => {
@@ -297,7 +297,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await actionButton.click()
 
     // Click Edit in context menu
-    await page.getByRole('button', { name: 'Edit' }).first().click()
+    await page.getByRole('menuitem', { name: 'Edit' }).click()
 
     // Should navigate to detail page in edit mode
     await page.waitForURL(/\/contacts\/.*action=edit/)
@@ -325,7 +325,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await actionButton.click()
 
     // Click Merge in context menu
-    await page.getByRole('button', { name: 'Merge' }).first().click()
+    await page.getByRole('menuitem', { name: 'Merge' }).click()
 
     // Should navigate to detail page with merge modal open
     await page.waitForURL(/\/contacts\/.*action=merge/)
