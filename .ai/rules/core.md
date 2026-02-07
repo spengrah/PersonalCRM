@@ -133,6 +133,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | `PLAYWRIGHT_GREP` patterns with spaces | Makefile passes `--grep $$PLAYWRIGHT_GREP` unquoted - use dot wildcards (e.g., `context.menu`) or single words instead of multi-word patterns |
 | Portal dropdown without ARIA attributes | Add `aria-label`, `aria-haspopup="menu"`, `aria-expanded` on trigger; `role="menu"` on dropdown container |
 | Adding `role="menuitem"` without updating tests | `getByRole('button')` no longer matches elements with explicit `role="menuitem"` - update E2E selectors to `getByRole('menuitem')` |
+| Adding `aria-label` to buttons with text content | `aria-label` overrides text content as accessible name - `getByRole('button', { name: 'Previous' })` breaks if `aria-label="Go to previous page"` is added |
 
 ## Anti-Patterns
 
