@@ -1,0 +1,40 @@
+---
+timestamp: "2026-02-07T15:19:18.802530"
+type: gotcha
+summary: max-w-* alone doesn't size elements; needs flex-1 or w-full to grow
+detail: |
+  When using max-w-* classes on flex children, the element won't actually grow to that width without flex-1 or w-full. max-w-* only sets an upper bound, not a minimum or default width. Pattern: use 'flex-1 max-w-{size}' to allow growth with a cap, not just 'max-w-{size}' alone.
+actionable: true
+
+---
+timestamp: "2026-02-07T15:19:18.802530"
+type: rule
+summary: Icon sizing in inputs must match between search and filter controls
+detail: |
+  When adding icons to form inputs/selects, maintain visual consistency: if search uses h-5 w-5 icon with pl-3 wrapper and pl-10 input, filters should match exactly (not h-4 w-4 with pl-8). Users notice inconsistent icon alignment immediately. Standard pattern: h-5 w-5 icon, pl-3 on absolute wrapper, pl-10 on input/select.
+actionable: true
+
+---
+timestamp: "2026-02-07T15:19:18.802530"
+type: distinction
+summary: E2E tests select by value, not display text - option text changes are safe
+detail: |
+  When updating <select> option display text, E2E tests using selectOption('value') are unaffected because they match by value attribute, not visible text. Comments referencing old text are cosmetic. Only aria-label changes would break tests using getByLabel().
+actionable: true
+
+---
+timestamp: "2026-02-07T15:19:18.802530"
+type: architecture
+summary: Search field sizing requires balancing flex-1, max-w-*, and leaving space for filters
+detail: |
+  Contact list search field evolved through: max-w-md only (no effect) → flex-1 max-w-2xl (too wide) → flex-1 max-w-lg (still too wide) → flex-1 max-w-md (final). The flex-1 allows growth, max-w-* caps it to leave room for other filters. User preference was ~448px max width (max-w-md) to fit 'long name or short phrase' without spanning full row.
+actionable: true
+
+---
+timestamp: "2026-02-07T15:19:18.802530"
+type: rule
+summary: Filter dropdowns should use w-auto not fixed widths to accommodate future filters
+detail: |
+  When adding filter dropdowns, use w-auto instead of fixed widths like w-40 to size to content. This leaves flexible space for additional filter dropdowns. Combined with ListFilter icon and descriptive option text ('All Contacts', 'With Cadence', 'No Cadence'), the compact sizing makes room for expansion.
+actionable: true
+
