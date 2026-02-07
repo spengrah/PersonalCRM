@@ -65,19 +65,21 @@ type UpdateContactRequest struct {
 
 // ListContactsParams represents parameters for listing contacts
 type ListContactsParams struct {
-	Limit  int32  `json:"limit"`
-	Offset int32  `json:"offset"`
-	Sort   string `json:"sort,omitempty"`
-	Order  string `json:"order,omitempty"`
+	Limit         int32  `json:"limit"`
+	Offset        int32  `json:"offset"`
+	Sort          string `json:"sort,omitempty"`
+	Order         string `json:"order,omitempty"`
+	CadenceFilter string `json:"cadence_filter,omitempty"`
 }
 
 // SearchContactsParams represents parameters for searching contacts
 type SearchContactsParams struct {
-	Query  string `json:"query"`
-	Limit  int32  `json:"limit"`
-	Offset int32  `json:"offset"`
-	Sort   string `json:"sort,omitempty"`
-	Order  string `json:"order,omitempty"`
+	Query         string `json:"query"`
+	Limit         int32  `json:"limit"`
+	Offset        int32  `json:"offset"`
+	Sort          string `json:"sort,omitempty"`
+	Order         string `json:"order,omitempty"`
+	CadenceFilter string `json:"cadence_filter,omitempty"`
 }
 
 // convertDbContact converts a database contact to a repository contact
@@ -151,15 +153,17 @@ func (r *ContactRepository) ListContacts(ctx context.Context, params ListContact
 
 	if params.Sort != "" {
 		dbContacts, err = r.queries.ListContactsSorted(ctx, db.ListContactsSortedParams{
-			SortField:  params.Sort,
-			SortOrder:  params.Order,
-			PageOffset: params.Offset,
-			PageLimit:  params.Limit,
+			CadenceFilter: params.CadenceFilter,
+			SortField:     params.Sort,
+			SortOrder:     params.Order,
+			PageOffset:    params.Offset,
+			PageLimit:     params.Limit,
 		})
 	} else {
 		dbContacts, err = r.queries.ListContacts(ctx, db.ListContactsParams{
-			Limit:  params.Limit,
-			Offset: params.Offset,
+			CadenceFilter: params.CadenceFilter,
+			PageOffset:    params.Offset,
+			PageLimit:     params.Limit,
 		})
 	}
 	if err != nil {
@@ -183,17 +187,19 @@ func (r *ContactRepository) SearchContacts(ctx context.Context, params SearchCon
 
 	if params.Sort != "" {
 		dbContacts, err = r.queries.SearchContactsSorted(ctx, db.SearchContactsSortedParams{
-			SearchQuery: params.Query,
-			SortField:   params.Sort,
-			SortOrder:   params.Order,
-			PageOffset:  params.Offset,
-			PageLimit:   params.Limit,
+			CadenceFilter: params.CadenceFilter,
+			SearchQuery:   params.Query,
+			SortField:     params.Sort,
+			SortOrder:     params.Order,
+			PageOffset:    params.Offset,
+			PageLimit:     params.Limit,
 		})
 	} else {
 		dbContacts, err = r.queries.SearchContacts(ctx, db.SearchContactsParams{
-			PlaintoTsquery: params.Query,
-			Limit:          params.Limit,
-			Offset:         params.Offset,
+			CadenceFilter: params.CadenceFilter,
+			SearchQuery:   params.Query,
+			PageOffset:    params.Offset,
+			PageLimit:     params.Limit,
 		})
 	}
 	if err != nil {
@@ -305,20 +311,24 @@ func (r *ContactRepository) HardDeleteContact(ctx context.Context, id uuid.UUID)
 }
 
 // CountContacts returns the total number of active contacts
-func (r *ContactRepository) CountContacts(ctx context.Context) (int64, error) {
-	return r.queries.CountContacts(ctx)
+func (r *ContactRepository) CountContacts(ctx context.Context, cadenceFilter string) (int64, error) {
+	return r.queries.CountContacts(ctx, cadenceFilter)
 }
 
 // CountSearchContacts returns the total number of contacts matching a search query.
-func (r *ContactRepository) CountSearchContacts(ctx context.Context, query string) (int64, error) {
-	return r.queries.CountSearchContacts(ctx, query)
+func (r *ContactRepository) CountSearchContacts(ctx context.Context, query string, cadenceFilter string) (int64, error) {
+	return r.queries.CountSearchContacts(ctx, db.CountSearchContactsParams{
+		CadenceFilter: cadenceFilter,
+		SearchQuery:   query,
+	})
 }
 
 // ListContactIDsParams represents parameters for listing contact IDs
 type ListContactIDsParams struct {
-	Sort   string `json:"sort,omitempty"`
-	Order  string `json:"order,omitempty"`
-	Search string `json:"search,omitempty"`
+	Sort          string `json:"sort,omitempty"`
+	Order         string `json:"order,omitempty"`
+	Search        string `json:"search,omitempty"`
+	CadenceFilter string `json:"cadence_filter,omitempty"`
 }
 
 // ListContactIDs retrieves a list of contact IDs with optional sorting and search.
@@ -335,19 +345,24 @@ func (r *ContactRepository) ListContactIDs(ctx context.Context, params ListConta
 	switch {
 	case hasSearch && hasSort:
 		dbIDs, err = r.queries.SearchContactIDsSorted(ctx, db.SearchContactIDsSortedParams{
-			SearchQuery: params.Search,
-			SortField:   params.Sort,
-			SortOrder:   params.Order,
+			CadenceFilter: params.CadenceFilter,
+			SearchQuery:   params.Search,
+			SortField:     params.Sort,
+			SortOrder:     params.Order,
 		})
 	case hasSearch:
-		dbIDs, err = r.queries.SearchContactIDs(ctx, params.Search)
+		dbIDs, err = r.queries.SearchContactIDs(ctx, db.SearchContactIDsParams{
+			CadenceFilter: params.CadenceFilter,
+			SearchQuery:   params.Search,
+		})
 	case hasSort:
 		dbIDs, err = r.queries.ListContactIDsSorted(ctx, db.ListContactIDsSortedParams{
-			SortField: params.Sort,
-			SortOrder: params.Order,
+			CadenceFilter: params.CadenceFilter,
+			SortField:     params.Sort,
+			SortOrder:     params.Order,
 		})
 	default:
-		dbIDs, err = r.queries.ListContactIDs(ctx)
+		dbIDs, err = r.queries.ListContactIDs(ctx, params.CadenceFilter)
 	}
 
 	if err != nil {

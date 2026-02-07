@@ -84,7 +84,7 @@ func (s *ContactService) ListContactsPage(ctx context.Context, params repository
 		return nil, 0, err
 	}
 
-	total, err := s.contactRepo.CountContacts(ctx)
+	total, err := s.contactRepo.CountContacts(ctx, params.CadenceFilter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -116,7 +116,7 @@ func (s *ContactService) SearchContactsPage(ctx context.Context, params reposito
 		return nil, 0, err
 	}
 
-	total, err := s.contactRepo.CountSearchContacts(ctx, params.Query)
+	total, err := s.contactRepo.CountSearchContacts(ctx, params.Query, params.CadenceFilter)
 	if err != nil {
 		return nil, 0, err
 	}

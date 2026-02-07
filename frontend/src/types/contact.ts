@@ -58,4 +58,5 @@ export interface ContactListParams {
   search?: string
   sort?: 'name' | 'location' | 'birthday' | 'last_contacted' | 'contact_by' | 'cadence'
   order?: 'asc' | 'desc'
+  cadence_filter?: 'has_cadence' | 'no_cadence'
 }

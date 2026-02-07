@@ -12,11 +12,15 @@ import (
 )
 
 const CountContacts = `-- name: CountContacts :one
-SELECT COUNT(*) FROM contact WHERE deleted_at IS NULL
+SELECT COUNT(*) FROM contact
+WHERE deleted_at IS NULL
+  AND ($1 = '' OR
+       ($1 = 'has_cadence' AND cadence IS NOT NULL) OR
+       ($1 = 'no_cadence' AND cadence IS NULL))
 `
 
-func (q *Queries) CountContacts(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, CountContacts)
+func (q *Queries) CountContacts(ctx context.Context, cadenceFilter interface{}) (int64, error) {
+	row := q.db.QueryRow(ctx, CountContacts, cadenceFilter)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -30,11 +34,19 @@ LEFT JOIN (
   GROUP BY contact_id
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
+  AND ($1 = '' OR
+       ($1 = 'has_cadence' AND c.cadence IS NOT NULL) OR
+       ($1 = 'no_cadence' AND c.cadence IS NULL))
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $2)
 `
 
-func (q *Queries) CountSearchContacts(ctx context.Context, plaintoTsquery string) (int64, error) {
-	row := q.db.QueryRow(ctx, CountSearchContacts, plaintoTsquery)
+type CountSearchContactsParams struct {
+	CadenceFilter interface{} `json:"cadence_filter"`
+	SearchQuery   string      `json:"search_query"`
+}
+
+func (q *Queries) CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, CountSearchContacts, arg.CadenceFilter, arg.SearchQuery)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -276,11 +288,14 @@ func (q *Queries) HardDeleteContact(ctx context.Context, id pgtype.UUID) error {
 const ListContactIDs = `-- name: ListContactIDs :many
 SELECT id FROM contact
 WHERE deleted_at IS NULL
+  AND ($1 = '' OR
+       ($1 = 'has_cadence' AND cadence IS NOT NULL) OR
+       ($1 = 'no_cadence' AND cadence IS NULL))
 `
 
 // Lightweight query returning only IDs for navigation
-func (q *Queries) ListContactIDs(ctx context.Context) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, ListContactIDs)
+func (q *Queries) ListContactIDs(ctx context.Context, cadenceFilter interface{}) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, ListContactIDs, cadenceFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -302,36 +317,40 @@ func (q *Queries) ListContactIDs(ctx context.Context) ([]pgtype.UUID, error) {
 const ListContactIDsSorted = `-- name: ListContactIDsSorted :many
 SELECT id FROM contact
 WHERE deleted_at IS NULL
+  AND ($1 = '' OR
+       ($1 = 'has_cadence' AND cadence IS NOT NULL) OR
+       ($1 = 'no_cadence' AND cadence IS NULL))
 ORDER BY
-  CASE WHEN $1 = 'name' AND $2 = 'asc' THEN full_name END ASC,
-  CASE WHEN $1 = 'name' AND $2 = 'desc' THEN full_name END DESC,
-  CASE WHEN $1 = 'location' AND $2 = 'asc' THEN COALESCE(location, '') END ASC,
-  CASE WHEN $1 = 'location' AND $2 = 'desc' THEN COALESCE(location, '') END DESC,
-  CASE WHEN $1 = 'birthday' AND $2 = 'asc' THEN birthday END ASC NULLS LAST,
-  CASE WHEN $1 = 'birthday' AND $2 = 'desc' THEN birthday END DESC NULLS LAST,
-  CASE WHEN $1 = 'last_contacted' AND $2 = 'asc' THEN last_contacted END ASC NULLS LAST,
-  CASE WHEN $1 = 'last_contacted' AND $2 = 'desc' THEN last_contacted END DESC NULLS LAST,
-  CASE WHEN $1 = 'contact_by' AND $2 = 'asc' THEN contact_by END ASC NULLS LAST,
-  CASE WHEN $1 = 'contact_by' AND $2 = 'desc' THEN contact_by END DESC NULLS LAST,
+  CASE WHEN $2 = 'name' AND $3 = 'asc' THEN full_name END ASC,
+  CASE WHEN $2 = 'name' AND $3 = 'desc' THEN full_name END DESC,
+  CASE WHEN $2 = 'location' AND $3 = 'asc' THEN COALESCE(location, '') END ASC,
+  CASE WHEN $2 = 'location' AND $3 = 'desc' THEN COALESCE(location, '') END DESC,
+  CASE WHEN $2 = 'birthday' AND $3 = 'asc' THEN birthday END ASC NULLS LAST,
+  CASE WHEN $2 = 'birthday' AND $3 = 'desc' THEN birthday END DESC NULLS LAST,
+  CASE WHEN $2 = 'last_contacted' AND $3 = 'asc' THEN last_contacted END ASC NULLS LAST,
+  CASE WHEN $2 = 'last_contacted' AND $3 = 'desc' THEN last_contacted END DESC NULLS LAST,
+  CASE WHEN $2 = 'contact_by' AND $3 = 'asc' THEN contact_by END ASC NULLS LAST,
+  CASE WHEN $2 = 'contact_by' AND $3 = 'desc' THEN contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
-  CASE WHEN $1 = 'cadence' AND $2 = 'desc' THEN
+  CASE WHEN $2 = 'cadence' AND $3 = 'desc' THEN
     CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END ASC,
-  CASE WHEN $1 = 'cadence' AND $2 = 'asc' THEN
+  CASE WHEN $2 = 'cadence' AND $3 = 'asc' THEN
     CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END DESC,
   -- Secondary sort by name for cadence sorting
-  CASE WHEN $1 = 'cadence' THEN full_name END ASC
+  CASE WHEN $2 = 'cadence' THEN full_name END ASC
 `
 
 type ListContactIDsSortedParams struct {
-	SortField interface{} `json:"sort_field"`
-	SortOrder interface{} `json:"sort_order"`
+	CadenceFilter interface{} `json:"cadence_filter"`
+	SortField     interface{} `json:"sort_field"`
+	SortOrder     interface{} `json:"sort_order"`
 }
 
 // Lightweight query returning only IDs with sorting for navigation
 func (q *Queries) ListContactIDsSorted(ctx context.Context, arg ListContactIDsSortedParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, ListContactIDsSorted, arg.SortField, arg.SortOrder)
+	rows, err := q.db.Query(ctx, ListContactIDsSorted, arg.CadenceFilter, arg.SortField, arg.SortOrder)
 	if err != nil {
 		return nil, err
 	}
@@ -351,18 +370,22 @@ func (q *Queries) ListContactIDsSorted(ctx context.Context, arg ListContactIDsSo
 }
 
 const ListContacts = `-- name: ListContacts :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by FROM contact 
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by FROM contact
 WHERE deleted_at IS NULL
-LIMIT $1 OFFSET $2
+  AND ($1 = '' OR
+       ($1 = 'has_cadence' AND cadence IS NOT NULL) OR
+       ($1 = 'no_cadence' AND cadence IS NULL))
+LIMIT $3 OFFSET $2
 `
 
 type ListContactsParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+	CadenceFilter interface{} `json:"cadence_filter"`
+	PageOffset    int32       `json:"page_offset"`
+	PageLimit     int32       `json:"page_limit"`
 }
 
 func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error) {
-	rows, err := q.db.Query(ctx, ListContacts, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, ListContacts, arg.CadenceFilter, arg.PageOffset, arg.PageLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -397,39 +420,44 @@ func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*
 const ListContactsSorted = `-- name: ListContactsSorted :many
 SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by FROM contact
 WHERE deleted_at IS NULL
+  AND ($1 = '' OR
+       ($1 = 'has_cadence' AND cadence IS NOT NULL) OR
+       ($1 = 'no_cadence' AND cadence IS NULL))
 ORDER BY
-  CASE WHEN $1 = 'name' AND $2 = 'asc' THEN full_name END ASC,
-  CASE WHEN $1 = 'name' AND $2 = 'desc' THEN full_name END DESC,
-  CASE WHEN $1 = 'location' AND $2 = 'asc' THEN COALESCE(location, '') END ASC,
-  CASE WHEN $1 = 'location' AND $2 = 'desc' THEN COALESCE(location, '') END DESC,
-  CASE WHEN $1 = 'birthday' AND $2 = 'asc' THEN birthday END ASC NULLS LAST,
-  CASE WHEN $1 = 'birthday' AND $2 = 'desc' THEN birthday END DESC NULLS LAST,
-  CASE WHEN $1 = 'last_contacted' AND $2 = 'asc' THEN last_contacted END ASC NULLS LAST,
-  CASE WHEN $1 = 'last_contacted' AND $2 = 'desc' THEN last_contacted END DESC NULLS LAST,
-  CASE WHEN $1 = 'contact_by' AND $2 = 'asc' THEN contact_by END ASC NULLS LAST,
-  CASE WHEN $1 = 'contact_by' AND $2 = 'desc' THEN contact_by END DESC NULLS LAST,
+  CASE WHEN $2 = 'name' AND $3 = 'asc' THEN full_name END ASC,
+  CASE WHEN $2 = 'name' AND $3 = 'desc' THEN full_name END DESC,
+  CASE WHEN $2 = 'location' AND $3 = 'asc' THEN COALESCE(location, '') END ASC,
+  CASE WHEN $2 = 'location' AND $3 = 'desc' THEN COALESCE(location, '') END DESC,
+  CASE WHEN $2 = 'birthday' AND $3 = 'asc' THEN birthday END ASC NULLS LAST,
+  CASE WHEN $2 = 'birthday' AND $3 = 'desc' THEN birthday END DESC NULLS LAST,
+  CASE WHEN $2 = 'last_contacted' AND $3 = 'asc' THEN last_contacted END ASC NULLS LAST,
+  CASE WHEN $2 = 'last_contacted' AND $3 = 'desc' THEN last_contacted END DESC NULLS LAST,
+  CASE WHEN $2 = 'contact_by' AND $3 = 'asc' THEN contact_by END ASC NULLS LAST,
+  CASE WHEN $2 = 'contact_by' AND $3 = 'desc' THEN contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
   -- 'desc' = most frequent first (ASC on number), 'asc' = least frequent first (DESC on number)
-  CASE WHEN $1 = 'cadence' AND $2 = 'desc' THEN
+  CASE WHEN $2 = 'cadence' AND $3 = 'desc' THEN
     CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END ASC,
-  CASE WHEN $1 = 'cadence' AND $2 = 'asc' THEN
+  CASE WHEN $2 = 'cadence' AND $3 = 'asc' THEN
     CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END DESC,
   -- Secondary sort by name for cadence sorting
-  CASE WHEN $1 = 'cadence' THEN full_name END ASC
-LIMIT $4 OFFSET $3
+  CASE WHEN $2 = 'cadence' THEN full_name END ASC
+LIMIT $5 OFFSET $4
 `
 
 type ListContactsSortedParams struct {
-	SortField  interface{} `json:"sort_field"`
-	SortOrder  interface{} `json:"sort_order"`
-	PageOffset int32       `json:"page_offset"`
-	PageLimit  int32       `json:"page_limit"`
+	CadenceFilter interface{} `json:"cadence_filter"`
+	SortField     interface{} `json:"sort_field"`
+	SortOrder     interface{} `json:"sort_order"`
+	PageOffset    int32       `json:"page_offset"`
+	PageLimit     int32       `json:"page_limit"`
 }
 
 func (q *Queries) ListContactsSorted(ctx context.Context, arg ListContactsSortedParams) ([]*Contact, error) {
 	rows, err := q.db.Query(ctx, ListContactsSorted,
+		arg.CadenceFilter,
 		arg.SortField,
 		arg.SortOrder,
 		arg.PageOffset,
@@ -609,16 +637,24 @@ LEFT JOIN (
   GROUP BY contact_id
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
+  AND ($1 = '' OR
+       ($1 = 'has_cadence' AND c.cadence IS NOT NULL) OR
+       ($1 = 'no_cadence' AND c.cadence IS NULL))
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $2)
 ORDER BY ts_rank(
   to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
-  plainto_tsquery('english', $1)
+  plainto_tsquery('english', $2)
 ) DESC
 `
 
+type SearchContactIDsParams struct {
+	CadenceFilter interface{} `json:"cadence_filter"`
+	SearchQuery   string      `json:"search_query"`
+}
+
 // Lightweight query returning only IDs with search for navigation
-func (q *Queries) SearchContactIDs(ctx context.Context, plaintoTsquery string) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, SearchContactIDs, plaintoTsquery)
+func (q *Queries) SearchContactIDs(ctx context.Context, arg SearchContactIDsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, SearchContactIDs, arg.CadenceFilter, arg.SearchQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -645,38 +681,47 @@ LEFT JOIN (
   GROUP BY contact_id
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
+  AND ($1 = '' OR
+       ($1 = 'has_cadence' AND c.cadence IS NOT NULL) OR
+       ($1 = 'no_cadence' AND c.cadence IS NULL))
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $2)
 ORDER BY
-  CASE WHEN $2 = 'name' AND $3 = 'asc' THEN c.full_name END ASC,
-  CASE WHEN $2 = 'name' AND $3 = 'desc' THEN c.full_name END DESC,
-  CASE WHEN $2 = 'location' AND $3 = 'asc' THEN COALESCE(c.location, '') END ASC,
-  CASE WHEN $2 = 'location' AND $3 = 'desc' THEN COALESCE(c.location, '') END DESC,
-  CASE WHEN $2 = 'birthday' AND $3 = 'asc' THEN c.birthday END ASC NULLS LAST,
-  CASE WHEN $2 = 'birthday' AND $3 = 'desc' THEN c.birthday END DESC NULLS LAST,
-  CASE WHEN $2 = 'last_contacted' AND $3 = 'asc' THEN c.last_contacted END ASC NULLS LAST,
-  CASE WHEN $2 = 'last_contacted' AND $3 = 'desc' THEN c.last_contacted END DESC NULLS LAST,
-  CASE WHEN $2 = 'contact_by' AND $3 = 'asc' THEN c.contact_by END ASC NULLS LAST,
-  CASE WHEN $2 = 'contact_by' AND $3 = 'desc' THEN c.contact_by END DESC NULLS LAST,
+  CASE WHEN $3 = 'name' AND $4 = 'asc' THEN c.full_name END ASC,
+  CASE WHEN $3 = 'name' AND $4 = 'desc' THEN c.full_name END DESC,
+  CASE WHEN $3 = 'location' AND $4 = 'asc' THEN COALESCE(c.location, '') END ASC,
+  CASE WHEN $3 = 'location' AND $4 = 'desc' THEN COALESCE(c.location, '') END DESC,
+  CASE WHEN $3 = 'birthday' AND $4 = 'asc' THEN c.birthday END ASC NULLS LAST,
+  CASE WHEN $3 = 'birthday' AND $4 = 'desc' THEN c.birthday END DESC NULLS LAST,
+  CASE WHEN $3 = 'last_contacted' AND $4 = 'asc' THEN c.last_contacted END ASC NULLS LAST,
+  CASE WHEN $3 = 'last_contacted' AND $4 = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN $3 = 'contact_by' AND $4 = 'asc' THEN c.contact_by END ASC NULLS LAST,
+  CASE WHEN $3 = 'contact_by' AND $4 = 'desc' THEN c.contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
-  CASE WHEN $2 = 'cadence' AND $3 = 'desc' THEN
+  CASE WHEN $3 = 'cadence' AND $4 = 'desc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END ASC,
-  CASE WHEN $2 = 'cadence' AND $3 = 'asc' THEN
+  CASE WHEN $3 = 'cadence' AND $4 = 'asc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END DESC,
   -- Secondary sort by name for cadence sorting
-  CASE WHEN $2 = 'cadence' THEN c.full_name END ASC
+  CASE WHEN $3 = 'cadence' THEN c.full_name END ASC
 `
 
 type SearchContactIDsSortedParams struct {
-	SearchQuery string      `json:"search_query"`
-	SortField   interface{} `json:"sort_field"`
-	SortOrder   interface{} `json:"sort_order"`
+	CadenceFilter interface{} `json:"cadence_filter"`
+	SearchQuery   string      `json:"search_query"`
+	SortField     interface{} `json:"sort_field"`
+	SortOrder     interface{} `json:"sort_order"`
 }
 
 // Lightweight query returning only IDs with search and sorting for navigation
 func (q *Queries) SearchContactIDsSorted(ctx context.Context, arg SearchContactIDsSortedParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, SearchContactIDsSorted, arg.SearchQuery, arg.SortField, arg.SortOrder)
+	rows, err := q.db.Query(ctx, SearchContactIDsSorted,
+		arg.CadenceFilter,
+		arg.SearchQuery,
+		arg.SortField,
+		arg.SortOrder,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -703,22 +748,31 @@ LEFT JOIN (
   GROUP BY contact_id
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
+  AND ($1 = '' OR
+       ($1 = 'has_cadence' AND c.cadence IS NOT NULL) OR
+       ($1 = 'no_cadence' AND c.cadence IS NULL))
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $2)
 ORDER BY ts_rank(
   to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
-  plainto_tsquery('english', $1)
+  plainto_tsquery('english', $2)
 ) DESC
-LIMIT $2 OFFSET $3
+LIMIT $4 OFFSET $3
 `
 
 type SearchContactsParams struct {
-	PlaintoTsquery string `json:"plainto_tsquery"`
-	Limit          int32  `json:"limit"`
-	Offset         int32  `json:"offset"`
+	CadenceFilter interface{} `json:"cadence_filter"`
+	SearchQuery   string      `json:"search_query"`
+	PageOffset    int32       `json:"page_offset"`
+	PageLimit     int32       `json:"page_limit"`
 }
 
 func (q *Queries) SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error) {
-	rows, err := q.db.Query(ctx, SearchContacts, arg.PlaintoTsquery, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, SearchContacts,
+		arg.CadenceFilter,
+		arg.SearchQuery,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -758,40 +812,45 @@ LEFT JOIN (
   GROUP BY contact_id
 ) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $1)
+  AND ($1 = '' OR
+       ($1 = 'has_cadence' AND c.cadence IS NOT NULL) OR
+       ($1 = 'no_cadence' AND c.cadence IS NULL))
+  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $2)
 ORDER BY
-  CASE WHEN $2 = 'name' AND $3 = 'asc' THEN c.full_name END ASC,
-  CASE WHEN $2 = 'name' AND $3 = 'desc' THEN c.full_name END DESC,
-  CASE WHEN $2 = 'location' AND $3 = 'asc' THEN COALESCE(c.location, '') END ASC,
-  CASE WHEN $2 = 'location' AND $3 = 'desc' THEN COALESCE(c.location, '') END DESC,
-  CASE WHEN $2 = 'birthday' AND $3 = 'asc' THEN c.birthday END ASC NULLS LAST,
-  CASE WHEN $2 = 'birthday' AND $3 = 'desc' THEN c.birthday END DESC NULLS LAST,
-  CASE WHEN $2 = 'last_contacted' AND $3 = 'asc' THEN c.last_contacted END ASC NULLS LAST,
-  CASE WHEN $2 = 'last_contacted' AND $3 = 'desc' THEN c.last_contacted END DESC NULLS LAST,
-  CASE WHEN $2 = 'contact_by' AND $3 = 'asc' THEN c.contact_by END ASC NULLS LAST,
-  CASE WHEN $2 = 'contact_by' AND $3 = 'desc' THEN c.contact_by END DESC NULLS LAST,
+  CASE WHEN $3 = 'name' AND $4 = 'asc' THEN c.full_name END ASC,
+  CASE WHEN $3 = 'name' AND $4 = 'desc' THEN c.full_name END DESC,
+  CASE WHEN $3 = 'location' AND $4 = 'asc' THEN COALESCE(c.location, '') END ASC,
+  CASE WHEN $3 = 'location' AND $4 = 'desc' THEN COALESCE(c.location, '') END DESC,
+  CASE WHEN $3 = 'birthday' AND $4 = 'asc' THEN c.birthday END ASC NULLS LAST,
+  CASE WHEN $3 = 'birthday' AND $4 = 'desc' THEN c.birthday END DESC NULLS LAST,
+  CASE WHEN $3 = 'last_contacted' AND $4 = 'asc' THEN c.last_contacted END ASC NULLS LAST,
+  CASE WHEN $3 = 'last_contacted' AND $4 = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN $3 = 'contact_by' AND $4 = 'asc' THEN c.contact_by END ASC NULLS LAST,
+  CASE WHEN $3 = 'contact_by' AND $4 = 'desc' THEN c.contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
-  CASE WHEN $2 = 'cadence' AND $3 = 'desc' THEN
+  CASE WHEN $3 = 'cadence' AND $4 = 'desc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END ASC,
-  CASE WHEN $2 = 'cadence' AND $3 = 'asc' THEN
+  CASE WHEN $3 = 'cadence' AND $4 = 'asc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END DESC,
   -- Secondary sort by name for cadence sorting
-  CASE WHEN $2 = 'cadence' THEN c.full_name END ASC
-LIMIT $5 OFFSET $4
+  CASE WHEN $3 = 'cadence' THEN c.full_name END ASC
+LIMIT $6 OFFSET $5
 `
 
 type SearchContactsSortedParams struct {
-	SearchQuery string      `json:"search_query"`
-	SortField   interface{} `json:"sort_field"`
-	SortOrder   interface{} `json:"sort_order"`
-	PageOffset  int32       `json:"page_offset"`
-	PageLimit   int32       `json:"page_limit"`
+	CadenceFilter interface{} `json:"cadence_filter"`
+	SearchQuery   string      `json:"search_query"`
+	SortField     interface{} `json:"sort_field"`
+	SortOrder     interface{} `json:"sort_order"`
+	PageOffset    int32       `json:"page_offset"`
+	PageLimit     int32       `json:"page_limit"`
 }
 
 func (q *Queries) SearchContactsSorted(ctx context.Context, arg SearchContactsSortedParams) ([]*Contact, error) {
 	rows, err := q.db.Query(ctx, SearchContactsSorted,
+		arg.CadenceFilter,
 		arg.SearchQuery,
 		arg.SortField,
 		arg.SortOrder,

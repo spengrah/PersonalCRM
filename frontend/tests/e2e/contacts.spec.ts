@@ -358,6 +358,75 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   })
 })
 
+test.describe('Contacts - Cadence Filter @area:contacts', () => {
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  test('should filter contacts by cadence status', async ({ page }) => {
+    // Seed contacts with and without cadence
+    await testApi.seedContacts([
+      { full_name: 'FilterCadence WithWeekly', cadence: 'weekly' },
+      { full_name: 'FilterCadence WithMonthly', cadence: 'monthly' },
+      { full_name: 'FilterCadence NoCadence' },
+    ])
+
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+
+    // Search to isolate our test data
+    const searchInput = page.getByPlaceholder('Search contacts...')
+    await searchInput.fill(`${testApi.prefix}-FilterCadence`)
+    await searchInput.press('Enter')
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
+      timeout: 10000,
+    })
+
+    // Verify all 3 contacts visible with "All contacts" (default)
+    const filterSelect = page.getByLabel('Filter by cadence')
+    await expect(filterSelect).toHaveValue('')
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithMonthly`)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).toBeVisible()
+
+    // Select "Has cadence" - should show only contacts with cadence
+    const hasCadenceResponse = page.waitForResponse(
+      resp => resp.url().includes('cadence_filter=has_cadence') && resp.ok()
+    )
+    await filterSelect.selectOption('has_cadence')
+    await hasCadenceResponse
+
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithMonthly`)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).not.toBeVisible()
+
+    // Select "No cadence" - should show only contacts without cadence
+    const noCadenceResponse = page.waitForResponse(
+      resp => resp.url().includes('cadence_filter=no_cadence') && resp.ok()
+    )
+    await filterSelect.selectOption('no_cadence')
+    await noCadenceResponse
+
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).not.toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithMonthly`)).not.toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).toBeVisible()
+
+    // Reset to "All contacts" - should show all again
+    await filterSelect.selectOption('')
+
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
+      timeout: 10000,
+    })
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).toBeVisible()
+  })
+})
+
 test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', () => {
   // UI tests need serial mode since they create contacts via UI without TestAPI isolation
   test.describe.configure({ mode: 'serial' })

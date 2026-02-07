@@ -18,7 +18,7 @@ type Querier interface {
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error)
-	CountContacts(ctx context.Context) (int64, error)
+	CountContacts(ctx context.Context, cadenceFilter interface{}) (int64, error)
 	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	// Count events for a specific contact
 	CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
@@ -34,7 +34,7 @@ type Querier interface {
 	CountMergeNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
-	CountSearchContacts(ctx context.Context, plaintoTsquery string) (int64, error)
+	CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error)
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
@@ -167,7 +167,7 @@ type Querier interface {
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
 	ListAllUnmatchedExternalContacts(ctx context.Context, arg ListAllUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	// Lightweight query returning only IDs for navigation
-	ListContactIDs(ctx context.Context) ([]pgtype.UUID, error)
+	ListContactIDs(ctx context.Context, cadenceFilter interface{}) ([]pgtype.UUID, error)
 	// Lightweight query returning only IDs with sorting for navigation
 	ListContactIDsSorted(ctx context.Context, arg ListContactIDsSortedParams) ([]pgtype.UUID, error)
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
@@ -226,7 +226,7 @@ type Querier interface {
 	// Uses array_replace for efficient in-place replacement
 	ReplaceContactInCalendarEvents(ctx context.Context, arg ReplaceContactInCalendarEventsParams) error
 	// Lightweight query returning only IDs with search for navigation
-	SearchContactIDs(ctx context.Context, plaintoTsquery string) ([]pgtype.UUID, error)
+	SearchContactIDs(ctx context.Context, arg SearchContactIDsParams) ([]pgtype.UUID, error)
 	// Lightweight query returning only IDs with search and sorting for navigation
 	SearchContactIDsSorted(ctx context.Context, arg SearchContactIDsSortedParams) ([]pgtype.UUID, error)
 	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error)
