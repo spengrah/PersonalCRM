@@ -10,6 +10,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -34,13 +35,15 @@ type ContactService struct {
 	database          *db.Database
 	contactRepo       *repository.ContactRepository
 	contactMethodRepo *repository.ContactMethodRepository
+	interactionRepo   *repository.InteractionRepository
 }
 
-func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository) *ContactService {
+func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository, interactionRepo *repository.InteractionRepository) *ContactService {
 	return &ContactService{
 		database:          database,
 		contactRepo:       contactRepo,
 		contactMethodRepo: contactMethodRepo,
+		interactionRepo:   interactionRepo,
 	}
 }
 
@@ -244,33 +247,25 @@ func (s *ContactService) DeleteContact(ctx context.Context, id uuid.UUID) error 
 
 // UpdateContactLastContacted updates the last contacted date for a contact.
 // If lastContacted is nil, the current time is used.
-// Also updates contact_by based on the new last_contacted date and the contact's cadence.
+// Also records an interaction and updates contact_by based on the new last_contacted date and cadence.
 func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted *time.Time) (*repository.Contact, error) {
-	contact, err := s.contactRepo.GetContact(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
 	// Use provided date or default to current time
 	dateToSet := accelerated.GetCurrentTime()
 	if lastContacted != nil {
 		dateToSet = *lastContacted
 	}
 
-	// Calculate contact_by based on cadence
-	var contactBy *time.Time
-	if contact.Cadence != nil && *contact.Cadence != "" {
-		if cadenceType, err := cadence.ParseCadence(*contact.Cadence); err == nil {
-			contactByTime := cadence.CalculateContactBy(dateToSet, cadenceType)
-			contactBy = &contactByTime
-		}
+	// Record interaction (handles dedup, last_contacted update, and contact_by recalculation)
+	_, err := s.RecordInteraction(ctx, repository.RecordInteractionRequest{
+		ContactID:  id,
+		Source:     repository.InteractionSourceManual,
+		OccurredAt: dateToSet,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("record interaction: %w", err)
 	}
 
-	if err := s.contactRepo.UpdateContactLastContacted(ctx, id, dateToSet, contactBy); err != nil {
-		return nil, err
-	}
-
-	contact, err = s.contactRepo.GetContact(ctx, id)
+	contact, err := s.contactRepo.GetContact(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -280,6 +275,79 @@ func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid
 	}
 
 	return contact, nil
+}
+
+// RecordInteraction creates an interaction record and updates last_contacted/contact_by.
+// Handles source-aware deduplication:
+//   - For sources with source_ref (gcal, todoist): dedup by source_ref
+//   - For manual sources (no source_ref): dedup by 30-minute time window
+//
+// Uses forward-only semantics for last_contacted: only updates if occurred_at > current last_contacted.
+func (s *ContactService) RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error) {
+	// 1. Source-aware deduplication
+	if req.SourceRef != nil {
+		existing, err := s.interactionRepo.FindBySourceRef(ctx, req.ContactID, req.Source, *req.SourceRef)
+		if err != nil && !errors.Is(err, db.ErrNotFound) {
+			return nil, fmt.Errorf("check existing interaction by source_ref: %w", err)
+		}
+		if existing != nil {
+			logger.Debug().
+				Str("contactId", req.ContactID.String()).
+				Str("source", req.Source).
+				Str("sourceRef", *req.SourceRef).
+				Msg("skipping duplicate interaction (same source_ref)")
+			return existing, nil
+		}
+	} else {
+		// Manual source: use 30-minute time window
+		existing, err := s.interactionRepo.FindInWindow(ctx, req.ContactID, req.Source, req.OccurredAt, 30*time.Minute)
+		if err != nil && !errors.Is(err, db.ErrNotFound) {
+			return nil, fmt.Errorf("check existing interaction in window: %w", err)
+		}
+		if existing != nil {
+			logger.Debug().
+				Str("contactId", req.ContactID.String()).
+				Str("existingSource", existing.Source).
+				Str("newSource", req.Source).
+				Msg("skipping duplicate interaction within 30-min window")
+			return existing, nil
+		}
+	}
+
+	// 2. Verify contact exists (avoids FK violation returning unhelpful error)
+	contact, err := s.contactRepo.GetContact(ctx, req.ContactID)
+	if err != nil {
+		return nil, err // propagates ErrNotFound
+	}
+
+	// 3. Create interaction record
+	interaction, err := s.interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest(req))
+	if err != nil {
+		return nil, fmt.Errorf("create interaction: %w", err)
+	}
+
+	// 4. Update last_contacted
+	// Manual source always updates (user correction). Automated sources use forward-only semantics.
+	isManual := req.Source == repository.InteractionSourceManual
+	shouldUpdate := isManual || contact.LastContacted == nil || req.OccurredAt.After(*contact.LastContacted)
+	if shouldUpdate {
+		// Calculate contact_by based on cadence
+		var contactBy *time.Time
+		if contact.Cadence != nil && *contact.Cadence != "" {
+			if cadenceType, err := cadence.ParseCadence(*contact.Cadence); err == nil {
+				contactByTime := cadence.CalculateContactBy(req.OccurredAt, cadenceType)
+				contactBy = &contactByTime
+			}
+		}
+
+		if err := s.contactRepo.UpdateContactLastContacted(ctx, req.ContactID, req.OccurredAt, contactBy); err != nil {
+			logger.Warn().Err(err).
+				Str("contactId", req.ContactID.String()).
+				Msg("failed to update last_contacted from interaction")
+		}
+	}
+
+	return interaction, nil
 }
 
 // ListOverdueContacts retrieves contacts whose contact_by date is in the past.

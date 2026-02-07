@@ -87,9 +87,10 @@ func main() {
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	noteRepo := repository.NewNoteRepository(database.Queries)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
 
 	// Initialize services
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo)
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 	importMatchService := service.NewImportMatchService(contactRepo)
 
@@ -178,6 +179,7 @@ func main() {
 				contactRepo,
 				identityService,
 				externalContactRepo,
+				contactService,
 			)
 			providerRegistry.Register(gcalProvider)
 			logger.Info().Msg("Google Calendar sync provider registered")
@@ -195,6 +197,7 @@ func main() {
 				contactRepo,
 				syncRepo,
 				cfg,
+				contactService,
 			)
 			providerRegistry.Register(todoistProvider)
 			logger.Info().Msg("Todoist Cadence sync provider registered")
@@ -225,6 +228,7 @@ func main() {
 	// Initialize handlers
 	contactHandler := handlers.NewContactHandler(contactService)
 	noteHandler := handlers.NewNoteHandler(noteService)
+	interactionHandler := handlers.NewInteractionHandler(contactService, interactionRepo)
 	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
 
 	// Initialize and start scheduler
@@ -275,11 +279,19 @@ func main() {
 			contacts.PUT("/:id", contactHandler.UpdateContact)
 			contacts.DELETE("/:id", contactHandler.DeleteContact)
 			contacts.PATCH("/:id/last-contacted", contactHandler.UpdateContactLastContacted)
+			contacts.GET("/:id/interactions", interactionHandler.ListContactInteractions)
+			contacts.POST("/:id/interactions", interactionHandler.CreateInteraction)
 			contacts.GET("/:id/notes", noteHandler.GetContactNotepad)
 			contacts.PUT("/:id/notes", noteHandler.SaveContactNotepad)
 			// Merge routes
 			contacts.GET("/:id/merge/preview", contactHandler.GetMergePreview)
 			contacts.POST("/:id/merge", contactHandler.MergeContacts)
+		}
+
+		// Interaction routes (non-contact-scoped)
+		interactions := v1.Group("/interactions")
+		{
+			interactions.DELETE("/:id", interactionHandler.DeleteInteraction)
 		}
 
 		// System routes

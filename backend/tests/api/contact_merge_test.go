@@ -53,7 +53,8 @@ func TestContactMerge_Integration(t *testing.T) {
 	noteRepo := repository.NewNoteRepository(database.Queries)
 
 	// Create service
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo)
 
 	t.Run("GetMergePreview_BasicCounts", func(t *testing.T) {
 		// Create target contact

@@ -1,37 +1,39 @@
 -- Interaction queries
 
 -- name: GetInteraction :one
-SELECT * FROM interaction WHERE id = $1;
+SELECT * FROM interaction WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: ListContactInteractions :many
-SELECT * FROM interaction 
-WHERE contact_id = $1
-ORDER BY interaction_date DESC
+SELECT * FROM interaction
+WHERE contact_id = $1 AND deleted_at IS NULL
+ORDER BY occurred_at DESC
 LIMIT $2 OFFSET $3;
 
--- name: ListRecentInteractions :many
-SELECT i.*, c.full_name as contact_name
-FROM interaction i
-JOIN contact c ON c.id = i.contact_id
-WHERE c.deleted_at IS NULL
-ORDER BY i.interaction_date DESC
-LIMIT $1;
-
 -- name: CreateInteraction :one
-INSERT INTO interaction (contact_id, type, description, interaction_date) 
-VALUES ($1, $2, $3, $4) 
+INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
--- name: UpdateInteraction :one
-UPDATE interaction SET
-  type = $2,
-  description = $3,
-  interaction_date = $4
-WHERE id = $1
-RETURNING *;
-
--- name: DeleteInteraction :exec
-DELETE FROM interaction WHERE id = $1;
+-- name: SoftDeleteInteraction :exec
+UPDATE interaction SET deleted_at = NOW()
+WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: CountContactInteractions :one
-SELECT COUNT(*) FROM interaction WHERE contact_id = $1;
+SELECT COUNT(*) FROM interaction
+WHERE contact_id = $1 AND deleted_at IS NULL;
+
+-- name: FindInteractionBySourceRef :one
+-- Find an existing interaction by contact, source, and source_ref (for deduplication)
+SELECT * FROM interaction
+WHERE contact_id = $1 AND source = $2 AND source_ref = $3 AND deleted_at IS NULL
+LIMIT 1;
+
+-- name: FindInteractionInWindow :one
+-- Find an existing manual interaction within a time window (for manual deduplication)
+SELECT * FROM interaction
+WHERE contact_id = $1
+  AND source = $4
+  AND deleted_at IS NULL
+  AND occurred_at BETWEEN $2 AND $3
+ORDER BY occurred_at DESC
+LIMIT 1;

@@ -59,13 +59,19 @@ const (
 // DateFormat is the date format used for Todoist deadlines and synced_deadline metadata (YYYY-MM-DD)
 const DateFormat = "2006-01-02"
 
+// interactionRecorder defines the method for recording interactions (satisfied by ContactService)
+type interactionRecorder interface {
+	RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error)
+}
+
 // CadenceSyncProvider implements SyncProvider for Todoist cadence tasks
 type CadenceSyncProvider struct {
-	oauthService    *OAuthService
-	contactTaskRepo *repository.ContactTaskRepository
-	contactRepo     *repository.ContactRepository
-	syncRepo        *repository.SyncRepository
-	frontendURL     string
+	oauthService        *OAuthService
+	contactTaskRepo     *repository.ContactTaskRepository
+	contactRepo         *repository.ContactRepository
+	syncRepo            *repository.SyncRepository
+	interactionRecorder interactionRecorder
+	frontendURL         string
 }
 
 // NewCadenceSyncProvider creates a new Todoist cadence sync provider
@@ -75,13 +81,15 @@ func NewCadenceSyncProvider(
 	contactRepo *repository.ContactRepository,
 	syncRepo *repository.SyncRepository,
 	cfg *config.Config,
+	interactionRecorder interactionRecorder,
 ) *CadenceSyncProvider {
 	return &CadenceSyncProvider{
-		oauthService:    oauthService,
-		contactTaskRepo: contactTaskRepo,
-		contactRepo:     contactRepo,
-		syncRepo:        syncRepo,
-		frontendURL:     cfg.CORS.FrontendURL,
+		oauthService:        oauthService,
+		contactTaskRepo:     contactTaskRepo,
+		contactRepo:         contactRepo,
+		syncRepo:            syncRepo,
+		interactionRecorder: interactionRecorder,
+		frontendURL:         cfg.CORS.FrontendURL,
 	}
 }
 
@@ -409,16 +417,23 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 		}
 	}
 
-	// Mark contact as contacted
-	if err := p.contactRepo.UpdateContactLastContacted(ctx, contact.ID, completedAt, nil); err != nil {
-		logger.Warn().Err(err).Msg("failed to update last_contacted")
+	// Record interaction (handles last_contacted update and dedup)
+	sourceRef := task.ExternalTaskID
+	_, err := p.interactionRecorder.RecordInteraction(ctx, repository.RecordInteractionRequest{
+		ContactID:  contact.ID,
+		Source:     repository.InteractionSourceTodoist,
+		SourceRef:  &sourceRef,
+		OccurredAt: completedAt,
+	})
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to record interaction from Todoist completion")
 	}
 
 	logger.Info().
 		Str("contactId", contact.ID.String()).
 		Str("taskKind", task.Kind).
 		Time("lastContacted", completedAt).
-		Msg("marked contact as contacted from Todoist completion")
+		Msg("recorded interaction from Todoist completion")
 
 	// Handle action tasks differently - mark as completed, no new task
 	if task.Kind == TaskKindAction {

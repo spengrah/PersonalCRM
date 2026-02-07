@@ -55,7 +55,8 @@ func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 
 	// Create services
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo)
 	matchService := service.NewImportMatchService(contactRepo)
 	enrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
 

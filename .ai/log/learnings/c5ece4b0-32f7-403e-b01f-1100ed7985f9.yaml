@@ -1,0 +1,88 @@
+---
+timestamp: "2026-02-06T20:25:01.666043"
+type: architecture
+summary: Service-level RecordInteraction with source-aware deduplication
+detail: |
+  When tracking interactions from multiple sources (manual, calendar, Todoist), implement a centralized service method (ContactService.RecordInteraction) that handles: (1) source-aware deduplication (by source_ref for automated sources, 30-min window for manual), (2) forward-only last_contacted updates (only update if occurred_at > current value, except for manual source which always updates), (3) contact_by recalculation. This prevents double-counting interactions while correctly handling both automated syncs and manual backdated entries.
+actionable: true
+
+---
+timestamp: "2026-02-06T20:25:01.666043"
+type: gotcha
+summary: Use TEXT not UUID for source_ref to support multiple ID formats
+detail: |
+  When creating a source_ref column to link interactions back to external systems, use TEXT not UUID. Todoist uses alphanumeric strings (e.g., '6fw9cQQ5JppCp7qX'), only Google Calendar uses UUIDs. A UUID column would break Todoist integration and limit future integrations.
+actionable: true
+
+---
+timestamp: "2026-02-06T20:25:01.666043"
+type: architecture
+summary: Break circular dependencies with shared request types in repository layer
+detail: |
+  When sync providers (google, todoist packages) need to call service methods, move shared request types and constants to the repository package instead of defining them in service. This prevents circular dependencies since providers depend on repository already. Example: moved RecordInteractionRequest and InteractionSource* constants from service to repository package.
+actionable: true
+
+---
+timestamp: "2026-02-06T20:25:01.666043"
+type: gotcha
+summary: Forward-only semantics break manual backdating use cases
+detail: |
+  When implementing 'forward-only' last_contacted updates (to prevent calendar backfill from overwriting recent data), this breaks the legitimate use case of manually backdating interactions. Solution: use forward-only semantics only for automated sources (gcal, todoist), but always update last_contacted for manual source regardless of whether occurred_at is in the past.
+actionable: true
+
+---
+timestamp: "2026-02-06T20:25:01.666043"
+type: rule
+summary: Check entity existence before creating FK-referencing records
+detail: |
+  When a service method creates a record with a foreign key (e.g., interaction referencing contact_id), check that the parent entity exists first and return ErrNotFound if not. Otherwise, FK constraint violations return as 500 errors instead of proper 404s. This is especially important for API handler error handling patterns.
+actionable: true
+
+---
+timestamp: "2026-02-06T20:25:01.666043"
+type: distinction
+summary: Use struct type conversion instead of struct literals when types match
+detail: |
+  When types have identical field names/types (like RecordInteractionRequest and CreateInteractionRequest), staticcheck prefers direct type conversion over struct literals: use 'CreateInteractionRequest(req)' not 'CreateInteractionRequest{ContactID: req.ContactID, ...}'. This is enforced by staticcheck S1016.
+actionable: true
+
+---
+timestamp: "2026-02-06T20:25:01.666043"
+type: architecture
+summary: Inject services to sync providers via interface, not direct dependency
+detail: |
+  When sync providers need service methods, define a minimal interface (e.g., 'interactionRecorder') in the provider package that the service satisfies. Pass the service as this interface in the constructor. This maintains testability and avoids tight coupling while enabling providers to call service methods without circular dependencies.
+actionable: true
+
+---
+timestamp: "2026-02-06T20:25:01.666043"
+type: gotcha
+summary: Update interaction table schema requires updating existing TransferInteractions query
+detail: |
+  The contact merge functionality uses TransferInteractions query from contact_merge.sql. When repurposing the interaction table schema, this merge query must be updated for the new column structure, even though it just does a simple UPDATE to reassign contact_id.
+actionable: true
+
+---
+timestamp: "2026-02-06T20:37:33.574778"
+type: gotcha
+summary: Mock factory must include all provider dependencies including new fields
+detail: |
+  When adding a new field to a struct (e.g., interactionRecorder to CalendarSyncProvider), test factories (newTestProvider, newTestProviderWithExternal) must be updated to set that field, even if set to a default mock. Otherwise tests panic with nil pointer dereference when the code calls methods on the new field. This happened when updateLastContactedForPastEvents called p.interactionRecorder.RecordInteraction() but test mocks left interactionRecorder as nil.
+actionable: true
+
+---
+timestamp: "2026-02-06T20:37:33.574778"
+type: gotcha
+summary: Pre-push learnings extraction blocks push until learnings applied
+detail: |
+  The pre-push hook runs learnings extraction automatically. When new learnings are found, the push is blocked and the agent must: (1) read the new learnings file, (2) classify and apply actionable ones to project docs (AGENTS.md, .ai/rules/, .ai/patterns/, etc.), (3) commit both the learnings file and any updated docs, (4) push again. This workflow ensures learnings are captured and applied before code reaches the remote.
+actionable: true
+
+---
+timestamp: "2026-02-06T20:37:33.574778"
+type: documentation_gap
+summary: Gotchas table in core.md needs entry for test mock updates when adding struct fields
+detail: |
+  When a struct gains a new field that existing code uses (like CalendarSyncProvider.interactionRecorder), test factory functions must be updated to initialize that field. The gotchas table should capture this pattern: 'Adding new struct field used in existing methods | Update all test factory functions (newTestX, newMockX) to initialize the field - otherwise nil pointer panics in tests'. Without this guidance, agents may fix the production code but forget to update test infrastructure.
+actionable: true
+

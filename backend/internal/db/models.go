@@ -181,18 +181,14 @@ type ExternalSyncState struct {
 }
 
 type Interaction struct {
-	ID              pgtype.UUID        `json:"id"`
-	ContactID       pgtype.UUID        `json:"contact_id"`
-	Type            string             `json:"type"`
-	Description     pgtype.Text        `json:"description"`
-	InteractionDate pgtype.Timestamptz `json:"interaction_date"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-}
-
-type InteractionEmbedding struct {
-	InteractionID pgtype.UUID        `json:"interaction_id"`
-	Embedding     pgvector.Vector    `json:"embedding"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ID          pgtype.UUID        `json:"id"`
+	ContactID   pgtype.UUID        `json:"contact_id"`
+	Source      string             `json:"source"`
+	SourceRef   pgtype.Text        `json:"source_ref"`
+	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
+	Description pgtype.Text        `json:"description"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
 }
 
 type Note struct {

@@ -320,7 +320,7 @@ type TransferInteractionsParams struct {
 	SourceContactID pgtype.UUID `json:"source_contact_id"`
 }
 
-// Transfer interactions from source to target contact
+// Transfer interactions from source to target contact (includes soft-deleted for audit trail)
 func (q *Queries) TransferInteractions(ctx context.Context, arg TransferInteractionsParams) error {
 	_, err := q.db.Exec(ctx, TransferInteractions, arg.TargetContactID, arg.SourceContactID)
 	return err
