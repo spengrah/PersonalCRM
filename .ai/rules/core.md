@@ -137,6 +137,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Adding params to existing sqlc queries | Convert ALL positional params ($1, $2) to named `sqlc.arg()` first - can't mix styles. Expect field name changes in generated structs (e.g., `Limit`→`PageLimit`). Run `go build ./cmd/crm-api` after `make sqlc` |
 | E2E `waitForResponse` for param removal | Response may fire before listener is set up when removing a URL param (e.g., resetting filter). Use visibility assertions with timeout instead |
 | Adding new contact list filter | Must update all 10 SQL queries (8 listing + 2 count), plus repository params, service, handler, frontend types, API client, contacts page, and detail page listContext/buildNavigationUrl |
+| Writing new integration test in `backend/tests/` | Must call `db.RunMigrations(databaseURL, getMigrationsPath())` before `db.NewDatabase()` - CI has bare PostgreSQL without pre-existing schema |
 
 ## Anti-Patterns
 
