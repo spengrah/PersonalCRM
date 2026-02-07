@@ -300,7 +300,7 @@ func (s *ContactService) RecordInteraction(ctx context.Context, req repository.R
 		}
 	} else {
 		// Manual source: use 30-minute time window
-		existing, err := s.interactionRepo.FindInWindow(ctx, req.ContactID, req.OccurredAt, 30*time.Minute)
+		existing, err := s.interactionRepo.FindInWindow(ctx, req.ContactID, req.Source, req.OccurredAt, 30*time.Minute)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
 			return nil, fmt.Errorf("check existing interaction in window: %w", err)
 		}

@@ -143,6 +143,35 @@ func (m *mockExternalContactRepo) Upsert(ctx context.Context, req repository.Ups
 	}, nil
 }
 
+// mockInteractionRecorder is a mock implementation of interactionRecorder
+type mockInteractionRecorder struct {
+	recordCalled   bool
+	recordRequests []repository.RecordInteractionRequest
+	recordResults  []*repository.Interaction
+	recordError    error
+}
+
+func (m *mockInteractionRecorder) RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error) {
+	m.recordCalled = true
+	m.recordRequests = append(m.recordRequests, req)
+	if m.recordError != nil {
+		return nil, m.recordError
+	}
+	if len(m.recordResults) > 0 {
+		idx := len(m.recordRequests) - 1
+		if idx < len(m.recordResults) {
+			return m.recordResults[idx], nil
+		}
+	}
+	return &repository.Interaction{
+		ID:         uuid.New(),
+		ContactID:  req.ContactID,
+		Source:     req.Source,
+		SourceRef:  req.SourceRef,
+		OccurredAt: req.OccurredAt,
+	}, nil
+}
+
 // newTestProvider creates a CalendarSyncProvider with mocked dependencies for testing
 func newTestProvider(calRepo calendarRepoInterface, contactRepo contactRepoInterface, idSvc identityServiceInterface) *CalendarSyncProvider {
 	return newTestProviderWithExternal(calRepo, contactRepo, idSvc, nil)
@@ -156,5 +185,6 @@ func newTestProviderWithExternal(calRepo calendarRepoInterface, contactRepo cont
 		contactRepo:         contactRepo,
 		identityService:     idSvc,
 		externalContactRepo: extRepo,
+		interactionRecorder: &mockInteractionRecorder{},
 	}
 }

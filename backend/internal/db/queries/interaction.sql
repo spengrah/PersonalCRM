@@ -29,9 +29,10 @@ WHERE contact_id = $1 AND source = $2 AND source_ref = $3 AND deleted_at IS NULL
 LIMIT 1;
 
 -- name: FindInteractionInWindow :one
--- Find an existing interaction within a time window (for manual deduplication)
+-- Find an existing manual interaction within a time window (for manual deduplication)
 SELECT * FROM interaction
 WHERE contact_id = $1
+  AND source = $4
   AND deleted_at IS NULL
   AND occurred_at BETWEEN $2 AND $3
 ORDER BY occurred_at DESC

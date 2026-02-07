@@ -107,7 +107,7 @@ type Querier interface {
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
 	// Find an existing interaction by contact, source, and source_ref (for deduplication)
 	FindInteractionBySourceRef(ctx context.Context, arg FindInteractionBySourceRefParams) (*Interaction, error)
-	// Find an existing interaction within a time window (for manual deduplication)
+	// Find an existing manual interaction within a time window (for manual deduplication)
 	FindInteractionInWindow(ctx context.Context, arg FindInteractionInWindowParams) (*Interaction, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	FindSimilarContacts(ctx context.Context, arg FindSimilarContactsParams) ([]*FindSimilarContactsRow, error)

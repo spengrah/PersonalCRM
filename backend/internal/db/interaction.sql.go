@@ -91,6 +91,7 @@ func (q *Queries) FindInteractionBySourceRef(ctx context.Context, arg FindIntera
 const FindInteractionInWindow = `-- name: FindInteractionInWindow :one
 SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at FROM interaction
 WHERE contact_id = $1
+  AND source = $4
   AND deleted_at IS NULL
   AND occurred_at BETWEEN $2 AND $3
 ORDER BY occurred_at DESC
@@ -101,11 +102,17 @@ type FindInteractionInWindowParams struct {
 	ContactID    pgtype.UUID        `json:"contact_id"`
 	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
 	OccurredAt_2 pgtype.Timestamptz `json:"occurred_at_2"`
+	Source       string             `json:"source"`
 }
 
-// Find an existing interaction within a time window (for manual deduplication)
+// Find an existing manual interaction within a time window (for manual deduplication)
 func (q *Queries) FindInteractionInWindow(ctx context.Context, arg FindInteractionInWindowParams) (*Interaction, error) {
-	row := q.db.QueryRow(ctx, FindInteractionInWindow, arg.ContactID, arg.OccurredAt, arg.OccurredAt_2)
+	row := q.db.QueryRow(ctx, FindInteractionInWindow,
+		arg.ContactID,
+		arg.OccurredAt,
+		arg.OccurredAt_2,
+		arg.Source,
+	)
 	var i Interaction
 	err := row.Scan(
 		&i.ID,

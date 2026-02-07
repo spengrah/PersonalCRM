@@ -163,8 +163,8 @@ func (r *InteractionRepository) FindBySourceRef(ctx context.Context, contactID u
 	return &interaction, nil
 }
 
-// FindInWindow finds an existing interaction within a time window for a contact
-func (r *InteractionRepository) FindInWindow(ctx context.Context, contactID uuid.UUID, occurredAt time.Time, window time.Duration) (*Interaction, error) {
+// FindInWindow finds an existing interaction within a time window for a contact and source
+func (r *InteractionRepository) FindInWindow(ctx context.Context, contactID uuid.UUID, source string, occurredAt time.Time, window time.Duration) (*Interaction, error) {
 	windowStart := occurredAt.Add(-window)
 	windowEnd := occurredAt.Add(window)
 
@@ -172,6 +172,7 @@ func (r *InteractionRepository) FindInWindow(ctx context.Context, contactID uuid
 		ContactID:    uuidToPgUUID(contactID),
 		OccurredAt:   pgtype.Timestamptz{Time: windowStart, Valid: true},
 		OccurredAt_2: pgtype.Timestamptz{Time: windowEnd, Valid: true},
+		Source:       source,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

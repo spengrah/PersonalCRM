@@ -858,9 +858,11 @@ func TestUpdateLastContactedForPastEvents_UpdatesContactsAndMarksEvents(t *testi
 	}
 
 	mockContactRepo := &mockContactRepo{}
+	mockRecorder := &mockInteractionRecorder{}
 
 	// Use newTestProvider to create the REAL CalendarSyncProvider with mocked deps
 	provider := newTestProvider(mockCalRepo, mockContactRepo, nil)
+	provider.interactionRecorder = mockRecorder
 
 	// Call the REAL updateLastContactedForPastEvents method
 	err := provider.updateLastContactedForPastEvents(ctx)
@@ -870,16 +872,18 @@ func TestUpdateLastContactedForPastEvents_UpdatesContactsAndMarksEvents(t *testi
 	// Verify calendar repo was called to list past events
 	assert.True(t, mockCalRepo.listPastCalled)
 
-	// Verify contacts were updated
-	assert.True(t, mockContactRepo.updateLastContactedCalled)
-	assert.Len(t, mockContactRepo.updateLastContactedIDs, 2)
-	assert.Contains(t, mockContactRepo.updateLastContactedIDs, contactID1)
-	assert.Contains(t, mockContactRepo.updateLastContactedIDs, contactID2)
+	// Verify interactions were recorded for each contact
+	assert.True(t, mockRecorder.recordCalled)
+	assert.Len(t, mockRecorder.recordRequests, 2)
 
-	// Verify correct times were used
-	for _, contactedTime := range mockContactRepo.updateLastContactedTimes {
-		assert.Equal(t, eventEndTime, contactedTime)
+	recordedContactIDs := make([]uuid.UUID, len(mockRecorder.recordRequests))
+	for i, req := range mockRecorder.recordRequests {
+		recordedContactIDs[i] = req.ContactID
+		assert.Equal(t, repository.InteractionSourceGCal, req.Source)
+		assert.Equal(t, eventEndTime, req.OccurredAt)
 	}
+	assert.Contains(t, recordedContactIDs, contactID1)
+	assert.Contains(t, recordedContactIDs, contactID2)
 
 	// Verify event was marked as updated
 	assert.True(t, mockCalRepo.markUpdatedCalled)
@@ -912,14 +916,16 @@ func TestUpdateLastContactedForPastEvents_HandlesMultipleEvents(t *testing.T) {
 	}
 
 	mockContactRepo := &mockContactRepo{}
+	mockRecorder := &mockInteractionRecorder{}
 
 	provider := newTestProvider(mockCalRepo, mockContactRepo, nil)
+	provider.interactionRecorder = mockRecorder
 
 	err := provider.updateLastContactedForPastEvents(ctx)
 
 	assert.NoError(t, err)
 	assert.Len(t, mockCalRepo.markUpdatedIDs, 2)
-	assert.Len(t, mockContactRepo.updateLastContactedIDs, 2)
+	assert.Len(t, mockRecorder.recordRequests, 2)
 }
 
 // TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate tests the empty case
@@ -931,15 +937,17 @@ func TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate(t *testing.T) {
 	}
 
 	mockContactRepo := &mockContactRepo{}
+	mockRecorder := &mockInteractionRecorder{}
 
 	provider := newTestProvider(mockCalRepo, mockContactRepo, nil)
+	provider.interactionRecorder = mockRecorder
 
 	err := provider.updateLastContactedForPastEvents(ctx)
 
 	assert.NoError(t, err)
 	assert.True(t, mockCalRepo.listPastCalled)
-	assert.False(t, mockContactRepo.updateLastContactedCalled) // No contacts to update
-	assert.False(t, mockCalRepo.markUpdatedCalled)             // No events to mark
+	assert.False(t, mockRecorder.recordCalled)     // No contacts to update
+	assert.False(t, mockCalRepo.markUpdatedCalled) // No events to mark
 }
 
 // ========================================
