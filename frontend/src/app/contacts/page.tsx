@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
@@ -12,6 +13,8 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  Edit,
+  GitMerge,
 } from 'lucide-react'
 import { useContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
 import { Button } from '@/components/ui/button'
@@ -43,7 +46,7 @@ function ContactsTable({
 }) {
   const router = useRouter()
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
-  const [dropdownPosition, setDropdownPosition] = useState<'below' | 'above'>('below')
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({})
   const buttonRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
   const updateLastContacted = useUpdateLastContacted()
 
@@ -68,11 +71,12 @@ function ContactsTable({
 
   // Build URL with navigation context params
   // Always include sort/order so navigation order matches list order
-  const buildContactUrl = (contactId: string) => {
+  const buildContactUrl = (contactId: string, action?: 'edit' | 'merge') => {
     const params = new URLSearchParams()
     params.set('sort', sortBy || DEFAULT_SORT_FIELD)
     params.set('order', sortOrder || DEFAULT_SORT_ORDER)
     if (searchTerm) params.set('search', searchTerm)
+    if (action) params.set('action', action)
     return `/contacts/${contactId}?${params.toString()}`
   }
 
@@ -276,48 +280,79 @@ function ContactsTable({
                   : '-'}
               </td>
               <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium">
-                <div className="relative" onClick={handleDropdownClick}>
+                <div onClick={handleDropdownClick}>
                   <button
                     ref={el => setButtonRef(contact.id, el)}
                     className="text-gray-400 hover:text-gray-500"
+                    aria-label="Contact actions"
+                    aria-haspopup="menu"
+                    aria-expanded={openDropdown === contact.id}
                     onClick={e => {
                       e.stopPropagation()
                       if (openDropdown === contact.id) {
                         setOpenDropdown(null)
                       } else {
-                        // Calculate if dropdown should open above or below
                         const button = buttonRefs.current.get(contact.id)
                         if (button) {
                           const rect = button.getBoundingClientRect()
+                          const dropdownHeight = 140
                           const spaceBelow = window.innerHeight - rect.bottom
-                          const dropdownHeight = 50 // approximate height of dropdown
-                          setDropdownPosition(spaceBelow < dropdownHeight ? 'above' : 'below')
+                          const openAbove = spaceBelow < dropdownHeight
+                          setDropdownStyle({
+                            position: 'fixed',
+                            right: window.innerWidth - rect.right,
+                            ...(openAbove
+                              ? { bottom: window.innerHeight - rect.top + 4 }
+                              : { top: rect.bottom + 4 }),
+                          })
+                          setOpenDropdown(contact.id)
                         }
-                        setOpenDropdown(contact.id)
                       }
                     }}
                   >
                     <MoreHorizontal className="w-5 h-5" />
                   </button>
 
-                  {openDropdown === contact.id && (
-                    <div
-                      className={`absolute right-0 w-48 bg-white rounded-md shadow-lg z-10 ring-1 ring-black ring-opacity-5 ${
-                        dropdownPosition === 'above' ? 'bottom-full mb-2' : 'top-full mt-2'
-                      }`}
-                    >
-                      <div className="py-1">
-                        <button
-                          onClick={e => handleMarkAsContacted(e, contact.id)}
-                          className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                          disabled={updateLastContacted.isPending}
-                        >
-                          <CheckCircle className="w-4 h-4 mr-2" />
-                          {updateLastContacted.isPending ? 'Marking...' : 'Mark as Contacted'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                  {openDropdown === contact.id &&
+                    createPortal(
+                      <div
+                        style={dropdownStyle}
+                        className="w-48 bg-white rounded-md shadow-lg z-50 ring-1 ring-black ring-opacity-5"
+                        role="menu"
+                      >
+                        <div className="py-1">
+                          <button
+                            onClick={e => handleMarkAsContacted(e, contact.id)}
+                            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                            disabled={updateLastContacted.isPending}
+                          >
+                            <CheckCircle className="w-4 h-4 mr-2" />
+                            {updateLastContacted.isPending ? 'Marking...' : 'Mark as Contacted'}
+                          </button>
+                          <button
+                            onClick={e => {
+                              e.stopPropagation()
+                              router.push(buildContactUrl(contact.id, 'edit'))
+                            }}
+                            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                          >
+                            <Edit className="w-4 h-4 mr-2" />
+                            Edit
+                          </button>
+                          <button
+                            onClick={e => {
+                              e.stopPropagation()
+                              router.push(buildContactUrl(contact.id, 'merge'))
+                            }}
+                            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                          >
+                            <GitMerge className="w-4 h-4 mr-2" />
+                            Merge
+                          </button>
+                        </div>
+                      </div>,
+                      document.body
+                    )}
                 </div>
               </td>
             </tr>

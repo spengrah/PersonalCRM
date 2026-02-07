@@ -248,6 +248,92 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.getByTestId('cancel-last-contacted-btn').click()
   })
 
+  test('should show context menu without clipping for bottom rows', async ({ page }) => {
+    // Create enough contacts to have rows near the bottom of the viewport
+    const names = Array.from({ length: 8 }, (_, i) => ({
+      full_name: `Context Menu Test ${i}`,
+      cadence: 'monthly' as const,
+    }))
+    await testApi.seedContacts(names)
+
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+
+    // Find the last visible row's action button
+    const rows = page.locator('tbody tr')
+    await expect(rows.first()).toBeVisible({ timeout: 15000 })
+    const lastRow = rows.last()
+    const actionButton = lastRow
+      .locator('button')
+      .filter({ has: page.locator('svg') })
+      .last()
+    await actionButton.click()
+
+    // Verify the dropdown menu is visible and not clipped
+    const menuItem = page.getByRole('button', { name: 'Mark as Contacted' }).first()
+    await expect(menuItem).toBeVisible()
+
+    // Verify Edit and Merge items are also present
+    await expect(page.getByRole('button', { name: 'Edit' }).first()).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Merge' }).first()).toBeVisible()
+  })
+
+  test('should navigate to edit mode via context menu Edit action', async ({ page }) => {
+    const { ids } = await testApi.seedContacts([{ full_name: 'Context Edit Test' }])
+
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Context Edit Test`
+
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+
+    // Find the row and open context menu
+    const contactRow = page.locator('tr', { has: page.getByText(fullName) })
+    await expect(contactRow).toBeVisible({ timeout: 15000 })
+    const actionButton = contactRow
+      .locator('button')
+      .filter({ has: page.locator('svg') })
+      .last()
+    await actionButton.click()
+
+    // Click Edit in context menu
+    await page.getByRole('button', { name: 'Edit' }).first().click()
+
+    // Should navigate to detail page in edit mode
+    await page.waitForURL(/\/contacts\/.*action=edit/)
+    await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeVisible({
+      timeout: 15000,
+    })
+  })
+
+  test('should navigate to merge modal via context menu Merge action', async ({ page }) => {
+    const { ids } = await testApi.seedContacts([{ full_name: 'Context Merge Test' }])
+
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Context Merge Test`
+
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+
+    // Find the row and open context menu
+    const contactRow = page.locator('tr', { has: page.getByText(fullName) })
+    await expect(contactRow).toBeVisible({ timeout: 15000 })
+    const actionButton = contactRow
+      .locator('button')
+      .filter({ has: page.locator('svg') })
+      .last()
+    await actionButton.click()
+
+    // Click Merge in context menu
+    await page.getByRole('button', { name: 'Merge' }).first().click()
+
+    // Should navigate to detail page with merge modal open
+    await page.waitForURL(/\/contacts\/.*action=merge/)
+    await expect(page.getByRole('heading', { name: 'Merge Contacts' })).toBeVisible({
+      timeout: 15000,
+    })
+  })
+
   test('should update Mark as Contacted button behavior', async ({ page }) => {
     const { ids } = await testApi.seedContacts([
       {
