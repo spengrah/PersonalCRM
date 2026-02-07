@@ -15,6 +15,7 @@ import {
   ArrowDown,
   Edit,
   GitMerge,
+  ListFilter,
 } from 'lucide-react'
 import { useContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
 import { Button } from '@/components/ui/button'
@@ -474,7 +475,7 @@ export default function ContactsPage() {
 
         {/* Search and Filter */}
         <div className="mb-6 flex gap-3 items-start">
-          <form onSubmit={handleSearch} className="max-w-md flex-1">
+          <form onSubmit={handleSearch} className="flex-1 max-w-md">
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <Search className="h-5 w-5 text-gray-400" />
@@ -488,23 +489,28 @@ export default function ContactsPage() {
               />
             </div>
           </form>
-          <select
-            value={params.cadence_filter || ''}
-            onChange={e =>
-              setParams(prev => ({
-                ...prev,
-                cadence_filter:
-                  (e.target.value as ContactListParams['cadence_filter']) || undefined,
-                page: 1,
-              }))
-            }
-            className={FORM_SELECT_BASE + ' w-40'}
-            aria-label="Filter by cadence"
-          >
-            <option value="">All contacts</option>
-            <option value="has_cadence">Has cadence</option>
-            <option value="no_cadence">No cadence</option>
-          </select>
+          <div className="relative">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <ListFilter className="h-5 w-5 text-gray-400" />
+            </div>
+            <select
+              value={params.cadence_filter || ''}
+              onChange={e =>
+                setParams(prev => ({
+                  ...prev,
+                  cadence_filter:
+                    (e.target.value as ContactListParams['cadence_filter']) || undefined,
+                  page: 1,
+                }))
+              }
+              className={FORM_SELECT_BASE + ' pl-10 w-auto'}
+              aria-label="Filter by cadence"
+            >
+              <option value="">All Contacts</option>
+              <option value="has_cadence">With Cadence</option>
+              <option value="no_cadence">No Cadence</option>
+            </select>
+          </div>
         </div>
 
         {/* Top Pagination */}
