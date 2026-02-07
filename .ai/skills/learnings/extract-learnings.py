@@ -26,6 +26,8 @@ from typing import Iterator
 
 EXTRACTION_PROMPT = """\
 Analyze this session transcript to extract learnings that will help future agents work better on this project.
+The transcript may include a "Claude Code Auto-Memory" section at the end with notes Claude saved for itself.
+Treat these as an additional source of insights worth promoting to shared project documentation.
 
 Quality bar: Only extract insights that would meaningfully change how a future agent approaches work.
 
@@ -41,6 +43,7 @@ SKIP:
 - Implementation details specific to this session
 - Things obvious from reading the code or docs
 - Generic truisms ("consistency matters", "test before committing")
+- Insights already captured in the auto-memory section (avoid duplicating what Claude already knows)
 
 For documentation gaps, note:
 - What guidance existed but wasn't followed?
@@ -99,6 +102,35 @@ def get_project_sessions_path() -> Path:
     if not project_dir_name.startswith("-"):
         project_dir_name = "-" + project_dir_name
     return Path.home() / ".claude" / "projects" / project_dir_name
+
+
+def get_auto_memory_path() -> Path:
+    """Get the Claude Code auto-memory directory for this project."""
+    return get_project_sessions_path() / "memory"
+
+
+def read_auto_memory() -> str | None:
+    """Read all auto-memory markdown files and return as combined text.
+
+    Returns None if no memory files exist or directory is missing.
+    """
+    memory_dir = get_auto_memory_path()
+    if not memory_dir.exists():
+        return None
+
+    parts = []
+    for md_file in sorted(memory_dir.glob("*.md")):
+        try:
+            content = md_file.read_text().strip()
+            if content:
+                parts.append(f"### {md_file.name}\n\n{content}")
+        except (IOError, OSError):
+            continue
+
+    if not parts:
+        return None
+
+    return "\n\n---\n\n".join(parts)
 
 
 def get_extraction_state_path() -> Path:
@@ -538,6 +570,18 @@ def main():
     if not transcript.strip():
         print("No new content since last extraction.", file=sys.stderr)
         sys.exit(0)
+
+    # Append auto-memory content as additional context
+    auto_memory = read_auto_memory()
+    if auto_memory:
+        transcript += (
+            "\n\n---\n\n"
+            "# Claude Code Auto-Memory (for additional context)\n\n"
+            "The following are notes Claude saved for itself during this project. "
+            "Extract any insights worth promoting to shared project docs.\n\n"
+            + auto_memory
+        )
+        print(f"Included auto-memory from: {get_auto_memory_path()}", file=sys.stderr)
 
     if args.dry_run:
         print(transcript)
