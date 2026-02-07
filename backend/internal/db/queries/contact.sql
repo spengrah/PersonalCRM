@@ -20,7 +20,9 @@ ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'asc' THEN birthday END ASC NULLS LAST,
   CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'desc' THEN birthday END DESC NULLS FIRST,
   CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'asc' THEN last_contacted END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN last_contacted END DESC NULLS FIRST,
+  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN last_contacted END DESC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'asc' THEN contact_by END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'desc' THEN contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
   -- 'desc' = most frequent first (ASC on number), 'asc' = least frequent first (DESC on number)
   CASE WHEN sqlc.arg(sort_field) = 'cadence' AND sqlc.arg(sort_order) = 'desc' THEN
@@ -65,7 +67,9 @@ ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'asc' THEN c.birthday END ASC NULLS LAST,
   CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'desc' THEN c.birthday END DESC NULLS FIRST,
   CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'asc' THEN c.last_contacted END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN c.last_contacted END DESC NULLS FIRST,
+  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'asc' THEN c.contact_by END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'desc' THEN c.contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
   CASE WHEN sqlc.arg(sort_field) = 'cadence' AND sqlc.arg(sort_order) = 'desc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
@@ -156,7 +160,9 @@ ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'asc' THEN birthday END ASC NULLS LAST,
   CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'desc' THEN birthday END DESC NULLS FIRST,
   CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'asc' THEN last_contacted END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN last_contacted END DESC NULLS FIRST,
+  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN last_contacted END DESC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'asc' THEN contact_by END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'desc' THEN contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
   CASE WHEN sqlc.arg(sort_field) = 'cadence' AND sqlc.arg(sort_order) = 'desc' THEN
     CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
@@ -200,7 +206,9 @@ ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'asc' THEN c.birthday END ASC NULLS LAST,
   CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'desc' THEN c.birthday END DESC NULLS FIRST,
   CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'asc' THEN c.last_contacted END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN c.last_contacted END DESC NULLS FIRST,
+  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'asc' THEN c.contact_by END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'desc' THEN c.contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
   CASE WHEN sqlc.arg(sort_field) = 'cadence' AND sqlc.arg(sort_order) = 'desc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END

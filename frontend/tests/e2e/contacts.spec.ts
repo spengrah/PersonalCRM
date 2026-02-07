@@ -432,4 +432,77 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     // Verify the sort changed by checking the icon
     await expect(cadenceHeader.locator('svg')).toBeVisible()
   })
+
+  test('should display Next Contact column header and render dates', async ({ page }) => {
+    // Create contacts with cadence and last_contacted (so contact_by is calculated)
+    await testApi.seedContacts([
+      {
+        full_name: 'NextContact Weekly',
+        cadence: 'weekly',
+        last_contacted_days_ago: 3,
+      },
+      {
+        full_name: 'NextContact NoCadence',
+      },
+    ])
+
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+
+    // Verify "Next Contact" column header exists and is sortable
+    const nextContactHeader = page.getByRole('columnheader').filter({ hasText: 'Next Contact' })
+    await expect(nextContactHeader).toBeVisible()
+
+    // Search for our test contacts
+    const searchInput = page.getByPlaceholder('Search contacts...')
+    await searchInput.fill(`${testApi.prefix}-NextContact`)
+    await searchInput.press('Enter')
+    await page.waitForLoadState('networkidle')
+
+    // Contact with cadence should show a date (not N/A)
+    const weeklyRow = page.locator('tr', {
+      has: page.getByText(`${testApi.prefix}-NextContact Weekly`),
+    })
+    await expect(weeklyRow).toBeVisible()
+    // The Next Contact cell should contain a date (digits with slashes)
+    const weeklyCells = weeklyRow.locator('td')
+    // Next Contact is the 7th column (Name, Contact Info, Cadence, Location, Birthday, Last Contacted, Next Contact, Actions)
+    const weeklyNextContact = weeklyCells.nth(6)
+    await expect(weeklyNextContact).not.toHaveText('N/A')
+
+    // Contact without cadence should show N/A
+    const noCadenceRow = page.locator('tr', {
+      has: page.getByText(`${testApi.prefix}-NextContact NoCadence`),
+    })
+    await expect(noCadenceRow).toBeVisible()
+    const noCadenceCells = noCadenceRow.locator('td')
+    const noCadenceNextContact = noCadenceCells.nth(6)
+    await expect(noCadenceNextContact).toHaveText('N/A')
+  })
+
+  test('should sort by Next Contact column when header clicked', async ({ page }) => {
+    await testApi.seedContacts([
+      {
+        full_name: 'SortNext Weekly',
+        cadence: 'weekly',
+        last_contacted_days_ago: 3,
+      },
+      {
+        full_name: 'SortNext Annual',
+        cadence: 'annual',
+        last_contacted_days_ago: 3,
+      },
+    ])
+
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+
+    // Click Next Contact header to sort
+    const nextContactHeader = page.getByRole('columnheader').filter({ hasText: 'Next Contact' })
+    await nextContactHeader.click()
+    await page.waitForLoadState('networkidle')
+
+    // Verify sort icon appears (indicating active sort)
+    await expect(nextContactHeader.locator('svg')).toBeVisible()
+  })
 })

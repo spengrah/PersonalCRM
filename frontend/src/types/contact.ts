@@ -56,6 +56,6 @@ export interface ContactListParams {
   page?: number
   limit?: number
   search?: string
-  sort?: 'name' | 'location' | 'birthday' | 'last_contacted' | 'cadence'
+  sort?: 'name' | 'location' | 'birthday' | 'last_contacted' | 'contact_by' | 'cadence'
   order?: 'asc' | 'desc'
 }

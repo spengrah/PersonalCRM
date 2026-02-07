@@ -27,7 +27,7 @@ import { FORM_CONTROL_WITH_ICON } from '@/lib/form-classes'
 import { formatDateOnly, formatCadence } from '@/lib/utils'
 import type { Contact, ContactListParams, ContactMethod } from '@/types/contact'
 
-type SortField = 'name' | 'location' | 'birthday' | 'last_contacted' | 'cadence'
+type SortField = 'name' | 'location' | 'birthday' | 'last_contacted' | 'contact_by' | 'cadence'
 
 // Default sort configuration
 const DEFAULT_SORT_FIELD: SortField = 'cadence'
@@ -203,6 +203,15 @@ function ContactsTable({
                 {getSortIcon('last_contacted')}
               </div>
             </th>
+            <th
+              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              onClick={() => onSort('contact_by')}
+            >
+              <div className="flex items-center">
+                Next Contact
+                {getSortIcon('contact_by')}
+              </div>
+            </th>
             <th className="relative px-6 py-3">
               <span className="sr-only">Actions</span>
             </th>
@@ -304,6 +313,15 @@ function ContactsTable({
                     })
                   : 'Never'}
               </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                {contact.cadence && contact.contact_by
+                  ? formatDateOnly(contact.contact_by, {
+                      year: 'numeric',
+                      month: 'numeric',
+                      day: 'numeric',
+                    })
+                  : 'N/A'}
+              </td>
               <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                 <div className="relative" onClick={handleDropdownClick}>
                   <button
@@ -386,11 +404,11 @@ export default function ContactsPage() {
           page: 1, // Reset to first page when sorting
         }
       }
-      // If clicking a new field, default to ascending (except cadence defaults to desc for "most frequent first")
+      // If clicking a new field, default to ascending (except cadence and last_contacted default to desc)
       return {
         ...prev,
         sort: field,
-        order: field === 'cadence' ? 'desc' : 'asc',
+        order: field === 'cadence' || field === 'last_contacted' ? 'desc' : 'asc',
         page: 1,
       }
     })
