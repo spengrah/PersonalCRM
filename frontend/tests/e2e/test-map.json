@@ -104,6 +104,10 @@
     "tags": ["@area:settings"]
   },
   {
+    "pattern": "^frontend/src/components/ui/pagination\\.tsx$",
+    "tags": ["@area:contacts", "@area:imports"]
+  },
+  {
     "pattern": "^frontend/src/components/layout/",
     "tags": ["@area:navigation", "@area:dashboard"]
   },

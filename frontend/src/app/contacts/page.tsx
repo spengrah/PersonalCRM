@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { useContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
 import { Button } from '@/components/ui/button'
+import { Pagination } from '@/components/ui/pagination'
 import { Navigation } from '@/components/layout/navigation'
 import { FORM_CONTROL_WITH_ICON } from '@/lib/form-classes'
 import { formatDateOnly, formatCadence } from '@/lib/utils'
@@ -486,6 +487,19 @@ export default function ContactsPage() {
           </form>
         </div>
 
+        {/* Top Pagination */}
+        {data && data.pages > 1 && (
+          <div className="mb-6">
+            <Pagination
+              page={data.page}
+              pages={data.pages}
+              total={data.total}
+              onPageChange={p => setParams(prev => ({ ...prev, page: p }))}
+              noun="contacts"
+            />
+          </div>
+        )}
+
         {/* Error state */}
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-6">
@@ -521,30 +535,16 @@ export default function ContactsPage() {
           />
         </div>
 
-        {/* Pagination */}
+        {/* Bottom Pagination */}
         {data && data.pages > 1 && (
-          <div className="mt-6 flex items-center justify-between">
-            <div className="text-sm text-gray-700">
-              Showing page {data.page} of {data.pages} ({data.total} total contacts)
-            </div>
-            <div className="flex space-x-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={data.page <= 1}
-                onClick={() => setParams(prev => ({ ...prev, page: prev.page! - 1 }))}
-              >
-                Previous
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={data.page >= data.pages}
-                onClick={() => setParams(prev => ({ ...prev, page: prev.page! + 1 }))}
-              >
-                Next
-              </Button>
-            </div>
+          <div className="mt-6">
+            <Pagination
+              page={data.page}
+              pages={data.pages}
+              total={data.total}
+              onPageChange={p => setParams(prev => ({ ...prev, page: p }))}
+              noun="contacts"
+            />
           </div>
         )}
       </div>

@@ -605,4 +605,55 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     // Contact should still be visible after sort toggling
     await expect(page.getByText(`${testApi.prefix}-SortNext Contact`)).toBeVisible()
   })
+
+  test('should show page number buttons and top/bottom pagination when multiple pages exist', async ({
+    page,
+  }) => {
+    // Create 22 contacts to trigger pagination (default limit is 20)
+    const contacts = Array.from({ length: 22 }, (_, i) => ({
+      full_name: `Paginated Contact ${String(i).padStart(2, '0')}`,
+    }))
+    await testApi.seedContacts(contacts)
+
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+
+    // Search for our test contacts to isolate them
+    const searchInput = page.getByPlaceholder('Search contacts...')
+    await searchInput.fill(`${testApi.prefix}-Paginated`)
+    const searchResponse = page.waitForResponse(
+      resp => resp.url().includes('/api/v1/contacts') && resp.url().includes('search=')
+    )
+    await searchInput.press('Enter')
+    await searchResponse
+
+    // Verify top and bottom pagination controls both exist
+    const paginationControls = page.locator('[data-testid="pagination"]')
+    await expect(paginationControls).toHaveCount(2)
+
+    // Verify page number buttons exist (at least page 1 and 2 in top pagination)
+    const topPagination = paginationControls.first()
+    await expect(topPagination.getByRole('button', { name: '1' })).toBeVisible()
+    await expect(topPagination.getByRole('button', { name: '2' })).toBeVisible()
+
+    // Verify page 1 is active (primary variant)
+    const page1Button = topPagination.getByRole('button', { name: '1' })
+    await expect(page1Button).toHaveClass(/bg-blue-600/)
+
+    // Click page 2 and verify it navigates
+    await topPagination.getByRole('button', { name: '2' }).click()
+    await expect(topPagination.getByRole('button', { name: '2' })).toHaveClass(/bg-blue-600/)
+
+    // Verify Previous is now enabled and Next is disabled (only 2 pages)
+    await expect(topPagination.getByRole('button', { name: 'Previous' })).toBeEnabled()
+    await expect(topPagination.getByRole('button', { name: 'Next' })).toBeDisabled()
+
+    // Click Previous to go back to page 1
+    await topPagination.getByRole('button', { name: 'Previous' }).click()
+    await expect(topPagination.getByRole('button', { name: '1' })).toHaveClass(/bg-blue-600/)
+
+    // Verify both paginations are in sync (both show page 1 as active)
+    const bottomPagination = paginationControls.last()
+    await expect(bottomPagination.getByRole('button', { name: '1' })).toHaveClass(/bg-blue-600/)
+  })
 })

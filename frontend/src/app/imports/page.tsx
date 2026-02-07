@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
+import { Pagination } from '@/components/ui/pagination'
 import { ImportLinkModal } from '@/components/imports/import-link-modal'
 import { useImportCandidates, useIgnoreCandidate, useTriggerSync } from '@/hooks/use-imports'
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
@@ -526,28 +527,13 @@ export default function ImportsPage() {
 
         {/* Pagination */}
         {data && data.pages > 1 && (
-          <div className="mt-6 flex items-center justify-between">
-            <div className="text-sm text-gray-700">
-              Page {data.page} of {data.pages} ({data.total} total)
-            </div>
-            <div className="flex space-x-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={data.page <= 1}
-                onClick={() => setParams(prev => ({ ...prev, page: (prev.page || 1) - 1 }))}
-              >
-                Previous
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={data.page >= data.pages}
-                onClick={() => setParams(prev => ({ ...prev, page: (prev.page || 1) + 1 }))}
-              >
-                Next
-              </Button>
-            </div>
+          <div className="mt-6">
+            <Pagination
+              page={data.page}
+              pages={data.pages}
+              total={data.total}
+              onPageChange={p => setParams(prev => ({ ...prev, page: p }))}
+            />
           </div>
         )}
       </div>
