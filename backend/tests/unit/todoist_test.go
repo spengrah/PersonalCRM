@@ -880,28 +880,3 @@ func TestActionTaskVsCadenceTaskBehavior(t *testing.T) {
 		assert.True(t, true, "documented behavior")
 	})
 }
-
-// TestCRMMarkerSkipsCompletedAndDeletedItems documents that tryMatchByCRMMarker
-// must not match completed or deleted Todoist items. These are old tasks that
-// were already closed and replaced — matching them would hijack the current
-// contact_task record and cause duplicate task accumulation.
-func TestCRMMarkerSkipsCompletedAndDeletedItems(t *testing.T) {
-	t.Run("completed items must not match via CRM marker", func(t *testing.T) {
-		// When a cadence event (completion, skip, deadline drift) fires:
-		// 1. Old Todoist task TASK_A is closed (checked=true)
-		// 2. New Todoist task TASK_B is created
-		// 3. external_task_id is updated to TASK_B
-		//
-		// On next sync, TASK_A (checked=true) appears in items. Without this
-		// guard, its CRM marker would match and migrate external_task_id back
-		// to TASK_A, causing handleTaskCompletion to fire again and create
-		// yet another task — leading to orphaned task accumulation.
-		assert.True(t, true, "completed items are skipped before marker parsing")
-	})
-
-	t.Run("deleted items must not match via CRM marker", func(t *testing.T) {
-		// Same cascade applies to deleted items (is_deleted=true).
-		// These are tasks removed via skip triggers or manual deletion.
-		assert.True(t, true, "deleted items are skipped before marker parsing")
-	})
-}
