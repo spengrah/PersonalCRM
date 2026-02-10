@@ -1,0 +1,24 @@
+---
+timestamp: "2026-02-10T11:29:32.556689"
+type: gotcha
+summary: CRM marker fallback must skip completed/deleted tasks
+detail: |
+  The `tryMatchByCRMMarker` fallback mechanism (designed for Todoist API ID migrations) was matching old completed/deleted tasks, causing it to migrate external_task_id back to obsolete task IDs and creating duplicate task accumulation. Completed/deleted items in sync responses are old tasks already replaced - they should never hijack current contact_task records. Add early return: `if item.Checked || item.IsDeleted { return nil }` before CRM marker parsing.
+actionable: true
+
+---
+timestamp: "2026-02-10T11:29:32.556689"
+type: gotcha
+summary: Colima requires delete + restart to recover from fatal VM errors
+detail: |
+  When colima fails to start with 'error starting vm: error at 'starting': exit status 1', running `colima start` again fails. Must run `colima delete -f && colima start` to fully reset the VM state and recover. Simple restart commands don't clear the corrupted state.
+actionable: true
+
+---
+timestamp: "2026-02-10T11:29:32.556689"
+type: rule
+summary: Fallback ID matching mechanisms must validate item state
+detail: |
+  When implementing fallback matching for external IDs (like CRM markers in task descriptions), always validate that the external item is in an active/relevant state before migrating the ID. Matching mechanisms designed for ID transitions should not reactivate obsolete/completed/deleted external records. This prevents state machine corruption where old external items hijack current internal records.
+actionable: true
+
