@@ -22,3 +22,27 @@ detail: |
   When implementing fallback matching for external IDs (like CRM markers in task descriptions), always validate that the external item is in an active/relevant state before migrating the ID. Matching mechanisms designed for ID transitions should not reactivate obsolete/completed/deleted external records. This prevents state machine corruption where old external items hijack current internal records.
 actionable: true
 
+---
+timestamp: "2026-02-10T11:48:00.732130"
+type: gotcha
+summary: Integration test count assertions are racy across separate queries on shared DB
+detail: |
+  When integration tests make multiple separate count queries against a shared database (e.g., `CountContacts(ctx, "")` then `CountContacts(ctx, "has_cadence")`), other tests running in parallel can create/delete records between the queries, making cross-query equality assertions fail. The assertion `totalAll == totalHas + totalNo` is inherently racy in this environment. Instead, assert meaningful invariants about each individual query result (e.g., "at least one result exists") rather than comparing results across separate queries.
+actionable: true
+
+---
+timestamp: "2026-02-10T11:48:00.732130"
+type: rule
+summary: Don't assume CI test failures are related to PR changes
+detail: |
+  When CI fails, investigate whether the failure is actually caused by the PR changes or is a pre-existing flaky test. Check recent main branch CI runs to see if tests pass consistently there. The initial instinct was to rerun CI hoping for a pass, but the correct approach is to fix the underlying test isolation issue that makes it flaky.
+actionable: true
+
+---
+timestamp: "2026-02-10T11:48:00.732130"
+type: documentation_gap
+summary: Test isolation gotchas not documented in testing rules
+detail: |
+  The `.ai/rules/testing.md` file exists but doesn't warn about integration test isolation issues with shared databases. The guidance existed implicitly ("Use integration tests for DB operations") but didn't explain that multiple queries in one test against a shared DB can race with parallel tests. This caused the agent to initially dismiss the CI failure as "pre-existing and unrelated" rather than fixing it. Should add explicit guidance: "Integration tests share a database - avoid assertions that compare results across separate queries; other tests may modify state between calls."
+actionable: true
+
