@@ -1,0 +1,72 @@
+---
+timestamp: "2026-02-10T11:29:32.556689"
+type: gotcha
+summary: CRM marker fallback must skip completed/deleted tasks
+detail: |
+  The `tryMatchByCRMMarker` fallback mechanism (designed for Todoist API ID migrations) was matching old completed/deleted tasks, causing it to migrate external_task_id back to obsolete task IDs and creating duplicate task accumulation. Completed/deleted items in sync responses are old tasks already replaced - they should never hijack current contact_task records. Add early return: `if item.Checked || item.IsDeleted { return nil }` before CRM marker parsing.
+actionable: true
+
+---
+timestamp: "2026-02-10T11:29:32.556689"
+type: gotcha
+summary: Colima requires delete + restart to recover from fatal VM errors
+detail: |
+  When colima fails to start with 'error starting vm: error at 'starting': exit status 1', running `colima start` again fails. Must run `colima delete -f && colima start` to fully reset the VM state and recover. Simple restart commands don't clear the corrupted state.
+actionable: true
+
+---
+timestamp: "2026-02-10T11:29:32.556689"
+type: rule
+summary: Fallback ID matching mechanisms must validate item state
+detail: |
+  When implementing fallback matching for external IDs (like CRM markers in task descriptions), always validate that the external item is in an active/relevant state before migrating the ID. Matching mechanisms designed for ID transitions should not reactivate obsolete/completed/deleted external records. This prevents state machine corruption where old external items hijack current internal records.
+actionable: true
+
+---
+timestamp: "2026-02-10T11:48:00.732130"
+type: gotcha
+summary: Integration test count assertions are racy across separate queries on shared DB
+detail: |
+  When integration tests make multiple separate count queries against a shared database (e.g., `CountContacts(ctx, "")` then `CountContacts(ctx, "has_cadence")`), other tests running in parallel can create/delete records between the queries, making cross-query equality assertions fail. The assertion `totalAll == totalHas + totalNo` is inherently racy in this environment. Instead, assert meaningful invariants about each individual query result (e.g., "at least one result exists") rather than comparing results across separate queries.
+actionable: true
+
+---
+timestamp: "2026-02-10T11:48:00.732130"
+type: rule
+summary: Don't assume CI test failures are related to PR changes
+detail: |
+  When CI fails, investigate whether the failure is actually caused by the PR changes or is a pre-existing flaky test. Check recent main branch CI runs to see if tests pass consistently there. The initial instinct was to rerun CI hoping for a pass, but the correct approach is to fix the underlying test isolation issue that makes it flaky.
+actionable: true
+
+---
+timestamp: "2026-02-10T11:48:00.732130"
+type: documentation_gap
+summary: Test isolation gotchas not documented in testing rules
+detail: |
+  The `.ai/rules/testing.md` file exists but doesn't warn about integration test isolation issues with shared databases. The guidance existed implicitly ("Use integration tests for DB operations") but didn't explain that multiple queries in one test against a shared DB can race with parallel tests. This caused the agent to initially dismiss the CI failure as "pre-existing and unrelated" rather than fixing it. Should add explicit guidance: "Integration tests share a database - avoid assertions that compare results across separate queries; other tests may modify state between calls."
+actionable: true
+
+---
+timestamp: "2026-02-10T12:00:16.023330"
+type: gotcha
+summary: Unit tests for unexported methods must be in the same package
+detail: |
+  When testing unexported (lowercase) methods like `tryMatchByCRMMarker`, the test file must be in the same package (e.g., `backend/internal/todoist/provider_test.go` with `package todoist`). Tests in `backend/tests/unit/*_test.go` use external package naming (`package todoist_test`) and cannot access unexported symbols. Use `Glob` to check for existing `*_test.go` files in the target package before creating a new one.
+actionable: true
+
+---
+timestamp: "2026-02-10T12:00:16.023330"
+type: gotcha
+summary: Nil struct fields are safe when method guards prevent access
+detail: |
+  When testing methods with early-return guards, you can construct a struct with nil fields if the guard prevents field access. Example: `tryMatchByCRMMarker` returns nil for completed/deleted items before touching `contactTaskRepo`, so `&CadenceSyncProvider{}` with nil repos is safe for testing the guard logic. This enables true unit tests without DB setup or mocking.
+actionable: true
+
+---
+timestamp: "2026-02-10T12:00:16.023330"
+type: documentation_gap
+summary: No guidance on where to place unit tests for package internals
+detail: |
+  Existing test organization (backend/tests/unit/ vs backend/internal/*/test.go) isn't documented. The agent initially looked in backend/tests/unit/ for all unit tests, didn't find CadenceSyncProvider tests, and had to discover that testing unexported methods requires same-package test files. Should add to .ai/rules/testing.md: 'Unit tests for exported API go in backend/tests/unit/*_test.go (external package). Unit tests for unexported methods/functions must be in *_test.go files within the same package (e.g., backend/internal/todoist/provider_test.go).'
+actionable: true
+
