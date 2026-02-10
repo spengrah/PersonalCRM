@@ -46,3 +46,27 @@ detail: |
   The `.ai/rules/testing.md` file exists but doesn't warn about integration test isolation issues with shared databases. The guidance existed implicitly ("Use integration tests for DB operations") but didn't explain that multiple queries in one test against a shared DB can race with parallel tests. This caused the agent to initially dismiss the CI failure as "pre-existing and unrelated" rather than fixing it. Should add explicit guidance: "Integration tests share a database - avoid assertions that compare results across separate queries; other tests may modify state between calls."
 actionable: true
 
+---
+timestamp: "2026-02-10T12:00:16.023330"
+type: gotcha
+summary: Unit tests for unexported methods must be in the same package
+detail: |
+  When testing unexported (lowercase) methods like `tryMatchByCRMMarker`, the test file must be in the same package (e.g., `backend/internal/todoist/provider_test.go` with `package todoist`). Tests in `backend/tests/unit/*_test.go` use external package naming (`package todoist_test`) and cannot access unexported symbols. Use `Glob` to check for existing `*_test.go` files in the target package before creating a new one.
+actionable: true
+
+---
+timestamp: "2026-02-10T12:00:16.023330"
+type: gotcha
+summary: Nil struct fields are safe when method guards prevent access
+detail: |
+  When testing methods with early-return guards, you can construct a struct with nil fields if the guard prevents field access. Example: `tryMatchByCRMMarker` returns nil for completed/deleted items before touching `contactTaskRepo`, so `&CadenceSyncProvider{}` with nil repos is safe for testing the guard logic. This enables true unit tests without DB setup or mocking.
+actionable: true
+
+---
+timestamp: "2026-02-10T12:00:16.023330"
+type: documentation_gap
+summary: No guidance on where to place unit tests for package internals
+detail: |
+  Existing test organization (backend/tests/unit/ vs backend/internal/*/test.go) isn't documented. The agent initially looked in backend/tests/unit/ for all unit tests, didn't find CadenceSyncProvider tests, and had to discover that testing unexported methods requires same-package test files. Should add to .ai/rules/testing.md: 'Unit tests for exported API go in backend/tests/unit/*_test.go (external package). Unit tests for unexported methods/functions must be in *_test.go files within the same package (e.g., backend/internal/todoist/provider_test.go).'
+actionable: true
+
