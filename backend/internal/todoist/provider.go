@@ -1044,6 +1044,12 @@ func containsLabel(labels []string, labelName string) bool {
 // where Todoist changes task IDs (e.g., v9 numeric → v1 alphanumeric migration).
 // If matched, it updates the stored external_task_id to the new ID.
 func (p *CadenceSyncProvider) tryMatchByCRMMarker(ctx context.Context, item SyncItem) *repository.ContactTask {
+	// Skip completed or deleted items - these are old tasks we already replaced.
+	// CRM marker fallback is for API ID migration of active tasks only.
+	if item.Checked || item.IsDeleted {
+		return nil
+	}
+
 	var marker struct {
 		CRM       bool   `json:"crm"`
 		ContactID string `json:"contact_id"`
