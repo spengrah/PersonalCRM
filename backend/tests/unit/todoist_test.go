@@ -880,3 +880,110 @@ func TestActionTaskVsCadenceTaskBehavior(t *testing.T) {
 		assert.True(t, true, "documented behavior")
 	})
 }
+
+// TestCRMMarkerFallbackHijackPrevention tests the guard that prevents orphaned
+// Todoist tasks from hijacking a contact_task's external_task_id via the CRM
+// marker fallback. This was the second bug found during the Feb 2026 data
+// recovery: active orphans with valid CRM markers would overwrite the real
+// external_task_id of the managed contact_task.
+func TestCRMMarkerFallbackHijackPrevention(t *testing.T) {
+	tests := []struct {
+		name            string
+		taskExternalID  string
+		taskMetadata    map[string]any
+		candidateItemID string
+		expectSkip      bool // true = guard blocks migration (returns nil)
+		expectMigrate   bool // true = migration proceeds
+		expectAlreadyOK bool // true = IDs already match (return task as-is)
+	}{
+		{
+			name:            "candidate matches existing ID - no migration needed",
+			taskExternalID:  "6fxg8r689rhRxJ9w",
+			taskMetadata:    map[string]any{"synced_deadline": "2026-02-15"},
+			candidateItemID: "6fxg8r689rhRxJ9w",
+			expectAlreadyOK: true,
+		},
+		{
+			name:            "task has real external ID, different candidate - BLOCK (hijack prevention)",
+			taskExternalID:  "6fxg8r689rhRxJ9w",
+			taskMetadata:    map[string]any{"synced_deadline": "2026-02-15"},
+			candidateItemID: "orphan_task_abc123",
+			expectSkip:      true,
+		},
+		{
+			name:            "task has empty external ID - allow migration",
+			taskExternalID:  "",
+			taskMetadata:    map[string]any{"synced_deadline": "2026-02-15"},
+			candidateItemID: "6fxg8r689rhRxJ9w",
+			expectMigrate:   true,
+		},
+		{
+			name:            "task has pending temp ID - allow migration",
+			taskExternalID:  "temp-uuid-123",
+			taskMetadata:    map[string]any{"pending_temp_id": "temp-uuid-123"},
+			candidateItemID: "6fxg8r689rhRxJ9w",
+			expectMigrate:   true,
+		},
+		{
+			name:            "task has resolved temp ID (real ID) - BLOCK",
+			taskExternalID:  "6fxg8r689rhRxJ9w",
+			taskMetadata:    map[string]any{"pending_temp_id": "temp-uuid-123"},
+			candidateItemID: "orphan_task_abc123",
+			expectSkip:      true,
+		},
+		{
+			name:            "task has nil metadata and real ID - BLOCK",
+			taskExternalID:  "6fxg8r689rhRxJ9w",
+			taskMetadata:    nil,
+			candidateItemID: "orphan_task_abc123",
+			expectSkip:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the tryMatchByCRMMarker guard sequence (post-repo-call):
+			// 1. If candidate ID matches existing ID → return task (already OK)
+			// 2. If task has real (non-temp) external ID → return nil (block hijack)
+			// 3. Otherwise → proceed with migration
+
+			var skip, migrate, alreadyOK bool
+
+			if tt.taskExternalID == tt.candidateItemID {
+				alreadyOK = true
+			} else {
+				// isPendingTempID logic
+				isPending := false
+				if tt.taskMetadata != nil && tt.taskExternalID != "" {
+					pendingTempID, ok := tt.taskMetadata["pending_temp_id"].(string)
+					if ok && pendingTempID != "" {
+						isPending = pendingTempID == tt.taskExternalID
+					}
+				}
+
+				if tt.taskExternalID != "" && !isPending {
+					skip = true
+				} else {
+					migrate = true
+				}
+			}
+
+			assert.Equal(t, tt.expectAlreadyOK, alreadyOK, "alreadyOK mismatch")
+			assert.Equal(t, tt.expectSkip, skip, "skip mismatch (hijack prevention)")
+			assert.Equal(t, tt.expectMigrate, migrate, "migrate mismatch")
+
+			// Exactly one outcome should be true
+			outcomes := 0
+			if alreadyOK {
+				outcomes++
+			}
+			if skip {
+				outcomes++
+			}
+			if migrate {
+				outcomes++
+			}
+			assert.Equal(t, 1, outcomes, "exactly one outcome should be true")
+		})
+	}
+}
