@@ -1111,6 +1111,18 @@ func (p *CadenceSyncProvider) tryMatchByCRMMarker(ctx context.Context, item Sync
 		return task
 	}
 
+	// If the task already has a real (non-temp) external ID, don't replace it.
+	// This prevents orphaned duplicate tasks from hijacking the current task's ID.
+	// Migration only makes sense when external_task_id is empty or still a temp ID.
+	if task.ExternalTaskID != "" && !isPendingTempID(task) {
+		logger.Debug().
+			Str("contactId", marker.ContactID).
+			Str("currentExternalId", task.ExternalTaskID).
+			Str("candidateId", item.ID).
+			Msg("CRM marker matched but task already has a real external ID - skipping to prevent hijacking")
+		return nil
+	}
+
 	oldID := task.ExternalTaskID
 
 	if _, err := p.contactTaskRepo.UpdateContactTaskExternalID(ctx, task.ID, item.ID); err != nil {

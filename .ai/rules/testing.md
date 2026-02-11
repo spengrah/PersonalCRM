@@ -60,12 +60,15 @@ See [Layered Architecture](../guides/architecture.md#why-layered) for how these 
 
 ```
 backend/tests/
-  ├── unit/           # Fast, isolated tests
+  ├── unit/           # Fast, isolated tests (external package: `package unit`)
   ├── integration/    # Database tests
   └── api/            # HTTP endpoint tests
 
-frontend/tests/e2e/   # Playwright browser tests
+backend/internal/<pkg>/*_test.go  # Same-package tests (access unexported symbols)
+frontend/tests/e2e/               # Playwright browser tests
 ```
+
+**Same-package vs external-package tests:** Tests for unexported methods/functions (lowercase names like `tryMatchByCRMMarker`) must live in `*_test.go` files within the same package directory (e.g., `backend/internal/todoist/provider_test.go` with `package todoist`). Tests in `backend/tests/unit/` use external package naming (`package unit`) and can only access exported symbols. When testing unexported logic from an external package, mirror the logic in the test (see `TestIsPendingTempIDLogic` pattern in `backend/tests/unit/todoist_test.go`).
 
 ## Running Tests
 

@@ -140,6 +140,8 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Writing new integration test in `backend/tests/` | Must call `db.RunMigrations(databaseURL, getMigrationsPath())` before `db.NewDatabase()` - CI has bare PostgreSQL without pre-existing schema |
 | Filtering nullable string columns (e.g., cadence) with only IS NULL/IS NOT NULL | Must handle three states: NULL, empty string `''`, and valid values. Use `IS NOT NULL AND col != ''` for "has value" and `(IS NULL OR col = '')` for "no value" |
 | Integration test asserting equality across separate count queries | Shared DB means other tests can create/delete rows between calls — assert per-query invariants (e.g., `>= 1`) instead of cross-query equality |
+| Todoist REST API `close` vs `delete` for cleanup | `POST /tasks/{id}/close` marks as completed (triggers `handleTaskCompletion` on next sync); `DELETE /tasks/{id}` permanently removes. Use DELETE for cleanup scripts |
+| Todoist Sync API incremental responses include completed/deleted items | Sync API returns all changed items including `Checked: true` and `IsDeleted: true` — matching logic must explicitly guard against these to avoid processing stale items as active |
 
 ## Anti-Patterns
 

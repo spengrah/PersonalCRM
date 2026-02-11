@@ -70,3 +70,51 @@ detail: |
   Existing test organization (backend/tests/unit/ vs backend/internal/*/test.go) isn't documented. The agent initially looked in backend/tests/unit/ for all unit tests, didn't find CadenceSyncProvider tests, and had to discover that testing unexported methods requires same-package test files. Should add to .ai/rules/testing.md: 'Unit tests for exported API go in backend/tests/unit/*_test.go (external package). Unit tests for unexported methods/functions must be in *_test.go files within the same package (e.g., backend/internal/todoist/provider_test.go).'
 actionable: true
 
+---
+timestamp: "2026-02-10T22:36:58.551160"
+type: gotcha
+summary: Todoist REST API close endpoint completes tasks, not deletes them
+detail: |
+  The Todoist REST API `/tasks/{id}/close` endpoint marks tasks as completed (checked), not deleted. This is a critical distinction for CRM cleanup scripts: when orphaned tasks are closed instead of deleted, they appear as `Checked: true` in the next Sync API response. If `tryMatchByCRMMarker` can still match them (e.g., before the fix), it triggers `handleTaskCompletion`, recording spurious interactions and updating `last_contacted` for all matched contacts. For cleanup operations that should truly remove tasks, use the DELETE endpoint or mark as deleted, not the close endpoint.
+actionable: true
+
+---
+timestamp: "2026-02-10T22:36:58.551160"
+type: architecture
+summary: CRM marker fallback enables orphaned task hijacking without guards
+detail: |
+  The `tryMatchByCRMMarker` fallback in Todoist sync allows matching tasks by CRM marker JSON in the description field when `external_task_id` lookup fails. Without guards against completed/deleted items, this creates a hijacking vulnerability: when a sync response includes old completed/deleted tasks (which Todoist returns as changed items), the fallback matches them, reassigns `external_task_id` to the orphaned task ID, and processes it as the active task. This triggers completion handlers, spawning new replacement tasks while leaving the original valid task orphaned. The fix requires early returns in `tryMatchByCRMMarker` to skip `item.Checked || item.IsDeleted` items, ensuring fallback matching only applies to genuinely active tasks during API ID migrations.
+actionable: true
+
+---
+timestamp: "2026-02-10T22:36:58.551160"
+type: gotcha
+summary: Integration tests with shared DB can fail on count equality across separate queries
+detail: |
+  When integration tests run concurrently against a shared database, asserting equality across separate count queries (e.g., `totalAll == totalHas + totalNo`) can fail because other tests may create/delete rows between calls. This manifested in `TestCadenceFilter_Integration/CountContacts_HasCadence` where expected 2 but got 3. The fix: replace cross-query equality assertions with per-query invariants (e.g., `assert.GreaterOrEqual(t, totalHas, 1)`) that tolerate concurrent changes. Already documented in core.md gotchas table.
+actionable: false
+
+---
+timestamp: "2026-02-10T22:36:58.551160"
+type: documentation_gap
+summary: Cleanup script patterns should specify DELETE vs COMPLETE operations
+detail: |
+  When creating cleanup scripts for external sync sources like Todoist, the distinction between DELETE (permanent removal) and COMPLETE/CLOSE (mark as done) operations must be explicit in both script design and documentation. The cleanup script used Todoist's close endpoint without clearly documenting that this marks tasks as completed rather than deleting them, leading to downstream data corruption when completed orphans triggered interaction recording. Future cleanup script patterns should: (1) default to DELETE for true removal, (2) explicitly document if COMPLETE is used and why, (3) consider sync feedback loops where marked-complete items may trigger handlers in subsequent syncs.
+actionable: true
+
+---
+timestamp: "2026-02-10T22:36:58.551160"
+type: rule
+summary: Disable external sync immediately when corruption is detected
+detail: |
+  When data corruption from external sync bugs is discovered (e.g., 15K+ spurious interactions), disable the sync source immediately via `UPDATE external_sync_state SET enabled = false` before investigating or planning fixes. This prevents continued damage while diagnosing the issue. The Todoist sync continued running for hours after the cleanup script ran, compounding the corruption with thousands more spurious interactions. Standard incident response for sync bugs should be: (1) disable sync, (2) assess damage, (3) plan recovery, (4) fix code, (5) clean data, (6) re-enable with monitoring.
+actionable: true
+
+---
+timestamp: "2026-02-10T22:36:58.551160"
+type: gotcha
+summary: Todoist Sync API returns completed/deleted items as changed items in incremental sync
+detail: |
+  The Todoist Sync API with incremental sync tokens returns all items that changed since the last sync, including items marked as completed (`Checked: true`) or deleted (`IsDeleted: true`). This is working as designed for the Sync API to communicate state changes, but creates a processing challenge: downstream handlers must explicitly check for and skip these items if they should only process active tasks. Failing to guard against completed/deleted items in matching logic (like `tryMatchByCRMMarker`) causes those items to be treated as active, potentially triggering duplicate work or hijacking references. The fix pattern: add early returns for `item.Checked || item.IsDeleted` in any matching logic meant for active items only.
+actionable: true
+
