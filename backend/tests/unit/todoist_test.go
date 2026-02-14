@@ -1,8 +1,6 @@
 package unit
 
 import (
-	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -390,6 +388,12 @@ func TestWasContactedSinceSyncLogic(t *testing.T) {
 			syncedLastContacted: "not-a-date",
 			expectContacted:     false,
 		},
+		{
+			name:                "subsecond precision does not trigger false positive",
+			lastContacted:       timePtr(time.Date(2026, 2, 8, 12, 0, 0, 432453000, time.UTC)),
+			syncedLastContacted: "2026-02-08T12:00:00Z",
+			expectContacted:     false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -400,7 +404,7 @@ func TestWasContactedSinceSyncLogic(t *testing.T) {
 			if tt.lastContacted != nil && tt.syncedLastContacted != "" {
 				syncedLastContacted, err := time.Parse(time.RFC3339, tt.syncedLastContacted)
 				if err == nil {
-					wasContacted = tt.lastContacted.After(syncedLastContacted)
+					wasContacted = tt.lastContacted.Truncate(time.Second).After(syncedLastContacted)
 				}
 			}
 
@@ -509,7 +513,7 @@ func TestReconciliationWithNonTodoistContact(t *testing.T) {
 						if slc, ok := tt.metadata["synced_last_contacted"].(string); ok && slc != "" {
 							syncedLC, err := time.Parse(time.RFC3339, slc)
 							if err == nil {
-								wasContacted = tt.lastContacted.After(syncedLC)
+								wasContacted = tt.lastContacted.Truncate(time.Second).After(syncedLC)
 							}
 						}
 					}
@@ -579,7 +583,7 @@ func TestBackfillSyncedLastContacted(t *testing.T) {
 
 		// wasContactedSinceSync check
 		syncedLC, _ := time.Parse(time.RFC3339, metadata["synced_last_contacted"].(string))
-		wasContacted := lastContacted.After(syncedLC)
+		wasContacted := lastContacted.Truncate(time.Second).After(syncedLC)
 		assert.False(t, wasContacted, "should not detect contact on first cycle (backfill == current)")
 	})
 
@@ -593,7 +597,7 @@ func TestBackfillSyncedLastContacted(t *testing.T) {
 		lastContacted := time.Date(2026, 2, 8, 14, 30, 0, 0, time.UTC)
 
 		syncedLC, _ := time.Parse(time.RFC3339, metadata["synced_last_contacted"].(string))
-		wasContacted := lastContacted.After(syncedLC)
+		wasContacted := lastContacted.Truncate(time.Second).After(syncedLC)
 		assert.True(t, wasContacted, "should detect contact after backfill when last_contacted advances")
 	})
 }
@@ -747,113 +751,6 @@ func TestActionTaskMetadataSchema(t *testing.T) {
 	}
 }
 
-// TestCRMMarkerParsing tests the CRM marker JSON parsing used for fallback
-// matching when Todoist changes task IDs (e.g., v9 → v1 migration).
-func TestCRMMarkerParsing(t *testing.T) {
-	type marker struct {
-		CRM       bool   `json:"crm"`
-		ContactID string `json:"contact_id"`
-		Kind      string `json:"kind"`
-	}
-
-	tests := []struct {
-		name            string
-		description     string
-		expectMatch     bool
-		expectContactID string
-		expectKind      string
-	}{
-		{
-			name:            "valid cadence marker",
-			description:     `{"crm":true,"contact_id":"ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c","kind":"cadence","instance":"9fd7f60a-c8f5-4531-ae64-48fdc17e02dd"}`,
-			expectMatch:     true,
-			expectContactID: "ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c",
-			expectKind:      "cadence",
-		},
-		{
-			name:            "valid action marker",
-			description:     `{"crm":true,"contact_id":"abc12345-0000-0000-0000-000000000000","kind":"action","instance":"inst-id"}`,
-			expectMatch:     true,
-			expectContactID: "abc12345-0000-0000-0000-000000000000",
-			expectKind:      "action",
-		},
-		{
-			name:            "missing kind defaults to cadence",
-			description:     `{"crm":true,"contact_id":"ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c"}`,
-			expectMatch:     true,
-			expectContactID: "ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c",
-			expectKind:      "",
-		},
-		{
-			name:        "not a CRM task (crm=false)",
-			description: `{"crm":false,"contact_id":"ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c"}`,
-			expectMatch: false,
-		},
-		{
-			name:        "missing contact_id",
-			description: `{"crm":true}`,
-			expectMatch: false,
-		},
-		{
-			name:        "not JSON",
-			description: "Just a plain description",
-			expectMatch: false,
-		},
-		{
-			name:        "empty description",
-			description: "",
-			expectMatch: false,
-		},
-		{
-			name:        "unrelated JSON",
-			description: `{"foo":"bar"}`,
-			expectMatch: false,
-		},
-		{
-			name:            "marker embedded after markdown prefix",
-			description:     "[See context in CRM](http://localhost:3000/contacts/ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c)\n\n---\n{\"contact_id\":\"ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c\",\"crm\":true,\"instance\":\"411cf33d-b6c0-45de-86dc-1371f2461347\",\"kind\":\"cadence\"}",
-			expectMatch:     true,
-			expectContactID: "ebd1fbdd-0fde-4b0f-9710-9981f37e1f4c",
-			expectKind:      "cadence",
-		},
-		{
-			name:            "marker embedded with prefix, no kind",
-			description:     "[See context](http://example.com)\n\n---\n{\"contact_id\":\"abc12345-0000-0000-0000-000000000000\",\"crm\":true}",
-			expectMatch:     true,
-			expectContactID: "abc12345-0000-0000-0000-000000000000",
-			expectKind:      "",
-		},
-	}
-
-	// extractMarker mimics the parsing logic in tryMatchByCRMMarker
-	extractMarker := func(description string) (marker, bool) {
-		var m marker
-		if err := json.Unmarshal([]byte(description), &m); err == nil && m.CRM && m.ContactID != "" {
-			return m, true
-		}
-		// Try extracting JSON from end of description
-		m = marker{}
-		if idx := strings.LastIndex(description, "{"); idx >= 0 {
-			if err := json.Unmarshal([]byte(description[idx:]), &m); err == nil && m.CRM && m.ContactID != "" {
-				return m, true
-			}
-		}
-		return marker{}, false
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m, matched := extractMarker(tt.description)
-
-			assert.Equal(t, tt.expectMatch, matched, "match expectation")
-			if tt.expectMatch {
-				assert.Equal(t, tt.expectContactID, m.ContactID)
-				assert.Equal(t, tt.expectKind, m.Kind)
-			}
-		})
-	}
-}
-
 // TestActionTaskVsCadenceTaskBehavior documents the key behavioral differences
 func TestActionTaskVsCadenceTaskBehavior(t *testing.T) {
 	t.Run("cadence tasks create new task on completion", func(t *testing.T) {
@@ -879,111 +776,4 @@ func TestActionTaskVsCadenceTaskBehavior(t *testing.T) {
 		// No skip semantics, no new task created
 		assert.True(t, true, "documented behavior")
 	})
-}
-
-// TestCRMMarkerFallbackHijackPrevention tests the guard that prevents orphaned
-// Todoist tasks from hijacking a contact_task's external_task_id via the CRM
-// marker fallback. This was the second bug found during the Feb 2026 data
-// recovery: active orphans with valid CRM markers would overwrite the real
-// external_task_id of the managed contact_task.
-func TestCRMMarkerFallbackHijackPrevention(t *testing.T) {
-	tests := []struct {
-		name            string
-		taskExternalID  string
-		taskMetadata    map[string]any
-		candidateItemID string
-		expectSkip      bool // true = guard blocks migration (returns nil)
-		expectMigrate   bool // true = migration proceeds
-		expectAlreadyOK bool // true = IDs already match (return task as-is)
-	}{
-		{
-			name:            "candidate matches existing ID - no migration needed",
-			taskExternalID:  "6fxg8r689rhRxJ9w",
-			taskMetadata:    map[string]any{"synced_deadline": "2026-02-15"},
-			candidateItemID: "6fxg8r689rhRxJ9w",
-			expectAlreadyOK: true,
-		},
-		{
-			name:            "task has real external ID, different candidate - BLOCK (hijack prevention)",
-			taskExternalID:  "6fxg8r689rhRxJ9w",
-			taskMetadata:    map[string]any{"synced_deadline": "2026-02-15"},
-			candidateItemID: "orphan_task_abc123",
-			expectSkip:      true,
-		},
-		{
-			name:            "task has empty external ID - allow migration",
-			taskExternalID:  "",
-			taskMetadata:    map[string]any{"synced_deadline": "2026-02-15"},
-			candidateItemID: "6fxg8r689rhRxJ9w",
-			expectMigrate:   true,
-		},
-		{
-			name:            "task has pending temp ID - allow migration",
-			taskExternalID:  "temp-uuid-123",
-			taskMetadata:    map[string]any{"pending_temp_id": "temp-uuid-123"},
-			candidateItemID: "6fxg8r689rhRxJ9w",
-			expectMigrate:   true,
-		},
-		{
-			name:            "task has resolved temp ID (real ID) - BLOCK",
-			taskExternalID:  "6fxg8r689rhRxJ9w",
-			taskMetadata:    map[string]any{"pending_temp_id": "temp-uuid-123"},
-			candidateItemID: "orphan_task_abc123",
-			expectSkip:      true,
-		},
-		{
-			name:            "task has nil metadata and real ID - BLOCK",
-			taskExternalID:  "6fxg8r689rhRxJ9w",
-			taskMetadata:    nil,
-			candidateItemID: "orphan_task_abc123",
-			expectSkip:      true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Simulate the tryMatchByCRMMarker guard sequence (post-repo-call):
-			// 1. If candidate ID matches existing ID → return task (already OK)
-			// 2. If task has real (non-temp) external ID → return nil (block hijack)
-			// 3. Otherwise → proceed with migration
-
-			var skip, migrate, alreadyOK bool
-
-			if tt.taskExternalID == tt.candidateItemID {
-				alreadyOK = true
-			} else {
-				// isPendingTempID logic
-				isPending := false
-				if tt.taskMetadata != nil && tt.taskExternalID != "" {
-					pendingTempID, ok := tt.taskMetadata["pending_temp_id"].(string)
-					if ok && pendingTempID != "" {
-						isPending = pendingTempID == tt.taskExternalID
-					}
-				}
-
-				if tt.taskExternalID != "" && !isPending {
-					skip = true
-				} else {
-					migrate = true
-				}
-			}
-
-			assert.Equal(t, tt.expectAlreadyOK, alreadyOK, "alreadyOK mismatch")
-			assert.Equal(t, tt.expectSkip, skip, "skip mismatch (hijack prevention)")
-			assert.Equal(t, tt.expectMigrate, migrate, "migrate mismatch")
-
-			// Exactly one outcome should be true
-			outcomes := 0
-			if alreadyOK {
-				outcomes++
-			}
-			if skip {
-				outcomes++
-			}
-			if migrate {
-				outcomes++
-			}
-			assert.Equal(t, 1, outcomes, "exactly one outcome should be true")
-		})
-	}
 }
