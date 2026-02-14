@@ -288,9 +288,10 @@ func (p *CadenceSyncProvider) processItem(
 			logger.Warn().Err(err).Str("taskId", item.ID).Msg("failed to find contact task")
 			return false, nil
 		}
-		// External ID not found — try fallback matching by CRM marker in description.
-		// This handles Todoist API migrations where task IDs change (e.g., v9 → v1).
-		task = p.tryMatchByCRMMarker(ctx, item)
+		// Fallback: if processTempIDMappings failed, the contact_task still has a
+		// temp ID while Todoist uses the real ID. Try to recover by matching the
+		// CRM marker in the description to find a task with a pending temp ID.
+		task = p.tryRecoverPendingTempID(ctx, item)
 		if task == nil {
 			return false, nil // Not a managed task
 		}
@@ -866,7 +867,7 @@ func (p *CadenceSyncProvider) wasContactedSinceSync(contact *repository.Contact,
 		return false
 	}
 
-	return contact.LastContacted.After(syncedLastContacted)
+	return contact.LastContacted.Truncate(time.Second).After(syncedLastContacted)
 }
 
 // isPendingTempID checks if the task's external ID is still a pending temp ID
@@ -884,6 +885,89 @@ func isPendingTempID(task *repository.ContactTask) bool {
 		return false
 	}
 	return pendingTempID == task.ExternalTaskID
+}
+
+// tryRecoverPendingTempID handles the case where processTempIDMappings failed
+// to update a contact_task's external_task_id from a temp ID to the real Todoist ID.
+// It parses the CRM marker in the item description to find the contact, then checks
+// if there's a managed cadence task with a pending temp ID for that contact.
+// If found, it migrates the external_task_id to the real ID.
+func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item SyncItem) *repository.ContactTask {
+	// Parse CRM marker from description to get contact ID
+	var marker struct {
+		CRM       bool   `json:"crm"`
+		ContactID string `json:"contact_id"`
+		Kind      string `json:"kind"`
+	}
+	descToTry := item.Description
+	if err := json.Unmarshal([]byte(descToTry), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
+		marker = struct {
+			CRM       bool   `json:"crm"`
+			ContactID string `json:"contact_id"`
+			Kind      string `json:"kind"`
+		}{}
+		if idx := strings.LastIndex(item.Description, "{"); idx >= 0 {
+			descToTry = item.Description[idx:]
+		}
+		if err := json.Unmarshal([]byte(descToTry), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
+			return nil
+		}
+	}
+
+	contactID, err := uuid.Parse(marker.ContactID)
+	if err != nil {
+		return nil
+	}
+
+	// Only recover cadence tasks
+	kind := marker.Kind
+	if kind == "" {
+		kind = TaskKindCadence
+	}
+	if kind != TaskKindCadence {
+		return nil
+	}
+
+	task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contactID, SourceName, kind)
+	if err != nil {
+		return nil
+	}
+
+	// Only recover tasks that still have a pending temp ID
+	if task.State != repository.ContactTaskStateManaged || !isPendingTempID(task) {
+		return nil
+	}
+
+	// Migrate external_task_id to the real Todoist ID
+	oldID := task.ExternalTaskID
+	if _, err := p.contactTaskRepo.UpdateContactTaskExternalID(ctx, task.ID, item.ID); err != nil {
+		logger.Warn().Err(err).
+			Str("contactId", marker.ContactID).
+			Str("oldExternalId", oldID).
+			Str("newExternalId", item.ID).
+			Msg("failed to recover pending temp ID")
+		return task // still process with old ID
+	}
+
+	task.ExternalTaskID = item.ID
+
+	// Clear pending_temp_id from metadata
+	metadata := task.Metadata
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	delete(metadata, MetadataKeyPendingTempID)
+	if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+		logger.Warn().Err(err).Msg("failed to clear pending_temp_id after recovery")
+	}
+
+	logger.Info().
+		Str("contactId", marker.ContactID).
+		Str("oldTempId", oldID).
+		Str("realId", item.ID).
+		Msg("recovered pending temp ID mapping")
+
+	return task
 }
 
 // createTaskCommand creates a Todoist task creation command
@@ -1037,111 +1121,4 @@ func containsLabel(labels []string, labelName string) bool {
 		}
 	}
 	return false
-}
-
-// tryMatchByCRMMarker attempts to match a Todoist item to a contact task by
-// parsing the CRM marker JSON in the item's description. This handles cases
-// where Todoist changes task IDs (e.g., v9 numeric → v1 alphanumeric migration).
-// If matched, it updates the stored external_task_id to the new ID.
-func (p *CadenceSyncProvider) tryMatchByCRMMarker(ctx context.Context, item SyncItem) *repository.ContactTask {
-	// Skip completed or deleted items - these are old tasks we already replaced.
-	// CRM marker fallback is for API ID migration of active tasks only.
-	if item.Checked || item.IsDeleted {
-		return nil
-	}
-
-	var marker struct {
-		CRM       bool   `json:"crm"`
-		ContactID string `json:"contact_id"`
-		Kind      string `json:"kind"`
-	}
-	// The CRM marker JSON may be the entire description or embedded after
-	// a markdown prefix (e.g., "[See context in CRM](...)\n\n---\n{...}").
-	// Try the full description first, then extract the last JSON object.
-	descToTry := item.Description
-	if err := json.Unmarshal([]byte(descToTry), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
-		// Reset and try extracting JSON from the end of description
-		marker = struct {
-			CRM       bool   `json:"crm"`
-			ContactID string `json:"contact_id"`
-			Kind      string `json:"kind"`
-		}{}
-		if idx := strings.LastIndex(item.Description, "{"); idx >= 0 {
-			descToTry = item.Description[idx:]
-		}
-		if err := json.Unmarshal([]byte(descToTry), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
-			return nil
-		}
-	}
-
-	contactID, err := uuid.Parse(marker.ContactID)
-	if err != nil {
-		return nil
-	}
-
-	// Only attempt fallback for cadence tasks. Action tasks can have multiple
-	// per contact (so GetContactTaskByContact may return the wrong one) and their
-	// descriptions include user notes that make the JSON parse fail anyway.
-	kind := marker.Kind
-	if kind == "" {
-		kind = TaskKindCadence
-	}
-	if kind != TaskKindCadence {
-		return nil
-	}
-
-	task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contactID, SourceName, kind)
-	if err != nil {
-		if !errors.Is(err, db.ErrNotFound) {
-			logger.Warn().Err(err).
-				Str("contactId", marker.ContactID).
-				Msg("failed to get contact task by contact for CRM marker fallback")
-		}
-		return nil
-	}
-
-	// Only migrate managed tasks — don't reactivate unmanaged ones since
-	// UpdateContactTaskExternalID also sets state = 'managed'.
-	if task.State != repository.ContactTaskStateManaged {
-		return nil
-	}
-
-	// Already has the correct ID — no migration needed
-	if task.ExternalTaskID == item.ID {
-		return task
-	}
-
-	// If the task already has a real (non-temp) external ID, don't replace it.
-	// This prevents orphaned duplicate tasks from hijacking the current task's ID.
-	// Migration only makes sense when external_task_id is empty or still a temp ID.
-	if task.ExternalTaskID != "" && !isPendingTempID(task) {
-		logger.Debug().
-			Str("contactId", marker.ContactID).
-			Str("currentExternalId", task.ExternalTaskID).
-			Str("candidateId", item.ID).
-			Msg("CRM marker matched but task already has a real external ID - skipping to prevent hijacking")
-		return nil
-	}
-
-	oldID := task.ExternalTaskID
-
-	if _, err := p.contactTaskRepo.UpdateContactTaskExternalID(ctx, task.ID, item.ID); err != nil {
-		logger.Warn().Err(err).
-			Str("contactId", marker.ContactID).
-			Str("oldExternalId", oldID).
-			Str("newExternalId", item.ID).
-			Msg("failed to migrate external task ID — processing with old ID")
-		// Still return the task so processing continues even if ID migration fails
-		return task
-	}
-
-	task.ExternalTaskID = item.ID
-
-	logger.Info().
-		Str("contactId", marker.ContactID).
-		Str("oldExternalId", oldID).
-		Str("newExternalId", item.ID).
-		Msg("migrated external task ID from CRM marker")
-
-	return task
 }
