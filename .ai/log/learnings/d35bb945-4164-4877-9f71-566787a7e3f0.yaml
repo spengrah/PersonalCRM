@@ -142,3 +142,11 @@ detail: |
   The interaction between handleTaskCompletion (which marks cadence tasks 'completed') and reconcileContactTasks (which creates new cadence tasks) is not documented anywhere. This led to the terminal-state cleanup bug going unnoticed during implementation and initial testing. The multi-step lifecycle (completion → follow-up creation → follow-up completion → new cadence task creation) spans multiple files and background jobs with no single place explaining the full flow. **Strengthen:** Add a 'Task Lifecycle State Machine' diagram to .ai/guides/architecture.md showing: cadence task states, follow-up task states, reconciliation cleanup rules, and which components own each transition.
 actionable: true
 
+---
+timestamp: "2026-04-07T15:28:09.279599"
+type: documentation_gap
+summary: Bug fix test coverage rule wasn't followed initially
+detail: |
+  Existing rule says 'Always add comprehensive tests for new/changed code' but wasn't applied when fixing a bug found during code review. The rule exists in `.ai/rules/core.md` but is too general. Future agents need stronger, more explicit guidance: 'When fixing a bug (especially one found by codex/review), add a regression test BEFORE making the fix.' The gap: the rule is buried as a general principle rather than highlighted as a bug-fix-specific requirement. Strengthen by: (1) Add to 'When You Change X, Check Y' table: 'When fixing a bug → Add regression test first', (2) Add to Anti-Patterns with ❌/✅ example.
+actionable: true
+
