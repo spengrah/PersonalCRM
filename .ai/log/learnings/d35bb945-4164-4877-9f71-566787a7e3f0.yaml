@@ -174,3 +174,19 @@ detail: |
   Comments like "// Verify: last_response_at should still reflect..." without accompanying assertions create untested assumptions. If a field should NOT be modified, assert it with assert.Nil() or assert.Equal(). If behavior is uncertain, remove the comment. Comments without assertions are code smell indicating incomplete test coverage of edge cases and cross-concern boundaries.
 actionable: true
 
+---
+timestamp: "2026-04-07T15:44:58.393269"
+type: gotcha
+summary: Pre-push hook 'FAIL E2E tests' can mean learnings blocked push, not test failure
+detail: |
+  When pre-push hook output shows 'FAIL E2E tests' followed by 'Appended X new learnings' and 'LEARNINGS EXTRACTED', it means the learnings extraction blocked the push, NOT that the E2E tests actually failed. The tests may have passed. Check for 'WARN New learnings extracted' and the learnings output to distinguish from real test failures. The misleading 'FAIL E2E tests' line appears because tests run in parallel with learnings extraction.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:44:58.393269"
+type: rule
+summary: Never discard delete errors before creating replacement with same unique constraint
+detail: |
+  Silently discarding a delete error (e.g., `_ = DeleteContactTask(ctx, id)`) before creating a new record with the same unique constraint (e.g., same `(contact_id, source, task_type)`) creates a permanent stuck state. If the delete fails, the subsequent create will hit a constraint violation loop. Must handle delete errors and abort/skip the create operation if delete fails. Found in provider.go where completed cadence tasks are cleaned up before creating replacements.
+actionable: true
+
