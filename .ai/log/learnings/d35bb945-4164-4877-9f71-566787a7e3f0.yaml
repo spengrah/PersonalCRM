@@ -46,3 +46,59 @@ detail: |
   When adding parameters to repository methods (e.g., `CountContacts(ctx, cadenceFilter)` → `CountContacts(ctx, cadenceFilter, followupFilter)`), must update not just the production call sites but ALL test factory functions and helper methods that construct test services. These are easy to miss because they're scattered across `tests/api/*_test.go` and may use the old signature. Build errors surface these, but grep for `NewContactService` in tests/ upfront saves iteration.
 actionable: true
 
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: gotcha
+summary: "Staticcheck S1016: use type conversion for structs with identical fields"
+detail: |
+  When two struct types have identical field names and types (e.g., `RecordInteractionRequest` and `CreateInteractionRequest`), staticcheck S1016 requires direct type conversion `repository.CreateInteractionRequest(req)` instead of struct literal copying `repository.CreateInteractionRequest{ContactID: req.ContactID, ...}`. This came up in backend/internal/service/contact.go:362 during lint.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: architecture
+summary: Best-effort external service cleanup pattern for optional integrations
+detail: |
+  When an external service (like Todoist) is optional, cleanup operations must degrade gracefully. `CompleteFollowUp` initially hard-errored when `getTodoistSettings` failed, which would leave local records stuck in 'managed' state forever if Todoist was disconnected. **Fix:** Try external cleanup first; if it fails (settings unavailable, API error), warn-log but still complete the local state transition. This prevents optional external services from blocking core state machine progress. Code review found this as Critical Issue #1.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: gotcha
+summary: Metadata key consistency across all task creation/update paths
+detail: |
+  Follow-up tasks wrote metadata under `"deadline"` key (followup.go:148, 160, 221) but API response read `"due_date"` key (contact_task.go:256), causing follow-up due dates to never appear until a Todoist sync rewrote them. When adding new metadata keys, must update ALL task creation/update paths: reconcileContactTasks, handleTaskCompletion, handleSkipTrigger, reconcileExistingTask, AND the API response serializer. Code review found this as issue #2.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: rule
+summary: Forward-only guards must apply to ALL related derived fields, not just timestamps
+detail: |
+  `contact_by` (cadence due date) is derived from `last_contacted` + cadence window. The SQL queries already had forward-only guards for `last_contacted` (don't regress from newer value), but `contact_by` was always applied when non-null. This meant late-arriving automated inbound events would correctly preserve the newer `last_contacted` but regress `contact_by` to an older cadence window, breaking the invariant that contact_by = last_contacted + cadence. **Rule:** When timestamp fields have forward-only semantics, ALL derived fields computed from those timestamps need the same guard: only compute the derived value when the timestamp update will actually take effect (newer than current, or manual source override). Code review found this as issue #1.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: gotcha
+summary: Transient external failures can create permanent stuck state without idempotent retry
+detail: |
+  If `CompleteFollowUp` succeeds in marking the local `contact_task` completed but the Todoist API close call fails transiently (network blip, rate limit), the contact remains in 'awaiting reply' state indefinitely. Reconciliation skips contacts with managed follow-up tasks, so no future job will retry. **Pattern:** For two-phase operations (local DB + external API), either: (1) make the external call first and only update local state on success, or (2) make local state update idempotent so reconciliation can retry the external cleanup. Code review found this as issue #3.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: documentation_gap
+summary: "Conventions doc should explicitly state: both structs with identical fields AND how to handle best-effort external cleanup"
+detail: |
+  The `.ai/rules/core.md` has error handling patterns but doesn't cover: (1) when to use type conversion vs struct literals for similar types, or (2) how to handle optional external service failures in state machine transitions. These are not obvious from reading the code. The staticcheck lint caught #1, but #2 (best-effort cleanup) was only caught by code review. **Strengthen:** Add to Anti-Patterns section: show the CompleteFollowUp pattern (try external, warn on fail, complete local anyway) as the canonical way to handle optional service cleanup.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: rule
+summary: Code review agents caught 4 critical bugs that tests would have missed
+detail: |
+  All major bugs in this session were found by `feature-dev:code-reviewer` agents, not by tests: (1) CompleteFollowUp hard-error blocking inbound interactions, (2) metadata key mismatch hiding follow-up due dates, (3) contact_by regression from late events, (4) transient Todoist failure creating stuck state. The initial commit had zero new test coverage for the changed behavior despite touching core state machine logic. **Lesson:** For non-trivial state machine changes, ALWAYS run code review agents before considering the work done, even if make lint and make test pass. Tests validate happy paths; reviewers find edge cases and failure modes.
+actionable: true
+
