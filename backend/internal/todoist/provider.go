@@ -655,7 +655,12 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 			// Clean up completed cadence task so a new one can be created.
 			// This happens after handleTaskCompletion marks cadence tasks completed
 			// before recording the outbound interaction (follow-up ordering fix).
-			_ = p.contactTaskRepo.DeleteContactTask(ctx, task.ID)
+			if deleteErr := p.contactTaskRepo.DeleteContactTask(ctx, task.ID); deleteErr != nil {
+				logger.Warn().Err(deleteErr).
+					Str("contactId", contact.ID.String()).
+					Msg("failed to clean up completed cadence task — skipping until next cycle")
+				continue
+			}
 			err = db.ErrNotFound
 		}
 		if err != nil {
