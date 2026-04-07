@@ -175,7 +175,13 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 
 	var direction string
 	if req.Direction != nil {
-		direction = *req.Direction
+		switch *req.Direction {
+		case "outbound", "inbound", "mutual":
+			direction = *req.Direction
+		default:
+			api.SendValidationError(c, "Invalid direction", "must be one of: outbound, inbound, mutual")
+			return
+		}
 	}
 
 	interaction, err := h.recorder.RecordInteraction(c.Request.Context(), repository.RecordInteractionRequest{

@@ -91,9 +91,10 @@ func TestRecordInteraction_DirectionOutbound(t *testing.T) {
 	assert.NotNil(t, updated.LastOutreachAt)
 	assert.Equal(t, outboundTime.UTC(), updated.LastOutreachAt.UTC())
 
-	// Verify: last_response_at should still reflect initial backfill (from CreateContact last_contacted)
-	// (It was backfilled by migration 031 from last_contacted, but CreateContact doesn't set it directly,
-	// so it may be nil for new contacts created after the migration)
+	// Verify: last_response_at and last_interaction_at should NOT be set by outbound
+	// (New contacts created after migration 031 won't have backfilled values)
+	assert.Nil(t, updated.LastResponseAt, "outbound should not set last_response_at")
+	assert.Nil(t, updated.LastInteractionAt, "outbound should not set last_interaction_at")
 }
 
 func TestRecordInteraction_DirectionMutual(t *testing.T) {
@@ -170,7 +171,8 @@ func TestRecordInteraction_DirectionInbound(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, updated.LastContacted)
 	assert.Equal(t, inboundTime.UTC(), updated.LastContacted.UTC(), "inbound should update last_contacted")
-	// last_outreach_at should NOT be changed by inbound
+	// last_outreach_at should NOT be set by inbound
+	assert.Nil(t, updated.LastOutreachAt, "inbound should not set last_outreach_at")
 	// last_response_at should be updated
 	assert.NotNil(t, updated.LastResponseAt)
 	assert.Equal(t, inboundTime.UTC(), updated.LastResponseAt.UTC())
