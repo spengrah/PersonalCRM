@@ -651,6 +651,13 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 
 		// Check if contact has a managed task
 		task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contact.ID, SourceName, TaskKindCadence)
+		if err == nil && task.State == repository.ContactTaskStateCompleted {
+			// Clean up completed cadence task so a new one can be created.
+			// This happens after handleTaskCompletion marks cadence tasks completed
+			// before recording the outbound interaction (follow-up ordering fix).
+			_ = p.contactTaskRepo.DeleteContactTask(ctx, task.ID)
+			err = db.ErrNotFound
+		}
 		if err != nil {
 			if !errors.Is(err, db.ErrNotFound) {
 				continue
