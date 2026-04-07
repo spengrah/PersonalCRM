@@ -190,3 +190,35 @@ detail: |
   Silently discarding a delete error (e.g., `_ = DeleteContactTask(ctx, id)`) before creating a new record with the same unique constraint (e.g., same `(contact_id, source, task_type)`) creates a permanent stuck state. If the delete fails, the subsequent create will hit a constraint violation loop. Must handle delete errors and abort/skip the create operation if delete fails. Found in provider.go where completed cadence tasks are cleaned up before creating replacements.
 actionable: true
 
+---
+timestamp: "2026-04-07T15:57:56.401468"
+type: documentation_gap
+summary: Contact list filter gotcha didn't prevent incomplete implementation
+detail: |
+  Existing gotcha documents adding contact list filter requires updating "10 SQL queries + repo params + service count calls + handler query struct + frontend types + API client + contacts page + detail page listContext". Agent followed this for SQL/backend but still missed 4 frontend locations: ContactIDsParams interface, getContacts spread, getContactIDs spread, and buildNavigationUrl. The documentation exists but wasn't specific enough to prevent the error. Needs strengthening with explicit checklist format showing all 12+ locations grouped by layer (Backend: 10 SQL queries, repo params, service, handler | Frontend: TypeScript type, ContactIDsParams, API client getContacts, API client getContactIDs, contacts page, detail page listContext, detail page buildNavigationUrl).
+actionable: true
+
+---
+timestamp: "2026-04-07T15:57:56.401468"
+type: gotcha
+summary: validate struct tags without validator calls are dead code
+detail: |
+  Handler had `validate:"omitempty,oneof=outbound inbound mutual"` tag on Direction field but InteractionHandler has no validator field and never calls validator.Struct(). Validation actually happens via switch statement. The tag is misleading - future developers might think Gin enforces it automatically. Rule: either remove validate tags or add validator.Struct() call; don't leave orphaned tags.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:57:56.401468"
+type: rule
+summary: Handler validation logic requires test for invalid input
+detail: |
+  InteractionHandler had switch statement validating direction values and correctly returning 400 for invalid inputs, but tests only covered valid values and default behavior. Missing regression test for invalid input (e.g., `{"direction": "invalid_value"}` → 400). When adding handler validation, always test both valid paths AND invalid input that should return 400.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:57:56.401468"
+type: architecture
+summary: Frontend API client wiring follows consistent spread pattern
+detail: |
+  When adding optional filter parameters to contact list queries, must add to ContactIDsParams interface AND spread into queryParams in both getContacts and getContactIDs using pattern: `...(params.filter_name && { filter_name: params.filter_name })`. Also must add to detail page listContext extraction from searchParams and buildNavigationUrl params.set() calls, including dependency array. This pattern mirrors how cadence_filter was implemented.
+actionable: true
+
