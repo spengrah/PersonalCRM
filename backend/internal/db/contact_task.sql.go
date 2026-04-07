@@ -11,6 +11,45 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const CompleteFollowUpForContact = `-- name: CompleteFollowUpForContact :many
+UPDATE contact_task
+SET state = 'completed',
+    updated_at = NOW()
+WHERE contact_id = $1 AND kind = 'follow_up' AND state = 'managed'
+RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at
+`
+
+// Mark all pending follow-up tasks as completed for a contact (when a response arrives)
+func (q *Queries) CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error) {
+	rows, err := q.db.Query(ctx, CompleteFollowUpForContact, contactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ContactTask{}
+	for rows.Next() {
+		var i ContactTask
+		if err := rows.Scan(
+			&i.ID,
+			&i.ContactID,
+			&i.Provider,
+			&i.Kind,
+			&i.ExternalTaskID,
+			&i.State,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const CountContactTasksByProvider = `-- name: CountContactTasksByProvider :one
 SELECT COUNT(*) FROM contact_task
 WHERE provider = $1 AND state = $2
@@ -115,6 +154,30 @@ WHERE provider = $1
 func (q *Queries) DeleteContactTasksByProvider(ctx context.Context, provider string) error {
 	_, err := q.db.Exec(ctx, DeleteContactTasksByProvider, provider)
 	return err
+}
+
+const FindPendingFollowUp = `-- name: FindPendingFollowUp :one
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+WHERE contact_id = $1 AND kind = 'follow_up' AND state = 'managed'
+LIMIT 1
+`
+
+// Find a pending follow-up task for a contact (kind='follow_up', state='managed')
+func (q *Queries) FindPendingFollowUp(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error) {
+	row := q.db.QueryRow(ctx, FindPendingFollowUp, contactID)
+	var i ContactTask
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Provider,
+		&i.Kind,
+		&i.ExternalTaskID,
+		&i.State,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
 }
 
 const GetContactTask = `-- name: GetContactTask :one
@@ -323,6 +386,43 @@ type ListContactTasksByProviderParams struct {
 // List all tasks for a provider (optionally filtered by state)
 func (q *Queries) ListContactTasksByProvider(ctx context.Context, arg ListContactTasksByProviderParams) ([]*ContactTask, error) {
 	rows, err := q.db.Query(ctx, ListContactTasksByProvider, arg.Provider, arg.State)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ContactTask{}
+	for rows.Next() {
+		var i ContactTask
+		if err := rows.Scan(
+			&i.ID,
+			&i.ContactID,
+			&i.Provider,
+			&i.Kind,
+			&i.ExternalTaskID,
+			&i.State,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListFollowUpsWithPendingClose = `-- name: ListFollowUpsWithPendingClose :many
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+WHERE kind = 'follow_up' AND state = 'completed'
+  AND metadata->>'todoist_close_pending' = 'true'
+`
+
+// Find completed follow-up tasks where the Todoist close call failed and needs retry
+func (q *Queries) ListFollowUpsWithPendingClose(ctx context.Context) ([]*ContactTask, error) {
+	rows, err := q.db.Query(ctx, ListFollowUpsWithPendingClose)
 	if err != nil {
 		return nil, err
 	}

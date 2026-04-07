@@ -42,18 +42,21 @@ type Connection struct {
 }
 
 type Contact struct {
-	ID            pgtype.UUID        `json:"id"`
-	FullName      string             `json:"full_name"`
-	Location      pgtype.Text        `json:"location"`
-	Birthday      pgtype.Date        `json:"birthday"`
-	HowMet        pgtype.Text        `json:"how_met"`
-	Cadence       pgtype.Text        `json:"cadence"`
-	LastContacted pgtype.Timestamptz `json:"last_contacted"`
-	ProfilePhoto  pgtype.Text        `json:"profile_photo"`
-	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
-	ContactBy     pgtype.Date        `json:"contact_by"`
+	ID                pgtype.UUID        `json:"id"`
+	FullName          string             `json:"full_name"`
+	Location          pgtype.Text        `json:"location"`
+	Birthday          pgtype.Date        `json:"birthday"`
+	HowMet            pgtype.Text        `json:"how_met"`
+	Cadence           pgtype.Text        `json:"cadence"`
+	LastContacted     pgtype.Timestamptz `json:"last_contacted"`
+	ProfilePhoto      pgtype.Text        `json:"profile_photo"`
+	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ContactBy         pgtype.Date        `json:"contact_by"`
+	LastInteractionAt pgtype.Timestamptz `json:"last_interaction_at"`
+	LastOutreachAt    pgtype.Timestamptz `json:"last_outreach_at"`
+	LastResponseAt    pgtype.Timestamptz `json:"last_response_at"`
 }
 
 type ContactEnrichment struct {
@@ -189,6 +192,7 @@ type Interaction struct {
 	Description pgtype.Text        `json:"description"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
+	Direction   string             `json:"direction"`
 }
 
 type Note struct {

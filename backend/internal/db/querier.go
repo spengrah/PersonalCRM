@@ -13,12 +13,14 @@ import (
 type Querier interface {
 	AddContactTag(ctx context.Context, arg AddContactTagParams) error
 	BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error
+	// Mark all pending follow-up tasks as completed for a contact (when a response arrives)
+	CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
 	CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error)
-	CountContacts(ctx context.Context, cadenceFilter interface{}) (int64, error)
+	CountContacts(ctx context.Context, arg CountContactsParams) (int64, error)
 	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	// Count events for a specific contact
 	CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
@@ -110,6 +112,8 @@ type Querier interface {
 	// Find an existing manual interaction within a time window (for manual deduplication)
 	FindInteractionInWindow(ctx context.Context, arg FindInteractionInWindowParams) (*Interaction, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
+	// Find a pending follow-up task for a contact (kind='follow_up', state='managed')
+	FindPendingFollowUp(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error)
 	FindSimilarContacts(ctx context.Context, arg FindSimilarContactsParams) ([]*FindSimilarContactsRow, error)
 	// Finds similar contacts for multiple candidate names in a single batch query.
 	// Uses UNNEST to expand input arrays and LATERAL join to find matches per candidate.
@@ -167,7 +171,7 @@ type Querier interface {
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
 	ListAllUnmatchedExternalContacts(ctx context.Context, arg ListAllUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	// Lightweight query returning only IDs for navigation
-	ListContactIDs(ctx context.Context, cadenceFilter interface{}) ([]pgtype.UUID, error)
+	ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]pgtype.UUID, error)
 	// Lightweight query returning only IDs with sorting for navigation
 	ListContactIDsSorted(ctx context.Context, arg ListContactIDsSortedParams) ([]pgtype.UUID, error)
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
@@ -180,6 +184,9 @@ type Querier interface {
 	ListContactTasksByContactFiltered(ctx context.Context, arg ListContactTasksByContactFilteredParams) ([]*ContactTask, error)
 	// List all tasks for a provider (optionally filtered by state)
 	ListContactTasksByProvider(ctx context.Context, arg ListContactTasksByProviderParams) ([]*ContactTask, error)
+	// cadence_filter: '' = no filter (Go zero value), 'has_cadence' = non-empty cadence,
+	// 'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
+	// followup_filter: '' = no filter, 'has_followup' = pending follow-up exists, 'no_followup' = no pending follow-up
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error)
 	ListContactsSorted(ctx context.Context, arg ListContactsSortedParams) ([]*Contact, error)
 	// Lists contacts that have a cadence set (used for Todoist sync reconciliation).
@@ -196,6 +203,8 @@ type Querier interface {
 	ListEventsForContact(ctx context.Context, arg ListEventsForContactParams) ([]*CalendarEvent, error)
 	ListExternalContactsBySource(ctx context.Context, arg ListExternalContactsBySourceParams) ([]*ExternalContact, error)
 	ListExternalContactsForCRMContact(ctx context.Context, crmContactID pgtype.UUID) ([]*ExternalContact, error)
+	// Find completed follow-up tasks where the Todoist close call failed and needs retry
+	ListFollowUpsWithPendingClose(ctx context.Context) ([]*ContactTask, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
 	ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error)
 	// List all managed tasks for a provider (for reconciliation)
@@ -252,12 +261,23 @@ type Querier interface {
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	// Updates just the contact_by field (for Todoist deadline sync).
 	UpdateContactBy(ctx context.Context, arg UpdateContactByParams) error
+	// Updates last_contacted, contact_by, and all direction timestamp fields (for mutual interactions)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
 	// Updates last_contacted and contact_by only if the new date is later.
+	// Also updates direction timestamp fields (this path is used by gcal, which is always mutual).
 	// contact_by is recalculated from the new last_contacted date using the contact's existing cadence.
 	// Cadence day mappings: weekly=7, biweekly=14, monthly=30, quarterly=90, biannual=180, annual=365
 	UpdateContactLastContactedIfLater(ctx context.Context, arg UpdateContactLastContactedIfLaterParams) error
 	UpdateContactMethodValue(ctx context.Context, arg UpdateContactMethodValueParams) (*ContactMethod, error)
+	// Updates all direction fields + last_contacted + contact_by (for mutual interactions).
+	// Uses forward-only semantics for automated sources; manual always updates.
+	UpdateContactMutualFields(ctx context.Context, arg UpdateContactMutualFieldsParams) error
+	// Updates only last_outreach_at (for outbound-only interactions).
+	// Uses forward-only semantics: only updates if the new time is later.
+	UpdateContactOutreachAt(ctx context.Context, arg UpdateContactOutreachAtParams) error
+	// Updates last_contacted, last_interaction_at, last_response_at, and contact_by (for inbound interactions).
+	// Uses forward-only semantics for automated sources; manual always updates.
+	UpdateContactResponseFields(ctx context.Context, arg UpdateContactResponseFieldsParams) error
 	// Update the external task ID (when creating a new Todoist task)
 	UpdateContactTaskExternalID(ctx context.Context, arg UpdateContactTaskExternalIDParams) (*ContactTask, error)
 	UpdateContactTaskMetadata(ctx context.Context, arg UpdateContactTaskMetadataParams) (*ContactTask, error)
@@ -265,6 +285,8 @@ type Querier interface {
 	UpdateExternalContactDuplicate(ctx context.Context, arg UpdateExternalContactDuplicateParams) error
 	UpdateExternalContactMatch(ctx context.Context, arg UpdateExternalContactMatchParams) (*ExternalContact, error)
 	UpdateIdentityMessageCount(ctx context.Context, arg UpdateIdentityMessageCountParams) (*ExternalIdentity, error)
+	// Promote an outbound interaction to mutual when a reply arrives (in-place update)
+	UpdateInteractionDirection(ctx context.Context, arg UpdateInteractionDirectionParams) (*Interaction, error)
 	// Update the matched contact IDs for an event
 	UpdateMatchedContacts(ctx context.Context, arg UpdateMatchedContactsParams) (*CalendarEvent, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)

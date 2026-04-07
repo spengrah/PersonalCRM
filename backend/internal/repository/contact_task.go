@@ -427,5 +427,49 @@ func (r *ContactTaskRepository) GetContactTaskByPendingTempID(ctx context.Contex
 	return &task, nil
 }
 
+// ListFollowUpsWithPendingClose finds completed follow-up tasks where Todoist close failed
+func (r *ContactTaskRepository) ListFollowUpsWithPendingClose(ctx context.Context) ([]ContactTask, error) {
+	dbTasks, err := r.queries.ListFollowUpsWithPendingClose(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	tasks := make([]ContactTask, len(dbTasks))
+	for i, dbTask := range dbTasks {
+		tasks[i] = convertDbContactTask(dbTask)
+	}
+
+	return tasks, nil
+}
+
+// FindPendingFollowUp finds a pending follow-up task for a contact
+func (r *ContactTaskRepository) FindPendingFollowUp(ctx context.Context, contactID uuid.UUID) (*ContactTask, error) {
+	dbTask, err := r.queries.FindPendingFollowUp(ctx, uuidToPgUUID(contactID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
+// CompleteFollowUpForContact marks all pending follow-up tasks as completed for a contact
+func (r *ContactTaskRepository) CompleteFollowUpForContact(ctx context.Context, contactID uuid.UUID) ([]ContactTask, error) {
+	dbTasks, err := r.queries.CompleteFollowUpForContact(ctx, uuidToPgUUID(contactID))
+	if err != nil {
+		return nil, err
+	}
+
+	tasks := make([]ContactTask, len(dbTasks))
+	for i, dbTask := range dbTasks {
+		tasks[i] = convertDbContactTask(dbTask)
+	}
+
+	return tasks, nil
+}
+
 // Note: Helper functions (stringToPgText, uuidToPgUUID, timeToPgTimestamptz)
 // are defined in conversions.go

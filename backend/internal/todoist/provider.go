@@ -26,6 +26,8 @@ const (
 	TaskKindCadence = "cadence"
 	// TaskKindAction is the task kind for one-off action tasks
 	TaskKindAction = "action"
+	// TaskKindFollowUp is the task kind for follow-up tasks
+	TaskKindFollowUp = "follow_up"
 	// DefaultSyncInterval is the default sync interval (5 minutes)
 	DefaultSyncInterval = 5 * time.Minute
 )
@@ -64,6 +66,11 @@ type interactionRecorder interface {
 	RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error)
 }
 
+// followUpCloser retries failed Todoist close calls for follow-up tasks (satisfied by FollowUpService)
+type followUpCloser interface {
+	RetryPendingCloses(ctx context.Context)
+}
+
 // CadenceSyncProvider implements SyncProvider for Todoist cadence tasks
 type CadenceSyncProvider struct {
 	oauthService        *OAuthService
@@ -71,6 +78,7 @@ type CadenceSyncProvider struct {
 	contactRepo         *repository.ContactRepository
 	syncRepo            *repository.SyncRepository
 	interactionRecorder interactionRecorder
+	followUpCloser      followUpCloser
 	frontendURL         string
 }
 
@@ -91,6 +99,11 @@ func NewCadenceSyncProvider(
 		interactionRecorder: interactionRecorder,
 		frontendURL:         cfg.CORS.FrontendURL,
 	}
+}
+
+// SetFollowUpCloser injects the follow-up closer after construction
+func (p *CadenceSyncProvider) SetFollowUpCloser(c followUpCloser) {
+	p.followUpCloser = c
 }
 
 // Config returns the provider's configuration
@@ -418,65 +431,53 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 		}
 	}
 
-	// Record interaction (handles last_contacted update and dedup)
-	sourceRef := task.ExternalTaskID
-	_, err := p.interactionRecorder.RecordInteraction(ctx, repository.RecordInteractionRequest{
-		ContactID:  contact.ID,
-		Source:     repository.InteractionSourceTodoist,
-		SourceRef:  &sourceRef,
-		OccurredAt: completedAt,
-	})
-	if err != nil {
-		logger.Warn().Err(err).Msg("failed to record interaction from Todoist completion")
-	}
-
-	logger.Info().
-		Str("contactId", contact.ID.String()).
-		Str("taskKind", task.Kind).
-		Time("lastContacted", completedAt).
-		Msg("recorded interaction from Todoist completion")
-
-	// Handle action tasks differently - mark as completed, no new task
+	// Handle action tasks — mark as completed, record mutual interaction, no new task
 	if task.Kind == TaskKindAction {
+		sourceRef := task.ExternalTaskID
+		_, err := p.interactionRecorder.RecordInteraction(ctx, repository.RecordInteractionRequest{
+			ContactID:  contact.ID,
+			Source:     repository.InteractionSourceTodoist,
+			SourceRef:  &sourceRef,
+			OccurredAt: completedAt,
+		})
+		if err != nil {
+			logger.Warn().Err(err).Msg("failed to record interaction from action task completion")
+		}
 		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateCompleted); err != nil {
 			logger.Warn().Err(err).Msg("failed to update action task state to completed")
 		}
 		return true, nil
 	}
 
-	// Calculate next contact_by for cadence tasks
-	if contact.Cadence != nil && *contact.Cadence != "" {
-		cadenceType, err := cadence.ParseCadence(*contact.Cadence)
-		if err == nil {
-			// Use date-based cadence for Todoist deadlines
-			// This ensures consistent behavior regardless of CRM_ENV
-			days := cadence.CadenceDays(cadenceType)
-			today := cadence.Today(completedAt)
-			nextContactBy := today.AddDate(0, 0, days)
-
-			// Update contact_by
-			if err := p.contactRepo.UpdateContactBy(ctx, contact.ID, nextContactBy); err != nil {
-				logger.Warn().Err(err).Msg("failed to update contact_by")
-			}
-
-			// Create next task
-			deadlineStr := nextContactBy.Format(DateFormat)
-			cmd := p.createTaskCommand(contact, settings, &deadlineStr)
-			commands = append(commands, cmd)
-
-			// Update metadata with temp_id, synced_deadline, and synced_last_contacted (preserving existing keys)
-			metadata := task.Metadata
-			if metadata == nil {
-				metadata = make(map[string]any)
-			}
-			metadata[MetadataKeyPendingTempID] = cmd.TempID
-			metadata[MetadataKeySyncedDeadline] = deadlineStr
-			metadata[MetadataKeySyncedLastContacted] = completedAt.Format(time.RFC3339)
-			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
-				logger.Warn().Err(err).Msg("failed to store pending_temp_id and synced_deadline in task metadata")
-			}
-		}
+	// For cadence and follow_up tasks: mark completed FIRST, then record outbound interaction.
+	// CRITICAL: Must mark completed before RecordInteraction because RecordInteraction triggers
+	// followUpManager.CreateOrRefreshFollowUp, which looks for existing pending follow-ups.
+	// If this task is still 'managed' when that lookup runs, it refreshes the dying task
+	// instead of creating a successor — collapsing the follow-up cycle.
+	if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateCompleted); err != nil {
+		logger.Warn().Err(err).
+			Str("taskKind", task.Kind).
+			Msg("failed to mark task as completed")
 	}
+
+	// Record outbound interaction — this triggers follow-up creation via followUpManager
+	sourceRef := task.ExternalTaskID
+	_, err := p.interactionRecorder.RecordInteraction(ctx, repository.RecordInteractionRequest{
+		ContactID:  contact.ID,
+		Source:     repository.InteractionSourceTodoist,
+		SourceRef:  &sourceRef,
+		OccurredAt: completedAt,
+		Direction:  repository.InteractionDirectionOutbound,
+	})
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to record outbound interaction from Todoist completion")
+	}
+
+	logger.Info().
+		Str("contactId", contact.ID.String()).
+		Str("taskKind", task.Kind).
+		Time("completedAt", completedAt).
+		Msg("recorded outbound interaction from Todoist task completion")
 
 	return true, commands
 }
@@ -633,10 +634,35 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 			continue
 		}
 
+		// Skip contacts with pending follow-up (grace period — waiting for response)
+		_, err := p.contactTaskRepo.FindPendingFollowUp(ctx, contact.ID)
+		if err == nil {
+			logger.Debug().
+				Str("contactId", contact.ID.String()).
+				Str("contactName", contact.FullName).
+				Msg("skipping reconciliation: pending follow-up task exists")
+			continue
+		}
+		if !errors.Is(err, db.ErrNotFound) {
+			continue // unexpected error, skip
+		}
+
 		currentDeadline := contact.ContactBy.Format(DateFormat)
 
 		// Check if contact has a managed task
 		task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contact.ID, SourceName, TaskKindCadence)
+		if err == nil && task.State == repository.ContactTaskStateCompleted {
+			// Clean up completed cadence task so a new one can be created.
+			// This happens after handleTaskCompletion marks cadence tasks completed
+			// before recording the outbound interaction (follow-up ordering fix).
+			if deleteErr := p.contactTaskRepo.DeleteContactTask(ctx, task.ID); deleteErr != nil {
+				logger.Warn().Err(deleteErr).
+					Str("contactId", contact.ID.String()).
+					Msg("failed to clean up completed cadence task — skipping until next cycle")
+				continue
+			}
+			err = db.ErrNotFound
+		}
 		if err != nil {
 			if !errors.Is(err, db.ErrNotFound) {
 				continue
@@ -675,6 +701,11 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 		// Task exists and is managed - check if deadline needs updating
 		cmds := p.reconcileExistingTask(ctx, task, &contact, settings, currentDeadline)
 		commands = append(commands, cmds...)
+	}
+
+	// Retry any failed Todoist close calls for completed follow-up tasks
+	if p.followUpCloser != nil {
+		p.followUpCloser.RetryPendingCloses(ctx)
 	}
 
 	return commands

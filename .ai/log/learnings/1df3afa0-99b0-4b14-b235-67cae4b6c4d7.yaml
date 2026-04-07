@@ -1,0 +1,64 @@
+---
+timestamp: "2026-04-06T19:19:08.346707"
+type: architecture
+summary: Not all sync sources fit the SyncProvider pattern
+detail: |
+  The existing sync architecture (RunDueSyncs → SyncProvider.Sync() on a schedule) assumes stateless, interval-based polling. Long-lived connections like Telegram MTProto require a fundamentally different lifecycle. Telegram needs a TelegramManager (connection manager) that maintains persistent state, handles real-time updates, and runs independently of the scheduler. The SyncProvider abstraction breaks down when connections are: (1) Stateful - maintain persistent session/connection, (2) Event-driven - push updates vs interval polling, (3) Lifecycle-bound - connection startup/teardown is critical. Don't force-fit long-lived connections into the polling-based SyncProvider interface.
+actionable: true
+
+---
+timestamp: "2026-04-06T19:19:08.346707"
+type: distinction
+summary: Messaging sources require direction modeling; event sources don't
+detail: |
+  Calendar events and task completions are inherently mutual (both parties participated). Messaging introduces directionality: sending is outreach, receiving is engagement. This required adding a `direction` column ('outbound'|'inbound'|'mutual') to the `interaction` table. However, aggregation logic (burst windows, reply bridging) should ONLY apply to messaging sources. For gcal/todoist, continue writing one interaction per discrete event - bundling would destroy user-meaningful information. The direction column applies everywhere for consistency, but aggregation is context-dependent.
+actionable: true
+
+---
+timestamp: "2026-04-06T19:19:08.346707"
+type: gotcha
+summary: Session keys must be immutable and not require contact matching
+detail: |
+  When creating aggregated interactions from messages, use session keys that are based on external identifiers (chat_id + message_id), NOT internal entities like contact_id. This prevents two problems: (1) Contact matching happens asynchronously after message storage - can't create keys that depend on it, (2) When a delayed reply promotes an outbound interaction to mutual, the session key must remain stable for idempotency. Use in-place UPDATE of the existing interaction row, not delete+recreate. Format: `tg:{chat_id}:{first_msg_id}` where first_msg_id never changes even when the interaction is promoted.
+actionable: true
+
+---
+timestamp: "2026-04-06T19:19:08.346707"
+type: architecture
+summary: Cadence does two jobs that need unbundling when direction is introduced
+detail: |
+  The current 'cadence' system conflates: (1) Relationship health - 'I want engagement with Alice monthly' (resets when actual engagement happens), (2) Operational task - 'remind me to take action toward Alice monthly' (resets when I do my part, regardless of response). These collapse when action = engagement. With messaging direction, they must separate: last_contacted/last_interaction_at track relationship health (only mutual/inbound reset it), while outreach tasks track operational completion. Follow-up tasks handle the 'did they respond?' question. Two independent clocks serving different purposes.
+actionable: true
+
+---
+timestamp: "2026-04-06T19:19:08.346707"
+type: rule
+summary: Message aggregation uses asymmetric windows for different purposes
+detail: |
+  Burst window (2h): same-direction messages within 2h bundle into one burst. Reply bridge window (48h): inbound arriving within 48h of outbound promotes to mutual. These serve different purposes and need different durations. The burst window groups fragments of a single conversational turn. The reply bridge window handles delayed responses that still represent engagement. Explicit reply_to references always bridge regardless of time gap. Academic literature (Eagle & Pentland) suggests inter-event gap thresholds of 1-6 hours for bursts; 24-48h is appropriate for reply bridging in async messaging.
+actionable: true
+
+---
+timestamp: "2026-04-06T19:19:08.346707"
+type: documentation_gap
+summary: "Spec ambiguity: what triggers follow-up task creation"
+detail: |
+  The initial spec had conflicting signals about what triggers follow-up task creation. This ambiguity would lead to implementation confusion. The resolution: ANY outbound interaction (Telegram message, Todoist task completion, manual entry) creates or refreshes a follow-up Todoist task for contacts with a cadence. This is centralized in RecordInteraction via a followUpManager interface. Specs must be explicit about trigger conditions when behavior could be interpreted multiple ways. Check user stories, architecture diagrams, and implementation sections for consistency.
+actionable: true
+
+---
+timestamp: "2026-04-06T19:19:08.346707"
+type: gotcha
+summary: Backward compatibility when changing interaction semantics
+detail: |
+  When adding the `direction` field to interactions, existing sources (gcal, manual) must default to `direction=mutual` to preserve current behavior. The todoist provider needs explicit change from implicit mutual to explicit outbound on task completion. This is a subtle but critical behavior change: completing a Todoist task will NO LONGER reset last_contacted. Must be intentional and documented. When changing data models that affect multiple providers, audit all callers and explicitly set the new field rather than relying on database defaults.
+actionable: true
+
+---
+timestamp: "2026-04-06T19:19:08.346707"
+type: architecture
+summary: Real-time updates change testing and state management
+detail: |
+  Moving from polling to real-time updates (Telegram UpdateNewMessage, UpdateEditMessage, UpdateDeleteMessages) requires: (1) Update handlers that process events incrementally, (2) State tracking (pts, qts, seq) for gap detection and recovery, (3) Channel state per chat for efficient updates, (4) Soft-delete for message deletions (the interaction still happened even if the message is gone), (5) Edit tracking with edited_at timestamps. Mocking for tests shifts from 'mock HTTP responses' to 'mock update handlers'. Integration tests need to inject update events, not simulate polling cycles.
+actionable: true
+

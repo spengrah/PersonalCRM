@@ -1,0 +1,224 @@
+---
+timestamp: "2026-04-07T13:17:32.446151"
+type: gotcha
+summary: Follow-up task refresh can capture the completing task itself
+detail: |
+  When completing a follow-up task triggers `RecordInteraction(direction=outbound)` which calls `CreateOrRefreshFollowUp`, the refresh logic can find and refresh the very task being completed (if it hasn't been marked completed yet), leaving no pending follow-up after completion. **Fix:** Mark the task as completed FIRST (in local state), THEN call `RecordInteraction`. This ensures `FindPendingFollowUp()` returns nil and creates a successor task instead of refreshing the dying one.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:17:32.446151"
+type: rule
+summary: Use date arithmetic not duration arithmetic for Todoist deadlines
+detail: |
+  Todoist deadlines are date-based (YYYY-MM-DD). Watchdog/cadence windows should use `cadence.Today(outreachAt).AddDate(0, 0, days)` (date arithmetic) not `outreachAt + 24*time.Hour*days` (duration arithmetic). Duration-based calculations leak DST transitions and time-of-day effects into what should be pure 'N days later' behavior, causing date drift. This matches the existing Todoist cadence pattern already in the codebase.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:17:32.446151"
+type: architecture
+summary: Post-construction setter injection resolves circular service dependencies
+detail: |
+  When ContactService needs FollowUpService but FollowUpService needs ContactService (or its repository), use post-construction injection: ContactService gets a `followUpManager` interface field (initially nil) and a `SetFollowUpManager(fm)` setter called after both services are constructed in main.go. This avoids constructor cycles while maintaining testability (tests can inject mocks). The nil check makes the feature optional (no-op if Todoist not configured).
+actionable: true
+
+---
+timestamp: "2026-04-07T13:17:32.446151"
+type: documentation_gap
+summary: Test plans must explicitly include API-level test coverage
+detail: |
+  The plan listed unit/integration/E2E tests but omitted explicit API-level tests for new response fields (`has_pending_followup`), request validation (`direction` field), and query parameter filtering (`followup_filter`). The gap was caught in review. **Strengthen:** When a feature adds new API fields or parameters, the test plan MUST include a dedicated 'Handler/API Tests' section covering request/response contracts, validation, and filtering - separate from unit/integration/E2E categories. Reference: spec Section 11.8 already calls this out but wasn't followed.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:17:32.446151"
+type: distinction
+summary: Forward-only timestamp updates apply per-direction, not globally
+detail: |
+  The codebase has `isManual` flag for always-update vs forward-only timestamp logic. When adding direction-conditional fields (last_outreach_at, last_response_at, last_interaction_at), the forward-only logic applies to each field independently based on direction: outbound interactions use forward-only for `last_outreach_at` but don't touch `last_contacted`; inbound/mutual interactions update both with their respective forward-only semantics. This prevents automated sources from backdating user corrections while still capturing historical data properly.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:17:32.446151"
+type: gotcha
+summary: Repository method signature changes require updating all test factories
+detail: |
+  When adding parameters to repository methods (e.g., `CountContacts(ctx, cadenceFilter)` → `CountContacts(ctx, cadenceFilter, followupFilter)`), must update not just the production call sites but ALL test factory functions and helper methods that construct test services. These are easy to miss because they're scattered across `tests/api/*_test.go` and may use the old signature. Build errors surface these, but grep for `NewContactService` in tests/ upfront saves iteration.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: gotcha
+summary: "Staticcheck S1016: use type conversion for structs with identical fields"
+detail: |
+  When two struct types have identical field names and types (e.g., `RecordInteractionRequest` and `CreateInteractionRequest`), staticcheck S1016 requires direct type conversion `repository.CreateInteractionRequest(req)` instead of struct literal copying `repository.CreateInteractionRequest{ContactID: req.ContactID, ...}`. This came up in backend/internal/service/contact.go:362 during lint.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: architecture
+summary: Best-effort external service cleanup pattern for optional integrations
+detail: |
+  When an external service (like Todoist) is optional, cleanup operations must degrade gracefully. `CompleteFollowUp` initially hard-errored when `getTodoistSettings` failed, which would leave local records stuck in 'managed' state forever if Todoist was disconnected. **Fix:** Try external cleanup first; if it fails (settings unavailable, API error), warn-log but still complete the local state transition. This prevents optional external services from blocking core state machine progress. Code review found this as Critical Issue #1.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: gotcha
+summary: Metadata key consistency across all task creation/update paths
+detail: |
+  Follow-up tasks wrote metadata under `"deadline"` key (followup.go:148, 160, 221) but API response read `"due_date"` key (contact_task.go:256), causing follow-up due dates to never appear until a Todoist sync rewrote them. When adding new metadata keys, must update ALL task creation/update paths: reconcileContactTasks, handleTaskCompletion, handleSkipTrigger, reconcileExistingTask, AND the API response serializer. Code review found this as issue #2.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: rule
+summary: Forward-only guards must apply to ALL related derived fields, not just timestamps
+detail: |
+  `contact_by` (cadence due date) is derived from `last_contacted` + cadence window. The SQL queries already had forward-only guards for `last_contacted` (don't regress from newer value), but `contact_by` was always applied when non-null. This meant late-arriving automated inbound events would correctly preserve the newer `last_contacted` but regress `contact_by` to an older cadence window, breaking the invariant that contact_by = last_contacted + cadence. **Rule:** When timestamp fields have forward-only semantics, ALL derived fields computed from those timestamps need the same guard: only compute the derived value when the timestamp update will actually take effect (newer than current, or manual source override). Code review found this as issue #1.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: gotcha
+summary: Transient external failures can create permanent stuck state without idempotent retry
+detail: |
+  If `CompleteFollowUp` succeeds in marking the local `contact_task` completed but the Todoist API close call fails transiently (network blip, rate limit), the contact remains in 'awaiting reply' state indefinitely. Reconciliation skips contacts with managed follow-up tasks, so no future job will retry. **Pattern:** For two-phase operations (local DB + external API), either: (1) make the external call first and only update local state on success, or (2) make local state update idempotent so reconciliation can retry the external cleanup. Code review found this as issue #3.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: documentation_gap
+summary: "Conventions doc should explicitly state: both structs with identical fields AND how to handle best-effort external cleanup"
+detail: |
+  The `.ai/rules/core.md` has error handling patterns but doesn't cover: (1) when to use type conversion vs struct literals for similar types, or (2) how to handle optional external service failures in state machine transitions. These are not obvious from reading the code. The staticcheck lint caught #1, but #2 (best-effort cleanup) was only caught by code review. **Strengthen:** Add to Anti-Patterns section: show the CompleteFollowUp pattern (try external, warn on fail, complete local anyway) as the canonical way to handle optional service cleanup.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:31:38.048808"
+type: rule
+summary: Code review agents caught 4 critical bugs that tests would have missed
+detail: |
+  All major bugs in this session were found by `feature-dev:code-reviewer` agents, not by tests: (1) CompleteFollowUp hard-error blocking inbound interactions, (2) metadata key mismatch hiding follow-up due dates, (3) contact_by regression from late events, (4) transient Todoist failure creating stuck state. The initial commit had zero new test coverage for the changed behavior despite touching core state machine logic. **Lesson:** For non-trivial state machine changes, ALWAYS run code review agents before considering the work done, even if make lint and make test pass. Tests validate happy paths; reviewers find edge cases and failure modes.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:25:49.300549"
+type: gotcha
+summary: Backup script must restart ALL dependent systemd services, not just backend
+detail: |
+  When stopping personalcrm-backend for database backup, personalcrm-frontend also stops due to systemd service dependencies. The backup script initially only restarted the backend, leaving the production app inaccessible (frontend dead, backend running). **Fix:** Explicitly stop and restart BOTH personalcrm-backend AND personalcrm-frontend to ensure full service recovery. Service dependency chains are opaque from the backup script's perspective.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:25:49.300549"
+type: gotcha
+summary: Docker Compose service name is 'postgres' not 'db' in production
+detail: |
+  The production docker-compose.yml defines the PostgreSQL service as 'postgres' (container name: crm-postgres), but backup script initially used 'db'. This caused 'docker compose stop db' to fail with 'no such service'. **Rule:** When writing automation scripts for production infrastructure, verify actual service names with 'docker compose ps' rather than assuming common conventions. The compose file is the source of truth.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:25:49.300549"
+type: architecture
+summary: Reconciliation loop must clean up terminal-state cadence tasks
+detail: |
+  After direction model implementation, cadence tasks are marked 'completed' (not deleted) when finished to preserve follow-up task ordering. But reconcileContactTasks skips existing rows and only creates new tasks when none exist. This meant completed cadence tasks blocked new cadence task creation indefinitely. **Pattern:** When state machines transition tasks to terminal states ('completed', 'cancelled'), reconciliation loops must either (1) DELETE terminal-state rows before creating replacements, or (2) explicitly filter WHERE state NOT IN ('completed', 'cancelled') when checking for existing tasks. Option 1 was chosen here because historical tracking happens via interactions table, not contact_task rows.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:25:49.300549"
+type: rule
+summary: Environment-specific infrastructure scripts must use env vars with defaults
+detail: |
+  The backup-db.sh script initially hardcoded PI_HOST='raspberry-pi' and PI_DIR='/srv/personalcrm'. User correctly requested these become environment variables to support multiple deployment targets. **Pattern:** Follow deploy.sh precedent: use ${VAR_NAME:-default_value} for convenience defaults (PI_HOST) and ${VAR_NAME:?error message} for required context-specific values (PI_DEPLOY_DIR). This balances usability (works without ceremony for common case) with flexibility (supports non-standard deployments).
+actionable: true
+
+---
+timestamp: "2026-04-07T15:25:49.300549"
+type: documentation_gap
+summary: Cadence task lifecycle and reconciliation interaction not documented
+detail: |
+  The interaction between handleTaskCompletion (which marks cadence tasks 'completed') and reconcileContactTasks (which creates new cadence tasks) is not documented anywhere. This led to the terminal-state cleanup bug going unnoticed during implementation and initial testing. The multi-step lifecycle (completion → follow-up creation → follow-up completion → new cadence task creation) spans multiple files and background jobs with no single place explaining the full flow. **Strengthen:** Add a 'Task Lifecycle State Machine' diagram to .ai/guides/architecture.md showing: cadence task states, follow-up task states, reconciliation cleanup rules, and which components own each transition.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:28:09.279599"
+type: documentation_gap
+summary: Bug fix test coverage rule wasn't followed initially
+detail: |
+  Existing rule says 'Always add comprehensive tests for new/changed code' but wasn't applied when fixing a bug found during code review. The rule exists in `.ai/rules/core.md` but is too general. Future agents need stronger, more explicit guidance: 'When fixing a bug (especially one found by codex/review), add a regression test BEFORE making the fix.' The gap: the rule is buried as a general principle rather than highlighted as a bug-fix-specific requirement. Strengthen by: (1) Add to 'When You Change X, Check Y' table: 'When fixing a bug → Add regression test first', (2) Add to Anti-Patterns with ❌/✅ example.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:37:54.952136"
+type: gotcha
+summary: Gin validate tags require explicit validation call
+detail: |
+  The `validate:"omitempty,oneof=..."` tag on handler request structs is just metadata. Gin's ShouldBindJSON does NOT automatically enforce validation rules. You must call `h.validator.Struct(req)` explicitly after binding, or the validation tag is ignored. Without this, invalid enum values bypass handler validation and hit DB CHECK constraints, returning 500 instead of 400.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:37:54.952136"
+type: rule
+summary: Always validate enums at handler layer before service
+detail: |
+  Invalid enum values (e.g., direction="invalid") that bypass handler validation will hit PostgreSQL CHECK constraints in the database layer, causing 500 Internal Server Error instead of 400 Bad Request. This breaks REST conventions and exposes implementation details. Validate all enum fields explicitly at the handler layer (either with validator.Struct() or inline switch statements) before passing to service layer.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:37:54.952136"
+type: rule
+summary: Test comments describing expected behavior must have assertions
+detail: |
+  Comments like "// Verify: last_response_at should still reflect..." without accompanying assertions create untested assumptions. If a field should NOT be modified, assert it with assert.Nil() or assert.Equal(). If behavior is uncertain, remove the comment. Comments without assertions are code smell indicating incomplete test coverage of edge cases and cross-concern boundaries.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:44:58.393269"
+type: gotcha
+summary: Pre-push hook 'FAIL E2E tests' can mean learnings blocked push, not test failure
+detail: |
+  When pre-push hook output shows 'FAIL E2E tests' followed by 'Appended X new learnings' and 'LEARNINGS EXTRACTED', it means the learnings extraction blocked the push, NOT that the E2E tests actually failed. The tests may have passed. Check for 'WARN New learnings extracted' and the learnings output to distinguish from real test failures. The misleading 'FAIL E2E tests' line appears because tests run in parallel with learnings extraction.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:44:58.393269"
+type: rule
+summary: Never discard delete errors before creating replacement with same unique constraint
+detail: |
+  Silently discarding a delete error (e.g., `_ = DeleteContactTask(ctx, id)`) before creating a new record with the same unique constraint (e.g., same `(contact_id, source, task_type)`) creates a permanent stuck state. If the delete fails, the subsequent create will hit a constraint violation loop. Must handle delete errors and abort/skip the create operation if delete fails. Found in provider.go where completed cadence tasks are cleaned up before creating replacements.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:57:56.401468"
+type: documentation_gap
+summary: Contact list filter gotcha didn't prevent incomplete implementation
+detail: |
+  Existing gotcha documents adding contact list filter requires updating "10 SQL queries + repo params + service count calls + handler query struct + frontend types + API client + contacts page + detail page listContext". Agent followed this for SQL/backend but still missed 4 frontend locations: ContactIDsParams interface, getContacts spread, getContactIDs spread, and buildNavigationUrl. The documentation exists but wasn't specific enough to prevent the error. Needs strengthening with explicit checklist format showing all 12+ locations grouped by layer (Backend: 10 SQL queries, repo params, service, handler | Frontend: TypeScript type, ContactIDsParams, API client getContacts, API client getContactIDs, contacts page, detail page listContext, detail page buildNavigationUrl).
+actionable: true
+
+---
+timestamp: "2026-04-07T15:57:56.401468"
+type: gotcha
+summary: validate struct tags without validator calls are dead code
+detail: |
+  Handler had `validate:"omitempty,oneof=outbound inbound mutual"` tag on Direction field but InteractionHandler has no validator field and never calls validator.Struct(). Validation actually happens via switch statement. The tag is misleading - future developers might think Gin enforces it automatically. Rule: either remove validate tags or add validator.Struct() call; don't leave orphaned tags.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:57:56.401468"
+type: rule
+summary: Handler validation logic requires test for invalid input
+detail: |
+  InteractionHandler had switch statement validating direction values and correctly returning 400 for invalid inputs, but tests only covered valid values and default behavior. Missing regression test for invalid input (e.g., `{"direction": "invalid_value"}` → 400). When adding handler validation, always test both valid paths AND invalid input that should return 400.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:57:56.401468"
+type: architecture
+summary: Frontend API client wiring follows consistent spread pattern
+detail: |
+  When adding optional filter parameters to contact list queries, must add to ContactIDsParams interface AND spread into queryParams in both getContacts and getContactIDs using pattern: `...(params.filter_name && { filter_name: params.filter_name })`. Also must add to detail page listContext extraction from searchParams and buildNavigationUrl params.set() calls, including dependency array. This pattern mirrors how cadence_filter was implemented.
+actionable: true
+

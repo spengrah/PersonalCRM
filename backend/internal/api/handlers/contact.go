@@ -11,6 +11,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -74,19 +75,23 @@ func NewContactHandler(contactService *service.ContactService) *ContactHandler {
 // Contact response model
 // @Description Contact information
 type ContactResponse struct {
-	ID            string                  `json:"id" example:"550e8400-e29b-41d4-a716-446655440000"`
-	FullName      string                  `json:"full_name" example:"John Doe"`
-	Methods       []ContactMethodResponse `json:"methods,omitempty"`
-	PrimaryMethod *ContactMethodResponse  `json:"primary_method,omitempty"`
-	Location      *string                 `json:"location,omitempty" example:"San Francisco, CA"`
-	Birthday      *time.Time              `json:"birthday,omitempty" example:"1990-01-15T00:00:00Z"`
-	HowMet        *string                 `json:"how_met,omitempty" example:"Met at tech conference"`
-	Cadence       *string                 `json:"cadence,omitempty" example:"monthly" enums:"weekly,monthly,quarterly,biannual,annual"`
-	LastContacted *time.Time              `json:"last_contacted,omitempty" example:"2024-01-15T10:30:00Z"`
-	ContactBy     *time.Time              `json:"contact_by,omitempty" example:"2024-02-15T00:00:00Z"`
-	ProfilePhoto  *string                 `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
-	CreatedAt     time.Time               `json:"created_at" example:"2024-01-01T00:00:00Z"`
-	UpdatedAt     time.Time               `json:"updated_at" example:"2024-01-15T10:30:00Z"`
+	ID                 string                  `json:"id" example:"550e8400-e29b-41d4-a716-446655440000"`
+	FullName           string                  `json:"full_name" example:"John Doe"`
+	Methods            []ContactMethodResponse `json:"methods,omitempty"`
+	PrimaryMethod      *ContactMethodResponse  `json:"primary_method,omitempty"`
+	Location           *string                 `json:"location,omitempty" example:"San Francisco, CA"`
+	Birthday           *time.Time              `json:"birthday,omitempty" example:"1990-01-15T00:00:00Z"`
+	HowMet             *string                 `json:"how_met,omitempty" example:"Met at tech conference"`
+	Cadence            *string                 `json:"cadence,omitempty" example:"monthly" enums:"weekly,monthly,quarterly,biannual,annual"`
+	LastContacted      *time.Time              `json:"last_contacted,omitempty" example:"2024-01-15T10:30:00Z"`
+	ContactBy          *time.Time              `json:"contact_by,omitempty" example:"2024-02-15T00:00:00Z"`
+	LastInteractionAt  *time.Time              `json:"last_interaction_at,omitempty"`
+	LastOutreachAt     *time.Time              `json:"last_outreach_at,omitempty"`
+	LastResponseAt     *time.Time              `json:"last_response_at,omitempty"`
+	HasPendingFollowup bool                    `json:"has_pending_followup"`
+	ProfilePhoto       *string                 `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
+	CreatedAt          time.Time               `json:"created_at" example:"2024-01-01T00:00:00Z"`
+	UpdatedAt          time.Time               `json:"updated_at" example:"2024-01-15T10:30:00Z"`
 }
 
 // ContactMethodResponse represents a contact method in responses
@@ -132,13 +137,14 @@ type UpdateContactRequest struct {
 
 // ListContactsQuery represents query parameters for listing contacts
 type ListContactsQuery struct {
-	Page          int    `form:"page" validate:"omitempty,min=1" example:"1"`
-	Limit         int    `form:"limit" validate:"omitempty,min=1,max=1000" example:"20"`
-	Search        string `form:"search" validate:"omitempty,max=255" example:"john"`
-	Sort          string `form:"sort" validate:"omitempty,oneof=name location birthday last_contacted contact_by cadence" example:"name"`
-	Order         string `form:"order" validate:"omitempty,oneof=asc desc" example:"asc"`
-	IDsOnly       bool   `form:"ids_only" example:"false"`
-	CadenceFilter string `form:"cadence_filter" validate:"omitempty,oneof=has_cadence no_cadence" example:"has_cadence"`
+	Page           int    `form:"page" validate:"omitempty,min=1" example:"1"`
+	Limit          int    `form:"limit" validate:"omitempty,min=1,max=1000" example:"20"`
+	Search         string `form:"search" validate:"omitempty,max=255" example:"john"`
+	Sort           string `form:"sort" validate:"omitempty,oneof=name location birthday last_contacted contact_by cadence" example:"name"`
+	Order          string `form:"order" validate:"omitempty,oneof=asc desc" example:"asc"`
+	IDsOnly        bool   `form:"ids_only" example:"false"`
+	CadenceFilter  string `form:"cadence_filter" validate:"omitempty,oneof=has_cadence no_cadence" example:"has_cadence"`
+	FollowupFilter string `form:"followup_filter" validate:"omitempty,oneof=has_followup no_followup" example:"has_followup"`
 }
 
 // ContactIDsResponse represents the response for ID-only queries
@@ -176,19 +182,22 @@ func contactToResponse(contact *repository.Contact) ContactResponse {
 	}
 
 	return ContactResponse{
-		ID:            contact.ID.String(),
-		FullName:      contact.FullName,
-		Methods:       methods,
-		PrimaryMethod: primaryMethod,
-		Location:      contact.Location,
-		Birthday:      contact.Birthday,
-		HowMet:        contact.HowMet,
-		Cadence:       contact.Cadence,
-		LastContacted: contact.LastContacted,
-		ContactBy:     contact.ContactBy,
-		ProfilePhoto:  contact.ProfilePhoto,
-		CreatedAt:     contact.CreatedAt,
-		UpdatedAt:     contact.UpdatedAt,
+		ID:                contact.ID.String(),
+		FullName:          contact.FullName,
+		Methods:           methods,
+		PrimaryMethod:     primaryMethod,
+		Location:          contact.Location,
+		Birthday:          contact.Birthday,
+		HowMet:            contact.HowMet,
+		Cadence:           contact.Cadence,
+		LastContacted:     contact.LastContacted,
+		ContactBy:         contact.ContactBy,
+		LastInteractionAt: contact.LastInteractionAt,
+		LastOutreachAt:    contact.LastOutreachAt,
+		LastResponseAt:    contact.LastResponseAt,
+		ProfilePhoto:      contact.ProfilePhoto,
+		CreatedAt:         contact.CreatedAt,
+		UpdatedAt:         contact.UpdatedAt,
 	}
 }
 
@@ -323,6 +332,14 @@ func (h *ContactHandler) GetContact(c *gin.Context) {
 	}
 
 	response := contactToResponse(contact)
+
+	// Compute has_pending_followup via service layer
+	hasPending, err := h.contactService.HasPendingFollowUp(c.Request.Context(), id)
+	if err != nil {
+		logger.Warn().Err(err).Str("contactId", id.String()).Msg("failed to check pending follow-up")
+	}
+	response.HasPendingFollowup = hasPending
+
 	api.SendSuccess(c, http.StatusOK, response, nil)
 }
 
@@ -367,10 +384,11 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 	// Handle IDs-only request (lightweight response for navigation)
 	if query.IDsOnly {
 		ids, err := h.contactService.ListContactIDs(c.Request.Context(), repository.ListContactIDsParams{
-			Sort:          query.Sort,
-			Order:         query.Order,
-			Search:        query.Search,
-			CadenceFilter: query.CadenceFilter,
+			Sort:           query.Sort,
+			Order:          query.Order,
+			Search:         query.Search,
+			CadenceFilter:  query.CadenceFilter,
+			FollowupFilter: query.FollowupFilter,
 		})
 		if err != nil {
 			api.SendInternalError(c, "Failed to retrieve contact IDs")
@@ -402,20 +420,22 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 
 	if query.Search != "" {
 		contacts, total, err = h.contactService.SearchContactsPage(c.Request.Context(), repository.SearchContactsParams{
-			Query:         query.Search,
-			Limit:         limit,
-			Offset:        offset,
-			Sort:          query.Sort,
-			Order:         query.Order,
-			CadenceFilter: query.CadenceFilter,
+			Query:          query.Search,
+			Limit:          limit,
+			Offset:         offset,
+			Sort:           query.Sort,
+			Order:          query.Order,
+			CadenceFilter:  query.CadenceFilter,
+			FollowupFilter: query.FollowupFilter,
 		})
 	} else {
 		contacts, total, err = h.contactService.ListContactsPage(c.Request.Context(), repository.ListContactsParams{
-			Limit:         limit,
-			Offset:        offset,
-			Sort:          query.Sort,
-			Order:         query.Order,
-			CadenceFilter: query.CadenceFilter,
+			Limit:          limit,
+			Offset:         offset,
+			Sort:           query.Sort,
+			Order:          query.Order,
+			CadenceFilter:  query.CadenceFilter,
+			FollowupFilter: query.FollowupFilter,
 		})
 	}
 

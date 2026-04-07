@@ -145,10 +145,10 @@ func TestCadenceFilter_Integration(t *testing.T) {
 	})
 
 	t.Run("CountContacts_HasCadence", func(t *testing.T) {
-		totalHas, err := repo.CountContacts(ctx, "has_cadence")
+		totalHas, err := repo.CountContacts(ctx, "has_cadence", "")
 		require.NoError(t, err)
 
-		totalNo, err := repo.CountContacts(ctx, "no_cadence")
+		totalNo, err := repo.CountContacts(ctx, "no_cadence", "")
 		require.NoError(t, err)
 
 		assert.Greater(t, totalHas, int64(0), "should have at least one contact with cadence")

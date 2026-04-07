@@ -127,3 +127,23 @@ WHERE provider = $1 AND state = $2;
 -- Find a task by its pending temp ID in metadata (for mapping temp IDs to real Todoist IDs)
 SELECT * FROM contact_task
 WHERE provider = @provider AND metadata->>'pending_temp_id' = @temp_id::text;
+
+-- name: ListFollowUpsWithPendingClose :many
+-- Find completed follow-up tasks where the Todoist close call failed and needs retry
+SELECT * FROM contact_task
+WHERE kind = 'follow_up' AND state = 'completed'
+  AND metadata->>'todoist_close_pending' = 'true';
+
+-- name: FindPendingFollowUp :one
+-- Find a pending follow-up task for a contact (kind='follow_up', state='managed')
+SELECT * FROM contact_task
+WHERE contact_id = $1 AND kind = 'follow_up' AND state = 'managed'
+LIMIT 1;
+
+-- name: CompleteFollowUpForContact :many
+-- Mark all pending follow-up tasks as completed for a contact (when a response arrives)
+UPDATE contact_task
+SET state = 'completed',
+    updated_at = NOW()
+WHERE contact_id = $1 AND kind = 'follow_up' AND state = 'managed'
+RETURNING *;

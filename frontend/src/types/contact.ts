@@ -25,6 +25,10 @@ export interface Contact {
   cadence?: string
   last_contacted?: string
   contact_by?: string
+  last_interaction_at?: string
+  last_outreach_at?: string
+  last_response_at?: string
+  has_pending_followup?: boolean
   created_at: string
   updated_at: string
   deleted_at?: string
@@ -59,4 +63,5 @@ export interface ContactListParams {
   sort?: 'name' | 'location' | 'birthday' | 'last_contacted' | 'contact_by' | 'cadence'
   order?: 'asc' | 'desc'
   cadence_filter?: 'has_cadence' | 'no_cadence'
+  followup_filter?: 'has_followup' | 'no_followup'
 }
