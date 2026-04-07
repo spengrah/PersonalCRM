@@ -399,5 +399,17 @@
   {
     "pattern": "^frontend/tests/e2e/contact-tasks\\.spec\\.ts$",
     "tags": ["@area:contacts", "@area:tasks"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/contact-direction\\.spec\\.ts$",
+    "tags": ["@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/service/followup\\.go$",
+    "tags": ["@area:contacts", "@area:tasks"]
+  },
+  {
+    "pattern": "^backend/migrations/031_",
+    "tags": ["@area:contacts"]
   }
 ]
