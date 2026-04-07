@@ -125,7 +125,7 @@ func (e ValidationErrors) Error() string {
 	var sb strings.Builder
 	sb.WriteString("configuration validation failed:\n")
 	for _, err := range e {
-		sb.WriteString(fmt.Sprintf("  - %s: %s\n", err.Field, err.Message))
+		fmt.Fprintf(&sb, "  - %s: %s\n", err.Field, err.Message)
 	}
 	return sb.String()
 }
