@@ -102,3 +102,43 @@ detail: |
   All major bugs in this session were found by `feature-dev:code-reviewer` agents, not by tests: (1) CompleteFollowUp hard-error blocking inbound interactions, (2) metadata key mismatch hiding follow-up due dates, (3) contact_by regression from late events, (4) transient Todoist failure creating stuck state. The initial commit had zero new test coverage for the changed behavior despite touching core state machine logic. **Lesson:** For non-trivial state machine changes, ALWAYS run code review agents before considering the work done, even if make lint and make test pass. Tests validate happy paths; reviewers find edge cases and failure modes.
 actionable: true
 
+---
+timestamp: "2026-04-07T15:25:49.300549"
+type: gotcha
+summary: Backup script must restart ALL dependent systemd services, not just backend
+detail: |
+  When stopping personalcrm-backend for database backup, personalcrm-frontend also stops due to systemd service dependencies. The backup script initially only restarted the backend, leaving the production app inaccessible (frontend dead, backend running). **Fix:** Explicitly stop and restart BOTH personalcrm-backend AND personalcrm-frontend to ensure full service recovery. Service dependency chains are opaque from the backup script's perspective.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:25:49.300549"
+type: gotcha
+summary: Docker Compose service name is 'postgres' not 'db' in production
+detail: |
+  The production docker-compose.yml defines the PostgreSQL service as 'postgres' (container name: crm-postgres), but backup script initially used 'db'. This caused 'docker compose stop db' to fail with 'no such service'. **Rule:** When writing automation scripts for production infrastructure, verify actual service names with 'docker compose ps' rather than assuming common conventions. The compose file is the source of truth.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:25:49.300549"
+type: architecture
+summary: Reconciliation loop must clean up terminal-state cadence tasks
+detail: |
+  After direction model implementation, cadence tasks are marked 'completed' (not deleted) when finished to preserve follow-up task ordering. But reconcileContactTasks skips existing rows and only creates new tasks when none exist. This meant completed cadence tasks blocked new cadence task creation indefinitely. **Pattern:** When state machines transition tasks to terminal states ('completed', 'cancelled'), reconciliation loops must either (1) DELETE terminal-state rows before creating replacements, or (2) explicitly filter WHERE state NOT IN ('completed', 'cancelled') when checking for existing tasks. Option 1 was chosen here because historical tracking happens via interactions table, not contact_task rows.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:25:49.300549"
+type: rule
+summary: Environment-specific infrastructure scripts must use env vars with defaults
+detail: |
+  The backup-db.sh script initially hardcoded PI_HOST='raspberry-pi' and PI_DIR='/srv/personalcrm'. User correctly requested these become environment variables to support multiple deployment targets. **Pattern:** Follow deploy.sh precedent: use ${VAR_NAME:-default_value} for convenience defaults (PI_HOST) and ${VAR_NAME:?error message} for required context-specific values (PI_DEPLOY_DIR). This balances usability (works without ceremony for common case) with flexibility (supports non-standard deployments).
+actionable: true
+
+---
+timestamp: "2026-04-07T15:25:49.300549"
+type: documentation_gap
+summary: Cadence task lifecycle and reconciliation interaction not documented
+detail: |
+  The interaction between handleTaskCompletion (which marks cadence tasks 'completed') and reconcileContactTasks (which creates new cadence tasks) is not documented anywhere. This led to the terminal-state cleanup bug going unnoticed during implementation and initial testing. The multi-step lifecycle (completion → follow-up creation → follow-up completion → new cadence task creation) spans multiple files and background jobs with no single place explaining the full flow. **Strengthen:** Add a 'Task Lifecycle State Machine' diagram to .ai/guides/architecture.md showing: cadence task states, follow-up task states, reconciliation cleanup rules, and which components own each transition.
+actionable: true
+
