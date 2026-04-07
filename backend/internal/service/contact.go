@@ -31,20 +31,46 @@ type OverdueContact struct {
 	SuggestedAction string
 }
 
+// followUpManager manages follow-up Todoist tasks for outbound interactions
+type followUpManager interface {
+	CreateOrRefreshFollowUp(ctx context.Context, contact repository.Contact, outreachAt time.Time) error
+	CompleteFollowUp(ctx context.Context, contactID uuid.UUID) error
+}
+
 type ContactService struct {
 	database          *db.Database
 	contactRepo       *repository.ContactRepository
 	contactMethodRepo *repository.ContactMethodRepository
 	interactionRepo   *repository.InteractionRepository
+	contactTaskRepo   *repository.ContactTaskRepository
+	followUpMgr       followUpManager
 }
 
-func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository, interactionRepo *repository.InteractionRepository) *ContactService {
+func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository, interactionRepo *repository.InteractionRepository, contactTaskRepo *repository.ContactTaskRepository) *ContactService {
 	return &ContactService{
 		database:          database,
 		contactRepo:       contactRepo,
 		contactMethodRepo: contactMethodRepo,
 		interactionRepo:   interactionRepo,
+		contactTaskRepo:   contactTaskRepo,
 	}
+}
+
+// SetFollowUpManager injects the follow-up manager after construction (resolves circular dependency)
+func (s *ContactService) SetFollowUpManager(fm followUpManager) {
+	s.followUpMgr = fm
+}
+
+// HasPendingFollowUp checks if a contact has a pending follow-up task
+func (s *ContactService) HasPendingFollowUp(ctx context.Context, contactID uuid.UUID) (bool, error) {
+	_, err := s.contactTaskRepo.FindPendingFollowUp(ctx, contactID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *ContactService) GetContact(ctx context.Context, id uuid.UUID) (*repository.Contact, error) {
@@ -84,7 +110,7 @@ func (s *ContactService) ListContactsPage(ctx context.Context, params repository
 		return nil, 0, err
 	}
 
-	total, err := s.contactRepo.CountContacts(ctx, params.CadenceFilter)
+	total, err := s.contactRepo.CountContacts(ctx, params.CadenceFilter, params.FollowupFilter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -116,7 +142,7 @@ func (s *ContactService) SearchContactsPage(ctx context.Context, params reposito
 		return nil, 0, err
 	}
 
-	total, err := s.contactRepo.CountSearchContacts(ctx, params.Query, params.CadenceFilter)
+	total, err := s.contactRepo.CountSearchContacts(ctx, params.Query, params.CadenceFilter, params.FollowupFilter)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -277,14 +303,26 @@ func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid
 	return contact, nil
 }
 
-// RecordInteraction creates an interaction record and updates last_contacted/contact_by.
+// RecordInteraction creates an interaction record and updates contact fields based on direction.
 // Handles source-aware deduplication:
 //   - For sources with source_ref (gcal, todoist): dedup by source_ref
 //   - For manual sources (no source_ref): dedup by 30-minute time window
 //
-// Uses forward-only semantics for last_contacted: only updates if occurred_at > current last_contacted.
+// Direction-conditional updates:
+//   - outbound: updates only last_outreach_at (does NOT reset last_contacted/contact_by)
+//   - inbound: updates last_contacted, last_interaction_at, last_response_at, contact_by
+//   - mutual: updates all fields + contact_by
+//
+// Follow-up management (best-effort, non-blocking):
+//   - outbound: creates or refreshes a follow-up Todoist task
+//   - inbound/mutual: completes any pending follow-up task
 func (s *ContactService) RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error) {
-	// 1. Source-aware deduplication
+	// 1. Default direction to "mutual" if empty (backward compat)
+	if req.Direction == "" {
+		req.Direction = repository.InteractionDirectionMutual
+	}
+
+	// 2. Source-aware deduplication
 	if req.SourceRef != nil {
 		existing, err := s.interactionRepo.FindBySourceRef(ctx, req.ContactID, req.Source, *req.SourceRef)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
@@ -314,36 +352,85 @@ func (s *ContactService) RecordInteraction(ctx context.Context, req repository.R
 		}
 	}
 
-	// 2. Verify contact exists (avoids FK violation returning unhelpful error)
+	// 3. Verify contact exists (avoids FK violation returning unhelpful error)
 	contact, err := s.contactRepo.GetContact(ctx, req.ContactID)
 	if err != nil {
 		return nil, err // propagates ErrNotFound
 	}
 
-	// 3. Create interaction record
+	// 4. Create interaction record
 	interaction, err := s.interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest(req))
 	if err != nil {
 		return nil, fmt.Errorf("create interaction: %w", err)
 	}
 
-	// 4. Update last_contacted
-	// Manual source always updates (user correction). Automated sources use forward-only semantics.
+	// 5. Direction-conditional contact field updates
 	isManual := req.Source == repository.InteractionSourceManual
-	shouldUpdate := isManual || contact.LastContacted == nil || req.OccurredAt.After(*contact.LastContacted)
-	if shouldUpdate {
-		// Calculate contact_by based on cadence
+
+	switch req.Direction {
+	case repository.InteractionDirectionOutbound:
+		// Outbound: only update last_outreach_at (does NOT reset cadence clock)
+		if err := s.contactRepo.UpdateContactOutreachAt(ctx, req.ContactID, req.OccurredAt, isManual); err != nil {
+			logger.Warn().Err(err).
+				Str("contactId", req.ContactID.String()).
+				Msg("failed to update last_outreach_at from outbound interaction")
+		}
+
+	case repository.InteractionDirectionInbound:
+		// Inbound: update last_contacted, last_interaction_at, last_response_at, contact_by
+		// Only recalculate contact_by if this event would actually advance last_contacted
+		// (forward-only guard prevents late-arriving events from regressing the due date)
 		var contactBy *time.Time
-		if contact.Cadence != nil && *contact.Cadence != "" {
+		shouldRecalcContactBy := isManual || contact.LastContacted == nil || req.OccurredAt.After(*contact.LastContacted)
+		if shouldRecalcContactBy && contact.Cadence != nil && *contact.Cadence != "" {
 			if cadenceType, err := cadence.ParseCadence(*contact.Cadence); err == nil {
 				contactByTime := cadence.CalculateContactBy(req.OccurredAt, cadenceType)
 				contactBy = &contactByTime
 			}
 		}
-
-		if err := s.contactRepo.UpdateContactLastContacted(ctx, req.ContactID, req.OccurredAt, contactBy); err != nil {
+		if err := s.contactRepo.UpdateContactResponseFields(ctx, req.ContactID, req.OccurredAt, contactBy, isManual); err != nil {
 			logger.Warn().Err(err).
 				Str("contactId", req.ContactID.String()).
-				Msg("failed to update last_contacted from interaction")
+				Msg("failed to update contact fields from inbound interaction")
+		}
+
+	default: // mutual
+		// Mutual: update all fields + contact_by
+		// Same forward-only guard for contact_by
+		var contactBy *time.Time
+		shouldRecalcContactBy := isManual || contact.LastContacted == nil || req.OccurredAt.After(*contact.LastContacted)
+		if shouldRecalcContactBy && contact.Cadence != nil && *contact.Cadence != "" {
+			if cadenceType, err := cadence.ParseCadence(*contact.Cadence); err == nil {
+				contactByTime := cadence.CalculateContactBy(req.OccurredAt, cadenceType)
+				contactBy = &contactByTime
+			}
+		}
+		if err := s.contactRepo.UpdateContactMutualFields(ctx, req.ContactID, req.OccurredAt, contactBy, isManual); err != nil {
+			logger.Warn().Err(err).
+				Str("contactId", req.ContactID.String()).
+				Msg("failed to update contact fields from mutual interaction")
+		}
+	}
+
+	// 6. Follow-up management (best-effort, non-blocking)
+	if s.followUpMgr != nil {
+		switch req.Direction {
+		case repository.InteractionDirectionOutbound:
+			if err := s.followUpMgr.CreateOrRefreshFollowUp(ctx, *contact, req.OccurredAt); err != nil {
+				logger.Warn().Err(err).
+					Str("contactId", req.ContactID.String()).
+					Str("direction", req.Direction).
+					Str("source", req.Source).
+					Msg("failed to create/refresh follow-up task")
+			}
+		case repository.InteractionDirectionInbound, repository.InteractionDirectionMutual:
+			if err := s.followUpMgr.CompleteFollowUp(ctx, req.ContactID); err != nil {
+				logger.Warn().Err(err).
+					Str("contactId", req.ContactID.String()).
+					Str("direction", req.Direction).
+					Str("source", req.Source).
+					Msg("failed to complete follow-up task")
+			}
 		}
 	}
 

@@ -26,19 +26,22 @@ func NewContactRepository(queries db.Querier) *ContactRepository {
 
 // Contact represents a contact entity
 type Contact struct {
-	ID            uuid.UUID       `json:"id"`
-	FullName      string          `json:"full_name"`
-	Methods       []ContactMethod `json:"methods,omitempty"`
-	PrimaryMethod *ContactMethod  `json:"primary_method,omitempty"`
-	Location      *string         `json:"location,omitempty"`
-	Birthday      *time.Time      `json:"birthday,omitempty"`
-	HowMet        *string         `json:"how_met,omitempty"`
-	Cadence       *string         `json:"cadence,omitempty"`
-	LastContacted *time.Time      `json:"last_contacted,omitempty"`
-	ContactBy     *time.Time      `json:"contact_by,omitempty"`
-	ProfilePhoto  *string         `json:"profile_photo,omitempty"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	ID                uuid.UUID       `json:"id"`
+	FullName          string          `json:"full_name"`
+	Methods           []ContactMethod `json:"methods,omitempty"`
+	PrimaryMethod     *ContactMethod  `json:"primary_method,omitempty"`
+	Location          *string         `json:"location,omitempty"`
+	Birthday          *time.Time      `json:"birthday,omitempty"`
+	HowMet            *string         `json:"how_met,omitempty"`
+	Cadence           *string         `json:"cadence,omitempty"`
+	LastContacted     *time.Time      `json:"last_contacted,omitempty"`
+	ContactBy         *time.Time      `json:"contact_by,omitempty"`
+	LastInteractionAt *time.Time      `json:"last_interaction_at,omitempty"`
+	LastOutreachAt    *time.Time      `json:"last_outreach_at,omitempty"`
+	LastResponseAt    *time.Time      `json:"last_response_at,omitempty"`
+	ProfilePhoto      *string         `json:"profile_photo,omitempty"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
 }
 
 // CreateContactRequest represents the request to create a contact
@@ -65,21 +68,23 @@ type UpdateContactRequest struct {
 
 // ListContactsParams represents parameters for listing contacts
 type ListContactsParams struct {
-	Limit         int32  `json:"limit"`
-	Offset        int32  `json:"offset"`
-	Sort          string `json:"sort,omitempty"`
-	Order         string `json:"order,omitempty"`
-	CadenceFilter string `json:"cadence_filter,omitempty"`
+	Limit          int32  `json:"limit"`
+	Offset         int32  `json:"offset"`
+	Sort           string `json:"sort,omitempty"`
+	Order          string `json:"order,omitempty"`
+	CadenceFilter  string `json:"cadence_filter,omitempty"`
+	FollowupFilter string `json:"followup_filter,omitempty"`
 }
 
 // SearchContactsParams represents parameters for searching contacts
 type SearchContactsParams struct {
-	Query         string `json:"query"`
-	Limit         int32  `json:"limit"`
-	Offset        int32  `json:"offset"`
-	Sort          string `json:"sort,omitempty"`
-	Order         string `json:"order,omitempty"`
-	CadenceFilter string `json:"cadence_filter,omitempty"`
+	Query          string `json:"query"`
+	Limit          int32  `json:"limit"`
+	Offset         int32  `json:"offset"`
+	Sort           string `json:"sort,omitempty"`
+	Order          string `json:"order,omitempty"`
+	CadenceFilter  string `json:"cadence_filter,omitempty"`
+	FollowupFilter string `json:"followup_filter,omitempty"`
 }
 
 // convertDbContact converts a database contact to a repository contact
@@ -126,6 +131,18 @@ func convertDbContact(dbContact *db.Contact) Contact {
 		contactBy := dbContact.ContactBy.Time
 		contact.ContactBy = &contactBy
 	}
+	if dbContact.LastInteractionAt.Valid {
+		t := dbContact.LastInteractionAt.Time.UTC()
+		contact.LastInteractionAt = &t
+	}
+	if dbContact.LastOutreachAt.Valid {
+		t := dbContact.LastOutreachAt.Time.UTC()
+		contact.LastOutreachAt = &t
+	}
+	if dbContact.LastResponseAt.Valid {
+		t := dbContact.LastResponseAt.Time.UTC()
+		contact.LastResponseAt = &t
+	}
 
 	return contact
 }
@@ -153,17 +170,19 @@ func (r *ContactRepository) ListContacts(ctx context.Context, params ListContact
 
 	if params.Sort != "" {
 		dbContacts, err = r.queries.ListContactsSorted(ctx, db.ListContactsSortedParams{
-			CadenceFilter: params.CadenceFilter,
-			SortField:     params.Sort,
-			SortOrder:     params.Order,
-			PageOffset:    params.Offset,
-			PageLimit:     params.Limit,
+			CadenceFilter:  params.CadenceFilter,
+			FollowupFilter: params.FollowupFilter,
+			SortField:      params.Sort,
+			SortOrder:      params.Order,
+			PageOffset:     params.Offset,
+			PageLimit:      params.Limit,
 		})
 	} else {
 		dbContacts, err = r.queries.ListContacts(ctx, db.ListContactsParams{
-			CadenceFilter: params.CadenceFilter,
-			PageOffset:    params.Offset,
-			PageLimit:     params.Limit,
+			CadenceFilter:  params.CadenceFilter,
+			FollowupFilter: params.FollowupFilter,
+			PageOffset:     params.Offset,
+			PageLimit:      params.Limit,
 		})
 	}
 	if err != nil {
@@ -187,19 +206,21 @@ func (r *ContactRepository) SearchContacts(ctx context.Context, params SearchCon
 
 	if params.Sort != "" {
 		dbContacts, err = r.queries.SearchContactsSorted(ctx, db.SearchContactsSortedParams{
-			CadenceFilter: params.CadenceFilter,
-			SearchQuery:   params.Query,
-			SortField:     params.Sort,
-			SortOrder:     params.Order,
-			PageOffset:    params.Offset,
-			PageLimit:     params.Limit,
+			CadenceFilter:  params.CadenceFilter,
+			FollowupFilter: params.FollowupFilter,
+			SearchQuery:    params.Query,
+			SortField:      params.Sort,
+			SortOrder:      params.Order,
+			PageOffset:     params.Offset,
+			PageLimit:      params.Limit,
 		})
 	} else {
 		dbContacts, err = r.queries.SearchContacts(ctx, db.SearchContactsParams{
-			CadenceFilter: params.CadenceFilter,
-			SearchQuery:   params.Query,
-			PageOffset:    params.Offset,
-			PageLimit:     params.Limit,
+			CadenceFilter:  params.CadenceFilter,
+			FollowupFilter: params.FollowupFilter,
+			SearchQuery:    params.Query,
+			PageOffset:     params.Offset,
+			PageLimit:      params.Limit,
 		})
 	}
 	if err != nil {
@@ -300,6 +321,35 @@ func (r *ContactRepository) UpdateContactBy(ctx context.Context, id uuid.UUID, c
 	})
 }
 
+// UpdateContactOutreachAt updates only last_outreach_at (for outbound interactions)
+func (r *ContactRepository) UpdateContactOutreachAt(ctx context.Context, id uuid.UUID, outreachAt time.Time, isManual bool) error {
+	return r.queries.UpdateContactOutreachAt(ctx, db.UpdateContactOutreachAtParams{
+		ID:         uuidToPgUUID(id),
+		OutreachAt: pgtype.Timestamptz{Time: outreachAt, Valid: true},
+		IsManual:   isManual,
+	})
+}
+
+// UpdateContactResponseFields updates last_contacted, last_interaction_at, last_response_at, contact_by (for inbound interactions)
+func (r *ContactRepository) UpdateContactResponseFields(ctx context.Context, id uuid.UUID, occurredAt time.Time, contactBy *time.Time, isManual bool) error {
+	return r.queries.UpdateContactResponseFields(ctx, db.UpdateContactResponseFieldsParams{
+		ID:         uuidToPgUUID(id),
+		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
+		ContactBy:  timeToPgDate(contactBy),
+		IsManual:   isManual,
+	})
+}
+
+// UpdateContactMutualFields updates all direction fields + last_contacted + contact_by (for mutual interactions)
+func (r *ContactRepository) UpdateContactMutualFields(ctx context.Context, id uuid.UUID, occurredAt time.Time, contactBy *time.Time, isManual bool) error {
+	return r.queries.UpdateContactMutualFields(ctx, db.UpdateContactMutualFieldsParams{
+		ID:         uuidToPgUUID(id),
+		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
+		ContactBy:  timeToPgDate(contactBy),
+		IsManual:   isManual,
+	})
+}
+
 // SoftDeleteContact soft deletes a contact
 func (r *ContactRepository) SoftDeleteContact(ctx context.Context, id uuid.UUID) error {
 	return r.queries.SoftDeleteContact(ctx, uuidToPgUUID(id))
@@ -311,24 +361,29 @@ func (r *ContactRepository) HardDeleteContact(ctx context.Context, id uuid.UUID)
 }
 
 // CountContacts returns the total number of active contacts
-func (r *ContactRepository) CountContacts(ctx context.Context, cadenceFilter string) (int64, error) {
-	return r.queries.CountContacts(ctx, cadenceFilter)
+func (r *ContactRepository) CountContacts(ctx context.Context, cadenceFilter string, followupFilter string) (int64, error) {
+	return r.queries.CountContacts(ctx, db.CountContactsParams{
+		CadenceFilter:  cadenceFilter,
+		FollowupFilter: followupFilter,
+	})
 }
 
 // CountSearchContacts returns the total number of contacts matching a search query.
-func (r *ContactRepository) CountSearchContacts(ctx context.Context, query string, cadenceFilter string) (int64, error) {
+func (r *ContactRepository) CountSearchContacts(ctx context.Context, query string, cadenceFilter string, followupFilter string) (int64, error) {
 	return r.queries.CountSearchContacts(ctx, db.CountSearchContactsParams{
-		CadenceFilter: cadenceFilter,
-		SearchQuery:   query,
+		CadenceFilter:  cadenceFilter,
+		FollowupFilter: followupFilter,
+		SearchQuery:    query,
 	})
 }
 
 // ListContactIDsParams represents parameters for listing contact IDs
 type ListContactIDsParams struct {
-	Sort          string `json:"sort,omitempty"`
-	Order         string `json:"order,omitempty"`
-	Search        string `json:"search,omitempty"`
-	CadenceFilter string `json:"cadence_filter,omitempty"`
+	Sort           string `json:"sort,omitempty"`
+	Order          string `json:"order,omitempty"`
+	Search         string `json:"search,omitempty"`
+	CadenceFilter  string `json:"cadence_filter,omitempty"`
+	FollowupFilter string `json:"followup_filter,omitempty"`
 }
 
 // ListContactIDs retrieves a list of contact IDs with optional sorting and search.
@@ -345,24 +400,30 @@ func (r *ContactRepository) ListContactIDs(ctx context.Context, params ListConta
 	switch {
 	case hasSearch && hasSort:
 		dbIDs, err = r.queries.SearchContactIDsSorted(ctx, db.SearchContactIDsSortedParams{
-			CadenceFilter: params.CadenceFilter,
-			SearchQuery:   params.Search,
-			SortField:     params.Sort,
-			SortOrder:     params.Order,
+			CadenceFilter:  params.CadenceFilter,
+			FollowupFilter: params.FollowupFilter,
+			SearchQuery:    params.Search,
+			SortField:      params.Sort,
+			SortOrder:      params.Order,
 		})
 	case hasSearch:
 		dbIDs, err = r.queries.SearchContactIDs(ctx, db.SearchContactIDsParams{
-			CadenceFilter: params.CadenceFilter,
-			SearchQuery:   params.Search,
+			CadenceFilter:  params.CadenceFilter,
+			FollowupFilter: params.FollowupFilter,
+			SearchQuery:    params.Search,
 		})
 	case hasSort:
 		dbIDs, err = r.queries.ListContactIDsSorted(ctx, db.ListContactIDsSortedParams{
-			CadenceFilter: params.CadenceFilter,
-			SortField:     params.Sort,
-			SortOrder:     params.Order,
+			CadenceFilter:  params.CadenceFilter,
+			FollowupFilter: params.FollowupFilter,
+			SortField:      params.Sort,
+			SortOrder:      params.Order,
 		})
 	default:
-		dbIDs, err = r.queries.ListContactIDs(ctx, params.CadenceFilter)
+		dbIDs, err = r.queries.ListContactIDs(ctx, db.ListContactIDsParams{
+			CadenceFilter:  params.CadenceFilter,
+			FollowupFilter: params.FollowupFilter,
+		})
 	}
 
 	if err != nil {

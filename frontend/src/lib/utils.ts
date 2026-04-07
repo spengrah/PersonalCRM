@@ -42,6 +42,32 @@ export function formatDateOnly(
  * @param cadence - Cadence value (weekly, biweekly, monthly, quarterly, biannual, annual)
  * @returns Formatted cadence string with proper capitalization
  */
+/**
+ * Format a timestamp as a relative time string (e.g., "3 days ago", "today").
+ *
+ * @param dateString - ISO timestamp string
+ * @returns Relative time string, or empty string if invalid
+ */
+export function formatRelativeTime(dateString: string | undefined | null): string {
+  if (!dateString) return ''
+  const date = new Date(dateString)
+  if (isNaN(date.getTime())) return ''
+
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+
+  if (diffDays < 0) return 'in the future'
+  if (diffDays === 0) return 'today'
+  if (diffDays === 1) return 'yesterday'
+  if (diffDays < 7) return `${diffDays} days ago`
+  if (diffDays < 14) return '1 week ago'
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`
+  if (diffDays < 60) return '1 month ago'
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`
+  return `${Math.floor(diffDays / 365)} year${Math.floor(diffDays / 365) > 1 ? 's' : ''} ago`
+}
+
 export function formatCadence(cadence: string | undefined | null): string {
   if (!cadence) return '-'
   const labels: Record<string, string> = {

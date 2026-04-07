@@ -50,7 +50,7 @@ func setupContactIDsTestRouter() (*gin.Engine, *repository.ContactRepository, fu
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries))
 	contactHandler := handlers.NewContactHandler(contactService)
 
 	router := gin.New()

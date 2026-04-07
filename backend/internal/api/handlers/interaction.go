@@ -43,6 +43,7 @@ type InteractionResponse struct {
 	SourceRef   *string   `json:"source_ref,omitempty"`
 	OccurredAt  time.Time `json:"occurred_at"`
 	Description *string   `json:"description,omitempty"`
+	Direction   string    `json:"direction"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -50,6 +51,7 @@ type InteractionResponse struct {
 type CreateInteractionRequest struct {
 	OccurredAt  *string `json:"occurred_at,omitempty"`
 	Description *string `json:"description,omitempty"`
+	Direction   *string `json:"direction,omitempty" validate:"omitempty,oneof=outbound inbound mutual"`
 }
 
 func interactionToResponse(i *repository.Interaction) InteractionResponse {
@@ -60,6 +62,7 @@ func interactionToResponse(i *repository.Interaction) InteractionResponse {
 		SourceRef:   i.SourceRef,
 		OccurredAt:  i.OccurredAt,
 		Description: i.Description,
+		Direction:   i.Direction,
 		CreatedAt:   i.CreatedAt,
 	}
 }
@@ -170,11 +173,17 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 		occurredAt = parsed
 	}
 
+	var direction string
+	if req.Direction != nil {
+		direction = *req.Direction
+	}
+
 	interaction, err := h.recorder.RecordInteraction(c.Request.Context(), repository.RecordInteractionRequest{
 		ContactID:   contactID,
 		Source:      repository.InteractionSourceManual,
 		OccurredAt:  occurredAt,
 		Description: req.Description,
+		Direction:   direction,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {

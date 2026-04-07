@@ -88,9 +88,10 @@ func main() {
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	noteRepo := repository.NewNoteRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 
 	// Initialize services
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 	importMatchService := service.NewImportMatchService(contactRepo)
 
@@ -190,7 +191,6 @@ func main() {
 
 		// Register Todoist Cadence provider if OAuth is configured
 		if todoistOAuthService != nil {
-			contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 			todoistProvider := todoist.NewCadenceSyncProvider(
 				todoistOAuthService,
 				contactTaskRepo,
@@ -201,6 +201,18 @@ func main() {
 			)
 			providerRegistry.Register(todoistProvider)
 			logger.Info().Msg("Todoist Cadence sync provider registered")
+
+			// Initialize follow-up service and inject into contact service
+			followUpService := service.NewFollowUpService(
+				contactTaskRepo,
+				contactRepo,
+				syncRepo,
+				todoistOAuthService,
+				cfg,
+			)
+			contactService.SetFollowUpManager(followUpService)
+			todoistProvider.SetFollowUpCloser(followUpService)
+			logger.Info().Msg("Follow-up service initialized")
 
 			// Initialize contact task service and handler for action tasks
 			contactTaskService := service.NewContactTaskService(

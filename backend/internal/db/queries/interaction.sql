@@ -10,8 +10,17 @@ ORDER BY occurred_at DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CreateInteraction :one
-INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction)
+VALUES ($1, $2, $3, $4, $5, COALESCE(sqlc.narg('direction'), 'mutual'))
+RETURNING *;
+
+-- name: UpdateInteractionDirection :one
+-- Promote an outbound interaction to mutual when a reply arrives (in-place update)
+UPDATE interaction
+SET direction = sqlc.arg(direction),
+    occurred_at = sqlc.arg(occurred_at)
+WHERE id = sqlc.arg(id)
+  AND deleted_at IS NULL
 RETURNING *;
 
 -- name: SoftDeleteInteraction :exec

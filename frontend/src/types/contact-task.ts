@@ -3,7 +3,7 @@
 export interface ContactTask {
   id: string
   contact_id: string
-  kind: 'action' | 'cadence'
+  kind: 'action' | 'cadence' | 'follow_up'
   external_task_id: string
   content?: string
   due_date?: string
@@ -19,5 +19,5 @@ export interface CreateActionTaskRequest {
 
 export interface ContactTaskListParams {
   state?: 'managed' | 'completed' | 'unmanaged'
-  kind?: 'action' | 'cadence'
+  kind?: 'action' | 'cadence' | 'follow_up'
 }

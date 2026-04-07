@@ -1,17 +1,21 @@
 -- Contact queries
 
 -- name: GetContact :one
-SELECT * FROM contact 
+SELECT * FROM contact
 WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: ListContacts :many
 -- cadence_filter: '' = no filter (Go zero value), 'has_cadence' = non-empty cadence,
 -- 'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
+-- followup_filter: '' = no filter, 'has_followup' = pending follow-up exists, 'no_followup' = no pending follow-up
 SELECT * FROM contact
 WHERE deleted_at IS NULL
   AND (sqlc.arg(cadence_filter) = '' OR
        (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
+  AND (sqlc.arg(followup_filter) = '' OR
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
 LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: ListContactsSorted :many
@@ -20,6 +24,9 @@ WHERE deleted_at IS NULL
   AND (sqlc.arg(cadence_filter) = '' OR
        (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
+  AND (sqlc.arg(followup_filter) = '' OR
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
 ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN full_name END ASC,
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'desc' THEN full_name END DESC,
@@ -54,6 +61,9 @@ WHERE c.deleted_at IS NULL
   AND (sqlc.arg(cadence_filter) = '' OR
        (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND (sqlc.arg(followup_filter) = '' OR
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
 ORDER BY ts_rank(
   to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
@@ -72,6 +82,9 @@ WHERE c.deleted_at IS NULL
   AND (sqlc.arg(cadence_filter) = '' OR
        (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND (sqlc.arg(followup_filter) = '' OR
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
 ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN c.full_name END ASC,
@@ -116,18 +129,26 @@ WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
 
 -- name: UpdateContactLastContacted :exec
+-- Updates last_contacted, contact_by, and all direction timestamp fields (for mutual interactions)
 UPDATE contact SET
   last_contacted = $2,
   contact_by = $3,
+  last_interaction_at = $2,
+  last_outreach_at = $2,
+  last_response_at = $2,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: UpdateContactLastContactedIfLater :exec
 -- Updates last_contacted and contact_by only if the new date is later.
+-- Also updates direction timestamp fields (this path is used by gcal, which is always mutual).
 -- contact_by is recalculated from the new last_contacted date using the contact's existing cadence.
 -- Cadence day mappings: weekly=7, biweekly=14, monthly=30, quarterly=90, biannual=180, annual=365
 UPDATE contact SET
   last_contacted = GREATEST(COALESCE(last_contacted, '1970-01-01'::timestamptz), $2),
+  last_interaction_at = GREATEST(COALESCE(last_interaction_at, '1970-01-01'::timestamptz), $2),
+  last_outreach_at = GREATEST(COALESCE(last_outreach_at, '1970-01-01'::timestamptz), $2),
+  last_response_at = GREATEST(COALESCE(last_response_at, '1970-01-01'::timestamptz), $2),
   contact_by = CASE
     WHEN $2 > COALESCE(last_contacted, '1970-01-01'::timestamptz) AND cadence IS NOT NULL AND cadence != '' THEN
       ($2::date + CASE cadence
@@ -145,6 +166,75 @@ UPDATE contact SET
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL;
 
+-- name: UpdateContactOutreachAt :exec
+-- Updates only last_outreach_at (for outbound-only interactions).
+-- Uses forward-only semantics: only updates if the new time is later.
+UPDATE contact SET
+  last_outreach_at = CASE
+    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(outreach_at)::timestamptz
+    WHEN sqlc.arg(outreach_at)::timestamptz > COALESCE(last_outreach_at, '1970-01-01'::timestamptz) THEN sqlc.arg(outreach_at)::timestamptz
+    ELSE last_outreach_at
+  END,
+  updated_at = NOW()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
+-- name: UpdateContactResponseFields :exec
+-- Updates last_contacted, last_interaction_at, last_response_at, and contact_by (for inbound interactions).
+-- Uses forward-only semantics for automated sources; manual always updates.
+UPDATE contact SET
+  last_contacted = CASE
+    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
+    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_contacted, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
+    ELSE last_contacted
+  END,
+  last_interaction_at = CASE
+    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
+    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_interaction_at, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
+    ELSE last_interaction_at
+  END,
+  last_response_at = CASE
+    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
+    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_response_at, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
+    ELSE last_response_at
+  END,
+  contact_by = CASE
+    WHEN sqlc.narg('contact_by')::date IS NOT NULL THEN sqlc.narg('contact_by')::date
+    ELSE contact_by
+  END,
+  updated_at = NOW()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
+-- name: UpdateContactMutualFields :exec
+-- Updates all direction fields + last_contacted + contact_by (for mutual interactions).
+-- Uses forward-only semantics for automated sources; manual always updates.
+UPDATE contact SET
+  last_contacted = CASE
+    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
+    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_contacted, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
+    ELSE last_contacted
+  END,
+  last_interaction_at = CASE
+    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
+    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_interaction_at, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
+    ELSE last_interaction_at
+  END,
+  last_outreach_at = CASE
+    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
+    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_outreach_at, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
+    ELSE last_outreach_at
+  END,
+  last_response_at = CASE
+    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
+    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_response_at, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
+    ELSE last_response_at
+  END,
+  contact_by = CASE
+    WHEN sqlc.narg('contact_by')::date IS NOT NULL THEN sqlc.narg('contact_by')::date
+    ELSE contact_by
+  END,
+  updated_at = NOW()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
 -- name: SoftDeleteContact :exec
 UPDATE contact SET
   deleted_at = NOW(),
@@ -159,7 +249,10 @@ SELECT COUNT(*) FROM contact
 WHERE deleted_at IS NULL
   AND (sqlc.arg(cadence_filter) = '' OR
        (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
-       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')));
+       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
+  AND (sqlc.arg(followup_filter) = '' OR
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')));
 
 -- name: ListContactIDs :many
 -- Lightweight query returning only IDs for navigation
@@ -167,7 +260,10 @@ SELECT id FROM contact
 WHERE deleted_at IS NULL
   AND (sqlc.arg(cadence_filter) = '' OR
        (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
-       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')));
+       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
+  AND (sqlc.arg(followup_filter) = '' OR
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')));
 
 -- name: ListContactIDsSorted :many
 -- Lightweight query returning only IDs with sorting for navigation
@@ -176,6 +272,9 @@ WHERE deleted_at IS NULL
   AND (sqlc.arg(cadence_filter) = '' OR
        (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
+  AND (sqlc.arg(followup_filter) = '' OR
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
 ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN full_name END ASC,
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'desc' THEN full_name END DESC,
@@ -209,6 +308,9 @@ WHERE c.deleted_at IS NULL
   AND (sqlc.arg(cadence_filter) = '' OR
        (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND (sqlc.arg(followup_filter) = '' OR
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
 ORDER BY ts_rank(
   to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
@@ -227,6 +329,9 @@ WHERE c.deleted_at IS NULL
   AND (sqlc.arg(cadence_filter) = '' OR
        (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND (sqlc.arg(followup_filter) = '' OR
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
 ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN c.full_name END ASC,
@@ -260,6 +365,9 @@ WHERE c.deleted_at IS NULL
   AND (sqlc.arg(cadence_filter) = '' OR
        (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND (sqlc.arg(followup_filter) = '' OR
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query));
 
 -- name: FindSimilarContacts :many

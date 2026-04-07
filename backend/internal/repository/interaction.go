@@ -14,9 +14,17 @@ import (
 
 // Interaction source constants
 const (
-	InteractionSourceManual  = "manual"
-	InteractionSourceGCal    = "gcal"
-	InteractionSourceTodoist = "todoist"
+	InteractionSourceManual   = "manual"
+	InteractionSourceGCal     = "gcal"
+	InteractionSourceTodoist  = "todoist"
+	InteractionSourceTelegram = "telegram"
+)
+
+// Interaction direction constants
+const (
+	InteractionDirectionOutbound = "outbound"
+	InteractionDirectionInbound  = "inbound"
+	InteractionDirectionMutual   = "mutual"
 )
 
 // RecordInteractionRequest represents a request to record an interaction via the service layer
@@ -26,6 +34,7 @@ type RecordInteractionRequest struct {
 	SourceRef   *string
 	OccurredAt  time.Time
 	Description *string
+	Direction   string // "outbound", "inbound", "mutual" — defaults to "mutual" if empty
 }
 
 // InteractionRepository handles interaction persistence
@@ -46,6 +55,7 @@ type Interaction struct {
 	SourceRef   *string   `json:"source_ref,omitempty"`
 	OccurredAt  time.Time `json:"occurred_at"`
 	Description *string   `json:"description,omitempty"`
+	Direction   string    `json:"direction"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -56,11 +66,13 @@ type CreateInteractionRequest struct {
 	SourceRef   *string
 	OccurredAt  time.Time
 	Description *string
+	Direction   string
 }
 
 func convertDbInteraction(dbInteraction *db.Interaction) Interaction {
 	interaction := Interaction{
-		Source: dbInteraction.Source,
+		Source:    dbInteraction.Source,
+		Direction: dbInteraction.Direction,
 	}
 
 	if dbInteraction.ID.Valid {
@@ -131,6 +143,7 @@ func (r *InteractionRepository) CreateInteraction(ctx context.Context, req Creat
 		SourceRef:   stringToPgText(req.SourceRef),
 		OccurredAt:  pgtype.Timestamptz{Time: req.OccurredAt, Valid: true},
 		Description: stringToPgText(req.Description),
+		Direction:   stringToPgText(&req.Direction),
 	})
 	if err != nil {
 		return nil, err
@@ -173,6 +186,24 @@ func (r *InteractionRepository) FindInWindow(ctx context.Context, contactID uuid
 		OccurredAt:   pgtype.Timestamptz{Time: windowStart, Valid: true},
 		OccurredAt_2: pgtype.Timestamptz{Time: windowEnd, Valid: true},
 		Source:       source,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
+// UpdateInteractionDirection updates the direction and occurred_at of an interaction (for reply bridging)
+func (r *InteractionRepository) UpdateInteractionDirection(ctx context.Context, id uuid.UUID, direction string, occurredAt time.Time) (*Interaction, error) {
+	dbInteraction, err := r.queries.UpdateInteractionDirection(ctx, db.UpdateInteractionDirectionParams{
+		ID:         uuidToPgUUID(id),
+		Direction:  direction,
+		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

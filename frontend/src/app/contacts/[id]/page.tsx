@@ -17,7 +17,7 @@ import { useContactNote, useSaveContactNote } from '@/hooks/use-contact-note'
 import { useContactTasks } from '@/hooks/use-contact-tasks'
 import { useKeyboardNavigation } from '@/hooks/use-keyboard-navigation'
 import { ContactNavigationBar } from '@/components/contacts/contact-navigation-bar'
-import { formatDateOnly } from '@/lib/utils'
+import { formatDateOnly, formatRelativeTime } from '@/lib/utils'
 import {
   Edit,
   Trash2,
@@ -90,14 +90,24 @@ export default function ContactDetailPage() {
   const saveContactNoteMutation = useSaveContactNote()
 
   // Fetch tasks at page level to start loading in parallel with contact
-  const { data: activeTasks = [], isLoading: loadingActiveTasks } = useContactTasks(contactId, {
-    state: 'managed',
-    kind: 'action',
-  })
+  const { data: activeActionTasks = [], isLoading: loadingActiveTasks } = useContactTasks(
+    contactId,
+    {
+      state: 'managed',
+      kind: 'action',
+    }
+  )
   const { data: completedTasks = [], isLoading: loadingCompletedTasks } = useContactTasks(
     contactId,
     { state: 'completed', kind: 'action' }
   )
+  const { data: followUpTasks = [] } = useContactTasks(contactId, {
+    state: 'managed',
+    kind: 'follow_up',
+  })
+
+  // Merge active action tasks and follow-up tasks for display
+  const activeTasks = [...followUpTasks, ...activeActionTasks]
 
   // Build URL preserving list context params
   const buildNavigationUrl = useCallback(
@@ -560,6 +570,38 @@ export default function ContactDetailPage() {
                   )}
                 </dd>
               </div>
+
+              {(contact.last_outreach_at ||
+                contact.last_response_at ||
+                contact.has_pending_followup) && (
+                <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                  <dt className="text-sm font-medium text-gray-500">Direction signals</dt>
+                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2 space-y-1">
+                    {contact.last_outreach_at && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-gray-400" title="Last outreach">
+                          &#8599;
+                        </span>
+                        <span>Last outreach: {formatRelativeTime(contact.last_outreach_at)}</span>
+                      </div>
+                    )}
+                    {contact.last_response_at && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-gray-400" title="Last response">
+                          &#8601;
+                        </span>
+                        <span>Last response: {formatRelativeTime(contact.last_response_at)}</span>
+                      </div>
+                    )}
+                    {contact.has_pending_followup && (
+                      <div className="flex items-center gap-1.5 text-amber-600">
+                        <span title="Awaiting reply">&#9888;</span>
+                        <span>Awaiting reply</span>
+                      </div>
+                    )}
+                  </dd>
+                </div>
+              )}
 
               <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
                 <dt className="text-sm font-medium text-gray-500">Created</dt>

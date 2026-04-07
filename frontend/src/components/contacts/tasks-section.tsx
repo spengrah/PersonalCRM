@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useDeleteTaskLink } from '@/hooks/use-contact-tasks'
 import { Button } from '@/components/ui/button'
-import { Plus, Circle, CheckCircle2, ExternalLink, X, ListTodo } from 'lucide-react'
+import { Plus, Circle, CheckCircle2, Clock, ExternalLink, X, ListTodo } from 'lucide-react'
 import { AddTaskModal } from './add-task-modal'
 import { formatDateOnly } from '@/lib/utils'
 import type { ContactTask } from '@/types/contact-task'
@@ -123,6 +123,7 @@ interface TaskRowProps {
     content?: string
     due_date?: string
     external_task_id: string
+    kind?: string
   }
   contactId: string
   completed: boolean
@@ -140,9 +141,11 @@ function TaskRow({ task, contactId, completed }: TaskRowProps) {
 
   return (
     <div className="px-4 py-3 sm:px-6 flex items-center gap-3 group">
-      {/* Checkbox icon (visual only - completion happens in Todoist) */}
+      {/* Task icon — follow-up tasks use Clock, others use Circle/CheckCircle */}
       {completed ? (
         <CheckCircle2 className="w-5 h-5 text-gray-400 flex-shrink-0" />
+      ) : task.kind === 'follow_up' ? (
+        <Clock className="w-5 h-5 text-amber-400 flex-shrink-0" />
       ) : (
         <Circle className="w-5 h-5 text-gray-300 flex-shrink-0" />
       )}

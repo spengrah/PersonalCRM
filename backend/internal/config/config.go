@@ -19,6 +19,7 @@ type Config struct {
 	External ExternalConfig
 	Google   GoogleConfig
 	Todoist  TodoistConfig
+	Watchdog WatchdogConfig
 }
 
 // DatabaseConfig holds database connection settings
@@ -92,6 +93,16 @@ type TodoistConfig struct {
 	ClientID     string // TODOIST_CLIENT_ID
 	ClientSecret string // TODOIST_CLIENT_SECRET
 	RedirectURL  string // TODOIST_REDIRECT_URL (default: http://localhost:8080/api/v1/auth/todoist/callback)
+}
+
+// WatchdogConfig holds follow-up task watchdog window settings (days until follow-up is due)
+type WatchdogConfig struct {
+	WeeklyDays    int // Default: 3
+	BiweeklyDays  int // Default: 5
+	MonthlyDays   int // Default: 7
+	QuarterlyDays int // Default: 14
+	BiannualDays  int // Default: 21
+	AnnualDays    int // Default: 21
 }
 
 // ValidationError represents a configuration validation error
@@ -193,6 +204,14 @@ func Load() (*Config, error) {
 			ClientID:     getEnv("TODOIST_CLIENT_ID", ""),
 			ClientSecret: getEnv("TODOIST_CLIENT_SECRET", ""),
 			RedirectURL:  getEnv("TODOIST_REDIRECT_URL", "http://localhost:8080/api/v1/auth/todoist/callback"),
+		},
+		Watchdog: WatchdogConfig{
+			WeeklyDays:    getEnvAsInt("WATCHDOG_WEEKLY_DAYS", 3),
+			BiweeklyDays:  getEnvAsInt("WATCHDOG_BIWEEKLY_DAYS", 5),
+			MonthlyDays:   getEnvAsInt("WATCHDOG_MONTHLY_DAYS", 7),
+			QuarterlyDays: getEnvAsInt("WATCHDOG_QUARTERLY_DAYS", 14),
+			BiannualDays:  getEnvAsInt("WATCHDOG_BIANNUAL_DAYS", 21),
+			AnnualDays:    getEnvAsInt("WATCHDOG_ANNUAL_DAYS", 21),
 		},
 	}
 
@@ -409,6 +428,14 @@ func TestConfig() *Config {
 			ClientID:     "test-todoist-client-id",
 			ClientSecret: "test-todoist-client-secret",
 			RedirectURL:  "http://localhost:8080/api/v1/auth/todoist/callback",
+		},
+		Watchdog: WatchdogConfig{
+			WeeklyDays:    3,
+			BiweeklyDays:  5,
+			MonthlyDays:   7,
+			QuarterlyDays: 14,
+			BiannualDays:  21,
+			AnnualDays:    21,
 		},
 	}
 }
