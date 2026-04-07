@@ -150,3 +150,27 @@ detail: |
   Existing rule says 'Always add comprehensive tests for new/changed code' but wasn't applied when fixing a bug found during code review. The rule exists in `.ai/rules/core.md` but is too general. Future agents need stronger, more explicit guidance: 'When fixing a bug (especially one found by codex/review), add a regression test BEFORE making the fix.' The gap: the rule is buried as a general principle rather than highlighted as a bug-fix-specific requirement. Strengthen by: (1) Add to 'When You Change X, Check Y' table: 'When fixing a bug → Add regression test first', (2) Add to Anti-Patterns with ❌/✅ example.
 actionable: true
 
+---
+timestamp: "2026-04-07T15:37:54.952136"
+type: gotcha
+summary: Gin validate tags require explicit validation call
+detail: |
+  The `validate:"omitempty,oneof=..."` tag on handler request structs is just metadata. Gin's ShouldBindJSON does NOT automatically enforce validation rules. You must call `h.validator.Struct(req)` explicitly after binding, or the validation tag is ignored. Without this, invalid enum values bypass handler validation and hit DB CHECK constraints, returning 500 instead of 400.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:37:54.952136"
+type: rule
+summary: Always validate enums at handler layer before service
+detail: |
+  Invalid enum values (e.g., direction="invalid") that bypass handler validation will hit PostgreSQL CHECK constraints in the database layer, causing 500 Internal Server Error instead of 400 Bad Request. This breaks REST conventions and exposes implementation details. Validate all enum fields explicitly at the handler layer (either with validator.Struct() or inline switch statements) before passing to service layer.
+actionable: true
+
+---
+timestamp: "2026-04-07T15:37:54.952136"
+type: rule
+summary: Test comments describing expected behavior must have assertions
+detail: |
+  Comments like "// Verify: last_response_at should still reflect..." without accompanying assertions create untested assumptions. If a field should NOT be modified, assert it with assert.Nil() or assert.Equal(). If behavior is uncertain, remove the comment. Comments without assertions are code smell indicating incomplete test coverage of edge cases and cross-concern boundaries.
+actionable: true
+
