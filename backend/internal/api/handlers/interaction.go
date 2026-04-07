@@ -51,7 +51,7 @@ type InteractionResponse struct {
 type CreateInteractionRequest struct {
 	OccurredAt  *string `json:"occurred_at,omitempty"`
 	Description *string `json:"description,omitempty"`
-	Direction   *string `json:"direction,omitempty" validate:"omitempty,oneof=outbound inbound mutual"`
+	Direction   *string `json:"direction,omitempty"`
 }
 
 func interactionToResponse(i *repository.Interaction) InteractionResponse {

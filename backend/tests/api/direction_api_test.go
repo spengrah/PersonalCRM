@@ -145,6 +145,19 @@ func TestInteractionAPI_DirectionInResponse(t *testing.T) {
 		assert.Equal(t, "mutual", data["direction"], "no direction should default to mutual")
 	})
 
+	t.Run("CreateWithInvalidDirection_Returns400", func(t *testing.T) {
+		pastDate := accelerated.GetCurrentTime().Add(-10800_000_000_000).Format("2006-01-02T15:04:05Z07:00")
+		body, _ := json.Marshal(map[string]string{
+			"occurred_at": pastDate,
+			"direction":   "invalid_value",
+		})
+		req, _ := http.NewRequest("POST", "/api/v1/contacts/"+contactID+"/interactions", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "invalid direction should return 400")
+	})
+
 	t.Run("ListIncludesDirection", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/interactions", nil)
 		w := httptest.NewRecorder()
