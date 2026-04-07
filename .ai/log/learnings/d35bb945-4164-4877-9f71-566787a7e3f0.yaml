@@ -1,0 +1,48 @@
+---
+timestamp: "2026-04-07T13:17:32.446151"
+type: gotcha
+summary: Follow-up task refresh can capture the completing task itself
+detail: |
+  When completing a follow-up task triggers `RecordInteraction(direction=outbound)` which calls `CreateOrRefreshFollowUp`, the refresh logic can find and refresh the very task being completed (if it hasn't been marked completed yet), leaving no pending follow-up after completion. **Fix:** Mark the task as completed FIRST (in local state), THEN call `RecordInteraction`. This ensures `FindPendingFollowUp()` returns nil and creates a successor task instead of refreshing the dying one.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:17:32.446151"
+type: rule
+summary: Use date arithmetic not duration arithmetic for Todoist deadlines
+detail: |
+  Todoist deadlines are date-based (YYYY-MM-DD). Watchdog/cadence windows should use `cadence.Today(outreachAt).AddDate(0, 0, days)` (date arithmetic) not `outreachAt + 24*time.Hour*days` (duration arithmetic). Duration-based calculations leak DST transitions and time-of-day effects into what should be pure 'N days later' behavior, causing date drift. This matches the existing Todoist cadence pattern already in the codebase.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:17:32.446151"
+type: architecture
+summary: Post-construction setter injection resolves circular service dependencies
+detail: |
+  When ContactService needs FollowUpService but FollowUpService needs ContactService (or its repository), use post-construction injection: ContactService gets a `followUpManager` interface field (initially nil) and a `SetFollowUpManager(fm)` setter called after both services are constructed in main.go. This avoids constructor cycles while maintaining testability (tests can inject mocks). The nil check makes the feature optional (no-op if Todoist not configured).
+actionable: true
+
+---
+timestamp: "2026-04-07T13:17:32.446151"
+type: documentation_gap
+summary: Test plans must explicitly include API-level test coverage
+detail: |
+  The plan listed unit/integration/E2E tests but omitted explicit API-level tests for new response fields (`has_pending_followup`), request validation (`direction` field), and query parameter filtering (`followup_filter`). The gap was caught in review. **Strengthen:** When a feature adds new API fields or parameters, the test plan MUST include a dedicated 'Handler/API Tests' section covering request/response contracts, validation, and filtering - separate from unit/integration/E2E categories. Reference: spec Section 11.8 already calls this out but wasn't followed.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:17:32.446151"
+type: distinction
+summary: Forward-only timestamp updates apply per-direction, not globally
+detail: |
+  The codebase has `isManual` flag for always-update vs forward-only timestamp logic. When adding direction-conditional fields (last_outreach_at, last_response_at, last_interaction_at), the forward-only logic applies to each field independently based on direction: outbound interactions use forward-only for `last_outreach_at` but don't touch `last_contacted`; inbound/mutual interactions update both with their respective forward-only semantics. This prevents automated sources from backdating user corrections while still capturing historical data properly.
+actionable: true
+
+---
+timestamp: "2026-04-07T13:17:32.446151"
+type: gotcha
+summary: Repository method signature changes require updating all test factories
+detail: |
+  When adding parameters to repository methods (e.g., `CountContacts(ctx, cadenceFilter)` → `CountContacts(ctx, cadenceFilter, followupFilter)`), must update not just the production call sites but ALL test factory functions and helper methods that construct test services. These are easy to miss because they're scattered across `tests/api/*_test.go` and may use the old signature. Build errors surface these, but grep for `NewContactService` in tests/ upfront saves iteration.
+actionable: true
+
