@@ -356,3 +356,56 @@ func TestFollowupFilter(t *testing.T) {
 	assert.False(t, foundWith, "contact with follow-up should NOT appear in no_followup filter")
 	assert.True(t, foundWithout, "contact without follow-up should appear in no_followup filter")
 }
+
+func TestCompletedCadenceTask_CanBeReplacedByNewOne(t *testing.T) {
+	_, contactRepo, contactTaskRepo, cleanup := setupDirectionTestDeps(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	cadence := "monthly"
+	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: "Cadence Replacement Test",
+		Cadence:  &cadence,
+	})
+	require.NoError(t, err)
+
+	// Simulate the handleTaskCompletion flow: create a cadence task and mark it completed
+	originalTask, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       "todoist",
+		Kind:           "cadence",
+		ExternalTaskID: "original-cadence-task",
+		State:          "managed",
+	})
+	require.NoError(t, err)
+
+	_, err = contactTaskRepo.UpdateContactTaskState(ctx, originalTask.ID, repository.ContactTaskStateCompleted)
+	require.NoError(t, err)
+
+	// Verify: GetContactTaskByContact finds the completed task
+	found, err := contactTaskRepo.GetContactTaskByContact(ctx, contact.ID, "todoist", "cadence")
+	require.NoError(t, err)
+	assert.Equal(t, repository.ContactTaskStateCompleted, found.State)
+
+	// Simulate what reconcileContactTasks now does: delete the completed task
+	err = contactTaskRepo.DeleteContactTask(ctx, found.ID)
+	require.NoError(t, err)
+
+	// Verify: can create a new cadence task (no unique constraint violation)
+	newTask, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       "todoist",
+		Kind:           "cadence",
+		ExternalTaskID: "replacement-cadence-task",
+		State:          "managed",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, repository.ContactTaskStateManaged, newTask.State)
+	assert.Equal(t, "replacement-cadence-task", newTask.ExternalTaskID)
+
+	// Verify: GetContactTaskByContact now returns the new managed task
+	current, err := contactTaskRepo.GetContactTaskByContact(ctx, contact.ID, "todoist", "cadence")
+	require.NoError(t, err)
+	assert.Equal(t, newTask.ID, current.ID)
+	assert.Equal(t, repository.ContactTaskStateManaged, current.State)
+}
