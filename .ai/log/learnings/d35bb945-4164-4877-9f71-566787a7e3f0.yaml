@@ -222,3 +222,171 @@ detail: |
   When adding optional filter parameters to contact list queries, must add to ContactIDsParams interface AND spread into queryParams in both getContacts and getContactIDs using pattern: `...(params.filter_name && { filter_name: params.filter_name })`. Also must add to detail page listContext extraction from searchParams and buildNavigationUrl params.set() calls, including dependency array. This pattern mirrors how cadence_filter was implemented.
 actionable: true
 
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: gotcha
+summary: "`external_sync_state` for non-SyncProvider sources requires `Enabled=false` to prevent scheduler pickup"
+detail: |
+  When creating an `external_sync_state` row for a source that is NOT a `SyncProvider` (like Telegram's long-lived connection), you MUST set `Enabled: false` when calling `CreateSyncState`. Otherwise, `RunDueSyncs` will attempt to schedule it. The row is for status display only, not scheduler management. Also ensure you reload the sync state ID on restart using `GetSyncStateBySource` to avoid unique constraint violations on subsequent auth flows.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: gotcha
+summary: "`UpdateSyncStateMetadata` replaces entire JSONB, not merges - read-modify-write required"
+detail: |
+  The repository method `UpdateSyncStateMetadata` does a wholesale replace (`SET metadata = $2`) not a merge. To preserve existing metadata keys while updating specific fields, you must: (1) get current state, (2) unmarshal existing metadata, (3) modify only the keys you need, (4) call UpdateSyncStateMetadata with the merged map. This prevents losing other keys that may be set by different code paths.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: gotcha
+summary: Singleton database tables require explicit test isolation strategy
+detail: |
+  When using a singleton table pattern (e.g., `telegram_session` with `id INTEGER CHECK (id = 1)`), integration tests that modify it cannot run concurrently. Strategy: (1) all tests that touch the singleton must live in the same package/file, (2) use `t.Cleanup(func() { DELETE FROM singleton_table })` at the start of EVERY test to ensure clean state, (3) use unique test identifiers in related tables (e.g., `test_user_123`) to avoid collisions with concurrent tests on related non-singleton tables.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: architecture
+summary: Auth session managers with TTL cleanup need cancellable timers stored on session struct
+detail: |
+  When implementing an auth session manager with TTL cleanup using `time.AfterFunc`, the timer MUST be: (1) stored on the session struct, (2) explicitly stopped via `timer.Stop()` on successful auth completion. Otherwise, the delayed cleanup callback can still fire after auth succeeds and delete valid session data. Pattern: `type AuthSession struct { ... cleanup *time.Timer }`, then `session.cleanup = time.AfterFunc(...)`, and `session.cleanup.Stop()` on success.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: architecture
+summary: Channel-based auth flows need Done channel pattern, never close data channels
+detail: |
+  For auth flows using channels to communicate between HTTP handlers and long-running goroutines (e.g., gotd/td auth callbacks), use this pattern: (1) a `Done chan struct{}` on the session for signaling cleanup, (2) buffered data channels that are NEVER closed, (3) all sends wrapped in `select { case ch <- data: case <-session.Done: return ErrCancelled }`, (4) cleanup only closes the Done channel. This prevents send-on-closed-channel panics when TTL expiry races with active requests.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: gotcha
+summary: "`gotd/td` session storage StoreSession should NOT modify auth_state - separate concerns"
+detail: |
+  When implementing `session.Storage` interface for gotd/td, the `StoreSession` method receives raw session bytes during MTProto handshake/key exchange and should ONLY update encrypted session data, NOT application auth state. Auth state transitions (disconnected→awaiting_code→connected) are managed separately by the auth session manager. Use a separate `UpsertTelegramSessionData` query that only touches session_data_encrypted/nonce columns, distinct from `UpsertTelegramSession` which manages full row including auth_state.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: rule
+summary: Multi-round Codex review loop is effective for complex planning - each round finds increasingly subtle issues
+detail: |
+  When planning complex features (especially with external library integrations, state management, and cross-cutting concerns), running multiple Codex review rounds is highly effective. This session went through 12+ rounds. Early rounds catch architectural issues (sync state lifecycle, handler layering). Middle rounds catch API mismatches (repository methods, JSONB handling). Late rounds catch subtle issues (timer cancellation, UUID caching across restarts). Each round narrows to fewer, more nuanced problems until plan is production-ready.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: gotcha
+summary: Frontend error states must distinguish 404 (feature not configured) from 5xx (transient error) for UX
+detail: |
+  When building settings UI for optional external integrations, distinguish between: (1) 404 = feature flag off/credentials not configured → hide Connect button, show config instructions, (2) 5xx/network error = transient failure → show error state with retry button. Don't treat 404 as an error - it's an expected state before first configuration. This prevents confusing UX where users see 'error' states before they've configured anything.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: architecture
+summary: Long-lived connection managers (non-SyncProvider) should expose status via dedicated struct not sync state
+detail: |
+  For services that maintain persistent connections (WebSockets, Telegram MTProto, etc.) rather than interval-based polling, the manager should expose status through its own `Status()` method returning a dedicated struct, not by reading `external_sync_state`. The sync state row is for settings UI display only. The manager's in-memory state is the source of truth for connection status. Pattern: `type Status struct { Connected bool, Username string, Error string }` with manager owning the status lifecycle and updating sync state for persistence.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: distinction
+summary: E2E test seeding requires backend handler + route registration + frontend helper + cleanup all specified together
+detail: |
+  When adding E2E test helpers that seed specific backend state (e.g., `seedTelegramSession`), the plan must detail ALL four layers: (1) backend handler method on TestHandler struct, (2) route registration in main.go test endpoints block, (3) frontend testApi helper function, (4) cleanup registration in E2E test setup (beforeEach/afterEach). Missing any layer means E2E tests won't compile or will leave dirty state. Don't assume layers - specify all explicitly in plan.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: rule
+summary: When adding config migrations that remove old fields, search for ALL references not just config.go
+detail: |
+  Config field removals require comprehensive search: (1) config struct definition, (2) validation logic, (3) all .env.example.* files, (4) documentation (README.md, deployment docs), (5) test mocks/fixtures, (6) handler/service code that checks the flag. Pattern: `rg 'EnableOldFlag|OLD_FLAG_ENV' --type-add 'env:*.env*'` to catch all references. Missing references in .env examples causes confusion for deployments.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: gotcha
+summary: Query keys for new features must be added to centralized query-keys.ts and imported from there
+detail: |
+  When adding React Query hooks for new features, query keys MUST be defined in the centralized `frontend/src/lib/query-keys.ts` file following the existing pattern (`export const featureKeys = { all: ['feature'], status: () => [...featureKeys.all, 'status'] }`), then imported in hook files. Do NOT define keys inline in hook files - this creates maintenance issues and makes invalidation patterns unclear. The query-keys.ts file is the single source of truth for all cache keys.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: documentation_gap
+summary: The 'use actual repository methods not pseudo-code' rule needs strengthening in planning guidelines
+detail: |
+  Multiple Codex review rounds caught calls to non-existent repository methods (e.g., `CreateOrUpdateSyncState`, `UpdateSyncStateError`). Existing rules don't emphasize: when writing implementation plans, grep for actual method signatures in repository files BEFORE documenting API calls. Strengthen `.ai/guides/feature-development.md` planning phase to require: 'Before finalizing plan, verify ALL repository/service method calls exist with `rg 'func.*Repository.*MethodName'`. Use exact signatures from code, not invented ones.'
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: gotcha
+summary: gotd/td calls StoreSession during key exchange before auth completes
+detail: |
+  When implementing gotd/td session.Storage interface, StoreSession is called during MTProto key exchange, which happens BEFORE the user completes auth (code/2FA verification). The storage implementation must NOT set auth_state=connected in StoreSession. Solution: Create separate queries — one that only updates session bytes (UpsertTelegramSessionData), another that updates auth_state only after successful code/2FA verification.
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: architecture
+summary: Done channel pattern for HTTP-to-long-running-callback communication
+detail: |
+  When HTTP handlers need to communicate with long-running callbacks (like gotd client.Run), closing data channels while senders are active causes send-on-closed-channel panics. Solution: Never close data channels directly. Instead, create a Done channel, close it on cleanup, and have all senders use `select { case ch <- val: case <-done: return }`. This prevents sends after cleanup without risking panics.
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: rule
+summary: Auth session managers must cleanup on ALL error paths, not just success
+detail: |
+  When managing singleton auth sessions, failing to cleanup on error (wrong code/password) leaves the session wedged until TTL expires, blocking user retries. Must call cleanup() or defer cleanup() on all error paths in the run callback, not just on success. Found by Codex during implementation review — error handlers sent AuthResult{Status:"error"} and exited without cleanup, leaving m.session != nil and blocking new StartAuth calls.
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: gotcha
+summary: time.AfterFunc timer must be explicitly stopped to prevent firing after success
+detail: |
+  time.AfterFunc returns *time.Timer that must be stored and explicitly stopped. If you only track the function completion via channel/callback but don't call timer.Stop(), the AfterFunc will still fire even after successful completion. For auth TTL: store the *time.Timer on the session struct, call timer.Stop() in cleanup on success path. Otherwise successful auth is deleted 5 minutes later by the firing TTL timer.
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: distinction
+summary: Use Enabled=false in external_sync_state to track connection without scheduler pickup
+detail: |
+  When you need to track connection status in external_sync_state but DON'T want the scheduler to auto-run syncs (e.g., long-lived connections like Telegram that manage their own lifecycle), set Enabled=false. RunDueSyncs filters WHERE enabled=TRUE, so the row won't be picked up for scheduling, but you can still use it for status display and UUID tracking.
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: distinction
+summary: Frontend should distinguish 404 (not configured) vs 5xx (error) for feature flags
+detail: |
+  When checking if a feature-flagged backend endpoint exists, distinguish 404 (feature not configured, hide UI) from 5xx (temporary error, show retry button). Don't show 'Connect' button when backend returns 404 for status endpoint. Pattern: status endpoint returns 404 if feature flag disabled, 200/500 if enabled. Frontend: 404 = not_configured state (no action button), 5xx = error state (retry button).
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: rule
+summary: Feature-gated services with bad config should Fatal at startup, not degrade to 404
+detail: |
+  If a feature is explicitly enabled via flag but required config is invalid (e.g., bad encryption key), fail hard at startup with logger.Fatal() rather than silently returning 404. This makes misconfigurations visible immediately rather than hiding them behind missing-feature UX. User expects enabled feature to work or tell them why it can't, not silently pretend it's disabled.
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: gotcha
+summary: Singleton table tests require sequential execution within package
+detail: |
+  When testing code that uses singleton tables (e.g., telegram_session with id=1 constraint), parallel tests in the same package will collide on the singleton row. Solution: (1) Run telegram package tests sequentially via test build tag or explicit -p 1, (2) Add cleanup helpers that wipe singleton state between tests, (3) Use unique identifiers where possible to avoid conflicts. Integration tests for Telegram auth must be sequential within the telegram_test package.
+actionable: true
+
