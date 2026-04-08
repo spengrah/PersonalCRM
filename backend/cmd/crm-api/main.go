@@ -35,6 +35,7 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/crypto"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/health"
@@ -43,6 +44,7 @@ import (
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/sync"
+	tgpkg "personal-crm/backend/internal/telegram"
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/gin-gonic/gin"
@@ -237,6 +239,41 @@ func main() {
 		logger.Info().Msg("external sync infrastructure enabled")
 	}
 
+	// Telegram integration (independent of external sync)
+	var telegramManager *tgpkg.TelegramManager
+	var telegramHandler *handlers.TelegramHandler
+
+	if cfg.Features.EnableTelegramSync && cfg.External.TelegramAPIID != 0 {
+		telegramSessionRepo := repository.NewTelegramSessionRepository(database.Queries)
+		telegramUpdateStateRepo := repository.NewTelegramUpdateStateRepository(database.Queries)
+		telegramChatConfigRepo := repository.NewTelegramChatConfigRepository(database.Queries)
+		telegramSyncRepo := repository.NewSyncRepository(database.Queries)
+
+		encryptor, err := crypto.NewTokenEncryptor(cfg.External.TokenEncryptionKey)
+		if err != nil {
+			logger.Fatal().Err(err).Msg("failed to initialize Telegram encryptor (TOKEN_ENCRYPTION_KEY required)")
+		}
+
+		telegramManager = tgpkg.NewTelegramManager(
+			telegramSessionRepo,
+			telegramUpdateStateRepo,
+			telegramChatConfigRepo,
+			telegramSyncRepo,
+			encryptor,
+			cfg.External.TelegramAPIID,
+			cfg.External.TelegramAPIHash,
+			&cfg.Telegram,
+		)
+
+		if err := telegramManager.Start(ctx); err != nil {
+			logger.Warn().Err(err).Msg("failed to start Telegram connection")
+		}
+		defer telegramManager.Stop()
+
+		telegramHandler = handlers.NewTelegramHandler(telegramManager)
+		logger.Info().Msg("Telegram integration initialized")
+	}
+
 	// Initialize handlers
 	contactHandler := handlers.NewContactHandler(contactService)
 	noteHandler := handlers.NewNoteHandler(noteService)
@@ -343,6 +380,22 @@ func main() {
 				todoistRoutes.PATCH("/settings", todoistHandler.UpdateSettings)
 				todoistRoutes.GET("/projects", todoistHandler.ListProjects)
 				todoistRoutes.GET("/labels", todoistHandler.ListLabels)
+			}
+		}
+
+		// Telegram routes (feature-flagged)
+		if telegramHandler != nil {
+			tgRoutes := v1.Group("/telegram")
+			{
+				tgAuth := tgRoutes.Group("/auth")
+				{
+					tgAuth.POST("/start", telegramHandler.StartAuth)
+					tgAuth.POST("/verify-code", telegramHandler.VerifyCode)
+					tgAuth.POST("/verify-password", telegramHandler.VerifyPassword)
+					tgAuth.POST("/cancel", telegramHandler.CancelAuth)
+					tgAuth.DELETE("", telegramHandler.Disconnect)
+					tgAuth.GET("/status", telegramHandler.GetStatus)
+				}
 			}
 		}
 

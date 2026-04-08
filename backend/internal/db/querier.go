@@ -98,6 +98,10 @@ type Querier interface {
 	DeleteSyncState(ctx context.Context, id pgtype.UUID) error
 	DeleteSyncStatesByAccountID(ctx context.Context, accountID pgtype.Text) error
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
+	DeleteTelegramChannelState(ctx context.Context, channelID int64) error
+	DeleteTelegramChatConfig(ctx context.Context, telegramChatID int64) error
+	DeleteTelegramSession(ctx context.Context) error
+	DeleteTelegramUpdateState(ctx context.Context, userID int64) error
 	// Demote source's primary contact methods when target already has a primary for that type
 	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
 	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
@@ -163,6 +167,10 @@ type Querier interface {
 	// Tag queries
 	GetTag(ctx context.Context, id pgtype.UUID) (*Tag, error)
 	GetTagByName(ctx context.Context, name string) (*Tag, error)
+	GetTelegramChannelState(ctx context.Context, channelID int64) (*TelegramChannelState, error)
+	GetTelegramChatConfig(ctx context.Context, telegramChatID int64) (*TelegramChatConfig, error)
+	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
+	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	HasEnrichmentForField(ctx context.Context, arg HasEnrichmentForFieldParams) (bool, error)
 	IgnoreExternalContact(ctx context.Context, id pgtype.UUID) error
@@ -222,6 +230,8 @@ type Querier interface {
 	ListSyncLogsByState(ctx context.Context, arg ListSyncLogsByStateParams) ([]*ExternalSyncLog, error)
 	ListSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListTags(ctx context.Context) ([]*Tag, error)
+	ListTelegramChannelStates(ctx context.Context) ([]*TelegramChannelState, error)
+	ListTelegramChatConfigs(ctx context.Context) ([]*TelegramChatConfig, error)
 	ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	ListUnmatchedIdentities(ctx context.Context, arg ListUnmatchedIdentitiesParams) ([]*ExternalIdentity, error)
 	// List upcoming calendar events for a specific contact
@@ -242,6 +252,11 @@ type Querier interface {
 	SearchContactsSorted(ctx context.Context, arg SearchContactsSortedParams) ([]*Contact, error)
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
 	SetContactMethodPrimary(ctx context.Context, arg SetContactMethodPrimaryParams) error
+	SetTelegramChannelPts(ctx context.Context, arg SetTelegramChannelPtsParams) error
+	SetTelegramDate(ctx context.Context, arg SetTelegramDateParams) error
+	SetTelegramPts(ctx context.Context, arg SetTelegramPtsParams) error
+	SetTelegramQts(ctx context.Context, arg SetTelegramQtsParams) error
+	SetTelegramSeq(ctx context.Context, arg SetTelegramSeqParams) error
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteInteraction(ctx context.Context, id pgtype.UUID) error
 	// Transfer connections where source is contact_a to use target instead
@@ -299,6 +314,9 @@ type Querier interface {
 	UpdateSyncStateStatus(ctx context.Context, arg UpdateSyncStateStatusParams) (*ExternalSyncState, error)
 	UpdateSyncStateSuccess(ctx context.Context, arg UpdateSyncStateSuccessParams) (*ExternalSyncState, error)
 	UpdateTag(ctx context.Context, arg UpdateTagParams) (*Tag, error)
+	UpdateTelegramChatConfigStatus(ctx context.Context, arg UpdateTelegramChatConfigStatusParams) (*TelegramChatConfig, error)
+	UpdateTelegramSessionAuthState(ctx context.Context, authState string) (*TelegramSession, error)
+	UpdateTelegramSessionUserInfo(ctx context.Context, arg UpdateTelegramSessionUserInfoParams) (*TelegramSession, error)
 	// Insert or update a calendar event from Google Calendar
 	// Note: last_contacted_updated is reset when matched_contact_ids changes (order-insensitive)
 	// so newly matched contacts can be processed. Otherwise we preserve the processed state
@@ -313,6 +331,15 @@ type Querier interface {
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
 	// Insert or update an OAuth credential
 	UpsertOAuthCredential(ctx context.Context, arg UpsertOAuthCredentialParams) (*OauthCredential, error)
+	// Used by ChannelAccessHasher — only updates access_hash, preserves existing pts.
+	UpsertTelegramChannelAccessHash(ctx context.Context, arg UpsertTelegramChannelAccessHashParams) (*TelegramChannelState, error)
+	UpsertTelegramChannelState(ctx context.Context, arg UpsertTelegramChannelStateParams) (*TelegramChannelState, error)
+	UpsertTelegramChatConfig(ctx context.Context, arg UpsertTelegramChatConfigParams) (*TelegramChatConfig, error)
+	UpsertTelegramSession(ctx context.Context, arg UpsertTelegramSessionParams) (*TelegramSession, error)
+	// Used by gotd/td session.Storage — only updates encrypted session data,
+	// does NOT touch auth_state (which is managed by AuthSessionManager).
+	UpsertTelegramSessionData(ctx context.Context, arg UpsertTelegramSessionDataParams) (*TelegramSession, error)
+	UpsertTelegramUpdateState(ctx context.Context, arg UpsertTelegramUpdateStateParams) (*TelegramUpdateState, error)
 }
 
 var _ Querier = (*Queries)(nil)

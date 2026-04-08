@@ -213,7 +213,7 @@ CRM_ENV=production
 
 # Feature Flags
 ENABLE_VECTOR_SEARCH=false
-ENABLE_TELEGRAM_BOT=false
+ENABLE_TELEGRAM_SYNC=false
 ENABLE_CALENDAR_SYNC=false
 
 # Scheduler (for reminder notifications)

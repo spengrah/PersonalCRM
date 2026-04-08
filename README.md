@@ -55,9 +55,9 @@ Create your `.env` file from the appropriate template (`.env.example` for develo
 
 ### Optional Features
 - `ANTHROPIC_API_KEY`: For AI features (Phase 2+)
-- `TELEGRAM_BOT_TOKEN`: For Telegram bot integration
+- `TELEGRAM_API_ID` / `TELEGRAM_API_HASH`: For Telegram sync (from my.telegram.org/apps)
 - `ENABLE_VECTOR_SEARCH`: Enable vector search (default: false)
-- `ENABLE_TELEGRAM_BOT`: Enable Telegram bot (default: false)
+- `ENABLE_TELEGRAM_SYNC`: Enable Telegram sync (default: false)
 - `ENABLE_CALENDAR_SYNC`: Enable calendar sync (default: false)
 
 **Frontend** (create `frontend/.env.local` - see `frontend/.env.example`):

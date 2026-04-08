@@ -490,9 +490,10 @@ LOG_LEVEL=debug|info|warn|error
 ANTHROPIC_API_KEY=your-key-here
 ENABLE_VECTOR_SEARCH=false
 
-# Optional: Telegram bot (future)
-TELEGRAM_BOT_TOKEN=your-token-here
-ENABLE_TELEGRAM_BOT=false
+# Optional: Telegram sync
+# TELEGRAM_API_ID=your-api-id
+# TELEGRAM_API_HASH=your-api-hash
+ENABLE_TELEGRAM_SYNC=false
 ```
 
 ---
