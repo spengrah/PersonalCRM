@@ -193,6 +193,30 @@ func TestResolveSessions_ChatScoped(t *testing.T) {
 	require.Len(t, sessions, 2) // separate chats = separate sessions
 }
 
+func TestResolveSessions_CrossChatNoBridge(t *testing.T) {
+	e := &AggregationEngine{burstWindowHours: 2, replyBridgeHours: 48}
+	base := accelerated.GetCurrentTime()
+
+	// Outbound in chat 100, inbound in chat 200 — should NOT bridge even within 48h
+	bursts := []burst{
+		{
+			direction: repository.InteractionDirectionOutbound,
+			messages:  []repository.TelegramMessage{makeMsg(1, 100, true, base)},
+			chatID:    100,
+		},
+		{
+			direction: repository.InteractionDirectionInbound,
+			messages:  []repository.TelegramMessage{makeMsg(2, 200, false, base.Add(1*time.Hour))},
+			chatID:    200,
+		},
+	}
+
+	sessions := e.resolveSessions(bursts)
+	require.Len(t, sessions, 2) // different chats — no bridging
+	assert.Equal(t, repository.InteractionDirectionOutbound, sessions[0].direction)
+	assert.Equal(t, repository.InteractionDirectionInbound, sessions[1].direction)
+}
+
 func TestPartitionByChat(t *testing.T) {
 	now := accelerated.GetCurrentTime()
 	msgs := []repository.TelegramMessage{

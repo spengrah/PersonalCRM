@@ -180,7 +180,6 @@ type Querier interface {
 	GetTelegramChannelState(ctx context.Context, channelID int64) (*TelegramChannelState, error)
 	GetTelegramChatConfig(ctx context.Context, telegramChatID int64) (*TelegramChatConfig, error)
 	GetTelegramMessage(ctx context.Context, arg GetTelegramMessageParams) (*TelegramMessage, error)
-	GetTelegramMessageByReplyTo(ctx context.Context, arg GetTelegramMessageByReplyToParams) (*TelegramMessage, error)
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error

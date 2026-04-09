@@ -121,8 +121,5 @@ FROM telegram_message
 WHERE peer_user_id = @peer_user_id
   AND deleted_at IS NULL;
 
--- name: GetTelegramMessageByReplyTo :one
-SELECT * FROM telegram_message
-WHERE telegram_chat_id = @telegram_chat_id
-  AND telegram_message_id = @telegram_message_id
-  AND deleted_at IS NULL;
+-- GetTelegramMessageByReplyTo removed: identical to GetTelegramMessage.
+-- Use GetMessage repo method for reply resolution.

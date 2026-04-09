@@ -269,7 +269,7 @@ func (e *AggregationEngine) tryExplicitReplyBridge(ctx context.Context, contactI
 			continue
 		}
 		// Resolve the referenced message
-		referenced, err := e.messageRepo.GetMessageByReplyTo(ctx, sess.chatID, *msg.ReplyToMsgID)
+		referenced, err := e.messageRepo.GetMessage(ctx, sess.chatID, *msg.ReplyToMsgID)
 		if err != nil {
 			continue // message not found or error
 		}
@@ -365,7 +365,7 @@ func (e *AggregationEngine) resolveSessions(bursts []burst) []msgSession {
 		// Check if this inbound burst should bridge with the previous outbound session
 		if b.direction == repository.InteractionDirectionInbound && len(sessions) > 0 {
 			prev := &sessions[len(sessions)-1]
-			if prev.direction == repository.InteractionDirectionOutbound {
+			if prev.direction == repository.InteractionDirectionOutbound && prev.chatID == b.chatID {
 				shouldBridge := false
 
 				// Time-based bridging

@@ -341,22 +341,6 @@ func (r *TelegramMessageRepository) CountMessagesByPeer(ctx context.Context) ([]
 	return counts, nil
 }
 
-// GetMessageByReplyTo retrieves a message by chat ID and message ID (for reply resolution).
-func (r *TelegramMessageRepository) GetMessageByReplyTo(ctx context.Context, chatID int64, messageID int32) (*TelegramMessage, error) {
-	dbMsg, err := r.queries.GetTelegramMessageByReplyTo(ctx, db.GetTelegramMessageByReplyToParams{
-		TelegramChatID:    chatID,
-		TelegramMessageID: messageID,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, db.ErrNotFound
-		}
-		return nil, err
-	}
-	msg := convertDbTelegramMessage(dbMsg)
-	return &msg, nil
-}
-
 // CountMessagesByPeerID returns message counts for a single peer.
 func (r *TelegramMessageRepository) CountMessagesByPeerID(ctx context.Context, peerUserID int64) (*PeerMessageCount, error) {
 	row, err := r.queries.CountTelegramMessagesByPeerID(ctx, int64ToPgInt8(&peerUserID))

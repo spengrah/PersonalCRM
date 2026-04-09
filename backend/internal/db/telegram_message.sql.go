@@ -160,47 +160,6 @@ func (q *Queries) GetTelegramMessage(ctx context.Context, arg GetTelegramMessage
 	return &i, err
 }
 
-const GetTelegramMessageByReplyTo = `-- name: GetTelegramMessageByReplyTo :one
-SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at FROM telegram_message
-WHERE telegram_chat_id = $1
-  AND telegram_message_id = $2
-  AND deleted_at IS NULL
-`
-
-type GetTelegramMessageByReplyToParams struct {
-	TelegramChatID    int64 `json:"telegram_chat_id"`
-	TelegramMessageID int32 `json:"telegram_message_id"`
-}
-
-func (q *Queries) GetTelegramMessageByReplyTo(ctx context.Context, arg GetTelegramMessageByReplyToParams) (*TelegramMessage, error) {
-	row := q.db.QueryRow(ctx, GetTelegramMessageByReplyTo, arg.TelegramChatID, arg.TelegramMessageID)
-	var i TelegramMessage
-	err := row.Scan(
-		&i.ID,
-		&i.TelegramMessageID,
-		&i.TelegramChatID,
-		&i.ChatType,
-		&i.ChatTitle,
-		&i.MessageText,
-		&i.MessageType,
-		&i.SentAt,
-		&i.EditedAt,
-		&i.IsOutgoing,
-		&i.ReplyToMsgID,
-		&i.PeerUserID,
-		&i.PeerUsername,
-		&i.PeerFirstName,
-		&i.PeerLastName,
-		&i.PeerPhone,
-		&i.MatchedContactID,
-		&i.InteractionID,
-		&i.ProcessedAt,
-		&i.DeletedAt,
-		&i.CreatedAt,
-	)
-	return &i, err
-}
-
 const ListDistinctUnmatchedPeers = `-- name: ListDistinctUnmatchedPeers :many
 SELECT DISTINCT ON (peer_user_id)
     peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone
