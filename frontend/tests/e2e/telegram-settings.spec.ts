@@ -282,12 +282,12 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })
 
-  // NOTE: Disconnect, cancel, and auth error E2E tests are omitted intentionally.
-  // Playwright route mocking cannot reliably distinguish DELETE /telegram/auth from
-  // GET /telegram/auth/status (glob patterns match both). The auth flow itself requires
-  // a real Telegram MTProto connection (tested manually + via backend integration tests).
-  // The UI state transitions for these flows are simple (mutation success → setStep)
-  // and covered by the route-mocked happy-path tests above.
+  // Disconnect E2E test omitted: Playwright's `**/api/v1/telegram/auth` glob matches
+  // `/auth/status` too (LIFO routing means the less-specific handler intercepts status
+  // requests and calls route.continue(), bypassing the status mock). Verified with:
+  // glob patterns, regex patterns, function predicates, and LIFO registration order —
+  // none reliably isolate DELETE /auth from GET /auth/status. The disconnect UI path
+  // is a simple confirm() → mutateAsync() → setStep('disconnected') and is tested manually.
 
   test('shows error on invalid code', async ({ page }) => {
     await page.route('**/api/v1/telegram/auth/status', route =>
