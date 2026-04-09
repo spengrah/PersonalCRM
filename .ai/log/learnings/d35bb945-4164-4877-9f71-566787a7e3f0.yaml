@@ -606,3 +606,99 @@ detail: |
   The Common Gotchas entry 'Playwright route() string matcher fails for query params' recommends using regex patterns as the solution. But the actual final fix (commit 34176bc) moved from regex to function predicates, which are even more reliable. The function predicate pattern `page.route(url => url.pathname.includes('/path'), handler)` should be the canonical recommendation, not regex. **Why missed:** The learnings were extracted before the final iteration. **How to strengthen:** Update the gotcha to recommend function predicates as the primary pattern, regex as fallback, and string matchers as deprecated for route matching.
 actionable: true
 
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: gotcha
+summary: Playwright route() with overlapping URL patterns causes unpredictable handler ordering
+detail: |
+  When mocking related endpoints (e.g., /api/v1/telegram/auth/status and /api/v1/telegram/auth), using separate page.route() calls creates route matching ambiguity. Solution evolved through three iterations: (1) multiple glob patterns (ordering issues), (2) single regex with internal dispatch (better), (3) function predicate with URL object parsing (best). Use page.route(url => url.pathname.endsWith('/exact/path') && request.method() === 'DELETE', handler) for precise matching. Function predicates receive parsed URL objects, making intent clearer than regex on full URL strings.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: rule
+summary: "E2E disconnect flows: assert on final connected state instead of mocking waitForResponse"
+detail: |
+  When testing disconnect flows that trigger state changes, waitForResponse() can be flaky because the response may fire before the listener is set up, especially when the test modifies route mocks mid-test. Instead of waiting for the API response, assert on the final visible UI state: await expect(page.getByRole('button', { name: /Connect/ })).toBeVisible({ timeout: 5000 }). This polls until the component reaches the expected state, regardless of when the API call completes. The pattern: persist state changes, then assert on UI reflecting that state.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: gotcha
+summary: sqlc parameter additions convert simple args to compound structs, breaking all call sites
+detail: |
+  When adding parameters to sqlc queries (e.g., adding followup_filter to 10+ contact listing queries), sqlc regenerates param structs from simple types to compound structs. This breaks every repository method call site-wide. Pattern: after make sqlc, ALWAYS run go build ./cmd/crm-api to catch signature mismatches before committing. Then systematically fix all call sites by wrapping params in the new struct. Most common in queries with multiple optional filters where sqlc switches from positional args to named structs. Also affects test factories which are easy to miss since they're scattered across tests/*_test.go files.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: architecture
+summary: Circular service dependencies resolved with setter injection and interface fields
+detail: |
+  When ContactService needs FollowUpService but FollowUpService needs ContactService, use post-construction injection: (1) define followUpManager interface in service package, (2) ContactService has followUpManager field (initially nil), (3) add SetFollowUpManager() setter called after both services are constructed in main.go, (4) nil check makes feature optional (no-op if not configured). This avoids constructor cycles while maintaining testability (tests inject mocks). The nil check pattern allows graceful degradation when optional external services aren't configured.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: distinction
+summary: Forward-only timestamp updates apply per-field based on direction, not globally
+detail: |
+  Direction-conditional fields (last_outreach_at, last_response_at, last_interaction_at) each use forward-only logic independently: outbound interactions use forward-only for last_outreach_at but don't touch last_contacted; inbound/mutual update both with their respective forward-only semantics. Critical: outbound interactions do NOT update last_contacted or contact_by (prevents cadence reset when user reaches out first). The isManual flag overrides forward-only for all three patterns. This prevents automated sources from backdating user corrections while capturing historical data properly.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: rule
+summary: Date-based deadlines must use date arithmetic (.AddDate), never time.Duration
+detail: |
+  Todoist deadlines and cadence calculations are date-based ('N days later'), not timestamp-based. Using time.Duration (e.g., 24 * time.Hour * N) introduces DST drift and time-of-day leakage. Correct pattern: use cadence.Today(t).AddDate(0, 0, days) for all date arithmetic. Store watchdog windows as int (day counts) in config, not time.Duration. This matches existing cadence patterns and prevents subtle date drift bugs when crossing DST boundaries.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: architecture
+summary: Follow-up task lifecycle requires completing old task BEFORE creating new one
+detail: |
+  When a follow-up task is completed and triggers a new outbound interaction, must mark the current task as completed FIRST, then call RecordInteraction (which calls CreateOrRefreshFollowUp). Otherwise, CreateOrRefreshFollowUp finds the dying task, refreshes it, then the caller marks it completed, leaving no pending follow-up. Sequence matters: (1) mark task completed in local state, (2) RecordInteraction, (3) CreateOrRefreshFollowUp creates successor. This prevents accidentally refreshing the task being completed. Applies to any state machine where completion of one entity should trigger creation of a successor.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: documentation_gap
+summary: Bug fix commits require regression tests BEFORE the fix
+detail: |
+  Existing rule says 'Always add comprehensive tests for new/changed code' but wasn't followed when fixing bugs found during code review. The rule in .ai/rules/core.md is too general. Agents need explicit guidance: 'When fixing a bug (especially one found by codex/review), add a regression test that reproduces the bug BEFORE making the fix.' Strengthen by: (1) Add to 'When You Change X, Check Y' table: 'When fixing a bug → Add failing test first, verify fix makes it pass', (2) Add to Anti-Patterns with ❌/✅ example showing TDD cycle for bug fixes.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: gotcha
+summary: Metadata key consistency across all task creation/update paths prevents silent data loss
+detail: |
+  Follow-up tasks initially wrote metadata under 'deadline' key but API response read 'due_date' key, causing follow-up due dates to never appear. When adding metadata keys, must update ALL five task paths: reconcileContactTasks, handleTaskCompletion, handleSkipTrigger, reconcileExistingTask (drift + backfill), AND the API response serializer. Pattern: grep for TaskMetadata struct usage and verify all write paths use identical keys. Code review caught this but tests didn't because tests only verified task creation, not full round-trip through API serialization.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: architecture
+summary: Best-effort external service cleanup prevents stuck state in optional integrations
+detail: |
+  When external services (like Todoist) are optional, cleanup operations must degrade gracefully. CompleteFollowUp initially hard-errored when getTodoistSettings failed, leaving local records stuck in 'managed' state forever if Todoist was disconnected. Fix: try external cleanup first; if it fails (settings unavailable, API error), warn-log but still complete the local state transition. This prevents optional external services from blocking core state machine progress. Pattern: external_call(); if err != nil { log.Warn().Err(err).Msg('external cleanup failed'); } // proceed with local state update anyway. Applies to any local/remote two-phase operation where local state is source of truth.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: rule
+summary: Forward-only guards must apply to ALL derived fields, not just source timestamps
+detail: |
+  contact_by (cadence due date) is derived from last_contacted + cadence window. Initial implementation had forward-only guards for last_contacted but always updated contact_by when non-null. This meant late-arriving automated inbound events correctly preserved newer last_contacted but regressed contact_by to older cadence window, breaking the invariant. Rule: when timestamp fields have forward-only semantics, ALL derived fields computed from those timestamps need the same guard: only compute the derived value when the base timestamp update will actually take effect (newer than current, or manual source override). Code review found this.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: gotcha
+summary: E2E async component state checks with .isVisible().catch() don't wait, causing flakiness
+detail: |
+  When testing async components with loading states, .isVisible().catch(() => false) returns an instant snapshot and doesn't wait for state to resolve. This causes flaky CI failures when components are still loading. Use expect().toBeVisible() instead, which polls until element appears or times out. The Telegram settings test failed in CI because it checked for configRequired/connectButton immediately after heading was visible, but component was still in loading state (spinner). Fix: await expect(configRequired.or(connectButton)).toBeVisible() which polls until loading completes. Pattern applies to any test checking for async-rendered UI elements.
+actionable: true
+
