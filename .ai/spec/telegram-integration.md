@@ -677,6 +677,8 @@ When a reply arrives within the bridge window of a previously-committed outbound
 5. **Reassign prior outbound messages:** Update all `telegram_message` rows that reference this `interaction_id` — they already point to the correct (now-mutual) interaction, so no reassignment is needed. The `interaction_id` FK is stable because we update in place rather than delete+recreate.
 6. Set `processed_at` and `interaction_id` on the newly-arrived inbound messages, pointing to the same (now-mutual) interaction.
 
+**Timezone handling for `occurred_at` and contact field updates:** Telegram message timestamps (`msg.Date`) are Unix UTC. When the aggregation engine sets `occurred_at` on an interaction and triggers `last_contacted` / `contact_by` updates, it must account for the user's local timezone. A message at 11pm CT on March 31st is April 1st UTC — the `contact_by` calculation (which determines "days since last contact") should use the user's local date, not UTC, to avoid off-by-one errors at day boundaries. This applies to all timestamp-driven contact field updates from Telegram messages.
+
 **`processed_at` semantics:**
 - Set on `telegram_message` rows when they are successfully assigned to an `interaction_id`.
 - Messages with `processed_at IS NULL AND matched_contact_id IS NOT NULL` are the aggregation input set.
