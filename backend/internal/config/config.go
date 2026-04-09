@@ -20,6 +20,7 @@ type Config struct {
 	Google   GoogleConfig
 	Todoist  TodoistConfig
 	Watchdog WatchdogConfig
+	Telegram TelegramConfig
 }
 
 // DatabaseConfig holds database connection settings
@@ -57,7 +58,7 @@ type CORSConfig struct {
 // FeatureFlags holds experimental feature toggles
 type FeatureFlags struct {
 	EnableVectorSearch bool // Default: false
-	EnableTelegramBot  bool // Default: false
+	EnableTelegramSync bool // Default: false
 	EnableCalendarSync bool // Default: false
 	EnableExternalSync bool // Default: false
 }
@@ -73,7 +74,8 @@ type RuntimeConfig struct {
 type ExternalConfig struct {
 	SessionSecret      string // Required in production
 	AnthropicAPIKey    string // Optional (future use)
-	TelegramBotToken   string // Optional (if EnableTelegramBot)
+	TelegramAPIID      int    // TELEGRAM_API_ID (from my.telegram.org/apps)
+	TelegramAPIHash    string // TELEGRAM_API_HASH
 	APIKey             string // Required in production (API authentication)
 	BackupPath         string // Optional
 	HomeServerHost     string // Optional
@@ -103,6 +105,15 @@ type WatchdogConfig struct {
 	QuarterlyDays int // Default: 14
 	BiannualDays  int // Default: 21
 	AnnualDays    int // Default: 21
+}
+
+// TelegramConfig holds Telegram integration tuning parameters
+type TelegramConfig struct {
+	BurstWindowHours     int    // Default: 2
+	ReplyBridgeHours     int    // Default: 48
+	BackfillSince        string // Default: "2026-01-01" (YYYY-MM-DD)
+	DiscoveryMinMessages int    // Default: 3
+	GroupMaxMembers      int    // Default: 10
 }
 
 // ValidationError represents a configuration validation error
@@ -176,7 +187,7 @@ func Load() (*Config, error) {
 		},
 		Features: FeatureFlags{
 			EnableVectorSearch: getEnvAsBool("ENABLE_VECTOR_SEARCH", false),
-			EnableTelegramBot:  getEnvAsBool("ENABLE_TELEGRAM_BOT", false),
+			EnableTelegramSync: getEnvAsBool("ENABLE_TELEGRAM_SYNC", false),
 			EnableCalendarSync: getEnvAsBool("ENABLE_CALENDAR_SYNC", false),
 			EnableExternalSync: getEnvAsBool("ENABLE_EXTERNAL_SYNC", false),
 		},
@@ -188,7 +199,8 @@ func Load() (*Config, error) {
 		External: ExternalConfig{
 			SessionSecret:      getEnv("SESSION_SECRET", ""),
 			AnthropicAPIKey:    getEnv("ANTHROPIC_API_KEY", ""),
-			TelegramBotToken:   getEnv("TELEGRAM_BOT_TOKEN", ""),
+			TelegramAPIID:      getEnvAsInt("TELEGRAM_API_ID", 0),
+			TelegramAPIHash:    getEnv("TELEGRAM_API_HASH", ""),
 			APIKey:             getEnv("API_KEY", ""),
 			BackupPath:         getEnv("BACKUP_PATH", ""),
 			HomeServerHost:     getEnv("HOME_SERVER_HOST", ""),
@@ -212,6 +224,13 @@ func Load() (*Config, error) {
 			QuarterlyDays: getEnvAsInt("WATCHDOG_QUARTERLY_DAYS", 14),
 			BiannualDays:  getEnvAsInt("WATCHDOG_BIANNUAL_DAYS", 21),
 			AnnualDays:    getEnvAsInt("WATCHDOG_ANNUAL_DAYS", 21),
+		},
+		Telegram: TelegramConfig{
+			BurstWindowHours:     getEnvAsInt("TELEGRAM_BURST_WINDOW_HOURS", 2),
+			ReplyBridgeHours:     getEnvAsInt("TELEGRAM_REPLY_BRIDGE_HOURS", 48),
+			BackfillSince:        getEnv("TELEGRAM_BACKFILL_SINCE", "2026-01-01"),
+			DiscoveryMinMessages: getEnvAsInt("TELEGRAM_DISCOVERY_MIN_MESSAGES", 3),
+			GroupMaxMembers:      getEnvAsInt("TELEGRAM_GROUP_MAX_MEMBERS", 10),
 		},
 	}
 
@@ -286,12 +305,20 @@ func (c *Config) Validate() error {
 		})
 	}
 
-	// Dependency validation: Telegram token required if feature enabled
-	if c.Features.EnableTelegramBot && c.External.TelegramBotToken == "" {
-		errors = append(errors, ValidationError{
-			Field:   "TELEGRAM_BOT_TOKEN",
-			Message: "telegram bot token is required when ENABLE_TELEGRAM_BOT is true",
-		})
+	// Dependency validation: Telegram API credentials required if feature enabled
+	if c.Features.EnableTelegramSync {
+		if c.External.TelegramAPIID == 0 {
+			errors = append(errors, ValidationError{
+				Field:   "TELEGRAM_API_ID",
+				Message: "Telegram API ID is required when ENABLE_TELEGRAM_SYNC is true",
+			})
+		}
+		if c.External.TelegramAPIHash == "" {
+			errors = append(errors, ValidationError{
+				Field:   "TELEGRAM_API_HASH",
+				Message: "Telegram API hash is required when ENABLE_TELEGRAM_SYNC is true",
+			})
+		}
 	}
 
 	// CORS validation: FrontendURL should be set if not allowing all
@@ -406,7 +433,7 @@ func TestConfig() *Config {
 		},
 		Features: FeatureFlags{
 			EnableVectorSearch: false,
-			EnableTelegramBot:  false,
+			EnableTelegramSync: false,
 			EnableCalendarSync: false,
 			EnableExternalSync: false,
 		},
@@ -436,6 +463,13 @@ func TestConfig() *Config {
 			QuarterlyDays: 14,
 			BiannualDays:  21,
 			AnnualDays:    21,
+		},
+		Telegram: TelegramConfig{
+			BurstWindowHours:     2,
+			ReplyBridgeHours:     48,
+			BackfillSince:        "2026-01-01",
+			DiscoveryMinMessages: 3,
+			GroupMaxMembers:      10,
 		},
 	}
 }

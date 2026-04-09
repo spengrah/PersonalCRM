@@ -222,3 +222,643 @@ detail: |
   When adding optional filter parameters to contact list queries, must add to ContactIDsParams interface AND spread into queryParams in both getContacts and getContactIDs using pattern: `...(params.filter_name && { filter_name: params.filter_name })`. Also must add to detail page listContext extraction from searchParams and buildNavigationUrl params.set() calls, including dependency array. This pattern mirrors how cadence_filter was implemented.
 actionable: true
 
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: gotcha
+summary: "`external_sync_state` for non-SyncProvider sources requires `Enabled=false` to prevent scheduler pickup"
+detail: |
+  When creating an `external_sync_state` row for a source that is NOT a `SyncProvider` (like Telegram's long-lived connection), you MUST set `Enabled: false` when calling `CreateSyncState`. Otherwise, `RunDueSyncs` will attempt to schedule it. The row is for status display only, not scheduler management. Also ensure you reload the sync state ID on restart using `GetSyncStateBySource` to avoid unique constraint violations on subsequent auth flows.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: gotcha
+summary: "`UpdateSyncStateMetadata` replaces entire JSONB, not merges - read-modify-write required"
+detail: |
+  The repository method `UpdateSyncStateMetadata` does a wholesale replace (`SET metadata = $2`) not a merge. To preserve existing metadata keys while updating specific fields, you must: (1) get current state, (2) unmarshal existing metadata, (3) modify only the keys you need, (4) call UpdateSyncStateMetadata with the merged map. This prevents losing other keys that may be set by different code paths.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: gotcha
+summary: Singleton database tables require explicit test isolation strategy
+detail: |
+  When using a singleton table pattern (e.g., `telegram_session` with `id INTEGER CHECK (id = 1)`), integration tests that modify it cannot run concurrently. Strategy: (1) all tests that touch the singleton must live in the same package/file, (2) use `t.Cleanup(func() { DELETE FROM singleton_table })` at the start of EVERY test to ensure clean state, (3) use unique test identifiers in related tables (e.g., `test_user_123`) to avoid collisions with concurrent tests on related non-singleton tables.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: architecture
+summary: Auth session managers with TTL cleanup need cancellable timers stored on session struct
+detail: |
+  When implementing an auth session manager with TTL cleanup using `time.AfterFunc`, the timer MUST be: (1) stored on the session struct, (2) explicitly stopped via `timer.Stop()` on successful auth completion. Otherwise, the delayed cleanup callback can still fire after auth succeeds and delete valid session data. Pattern: `type AuthSession struct { ... cleanup *time.Timer }`, then `session.cleanup = time.AfterFunc(...)`, and `session.cleanup.Stop()` on success.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: architecture
+summary: Channel-based auth flows need Done channel pattern, never close data channels
+detail: |
+  For auth flows using channels to communicate between HTTP handlers and long-running goroutines (e.g., gotd/td auth callbacks), use this pattern: (1) a `Done chan struct{}` on the session for signaling cleanup, (2) buffered data channels that are NEVER closed, (3) all sends wrapped in `select { case ch <- data: case <-session.Done: return ErrCancelled }`, (4) cleanup only closes the Done channel. This prevents send-on-closed-channel panics when TTL expiry races with active requests.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: gotcha
+summary: "`gotd/td` session storage StoreSession should NOT modify auth_state - separate concerns"
+detail: |
+  When implementing `session.Storage` interface for gotd/td, the `StoreSession` method receives raw session bytes during MTProto handshake/key exchange and should ONLY update encrypted session data, NOT application auth state. Auth state transitions (disconnected→awaiting_code→connected) are managed separately by the auth session manager. Use a separate `UpsertTelegramSessionData` query that only touches session_data_encrypted/nonce columns, distinct from `UpsertTelegramSession` which manages full row including auth_state.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: rule
+summary: Multi-round Codex review loop is effective for complex planning - each round finds increasingly subtle issues
+detail: |
+  When planning complex features (especially with external library integrations, state management, and cross-cutting concerns), running multiple Codex review rounds is highly effective. This session went through 12+ rounds. Early rounds catch architectural issues (sync state lifecycle, handler layering). Middle rounds catch API mismatches (repository methods, JSONB handling). Late rounds catch subtle issues (timer cancellation, UUID caching across restarts). Each round narrows to fewer, more nuanced problems until plan is production-ready.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: gotcha
+summary: Frontend error states must distinguish 404 (feature not configured) from 5xx (transient error) for UX
+detail: |
+  When building settings UI for optional external integrations, distinguish between: (1) 404 = feature flag off/credentials not configured → hide Connect button, show config instructions, (2) 5xx/network error = transient failure → show error state with retry button. Don't treat 404 as an error - it's an expected state before first configuration. This prevents confusing UX where users see 'error' states before they've configured anything.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: architecture
+summary: Long-lived connection managers (non-SyncProvider) should expose status via dedicated struct not sync state
+detail: |
+  For services that maintain persistent connections (WebSockets, Telegram MTProto, etc.) rather than interval-based polling, the manager should expose status through its own `Status()` method returning a dedicated struct, not by reading `external_sync_state`. The sync state row is for settings UI display only. The manager's in-memory state is the source of truth for connection status. Pattern: `type Status struct { Connected bool, Username string, Error string }` with manager owning the status lifecycle and updating sync state for persistence.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: distinction
+summary: E2E test seeding requires backend handler + route registration + frontend helper + cleanup all specified together
+detail: |
+  When adding E2E test helpers that seed specific backend state (e.g., `seedTelegramSession`), the plan must detail ALL four layers: (1) backend handler method on TestHandler struct, (2) route registration in main.go test endpoints block, (3) frontend testApi helper function, (4) cleanup registration in E2E test setup (beforeEach/afterEach). Missing any layer means E2E tests won't compile or will leave dirty state. Don't assume layers - specify all explicitly in plan.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: rule
+summary: When adding config migrations that remove old fields, search for ALL references not just config.go
+detail: |
+  Config field removals require comprehensive search: (1) config struct definition, (2) validation logic, (3) all .env.example.* files, (4) documentation (README.md, deployment docs), (5) test mocks/fixtures, (6) handler/service code that checks the flag. Pattern: `rg 'EnableOldFlag|OLD_FLAG_ENV' --type-add 'env:*.env*'` to catch all references. Missing references in .env examples causes confusion for deployments.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: gotcha
+summary: Query keys for new features must be added to centralized query-keys.ts and imported from there
+detail: |
+  When adding React Query hooks for new features, query keys MUST be defined in the centralized `frontend/src/lib/query-keys.ts` file following the existing pattern (`export const featureKeys = { all: ['feature'], status: () => [...featureKeys.all, 'status'] }`), then imported in hook files. Do NOT define keys inline in hook files - this creates maintenance issues and makes invalidation patterns unclear. The query-keys.ts file is the single source of truth for all cache keys.
+actionable: true
+
+---
+timestamp: "2026-04-08T17:57:47.410983"
+type: documentation_gap
+summary: The 'use actual repository methods not pseudo-code' rule needs strengthening in planning guidelines
+detail: |
+  Multiple Codex review rounds caught calls to non-existent repository methods (e.g., `CreateOrUpdateSyncState`, `UpdateSyncStateError`). Existing rules don't emphasize: when writing implementation plans, grep for actual method signatures in repository files BEFORE documenting API calls. Strengthen `.ai/guides/feature-development.md` planning phase to require: 'Before finalizing plan, verify ALL repository/service method calls exist with `rg 'func.*Repository.*MethodName'`. Use exact signatures from code, not invented ones.'
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: gotcha
+summary: gotd/td calls StoreSession during key exchange before auth completes
+detail: |
+  When implementing gotd/td session.Storage interface, StoreSession is called during MTProto key exchange, which happens BEFORE the user completes auth (code/2FA verification). The storage implementation must NOT set auth_state=connected in StoreSession. Solution: Create separate queries — one that only updates session bytes (UpsertTelegramSessionData), another that updates auth_state only after successful code/2FA verification.
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: architecture
+summary: Done channel pattern for HTTP-to-long-running-callback communication
+detail: |
+  When HTTP handlers need to communicate with long-running callbacks (like gotd client.Run), closing data channels while senders are active causes send-on-closed-channel panics. Solution: Never close data channels directly. Instead, create a Done channel, close it on cleanup, and have all senders use `select { case ch <- val: case <-done: return }`. This prevents sends after cleanup without risking panics.
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: rule
+summary: Auth session managers must cleanup on ALL error paths, not just success
+detail: |
+  When managing singleton auth sessions, failing to cleanup on error (wrong code/password) leaves the session wedged until TTL expires, blocking user retries. Must call cleanup() or defer cleanup() on all error paths in the run callback, not just on success. Found by Codex during implementation review — error handlers sent AuthResult{Status:"error"} and exited without cleanup, leaving m.session != nil and blocking new StartAuth calls.
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: gotcha
+summary: time.AfterFunc timer must be explicitly stopped to prevent firing after success
+detail: |
+  time.AfterFunc returns *time.Timer that must be stored and explicitly stopped. If you only track the function completion via channel/callback but don't call timer.Stop(), the AfterFunc will still fire even after successful completion. For auth TTL: store the *time.Timer on the session struct, call timer.Stop() in cleanup on success path. Otherwise successful auth is deleted 5 minutes later by the firing TTL timer.
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: distinction
+summary: Use Enabled=false in external_sync_state to track connection without scheduler pickup
+detail: |
+  When you need to track connection status in external_sync_state but DON'T want the scheduler to auto-run syncs (e.g., long-lived connections like Telegram that manage their own lifecycle), set Enabled=false. RunDueSyncs filters WHERE enabled=TRUE, so the row won't be picked up for scheduling, but you can still use it for status display and UUID tracking.
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: distinction
+summary: Frontend should distinguish 404 (not configured) vs 5xx (error) for feature flags
+detail: |
+  When checking if a feature-flagged backend endpoint exists, distinguish 404 (feature not configured, hide UI) from 5xx (temporary error, show retry button). Don't show 'Connect' button when backend returns 404 for status endpoint. Pattern: status endpoint returns 404 if feature flag disabled, 200/500 if enabled. Frontend: 404 = not_configured state (no action button), 5xx = error state (retry button).
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: rule
+summary: Feature-gated services with bad config should Fatal at startup, not degrade to 404
+detail: |
+  If a feature is explicitly enabled via flag but required config is invalid (e.g., bad encryption key), fail hard at startup with logger.Fatal() rather than silently returning 404. This makes misconfigurations visible immediately rather than hiding them behind missing-feature UX. User expects enabled feature to work or tell them why it can't, not silently pretend it's disabled.
+actionable: true
+
+---
+timestamp: "2026-04-08T18:03:40.868442"
+type: gotcha
+summary: Singleton table tests require sequential execution within package
+detail: |
+  When testing code that uses singleton tables (e.g., telegram_session with id=1 constraint), parallel tests in the same package will collide on the singleton row. Solution: (1) Run telegram package tests sequentially via test build tag or explicit -p 1, (2) Add cleanup helpers that wipe singleton state between tests, (3) Use unique identifiers where possible to avoid conflicts. Integration tests for Telegram auth must be sequential within the telegram_test package.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: gotcha
+summary: sqlc UPSERT with selective field updates requires separate queries
+detail: |
+  When implementing `ON CONFLICT DO UPDATE` in sqlc, you cannot selectively preserve some fields while updating others in a single query. The `UpsertTelegramChannelAccessHash` pattern shows the solution: create separate queries for different update scenarios. One query updates all fields (pts + access_hash), another only updates access_hash and preserves existing pts by using `DO UPDATE SET access_hash = EXCLUDED.access_hash` (omitting pts from the SET clause). Without this, a generic upsert that sets pts=0 on insert will overwrite existing pts values on conflict.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: distinction
+summary: "Session cleanup: clearSession (success) vs cleanup (error)"
+detail: |
+  Auth flows need two distinct cleanup patterns: `clearSession` for successful completion (frees resources, session no longer needed) and `cleanup` for errors (resets state so a new auth attempt can start). The critical distinction: error cleanup must happen when the error is an internal/infrastructure failure (ErrAuthInternal), but NOT when it's an auth rejection (invalid code/password) — auth rejections should allow retry within the same session TTL. This pattern applies to any multi-step flow with retryable vs terminal errors.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: gotcha
+summary: Persistence before in-memory state commit on teardown
+detail: |
+  When implementing disconnect/teardown flows with persistent state: persist the change BEFORE updating in-memory flags, not after. In Disconnect(), deleting the DB session must happen before setting `m.running = false`, otherwise on DB failure the method returns an error but the in-memory state already shows disconnected. This creates inconsistency where Status() reads from memory (disconnected) but DB still has the session (will auto-reconnect on restart). The fix: persist first, then commit memory state only on success.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: architecture
+summary: Sentinel errors to distinguish infrastructure vs domain failures
+detail: |
+  Use typed sentinel errors (e.g., `ErrAuthInternal`) to distinguish infrastructure failures (DB errors, persistence failures) from domain-level failures (invalid credentials, auth rejections). Wrap all persistence errors with `fmt.Errorf("...: %w", ErrAuthInternal)` so handlers can use `errors.Is(err, ErrAuthInternal)` to return 500 vs 401. Without this, substring matching like `strings.Contains(err.Error(), "persist")` is fragile and breaks when error messages change. The pattern: define sentinel errors in the domain package, wrap at error sites, check with errors.Is in handlers.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: gotcha
+summary: Shared state across goroutines requires mutex on both read AND write
+detail: |
+  When implementing state machines with concurrent access (e.g., auth flow Step tracking), ALL accesses to shared state must be synchronized, not just reads OR writes. The sess.Step field was written by the MTProto goroutine (`sess.Step = "awaiting_code"`) but read by HTTP handlers checking state. Initially only reads were under mutex — this created a data race. Fix: wrap ALL Step assignments with `m.mu.Lock(); sess.Step = "..."; m.mu.Unlock()` matching the read-side locking. Data races on state machine fields cause nondeterministic behavior where valid requests get rejected or accepted incorrectly.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: rule
+summary: Auth flow state machines need explicit step tracking
+detail: |
+  Multi-step auth flows (phone → code → 2FA) should track the current step explicitly in a Step field, not infer it from other state. Without explicit tracking, VerifyCode can be called when awaiting_password (wrong step) or VerifyPassword when awaiting_code. The pattern: add Step string field to session struct, set it when sending each result ("awaiting_code", "awaiting_password"), check it at the start of each verify method: `if sess.Step != "awaiting_code" { return ErrInvalidState }`. This prevents out-of-order API calls and makes the state machine explicit.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: documentation_gap
+summary: Error handling patterns (sentinel errors, wrapping) not documented in code-review.md
+detail: |
+  The code review found 10+ rounds of issues around error handling patterns: distinguishing internal errors from auth errors, wrapping with sentinel errors, using errors.Is instead of string matching. These patterns are critical for correct HTTP status codes and user-facing error messages, but aren't in code-review.md or architecture.md. **Why missed:** No guidance on when to use sentinel errors vs error types vs wrapping. **How to strengthen:** Add an 'Error Handling' section to code-review.md or core.md covering: (1) define sentinel errors for domain boundaries, (2) wrap at error sites with fmt.Errorf("%w"), (3) check with errors.Is in handlers, (4) distinguish infrastructure (500) from domain (4xx) failures.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: documentation_gap
+summary: Thread safety requirements for concurrent goroutine patterns not in testing.md
+detail: |
+  The session found data races on shared state accessed from both HTTP handlers and background goroutines (sess.Step). The fix required mutex protection on ALL accesses, not just reads or writes. **Why missed:** No guidance in testing.md about running tests with race detector (`go test -race`) or patterns for protecting shared state. **How to strengthen:** Add to testing.md: (1) always run `go test -race` for code with goroutines, (2) pattern: shared mutable state needs mutex on ALL accesses (reads + writes), (3) alternative: use channels for state updates instead of shared memory.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:21:30.334242"
+type: gotcha
+summary: gotd/td updates.New() requires non-nil Handler - panics at runtime if nil
+detail: |
+  The `github.com/gotd/td/telegram/updates.New()` function validates that `Config.Handler` is non-nil and panics immediately if it's nil. This happens inside the library's `setDefaults()` method, not at compile time. Even if you don't need update processing, you must provide at least a no-op handler: `telegram.UpdateHandlerFunc(func(ctx context.Context, u tg.UpdatesClass) error { return nil })`. The panic manifests as a runtime crash in the goroutine that creates the updates manager.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:21:30.334242"
+type: gotcha
+summary: Telegram RPC calls hang forever if connection drops - need per-operation timeouts
+detail: |
+  Telegram MTProto RPC calls (`authClient.SendCode()`, `authClient.SignIn()`, `authClient.Password()`) can hang indefinitely if the Telegram connection drops mid-request, even if the parent context has a timeout. After a failed 2FA attempt or network interruption, subsequent auth calls will never return. Solution: wrap each RPC call with its own `context.WithTimeout()` (e.g., 30 seconds): `sendCtx, cancel := context.WithTimeout(runCtx, 30*time.Second); defer cancel(); authClient.SendCode(sendCtx, ...)`. The parent context timeout alone is insufficient because the connection state may be broken.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:21:30.334242"
+type: rule
+summary: E2E tests checking overflow-dependent UI must wait for content render, not just page load
+detail: |
+  Tests that verify overflow-dependent UI elements (like 'Show more' buttons triggered by CSS line-clamp) fail intermittently in headless browsers if they only wait for page load. The overflow detection useEffect runs after React renders the content, which may happen after navigation completes. Solution: before checking for the overflow button, wait for the actual text content to be visible: `await expect(page.getByText('snippet of long content')).toBeVisible()`. This ensures the element is rendered and the overflow detection effect has fired. Applies to any UI that uses scrollHeight/clientHeight comparisons.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:21:30.334242"
+type: documentation_gap
+summary: No guidance on library-specific runtime validation requirements for third-party integrations
+detail: |
+  When integrating third-party libraries (especially those with runtime validation like gotd/td), agents had to discover required configuration fields through crash debugging rather than proactive checking. The `updates.Config.Handler` requirement wasn't obvious from reading the code - it only manifested as a panic in a goroutine during startup. **Strengthening**: Add to `.ai/guides/architecture.md` or create `.ai/patterns/third-party-integrations.md` with rule: 'Before adding a new third-party library integration, grep the library source for `panic()` calls in config/setup code to identify required fields that won't be caught at compile time. Test startup paths immediately after adding the integration.'
+actionable: true
+
+---
+timestamp: "2026-04-08T19:30:34.260870"
+type: gotcha
+summary: "E2E async component checks: .isVisible().catch() doesn't wait, use expect().toBeVisible()"
+detail: |
+  When testing async components with loading states, `.isVisible().catch(() => false)` returns an instant snapshot and doesn't wait for state to resolve. This causes flaky tests when components are still loading. Use `expect().toBeVisible()` instead, which polls until the element appears or times out. The Telegram settings test failed in CI because it checked for configRequired/connectButton immediately after the heading was visible, but the component was still in loading state (spinner). The fix: wait for one of the expected final states with `expect(configRequired.or(connectButton)).toBeVisible()` which polls until loading completes.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:30:34.260870"
+type: architecture
+summary: "E2E Playwright: heading visible != component data loaded for async components"
+detail: |
+  React components that render a heading synchronously but fetch data asynchronously (like Telegram settings) will show the heading immediately while displaying a loading spinner. Waiting for the heading with `expect(heading).toBeVisible()` does NOT mean the async data fetch has completed. Must explicitly wait for the expected final state elements (error messages, buttons, data content) before asserting on them. This is especially important for settings pages that check backend configuration status.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:30:34.260870"
+type: gotcha
+summary: E2E shared DB state causes flaky tests when seeded data is consumed by other tests
+detail: |
+  Import candidates test failed with 'No import candidates' despite seeding data. Attributed to shared DB state where other tests consume the seeded data. Tests that depend on specific seeded data being present can fail intermittently when run in parallel or in different orders. The test passed on retry, indicating timing/state dependency rather than a code bug.
+actionable: false
+
+---
+timestamp: "2026-04-08T19:45:43.979226"
+type: gotcha
+summary: E2E async state checks fail in CI with instant isVisible() checks
+detail: |
+  In E2E tests, `await expect(locator).toBeVisible()` with instant checks like `locator.or(locator)` works locally but can fail in CI where API calls take longer. The component may still be in loading state when the assertion runs. Solution: Use polling assertions with explicit timeout: `await expect(locator.or(locator)).toBeVisible({ timeout: 5000 })`. The `.or()` pattern ensures Playwright polls until one of the states becomes visible rather than checking instantly.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:45:43.979226"
+type: rule
+summary: Never silently discard errors in critical callbacks
+detail: |
+  Silent error discards (`_ = callback()`) in async operations can hide critical failures. Example: `onComplete` callback creating sync state and starting connections - if it fails silently, user receives 'connected' status but backend connection never starts. **Why:** Callbacks often perform critical setup that must succeed for the system to work. **How to apply:** At minimum, log callback errors even when you can't return them (e.g., in goroutines or fire-and-forget operations). Use `log.Warn().Err(err).Msg("context about what failed")` for non-fatal but important failures.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:45:43.979226"
+type: architecture
+summary: Soft-delete tables need partial index on deleted_at IS NULL
+detail: |
+  Any table with soft-delete (deleted_at column) needs a partial index `CREATE INDEX idx_tablename_not_deleted ON tablename(id) WHERE deleted_at IS NULL` for query performance. All queries filter `deleted_at IS NULL` (enforced in sqlc), and without this index, queries do full table scans. Add the index in the same migration that creates the table with soft-delete support.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:45:43.979226"
+type: distinction
+summary: Static vs dynamic imports for API modules in React
+detail: |
+  Use static imports for API modules that are already loaded elsewhere in the component. Dynamic imports (`const { api } = await import('@/lib/api')`) only make sense for code-splitting when the import is truly conditional and not used in the main render path. If hooks in the same component already import the module statically, adding a dynamic import in a handler provides no bundle-splitting benefit and adds complexity. **When to use dynamic:** Large modules used in rare edge cases (e.g., export functionality). **When to use static:** API clients, utilities already imported by the component's dependencies.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:45:43.979226"
+type: gotcha
+summary: Type guards for unexported error classes require duck typing
+detail: |
+  When API error classes aren't exported (e.g., internal `ApiError` in api-client.ts), you can't use `instanceof ApiError`. Use duck typing with property checks instead: `statusError instanceof Error && 'status' in statusError ? statusError.status : undefined`. This is safer than type assertions `(statusError as { status?: number })?.status` which skip runtime validation. The `instanceof Error` check ensures you're dealing with an Error object before accessing properties.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:45:43.979226"
+type: documentation_gap
+summary: Soft-delete guidance missing index requirement
+detail: |
+  **Existing guidance:** `.ai/rules/core.md` states 'All queries must filter `WHERE deleted_at IS NULL`' and mentions sqlc enforcement. **What was missed:** No mention that soft-delete tables need a partial index for performance. Agent added index only after CI review flagged it. **Why missed:** The rule focuses on query syntax, not database performance implications. **How to strengthen:** Add to core.md soft-deletes section: 'Tables with deleted_at must include partial index `CREATE INDEX idx_table_not_deleted ON table(id) WHERE deleted_at IS NULL` in the same migration that adds soft-delete support.' Also add to 'When You Change X, Check Y' table: 'New soft-delete table → Add partial index on deleted_at IS NULL'.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:53:24.466594"
+type: gotcha
+summary: Playwright route handlers with overlapping URL patterns cause unpredictable ordering issues
+detail: |
+  When mocking multiple related endpoints in E2E tests (e.g., `/api/v1/telegram/auth/status` and `/api/v1/telegram/auth`), using separate `page.route()` calls with glob patterns like `**/telegram/auth/status` and `**/telegram/auth` creates route ordering ambiguity. Playwright may match the wrong handler depending on registration order. The fix: use a SINGLE regex route handler matching all paths under the base URL (e.g., `/\/api\/v1\/telegram\/auth/`) and dispatch internally based on URL string matching (`url.includes('/auth/status')`) and HTTP method. This pattern emerged through three commit iterations: (1) polling assertions, (2) exact path scoping with URL parsing, (3) single regex handler with internal dispatch. The internal dispatch pattern is more reliable than relying on Playwright's route matching precedence.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:58:51.966456"
+type: gotcha
+summary: Playwright route() function predicates are more reliable than regex for pathname matching
+detail: |
+  When intercepting API routes in E2E tests, using a function predicate `page.route(url => url.pathname.includes('/api/v1/path'), handler)` is MORE reliable than regex patterns `page.route(/\/api\/v1\/path/, handler)`. The function predicate receives a URL object with parsed pathname, allowing precise URL structure matching. Regex patterns operate on the full URL string (including query params, protocol) which can cause unexpected matches. This pattern evolved through three iterations: (1) multiple glob patterns (ordering issues), (2) single regex with internal dispatch (better), (3) function predicate with URL object (best). The function predicate also makes the intent clearer: pathname-based routing.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:58:51.966456"
+type: architecture
+summary: Injectable function fields solve concrete-type testability without introducing interfaces
+detail: |
+  When a service depends on a concrete type that can't be mocked (e.g., `OAuthService`), extract the problematic method into an injectable function field on the dependent service. Example: `FollowUpService` needed `OAuthService.GetTodoistSettings()` but couldn't mock it for tests. Fix: added `todoistSettingsFunc func(context.Context) (*Settings, string, error)` field, set to real implementation in production, overridden with fake in tests. This avoids creating interfaces for single-method dependencies while maintaining full testability. Pattern: (1) add function field to struct, (2) initialize in constructor to real implementation, (3) optionally add setter for dependency injection, (4) tests inject fake functions.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:58:51.966456"
+type: rule
+summary: Codex code review caught 4 critical bugs that tests and linters missed
+detail: |
+  The feature-dev:code-reviewer agent found: (1) CompleteFollowUp hard-error blocking inbound interactions when Todoist unavailable, (2) metadata key mismatch ('deadline' vs 'due_date') hiding follow-up due dates, (3) contact_by regression from late-arriving events despite forward-only timestamp guards, (4) transient Todoist failures creating permanent stuck state. All bugs involved state machine edge cases and failure modes. Tests validated happy paths but missed cross-cutting consistency requirements and error handling gaps. **Lesson:** For state machine changes or multi-path features (e.g., 5 task creation paths), ALWAYS run code review agents before considering work done, even when lint and tests pass. State invariants and error propagation paths are exactly what automated review excels at catching.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:58:51.966456"
+type: distinction
+summary: Forward-only update semantics must apply to ALL derived fields, not just source timestamps
+detail: |
+  `contact_by` (cadence due date) is derived from `last_contacted` + cadence window. SQL queries had forward-only guards for `last_contacted` (don't regress to older values), but `contact_by` was always recomputed and applied when non-null. This meant late-arriving automated events would correctly preserve newer `last_contacted` but regress `contact_by` to an older cadence window, breaking the invariant. **Rule:** When timestamp fields have forward-only/manual-override semantics, identify ALL derived fields computed from those timestamps. Apply the same guard: only compute the derived value when the base timestamp update will actually take effect (event is newer than current value OR source is manual). Check at the service layer BEFORE passing to repository - don't rely on SQL guards alone.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:58:51.966456"
+type: documentation_gap
+summary: Common Gotchas table lists the Playwright function predicate fix incorrectly
+detail: |
+  The Common Gotchas entry 'Playwright route() string matcher fails for query params' recommends using regex patterns as the solution. But the actual final fix (commit 34176bc) moved from regex to function predicates, which are even more reliable. The function predicate pattern `page.route(url => url.pathname.includes('/path'), handler)` should be the canonical recommendation, not regex. **Why missed:** The learnings were extracted before the final iteration. **How to strengthen:** Update the gotcha to recommend function predicates as the primary pattern, regex as fallback, and string matchers as deprecated for route matching.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: gotcha
+summary: Playwright route() with overlapping URL patterns causes unpredictable handler ordering
+detail: |
+  When mocking related endpoints (e.g., /api/v1/telegram/auth/status and /api/v1/telegram/auth), using separate page.route() calls creates route matching ambiguity. Solution evolved through three iterations: (1) multiple glob patterns (ordering issues), (2) single regex with internal dispatch (better), (3) function predicate with URL object parsing (best). Use page.route(url => url.pathname.endsWith('/exact/path') && request.method() === 'DELETE', handler) for precise matching. Function predicates receive parsed URL objects, making intent clearer than regex on full URL strings.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: rule
+summary: "E2E disconnect flows: assert on final connected state instead of mocking waitForResponse"
+detail: |
+  When testing disconnect flows that trigger state changes, waitForResponse() can be flaky because the response may fire before the listener is set up, especially when the test modifies route mocks mid-test. Instead of waiting for the API response, assert on the final visible UI state: await expect(page.getByRole('button', { name: /Connect/ })).toBeVisible({ timeout: 5000 }). This polls until the component reaches the expected state, regardless of when the API call completes. The pattern: persist state changes, then assert on UI reflecting that state.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: gotcha
+summary: sqlc parameter additions convert simple args to compound structs, breaking all call sites
+detail: |
+  When adding parameters to sqlc queries (e.g., adding followup_filter to 10+ contact listing queries), sqlc regenerates param structs from simple types to compound structs. This breaks every repository method call site-wide. Pattern: after make sqlc, ALWAYS run go build ./cmd/crm-api to catch signature mismatches before committing. Then systematically fix all call sites by wrapping params in the new struct. Most common in queries with multiple optional filters where sqlc switches from positional args to named structs. Also affects test factories which are easy to miss since they're scattered across tests/*_test.go files.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: architecture
+summary: Circular service dependencies resolved with setter injection and interface fields
+detail: |
+  When ContactService needs FollowUpService but FollowUpService needs ContactService, use post-construction injection: (1) define followUpManager interface in service package, (2) ContactService has followUpManager field (initially nil), (3) add SetFollowUpManager() setter called after both services are constructed in main.go, (4) nil check makes feature optional (no-op if not configured). This avoids constructor cycles while maintaining testability (tests inject mocks). The nil check pattern allows graceful degradation when optional external services aren't configured.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: distinction
+summary: Forward-only timestamp updates apply per-field based on direction, not globally
+detail: |
+  Direction-conditional fields (last_outreach_at, last_response_at, last_interaction_at) each use forward-only logic independently: outbound interactions use forward-only for last_outreach_at but don't touch last_contacted; inbound/mutual update both with their respective forward-only semantics. Critical: outbound interactions do NOT update last_contacted or contact_by (prevents cadence reset when user reaches out first). The isManual flag overrides forward-only for all three patterns. This prevents automated sources from backdating user corrections while capturing historical data properly.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: rule
+summary: Date-based deadlines must use date arithmetic (.AddDate), never time.Duration
+detail: |
+  Todoist deadlines and cadence calculations are date-based ('N days later'), not timestamp-based. Using time.Duration (e.g., 24 * time.Hour * N) introduces DST drift and time-of-day leakage. Correct pattern: use cadence.Today(t).AddDate(0, 0, days) for all date arithmetic. Store watchdog windows as int (day counts) in config, not time.Duration. This matches existing cadence patterns and prevents subtle date drift bugs when crossing DST boundaries.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: architecture
+summary: Follow-up task lifecycle requires completing old task BEFORE creating new one
+detail: |
+  When a follow-up task is completed and triggers a new outbound interaction, must mark the current task as completed FIRST, then call RecordInteraction (which calls CreateOrRefreshFollowUp). Otherwise, CreateOrRefreshFollowUp finds the dying task, refreshes it, then the caller marks it completed, leaving no pending follow-up. Sequence matters: (1) mark task completed in local state, (2) RecordInteraction, (3) CreateOrRefreshFollowUp creates successor. This prevents accidentally refreshing the task being completed. Applies to any state machine where completion of one entity should trigger creation of a successor.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: documentation_gap
+summary: Bug fix commits require regression tests BEFORE the fix
+detail: |
+  Existing rule says 'Always add comprehensive tests for new/changed code' but wasn't followed when fixing bugs found during code review. The rule in .ai/rules/core.md is too general. Agents need explicit guidance: 'When fixing a bug (especially one found by codex/review), add a regression test that reproduces the bug BEFORE making the fix.' Strengthen by: (1) Add to 'When You Change X, Check Y' table: 'When fixing a bug → Add failing test first, verify fix makes it pass', (2) Add to Anti-Patterns with ❌/✅ example showing TDD cycle for bug fixes.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: gotcha
+summary: Metadata key consistency across all task creation/update paths prevents silent data loss
+detail: |
+  Follow-up tasks initially wrote metadata under 'deadline' key but API response read 'due_date' key, causing follow-up due dates to never appear. When adding metadata keys, must update ALL five task paths: reconcileContactTasks, handleTaskCompletion, handleSkipTrigger, reconcileExistingTask (drift + backfill), AND the API response serializer. Pattern: grep for TaskMetadata struct usage and verify all write paths use identical keys. Code review caught this but tests didn't because tests only verified task creation, not full round-trip through API serialization.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: architecture
+summary: Best-effort external service cleanup prevents stuck state in optional integrations
+detail: |
+  When external services (like Todoist) are optional, cleanup operations must degrade gracefully. CompleteFollowUp initially hard-errored when getTodoistSettings failed, leaving local records stuck in 'managed' state forever if Todoist was disconnected. Fix: try external cleanup first; if it fails (settings unavailable, API error), warn-log but still complete the local state transition. This prevents optional external services from blocking core state machine progress. Pattern: external_call(); if err != nil { log.Warn().Err(err).Msg('external cleanup failed'); } // proceed with local state update anyway. Applies to any local/remote two-phase operation where local state is source of truth.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: rule
+summary: Forward-only guards must apply to ALL derived fields, not just source timestamps
+detail: |
+  contact_by (cadence due date) is derived from last_contacted + cadence window. Initial implementation had forward-only guards for last_contacted but always updated contact_by when non-null. This meant late-arriving automated inbound events correctly preserved newer last_contacted but regressed contact_by to older cadence window, breaking the invariant. Rule: when timestamp fields have forward-only semantics, ALL derived fields computed from those timestamps need the same guard: only compute the derived value when the base timestamp update will actually take effect (newer than current, or manual source override). Code review found this.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:07:55.201000"
+type: gotcha
+summary: E2E async component state checks with .isVisible().catch() don't wait, causing flakiness
+detail: |
+  When testing async components with loading states, .isVisible().catch(() => false) returns an instant snapshot and doesn't wait for state to resolve. This causes flaky CI failures when components are still loading. Use expect().toBeVisible() instead, which polls until element appears or times out. The Telegram settings test failed in CI because it checked for configRequired/connectButton immediately after heading was visible, but component was still in loading state (spinner). Fix: await expect(configRequired.or(connectButton)).toBeVisible() which polls until loading completes. Pattern applies to any test checking for async-rendered UI elements.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:26:00.244112"
+type: rule
+summary: "E2E tests for async state changes: assert final UI state, not API responses"
+detail: |
+  When testing flows that trigger async state changes (like disconnect/reconnect), using `page.waitForResponse()` is flaky because the response may fire before the listener is set up, especially when modifying route mocks mid-test. Instead, assert on the final UI state: `await expect(page.getByRole('button', { name: /Connect/ })).toBeVisible({ timeout: 5000 })`. This polls until the component reflects the expected state, regardless of when the API call completes. This pattern emerged after 4 commit iterations fixing a flaky disconnect test.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:26:00.244112"
+type: gotcha
+summary: Playwright route() overlapping URL patterns cause unpredictable handler ordering
+detail: |
+  When mocking related endpoints (e.g., `/api/v1/telegram/auth/status` and `/api/v1/telegram/auth`), using separate `page.route()` calls creates route matching ambiguity - Playwright may invoke the wrong handler. Solution: use function predicates for precise matching: `page.route(url => url.pathname.endsWith('/exact/path') && url.searchParams.get('method') === 'DELETE', handler)`. Function predicates receive parsed URL objects, making intent clearer than regex patterns that operate on full URL strings. This pattern emerged through 3 iterations: (1) glob patterns → ordering issues, (2) single regex → better, (3) function predicate → best.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:26:00.244112"
+type: architecture
+summary: Connection managers (non-SyncProvider) use external_sync_state with Enabled=false for status tracking
+detail: |
+  When a feature needs a long-lived connection (like Telegram MTProto) that manages its own lifecycle instead of being scheduled, use `external_sync_state` with `Enabled: false`. This prevents `RunDueSyncs` from picking it up (it filters `WHERE enabled=TRUE`) while still providing a row for status display and UUID tracking. The sync state is created on first connect, loaded via `GetSyncStateBySource()` on restart, and deleted on disconnect.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:26:00.244112"
+type: gotcha
+summary: Third-party session storage callbacks may fire before domain auth completes
+detail: |
+  When implementing external library storage interfaces (like gotd/td's `session.Storage`), the library may call storage methods during internal setup (e.g., MTProto key exchange) before your application's auth flow completes. The storage implementation must NOT set domain-level auth state (like `auth_state=connected`) in these callbacks. Solution: separate the storage operation (just persist bytes) from the auth state transition (set by domain logic after code/2FA verification). This required creating separate sqlc queries: `UpsertTelegramSessionData` (bytes only) vs `UpdateTelegramAuthState` (domain state).
+actionable: true
+
+---
+timestamp: "2026-04-08T20:26:00.244112"
+type: distinction
+summary: Frontend should distinguish 404 (not configured) from 5xx (error) for feature-flagged endpoints
+detail: |
+  When a backend feature is behind a feature flag, the status endpoint should return 404 if the feature is disabled, not 500. Frontend should treat these differently: 404 = not_configured state (hide action buttons, show config instructions), 5xx = temporary error (show retry button). This prevents showing 'Connect' buttons when the backend isn't configured at all, which would fail with confusing errors.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:43:27.327365"
+type: rule
+summary: E2E tests for auth flows requiring real external connections should be omitted with rationale comment
+detail: |
+  Playwright route mocking cannot reliably distinguish between similar API endpoints (e.g., DELETE /telegram/auth vs GET /telegram/auth/status) - glob patterns match both, regex patterns are brittle, function predicates are verbose and still fragile when paths overlap. After multiple fix attempts across 6 commits (glob→regex→function predicates→scoped paths→single handler), the final resolution was to remove disconnect/cancel/error E2E tests entirely. Auth flows requiring real external connections (MTProto, OAuth callbacks, WebSocket handshakes) should be tested via: (1) backend integration tests for business logic, (2) route-mocked happy-path E2E tests for UI transitions only, (3) manual testing for actual connection flows. Document omission with a NOTE comment explaining why the test was removed and what coverage exists elsewhere.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:43:27.327365"
+type: gotcha
+summary: External library storage callbacks must not set domain auth state
+detail: |
+  When implementing storage interfaces for third-party libraries (like gotd/td's session.Storage), the library may call storage methods during internal protocol setup (e.g., MTProto key exchange) BEFORE your application's domain auth flow completes (code verification, 2FA). The storage implementation must ONLY persist the library's opaque bytes, never set application-level auth state flags. This requires separate operations: UpsertSessionData (library bytes only, no auth_state column) vs UpdateAuthState (domain logic sets this after verification). Mixing these causes race conditions where the library's internal handshake marks the session 'connected' before user has actually authenticated.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:43:27.327365"
+type: gotcha
+summary: sqlc upsert queries that need to preserve existing columns require separate specialized queries
+detail: |
+  When using sqlc upsert patterns (INSERT ... ON CONFLICT DO UPDATE), if you need to update only a subset of columns while preserving others, you must create separate queries for each update pattern. Cannot use a single UpsertTelegramChannelState for both full updates (pts + access_hash) and partial updates (access_hash only, preserve pts). The original UpsertTelegramChannelState with 'pts = EXCLUDED.pts' would overwrite pts=0 on every access hash update, violating gotd/td's requirement that access hashes can be updated independently. Solution: UpsertTelegramChannelAccessHash with 'ON CONFLICT DO UPDATE SET access_hash = EXCLUDED.access_hash' (omitting pts entirely). This pattern applies whenever different code paths need different conflict resolution semantics for the same unique constraint.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:43:27.327365"
+type: rule
+summary: Auth session cleanup on error prevents stuck state requiring manual intervention
+detail: |
+  For multi-step auth flows using in-memory session state (phone→code→password), when verification fails at any step, you must call clearSession() to remove the auth session from the manager's active sessions map. Without cleanup, a failed auth leaves the session in limbo: StartAuth returns ErrAuthInProgress (blocking retries), but VerifyCode/VerifyPassword have no valid session to complete. The error path must mirror the success path: on 'error' status result, clear the session AND stop any TTL timers to prevent delayed cleanup callbacks from racing. Pattern: switch result.Status { case 'connected': sess.Timer.Stop(); clearSession(sess); case 'error': sess.Timer.Stop(); clearSession(sess); return nil, result.Error }
+actionable: true
+
+---
+timestamp: "2026-04-08T20:43:27.327365"
+type: architecture
+summary: Cancel endpoints for async flows prevent blocking retries when client-side state desyncs
+detail: |
+  When building multi-step async auth flows where client and server maintain parallel state machines, provide an explicit cancel/reset endpoint separate from the start endpoint. StartAuth checking 'session already exists' and returning error is correct (prevents duplicate flows), but if client-side state resets (page refresh, navigation, explicit Cancel button) while server-side session is active, the user is stuck - can't start new auth, can't resume old auth. Solution: POST /auth/cancel that unconditionally clears server-side session. Client calls this on Cancel button click and on component unmount cleanup. This is different from DELETE /auth (disconnect authenticated session) - cancel clears in-progress auth, disconnect revokes completed auth.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:43:27.327365"
+type: documentation_gap
+summary: Common Gotchas entry 'E2E test waiting for page load' recommends networkidle, which is unreliable for async components
+detail: |
+  The existing gotcha about E2E page load waiting doesn't cover the pattern for components with async loading states. Tests that check for elements rendered by useEffect/React Query immediately after page navigation fail in CI because domcontentloaded doesn't mean React components have rendered. Pattern: (1) await page.goto(), (2) await page.waitForLoadState('domcontentloaded'), (3) await expect(staticElement).toBeVisible() [structural element that's always present], (4) await expect(asyncElement.or(fallbackElement)).toBeVisible({ timeout }) for elements rendered after data fetch. Never use 'networkidle' - it's flaky in real apps with long-polling, WebSockets, or background fetches. Never use .isVisible().catch() - it's a snapshot, not a poll.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: gotcha
+summary: gotd updates.Config panics if Handler is nil
+detail: |
+  The gotd Telegram library's updates.New() panics at initialization if Config.Handler is nil, even if you don't plan to process updates. Solution: provide a no-op handler implementing the required interface. This is not documented in the gotd Quick Start, so agents implementing Phase 2 (connection without message processing) will hit a runtime panic without this knowledge.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: distinction
+summary: Use sentinel errors with errors.Is(), not substring matching for error classification
+detail: |
+  When distinguishing internal persistence/infrastructure errors (should return 500) from Telegram auth rejections (should return 401), use a sentinel error pattern: define `var ErrAuthInternal = errors.New("internal auth error")`, wrap persistence errors with `fmt.Errorf("...: %w", ErrAuthInternal)`, and check with `errors.Is(err, ErrAuthInternal)`. String matching with `strings.Contains(msg, "persist")` is brittle and misses errors with different wording.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: architecture
+summary: gotd auth flow requires retry loop within Run callback, not callback restart
+detail: |
+  The gotd library's auth pattern ties the phone_code_hash to a specific client.Run() session. When SignIn returns an invalid code error, you cannot exit the Run callback and restart — you must loop within the callback and wait for another code via the channel. Structure: send awaiting_code → loop { read code from chan → SignIn → if error, send error result but continue loop → if success, break }. Exiting the callback invalidates the code hash and forces a new SendCode round-trip.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: gotcha
+summary: "Disconnect failure handling: delete session BEFORE updating in-memory state"
+detail: |
+  When implementing Disconnect(), delete the DB session row FIRST, then commit in-memory teardown (m.running = false, m.status.Connected = false). If you update in-memory state first and then DeleteSession fails, the manager shows disconnected but the DB still has the session, causing auto-reconnect on restart. The user was told they disconnected but they didn't. If delete fails, leave in-memory state as-is, return error, let user retry.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: gotcha
+summary: disconnected flag must be cleared on reconnect
+detail: |
+  The manager's `disconnected` bool flag (used to prevent auto-reconnect after explicit disconnect) must be cleared when startConnection succeeds. If not cleared, after a successful disconnect → successful reconnect sequence, the next disconnect failure will incorrectly short-circuit Status() to return connected=false instead of falling back to DB truth. Add `m.disconnected = false` in startConnection after acquiring the lock.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: rule
+summary: Add RPC call timeouts for MTProto operations that can hang
+detail: |
+  Wrap gotd RPC calls (SendCode, SignIn, Password) with 30s context timeout to prevent hanging when the Telegram connection drops mid-auth. Without timeout, a network partition during auth leaves the HTTP handler waiting indefinitely. Use context.WithTimeout and pass the child context to the RPC call. This applies to any gotd API call that involves network round-trips.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: architecture
+summary: Auto-reconnect requires exponential backoff and permanent disconnect flag
+detail: |
+  Implementing auto-reconnect for long-lived MTProto connections requires: (1) a runWithReconnect loop that catches Run() exits and retries with exponential backoff (5s base to 5min max), (2) a `disconnected` bool flag to distinguish explicit user disconnect from transient failure (if disconnected=true, don't auto-reconnect), (3) backoff reset on successful connection. The gotd client.Run() exit does not distinguish between permanent and transient errors — all failures look the same, so you must track user intent separately.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: gotcha
+summary: "Frontend notes overflow detection: scrollHeight vs clientHeight"
+detail: |
+  To detect if text content overflows a CSS line-clamp, use a useEffect that checks `notesRef.current.scrollHeight > notesRef.current.clientHeight` when the content changes. This triggers after browser layout, so it accurately detects overflow even for multi-line clamped content. Add the check in a useEffect with dependencies on the content and the expanded state, and only run when !expanded (otherwise scrollHeight === clientHeight when fully shown).
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: rule
+summary: "Auth state machine: track step and validate in handler"
+detail: |
+  When implementing multi-step auth flows (code → password), add a Step field to the auth session ("awaiting_code", "awaiting_password") and validate it in the HTTP handlers. VerifyCode should check step === "awaiting_code" and return 409 Conflict if not; VerifyPassword should check step === "awaiting_password". This prevents out-of-order calls like calling VerifyPassword before sending a code. Set the step when sending the awaiting_X result, and transition it when SignIn returns ErrPasswordAuthNeeded.
+actionable: true
+

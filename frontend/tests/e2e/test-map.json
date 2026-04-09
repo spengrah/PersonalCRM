@@ -411,5 +411,41 @@
   {
     "pattern": "^backend/migrations/031_",
     "tags": ["@area:contacts"]
+  },
+  {
+    "pattern": "^frontend/src/components/settings/telegram-section\\.tsx$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/hooks/use-telegram\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/lib/telegram-api\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/telegram-settings\\.spec\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/telegram/",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/telegram\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/repository/telegram_.*\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/telegram_.*\\.sql$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/migrations/032_",
+    "tags": ["@area:settings"]
   }
 ]

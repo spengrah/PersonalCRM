@@ -178,24 +178,30 @@ func TestConfig_Validate_ProductionRequiresSessionSecret(t *testing.T) {
 func TestConfig_Validate_TelegramDependency(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
-	WithEnv(t, "ENABLE_TELEGRAM_BOT", "true")
-	// Don't set TELEGRAM_BOT_TOKEN
+	WithEnv(t, "ENABLE_TELEGRAM_SYNC", "true")
+	// Don't set TELEGRAM_API_ID or TELEGRAM_API_HASH
 
 	_, err := Load()
 	if err == nil {
-		t.Fatal("Expected error when TELEGRAM_BOT_TOKEN is missing but ENABLE_TELEGRAM_BOT is true")
+		t.Fatal("Expected error when TELEGRAM_API_ID/TELEGRAM_API_HASH are missing but ENABLE_TELEGRAM_SYNC is true")
 	}
 
 	if verr, ok := err.(ValidationErrors); ok {
-		found := false
+		foundID := false
+		foundHash := false
 		for _, e := range verr {
-			if e.Field == "TELEGRAM_BOT_TOKEN" {
-				found = true
-				break
+			if e.Field == "TELEGRAM_API_ID" {
+				foundID = true
+			}
+			if e.Field == "TELEGRAM_API_HASH" {
+				foundHash = true
 			}
 		}
-		if !found {
-			t.Error("Expected validation error for TELEGRAM_BOT_TOKEN")
+		if !foundID {
+			t.Error("Expected validation error for TELEGRAM_API_ID")
+		}
+		if !foundHash {
+			t.Error("Expected validation error for TELEGRAM_API_HASH")
 		}
 	}
 }

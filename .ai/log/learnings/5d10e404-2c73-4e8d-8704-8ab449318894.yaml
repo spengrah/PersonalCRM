@@ -1,0 +1,80 @@
+---
+timestamp: "2026-04-08T19:48:29.902328"
+type: gotcha
+summary: sqlc parameter struct changes break repository layer when adding query params
+detail: |
+  When adding new sqlc query parameters (e.g., adding `followup_filter` to 10+ contact listing queries), sqlc regenerates param structs from simple strings to compound structs. This breaks all repository method calls site-wide. Pattern: after `make sqlc`, always run `go build ./cmd/crm-api` to catch signature mismatches. Then systematically fix all call sites by wrapping params in the new struct (e.g., `CountContacts(filter)` → `CountContacts(CountContactsParams{CadenceFilter: filter, FollowupFilter: followupFilter})`). Most common in queries with multiple optional filters.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:48:29.902328"
+type: architecture
+summary: Follow-up task lifecycle requires completing old task BEFORE creating new one
+detail: |
+  When a follow-up task is completed and triggers a new outbound interaction, the service must mark the current task as completed FIRST, then call RecordInteraction (which calls CreateOrRefreshFollowUp). Otherwise, CreateOrRefreshFollowUp finds the dying task, refreshes it, then the caller marks it completed, leaving no pending follow-up. Sequence matters: (1) mark task completed, (2) RecordInteraction, (3) CreateOrRefreshFollowUp creates successor. This prevents accidentally refreshing the task being completed.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:48:29.902328"
+type: rule
+summary: Date-based deadline calculations must use date arithmetic not time.Duration
+detail: |
+  Todoist deadlines and cadence calculations are date-based ("N days later"), not timestamp-based. Using `time.Duration` (e.g., `24 * time.Hour * N`) introduces DST drift and time-of-day leakage. Correct pattern: use `cadence.Today(t).AddDate(0, 0, days)` for date arithmetic. Store watchdog windows as `int` (day counts) in config, not `time.Duration`. This matches existing cadence calculation patterns and prevents subtle date drift bugs.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:48:29.902328"
+type: architecture
+summary: Layer discipline for has_pending_followup requires service-level method
+detail: |
+  Handlers must not directly query contactTaskRepo for derived fields like `has_pending_followup`. Instead, add a service-level method (e.g., `ContactService.HasPendingFollowUp(contactID)`) that delegates to the repo. This maintains Handler → Service → Repository layer discipline. Requires injecting contactTaskRepo into ContactService constructor and updating all NewContactService call sites (main.go + all test files). The extra query is cheap and keeps architecture clean.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:48:29.902328"
+type: gotcha
+summary: Adding repository dependency to service requires updating all test constructors
+detail: |
+  When adding contactTaskRepo parameter to NewContactService(), must update not just main.go but ALL test files that construct the service (contact_ids_test.go, contact_merge_test.go, interaction_test.go, etc.). Pattern: grep for all NewContactService calls, add `contactTaskRepo := repository.NewContactTaskRepository(database.Queries)` before service creation, then pass it. Batch edit with sed or manual updates. Compilation won't catch test files until you run `make test`.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:48:29.902328"
+type: rule
+summary: API test coverage must include new request/response fields and validations
+detail: |
+  When adding new API fields (direction in interaction requests, has_pending_followup in contact responses, followup_filter query params, follow_up kind validation), must write handler-level API tests that verify: (1) new request fields parse correctly, (2) new response fields serialize correctly, (3) new validations reject invalid input, (4) new query parameters filter as expected. Integration tests verify DB behavior; API tests verify HTTP contract. Both are required for complete coverage.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:48:29.902328"
+type: distinction
+summary: "Direction-conditional timestamp updates: outbound vs inbound vs mutual"
+detail: |
+  The direction model creates three distinct update patterns: (1) outbound-only: updates ONLY last_outreach_at (does NOT reset cadence clock), (2) inbound-only: updates last_contacted, last_interaction_at, last_response_at, contact_by (resets cadence), (3) mutual: updates ALL five fields + contact_by. Critical: outbound interactions do NOT update last_contacted or contact_by. This prevents cadence reset when user reaches out first. The isManual flag overrides forward-only semantics for all three patterns (manual always updates, automated uses forward-only).
+actionable: true
+
+---
+timestamp: "2026-04-08T19:48:29.902328"
+type: gotcha
+summary: RecordInteractionRequest and CreateInteractionRequest type mismatch after adding direction
+detail: |
+  After adding Direction field to RecordInteractionRequest, can no longer use type conversion `repository.CreateInteractionRequest(req)` because structs have different fields. Must explicitly construct the struct: `CreateInteractionRequest{ContactID: req.ContactID, Source: req.Source, SourceRef: req.SourceRef, OccurredAt: req.OccurredAt, Description: req.Description, Direction: req.Direction}`. Type conversion only works when struct fields match exactly; adding one field breaks the conversion.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:48:29.902328"
+type: architecture
+summary: Circular dependency between ContactService and FollowUpService resolved with setter injection
+detail: |
+  ContactService needs FollowUpService (to create/complete follow-ups in RecordInteraction), but FollowUpService needs ContactService (to record outbound interactions). Resolved with: (1) define followUpManager interface in service package, (2) ContactService has `followUpManager` field (initially nil), (3) ContactService.SetFollowUpManager() setter for post-construction injection, (4) main.go: create ContactService, create FollowUpService, call ContactService.SetFollowUpManager(followUpService). If Todoist not configured, skip SetFollowUpManager → followUpManager stays nil → RecordInteraction skips follow-up logic.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:48:29.902328"
+type: documentation_gap
+summary: Plan review feedback revealed missing wiring, observability, and test coverage specs
+detail: |
+  Initial plan omitted: (1) constructor signature changes for NewContactService (adding contactTaskRepo parameter), (2) observability requirements from spec Section 11.8 (log follow-up created/refreshed/completed with contact/task IDs and due dates), (3) API-level test coverage for new fields/validations. These were all required by the spec or architectural patterns but weren't in the initial plan. Plan phase should explicitly include: constructor wiring changes, logging/observability for new paths, and test coverage matrix (unit/integration/API) for all changes. The spec's own review rubric provides the checklist.
+actionable: true
+

@@ -190,7 +190,7 @@ LOG_LEVEL=info
 
 # Feature Flags (optional)
 ENABLE_VECTOR_SEARCH=false
-ENABLE_TELEGRAM_BOT=false
+ENABLE_TELEGRAM_SYNC=false
 ENABLE_CALENDAR_SYNC=false
 
 # CRM Environment
@@ -1000,8 +1000,9 @@ After stable deployment, consider enabling:
    # Add to .env.local
    nano .env.local
    # Add these lines:
-   # TELEGRAM_BOT_TOKEN=your-token-here
-   # ENABLE_TELEGRAM_BOT=true
+   # TELEGRAM_API_ID=your-api-id-here
+   # TELEGRAM_API_HASH=your-api-hash-here
+   # ENABLE_TELEGRAM_SYNC=true
 
    # Restart backend
    make stop && make start-local

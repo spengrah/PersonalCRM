@@ -52,3 +52,8 @@ export const contactTaskKeys = {
   list: (contactId: string, params?: { state?: string; kind?: string }) =>
     [...contactTaskKeys.lists(), contactId, params] as const,
 }
+
+export const telegramKeys = {
+  all: ['telegram'] as const,
+  status: () => [...telegramKeys.all, 'status'] as const,
+}

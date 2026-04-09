@@ -101,9 +101,12 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.goto(`/contacts/${contactId}`)
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
+    // Wait for notes to render before checking overflow detection
+    await expect(page.getByText('Met at the AI conference')).toBeVisible({ timeout: 5000 })
+
     // Verify "Show more" button is visible (indicates notes overflow the 4-line clamp)
     const showMoreButton = page.getByRole('button', { name: 'Show more' })
-    await expect(showMoreButton).toBeVisible()
+    await expect(showMoreButton).toBeVisible({ timeout: 5000 })
 
     // Click "Show more" to expand
     await showMoreButton.click()
