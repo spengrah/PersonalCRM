@@ -281,8 +281,10 @@ func (m *PeerMatcher) OnPeerLinked(ctx context.Context, peerUserID int64, peerUs
 	}
 
 	// 2. Update matched_contact_id on all messages for this peer
-	if err := m.messageRepo.UpdateMessageContact(ctx, peerUserID, contactID); err != nil {
-		return fmt.Errorf("update message contacts on import: %w", err)
+	if m.messageRepo != nil {
+		if err := m.messageRepo.UpdateMessageContact(ctx, peerUserID, contactID); err != nil {
+			return fmt.Errorf("update message contacts on import: %w", err)
+		}
 	}
 
 	log.Info().

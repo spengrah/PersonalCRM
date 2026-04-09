@@ -27,9 +27,16 @@ func (m *mockIdentityMatcher) MatchOrCreate(_ context.Context, req service.Match
 	return &service.MatchResult{MatchType: repository.MatchTypeUnmatched}, nil
 }
 
+type updateMatchCall struct {
+	id        uuid.UUID
+	contactID *uuid.UUID
+	status    repository.MatchStatus
+}
+
 type mockExternalContactUpserter struct {
-	upsertCalls []repository.UpsertExternalContactRequest
-	getResult   *repository.ExternalContact
+	upsertCalls      []repository.UpsertExternalContactRequest
+	getResult        *repository.ExternalContact
+	updateMatchCalls []updateMatchCall
 }
 
 func (m *mockExternalContactUpserter) Upsert(_ context.Context, req repository.UpsertExternalContactRequest) (*repository.ExternalContact, error) {
@@ -41,7 +48,8 @@ func (m *mockExternalContactUpserter) GetBySource(_ context.Context, _, _ string
 	return m.getResult, nil
 }
 
-func (m *mockExternalContactUpserter) UpdateMatch(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ repository.MatchStatus) (*repository.ExternalContact, error) {
+func (m *mockExternalContactUpserter) UpdateMatch(_ context.Context, id uuid.UUID, contactID *uuid.UUID, status repository.MatchStatus) (*repository.ExternalContact, error) {
+	m.updateMatchCalls = append(m.updateMatchCalls, updateMatchCall{id: id, contactID: contactID, status: status})
 	return nil, nil
 }
 
@@ -194,6 +202,82 @@ func TestMatchPeer_NilUsernameAndPhone(t *testing.T) {
 	assert.Nil(t, result)
 	// No calls — nothing to match on
 	assert.Empty(t, identityMock.calls)
+}
+
+func TestOnPeerLinked_WithUsername(t *testing.T) {
+	contactID := uuid.New()
+	identityMock := &mockIdentityMatcher{
+		results: map[string]*service.MatchResult{},
+	}
+	matcher := &PeerMatcher{
+		identityService:     identityMock,
+		externalContactRepo: &mockExternalContactUpserter{},
+		discoveryMinMsgs:    3,
+	}
+
+	err := matcher.OnPeerLinked(context.Background(), 12345, "alice", contactID)
+	require.NoError(t, err)
+
+	// Should call MatchOrCreate with KnownContactID to link identity
+	require.Len(t, identityMock.calls, 1)
+	assert.Equal(t, "alice", identityMock.calls[0].RawIdentifier)
+	assert.NotNil(t, identityMock.calls[0].KnownContactID)
+	assert.Equal(t, contactID, *identityMock.calls[0].KnownContactID)
+}
+
+func TestOnPeerLinked_WithoutUsername(t *testing.T) {
+	contactID := uuid.New()
+	identityMock := &mockIdentityMatcher{
+		results: map[string]*service.MatchResult{},
+	}
+	matcher := &PeerMatcher{
+		identityService:     identityMock,
+		externalContactRepo: &mockExternalContactUpserter{},
+		discoveryMinMsgs:    3,
+	}
+
+	err := matcher.OnPeerLinked(context.Background(), 12345, "", contactID)
+	require.NoError(t, err)
+
+	// No MatchOrCreate call when username is empty
+	assert.Empty(t, identityMock.calls)
+}
+
+func TestMarkExternalContactMatched_AlreadyMatched(t *testing.T) {
+	contactID := uuid.New()
+	ecMock := &mockExternalContactUpserter{
+		getResult: &repository.ExternalContact{
+			ID:          uuid.New(),
+			MatchStatus: repository.MatchStatusMatched,
+		},
+	}
+	matcher := &PeerMatcher{
+		externalContactRepo: ecMock,
+	}
+
+	// Should not upsert — already matched
+	matcher.markExternalContactMatched(context.Background(), 12345, contactID)
+	assert.Empty(t, ecMock.upsertCalls)
+}
+
+func TestMarkExternalContactMatched_Unmatched(t *testing.T) {
+	contactID := uuid.New()
+	ecID := uuid.New()
+	ecMock := &mockExternalContactUpserter{
+		getResult: &repository.ExternalContact{
+			ID:          ecID,
+			MatchStatus: repository.MatchStatusUnmatched,
+		},
+		updateMatchCalls: make([]updateMatchCall, 0),
+	}
+	matcher := &PeerMatcher{
+		externalContactRepo: ecMock,
+	}
+
+	matcher.markExternalContactMatched(context.Background(), 12345, contactID)
+	require.Len(t, ecMock.updateMatchCalls, 1)
+	assert.Equal(t, ecID, ecMock.updateMatchCalls[0].id)
+	assert.Equal(t, contactID, *ecMock.updateMatchCalls[0].contactID)
 }
 
 func ptr(s string) *string { return &s }
