@@ -391,10 +391,13 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByText('Close Friends')).toBeVisible({ timeout: 10000 })
-    await expect(page.getByText('Work Team')).toBeVisible()
-    await expect(page.getByText('5 members')).toBeVisible()
-    await expect(page.getByText('25 members')).toBeVisible()
+    const section = page.locator('section', {
+      has: page.getByRole('heading', { name: 'Telegram', exact: true }),
+    })
+    await expect(section.getByText('Close Friends')).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText('Work Team')).toBeVisible()
+    await expect(section.getByText('5 members').first()).toBeVisible()
+    await expect(section.getByText('25 members').first()).toBeVisible()
   })
 
   test('group chat management: empty state', async ({ page }) => {
@@ -471,7 +474,7 @@ test.describe('Telegram Settings @area:settings', () => {
       })
     )
 
-    await page.route('**/api/v1/telegram/chats', route => {
+    await page.route('**/api/v1/telegram/chats**', route => {
       if (route.request().method() === 'GET') {
         return route.fulfill({
           status: 200,
@@ -542,7 +545,7 @@ test.describe('Telegram Settings @area:settings', () => {
       })
     )
 
-    await page.route('**/api/v1/telegram/chats', route => {
+    await page.route('**/api/v1/telegram/chats**', route => {
       if (route.request().method() === 'GET') {
         return route.fulfill({
           status: 200,
