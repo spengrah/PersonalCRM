@@ -390,3 +390,123 @@ detail: |
   When testing code that uses singleton tables (e.g., telegram_session with id=1 constraint), parallel tests in the same package will collide on the singleton row. Solution: (1) Run telegram package tests sequentially via test build tag or explicit -p 1, (2) Add cleanup helpers that wipe singleton state between tests, (3) Use unique identifiers where possible to avoid conflicts. Integration tests for Telegram auth must be sequential within the telegram_test package.
 actionable: true
 
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: gotcha
+summary: sqlc UPSERT with selective field updates requires separate queries
+detail: |
+  When implementing `ON CONFLICT DO UPDATE` in sqlc, you cannot selectively preserve some fields while updating others in a single query. The `UpsertTelegramChannelAccessHash` pattern shows the solution: create separate queries for different update scenarios. One query updates all fields (pts + access_hash), another only updates access_hash and preserves existing pts by using `DO UPDATE SET access_hash = EXCLUDED.access_hash` (omitting pts from the SET clause). Without this, a generic upsert that sets pts=0 on insert will overwrite existing pts values on conflict.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: distinction
+summary: "Session cleanup: clearSession (success) vs cleanup (error)"
+detail: |
+  Auth flows need two distinct cleanup patterns: `clearSession` for successful completion (frees resources, session no longer needed) and `cleanup` for errors (resets state so a new auth attempt can start). The critical distinction: error cleanup must happen when the error is an internal/infrastructure failure (ErrAuthInternal), but NOT when it's an auth rejection (invalid code/password) — auth rejections should allow retry within the same session TTL. This pattern applies to any multi-step flow with retryable vs terminal errors.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: gotcha
+summary: Persistence before in-memory state commit on teardown
+detail: |
+  When implementing disconnect/teardown flows with persistent state: persist the change BEFORE updating in-memory flags, not after. In Disconnect(), deleting the DB session must happen before setting `m.running = false`, otherwise on DB failure the method returns an error but the in-memory state already shows disconnected. This creates inconsistency where Status() reads from memory (disconnected) but DB still has the session (will auto-reconnect on restart). The fix: persist first, then commit memory state only on success.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: architecture
+summary: Sentinel errors to distinguish infrastructure vs domain failures
+detail: |
+  Use typed sentinel errors (e.g., `ErrAuthInternal`) to distinguish infrastructure failures (DB errors, persistence failures) from domain-level failures (invalid credentials, auth rejections). Wrap all persistence errors with `fmt.Errorf("...: %w", ErrAuthInternal)` so handlers can use `errors.Is(err, ErrAuthInternal)` to return 500 vs 401. Without this, substring matching like `strings.Contains(err.Error(), "persist")` is fragile and breaks when error messages change. The pattern: define sentinel errors in the domain package, wrap at error sites, check with errors.Is in handlers.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: gotcha
+summary: Shared state across goroutines requires mutex on both read AND write
+detail: |
+  When implementing state machines with concurrent access (e.g., auth flow Step tracking), ALL accesses to shared state must be synchronized, not just reads OR writes. The sess.Step field was written by the MTProto goroutine (`sess.Step = "awaiting_code"`) but read by HTTP handlers checking state. Initially only reads were under mutex — this created a data race. Fix: wrap ALL Step assignments with `m.mu.Lock(); sess.Step = "..."; m.mu.Unlock()` matching the read-side locking. Data races on state machine fields cause nondeterministic behavior where valid requests get rejected or accepted incorrectly.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: rule
+summary: Auth flow state machines need explicit step tracking
+detail: |
+  Multi-step auth flows (phone → code → 2FA) should track the current step explicitly in a Step field, not infer it from other state. Without explicit tracking, VerifyCode can be called when awaiting_password (wrong step) or VerifyPassword when awaiting_code. The pattern: add Step string field to session struct, set it when sending each result ("awaiting_code", "awaiting_password"), check it at the start of each verify method: `if sess.Step != "awaiting_code" { return ErrInvalidState }`. This prevents out-of-order API calls and makes the state machine explicit.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: documentation_gap
+summary: Error handling patterns (sentinel errors, wrapping) not documented in code-review.md
+detail: |
+  The code review found 10+ rounds of issues around error handling patterns: distinguishing internal errors from auth errors, wrapping with sentinel errors, using errors.Is instead of string matching. These patterns are critical for correct HTTP status codes and user-facing error messages, but aren't in code-review.md or architecture.md. **Why missed:** No guidance on when to use sentinel errors vs error types vs wrapping. **How to strengthen:** Add an 'Error Handling' section to code-review.md or core.md covering: (1) define sentinel errors for domain boundaries, (2) wrap at error sites with fmt.Errorf("%w"), (3) check with errors.Is in handlers, (4) distinguish infrastructure (500) from domain (4xx) failures.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:18:32.204351"
+type: documentation_gap
+summary: Thread safety requirements for concurrent goroutine patterns not in testing.md
+detail: |
+  The session found data races on shared state accessed from both HTTP handlers and background goroutines (sess.Step). The fix required mutex protection on ALL accesses, not just reads or writes. **Why missed:** No guidance in testing.md about running tests with race detector (`go test -race`) or patterns for protecting shared state. **How to strengthen:** Add to testing.md: (1) always run `go test -race` for code with goroutines, (2) pattern: shared mutable state needs mutex on ALL accesses (reads + writes), (3) alternative: use channels for state updates instead of shared memory.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:21:30.334242"
+type: gotcha
+summary: gotd/td updates.New() requires non-nil Handler - panics at runtime if nil
+detail: |
+  The `github.com/gotd/td/telegram/updates.New()` function validates that `Config.Handler` is non-nil and panics immediately if it's nil. This happens inside the library's `setDefaults()` method, not at compile time. Even if you don't need update processing, you must provide at least a no-op handler: `telegram.UpdateHandlerFunc(func(ctx context.Context, u tg.UpdatesClass) error { return nil })`. The panic manifests as a runtime crash in the goroutine that creates the updates manager.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:21:30.334242"
+type: gotcha
+summary: Telegram RPC calls hang forever if connection drops - need per-operation timeouts
+detail: |
+  Telegram MTProto RPC calls (`authClient.SendCode()`, `authClient.SignIn()`, `authClient.Password()`) can hang indefinitely if the Telegram connection drops mid-request, even if the parent context has a timeout. After a failed 2FA attempt or network interruption, subsequent auth calls will never return. Solution: wrap each RPC call with its own `context.WithTimeout()` (e.g., 30 seconds): `sendCtx, cancel := context.WithTimeout(runCtx, 30*time.Second); defer cancel(); authClient.SendCode(sendCtx, ...)`. The parent context timeout alone is insufficient because the connection state may be broken.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:21:30.334242"
+type: rule
+summary: E2E tests checking overflow-dependent UI must wait for content render, not just page load
+detail: |
+  Tests that verify overflow-dependent UI elements (like 'Show more' buttons triggered by CSS line-clamp) fail intermittently in headless browsers if they only wait for page load. The overflow detection useEffect runs after React renders the content, which may happen after navigation completes. Solution: before checking for the overflow button, wait for the actual text content to be visible: `await expect(page.getByText('snippet of long content')).toBeVisible()`. This ensures the element is rendered and the overflow detection effect has fired. Applies to any UI that uses scrollHeight/clientHeight comparisons.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:21:30.334242"
+type: documentation_gap
+summary: No guidance on library-specific runtime validation requirements for third-party integrations
+detail: |
+  When integrating third-party libraries (especially those with runtime validation like gotd/td), agents had to discover required configuration fields through crash debugging rather than proactive checking. The `updates.Config.Handler` requirement wasn't obvious from reading the code - it only manifested as a panic in a goroutine during startup. **Strengthening**: Add to `.ai/guides/architecture.md` or create `.ai/patterns/third-party-integrations.md` with rule: 'Before adding a new third-party library integration, grep the library source for `panic()` calls in config/setup code to identify required fields that won't be caught at compile time. Test startup paths immediately after adding the integration.'
+actionable: true
+
+---
+timestamp: "2026-04-08T19:30:34.260870"
+type: gotcha
+summary: "E2E async component checks: .isVisible().catch() doesn't wait, use expect().toBeVisible()"
+detail: |
+  When testing async components with loading states, `.isVisible().catch(() => false)` returns an instant snapshot and doesn't wait for state to resolve. This causes flaky tests when components are still loading. Use `expect().toBeVisible()` instead, which polls until the element appears or times out. The Telegram settings test failed in CI because it checked for configRequired/connectButton immediately after the heading was visible, but the component was still in loading state (spinner). The fix: wait for one of the expected final states with `expect(configRequired.or(connectButton)).toBeVisible()` which polls until loading completes.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:30:34.260870"
+type: architecture
+summary: "E2E Playwright: heading visible != component data loaded for async components"
+detail: |
+  React components that render a heading synchronously but fetch data asynchronously (like Telegram settings) will show the heading immediately while displaying a loading spinner. Waiting for the heading with `expect(heading).toBeVisible()` does NOT mean the async data fetch has completed. Must explicitly wait for the expected final state elements (error messages, buttons, data content) before asserting on them. This is especially important for settings pages that check backend configuration status.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:30:34.260870"
+type: gotcha
+summary: E2E shared DB state causes flaky tests when seeded data is consumed by other tests
+detail: |
+  Import candidates test failed with 'No import candidates' despite seeding data. Attributed to shared DB state where other tests consume the seeded data. Tests that depend on specific seeded data being present can fail intermittently when run in parallel or in different orders. The test passed on retry, indicating timing/state dependency rather than a code bug.
+actionable: false
+
