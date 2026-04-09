@@ -138,6 +138,45 @@ func (r *TelegramChatConfigRepository) ListConfigs(ctx context.Context) ([]Teleg
 	return cfgs, nil
 }
 
+// UpdateBackfillCursor updates the backfill cursor for a chat.
+func (r *TelegramChatConfigRepository) UpdateBackfillCursor(ctx context.Context, telegramChatID int64, cursor int32) error {
+	return r.queries.UpdateTelegramChatConfigBackfillCursor(ctx, db.UpdateTelegramChatConfigBackfillCursorParams{
+		BackfillCursor: pgtype.Int4{Int32: cursor, Valid: true},
+		TelegramChatID: telegramChatID,
+	})
+}
+
+// UpdateBackfillComplete marks a chat's backfill as complete.
+func (r *TelegramChatConfigRepository) UpdateBackfillComplete(ctx context.Context, telegramChatID int64) error {
+	return r.queries.UpdateTelegramChatConfigBackfillComplete(ctx, telegramChatID)
+}
+
+// ResetBackfill resets backfill state for a chat (for retroactive backfill).
+func (r *TelegramChatConfigRepository) ResetBackfill(ctx context.Context, telegramChatID int64) error {
+	return r.queries.ResetTelegramChatConfigBackfill(ctx, telegramChatID)
+}
+
+// ListForBackfill returns chats that need backfill (backfill_complete = false).
+func (r *TelegramChatConfigRepository) ListForBackfill(ctx context.Context) ([]TelegramChatConfig, error) {
+	dbCfgs, err := r.queries.ListTelegramChatConfigsForBackfill(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cfgs := make([]TelegramChatConfig, len(dbCfgs))
+	for i, c := range dbCfgs {
+		cfgs[i] = convertDbTelegramChatConfig(c)
+	}
+	return cfgs, nil
+}
+
+// UpdateMemberCount updates the member count for a chat.
+func (r *TelegramChatConfigRepository) UpdateMemberCount(ctx context.Context, telegramChatID int64, memberCount int32) error {
+	return r.queries.UpdateTelegramChatConfigMemberCount(ctx, db.UpdateTelegramChatConfigMemberCountParams{
+		MemberCount:    pgtype.Int4{Int32: memberCount, Valid: true},
+		TelegramChatID: telegramChatID,
+	})
+}
+
 // DeleteConfig deletes a chat config
 func (r *TelegramChatConfigRepository) DeleteConfig(ctx context.Context, telegramChatID int64) error {
 	return r.queries.DeleteTelegramChatConfig(ctx, telegramChatID)

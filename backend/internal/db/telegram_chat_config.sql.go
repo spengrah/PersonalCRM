@@ -77,6 +77,97 @@ func (q *Queries) ListTelegramChatConfigs(ctx context.Context) ([]*TelegramChatC
 	return items, nil
 }
 
+const ListTelegramChatConfigsForBackfill = `-- name: ListTelegramChatConfigsForBackfill :many
+SELECT id, telegram_chat_id, chat_title, chat_type, member_count, status, backfill_cursor, backfill_complete, created_at, updated_at FROM telegram_chat_config
+WHERE backfill_complete = FALSE
+ORDER BY created_at
+`
+
+func (q *Queries) ListTelegramChatConfigsForBackfill(ctx context.Context) ([]*TelegramChatConfig, error) {
+	rows, err := q.db.Query(ctx, ListTelegramChatConfigsForBackfill)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TelegramChatConfig{}
+	for rows.Next() {
+		var i TelegramChatConfig
+		if err := rows.Scan(
+			&i.ID,
+			&i.TelegramChatID,
+			&i.ChatTitle,
+			&i.ChatType,
+			&i.MemberCount,
+			&i.Status,
+			&i.BackfillCursor,
+			&i.BackfillComplete,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ResetTelegramChatConfigBackfill = `-- name: ResetTelegramChatConfigBackfill :exec
+UPDATE telegram_chat_config
+SET backfill_complete = FALSE, backfill_cursor = NULL, updated_at = NOW()
+WHERE telegram_chat_id = $1
+`
+
+func (q *Queries) ResetTelegramChatConfigBackfill(ctx context.Context, telegramChatID int64) error {
+	_, err := q.db.Exec(ctx, ResetTelegramChatConfigBackfill, telegramChatID)
+	return err
+}
+
+const UpdateTelegramChatConfigBackfillComplete = `-- name: UpdateTelegramChatConfigBackfillComplete :exec
+UPDATE telegram_chat_config
+SET backfill_complete = TRUE, backfill_cursor = NULL, updated_at = NOW()
+WHERE telegram_chat_id = $1
+`
+
+func (q *Queries) UpdateTelegramChatConfigBackfillComplete(ctx context.Context, telegramChatID int64) error {
+	_, err := q.db.Exec(ctx, UpdateTelegramChatConfigBackfillComplete, telegramChatID)
+	return err
+}
+
+const UpdateTelegramChatConfigBackfillCursor = `-- name: UpdateTelegramChatConfigBackfillCursor :exec
+UPDATE telegram_chat_config
+SET backfill_cursor = $1, updated_at = NOW()
+WHERE telegram_chat_id = $2
+`
+
+type UpdateTelegramChatConfigBackfillCursorParams struct {
+	BackfillCursor pgtype.Int4 `json:"backfill_cursor"`
+	TelegramChatID int64       `json:"telegram_chat_id"`
+}
+
+func (q *Queries) UpdateTelegramChatConfigBackfillCursor(ctx context.Context, arg UpdateTelegramChatConfigBackfillCursorParams) error {
+	_, err := q.db.Exec(ctx, UpdateTelegramChatConfigBackfillCursor, arg.BackfillCursor, arg.TelegramChatID)
+	return err
+}
+
+const UpdateTelegramChatConfigMemberCount = `-- name: UpdateTelegramChatConfigMemberCount :exec
+UPDATE telegram_chat_config
+SET member_count = $1, updated_at = NOW()
+WHERE telegram_chat_id = $2
+`
+
+type UpdateTelegramChatConfigMemberCountParams struct {
+	MemberCount    pgtype.Int4 `json:"member_count"`
+	TelegramChatID int64       `json:"telegram_chat_id"`
+}
+
+func (q *Queries) UpdateTelegramChatConfigMemberCount(ctx context.Context, arg UpdateTelegramChatConfigMemberCountParams) error {
+	_, err := q.db.Exec(ctx, UpdateTelegramChatConfigMemberCount, arg.MemberCount, arg.TelegramChatID)
+	return err
+}
+
 const UpdateTelegramChatConfigStatus = `-- name: UpdateTelegramChatConfigStatus :one
 UPDATE telegram_chat_config
 SET status = $1, updated_at = NOW()

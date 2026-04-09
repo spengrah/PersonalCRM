@@ -38,6 +38,7 @@ type Querier interface {
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
+	CountTelegramMessagesByChat(ctx context.Context) ([]*CountTelegramMessagesByChatRow, error)
 	CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error)
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
@@ -169,6 +170,7 @@ type Querier interface {
 	GetTagByName(ctx context.Context, name string) (*Tag, error)
 	GetTelegramChannelState(ctx context.Context, channelID int64) (*TelegramChannelState, error)
 	GetTelegramChatConfig(ctx context.Context, telegramChatID int64) (*TelegramChatConfig, error)
+	GetTelegramMessage(ctx context.Context, arg GetTelegramMessageParams) (*TelegramMessage, error)
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
@@ -232,6 +234,8 @@ type Querier interface {
 	ListTags(ctx context.Context) ([]*Tag, error)
 	ListTelegramChannelStates(ctx context.Context) ([]*TelegramChannelState, error)
 	ListTelegramChatConfigs(ctx context.Context) ([]*TelegramChatConfig, error)
+	ListTelegramChatConfigsForBackfill(ctx context.Context) ([]*TelegramChatConfig, error)
+	ListTelegramMessagesByChatUnprocessed(ctx context.Context, telegramChatID int64) ([]*TelegramMessage, error)
 	ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	ListUnmatchedIdentities(ctx context.Context, arg ListUnmatchedIdentitiesParams) ([]*ExternalIdentity, error)
 	// List upcoming calendar events for a specific contact
@@ -244,6 +248,7 @@ type Querier interface {
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement
 	ReplaceContactInCalendarEvents(ctx context.Context, arg ReplaceContactInCalendarEventsParams) error
+	ResetTelegramChatConfigBackfill(ctx context.Context, telegramChatID int64) error
 	// Lightweight query returning only IDs with search for navigation
 	SearchContactIDs(ctx context.Context, arg SearchContactIDsParams) ([]pgtype.UUID, error)
 	// Lightweight query returning only IDs with search and sorting for navigation
@@ -259,6 +264,8 @@ type Querier interface {
 	SetTelegramSeq(ctx context.Context, arg SetTelegramSeqParams) error
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteInteraction(ctx context.Context, id pgtype.UUID) error
+	SoftDeleteTelegramChannelMessages(ctx context.Context, arg SoftDeleteTelegramChannelMessagesParams) error
+	SoftDeleteTelegramMessages(ctx context.Context, messageIds []int32) error
 	// Transfer connections where source is contact_a to use target instead
 	// This handles the bidirectional relationship table
 	TransferConnectionsAsContactA(ctx context.Context, arg TransferConnectionsAsContactAParams) error
@@ -314,6 +321,9 @@ type Querier interface {
 	UpdateSyncStateStatus(ctx context.Context, arg UpdateSyncStateStatusParams) (*ExternalSyncState, error)
 	UpdateSyncStateSuccess(ctx context.Context, arg UpdateSyncStateSuccessParams) (*ExternalSyncState, error)
 	UpdateTag(ctx context.Context, arg UpdateTagParams) (*Tag, error)
+	UpdateTelegramChatConfigBackfillComplete(ctx context.Context, telegramChatID int64) error
+	UpdateTelegramChatConfigBackfillCursor(ctx context.Context, arg UpdateTelegramChatConfigBackfillCursorParams) error
+	UpdateTelegramChatConfigMemberCount(ctx context.Context, arg UpdateTelegramChatConfigMemberCountParams) error
 	UpdateTelegramChatConfigStatus(ctx context.Context, arg UpdateTelegramChatConfigStatusParams) (*TelegramChatConfig, error)
 	UpdateTelegramSessionAuthState(ctx context.Context, authState string) (*TelegramSession, error)
 	UpdateTelegramSessionUserInfo(ctx context.Context, arg UpdateTelegramSessionUserInfoParams) (*TelegramSession, error)
@@ -335,6 +345,7 @@ type Querier interface {
 	UpsertTelegramChannelAccessHash(ctx context.Context, arg UpsertTelegramChannelAccessHashParams) (*TelegramChannelState, error)
 	UpsertTelegramChannelState(ctx context.Context, arg UpsertTelegramChannelStateParams) (*TelegramChannelState, error)
 	UpsertTelegramChatConfig(ctx context.Context, arg UpsertTelegramChatConfigParams) (*TelegramChatConfig, error)
+	UpsertTelegramMessage(ctx context.Context, arg UpsertTelegramMessageParams) (*TelegramMessage, error)
 	UpsertTelegramSession(ctx context.Context, arg UpsertTelegramSessionParams) (*TelegramSession, error)
 	// Used by gotd/td session.Storage — only updates encrypted session data,
 	// does NOT touch auth_state (which is managed by AuthSessionManager).
