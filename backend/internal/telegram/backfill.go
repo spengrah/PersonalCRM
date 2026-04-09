@@ -58,7 +58,13 @@ func NewBackfiller(
 	}
 }
 
-// Run executes the full backfill: discover dialogs, then fetch history per chat.
+// dialogInfo holds a discovered dialog's peer and config for backfill.
+type dialogInfo struct {
+	peer   tg.InputPeerClass
+	config repository.TelegramChatConfig
+}
+
+// Run executes the full backfill: discover dialogs and fetch history per chat.
 func (b *Backfiller) Run(ctx context.Context) error {
 	sinceTime, err := time.Parse("2006-01-02", b.backfillSince)
 	if err != nil {
@@ -68,35 +74,38 @@ func (b *Backfiller) Run(ctx context.Context) error {
 
 	log.Info().Str("since", b.backfillSince).Msg("telegram: starting backfill")
 
-	// Phase 1: Discover dialogs
-	if err := b.discoverDialogs(ctx); err != nil {
+	// Discover dialogs and collect peers (with access hashes) for backfill
+	dialogs, err := b.discoverDialogs(ctx)
+	if err != nil {
 		return fmt.Errorf("discover dialogs: %w", err)
 	}
 
-	// Phase 2: Fetch history for chats needing backfill
-	chats, err := b.chatConfigRepo.ListForBackfill(ctx)
-	if err != nil {
-		return fmt.Errorf("list for backfill: %w", err)
-	}
-
-	total := len(chats)
+	total := len(dialogs)
 	if b.onProgress != nil {
 		b.onProgress(total, 0)
 	}
 
 	completed := 0
-	for _, chat := range chats {
+	for _, d := range dialogs {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
+		// Skip already-completed chats
+		if d.config.BackfillComplete {
+			completed++
+			if b.onProgress != nil {
+				b.onProgress(total, completed)
+			}
+			continue
+		}
+
 		// Check if chat should be tracked
-		if !EffectiveTracked(chat.Status, chat.MemberCount, b.groupMaxMembers) {
-			// Mark as complete immediately (skipped)
-			if err := b.chatConfigRepo.UpdateBackfillComplete(ctx, chat.TelegramChatID); err != nil {
-				log.Warn().Err(err).Int64("chat_id", chat.TelegramChatID).Msg("telegram: failed to mark skipped chat complete")
+		if !EffectiveTracked(d.config.Status, d.config.MemberCount, b.groupMaxMembers) {
+			if err := b.chatConfigRepo.UpdateBackfillComplete(ctx, d.config.TelegramChatID); err != nil {
+				log.Warn().Err(err).Int64("chat_id", d.config.TelegramChatID).Msg("telegram: failed to mark skipped chat complete")
 			}
 			completed++
 			if b.onProgress != nil {
@@ -105,8 +114,8 @@ func (b *Backfiller) Run(ctx context.Context) error {
 			continue
 		}
 
-		if err := b.backfillChat(ctx, chat, sinceUnix); err != nil {
-			log.Warn().Err(err).Int64("chat_id", chat.TelegramChatID).Msg("telegram: backfill failed for chat, skipping")
+		if err := b.backfillChatWithPeer(ctx, d.config, d.peer, sinceUnix); err != nil {
+			log.Warn().Err(err).Int64("chat_id", d.config.TelegramChatID).Msg("telegram: backfill failed for chat, skipping")
 		}
 
 		completed++
@@ -114,7 +123,6 @@ func (b *Backfiller) Run(ctx context.Context) error {
 			b.onProgress(total, completed)
 		}
 
-		// Rate limit between chats
 		time.Sleep(time.Duration(backfillChatSleepMs) * time.Millisecond)
 	}
 
@@ -123,6 +131,7 @@ func (b *Backfiller) Run(ctx context.Context) error {
 }
 
 // BackfillChat backfills a single chat by ID (used for retroactive backfill).
+// Uses messages.getInputPeer to resolve the peer with access hash.
 func (b *Backfiller) BackfillChat(ctx context.Context, chatID int64) error {
 	sinceTime, err := time.Parse("2006-01-02", b.backfillSince)
 	if err != nil {
@@ -134,41 +143,54 @@ func (b *Backfiller) BackfillChat(ctx context.Context, chatID int64) error {
 		return fmt.Errorf("get chat config: %w", err)
 	}
 
-	return b.backfillChat(ctx, *cfg, int(sinceTime.Unix()))
+	// Build peer — for retroactive backfill we don't have the access hash cached,
+	// so use InputPeerChat for groups (doesn't need hash) and InputPeerUser for
+	// private chats (may fail without hash — acceptable for retroactive backfill)
+	var peer tg.InputPeerClass
+	switch cfg.ChatType {
+	case "private":
+		peer = &tg.InputPeerUser{UserID: cfg.TelegramChatID}
+	case "group":
+		peer = &tg.InputPeerChat{ChatID: cfg.TelegramChatID}
+	default:
+		return fmt.Errorf("unsupported chat type: %s", cfg.ChatType)
+	}
+
+	return b.backfillChatWithPeer(ctx, *cfg, peer, int(sinceTime.Unix()))
 }
 
-func (b *Backfiller) discoverDialogs(ctx context.Context) error {
+func (b *Backfiller) discoverDialogs(ctx context.Context) ([]dialogInfo, error) {
 	q := query.NewQuery(b.api)
 	iter := q.GetDialogs().BatchSize(backfillBatchSize).Iter()
+
+	var dialogs []dialogInfo
 
 	for iter.Next(ctx) {
 		elem := iter.Value()
 
 		switch peer := elem.Peer.(type) {
 		case *tg.InputPeerUser:
-			// Private chat
 			if peer.UserID == b.selfUserID {
-				continue // skip Saved Messages
+				continue
 			}
-
-			// Check if it's a bot
 			if users := elem.Entities.Users(); users != nil {
 				if u, ok := users[peer.UserID]; ok && u.Bot {
 					continue
 				}
 			}
 
-			_, err := b.chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+			cfg, err := b.chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 				TelegramChatID: peer.UserID,
 				ChatType:       "private",
 				Status:         "auto",
 			})
 			if err != nil {
 				log.Warn().Err(err).Int64("user_id", peer.UserID).Msg("telegram: failed to upsert private chat config")
+				continue
 			}
+			dialogs = append(dialogs, dialogInfo{peer: peer, config: *cfg})
 
 		case *tg.InputPeerChat:
-			// Group chat
 			var memberCount *int32
 			var title *string
 			if chats := elem.Entities.Chats(); chats != nil {
@@ -180,7 +202,7 @@ func (b *Backfiller) discoverDialogs(ctx context.Context) error {
 				}
 			}
 
-			_, err := b.chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+			cfg, err := b.chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 				TelegramChatID: peer.ChatID,
 				ChatTitle:      title,
 				ChatType:       "group",
@@ -189,10 +211,11 @@ func (b *Backfiller) discoverDialogs(ctx context.Context) error {
 			})
 			if err != nil {
 				log.Warn().Err(err).Int64("chat_id", peer.ChatID).Msg("telegram: failed to upsert group chat config")
+				continue
 			}
+			dialogs = append(dialogs, dialogInfo{peer: peer, config: *cfg})
 
 		case *tg.InputPeerChannel:
-			// Supergroups and channels — skip per spec
 			continue
 		}
 	}
@@ -200,41 +223,27 @@ func (b *Backfiller) discoverDialogs(ctx context.Context) error {
 	if err := iter.Err(); err != nil {
 		if ok, waitErr := tgerr.FloodWait(ctx, err); ok {
 			if waitErr != nil {
-				return fmt.Errorf("flood wait during dialog discovery: %w", waitErr)
+				return dialogs, fmt.Errorf("flood wait during dialog discovery: %w", waitErr)
 			}
-			// Retry after flood wait — but for simplicity just return the error
-			// and let the caller retry on next connect
 		}
-		return fmt.Errorf("iterate dialogs: %w", err)
+		return dialogs, fmt.Errorf("iterate dialogs: %w", err)
 	}
 
-	return nil
+	log.Info().Int("dialogs", len(dialogs)).Msg("telegram: dialog discovery complete")
+	return dialogs, nil
 }
 
-func (b *Backfiller) backfillChat(ctx context.Context, chat repository.TelegramChatConfig, sinceUnix int) error {
+func (b *Backfiller) backfillChatWithPeer(ctx context.Context, chat repository.TelegramChatConfig, peer tg.InputPeerClass, sinceUnix int) error {
 	log.Info().
 		Int64("chat_id", chat.TelegramChatID).
 		Str("chat_type", chat.ChatType).
 		Bool("has_cursor", chat.BackfillCursor != nil).
 		Msg("telegram: backfilling chat")
 
-	// Build the appropriate input peer
-	var inputPeer tg.InputPeerClass
-	switch chat.ChatType {
-	case "private":
-		inputPeer = &tg.InputPeerUser{UserID: chat.TelegramChatID}
-	case "group":
-		inputPeer = &tg.InputPeerChat{ChatID: chat.TelegramChatID}
-	default:
-		return fmt.Errorf("unsupported chat type: %s", chat.ChatType)
-	}
-
-	// Build history iterator
 	q := query.NewQuery(b.api)
-	historyBuilder := q.Messages().GetHistory(inputPeer).BatchSize(backfillBatchSize)
+	historyBuilder := q.Messages().GetHistory(peer).BatchSize(backfillBatchSize)
 
 	if chat.BackfillCursor != nil {
-		// Resume from cursor (iterate backwards from this message ID)
 		historyBuilder = historyBuilder.OffsetID(int(*chat.BackfillCursor))
 	}
 	// Fresh backfill: no offset — start from newest, stop at sinceUnix in the loop
@@ -248,7 +257,7 @@ func (b *Backfiller) backfillChat(ctx context.Context, chat repository.TelegramC
 
 		msg, ok := elem.Msg.(*tg.Message)
 		if !ok {
-			continue // skip MessageService
+			continue
 		}
 
 		// Stop if message is older than backfill horizon
@@ -274,7 +283,6 @@ func (b *Backfiller) backfillChat(ctx context.Context, chat repository.TelegramC
 		messageCount++
 		cursorCount++
 
-		// Persist cursor periodically
 		if cursorCount >= backfillCursorEvery {
 			if err := b.chatConfigRepo.UpdateBackfillCursor(ctx, chat.TelegramChatID, parsed.TelegramMessageID); err != nil {
 				log.Warn().Err(err).Msg("telegram: failed to update backfill cursor")
@@ -291,12 +299,10 @@ func (b *Backfiller) backfillChat(ctx context.Context, chat repository.TelegramC
 		return fmt.Errorf("iterate history for chat %d: %w", chat.TelegramChatID, err)
 	}
 
-	// Mark backfill complete
 	if err := b.chatConfigRepo.UpdateBackfillComplete(ctx, chat.TelegramChatID); err != nil {
 		return fmt.Errorf("mark backfill complete: %w", err)
 	}
 
-	// Update sync timestamp
 	if b.syncStateID != nil {
 		_, _ = b.syncRepo.UpdateSyncStateStatus(ctx, *b.syncStateID, repository.SyncStatusIdle, nil)
 	}
