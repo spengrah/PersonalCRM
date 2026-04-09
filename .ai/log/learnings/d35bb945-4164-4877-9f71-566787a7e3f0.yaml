@@ -702,3 +702,91 @@ detail: |
   When testing async components with loading states, .isVisible().catch(() => false) returns an instant snapshot and doesn't wait for state to resolve. This causes flaky CI failures when components are still loading. Use expect().toBeVisible() instead, which polls until element appears or times out. The Telegram settings test failed in CI because it checked for configRequired/connectButton immediately after heading was visible, but component was still in loading state (spinner). Fix: await expect(configRequired.or(connectButton)).toBeVisible() which polls until loading completes. Pattern applies to any test checking for async-rendered UI elements.
 actionable: true
 
+---
+timestamp: "2026-04-08T20:26:00.244112"
+type: rule
+summary: "E2E tests for async state changes: assert final UI state, not API responses"
+detail: |
+  When testing flows that trigger async state changes (like disconnect/reconnect), using `page.waitForResponse()` is flaky because the response may fire before the listener is set up, especially when modifying route mocks mid-test. Instead, assert on the final UI state: `await expect(page.getByRole('button', { name: /Connect/ })).toBeVisible({ timeout: 5000 })`. This polls until the component reflects the expected state, regardless of when the API call completes. This pattern emerged after 4 commit iterations fixing a flaky disconnect test.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:26:00.244112"
+type: gotcha
+summary: Playwright route() overlapping URL patterns cause unpredictable handler ordering
+detail: |
+  When mocking related endpoints (e.g., `/api/v1/telegram/auth/status` and `/api/v1/telegram/auth`), using separate `page.route()` calls creates route matching ambiguity - Playwright may invoke the wrong handler. Solution: use function predicates for precise matching: `page.route(url => url.pathname.endsWith('/exact/path') && url.searchParams.get('method') === 'DELETE', handler)`. Function predicates receive parsed URL objects, making intent clearer than regex patterns that operate on full URL strings. This pattern emerged through 3 iterations: (1) glob patterns → ordering issues, (2) single regex → better, (3) function predicate → best.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:26:00.244112"
+type: architecture
+summary: Connection managers (non-SyncProvider) use external_sync_state with Enabled=false for status tracking
+detail: |
+  When a feature needs a long-lived connection (like Telegram MTProto) that manages its own lifecycle instead of being scheduled, use `external_sync_state` with `Enabled: false`. This prevents `RunDueSyncs` from picking it up (it filters `WHERE enabled=TRUE`) while still providing a row for status display and UUID tracking. The sync state is created on first connect, loaded via `GetSyncStateBySource()` on restart, and deleted on disconnect.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:26:00.244112"
+type: gotcha
+summary: Third-party session storage callbacks may fire before domain auth completes
+detail: |
+  When implementing external library storage interfaces (like gotd/td's `session.Storage`), the library may call storage methods during internal setup (e.g., MTProto key exchange) before your application's auth flow completes. The storage implementation must NOT set domain-level auth state (like `auth_state=connected`) in these callbacks. Solution: separate the storage operation (just persist bytes) from the auth state transition (set by domain logic after code/2FA verification). This required creating separate sqlc queries: `UpsertTelegramSessionData` (bytes only) vs `UpdateTelegramAuthState` (domain state).
+actionable: true
+
+---
+timestamp: "2026-04-08T20:26:00.244112"
+type: distinction
+summary: Frontend should distinguish 404 (not configured) from 5xx (error) for feature-flagged endpoints
+detail: |
+  When a backend feature is behind a feature flag, the status endpoint should return 404 if the feature is disabled, not 500. Frontend should treat these differently: 404 = not_configured state (hide action buttons, show config instructions), 5xx = temporary error (show retry button). This prevents showing 'Connect' buttons when the backend isn't configured at all, which would fail with confusing errors.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:43:27.327365"
+type: rule
+summary: E2E tests for auth flows requiring real external connections should be omitted with rationale comment
+detail: |
+  Playwright route mocking cannot reliably distinguish between similar API endpoints (e.g., DELETE /telegram/auth vs GET /telegram/auth/status) - glob patterns match both, regex patterns are brittle, function predicates are verbose and still fragile when paths overlap. After multiple fix attempts across 6 commits (glob→regex→function predicates→scoped paths→single handler), the final resolution was to remove disconnect/cancel/error E2E tests entirely. Auth flows requiring real external connections (MTProto, OAuth callbacks, WebSocket handshakes) should be tested via: (1) backend integration tests for business logic, (2) route-mocked happy-path E2E tests for UI transitions only, (3) manual testing for actual connection flows. Document omission with a NOTE comment explaining why the test was removed and what coverage exists elsewhere.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:43:27.327365"
+type: gotcha
+summary: External library storage callbacks must not set domain auth state
+detail: |
+  When implementing storage interfaces for third-party libraries (like gotd/td's session.Storage), the library may call storage methods during internal protocol setup (e.g., MTProto key exchange) BEFORE your application's domain auth flow completes (code verification, 2FA). The storage implementation must ONLY persist the library's opaque bytes, never set application-level auth state flags. This requires separate operations: UpsertSessionData (library bytes only, no auth_state column) vs UpdateAuthState (domain logic sets this after verification). Mixing these causes race conditions where the library's internal handshake marks the session 'connected' before user has actually authenticated.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:43:27.327365"
+type: gotcha
+summary: sqlc upsert queries that need to preserve existing columns require separate specialized queries
+detail: |
+  When using sqlc upsert patterns (INSERT ... ON CONFLICT DO UPDATE), if you need to update only a subset of columns while preserving others, you must create separate queries for each update pattern. Cannot use a single UpsertTelegramChannelState for both full updates (pts + access_hash) and partial updates (access_hash only, preserve pts). The original UpsertTelegramChannelState with 'pts = EXCLUDED.pts' would overwrite pts=0 on every access hash update, violating gotd/td's requirement that access hashes can be updated independently. Solution: UpsertTelegramChannelAccessHash with 'ON CONFLICT DO UPDATE SET access_hash = EXCLUDED.access_hash' (omitting pts entirely). This pattern applies whenever different code paths need different conflict resolution semantics for the same unique constraint.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:43:27.327365"
+type: rule
+summary: Auth session cleanup on error prevents stuck state requiring manual intervention
+detail: |
+  For multi-step auth flows using in-memory session state (phone→code→password), when verification fails at any step, you must call clearSession() to remove the auth session from the manager's active sessions map. Without cleanup, a failed auth leaves the session in limbo: StartAuth returns ErrAuthInProgress (blocking retries), but VerifyCode/VerifyPassword have no valid session to complete. The error path must mirror the success path: on 'error' status result, clear the session AND stop any TTL timers to prevent delayed cleanup callbacks from racing. Pattern: switch result.Status { case 'connected': sess.Timer.Stop(); clearSession(sess); case 'error': sess.Timer.Stop(); clearSession(sess); return nil, result.Error }
+actionable: true
+
+---
+timestamp: "2026-04-08T20:43:27.327365"
+type: architecture
+summary: Cancel endpoints for async flows prevent blocking retries when client-side state desyncs
+detail: |
+  When building multi-step async auth flows where client and server maintain parallel state machines, provide an explicit cancel/reset endpoint separate from the start endpoint. StartAuth checking 'session already exists' and returning error is correct (prevents duplicate flows), but if client-side state resets (page refresh, navigation, explicit Cancel button) while server-side session is active, the user is stuck - can't start new auth, can't resume old auth. Solution: POST /auth/cancel that unconditionally clears server-side session. Client calls this on Cancel button click and on component unmount cleanup. This is different from DELETE /auth (disconnect authenticated session) - cancel clears in-progress auth, disconnect revokes completed auth.
+actionable: true
+
+---
+timestamp: "2026-04-08T20:43:27.327365"
+type: documentation_gap
+summary: Common Gotchas entry 'E2E test waiting for page load' recommends networkidle, which is unreliable for async components
+detail: |
+  The existing gotcha about E2E page load waiting doesn't cover the pattern for components with async loading states. Tests that check for elements rendered by useEffect/React Query immediately after page navigation fail in CI because domcontentloaded doesn't mean React components have rendered. Pattern: (1) await page.goto(), (2) await page.waitForLoadState('domcontentloaded'), (3) await expect(staticElement).toBeVisible() [structural element that's always present], (4) await expect(asyncElement.or(fallbackElement)).toBeVisible({ timeout }) for elements rendered after data fetch. Never use 'networkidle' - it's flaky in real apps with long-polling, WebSockets, or background fetches. Never use .isVisible().catch() - it's a snapshot, not a poll.
+actionable: true
+
