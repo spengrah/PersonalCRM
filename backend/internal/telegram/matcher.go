@@ -212,6 +212,52 @@ func (m *PeerMatcher) UpdateDiscoveryCandidates(ctx context.Context) error {
 	return nil
 }
 
+// UpdateDiscoveryCandidatesForPeer checks if a specific unmatched peer has crossed the
+// discovery threshold and upserts their external_contact if so. Used for live messages.
+func (m *PeerMatcher) UpdateDiscoveryCandidatesForPeer(ctx context.Context, peerUserID int64, peerUsername, peerFirstName, peerLastName *string) {
+	counts, err := m.messageRepo.CountMessagesByPeer(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("telegram: failed to count messages for discovery check")
+		return
+	}
+
+	for _, count := range counts {
+		if count.PeerUserID != peerUserID {
+			continue
+		}
+		if count.TotalCount < int64(m.discoveryMinMsgs) {
+			return // below threshold
+		}
+
+		displayName := buildDisplayName(peerFirstName, peerLastName)
+		sourceID := strconv.FormatInt(peerUserID, 10)
+
+		metadata := map[string]any{
+			"message_count":  count.TotalCount,
+			"outbound_count": count.OutboundCount,
+			"inbound_count":  count.InboundCount,
+		}
+		if !count.LastMessageAt.IsZero() {
+			metadata["last_message_at"] = count.LastMessageAt.Format("2006-01-02T15:04:05Z")
+		}
+		if peerUsername != nil {
+			metadata["username"] = "@" + *peerUsername
+		}
+
+		if _, err := m.externalContactRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "telegram",
+			SourceID:    sourceID,
+			DisplayName: displayName,
+			FirstName:   peerFirstName,
+			LastName:    peerLastName,
+			Metadata:    metadata,
+		}); err != nil {
+			log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: failed to upsert discovery candidate for live peer")
+		}
+		return
+	}
+}
+
 // OnPeerLinked is called after a Telegram import/link to back-fill message matching.
 // It links the identity, updates matched_contact_id on messages, and returns true
 // to signal that aggregation should run.

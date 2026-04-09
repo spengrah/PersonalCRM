@@ -100,6 +100,9 @@ func (h *MessageHandler) HandleNewMessage(ctx context.Context, e tg.Entities, up
 			if err := h.aggregationEngine.AggregateForContact(ctx, *contactID, parsed.TelegramChatID); err != nil {
 				log.Warn().Err(err).Str("contact_id", contactID.String()).Msg("telegram: aggregation failed")
 			}
+		} else if contactID == nil {
+			// Unmatched peer — update discovery candidates incrementally
+			h.peerMatcher.UpdateDiscoveryCandidatesForPeer(ctx, *parsed.PeerUserID, parsed.PeerUsername, parsed.PeerFirstName, parsed.PeerLastName)
 		}
 	}
 

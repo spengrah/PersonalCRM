@@ -178,6 +178,10 @@ FROM telegram_message
 WHERE matched_contact_id IS NULL
   AND peer_user_id IS NOT NULL
   AND deleted_at IS NULL
+ORDER BY peer_user_id,
+    CASE WHEN peer_username IS NOT NULL THEN 0 ELSE 1 END,
+    CASE WHEN peer_phone IS NOT NULL THEN 0 ELSE 1 END,
+    sent_at DESC
 `
 
 type ListDistinctUnmatchedPeersRow struct {
@@ -188,6 +192,7 @@ type ListDistinctUnmatchedPeersRow struct {
 	PeerPhone     pgtype.Text `json:"peer_phone"`
 }
 
+// Prefer rows with username/phone for identity matching
 func (q *Queries) ListDistinctUnmatchedPeers(ctx context.Context) ([]*ListDistinctUnmatchedPeersRow, error) {
 	rows, err := q.db.Query(ctx, ListDistinctUnmatchedPeers)
 	if err != nil {
