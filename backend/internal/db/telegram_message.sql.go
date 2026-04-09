@@ -89,6 +89,36 @@ func (q *Queries) CountTelegramMessagesByPeer(ctx context.Context) ([]*CountTele
 	return items, nil
 }
 
+const CountTelegramMessagesByPeerID = `-- name: CountTelegramMessagesByPeerID :one
+SELECT COUNT(*) as total_count,
+       COUNT(*) FILTER (WHERE is_outgoing) as outbound_count,
+       COUNT(*) FILTER (WHERE NOT is_outgoing) as inbound_count,
+       MAX(sent_at) as last_message_at
+FROM telegram_message
+WHERE peer_user_id = $1
+  AND deleted_at IS NULL
+`
+
+type CountTelegramMessagesByPeerIDRow struct {
+	TotalCount    int64       `json:"total_count"`
+	OutboundCount int64       `json:"outbound_count"`
+	InboundCount  int64       `json:"inbound_count"`
+	LastMessageAt interface{} `json:"last_message_at"`
+}
+
+// Count messages for a single peer (for incremental discovery threshold check)
+func (q *Queries) CountTelegramMessagesByPeerID(ctx context.Context, peerUserID pgtype.Int8) (*CountTelegramMessagesByPeerIDRow, error) {
+	row := q.db.QueryRow(ctx, CountTelegramMessagesByPeerID, peerUserID)
+	var i CountTelegramMessagesByPeerIDRow
+	err := row.Scan(
+		&i.TotalCount,
+		&i.OutboundCount,
+		&i.InboundCount,
+		&i.LastMessageAt,
+	)
+	return &i, err
+}
+
 const GetTelegramMessage = `-- name: GetTelegramMessage :one
 SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at FROM telegram_message
 WHERE telegram_chat_id = $1

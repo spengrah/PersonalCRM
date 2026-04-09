@@ -40,6 +40,8 @@ type Querier interface {
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountTelegramMessagesByChat(ctx context.Context) ([]*CountTelegramMessagesByChatRow, error)
 	CountTelegramMessagesByPeer(ctx context.Context) ([]*CountTelegramMessagesByPeerRow, error)
+	// Count messages for a single peer (for incremental discovery threshold check)
+	CountTelegramMessagesByPeerID(ctx context.Context, peerUserID pgtype.Int8) (*CountTelegramMessagesByPeerIDRow, error)
 	CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error)
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
@@ -212,6 +214,7 @@ type Querier interface {
 	// Lists contacts that have a contact_by date set (used for testing mode filtering).
 	// Returns contacts ordered by contact_by (soonest first).
 	ListContactsWithContactBy(ctx context.Context, limit int32) ([]*Contact, error)
+	// Prefer rows with username/phone for identity matching
 	ListDistinctUnmatchedPeers(ctx context.Context) ([]*ListDistinctUnmatchedPeersRow, error)
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)

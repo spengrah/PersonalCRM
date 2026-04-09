@@ -355,4 +355,22 @@ func (r *TelegramMessageRepository) GetMessageByReplyTo(ctx context.Context, cha
 	return &msg, nil
 }
 
+// CountMessagesByPeerID returns message counts for a single peer.
+func (r *TelegramMessageRepository) CountMessagesByPeerID(ctx context.Context, peerUserID int64) (*PeerMessageCount, error) {
+	row, err := r.queries.CountTelegramMessagesByPeerID(ctx, int64ToPgInt8(&peerUserID))
+	if err != nil {
+		return nil, err
+	}
+	count := &PeerMessageCount{
+		PeerUserID:    peerUserID,
+		TotalCount:    row.TotalCount,
+		OutboundCount: row.OutboundCount,
+		InboundCount:  row.InboundCount,
+	}
+	if t, ok := row.LastMessageAt.(time.Time); ok {
+		count.LastMessageAt = t
+	}
+	return count, nil
+}
+
 // int32ToPgInt4 already defined in telegram_chat_config.go

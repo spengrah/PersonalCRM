@@ -111,6 +111,16 @@ WHERE peer_user_id IS NOT NULL
   AND deleted_at IS NULL
 GROUP BY peer_user_id;
 
+-- name: CountTelegramMessagesByPeerID :one
+-- Count messages for a single peer (for incremental discovery threshold check)
+SELECT COUNT(*) as total_count,
+       COUNT(*) FILTER (WHERE is_outgoing) as outbound_count,
+       COUNT(*) FILTER (WHERE NOT is_outgoing) as inbound_count,
+       MAX(sent_at) as last_message_at
+FROM telegram_message
+WHERE peer_user_id = @peer_user_id
+  AND deleted_at IS NULL;
+
 -- name: GetTelegramMessageByReplyTo :one
 SELECT * FROM telegram_message
 WHERE telegram_chat_id = @telegram_chat_id
