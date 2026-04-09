@@ -97,7 +97,9 @@ func (h *MessageHandler) HandleNewMessage(ctx context.Context, e tg.Entities, up
 		if err != nil {
 			log.Warn().Err(err).Int64("peer_user_id", *parsed.PeerUserID).Msg("telegram: peer matching failed")
 		} else if contactID != nil && h.aggregationEngine != nil {
-			if err := h.aggregationEngine.AggregateForContact(ctx, *contactID, parsed.TelegramChatID); err != nil {
+			// Use batch aggregation to process all chats for this contact
+			// (MatchPeer links messages across all chats for the peer)
+			if err := h.aggregationEngine.AggregateForContactBatch(ctx, *contactID); err != nil {
 				log.Warn().Err(err).Str("contact_id", contactID.String()).Msg("telegram: aggregation failed")
 			}
 		} else if contactID == nil {

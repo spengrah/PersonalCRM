@@ -20,9 +20,11 @@ type identityMatcher interface {
 	MatchOrCreate(ctx context.Context, req service.MatchRequest) (*service.MatchResult, error)
 }
 
-// externalContactUpserter defines the interface for upserting external contacts.
+// externalContactUpserter defines the interface for upserting/updating external contacts.
 type externalContactUpserter interface {
 	Upsert(ctx context.Context, req repository.UpsertExternalContactRequest) (*repository.ExternalContact, error)
+	GetBySource(ctx context.Context, source, sourceID string, accountID *string) (*repository.ExternalContact, error)
+	UpdateMatch(ctx context.Context, id uuid.UUID, crmContactID *uuid.UUID, status repository.MatchStatus) (*repository.ExternalContact, error)
 }
 
 // PeerMatcher matches Telegram peers to CRM contacts using the identity service.
@@ -70,6 +72,7 @@ func (m *PeerMatcher) MatchPeer(ctx context.Context, peerUserID int64, peerUsern
 			if err := m.messageRepo.UpdateMessageContact(ctx, peerUserID, *result.ContactID); err != nil {
 				log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: failed to update message contacts")
 			}
+			m.markExternalContactMatched(ctx, peerUserID, *result.ContactID)
 			log.Info().
 				Int64("peer_user_id", peerUserID).
 				Str("contact_id", result.ContactID.String()).
@@ -95,6 +98,7 @@ func (m *PeerMatcher) MatchPeer(ctx context.Context, peerUserID int64, peerUsern
 			if err := m.messageRepo.UpdateMessageContact(ctx, peerUserID, *result.ContactID); err != nil {
 				log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: failed to update message contacts")
 			}
+			m.markExternalContactMatched(ctx, peerUserID, *result.ContactID)
 
 			// Link telegram identity to this contact (so future matches use username cache)
 			if peerUsername != nil && *peerUsername != "" {
@@ -282,6 +286,21 @@ func (m *PeerMatcher) OnPeerLinked(ctx context.Context, peerUserID int64, peerUs
 		Str("contact_id", contactID.String()).
 		Msg("telegram: peer linked via import, messages updated")
 	return nil
+}
+
+// markExternalContactMatched updates any existing external_contact for this peer to "matched" status.
+func (m *PeerMatcher) markExternalContactMatched(ctx context.Context, peerUserID int64, contactID uuid.UUID) {
+	sourceID := strconv.FormatInt(peerUserID, 10)
+	existing, err := m.externalContactRepo.GetBySource(ctx, "telegram", sourceID, nil)
+	if err != nil || existing == nil {
+		return // no existing candidate, nothing to update
+	}
+	if existing.MatchStatus == repository.MatchStatusMatched || existing.MatchStatus == repository.MatchStatusImported {
+		return // already marked
+	}
+	if _, err := m.externalContactRepo.UpdateMatch(ctx, existing.ID, &contactID, repository.MatchStatusMatched); err != nil {
+		log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: failed to mark external contact as matched")
+	}
 }
 
 func buildDisplayName(firstName, lastName *string) *string {

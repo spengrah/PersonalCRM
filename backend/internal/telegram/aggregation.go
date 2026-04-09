@@ -126,6 +126,13 @@ func (e *AggregationEngine) AggregateAll(ctx context.Context) error {
 	return nil
 }
 
+// AggregateForContactBatch processes all unprocessed messages for a single contact in batch mode.
+// Used after import/link to aggregate newly-matched messages without scanning all contacts.
+func (e *AggregationEngine) AggregateForContactBatch(ctx context.Context, contactID uuid.UUID) error {
+	_, err := e.aggregateBatch(ctx, contactID)
+	return err
+}
+
 // aggregateBatch processes all unprocessed messages for a contact in batch mode.
 func (e *AggregationEngine) aggregateBatch(ctx context.Context, contactID uuid.UUID) (int, error) {
 	msgs, err := e.messageRepo.ListUnprocessedByContact(ctx, contactID)
@@ -145,7 +152,7 @@ func (e *AggregationEngine) aggregateBatch(ctx context.Context, contactID uuid.U
 		bursts := e.groupIntoBursts(chatMessages, chatID)
 
 		// Resolve bursts into sessions (merge outbound+inbound into mutual where applicable)
-		sessions := e.resolveSessions(ctx, bursts)
+		sessions := e.resolveSessions(bursts)
 
 		// Create interactions for each session
 		for _, sess := range sessions {
@@ -174,7 +181,7 @@ func (e *AggregationEngine) AggregateForContact(ctx context.Context, contactID u
 	bursts := e.groupIntoBursts(msgs, chatID)
 
 	// Resolve into sessions (same logic as batch)
-	sessions := e.resolveSessions(ctx, bursts)
+	sessions := e.resolveSessions(bursts)
 
 	sourceRefPrefix := fmt.Sprintf("tg:%d:%%", chatID)
 	now := msgs[len(msgs)-1].SentAt // use latest message time as upper bound
@@ -328,7 +335,7 @@ func (e *AggregationEngine) groupIntoBursts(msgs []repository.TelegramMessage, c
 }
 
 // resolveSessions merges bursts into sessions, applying reply bridging for batch mode.
-func (e *AggregationEngine) resolveSessions(ctx context.Context, bursts []burst) []msgSession {
+func (e *AggregationEngine) resolveSessions(bursts []burst) []msgSession {
 	if len(bursts) == 0 {
 		return nil
 	}

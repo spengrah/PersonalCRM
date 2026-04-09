@@ -1,7 +1,6 @@
 package telegram
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -12,10 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// Silence unused import warnings
-var _ = require.New
-var _ = context.Background
 
 func makeMsg(id int32, chatID int64, outgoing bool, sentAt time.Time) repository.TelegramMessage {
 	return repository.TelegramMessage{
@@ -103,7 +98,7 @@ func TestResolveSessions_ReplyBridgeWithin48h(t *testing.T) {
 		},
 	}
 
-	sessions := e.resolveSessions(context.Background(), bursts)
+	sessions := e.resolveSessions(bursts)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, repository.InteractionDirectionMutual, sessions[0].direction)
 	assert.Len(t, sessions[0].messages, 3)
@@ -130,7 +125,7 @@ func TestResolveSessions_ReplyBridgeExpired(t *testing.T) {
 		},
 	}
 
-	sessions := e.resolveSessions(context.Background(), bursts)
+	sessions := e.resolveSessions(bursts)
 	require.Len(t, sessions, 2) // not bridged
 }
 
@@ -163,7 +158,7 @@ func TestResolveSessions_ExplicitReplyBridges(t *testing.T) {
 		},
 	}
 
-	sessions := e.resolveSessions(context.Background(), bursts)
+	sessions := e.resolveSessions(bursts)
 	require.Len(t, sessions, 1) // bridged via explicit reply
 	assert.Equal(t, repository.InteractionDirectionMutual, sessions[0].direction)
 }
@@ -194,7 +189,7 @@ func TestResolveSessions_ChatScoped(t *testing.T) {
 		},
 	}
 
-	sessions := e.resolveSessions(context.Background(), bursts)
+	sessions := e.resolveSessions(bursts)
 	require.Len(t, sessions, 2) // separate chats = separate sessions
 }
 

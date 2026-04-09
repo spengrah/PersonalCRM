@@ -23,9 +23,9 @@ func cleanupAggregationMessages(t *testing.T, database *db.Database) {
 	t.Helper()
 	ctx := context.Background()
 	// Hard delete test messages (unique message IDs for this test suite)
-	_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE telegram_message_id IN (80001, 80002, 80003, 80011, 80012, 80013, 80021, 80022, 80031, 80032)")
+	_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE telegram_message_id IN (80001, 80002, 80003, 80011, 80012, 80013, 80021, 80022, 80031, 80032, 80041, 80042, 80051, 80052)")
 	// Hard delete interactions with source_ref matching test chat IDs
-	_, _ = database.Pool.Exec(ctx, "DELETE FROM interaction WHERE source_ref LIKE 'tg:100:%' OR source_ref LIKE 'tg:101:%' OR source_ref LIKE 'tg:102:%' OR source_ref LIKE 'tg:201:%' OR source_ref LIKE 'tg:202:%'")
+	_, _ = database.Pool.Exec(ctx, "DELETE FROM interaction WHERE source_ref LIKE 'tg:100:%' OR source_ref LIKE 'tg:101:%' OR source_ref LIKE 'tg:102:%' OR source_ref LIKE 'tg:201:%' OR source_ref LIKE 'tg:202:%' OR source_ref LIKE 'tg:301:%' OR source_ref LIKE 'tg:302:%'")
 }
 
 func setupAggregationTest(t *testing.T) (
@@ -206,4 +206,67 @@ func TestAggregation_ChatScoped(t *testing.T) {
 	interactions, err := interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(interactions), 2) // at least 2 (one per chat)
+}
+
+func TestAggregation_IncrementalCoalescing(t *testing.T) {
+	messageRepo, interactionRepo, contactRepo, _, engine, _ := setupAggregationTest(t)
+	ctx := context.Background()
+
+	contact := createTestContact(t, contactRepo, "Aggregation Incremental Coalesce")
+	t.Cleanup(func() {
+		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
+	})
+
+	base := accelerated.GetCurrentTime().Add(-30 * time.Minute).Truncate(time.Microsecond)
+
+	// First outbound message → creates interaction
+	insertTestMessage(t, messageRepo, 80041, 301, true, base, &contact.ID, 70005)
+	err := engine.AggregateForContact(ctx, contact.ID, 301)
+	require.NoError(t, err)
+
+	interactions, err := interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
+	require.NoError(t, err)
+	require.Len(t, interactions, 1)
+	assert.Equal(t, "outbound", interactions[0].Direction)
+
+	// Second outbound message within burst window → should coalesce (extend), not create new
+	insertTestMessage(t, messageRepo, 80042, 301, true, base.Add(10*time.Minute), &contact.ID, 70005)
+	err = engine.AggregateForContact(ctx, contact.ID, 301)
+	require.NoError(t, err)
+
+	interactions, err = interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
+	require.NoError(t, err)
+	assert.Len(t, interactions, 1) // still just 1 interaction (coalesced)
+}
+
+func TestAggregation_IncrementalReplyBridge(t *testing.T) {
+	messageRepo, interactionRepo, contactRepo, _, engine, _ := setupAggregationTest(t)
+	ctx := context.Background()
+
+	contact := createTestContact(t, contactRepo, "Aggregation Incremental Bridge")
+	t.Cleanup(func() {
+		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
+	})
+
+	base := accelerated.GetCurrentTime().Add(-2 * time.Hour).Truncate(time.Microsecond)
+
+	// Create outbound interaction first
+	insertTestMessage(t, messageRepo, 80051, 302, true, base, &contact.ID, 70006)
+	err := engine.AggregateForContact(ctx, contact.ID, 302)
+	require.NoError(t, err)
+
+	interactions, err := interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
+	require.NoError(t, err)
+	require.Len(t, interactions, 1)
+	assert.Equal(t, "outbound", interactions[0].Direction)
+
+	// Inbound reply within 48h → should promote to mutual
+	insertTestMessage(t, messageRepo, 80052, 302, false, base.Add(30*time.Minute), &contact.ID, 70006)
+	err = engine.AggregateForContact(ctx, contact.ID, 302)
+	require.NoError(t, err)
+
+	interactions, err = interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
+	require.NoError(t, err)
+	require.Len(t, interactions, 1) // still 1, promoted
+	assert.Equal(t, "mutual", interactions[0].Direction)
 }

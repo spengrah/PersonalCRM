@@ -592,8 +592,8 @@ func (m *TelegramManager) OnPeerLinked(ctx context.Context, peerUserID int64, pe
 	if err := m.peerMatcher.OnPeerLinked(ctx, peerUserID, peerUsername, contactID); err != nil {
 		return err
 	}
-	// Aggregate for the newly-matched contact
-	if err := m.aggregationEngine.AggregateAll(ctx); err != nil {
+	// Aggregate only the newly-matched contact (not all contacts)
+	if err := m.aggregationEngine.AggregateForContactBatch(ctx, contactID); err != nil {
 		log.Warn().Err(err).Msg("telegram: post-import aggregation failed")
 	}
 	return nil

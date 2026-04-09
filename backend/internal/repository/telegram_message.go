@@ -332,7 +332,9 @@ func (r *TelegramMessageRepository) CountMessagesByPeer(ctx context.Context) ([]
 			OutboundCount: row.OutboundCount,
 			InboundCount:  row.InboundCount,
 		}
-		if t, ok := row.LastMessageAt.(time.Time); ok {
+		if ts, ok := row.LastMessageAt.(pgtype.Timestamptz); ok && ts.Valid {
+			counts[i].LastMessageAt = ts.Time
+		} else if t, ok := row.LastMessageAt.(time.Time); ok {
 			counts[i].LastMessageAt = t
 		}
 	}
@@ -367,7 +369,9 @@ func (r *TelegramMessageRepository) CountMessagesByPeerID(ctx context.Context, p
 		OutboundCount: row.OutboundCount,
 		InboundCount:  row.InboundCount,
 	}
-	if t, ok := row.LastMessageAt.(time.Time); ok {
+	if ts, ok := row.LastMessageAt.(pgtype.Timestamptz); ok && ts.Valid {
+		count.LastMessageAt = ts.Time
+	} else if t, ok := row.LastMessageAt.(time.Time); ok {
 		count.LastMessageAt = t
 	}
 	return count, nil
