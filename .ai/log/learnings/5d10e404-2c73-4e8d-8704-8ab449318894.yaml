@@ -590,3 +590,15 @@ detail: |
   core.md documents: 'When push is blocked by learnings extraction: 1. Read the new learnings 2. For each actionable learning, decide if/where to apply it 3. Commit any applied changes plus the learnings files'. In practice, Claude committed learnings directly without reading them first. Why missed: instruction exists in core.md but isn't in the blocking message itself. How to strengthen: Either include the workflow steps in the pre-push hook's blocking message, or make the instruction more prominent in core.md's Pre-push Hooks section.
 actionable: true
 
+---
+timestamp: "2026-04-09T14:42:06.934469"
+type: rule
+summary: Nil guards in production code acceptable for test simplification
+detail: |
+  When a method calls dependencies purely for side effects (not return values), it's acceptable to add `if m.dependency != nil` guards specifically to enable unit testing without complete mock setup. Example from session: `OnPeerLinked` calls `m.messageRepo.UpdateMessageContact()` for side effects only — adding a nil guard allows testing the core matching logic without mocking the message repository. The code even documents this: "Nil guard for messageRepo in OnPeerLinked (enables unit testing)". This pattern trades stricter dependency verification for simpler test setup.
+  
+  **Why**: Always-present production dependencies can be nil in unit tests when you want to test core logic in isolation.
+  
+  **How to apply**: When adding unit tests to methods with multiple dependencies, consider nil guards for dependencies used only for side effects rather than requiring full mock setup. Use real mocks for dependencies that affect return values or control flow.
+actionable: true
+
