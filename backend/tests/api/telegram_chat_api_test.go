@@ -15,6 +15,7 @@ import (
 	"personal-crm/backend/internal/crypto"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	tgpkg "personal-crm/backend/internal/telegram"
 
 	"github.com/gin-gonic/gin"
@@ -62,9 +63,22 @@ func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramCha
 	require.NoError(t, err)
 
 	telegramCfg := &config.TelegramConfig{
-		GroupMaxMembers: 10,
-		BackfillSince:   "2026-01-01",
+		GroupMaxMembers:      10,
+		BackfillSince:        "2026-01-01",
+		BurstWindowHours:     2,
+		ReplyBridgeHours:     48,
+		DiscoveryMinMessages: 3,
 	}
+
+	// Phase 4 dependencies (nil for chat API tests — not exercised)
+	identityRepo := repository.NewIdentityRepository(database.Queries)
+	identityService := service.NewIdentityService(identityRepo)
+	externalContactRepo := repository.NewExternalContactRepository(database.Queries)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
+	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
 
 	manager := tgpkg.NewTelegramManager(
 		sessionRepo,
@@ -76,6 +90,12 @@ func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramCha
 		12345,
 		"testhash",
 		telegramCfg,
+		identityService,
+		externalContactRepo,
+		interactionRepo,
+		contactService,
+		contactService,
+		contactService,
 	)
 
 	handler := handlers.NewTelegramHandler(manager)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TelegramMessage represents a stored Telegram message.
@@ -205,6 +206,153 @@ func (r *TelegramMessageRepository) CountByChat(ctx context.Context) (map[int64]
 		counts[row.TelegramChatID] = row.MessageCount
 	}
 	return counts, nil
+}
+
+// UnmatchedPeer holds distinct peer info for identity matching.
+type UnmatchedPeer struct {
+	PeerUserID    int64
+	PeerUsername  *string
+	PeerFirstName *string
+	PeerLastName  *string
+	PeerPhone     *string
+}
+
+// PeerMessageCount holds message counts for a peer.
+type PeerMessageCount struct {
+	PeerUserID    int64
+	TotalCount    int64
+	OutboundCount int64
+	InboundCount  int64
+	LastMessageAt time.Time
+}
+
+// ListUnprocessedByContactAndChat returns unprocessed messages for a contact+chat.
+func (r *TelegramMessageRepository) ListUnprocessedByContactAndChat(ctx context.Context, contactID uuid.UUID, chatID int64) ([]TelegramMessage, error) {
+	dbMsgs, err := r.queries.ListUnprocessedTelegramMessagesByContactAndChat(ctx, db.ListUnprocessedTelegramMessagesByContactAndChatParams{
+		MatchedContactID: uuidToPgUUID(contactID),
+		TelegramChatID:   chatID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	msgs := make([]TelegramMessage, len(dbMsgs))
+	for i, m := range dbMsgs {
+		msgs[i] = convertDbTelegramMessage(m)
+	}
+	return msgs, nil
+}
+
+// ListUnprocessedByContact returns all unprocessed messages for a contact.
+func (r *TelegramMessageRepository) ListUnprocessedByContact(ctx context.Context, contactID uuid.UUID) ([]TelegramMessage, error) {
+	dbMsgs, err := r.queries.ListUnprocessedTelegramMessagesByContact(ctx, uuidToPgUUID(contactID))
+	if err != nil {
+		return nil, err
+	}
+	msgs := make([]TelegramMessage, len(dbMsgs))
+	for i, m := range dbMsgs {
+		msgs[i] = convertDbTelegramMessage(m)
+	}
+	return msgs, nil
+}
+
+// ListDistinctUnmatchedPeers returns distinct peer info for unmatched messages.
+func (r *TelegramMessageRepository) ListDistinctUnmatchedPeers(ctx context.Context) ([]UnmatchedPeer, error) {
+	rows, err := r.queries.ListDistinctUnmatchedPeers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	peers := make([]UnmatchedPeer, len(rows))
+	for i, row := range rows {
+		p := UnmatchedPeer{
+			PeerUserID: row.PeerUserID.Int64,
+		}
+		if row.PeerUsername.Valid {
+			p.PeerUsername = &row.PeerUsername.String
+		}
+		if row.PeerFirstName.Valid {
+			p.PeerFirstName = &row.PeerFirstName.String
+		}
+		if row.PeerLastName.Valid {
+			p.PeerLastName = &row.PeerLastName.String
+		}
+		if row.PeerPhone.Valid {
+			p.PeerPhone = &row.PeerPhone.String
+		}
+		peers[i] = p
+	}
+	return peers, nil
+}
+
+// UpdateMessageContact sets matched_contact_id on all messages for a peer.
+func (r *TelegramMessageRepository) UpdateMessageContact(ctx context.Context, peerUserID int64, contactID uuid.UUID) error {
+	return r.queries.UpdateTelegramMessageContact(ctx, db.UpdateTelegramMessageContactParams{
+		MatchedContactID: uuidToPgUUID(contactID),
+		PeerUserID:       int64ToPgInt8(&peerUserID),
+	})
+}
+
+// MarkMessagesProcessed sets processed_at and interaction_id on messages.
+func (r *TelegramMessageRepository) MarkMessagesProcessed(ctx context.Context, messageIDs []uuid.UUID, interactionID uuid.UUID) error {
+	pgIDs := make([]pgtype.UUID, len(messageIDs))
+	for i, id := range messageIDs {
+		pgIDs[i] = uuidToPgUUID(id)
+	}
+	return r.queries.MarkTelegramMessagesProcessed(ctx, db.MarkTelegramMessagesProcessedParams{
+		InteractionID: uuidToPgUUID(interactionID),
+		MessageIds:    pgIDs,
+	})
+}
+
+// ListUnprocessedContactIDs returns distinct contact IDs with unprocessed messages.
+func (r *TelegramMessageRepository) ListUnprocessedContactIDs(ctx context.Context) ([]uuid.UUID, error) {
+	pgIDs, err := r.queries.ListUnprocessedContactIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uuid.UUID, 0, len(pgIDs))
+	for _, pgID := range pgIDs {
+		if pgID.Valid {
+			ids = append(ids, uuid.UUID(pgID.Bytes))
+		}
+	}
+	return ids, nil
+}
+
+// CountMessagesByPeer returns message counts grouped by peer.
+func (r *TelegramMessageRepository) CountMessagesByPeer(ctx context.Context) ([]PeerMessageCount, error) {
+	rows, err := r.queries.CountTelegramMessagesByPeer(ctx)
+	if err != nil {
+		return nil, err
+	}
+	counts := make([]PeerMessageCount, len(rows))
+	for i, row := range rows {
+		counts[i] = PeerMessageCount{
+			PeerUserID:    row.PeerUserID.Int64,
+			TotalCount:    row.TotalCount,
+			OutboundCount: row.OutboundCount,
+			InboundCount:  row.InboundCount,
+		}
+		if t, ok := row.LastMessageAt.(time.Time); ok {
+			counts[i].LastMessageAt = t
+		}
+	}
+	return counts, nil
+}
+
+// GetMessageByReplyTo retrieves a message by chat ID and message ID (for reply resolution).
+func (r *TelegramMessageRepository) GetMessageByReplyTo(ctx context.Context, chatID int64, messageID int32) (*TelegramMessage, error) {
+	dbMsg, err := r.queries.GetTelegramMessageByReplyTo(ctx, db.GetTelegramMessageByReplyToParams{
+		TelegramChatID:    chatID,
+		TelegramMessageID: messageID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	msg := convertDbTelegramMessage(dbMsg)
+	return &msg, nil
 }
 
 // int32ToPgInt4 already defined in telegram_chat_config.go

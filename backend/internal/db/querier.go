@@ -39,6 +39,7 @@ type Querier interface {
 	CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountTelegramMessagesByChat(ctx context.Context) ([]*CountTelegramMessagesByChatRow, error)
+	CountTelegramMessagesByPeer(ctx context.Context) ([]*CountTelegramMessagesByPeerRow, error)
 	CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error)
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
@@ -119,6 +120,12 @@ type Querier interface {
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	// Find a pending follow-up task for a contact (kind='follow_up', state='managed')
 	FindPendingFollowUp(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error)
+	// Find the most recent outbound telegram interaction for a contact in a specific chat
+	// within a time window. source_ref_prefix should include trailing % for LIKE match.
+	FindRecentOutboundTelegramInteraction(ctx context.Context, arg FindRecentOutboundTelegramInteractionParams) (*Interaction, error)
+	// Find the most recent telegram interaction for a contact in a specific chat
+	// with a given direction. Used for incremental coalescing.
+	FindRecentTelegramInteraction(ctx context.Context, arg FindRecentTelegramInteractionParams) (*Interaction, error)
 	FindSimilarContacts(ctx context.Context, arg FindSimilarContactsParams) ([]*FindSimilarContactsRow, error)
 	// Finds similar contacts for multiple candidate names in a single batch query.
 	// Uses UNNEST to expand input arrays and LATERAL join to find matches per candidate.
@@ -171,6 +178,7 @@ type Querier interface {
 	GetTelegramChannelState(ctx context.Context, channelID int64) (*TelegramChannelState, error)
 	GetTelegramChatConfig(ctx context.Context, telegramChatID int64) (*TelegramChatConfig, error)
 	GetTelegramMessage(ctx context.Context, arg GetTelegramMessageParams) (*TelegramMessage, error)
+	GetTelegramMessageByReplyTo(ctx context.Context, arg GetTelegramMessageByReplyToParams) (*TelegramMessage, error)
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
@@ -204,6 +212,7 @@ type Querier interface {
 	// Lists contacts that have a contact_by date set (used for testing mode filtering).
 	// Returns contacts ordered by contact_by (soonest first).
 	ListContactsWithContactBy(ctx context.Context, limit int32) ([]*Contact, error)
+	ListDistinctUnmatchedPeers(ctx context.Context) ([]*ListDistinctUnmatchedPeersRow, error)
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListEnrichmentsBySource(ctx context.Context, arg ListEnrichmentsBySourceParams) ([]*ContactEnrichment, error)
@@ -238,12 +247,16 @@ type Querier interface {
 	ListTelegramMessagesByChatUnprocessed(ctx context.Context, telegramChatID int64) ([]*TelegramMessage, error)
 	ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	ListUnmatchedIdentities(ctx context.Context, arg ListUnmatchedIdentitiesParams) ([]*ExternalIdentity, error)
+	ListUnprocessedContactIDs(ctx context.Context) ([]pgtype.UUID, error)
+	ListUnprocessedTelegramMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*TelegramMessage, error)
+	ListUnprocessedTelegramMessagesByContactAndChat(ctx context.Context, arg ListUnprocessedTelegramMessagesByContactAndChatParams) ([]*TelegramMessage, error)
 	// List upcoming calendar events for a specific contact
 	ListUpcomingEventsForContact(ctx context.Context, arg ListUpcomingEventsForContactParams) ([]*CalendarEvent, error)
 	// List upcoming events that have matched CRM contacts
 	ListUpcomingEventsWithContacts(ctx context.Context, arg ListUpcomingEventsWithContactsParams) ([]*CalendarEvent, error)
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
+	MarkTelegramMessagesProcessed(ctx context.Context, arg MarkTelegramMessagesProcessedParams) error
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement
@@ -309,6 +322,8 @@ type Querier interface {
 	UpdateIdentityMessageCount(ctx context.Context, arg UpdateIdentityMessageCountParams) (*ExternalIdentity, error)
 	// Promote an outbound interaction to mutual when a reply arrives (in-place update)
 	UpdateInteractionDirection(ctx context.Context, arg UpdateInteractionDirectionParams) (*Interaction, error)
+	// Extend an existing interaction's occurred_at and description (incremental coalescing)
+	UpdateInteractionTimestamp(ctx context.Context, arg UpdateInteractionTimestampParams) (*Interaction, error)
 	// Update the matched contact IDs for an event
 	UpdateMatchedContacts(ctx context.Context, arg UpdateMatchedContactsParams) (*CalendarEvent, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
@@ -325,6 +340,7 @@ type Querier interface {
 	UpdateTelegramChatConfigBackfillCursor(ctx context.Context, arg UpdateTelegramChatConfigBackfillCursorParams) error
 	UpdateTelegramChatConfigMemberCount(ctx context.Context, arg UpdateTelegramChatConfigMemberCountParams) error
 	UpdateTelegramChatConfigStatus(ctx context.Context, arg UpdateTelegramChatConfigStatusParams) (*TelegramChatConfig, error)
+	UpdateTelegramMessageContact(ctx context.Context, arg UpdateTelegramMessageContactParams) error
 	UpdateTelegramSessionAuthState(ctx context.Context, authState string) (*TelegramSession, error)
 	UpdateTelegramSessionUserInfo(ctx context.Context, arg UpdateTelegramSessionUserInfoParams) (*TelegramSession, error)
 	// Insert or update a calendar event from Google Calendar

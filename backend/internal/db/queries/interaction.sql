@@ -46,3 +46,40 @@ WHERE contact_id = $1
   AND occurred_at BETWEEN $2 AND $3
 ORDER BY occurred_at DESC
 LIMIT 1;
+
+-- name: FindRecentOutboundTelegramInteraction :one
+-- Find the most recent outbound telegram interaction for a contact in a specific chat
+-- within a time window. source_ref_prefix should include trailing % for LIKE match.
+SELECT * FROM interaction
+WHERE contact_id = sqlc.arg(contact_id)
+  AND source = 'telegram'
+  AND direction = 'outbound'
+  AND source_ref LIKE sqlc.arg(source_ref_prefix)
+  AND occurred_at >= sqlc.arg(window_start)
+  AND occurred_at <= sqlc.arg(window_end)
+  AND deleted_at IS NULL
+ORDER BY occurred_at DESC
+LIMIT 1;
+
+-- name: FindRecentTelegramInteraction :one
+-- Find the most recent telegram interaction for a contact in a specific chat
+-- with a given direction. Used for incremental coalescing.
+SELECT * FROM interaction
+WHERE contact_id = sqlc.arg(contact_id)
+  AND source = 'telegram'
+  AND direction = sqlc.arg(direction)
+  AND source_ref LIKE sqlc.arg(source_ref_prefix)
+  AND occurred_at >= sqlc.arg(window_start)
+  AND occurred_at <= sqlc.arg(window_end)
+  AND deleted_at IS NULL
+ORDER BY occurred_at DESC
+LIMIT 1;
+
+-- name: UpdateInteractionTimestamp :one
+-- Extend an existing interaction's occurred_at and description (incremental coalescing)
+UPDATE interaction
+SET occurred_at = sqlc.arg(occurred_at),
+    description = sqlc.arg(description)
+WHERE id = sqlc.arg(id)
+  AND deleted_at IS NULL
+RETURNING *;

@@ -198,6 +198,62 @@ func (r *InteractionRepository) FindInWindow(ctx context.Context, contactID uuid
 	return &interaction, nil
 }
 
+// FindRecentOutboundTelegramInteraction finds the most recent outbound telegram interaction
+// for a contact in a specific chat within a time window.
+func (r *InteractionRepository) FindRecentOutboundTelegramInteraction(ctx context.Context, contactID uuid.UUID, sourceRefPrefix string, windowStart, windowEnd time.Time) (*Interaction, error) {
+	dbInteraction, err := r.queries.FindRecentOutboundTelegramInteraction(ctx, db.FindRecentOutboundTelegramInteractionParams{
+		ContactID:       uuidToPgUUID(contactID),
+		SourceRefPrefix: pgtype.Text{String: sourceRefPrefix, Valid: true},
+		WindowStart:     pgtype.Timestamptz{Time: windowStart, Valid: true},
+		WindowEnd:       pgtype.Timestamptz{Time: windowEnd, Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
+// FindRecentTelegramInteraction finds the most recent telegram interaction for a contact
+// in a specific chat with a given direction. Used for incremental coalescing.
+func (r *InteractionRepository) FindRecentTelegramInteraction(ctx context.Context, contactID uuid.UUID, direction, sourceRefPrefix string, windowStart, windowEnd time.Time) (*Interaction, error) {
+	dbInteraction, err := r.queries.FindRecentTelegramInteraction(ctx, db.FindRecentTelegramInteractionParams{
+		ContactID:       uuidToPgUUID(contactID),
+		Direction:       direction,
+		SourceRefPrefix: pgtype.Text{String: sourceRefPrefix, Valid: true},
+		WindowStart:     pgtype.Timestamptz{Time: windowStart, Valid: true},
+		WindowEnd:       pgtype.Timestamptz{Time: windowEnd, Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
+// UpdateInteractionTimestamp extends an existing interaction's occurred_at and description.
+func (r *InteractionRepository) UpdateInteractionTimestamp(ctx context.Context, id uuid.UUID, occurredAt time.Time, description *string) (*Interaction, error) {
+	dbInteraction, err := r.queries.UpdateInteractionTimestamp(ctx, db.UpdateInteractionTimestampParams{
+		ID:          uuidToPgUUID(id),
+		OccurredAt:  pgtype.Timestamptz{Time: occurredAt, Valid: true},
+		Description: stringToPgText(description),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
 // UpdateInteractionDirection updates the direction and occurred_at of an interaction (for reply bridging)
 func (r *InteractionRepository) UpdateInteractionDirection(ctx context.Context, id uuid.UUID, direction string, occurredAt time.Time) (*Interaction, error) {
 	dbInteraction, err := r.queries.UpdateInteractionDirection(ctx, db.UpdateInteractionDirectionParams{

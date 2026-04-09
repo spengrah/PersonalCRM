@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strconv"
@@ -24,12 +25,19 @@ import (
 const MaxCandidatesForSorting = 10000
 
 // ImportHandler handles import candidate HTTP requests
+// PostImportHook is called after a Telegram candidate is imported/linked
+// to back-fill message matching and trigger aggregation.
+type PostImportHook interface {
+	OnPeerLinked(ctx context.Context, peerUserID int64, peerUsername string, contactID uuid.UUID) error
+}
+
 type ImportHandler struct {
-	externalRepo *repository.ExternalContactRepository
-	contactSvc   *service.ContactService
-	matchSvc     *service.ImportMatchService
-	enricher     *service.EnrichmentService
-	validator    *validator.Validate
+	externalRepo   *repository.ExternalContactRepository
+	contactSvc     *service.ContactService
+	matchSvc       *service.ImportMatchService
+	enricher       *service.EnrichmentService
+	validator      *validator.Validate
+	postImportHook PostImportHook
 }
 
 // NewImportHandler creates a new import handler
@@ -46,6 +54,11 @@ func NewImportHandler(
 		enricher:     enricher,
 		validator:    validator.New(),
 	}
+}
+
+// SetPostImportHook sets an optional hook for post-import processing (e.g., Telegram back-linking).
+func (h *ImportHandler) SetPostImportHook(hook PostImportHook) {
+	h.postImportHook = hook
 }
 
 // ImportCandidateResponse represents an import candidate for the API
@@ -362,6 +375,9 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 		return
 	}
 
+	// Post-import hook: back-link Telegram message history
+	h.triggerPostImportHook(ctx, external, contact.ID)
+
 	api.SendSuccess(c, http.StatusCreated, contact, nil)
 }
 
@@ -433,6 +449,17 @@ func (h *ImportHandler) buildMethodsAuto(external *repository.ExternalContact) [
 			Type:  "phone",
 			Value: phone.Value,
 		})
+	}
+
+	// Handle Telegram username from metadata
+	if external.Source == "telegram" {
+		if username, ok := external.Metadata["username"].(string); ok && username != "" {
+			username = strings.TrimPrefix(username, "@")
+			methods = append(methods, service.ContactMethodInput{
+				Type:  "telegram",
+				Value: username,
+			})
+		}
 	}
 
 	return methods
@@ -521,7 +548,29 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 		logger.Warn().Err(enrichErr).Str("external_id", id.String()).Msg("enrichment failed during link")
 	}
 
+	// Post-import hook: back-link Telegram message history
+	h.triggerPostImportHook(ctx, external, crmContactID)
+
 	api.SendSuccess(c, http.StatusOK, updated, nil)
+}
+
+// triggerPostImportHook calls the post-import hook for Telegram candidates (best-effort).
+func (h *ImportHandler) triggerPostImportHook(ctx context.Context, external *repository.ExternalContact, contactID uuid.UUID) {
+	if h.postImportHook == nil || external.Source != "telegram" {
+		return
+	}
+	peerUserID, err := strconv.ParseInt(external.SourceID, 10, 64)
+	if err != nil {
+		logger.Warn().Err(err).Str("source_id", external.SourceID).Msg("failed to parse telegram peer user ID for post-import hook")
+		return
+	}
+	var peerUsername string
+	if username, ok := external.Metadata["username"].(string); ok {
+		peerUsername = strings.TrimPrefix(username, "@")
+	}
+	if err := h.postImportHook.OnPeerLinked(ctx, peerUserID, peerUsername, contactID); err != nil {
+		logger.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: post-import hook failed")
+	}
 }
 
 // toEnrichmentMethodSelections converts handler selections to service format

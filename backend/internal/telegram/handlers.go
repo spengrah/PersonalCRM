@@ -15,13 +15,15 @@ import (
 
 // MessageHandler processes Telegram update events and stores messages.
 type MessageHandler struct {
-	messageRepo     *repository.TelegramMessageRepository
-	chatConfigRepo  *repository.TelegramChatConfigRepository
-	syncRepo        *repository.SyncRepository
-	syncStateID     *uuid.UUID
-	selfUserID      int64
-	groupMaxMembers int
-	api             *tg.Client
+	messageRepo       *repository.TelegramMessageRepository
+	chatConfigRepo    *repository.TelegramChatConfigRepository
+	syncRepo          *repository.SyncRepository
+	syncStateID       *uuid.UUID
+	selfUserID        int64
+	groupMaxMembers   int
+	api               *tg.Client
+	peerMatcher       *PeerMatcher
+	aggregationEngine *AggregationEngine
 }
 
 // NewMessageHandler creates a new message handler.
@@ -32,14 +34,18 @@ func NewMessageHandler(
 	syncStateID *uuid.UUID,
 	selfUserID int64,
 	groupMaxMembers int,
+	peerMatcher *PeerMatcher,
+	aggregationEngine *AggregationEngine,
 ) *MessageHandler {
 	return &MessageHandler{
-		messageRepo:     messageRepo,
-		chatConfigRepo:  chatConfigRepo,
-		syncRepo:        syncRepo,
-		syncStateID:     syncStateID,
-		selfUserID:      selfUserID,
-		groupMaxMembers: groupMaxMembers,
+		messageRepo:       messageRepo,
+		chatConfigRepo:    chatConfigRepo,
+		syncRepo:          syncRepo,
+		syncStateID:       syncStateID,
+		selfUserID:        selfUserID,
+		groupMaxMembers:   groupMaxMembers,
+		peerMatcher:       peerMatcher,
+		aggregationEngine: aggregationEngine,
 	}
 }
 
@@ -84,6 +90,18 @@ func (h *MessageHandler) HandleNewMessage(ctx context.Context, e tg.Entities, up
 		Str("chat_type", parsed.ChatType).
 		Bool("is_outgoing", parsed.IsOutgoing).
 		Msg("telegram: message stored")
+
+	// Phase 4: identity matching + aggregation (best-effort)
+	if h.peerMatcher != nil && parsed.PeerUserID != nil {
+		contactID, err := h.peerMatcher.MatchPeer(ctx, *parsed.PeerUserID, parsed.PeerUsername, parsed.PeerFirstName, parsed.PeerLastName, parsed.PeerPhone)
+		if err != nil {
+			log.Warn().Err(err).Int64("peer_user_id", *parsed.PeerUserID).Msg("telegram: peer matching failed")
+		} else if contactID != nil && h.aggregationEngine != nil {
+			if err := h.aggregationEngine.AggregateForContact(ctx, *contactID, parsed.TelegramChatID); err != nil {
+				log.Warn().Err(err).Str("contact_id", contactID.String()).Msg("telegram: aggregation failed")
+			}
+		}
+	}
 
 	return nil
 }
