@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"personal-crm/backend/internal/api"
+	"personal-crm/backend/internal/db"
 	tg "personal-crm/backend/internal/telegram"
 
 	"github.com/gin-gonic/gin"
@@ -271,14 +272,21 @@ func (h *TelegramHandler) UpdateChatStatus(c *gin.Context) {
 		return
 	}
 
+	// Get current status to detect changes
+	previousStatus, _ := h.manager.GetChatStatus(c.Request.Context(), chatID)
+
 	chat, err := h.manager.UpdateChatStatus(c.Request.Context(), chatID, status)
 	if err != nil {
-		api.SendNotFound(c, "Chat")
+		if errors.Is(err, db.ErrNotFound) {
+			api.SendNotFound(c, "Chat")
+			return
+		}
+		api.SendInternalError(c, "Failed to update chat status")
 		return
 	}
 
-	// Trigger retroactive backfill if status changed to "tracked"
-	if status == "tracked" {
+	// Trigger retroactive backfill only when status changes TO "tracked"
+	if status == "tracked" && previousStatus != "tracked" {
 		if err := h.manager.TriggerChatBackfill(c.Request.Context(), chatID); err != nil {
 			// Log but don't fail the request
 			c.Error(err)

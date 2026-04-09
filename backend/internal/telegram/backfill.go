@@ -237,7 +237,8 @@ func (b *Backfiller) backfillChat(ctx context.Context, chat repository.TelegramC
 		// Resume from cursor
 		historyBuilder = historyBuilder.OffsetID(int(*chat.BackfillCursor))
 	} else {
-		// Fresh backfill — no offset needed, we'll filter by date in the loop
+		// Fresh backfill — use OffsetDate to start from the backfill horizon
+		historyBuilder = historyBuilder.OffsetDate(sinceUnix)
 	}
 
 	iter := historyBuilder.Iter()

@@ -307,3 +307,72 @@ func TestChatConfig_UpdateMemberCount(t *testing.T) {
 	require.NotNil(t, got.MemberCount)
 	assert.Equal(t, int32(25), *got.MemberCount)
 }
+
+func TestChatConfig_BackfillResume(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	defer database.Close()
+
+	repo := repository.NewTelegramChatConfigRepository(database.Queries)
+
+	cleanupTelegramChatConfigs(t, database.Queries)
+	t.Cleanup(func() { cleanupTelegramChatConfigs(t, database.Queries) })
+
+	// Chat 1: has cursor (interrupted mid-backfill)
+	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+		TelegramChatID: testChatID1,
+		ChatType:       "private",
+		Status:         "auto",
+	})
+	require.NoError(t, err)
+	err = repo.UpdateBackfillCursor(ctx, testChatID1, 750)
+	require.NoError(t, err)
+
+	// Chat 2: reset (retroactive backfill)
+	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+		TelegramChatID: testChatID2,
+		ChatType:       "group",
+		Status:         "tracked",
+	})
+	require.NoError(t, err)
+	err = repo.UpdateBackfillComplete(ctx, testChatID2)
+	require.NoError(t, err)
+	err = repo.ResetBackfill(ctx, testChatID2)
+	require.NoError(t, err)
+
+	// Both should appear in ListForBackfill
+	chats, err := repo.ListForBackfill(ctx)
+	require.NoError(t, err)
+
+	var foundChat1, foundChat2 bool
+	for _, c := range chats {
+		if c.TelegramChatID == testChatID1 {
+			foundChat1 = true
+			require.NotNil(t, c.BackfillCursor)
+			assert.Equal(t, int32(750), *c.BackfillCursor, "cursor should be preserved")
+		}
+		if c.TelegramChatID == testChatID2 {
+			foundChat2 = true
+			assert.Nil(t, c.BackfillCursor, "cursor should be nil after reset")
+			assert.False(t, c.BackfillComplete)
+		}
+	}
+	assert.True(t, foundChat1, "interrupted chat should be in backfill list")
+	assert.True(t, foundChat2, "reset chat should be in backfill list")
+}

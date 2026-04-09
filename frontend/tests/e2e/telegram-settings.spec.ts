@@ -455,4 +455,63 @@ test.describe('Telegram Settings @area:settings', () => {
 
     await expect(page.getByText(/Syncing messages.*15\/42/)).toBeVisible({ timeout: 10000 })
   })
+
+  test('group chat management: toggle status', async ({ page }) => {
+    await page.route('**/api/v1/telegram/auth/status', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: { status: 'connected', connected: true, username: 'testuser' },
+        }),
+      })
+    )
+
+    await page.route('**/api/v1/telegram/chats', route => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: [
+              {
+                telegram_chat_id: -100111,
+                chat_title: 'Toggle Test Group',
+                chat_type: 'group',
+                member_count: 5,
+                status: 'auto',
+                effective_tracked: true,
+              },
+            ],
+          }),
+        })
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            telegram_chat_id: -100111,
+            chat_title: 'Toggle Test Group',
+            chat_type: 'group',
+            member_count: 5,
+            status: 'ignored',
+            effective_tracked: false,
+          },
+        }),
+      })
+    })
+
+    await page.goto('/settings')
+    await page.waitForLoadState('domcontentloaded')
+
+    await expect(page.getByText('Toggle Test Group')).toBeVisible({ timeout: 10000 })
+
+    // The select should be visible with "Auto" selected
+    const select = page.locator('select').first()
+    await expect(select).toHaveValue('auto')
+  })
 })

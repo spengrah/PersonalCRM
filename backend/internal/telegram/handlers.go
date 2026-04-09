@@ -2,8 +2,10 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -101,6 +103,7 @@ func (h *MessageHandler) HandleEditMessage(ctx context.Context, e tg.Entities, u
 	if parsed.ChatType == "group" {
 		tracked, err := h.shouldTrackChat(ctx, parsed, e)
 		if err != nil {
+			log.Warn().Err(err).Int64("chat_id", parsed.TelegramChatID).Msg("telegram: failed to check chat tracking for edit")
 			return nil
 		}
 		if !tracked {
@@ -173,7 +176,10 @@ func (h *MessageHandler) HandleChatParticipant(ctx context.Context, _ tg.Entitie
 // shouldTrackChat checks whether messages from this group chat should be stored.
 func (h *MessageHandler) shouldTrackChat(ctx context.Context, parsed *ParsedMessage, entities tg.Entities) (bool, error) {
 	cfg, err := h.chatConfigRepo.GetConfig(ctx, parsed.TelegramChatID)
-	if err != nil {
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		return false, fmt.Errorf("get chat config: %w", err)
+	}
+	if errors.Is(err, db.ErrNotFound) {
 		// Chat not yet discovered — upsert with defaults
 		var memberCount *int32
 		if chat, ok := entities.Chats[parsed.TelegramChatID]; ok {

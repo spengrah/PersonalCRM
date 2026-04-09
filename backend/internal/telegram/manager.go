@@ -432,6 +432,15 @@ func (m *TelegramManager) ListChats(ctx context.Context) ([]ChatWithTracking, er
 	return result, nil
 }
 
+// GetChatStatus returns the current status string for a chat, or empty if not found.
+func (m *TelegramManager) GetChatStatus(ctx context.Context, chatID int64) (string, error) {
+	cfg, err := m.chatConfigRepo.GetConfig(ctx, chatID)
+	if err != nil {
+		return "", err
+	}
+	return cfg.Status, nil
+}
+
 // UpdateChatStatus updates a chat's status and returns the updated config.
 func (m *TelegramManager) UpdateChatStatus(ctx context.Context, chatID int64, status string) (*ChatWithTracking, error) {
 	cfg, err := m.chatConfigRepo.UpdateStatus(ctx, chatID, status)
