@@ -157,7 +157,14 @@ func (b *Backfiller) BackfillChat(ctx context.Context, chatID int64) error {
 		return fmt.Errorf("unsupported chat type: %s", cfg.ChatType)
 	}
 
-	return b.backfillChatWithPeer(ctx, *cfg, peer, int(sinceTime.Unix()))
+	if b.onProgress != nil {
+		b.onProgress(1, 0)
+	}
+	err = b.backfillChatWithPeer(ctx, *cfg, peer, int(sinceTime.Unix()))
+	if b.onProgress != nil {
+		b.onProgress(1, 1)
+	}
+	return err
 }
 
 func (b *Backfiller) discoverDialogs(ctx context.Context, sinceUnix int) ([]dialogInfo, error) {

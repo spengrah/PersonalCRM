@@ -490,6 +490,9 @@ func (m *TelegramManager) TriggerChatBackfill(ctx context.Context, telegramChatI
 			if err := backfiller.BackfillChat(clientCtx, telegramChatID); err != nil {
 				log.Warn().Err(err).Int64("chat_id", telegramChatID).Msg("telegram: retroactive backfill failed")
 			}
+			m.backfillMu.Lock()
+			m.backfillInProgress = false
+			m.backfillMu.Unlock()
 		}()
 	}
 	return nil
