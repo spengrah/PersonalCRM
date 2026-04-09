@@ -272,8 +272,12 @@ func (h *TelegramHandler) UpdateChatStatus(c *gin.Context) {
 		return
 	}
 
-	// Get current status to detect changes
-	previousStatus, _ := h.manager.GetChatStatus(c.Request.Context(), chatID)
+	// Get current status to detect changes (not-found is fine — chat may not exist yet)
+	previousStatus, err := h.manager.GetChatStatus(c.Request.Context(), chatID)
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		api.SendInternalError(c, "Failed to read chat status")
+		return
+	}
 
 	chat, err := h.manager.UpdateChatStatus(c.Request.Context(), chatID, status)
 	if err != nil {

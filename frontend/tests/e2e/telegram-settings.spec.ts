@@ -513,5 +513,13 @@ test.describe('Telegram Settings @area:settings', () => {
     // The select should be visible with "Auto" selected
     const select = page.locator('select').first()
     await expect(select).toHaveValue('auto')
+
+    // Change to "Ignored" — triggers PATCH and refetch
+    const patchPromise = page.waitForRequest(
+      req => req.url().includes('/telegram/chats/') && req.method() === 'PATCH'
+    )
+    await select.selectOption('ignored')
+    const patchReq = await patchPromise
+    expect(JSON.parse(patchReq.postData() ?? '{}')).toEqual({ status: 'ignored' })
   })
 })
