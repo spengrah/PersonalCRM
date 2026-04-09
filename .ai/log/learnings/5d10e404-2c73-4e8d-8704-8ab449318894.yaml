@@ -150,3 +150,99 @@ detail: |
   The codebase has `make lint` but errcheck violations (ignoring error return from `c.Error(err)`) still appeared in telegram.go handler code (commit 3fab164). Why missed: lint may not be running automatically, or errcheck isn't enabled in the linter config. How to strengthen: Verify errcheck is enabled in .golangci.yml and that pre-push hooks run `make lint`. Consider adding `make lint` to the pre-commit hook (currently only in pre-push).
 actionable: true
 
+---
+timestamp: "2026-04-09T10:04:49.235928"
+type: gotcha
+summary: crypto.NewTokenEncryptor requires 64-char hex string, not 32-byte ASCII
+detail: |
+  When creating a TokenEncryptor for session encryption, the key must be a 64-character hex-encoded string (representing 32 bytes), not a plain 32-character ASCII string. Using "test-encryption-key-32-bytes!!" fails, while "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" works. This causes cryptic test failures if you don't know the format requirement upfront.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:04:49.235928"
+type: distinction
+summary: Telegram status polling needed after fresh connect, not just during backfill
+detail: |
+  After a fresh Telegram connection, last_sync_at is NULL until the first backfill completes. The UI must poll status when (connected && !last_sync_at) OR when backfill_in_progress. Without this, users see "Connected" but no progress indication until the first sync finishes. The distinction is: poll on connection establishment, not just during active syncing.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:04:49.235928"
+type: architecture
+summary: Singleton session managers must cleanup on auth failure, not just success
+detail: |
+  In AuthSessionManager, failed auth attempts (wrong code/password) must explicitly call clearSession(sess) before returning the error. Without cleanup, the singleton session remains wedged until the 5-minute TTL expires, blocking retry attempts. The pattern: any terminal state (success OR error) must cleanup the in-memory session state.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:04:49.235928"
+type: gotcha
+summary: "gotd StateStorage: SetChannelAccessHash must not overwrite pts values"
+detail: |
+  When implementing gotd's StateStorage interface, SetChannelAccessHash updates access hashes independently from pts tracking. Using a general upsert that updates ALL fields destroys gap recovery state by overwriting pts. Solution: create separate UpsertTelegramChannelAccessHash query that ONLY touches access_hash column, preserving pts. Critical for any multi-field state storage where fields have independent lifecycles.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:04:49.235928"
+type: rule
+summary: Prevent re-authentication while already connected session exists
+detail: |
+  StartAuth must check for existing connected session (not just in-progress auth). Re-authenticating while connected overwrites session data and can silently destroy the active login on restart. Added ErrAlreadyConnected check before allowing new auth flow. Applies to any authentication system with persistent session state.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:04:49.235928"
+type: documentation_gap
+summary: Soft-delete filter enforcement in new queries needs strengthening
+detail: |
+  New GetTelegramMessage query was missing 'deleted_at IS NULL' filter. Core rule states "all queries must filter soft deletes" but it's easy to forget when adding new queries. Code reviewer caught this, showing the rule exists but isn't fully internalized. Gap: rule is documented but needs stronger promotion during query creation, possibly a checklist or sqlc lint rule.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:19:02.054635"
+type: architecture
+summary: gotd/td auth requires retry loops inside Run callback, not exit-and-restart
+detail: |
+  When implementing Telegram auth with gotd/td library, invalid code/password errors must be handled by looping inside the `client.Run()` callback and waiting for another attempt, NOT by exiting the callback and restarting. The `phone_code_hash` from SendCode is tied to that session, so the Run callback must stay alive. Send error result to user via channel, then continue waiting for next code/password attempt. This pattern emerged after multiple Codex review rounds identified that exiting on invalid code prevented retries.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:19:02.054635"
+type: architecture
+summary: Auth error classification requires sentinel errors to distinguish user vs infrastructure failures
+detail: |
+  HTTP auth endpoints need to return 401 for user errors (wrong password) vs 500 for internal errors (DB failure). Implement with sentinel errors like `ErrAuthInternal` that wrap infrastructure failures, while passing through known Telegram auth rejection errors (PHONE_CODE_INVALID, PASSWORD_HASH_INVALID). Use `errors.Is()` for checking, not string matching on error messages. The `classifyAuthError()` helper wraps non-auth errors. This pattern prevents misleading 'invalid credentials' messages when the real issue is a persistence failure.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:19:02.054635"
+type: gotcha
+summary: Disconnect/reconnect lifecycle requires bidirectional state flag management
+detail: |
+  When implementing connection lifecycle with a `disconnected` boolean flag: (1) The flag must be cleared on successful reconnect, not just set on disconnect. Without clearing, the flag persists across reconnects and breaks Status() fallback logic. (2) If disconnect fails (e.g., DB delete fails), don't set the flag — return error and allow retry. Setting it creates inconsistent state where Status() reports disconnected but DB still shows connected. This was caught across multiple Codex review rounds as the reconnect path initially forgot to clear the flag.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:19:02.054635"
+type: architecture
+summary: Async auth flows need explicit step tracking to prevent out-of-order requests
+detail: |
+  Auth state machines with multiple async steps (phone → code → password) must track the current expected step and validate incoming requests against it. Add a `Step` field to the auth session ("awaiting_code", "awaiting_password") that's checked at the start of VerifyCode/VerifyPassword. Protect step writes with the same mutex used for reads to prevent races. Without this, clients can send password before code, or retry code after password step started, causing confusing errors.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:19:02.054635"
+type: documentation_gap
+summary: Code review rules don't specify stopping criteria for diminishing-returns edge cases
+detail: |
+  After 10 rounds of Codex reviews, the agent was still fixing increasingly theoretical concurrency edge cases (goroutine lifecycle races, failed-disconnect retry flows). The code-review.md doesn't provide guidance on when to stop iterating vs when edge cases become too rare to matter. Agents should understand that after core functionality works and obvious bugs are fixed, continuing to address hypothetical race conditions has diminishing returns. Suggest adding a pragmatic stopping point like: 'After 3-5 clean test runs and no High-severity findings, remaining Medium/Low edge cases can be accepted or deferred to real-world testing.'
+actionable: true
+
+---
+timestamp: "2026-04-09T10:19:02.054635"
+type: gotcha
+summary: "Done channel pattern for cleanup: close Done, never close data channels"
+detail: |
+  When coordinating async operations between HTTP handlers and long-running goroutines (like gotd client.Run callbacks), use a `Done chan struct{}` for signaling cleanup. Only close the Done channel in cleanup code. Never close data channels (CodeChan, PasswordChan, ResultChan) directly as both sender and receiver may still be alive. Instead, senders/receivers should select on Done to detect cleanup. Pattern: `select { case data <- value: case <-Done: return }`. This prevents send-on-closed-channel panics during auth cancellation or timeout.
+actionable: true
+
