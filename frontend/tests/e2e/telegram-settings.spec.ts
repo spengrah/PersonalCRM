@@ -283,7 +283,6 @@ test.describe('Telegram Settings @area:settings', () => {
   })
 
   test('disconnect button visible when connected', async ({ page }) => {
-    // Mock connected status
     await page.route('**/api/v1/telegram/auth/status', route =>
       route.fulfill({
         status: 200,
