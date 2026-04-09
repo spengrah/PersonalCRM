@@ -234,12 +234,10 @@ func (b *Backfiller) backfillChat(ctx context.Context, chat repository.TelegramC
 	historyBuilder := q.Messages().GetHistory(inputPeer).BatchSize(backfillBatchSize)
 
 	if chat.BackfillCursor != nil {
-		// Resume from cursor
+		// Resume from cursor (iterate backwards from this message ID)
 		historyBuilder = historyBuilder.OffsetID(int(*chat.BackfillCursor))
-	} else {
-		// Fresh backfill — use OffsetDate to start from the backfill horizon
-		historyBuilder = historyBuilder.OffsetDate(sinceUnix)
 	}
+	// Fresh backfill: no offset — start from newest, stop at sinceUnix in the loop
 
 	iter := historyBuilder.Iter()
 	messageCount := 0
