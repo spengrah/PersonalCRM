@@ -790,3 +790,75 @@ detail: |
   The existing gotcha about E2E page load waiting doesn't cover the pattern for components with async loading states. Tests that check for elements rendered by useEffect/React Query immediately after page navigation fail in CI because domcontentloaded doesn't mean React components have rendered. Pattern: (1) await page.goto(), (2) await page.waitForLoadState('domcontentloaded'), (3) await expect(staticElement).toBeVisible() [structural element that's always present], (4) await expect(asyncElement.or(fallbackElement)).toBeVisible({ timeout }) for elements rendered after data fetch. Never use 'networkidle' - it's flaky in real apps with long-polling, WebSockets, or background fetches. Never use .isVisible().catch() - it's a snapshot, not a poll.
 actionable: true
 
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: gotcha
+summary: gotd updates.Config panics if Handler is nil
+detail: |
+  The gotd Telegram library's updates.New() panics at initialization if Config.Handler is nil, even if you don't plan to process updates. Solution: provide a no-op handler implementing the required interface. This is not documented in the gotd Quick Start, so agents implementing Phase 2 (connection without message processing) will hit a runtime panic without this knowledge.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: distinction
+summary: Use sentinel errors with errors.Is(), not substring matching for error classification
+detail: |
+  When distinguishing internal persistence/infrastructure errors (should return 500) from Telegram auth rejections (should return 401), use a sentinel error pattern: define `var ErrAuthInternal = errors.New("internal auth error")`, wrap persistence errors with `fmt.Errorf("...: %w", ErrAuthInternal)`, and check with `errors.Is(err, ErrAuthInternal)`. String matching with `strings.Contains(msg, "persist")` is brittle and misses errors with different wording.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: architecture
+summary: gotd auth flow requires retry loop within Run callback, not callback restart
+detail: |
+  The gotd library's auth pattern ties the phone_code_hash to a specific client.Run() session. When SignIn returns an invalid code error, you cannot exit the Run callback and restart — you must loop within the callback and wait for another code via the channel. Structure: send awaiting_code → loop { read code from chan → SignIn → if error, send error result but continue loop → if success, break }. Exiting the callback invalidates the code hash and forces a new SendCode round-trip.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: gotcha
+summary: "Disconnect failure handling: delete session BEFORE updating in-memory state"
+detail: |
+  When implementing Disconnect(), delete the DB session row FIRST, then commit in-memory teardown (m.running = false, m.status.Connected = false). If you update in-memory state first and then DeleteSession fails, the manager shows disconnected but the DB still has the session, causing auto-reconnect on restart. The user was told they disconnected but they didn't. If delete fails, leave in-memory state as-is, return error, let user retry.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: gotcha
+summary: disconnected flag must be cleared on reconnect
+detail: |
+  The manager's `disconnected` bool flag (used to prevent auto-reconnect after explicit disconnect) must be cleared when startConnection succeeds. If not cleared, after a successful disconnect → successful reconnect sequence, the next disconnect failure will incorrectly short-circuit Status() to return connected=false instead of falling back to DB truth. Add `m.disconnected = false` in startConnection after acquiring the lock.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: rule
+summary: Add RPC call timeouts for MTProto operations that can hang
+detail: |
+  Wrap gotd RPC calls (SendCode, SignIn, Password) with 30s context timeout to prevent hanging when the Telegram connection drops mid-auth. Without timeout, a network partition during auth leaves the HTTP handler waiting indefinitely. Use context.WithTimeout and pass the child context to the RPC call. This applies to any gotd API call that involves network round-trips.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: architecture
+summary: Auto-reconnect requires exponential backoff and permanent disconnect flag
+detail: |
+  Implementing auto-reconnect for long-lived MTProto connections requires: (1) a runWithReconnect loop that catches Run() exits and retries with exponential backoff (5s base to 5min max), (2) a `disconnected` bool flag to distinguish explicit user disconnect from transient failure (if disconnected=true, don't auto-reconnect), (3) backoff reset on successful connection. The gotd client.Run() exit does not distinguish between permanent and transient errors — all failures look the same, so you must track user intent separately.
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: gotcha
+summary: "Frontend notes overflow detection: scrollHeight vs clientHeight"
+detail: |
+  To detect if text content overflows a CSS line-clamp, use a useEffect that checks `notesRef.current.scrollHeight > notesRef.current.clientHeight` when the content changes. This triggers after browser layout, so it accurately detects overflow even for multi-line clamped content. Add the check in a useEffect with dependencies on the content and the expanded state, and only run when !expanded (otherwise scrollHeight === clientHeight when fully shown).
+actionable: true
+
+---
+timestamp: "2026-04-08T21:01:22.266124"
+type: rule
+summary: "Auth state machine: track step and validate in handler"
+detail: |
+  When implementing multi-step auth flows (code → password), add a Step field to the auth session ("awaiting_code", "awaiting_password") and validate it in the HTTP handlers. VerifyCode should check step === "awaiting_code" and return 409 Conflict if not; VerifyPassword should check step === "awaiting_password". This prevents out-of-order calls like calling VerifyPassword before sending a code. Set the step when sending the awaiting_X result, and transition it when SignIn returns ErrPasswordAuthNeeded.
+actionable: true
+
