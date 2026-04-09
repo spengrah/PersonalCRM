@@ -574,3 +574,19 @@ detail: |
   Initial implementation passed all tests but Codex review found: (1) DISTINCT ON without ORDER BY causing nondeterministic peer selection, (2) live message handler not updating discovery candidates, (3) mutual session coalescing using wrong service method (ExtendInteraction instead of PromoteInteractionToMutual), (4) global peer count query on hot path. These issues weren't caught by unit/integration tests because tests used predictable data. Pattern: run Codex review iteratively (3-5 rounds) for complex multi-layered features like aggregation engines, don't rely solely on test coverage.
 actionable: true
 
+---
+timestamp: "2026-04-09T14:29:56.088102"
+type: architecture
+summary: Aggregation logic must explicitly guard entity boundaries
+detail: |
+  When implementing record aggregation/session logic that groups multiple records, add explicit guards to prevent cross-entity merging. The resolveSessions cross-chat bug required adding `prev.chatID == b.chatID` to prevent bridging sessions across different chats for the same contact. Without this guard, the function would merge conversations from separate chats. Pattern: when coalescing/bridging records based on time windows or relationships, always verify they share the same entity scope (chat, user, workspace, etc.).
+actionable: true
+
+---
+timestamp: "2026-04-09T14:29:56.088102"
+type: documentation_gap
+summary: Pre-push learning workflow instruction not followed
+detail: |
+  core.md documents: 'When push is blocked by learnings extraction: 1. Read the new learnings 2. For each actionable learning, decide if/where to apply it 3. Commit any applied changes plus the learnings files'. In practice, Claude committed learnings directly without reading them first. Why missed: instruction exists in core.md but isn't in the blocking message itself. How to strengthen: Either include the workflow steps in the pre-push hook's blocking message, or make the instruction more prominent in core.md's Pre-push Hooks section.
+actionable: true
+
