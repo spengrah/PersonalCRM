@@ -283,44 +283,45 @@ test.describe('Telegram Settings @area:settings', () => {
   })
 
   test('disconnect flow returns to disconnected state', async ({ page }) => {
-    // Single route handler for all /telegram/auth/* to avoid Playwright route ordering issues
     let disconnected = false
-    await page.route(/\/api\/v1\/telegram\/auth/, route => {
-      const url = route.request().url()
-      if (url.includes('/auth/status')) {
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            success: true,
-            data: disconnected
-              ? { status: 'disconnected', connected: false }
-              : { status: 'connected', connected: true, username: 'testuser' },
-          }),
-        })
+
+    // Intercept ALL telegram auth requests with a single handler
+    await page.route(
+      url => url.pathname.includes('/api/v1/telegram/auth'),
+      route => {
+        const url = new URL(route.request().url())
+        if (url.pathname.endsWith('/auth/status')) {
+          return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              success: true,
+              data: disconnected
+                ? { status: 'disconnected', connected: false }
+                : { status: 'connected', connected: true, username: 'testuser' },
+            }),
+          })
+        }
+        if (route.request().method() === 'DELETE') {
+          disconnected = true
+          return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ success: true, data: { status: 'disconnected' } }),
+          })
+        }
+        return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
       }
-      if (route.request().method() === 'DELETE') {
-        disconnected = true
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({ success: true, data: { status: 'disconnected' } }),
-        })
-      }
-      return route.continue()
-    })
+    )
 
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
 
     await expect(page.getByText(/Connected.*@testuser/)).toBeVisible({ timeout: 10000 })
 
-    // Accept the confirm dialog
     page.on('dialog', dialog => dialog.accept())
-
     await page.getByRole('button', { name: /Disconnect/i }).click()
 
-    // Should return to disconnected state
     await expect(page.getByRole('button', { name: /Connect Telegram/i })).toBeVisible({
       timeout: 5000,
     })
