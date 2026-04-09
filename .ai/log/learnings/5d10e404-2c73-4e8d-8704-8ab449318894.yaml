@@ -518,3 +518,59 @@ detail: |
   Message aggregation requires two distinct modes: **Batch mode** for backfill processes entire chat history, pre-resolves mutual interactions (looks ahead for both directions), creates all sessions upfront. **Incremental mode** for real-time messages processes one message at a time, extends existing bursts if within window, promotes outbound→mutual when reply arrives. Batch is complete-graph analysis; incremental is streaming with limited lookback. Both share the same burst/session logic but differ in when they resolve mutual status.
 actionable: true
 
+---
+timestamp: "2026-04-09T14:13:41.844496"
+type: gotcha
+summary: ExtendInteraction vs PromoteInteractionToMutual for direction changes
+detail: |
+  When a mutual session coalesces with an existing outbound interaction, must use PromoteInteractionToMutual instead of ExtendInteraction. ExtendInteraction passes the new direction but doesn't update the interaction.direction column. PromoteInteractionToMutual explicitly updates the direction field. This was caught in PR review when mutual sessions weren't actually marking interactions as mutual.
+actionable: true
+
+---
+timestamp: "2026-04-09T14:13:41.844496"
+type: gotcha
+summary: sqlc type assertions for nullable timestamps need pgtype.Timestamptz check
+detail: |
+  When sqlc queries return nullable timestamps (e.g., MAX(sent_at) as LastMessageAt), the type can be either pgtype.Timestamptz or time.Time depending on context. Must check both: `if ts, ok := row.LastMessageAt.(pgtype.Timestamptz); ok && ts.Valid { count.LastMessageAt = ts.Time } else if t, ok := row.LastMessageAt.(time.Time); ok { count.LastMessageAt = t }`. Single type assertion causes runtime panics when the type doesn't match.
+actionable: true
+
+---
+timestamp: "2026-04-09T14:13:41.844496"
+type: rule
+summary: Repository method calls in unit tests require nil checks for optional dependencies
+detail: |
+  When unit testing matcher/aggregation logic with mocks, repository method calls (e.g., messageRepo.UpdateMessageContact) need nil checks: `if m.messageRepo != nil { m.messageRepo.UpdateMessageContact(...) }`. This allows unit tests to pass nil for repos that aren't being tested, avoiding the need to mock every dependency. Only add nil checks for optional side-effect operations, not core data access.
+actionable: true
+
+---
+timestamp: "2026-04-09T14:13:41.844496"
+type: gotcha
+summary: Integration tests with shared database need unique identifiers per test
+detail: |
+  Integration tests that create telegram messages with hard-coded peer_user_id (e.g., 99999) fail when run in parallel or after cleanup skips. Soft-deleted messages from earlier runs remain in the DB. Other tests calling UpdateMessageContact(99999, contactID) update ALL messages for that peer, including soft-deleted ones from different tests. Solution: use unique peer IDs per test (80001, 80011, 80021, etc.) to avoid cross-test contamination.
+actionable: true
+
+---
+timestamp: "2026-04-09T14:13:41.844496"
+type: rule
+summary: DISTINCT ON requires deterministic ORDER BY to prevent flaky results
+detail: |
+  PostgreSQL DISTINCT ON returns arbitrary rows when the ORDER BY clause doesn't provide deterministic ordering. Query like `SELECT DISTINCT ON (peer_user_id) * FROM telegram_message ORDER BY peer_user_id` can return different messages across runs. Must add secondary sort: `ORDER BY peer_user_id, id DESC` or `ORDER BY peer_user_id, sent_at DESC` to ensure consistent results. Caught by code review when discovery candidate selection was nondeterministic.
+actionable: true
+
+---
+timestamp: "2026-04-09T14:13:41.844496"
+type: architecture
+summary: "Telegram interaction aggregation requires dual-mode design: batch vs incremental"
+detail: |
+  Message aggregation needs two modes with different mutual-resolution semantics: (1) Batch mode (backfill): processes entire chat history, pre-resolves outbound+inbound pairs into mutual before creating interactions, prevents cadence churn from historical data. (2) Incremental mode (live): processes new messages one at a time, extends existing bursts, promotes outbound→mutual when reply arrives. Both share burst/session logic but batch does complete-graph analysis while incremental is streaming. Can't use same code path for both.
+actionable: true
+
+---
+timestamp: "2026-04-09T14:13:41.844496"
+type: documentation_gap
+summary: Codex review rounds needed to catch subtle aggregation and matching bugs
+detail: |
+  Initial implementation passed all tests but Codex review found: (1) DISTINCT ON without ORDER BY causing nondeterministic peer selection, (2) live message handler not updating discovery candidates, (3) mutual session coalescing using wrong service method (ExtendInteraction instead of PromoteInteractionToMutual), (4) global peer count query on hot path. These issues weren't caught by unit/integration tests because tests used predictable data. Pattern: run Codex review iteratively (3-5 rounds) for complex multi-layered features like aggregation engines, don't rely solely on test coverage.
+actionable: true
+
