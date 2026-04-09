@@ -438,3 +438,83 @@ detail: |
   The `.ai/rules/core.md` Common Gotchas table documents test execution gotchas but doesn't cover pre-push hook environment conflicts. The E2E-with-running-dev-server port conflict caused push failures that weren't obvious to diagnose. This pattern applies to any hook-executed test that assumes clean environment. Suggestion: add row 'Pre-push E2E fails | Run `make stop` before push — hook's test server conflicts with dev server on port 8080'.
 actionable: true
 
+---
+timestamp: "2026-04-09T13:49:02.792919"
+type: gotcha
+summary: Import handler buildMethodsAuto only checks emails/phones JSONB, not metadata fields
+detail: |
+  The import handler's `buildMethodsAuto` function only extracts contact methods from `external_contact.Emails` and `external_contact.Phones` JSONB arrays. For social platforms like Telegram where identifiers live in `metadata["username"]`, need explicit source check (e.g., `if external.Source == "telegram" && metadata["username"] exists`) to extract and create the telegram contact method. This pattern applies to any external source that stores identifiers in metadata rather than structured phone/email fields.
+actionable: true
+
+---
+timestamp: "2026-04-09T13:49:02.792919"
+type: architecture
+summary: Use narrow service interfaces to avoid circular dependencies between packages
+detail: |
+  When a specialized package (e.g., telegram) needs service methods but can't import the service package (would create circular dependency), define narrow interfaces in the specialized package (`interactionRecorder`, `interactionPromoter`, `interactionExtender`) that the service satisfies. This keeps packages decoupled while maintaining testability. All three interfaces can be satisfied by the same concrete service (`*ContactService`), passed as separate interface parameters.
+actionable: true
+
+---
+timestamp: "2026-04-09T13:49:02.792919"
+type: architecture
+summary: "Circular dependency resolution: move shared types to repository package"
+detail: |
+  When two packages need shared request types or constants and both would import each other (e.g., sync providers need service types, service needs provider types), move the shared types to the `repository` package. Providers already depend on repository for DB access, so this breaks the cycle without adding new dependencies. This is the established pattern for this codebase.
+actionable: true
+
+---
+timestamp: "2026-04-09T13:49:02.792919"
+type: rule
+summary: PostImportHook pattern for source-specific post-processing after import/link
+detail: |
+  For external sources that need to back-fill or update data after a candidate is imported/linked (e.g., updating message history with newly matched contact), use an optional `PostImportHook` interface on the import handler. The source manager implements `OnPeerLinked(ctx, sourceID, sourceUsername, contactID)` and the handler calls it after successful import/link. This allows source-specific logic without tight coupling between import handler and individual sources.
+actionable: true
+
+---
+timestamp: "2026-04-09T13:49:02.792919"
+type: gotcha
+summary: Type name collisions with package imports require renaming
+detail: |
+  When defining a new type, check for name collisions with imported packages. Example: defining `type session struct` failed to compile because another file imported `"github.com/gotd/td/session"`. Had to rename to `msgSession`. Use grep to check all imports in the package before naming new types.
+actionable: true
+
+---
+timestamp: "2026-04-09T13:49:02.792919"
+type: gotcha
+summary: Integration tests must call db.RunMigrations before db.NewDatabase
+detail: |
+  Integration tests that create their own DB connection (in `backend/tests/`) MUST call `db.RunMigrations(databaseURL, getMigrationsPath())` before `db.NewDatabase()`. CI PostgreSQL starts with a bare database without pre-existing schema. Local dev often has schema from prior runs, causing tests to pass locally but fail in CI.
+actionable: true
+
+---
+timestamp: "2026-04-09T13:49:02.792919"
+type: rule
+summary: Never use time.Now() anywhere—use accelerated.GetCurrentTime() in ALL code including tests
+detail: |
+  The codebase enforces time acceleration support via forbidigo linter rules. `time.Now()` is forbidden everywhere, including unit tests and test helpers. Always use `accelerated.GetCurrentTime()`. Forgetting this in test code will cause lint failures even though tests pass.
+actionable: true
+
+---
+timestamp: "2026-04-09T13:49:02.792919"
+type: gotcha
+summary: Integration tests with shared DB cannot assert cross-query equality
+detail: |
+  When writing integration tests that share a database with other parallel tests, don't assert equality across separate count queries (e.g., `countBefore == countAfter`). Other tests can create/delete rows between calls. Instead, assert per-query invariants like `count >= expectedMinimum` or verify specific IDs returned rather than counts.
+actionable: true
+
+---
+timestamp: "2026-04-09T13:49:02.792919"
+type: architecture
+summary: Codex iterative review pattern for complex implementations
+detail: |
+  For complex multi-step implementations, use Codex (AI code reviewer) in an iterative loop: implement according to plan, run codex review, fix all issues it identifies, re-run codex on fixes until it approves. This session went through 5 rounds fixing 12 issues (burst coalescing, mutual pre-resolution, chat scoping, identity linkage, LIKE wildcards, query bounds, callable interfaces, wiring). The pattern: implement → codex review → batch fix issues → repeat until PASS.
+actionable: true
+
+---
+timestamp: "2026-04-09T13:49:02.792919"
+type: distinction
+summary: "Two aggregation modes needed: batch (backfill) vs incremental (real-time)"
+detail: |
+  Message aggregation requires two distinct modes: **Batch mode** for backfill processes entire chat history, pre-resolves mutual interactions (looks ahead for both directions), creates all sessions upfront. **Incremental mode** for real-time messages processes one message at a time, extends existing bursts if within window, promotes outbound→mutual when reply arrives. Batch is complete-graph analysis; incremental is streaming with limited lookback. Both share the same burst/session logic but differ in when they resolve mutual status.
+actionable: true
+
