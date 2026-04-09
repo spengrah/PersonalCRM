@@ -602,3 +602,27 @@ detail: |
   **How to apply**: When adding unit tests to methods with multiple dependencies, consider nil guards for dependencies used only for side effects rather than requiring full mock setup. Use real mocks for dependencies that affect return values or control flow.
 actionable: true
 
+---
+timestamp: "2026-04-09T14:56:02.838812"
+type: gotcha
+summary: "contacts.spec.ts:79 'expandable notes' test is flaky ~50%"
+detail: |
+  The E2E test 'should show expandable notes for long content' in contacts.spec.ts:79 fails intermittently. It waits for text content ('Met at the AI conference'), then checks for a 'Show more' button. The flakiness occurs because CSS line-clamp overflow detection hasn't necessarily completed when the test checks for button visibility. The test needs better wait conditions that ensure CSS layout has finished (e.g., waiting for the button itself with a longer timeout, or using a resize observer). This is a pre-existing issue unrelated to most feature work — retrying the push is often faster than fixing it unless you're specifically working on the notes UI.
+actionable: true
+
+---
+timestamp: "2026-04-09T14:56:02.838812"
+type: gotcha
+summary: Pre-push hook E2E failures don't show which test failed
+detail: |
+  When the pre-push hook reports '[test] FAIL E2E tests', it doesn't include details about which specific test failed. To diagnose, run `make test-e2e-diff` locally — it will show the exact test name and error (e.g., 'contacts.spec.ts:79'). The hook output file (shown in task notifications) also lacks this detail. This is a workflow gotcha that causes wasted time grepping hook output.
+actionable: true
+
+---
+timestamp: "2026-04-09T14:56:02.838812"
+type: rule
+summary: Don't fix pre-existing flaky tests as scope creep during feature work
+detail: |
+  When a pre-existing, unrelated flaky test blocks your push, prefer retrying over fixing it. Expanding scope to fix unrelated issues fragments your work and delays shipping. Example from this session: contacts.spec.ts expandable notes test was flaky during Telegram Phase 4 work. Agent correctly identified it as pre-existing, unrelated to changes, and retried until it passed rather than debugging CSS timing. Exception: if you're specifically working on that feature area, fix it properly. Otherwise, retry or note it for separate cleanup.
+actionable: true
+
