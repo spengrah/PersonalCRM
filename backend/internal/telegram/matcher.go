@@ -27,10 +27,16 @@ type externalContactUpserter interface {
 	UpdateMatch(ctx context.Context, id uuid.UUID, crmContactID *uuid.UUID, status repository.MatchStatus) (*repository.ExternalContact, error)
 }
 
+// peerMessageCounter counts messages for a peer (for discovery threshold checks).
+type peerMessageCounter interface {
+	CountMessagesByPeerID(ctx context.Context, peerUserID int64) (*repository.PeerMessageCount, error)
+}
+
 // PeerMatcher matches Telegram peers to CRM contacts using the identity service.
 type PeerMatcher struct {
 	identityService     identityMatcher
 	messageRepo         *repository.TelegramMessageRepository
+	messageCounter      peerMessageCounter // defaults to messageRepo; separate for testing
 	externalContactRepo externalContactUpserter
 	discoveryMinMsgs    int
 }
@@ -45,6 +51,7 @@ func NewPeerMatcher(
 	return &PeerMatcher{
 		identityService:     identityService,
 		messageRepo:         messageRepo,
+		messageCounter:      messageRepo, // default: use the same repo
 		externalContactRepo: externalContactRepo,
 		discoveryMinMsgs:    discoveryMinMsgs,
 	}
@@ -224,7 +231,7 @@ func (m *PeerMatcher) UpdateDiscoveryCandidates(ctx context.Context) error {
 // discovery threshold and upserts their external_contact if so. Used for live messages.
 // Uses a single-peer count query to avoid scanning all peers.
 func (m *PeerMatcher) UpdateDiscoveryCandidatesForPeer(ctx context.Context, peerUserID int64, peerUsername, peerFirstName, peerLastName *string) {
-	count, err := m.messageRepo.CountMessagesByPeerID(ctx, peerUserID)
+	count, err := m.messageCounter.CountMessagesByPeerID(ctx, peerUserID)
 	if err != nil {
 		log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: failed to count messages for discovery check")
 		return

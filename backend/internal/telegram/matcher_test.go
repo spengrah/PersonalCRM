@@ -280,4 +280,51 @@ func TestMarkExternalContactMatched_Unmatched(t *testing.T) {
 	assert.Equal(t, contactID, *ecMock.updateMatchCalls[0].contactID)
 }
 
+// --- Mock message counter ---
+
+type mockMessageCounter struct {
+	counts map[int64]*repository.PeerMessageCount
+}
+
+func (m *mockMessageCounter) CountMessagesByPeerID(_ context.Context, peerUserID int64) (*repository.PeerMessageCount, error) {
+	if count, ok := m.counts[peerUserID]; ok {
+		return count, nil
+	}
+	return &repository.PeerMessageCount{PeerUserID: peerUserID}, nil
+}
+
+func TestUpdateDiscoveryCandidatesForPeer_BelowThreshold(t *testing.T) {
+	ecMock := &mockExternalContactUpserter{}
+	matcher := &PeerMatcher{
+		messageCounter:      &mockMessageCounter{counts: map[int64]*repository.PeerMessageCount{12345: {TotalCount: 2}}},
+		externalContactRepo: ecMock,
+		discoveryMinMsgs:    3,
+	}
+
+	matcher.UpdateDiscoveryCandidatesForPeer(context.Background(), 12345, ptr("alice"), ptr("Alice"), nil)
+
+	// Below threshold — no upsert
+	assert.Empty(t, ecMock.upsertCalls)
+}
+
+func TestUpdateDiscoveryCandidatesForPeer_AtThreshold(t *testing.T) {
+	ecMock := &mockExternalContactUpserter{}
+	matcher := &PeerMatcher{
+		messageCounter: &mockMessageCounter{counts: map[int64]*repository.PeerMessageCount{
+			12345: {TotalCount: 3, OutboundCount: 1, InboundCount: 2},
+		}},
+		externalContactRepo: ecMock,
+		discoveryMinMsgs:    3,
+	}
+
+	matcher.UpdateDiscoveryCandidatesForPeer(context.Background(), 12345, ptr("alice"), ptr("Alice"), nil)
+
+	// At threshold — should upsert
+	require.Len(t, ecMock.upsertCalls, 1)
+	assert.Equal(t, "telegram", ecMock.upsertCalls[0].Source)
+	assert.Equal(t, "12345", ecMock.upsertCalls[0].SourceID)
+	assert.Equal(t, int64(3), ecMock.upsertCalls[0].Metadata["message_count"])
+	assert.Equal(t, "@alice", ecMock.upsertCalls[0].Metadata["username"])
+}
+
 func ptr(s string) *string { return &s }

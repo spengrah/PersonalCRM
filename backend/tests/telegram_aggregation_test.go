@@ -23,9 +23,9 @@ func cleanupAggregationMessages(t *testing.T, database *db.Database) {
 	t.Helper()
 	ctx := context.Background()
 	// Hard delete test messages (unique message IDs for this test suite)
-	_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE telegram_message_id IN (80001, 80002, 80003, 80011, 80012, 80013, 80021, 80022, 80031, 80032, 80041, 80042, 80051, 80052)")
+	_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE telegram_message_id IN (80001, 80002, 80003, 80011, 80012, 80013, 80021, 80022, 80031, 80032, 80041, 80042, 80051, 80052, 80061, 80062)")
 	// Hard delete interactions with source_ref matching test chat IDs
-	_, _ = database.Pool.Exec(ctx, "DELETE FROM interaction WHERE source_ref LIKE 'tg:100:%' OR source_ref LIKE 'tg:101:%' OR source_ref LIKE 'tg:102:%' OR source_ref LIKE 'tg:201:%' OR source_ref LIKE 'tg:202:%' OR source_ref LIKE 'tg:301:%' OR source_ref LIKE 'tg:302:%'")
+	_, _ = database.Pool.Exec(ctx, "DELETE FROM interaction WHERE source_ref LIKE 'tg:100:%' OR source_ref LIKE 'tg:101:%' OR source_ref LIKE 'tg:102:%' OR source_ref LIKE 'tg:201:%' OR source_ref LIKE 'tg:202:%' OR source_ref LIKE 'tg:301:%' OR source_ref LIKE 'tg:302:%' OR source_ref LIKE 'tg:303:%'")
 }
 
 func setupAggregationTest(t *testing.T) (
