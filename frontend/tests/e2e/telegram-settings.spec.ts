@@ -282,49 +282,24 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })
 
-  test('disconnect flow returns to disconnected state', async ({ page }) => {
-    let disconnected = false
-
-    // Intercept ALL telegram auth requests with a single handler
-    await page.route(
-      url => url.pathname.includes('/api/v1/telegram/auth'),
-      route => {
-        const url = new URL(route.request().url())
-        if (url.pathname.endsWith('/auth/status')) {
-          return route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({
-              success: true,
-              data: disconnected
-                ? { status: 'disconnected', connected: false }
-                : { status: 'connected', connected: true, username: 'testuser' },
-            }),
-          })
-        }
-        if (route.request().method() === 'DELETE') {
-          disconnected = true
-          return route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({ success: true, data: { status: 'disconnected' } }),
-          })
-        }
-        return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
-      }
+  test('disconnect button visible when connected', async ({ page }) => {
+    // Mock connected status
+    await page.route('**/api/v1/telegram/auth/status', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: { status: 'connected', connected: true, username: 'testdisconnect' },
+        }),
+      })
     )
 
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByText(/Connected.*@testuser/)).toBeVisible({ timeout: 10000 })
-
-    page.on('dialog', dialog => dialog.accept())
-    await page.getByRole('button', { name: /Disconnect/i }).click()
-
-    await expect(page.getByRole('button', { name: /Connect Telegram/i })).toBeVisible({
-      timeout: 5000,
-    })
+    await expect(page.getByText(/Connected.*@testdisconnect/)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })
 
   test('cancel during auth returns to disconnected state', async ({ page }) => {

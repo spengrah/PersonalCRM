@@ -558,3 +558,51 @@ detail: |
   **Existing guidance:** `.ai/rules/core.md` states 'All queries must filter `WHERE deleted_at IS NULL`' and mentions sqlc enforcement. **What was missed:** No mention that soft-delete tables need a partial index for performance. Agent added index only after CI review flagged it. **Why missed:** The rule focuses on query syntax, not database performance implications. **How to strengthen:** Add to core.md soft-deletes section: 'Tables with deleted_at must include partial index `CREATE INDEX idx_table_not_deleted ON table(id) WHERE deleted_at IS NULL` in the same migration that adds soft-delete support.' Also add to 'When You Change X, Check Y' table: 'New soft-delete table → Add partial index on deleted_at IS NULL'.
 actionable: true
 
+---
+timestamp: "2026-04-08T19:53:24.466594"
+type: gotcha
+summary: Playwright route handlers with overlapping URL patterns cause unpredictable ordering issues
+detail: |
+  When mocking multiple related endpoints in E2E tests (e.g., `/api/v1/telegram/auth/status` and `/api/v1/telegram/auth`), using separate `page.route()` calls with glob patterns like `**/telegram/auth/status` and `**/telegram/auth` creates route ordering ambiguity. Playwright may match the wrong handler depending on registration order. The fix: use a SINGLE regex route handler matching all paths under the base URL (e.g., `/\/api\/v1\/telegram\/auth/`) and dispatch internally based on URL string matching (`url.includes('/auth/status')`) and HTTP method. This pattern emerged through three commit iterations: (1) polling assertions, (2) exact path scoping with URL parsing, (3) single regex handler with internal dispatch. The internal dispatch pattern is more reliable than relying on Playwright's route matching precedence.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:58:51.966456"
+type: gotcha
+summary: Playwright route() function predicates are more reliable than regex for pathname matching
+detail: |
+  When intercepting API routes in E2E tests, using a function predicate `page.route(url => url.pathname.includes('/api/v1/path'), handler)` is MORE reliable than regex patterns `page.route(/\/api\/v1\/path/, handler)`. The function predicate receives a URL object with parsed pathname, allowing precise URL structure matching. Regex patterns operate on the full URL string (including query params, protocol) which can cause unexpected matches. This pattern evolved through three iterations: (1) multiple glob patterns (ordering issues), (2) single regex with internal dispatch (better), (3) function predicate with URL object (best). The function predicate also makes the intent clearer: pathname-based routing.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:58:51.966456"
+type: architecture
+summary: Injectable function fields solve concrete-type testability without introducing interfaces
+detail: |
+  When a service depends on a concrete type that can't be mocked (e.g., `OAuthService`), extract the problematic method into an injectable function field on the dependent service. Example: `FollowUpService` needed `OAuthService.GetTodoistSettings()` but couldn't mock it for tests. Fix: added `todoistSettingsFunc func(context.Context) (*Settings, string, error)` field, set to real implementation in production, overridden with fake in tests. This avoids creating interfaces for single-method dependencies while maintaining full testability. Pattern: (1) add function field to struct, (2) initialize in constructor to real implementation, (3) optionally add setter for dependency injection, (4) tests inject fake functions.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:58:51.966456"
+type: rule
+summary: Codex code review caught 4 critical bugs that tests and linters missed
+detail: |
+  The feature-dev:code-reviewer agent found: (1) CompleteFollowUp hard-error blocking inbound interactions when Todoist unavailable, (2) metadata key mismatch ('deadline' vs 'due_date') hiding follow-up due dates, (3) contact_by regression from late-arriving events despite forward-only timestamp guards, (4) transient Todoist failures creating permanent stuck state. All bugs involved state machine edge cases and failure modes. Tests validated happy paths but missed cross-cutting consistency requirements and error handling gaps. **Lesson:** For state machine changes or multi-path features (e.g., 5 task creation paths), ALWAYS run code review agents before considering work done, even when lint and tests pass. State invariants and error propagation paths are exactly what automated review excels at catching.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:58:51.966456"
+type: distinction
+summary: Forward-only update semantics must apply to ALL derived fields, not just source timestamps
+detail: |
+  `contact_by` (cadence due date) is derived from `last_contacted` + cadence window. SQL queries had forward-only guards for `last_contacted` (don't regress to older values), but `contact_by` was always recomputed and applied when non-null. This meant late-arriving automated events would correctly preserve newer `last_contacted` but regress `contact_by` to an older cadence window, breaking the invariant. **Rule:** When timestamp fields have forward-only/manual-override semantics, identify ALL derived fields computed from those timestamps. Apply the same guard: only compute the derived value when the base timestamp update will actually take effect (event is newer than current value OR source is manual). Check at the service layer BEFORE passing to repository - don't rely on SQL guards alone.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:58:51.966456"
+type: documentation_gap
+summary: Common Gotchas table lists the Playwright function predicate fix incorrectly
+detail: |
+  The Common Gotchas entry 'Playwright route() string matcher fails for query params' recommends using regex patterns as the solution. But the actual final fix (commit 34176bc) moved from regex to function predicates, which are even more reliable. The function predicate pattern `page.route(url => url.pathname.includes('/path'), handler)` should be the canonical recommendation, not regex. **Why missed:** The learnings were extracted before the final iteration. **How to strengthen:** Update the gotcha to recommend function predicates as the primary pattern, regex as fallback, and string matchers as deprecated for route matching.
+actionable: true
+
