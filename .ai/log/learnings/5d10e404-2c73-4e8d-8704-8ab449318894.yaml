@@ -246,3 +246,59 @@ detail: |
   When coordinating async operations between HTTP handlers and long-running goroutines (like gotd client.Run callbacks), use a `Done chan struct{}` for signaling cleanup. Only close the Done channel in cleanup code. Never close data channels (CodeChan, PasswordChan, ResultChan) directly as both sender and receiver may still be alive. Instead, senders/receivers should select on Done to detect cleanup. Pattern: `select { case data <- value: case <-Done: return }`. This prevents send-on-closed-channel panics during auth cancellation or timeout.
 actionable: true
 
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: gotcha
+summary: Telegram MessageMediaDocument.Document field can be nil despite parent type
+detail: |
+  When processing Telegram messages with type `*tg.MessageMediaDocument`, the nested `m.Document` field can be nil even though the parent type indicates it's a document. Must check `m.Document != nil` before calling `m.Document.AsNotEmpty()` to avoid nil pointer panics when inspecting document attributes (e.g., for stickers). This manifested as a test panic in classifyMedia() when handling document messages.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: distinction
+summary: Handler error checking should use repository layer errors, not service layer errors
+detail: |
+  When API handlers check for not-found conditions after calling manager/service methods, use `db.ErrNotFound` from the repository layer, not package-specific errors like `tg.ErrAuthInternal`. The layered architecture means handlers should recognize repository-layer error types. Wrong: `errors.Is(err, tg.ErrAuthInternal)`. Right: `errors.Is(err, db.ErrNotFound)` then `api.SendNotFound()` or fallback to `api.SendInternalError()`.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: architecture
+summary: Telegram compact updates have incomplete Entities map - design for graceful degradation
+detail: |
+  The gotd `updates.Manager` handles gap recovery via `getDifference` which returns full entities. However, real-time compact updates may have incomplete `Entities` maps - peer info may be missing from `entities.Users` or `entities.Chats`. Solution: store what's available (e.g., peer_user_id), leave missing fields (username, first_name) as NULL in database. Rely on upsert semantics to fill gaps when fuller updates arrive later. This is a deliberate tradeoff for Phase 3 - don't block on missing peer resolution.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: rule
+summary: Retroactive backfill required when toggling chat to 'tracked' status
+detail: |
+  When user changes a Telegram chat's status to 'tracked' via PATCH endpoint, must reset `backfill_complete = false` and trigger async backfill for that specific chat. This ensures toggling to 'tracked' provides message history, not just forward messages. Implementation: UpdateChatStatus should detect status change to 'tracked', reset the flag, and call backfiller.BackfillChat() in a goroutine with onProgress callbacks.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: gotcha
+summary: Handler API client dependency must be set before update processing starts
+detail: |
+  MessageHandler needs an `api *tg.Client` field that must be set via `SetAPI(client.API())` method inside the `client.Run` callback BEFORE the dispatcher starts processing updates. The API client lifetime must match the Run callback scope. If SetAPI is not called, handlers that make Telegram API calls (e.g., HandleChatParticipant calling MessagesGetFullChat) will panic with nil pointer dereference. Pattern: Create handler → wire to dispatcher → handler.SetAPI(client.API()) → start processing.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: rule
+summary: Edit message handler must check group-tracking status before storing
+detail: |
+  The HandleEditMessage handler must call `shouldTrackChat()` to verify the chat is being tracked before upserting messages - same check as HandleNewMessage. Edits to messages in non-tracked chats (status='ignored' or auto-excluded by member threshold) should be silently skipped. This prevents storing partial data for chats the user doesn't want tracked.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: rule
+summary: Must handle UpdateChatParticipant to keep member_count fresh for auto-tracking
+detail: |
+  Implement HandleChatParticipant update handler that calls h.api.MessagesGetFullChat() to query current participant count, then calls chatConfigRepo.UpdateMemberCount(). This keeps `member_count` in `telegram_chat_config` up-to-date as group membership changes. Important for auto-tracking logic: if a group grows past the threshold and status='auto', it should stop being tracked. Fresh member count ensures accurate threshold checks.
+actionable: true
+
