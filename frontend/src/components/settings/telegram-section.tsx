@@ -10,6 +10,7 @@ import {
   useVerifyTelegramPassword,
   useDisconnectTelegram,
 } from '@/hooks/use-telegram'
+import { telegramApi } from '@/lib/telegram-api'
 
 type Step =
   | 'loading'
@@ -46,7 +47,10 @@ export function TelegramSection() {
 
     if (statusError) {
       // 404 means routes not registered (Telegram not configured on backend)
-      const statusCode = (statusError as { status?: number })?.status
+      const statusCode =
+        statusError instanceof Error && 'status' in statusError
+          ? (statusError as { status: number }).status
+          : undefined
       if (statusCode === 404) {
         setStep('not_configured')
       } else {
@@ -135,7 +139,6 @@ export function TelegramSection() {
   const handleCancel = async () => {
     // Cancel the server-side auth session so StartAuth can be called again
     try {
-      const { telegramApi } = await import('@/lib/telegram-api')
       await telegramApi.cancelAuth()
     } catch {
       // Best effort — server may not have an active session

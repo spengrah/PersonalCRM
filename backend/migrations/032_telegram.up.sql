@@ -87,3 +87,5 @@ CREATE INDEX idx_telegram_message_unprocessed ON telegram_message(matched_contac
     WHERE processed_at IS NULL AND matched_contact_id IS NOT NULL;
 CREATE INDEX idx_telegram_message_peer ON telegram_message(peer_user_id)
     WHERE matched_contact_id IS NULL AND peer_user_id IS NOT NULL;
+CREATE INDEX idx_telegram_message_not_deleted ON telegram_message(deleted_at)
+    WHERE deleted_at IS NULL;

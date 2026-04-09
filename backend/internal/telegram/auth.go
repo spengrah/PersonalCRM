@@ -18,6 +18,7 @@ import (
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -331,7 +332,9 @@ func (m *AuthSessionManager) VerifyCode(token string, code string) (*AuthResult,
 		case "connected":
 			sess.Timer.Stop()
 			if m.onComplete != nil {
-				_ = m.onComplete(context.Background())
+				if err := m.onComplete(context.Background()); err != nil {
+					log.Warn().Err(err).Msg("telegram: onComplete failed after successful auth")
+				}
 			}
 			m.clearSession(sess)
 		case "error":
@@ -379,7 +382,9 @@ func (m *AuthSessionManager) VerifyPassword(token string, password string) (*Aut
 		case "connected":
 			sess.Timer.Stop()
 			if m.onComplete != nil {
-				_ = m.onComplete(context.Background())
+				if err := m.onComplete(context.Background()); err != nil {
+					log.Warn().Err(err).Msg("telegram: onComplete failed after successful auth")
+				}
 			}
 			m.clearSession(sess)
 		case "error":
@@ -425,7 +430,9 @@ func (m *AuthSessionManager) cleanup(sess *AuthSession) {
 	sess.Timer.Stop()
 
 	// 4. Delete any partially-written session row left by StoreSession during key exchange
-	_ = m.sessionRepo.DeleteSession(context.Background())
+	if err := m.sessionRepo.DeleteSession(context.Background()); err != nil {
+		log.Warn().Err(err).Msg("telegram: failed to delete partial session during auth cleanup")
+	}
 
 	// 5. Clear in-memory session
 	m.session = nil

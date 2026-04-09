@@ -281,4 +281,149 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(page.getByText('+15559876543')).toBeVisible()
     await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })
+
+  test('disconnect flow returns to disconnected state', async ({ page }) => {
+    // Mock status as connected initially
+    let disconnected = false
+    await page.route('**/api/v1/telegram/auth/status', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: disconnected
+            ? { status: 'disconnected', connected: false }
+            : { status: 'connected', connected: true, username: 'testuser' },
+        }),
+      })
+    )
+
+    // Mock disconnect
+    await page.route('**/api/v1/telegram/auth', route => {
+      if (route.request().method() === 'DELETE') {
+        disconnected = true
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { status: 'disconnected' } }),
+        })
+      }
+      return route.continue()
+    })
+
+    await page.goto('/settings')
+    await page.waitForLoadState('domcontentloaded')
+
+    await expect(page.getByText(/Connected.*@testuser/)).toBeVisible({ timeout: 10000 })
+
+    // Accept the confirm dialog
+    page.on('dialog', dialog => dialog.accept())
+
+    await page.getByRole('button', { name: /Disconnect/i }).click()
+
+    // Should return to disconnected state
+    await expect(page.getByRole('button', { name: /Connect Telegram/i })).toBeVisible({
+      timeout: 5000,
+    })
+  })
+
+  test('cancel during auth returns to disconnected state', async ({ page }) => {
+    await page.route('**/api/v1/telegram/auth/status', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: { status: 'disconnected', connected: false },
+        }),
+      })
+    )
+
+    // Mock cancel endpoint
+    await page.route('**/api/v1/telegram/auth/cancel', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: { status: 'cancelled' } }),
+      })
+    )
+
+    await page.goto('/settings')
+    await page.waitForLoadState('domcontentloaded')
+
+    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible({
+      timeout: 10000,
+    })
+
+    // Start auth flow
+    await page.getByRole('button', { name: /Connect Telegram/i }).click()
+    await expect(page.getByLabel('Phone Number')).toBeVisible()
+
+    // Click Cancel
+    await page.getByRole('button', { name: 'Cancel' }).click()
+
+    // Should return to disconnected state with Connect button
+    await expect(page.getByRole('button', { name: /Connect Telegram/i })).toBeVisible({
+      timeout: 5000,
+    })
+  })
+
+  test('shows error on invalid code', async ({ page }) => {
+    await page.route('**/api/v1/telegram/auth/status', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: { status: 'disconnected', connected: false },
+        }),
+      })
+    )
+
+    await page.route('**/api/v1/telegram/auth/start', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            auth_token: 'mock-token',
+            status: 'awaiting_code',
+            code_type: 'app',
+            expires_in: 300,
+          },
+        }),
+      })
+    )
+
+    // Mock verify code → 401 error
+    await page.route('**/api/v1/telegram/auth/verify-code', route =>
+      route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Invalid verification code' },
+        }),
+      })
+    )
+
+    await page.goto('/settings')
+    await page.waitForLoadState('domcontentloaded')
+
+    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible({
+      timeout: 10000,
+    })
+
+    await page.getByRole('button', { name: /Connect Telegram/i }).click()
+    await page.getByLabel('Phone Number').fill('+15551234567')
+    await page.getByRole('button', { name: 'Send Code' }).click()
+
+    await expect(page.getByLabel('Verification Code')).toBeVisible({ timeout: 5000 })
+    await page.getByLabel('Verification Code').fill('99999')
+    await page.getByRole('button', { name: 'Verify' }).click()
+
+    // Should show error
+    await expect(page.getByText(/Invalid verification code/i)).toBeVisible({ timeout: 5000 })
+  })
 })
