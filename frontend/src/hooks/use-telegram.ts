@@ -9,11 +9,16 @@ import type {
 } from '@/lib/telegram-api'
 
 export function useTelegramStatus() {
-  return useQuery({
+  const query = useQuery({
     queryKey: telegramKeys.status(),
     queryFn: telegramApi.getStatus,
     retry: false,
+    refetchInterval: query => {
+      const data = query.state.data
+      return data?.backfill_in_progress ? 3000 : false
+    },
   })
+  return query
 }
 
 export function useStartTelegramAuth() {
