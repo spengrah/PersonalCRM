@@ -455,6 +455,12 @@ function TelegramChatList() {
   return (
     <div className="mt-4 space-y-1">
       <h3 className="text-sm font-medium text-gray-700 mb-2">Group Chats</h3>
+      {updateStatus.isError && (
+        <div className="flex items-center gap-2 p-2 rounded bg-red-50 text-red-600 text-sm mb-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          Failed to update chat status
+        </div>
+      )}
       {chats.map(chat => (
         <div
           key={chat.telegram_chat_id}

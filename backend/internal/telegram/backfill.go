@@ -131,7 +131,8 @@ func (b *Backfiller) Run(ctx context.Context) error {
 }
 
 // BackfillChat backfills a single chat by ID (used for retroactive backfill).
-// Uses messages.getInputPeer to resolve the peer with access hash.
+// Access hashes are not available for retroactive backfill; private chat
+// history may fail if the server requires one.
 func (b *Backfiller) BackfillChat(ctx context.Context, chatID int64) error {
 	sinceTime, err := time.Parse("2006-01-02", b.backfillSince)
 	if err != nil {
