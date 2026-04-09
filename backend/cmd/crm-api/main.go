@@ -247,6 +247,7 @@ func main() {
 		telegramSessionRepo := repository.NewTelegramSessionRepository(database.Queries)
 		telegramUpdateStateRepo := repository.NewTelegramUpdateStateRepository(database.Queries)
 		telegramChatConfigRepo := repository.NewTelegramChatConfigRepository(database.Queries)
+		telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
 		telegramSyncRepo := repository.NewSyncRepository(database.Queries)
 
 		encryptor, err := crypto.NewTokenEncryptor(cfg.External.TokenEncryptionKey)
@@ -258,6 +259,7 @@ func main() {
 			telegramSessionRepo,
 			telegramUpdateStateRepo,
 			telegramChatConfigRepo,
+			telegramMessageRepo,
 			telegramSyncRepo,
 			encryptor,
 			cfg.External.TelegramAPIID,
@@ -395,6 +397,11 @@ func main() {
 					tgAuth.POST("/cancel", telegramHandler.CancelAuth)
 					tgAuth.DELETE("", telegramHandler.Disconnect)
 					tgAuth.GET("/status", telegramHandler.GetStatus)
+				}
+				tgChats := tgRoutes.Group("/chats")
+				{
+					tgChats.GET("", telegramHandler.ListChats)
+					tgChats.PATCH("/:chat_id", telegramHandler.UpdateChatStatus)
 				}
 			}
 		}

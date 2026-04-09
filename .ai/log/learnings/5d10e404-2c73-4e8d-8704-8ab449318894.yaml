@@ -78,3 +78,227 @@ detail: |
   Initial plan omitted: (1) constructor signature changes for NewContactService (adding contactTaskRepo parameter), (2) observability requirements from spec Section 11.8 (log follow-up created/refreshed/completed with contact/task IDs and due dates), (3) API-level test coverage for new fields/validations. These were all required by the spec or architectural patterns but weren't in the initial plan. Plan phase should explicitly include: constructor wiring changes, logging/observability for new paths, and test coverage matrix (unit/integration/API) for all changes. The spec's own review rubric provides the checklist.
 actionable: true
 
+---
+timestamp: "2026-04-09T09:55:05.357506"
+type: gotcha
+summary: Telegram OffsetDate parameter is backwards — fetches messages BEFORE the date
+detail: |
+  When implementing Telegram backfill, using `OffsetDate` to specify a "since" date fails because Telegram's `offset_date` means "return messages BEFORE this date", which is the opposite of the expected behavior. Fresh backfills should start from newest messages (no OffsetDate) and stop when hitting the backfill horizon in the iteration loop. This was discovered in commit 726d3b3 when backfill was returning the wrong messages.
+actionable: true
+
+---
+timestamp: "2026-04-09T09:55:05.357506"
+type: gotcha
+summary: Telegram InputPeerUser requires access hash — lost in two-pass discovery/backfill
+detail: |
+  Telegram's API requires an access hash to fetch message history for InputPeerUser. A two-pass approach (discover dialogs → store chat IDs → reconstruct peers for backfill) loses the access hashes from the dialog iterator, causing backfill to fail. The fix merges discovery and backfill into one pass, using the InputPeerClass from the dialog iterator which includes the access hash. This was discovered in commit 008aa89 when message history fetching was failing for private chats.
+actionable: true
+
+---
+timestamp: "2026-04-09T09:55:05.357506"
+type: gotcha
+summary: Frontend polling must bridge fresh-connect-to-backfill-start window
+detail: |
+  After a Telegram connection succeeds, there's a timing window where `connected=true` but `backfill_in_progress` is still false and `last_sync_at` is null. The UI needs to poll during this window, not just when backfill_in_progress is true. The fix adds a condition: poll if `(connected && !last_sync_at)` or `backfill_in_progress`. Discovered in commit 4fdbbf3 when fresh connections weren't showing backfill progress immediately.
+actionable: true
+
+---
+timestamp: "2026-04-09T09:55:05.357506"
+type: gotcha
+summary: E2E route mocks need ** wildcard suffix to match query params
+detail: |
+  Playwright route mocking with `page.route('**/api/v1/path')` only matches exact paths, not paths with query parameters. For endpoints that accept query params, use `page.route('**/api/v1/path**')` with double asterisk at the end. Discovered in commit e9270a3 when chat list mocking wasn't matching paginated requests.
+actionable: true
+
+---
+timestamp: "2026-04-09T09:55:05.357506"
+type: gotcha
+summary: Token encryption key must be 32 bytes = 64 hex characters
+detail: |
+  When creating a TokenEncryptor for session encryption, the key parameter expects a hex-encoded string representing 32 bytes. A 32-character string is only 16 bytes when hex-decoded. Use a 64-character hex string (e.g., "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"). Discovered in commit 4f19dfb when API tests were failing with encryption key validation errors.
+actionable: true
+
+---
+timestamp: "2026-04-09T09:55:05.357506"
+type: rule
+summary: E2E Playwright strict mode requires .first() or scoping for non-unique text
+detail: |
+  When using `getByText()` in Playwright strict mode, if multiple elements match (e.g., "5 members" appears in multiple chat rows), the test fails with a strict mode violation. Fix by either using `.first()` to select the first match, or scoping the selector to a specific section with `.locator('section', { has: ... }).getByText(...)`. Discovered in commit e9270a3 when chat management tests failed with strict mode errors.
+actionable: true
+
+---
+timestamp: "2026-04-09T09:55:05.357506"
+type: architecture
+summary: Telegram integration uses connection manager pattern, not SyncProvider
+detail: |
+  Unlike Google Calendar and Todoist which implement the SyncProvider interface for stateless interval-based polling, Telegram uses a TelegramManager connection manager pattern with a long-lived MTProto connection. This fundamentally different lifecycle (started on boot, maintains persistent connection with gap recovery) justifies a separate architectural pattern rather than forcing it into the SyncProvider interface. The spec explicitly documents this distinction in Section 5.4.
+actionable: false
+
+---
+timestamp: "2026-04-09T09:55:05.357506"
+type: documentation_gap
+summary: time.Now() violations still occurring despite core.md rules
+detail: |
+  Core rule #1 states "Never use `time.Now()` → Use `accelerated.GetCurrentTime()`" but multiple instances of `time.Now()` appeared in telegram_message_test.go (commit 3fab164). Why missed: The rule exists but developers may forget to check tests thoroughly. How to strengthen: Add a pre-commit linter rule that greps for `time\.Now\(\)` in all Go files and fails the commit if found (with escape hatch for specific cases where time.Now() is actually needed).
+actionable: true
+
+---
+timestamp: "2026-04-09T09:55:05.357506"
+type: documentation_gap
+summary: errcheck lint failures not caught before push
+detail: |
+  The codebase has `make lint` but errcheck violations (ignoring error return from `c.Error(err)`) still appeared in telegram.go handler code (commit 3fab164). Why missed: lint may not be running automatically, or errcheck isn't enabled in the linter config. How to strengthen: Verify errcheck is enabled in .golangci.yml and that pre-push hooks run `make lint`. Consider adding `make lint` to the pre-commit hook (currently only in pre-push).
+actionable: true
+
+---
+timestamp: "2026-04-09T10:04:49.235928"
+type: gotcha
+summary: crypto.NewTokenEncryptor requires 64-char hex string, not 32-byte ASCII
+detail: |
+  When creating a TokenEncryptor for session encryption, the key must be a 64-character hex-encoded string (representing 32 bytes), not a plain 32-character ASCII string. Using "test-encryption-key-32-bytes!!" fails, while "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" works. This causes cryptic test failures if you don't know the format requirement upfront.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:04:49.235928"
+type: distinction
+summary: Telegram status polling needed after fresh connect, not just during backfill
+detail: |
+  After a fresh Telegram connection, last_sync_at is NULL until the first backfill completes. The UI must poll status when (connected && !last_sync_at) OR when backfill_in_progress. Without this, users see "Connected" but no progress indication until the first sync finishes. The distinction is: poll on connection establishment, not just during active syncing.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:04:49.235928"
+type: architecture
+summary: Singleton session managers must cleanup on auth failure, not just success
+detail: |
+  In AuthSessionManager, failed auth attempts (wrong code/password) must explicitly call clearSession(sess) before returning the error. Without cleanup, the singleton session remains wedged until the 5-minute TTL expires, blocking retry attempts. The pattern: any terminal state (success OR error) must cleanup the in-memory session state.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:04:49.235928"
+type: gotcha
+summary: "gotd StateStorage: SetChannelAccessHash must not overwrite pts values"
+detail: |
+  When implementing gotd's StateStorage interface, SetChannelAccessHash updates access hashes independently from pts tracking. Using a general upsert that updates ALL fields destroys gap recovery state by overwriting pts. Solution: create separate UpsertTelegramChannelAccessHash query that ONLY touches access_hash column, preserving pts. Critical for any multi-field state storage where fields have independent lifecycles.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:04:49.235928"
+type: rule
+summary: Prevent re-authentication while already connected session exists
+detail: |
+  StartAuth must check for existing connected session (not just in-progress auth). Re-authenticating while connected overwrites session data and can silently destroy the active login on restart. Added ErrAlreadyConnected check before allowing new auth flow. Applies to any authentication system with persistent session state.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:04:49.235928"
+type: documentation_gap
+summary: Soft-delete filter enforcement in new queries needs strengthening
+detail: |
+  New GetTelegramMessage query was missing 'deleted_at IS NULL' filter. Core rule states "all queries must filter soft deletes" but it's easy to forget when adding new queries. Code reviewer caught this, showing the rule exists but isn't fully internalized. Gap: rule is documented but needs stronger promotion during query creation, possibly a checklist or sqlc lint rule.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:19:02.054635"
+type: architecture
+summary: gotd/td auth requires retry loops inside Run callback, not exit-and-restart
+detail: |
+  When implementing Telegram auth with gotd/td library, invalid code/password errors must be handled by looping inside the `client.Run()` callback and waiting for another attempt, NOT by exiting the callback and restarting. The `phone_code_hash` from SendCode is tied to that session, so the Run callback must stay alive. Send error result to user via channel, then continue waiting for next code/password attempt. This pattern emerged after multiple Codex review rounds identified that exiting on invalid code prevented retries.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:19:02.054635"
+type: architecture
+summary: Auth error classification requires sentinel errors to distinguish user vs infrastructure failures
+detail: |
+  HTTP auth endpoints need to return 401 for user errors (wrong password) vs 500 for internal errors (DB failure). Implement with sentinel errors like `ErrAuthInternal` that wrap infrastructure failures, while passing through known Telegram auth rejection errors (PHONE_CODE_INVALID, PASSWORD_HASH_INVALID). Use `errors.Is()` for checking, not string matching on error messages. The `classifyAuthError()` helper wraps non-auth errors. This pattern prevents misleading 'invalid credentials' messages when the real issue is a persistence failure.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:19:02.054635"
+type: gotcha
+summary: Disconnect/reconnect lifecycle requires bidirectional state flag management
+detail: |
+  When implementing connection lifecycle with a `disconnected` boolean flag: (1) The flag must be cleared on successful reconnect, not just set on disconnect. Without clearing, the flag persists across reconnects and breaks Status() fallback logic. (2) If disconnect fails (e.g., DB delete fails), don't set the flag — return error and allow retry. Setting it creates inconsistent state where Status() reports disconnected but DB still shows connected. This was caught across multiple Codex review rounds as the reconnect path initially forgot to clear the flag.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:19:02.054635"
+type: architecture
+summary: Async auth flows need explicit step tracking to prevent out-of-order requests
+detail: |
+  Auth state machines with multiple async steps (phone → code → password) must track the current expected step and validate incoming requests against it. Add a `Step` field to the auth session ("awaiting_code", "awaiting_password") that's checked at the start of VerifyCode/VerifyPassword. Protect step writes with the same mutex used for reads to prevent races. Without this, clients can send password before code, or retry code after password step started, causing confusing errors.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:19:02.054635"
+type: documentation_gap
+summary: Code review rules don't specify stopping criteria for diminishing-returns edge cases
+detail: |
+  After 10 rounds of Codex reviews, the agent was still fixing increasingly theoretical concurrency edge cases (goroutine lifecycle races, failed-disconnect retry flows). The code-review.md doesn't provide guidance on when to stop iterating vs when edge cases become too rare to matter. Agents should understand that after core functionality works and obvious bugs are fixed, continuing to address hypothetical race conditions has diminishing returns. Suggest adding a pragmatic stopping point like: 'After 3-5 clean test runs and no High-severity findings, remaining Medium/Low edge cases can be accepted or deferred to real-world testing.'
+actionable: true
+
+---
+timestamp: "2026-04-09T10:19:02.054635"
+type: gotcha
+summary: "Done channel pattern for cleanup: close Done, never close data channels"
+detail: |
+  When coordinating async operations between HTTP handlers and long-running goroutines (like gotd client.Run callbacks), use a `Done chan struct{}` for signaling cleanup. Only close the Done channel in cleanup code. Never close data channels (CodeChan, PasswordChan, ResultChan) directly as both sender and receiver may still be alive. Instead, senders/receivers should select on Done to detect cleanup. Pattern: `select { case data <- value: case <-Done: return }`. This prevents send-on-closed-channel panics during auth cancellation or timeout.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: gotcha
+summary: Telegram MessageMediaDocument.Document field can be nil despite parent type
+detail: |
+  When processing Telegram messages with type `*tg.MessageMediaDocument`, the nested `m.Document` field can be nil even though the parent type indicates it's a document. Must check `m.Document != nil` before calling `m.Document.AsNotEmpty()` to avoid nil pointer panics when inspecting document attributes (e.g., for stickers). This manifested as a test panic in classifyMedia() when handling document messages.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: distinction
+summary: Handler error checking should use repository layer errors, not service layer errors
+detail: |
+  When API handlers check for not-found conditions after calling manager/service methods, use `db.ErrNotFound` from the repository layer, not package-specific errors like `tg.ErrAuthInternal`. The layered architecture means handlers should recognize repository-layer error types. Wrong: `errors.Is(err, tg.ErrAuthInternal)`. Right: `errors.Is(err, db.ErrNotFound)` then `api.SendNotFound()` or fallback to `api.SendInternalError()`.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: architecture
+summary: Telegram compact updates have incomplete Entities map - design for graceful degradation
+detail: |
+  The gotd `updates.Manager` handles gap recovery via `getDifference` which returns full entities. However, real-time compact updates may have incomplete `Entities` maps - peer info may be missing from `entities.Users` or `entities.Chats`. Solution: store what's available (e.g., peer_user_id), leave missing fields (username, first_name) as NULL in database. Rely on upsert semantics to fill gaps when fuller updates arrive later. This is a deliberate tradeoff for Phase 3 - don't block on missing peer resolution.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: rule
+summary: Retroactive backfill required when toggling chat to 'tracked' status
+detail: |
+  When user changes a Telegram chat's status to 'tracked' via PATCH endpoint, must reset `backfill_complete = false` and trigger async backfill for that specific chat. This ensures toggling to 'tracked' provides message history, not just forward messages. Implementation: UpdateChatStatus should detect status change to 'tracked', reset the flag, and call backfiller.BackfillChat() in a goroutine with onProgress callbacks.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: gotcha
+summary: Handler API client dependency must be set before update processing starts
+detail: |
+  MessageHandler needs an `api *tg.Client` field that must be set via `SetAPI(client.API())` method inside the `client.Run` callback BEFORE the dispatcher starts processing updates. The API client lifetime must match the Run callback scope. If SetAPI is not called, handlers that make Telegram API calls (e.g., HandleChatParticipant calling MessagesGetFullChat) will panic with nil pointer dereference. Pattern: Create handler → wire to dispatcher → handler.SetAPI(client.API()) → start processing.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: rule
+summary: Edit message handler must check group-tracking status before storing
+detail: |
+  The HandleEditMessage handler must call `shouldTrackChat()` to verify the chat is being tracked before upserting messages - same check as HandleNewMessage. Edits to messages in non-tracked chats (status='ignored' or auto-excluded by member threshold) should be silently skipped. This prevents storing partial data for chats the user doesn't want tracked.
+actionable: true
+
+---
+timestamp: "2026-04-09T10:33:18.774515"
+type: rule
+summary: Must handle UpdateChatParticipant to keep member_count fresh for auto-tracking
+detail: |
+  Implement HandleChatParticipant update handler that calls h.api.MessagesGetFullChat() to query current participant count, then calls chatConfigRepo.UpdateMemberCount(). This keeps `member_count` in `telegram_chat_config` up-to-date as group membership changes. Important for auto-tracking logic: if a group grows past the threshold and status='auto', it should stop being tracked. Fresh member count ensures accurate threshold checks.
+actionable: true
+

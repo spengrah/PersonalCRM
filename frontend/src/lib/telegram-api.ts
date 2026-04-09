@@ -35,6 +35,22 @@ export interface TelegramStatus {
   last_sync_at?: string
   connected_at?: string
   error?: string
+  backfill_in_progress?: boolean
+  backfill_total?: number
+  backfill_completed?: number
+}
+
+export interface TelegramChat {
+  telegram_chat_id: number
+  chat_title: string | null
+  chat_type: string
+  member_count: number | null
+  status: 'auto' | 'ignored' | 'tracked'
+  effective_tracked: boolean
+}
+
+export interface UpdateChatStatusRequest {
+  status: 'auto' | 'ignored' | 'tracked'
 }
 
 export const telegramApi = {
@@ -52,4 +68,9 @@ export const telegramApi = {
   disconnect: () => apiClient.delete<{ status: string }>('/api/v1/telegram/auth'),
 
   getStatus: () => apiClient.get<TelegramStatus>('/api/v1/telegram/auth/status'),
+
+  listChats: () => apiClient.get<TelegramChat[]>('/api/v1/telegram/chats'),
+
+  updateChatStatus: (chatId: number, data: UpdateChatStatusRequest) =>
+    apiClient.patch<TelegramChat>(`/api/v1/telegram/chats/${chatId}`, data),
 }

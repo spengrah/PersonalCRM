@@ -2,14 +2,17 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
 
 	"personal-crm/backend/internal/api"
+	"personal-crm/backend/internal/db"
 	tg "personal-crm/backend/internal/telegram"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 )
 
 var phoneRegex = regexp.MustCompile(`^\+[0-9]{7,15}$`)
@@ -212,6 +215,90 @@ func (h *TelegramHandler) GetStatus(c *gin.Context) {
 	if status.Error != nil {
 		response["error"] = *status.Error
 	}
+	if status.BackfillInProgress {
+		response["backfill_in_progress"] = true
+		response["backfill_total"] = status.BackfillTotal
+		response["backfill_completed"] = status.BackfillCompleted
+	}
 
 	api.SendSuccess(c, http.StatusOK, response, nil)
+}
+
+type updateChatStatusRequest struct {
+	Status string `json:"status"`
+}
+
+// ListChats handles GET /api/v1/telegram/chats
+func (h *TelegramHandler) ListChats(c *gin.Context) {
+	chats, err := h.manager.ListChats(c.Request.Context())
+	if err != nil {
+		api.SendInternalError(c, "Failed to list chats")
+		return
+	}
+
+	result := make([]gin.H, len(chats))
+	for i, chat := range chats {
+		result[i] = chatToResponse(chat)
+	}
+
+	api.SendSuccess(c, http.StatusOK, result, nil)
+}
+
+// UpdateChatStatus handles PATCH /api/v1/telegram/chats/:chat_id
+func (h *TelegramHandler) UpdateChatStatus(c *gin.Context) {
+	chatIDStr := c.Param("chat_id")
+	var chatID int64
+	if _, err := fmt.Sscanf(chatIDStr, "%d", &chatID); err != nil {
+		api.SendValidationError(c, "Invalid chat ID", "chat_id must be a number")
+		return
+	}
+
+	var req updateChatStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.SendValidationError(c, "Invalid request body", err.Error())
+		return
+	}
+
+	status := strings.TrimSpace(req.Status)
+	if status != "auto" && status != "ignored" && status != "tracked" {
+		api.SendValidationError(c, "Invalid status", "status must be 'auto', 'ignored', or 'tracked'")
+		return
+	}
+
+	// Get current status to detect changes (not-found is fine — chat may not exist yet)
+	previousStatus, err := h.manager.GetChatStatus(c.Request.Context(), chatID)
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		api.SendInternalError(c, "Failed to read chat status")
+		return
+	}
+
+	chat, err := h.manager.UpdateChatStatus(c.Request.Context(), chatID, status)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			api.SendNotFound(c, "Chat")
+			return
+		}
+		api.SendInternalError(c, "Failed to update chat status")
+		return
+	}
+
+	// Trigger retroactive backfill only when status changes TO "tracked"
+	if status == "tracked" && previousStatus != "tracked" {
+		if err := h.manager.TriggerChatBackfill(c.Request.Context(), chatID); err != nil {
+			log.Warn().Err(err).Int64("chat_id", chatID).Msg("telegram: failed to trigger backfill")
+		}
+	}
+
+	api.SendSuccess(c, http.StatusOK, chatToResponse(*chat), nil)
+}
+
+func chatToResponse(chat tg.ChatWithTracking) gin.H {
+	return gin.H{
+		"telegram_chat_id":  chat.TelegramChatID,
+		"chat_title":        chat.ChatTitle,
+		"chat_type":         chat.ChatType,
+		"member_count":      chat.MemberCount,
+		"status":            chat.Status,
+		"effective_tracked": chat.EffectiveTracked,
+	}
 }

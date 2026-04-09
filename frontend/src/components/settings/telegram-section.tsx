@@ -9,6 +9,8 @@ import {
   useVerifyTelegramCode,
   useVerifyTelegramPassword,
   useDisconnectTelegram,
+  useTelegramChats,
+  useUpdateTelegramChatStatus,
 } from '@/hooks/use-telegram'
 import { telegramApi } from '@/lib/telegram-api'
 
@@ -376,12 +378,30 @@ export function TelegramSection() {
             Disconnect
           </Button>
 
-          {/* Group chat management placeholder */}
-          <div className="mt-4 p-4 border-2 border-dashed border-gray-200 rounded-lg bg-gray-50 text-center">
-            <p className="text-sm text-gray-500">
-              Group chat management will appear here once message sync is enabled.
-            </p>
-          </div>
+          {/* Backfill progress */}
+          {status.backfill_in_progress && (
+            <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+                <span className="text-sm font-medium text-blue-700">
+                  Syncing messages... {status.backfill_completed}/{status.backfill_total} chats
+                </span>
+              </div>
+              {status.backfill_total && status.backfill_total > 0 && (
+                <div className="w-full bg-blue-200 rounded-full h-1.5">
+                  <div
+                    className="bg-blue-500 h-1.5 rounded-full transition-all"
+                    style={{
+                      width: `${((status.backfill_completed ?? 0) / status.backfill_total) * 100}%`,
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Group chat management */}
+          <TelegramChatList />
         </div>
       )}
 
@@ -399,5 +419,82 @@ export function TelegramSection() {
         </div>
       </div>
     </section>
+  )
+}
+
+function TelegramChatList() {
+  const { data: chats, isLoading, error } = useTelegramChats()
+  const updateStatus = useUpdateTelegramChatStatus()
+
+  if (isLoading) {
+    return (
+      <div className="mt-4 flex items-center justify-center py-4">
+        <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="mt-4 p-3 bg-red-50 border border-red-100 rounded-lg text-sm text-red-600">
+        Failed to load chat list
+      </div>
+    )
+  }
+
+  if (!chats || chats.length === 0) {
+    return (
+      <div className="mt-4 p-4 border-2 border-dashed border-gray-200 rounded-lg bg-gray-50 text-center">
+        <p className="text-sm text-gray-500">
+          No group chats discovered yet. Chats will appear here after the initial sync completes.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-4 space-y-1">
+      <h3 className="text-sm font-medium text-gray-700 mb-2">Group Chats</h3>
+      {updateStatus.isError && (
+        <div className="flex items-center gap-2 p-2 rounded bg-red-50 text-red-600 text-sm mb-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          Failed to update chat status
+        </div>
+      )}
+      {chats.map(chat => (
+        <div
+          key={chat.telegram_chat_id}
+          className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <span
+              className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                chat.effective_tracked ? 'bg-green-500' : 'bg-gray-300'
+              }`}
+            />
+            <span className="text-sm text-gray-900 truncate">{chat.chat_title || 'Untitled'}</span>
+            {chat.member_count != null && (
+              <span className="text-xs text-gray-400 flex-shrink-0">
+                {chat.member_count} members
+              </span>
+            )}
+          </div>
+          <select
+            value={chat.status}
+            onChange={e =>
+              updateStatus.mutate({
+                chatId: chat.telegram_chat_id,
+                status: e.target.value as 'auto' | 'ignored' | 'tracked',
+              })
+            }
+            className="text-sm text-gray-700 bg-white border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="auto">Auto</option>
+            <option value="ignored">Ignored</option>
+            <option value="tracked">Tracked</option>
+          </select>
+        </div>
+      ))}
+    </div>
   )
 }

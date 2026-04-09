@@ -5,14 +5,24 @@ import type {
   TelegramAuthStartRequest,
   TelegramAuthVerifyCodeRequest,
   TelegramAuthVerifyPasswordRequest,
+  UpdateChatStatusRequest,
 } from '@/lib/telegram-api'
 
 export function useTelegramStatus() {
-  return useQuery({
+  const query = useQuery({
     queryKey: telegramKeys.status(),
     queryFn: telegramApi.getStatus,
     retry: false,
+    refetchInterval: query => {
+      const data = query.state.data
+      if (!data) return false
+      // Poll during backfill, or right after connect before backfill status is known
+      if (data.backfill_in_progress) return 3000
+      if (data.connected && !data.last_sync_at) return 3000
+      return false
+    },
   })
+  return query
 }
 
 export function useStartTelegramAuth() {
@@ -50,6 +60,30 @@ export function useDisconnectTelegram() {
   return useMutation({
     mutationFn: () => telegramApi.disconnect(),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: telegramKeys.status() })
+    },
+  })
+}
+
+export function useTelegramChats() {
+  return useQuery({
+    queryKey: telegramKeys.chats(),
+    queryFn: telegramApi.listChats,
+  })
+}
+
+export function useUpdateTelegramChatStatus() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      chatId,
+      status,
+    }: {
+      chatId: number
+      status: UpdateChatStatusRequest['status']
+    }) => telegramApi.updateChatStatus(chatId, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: telegramKeys.chats() })
       queryClient.invalidateQueries({ queryKey: telegramKeys.status() })
     },
   })

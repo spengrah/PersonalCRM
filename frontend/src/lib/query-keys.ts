@@ -56,4 +56,5 @@ export const contactTaskKeys = {
 export const telegramKeys = {
   all: ['telegram'] as const,
   status: () => [...telegramKeys.all, 'status'] as const,
+  chats: () => [...telegramKeys.all, 'chats'] as const,
 }

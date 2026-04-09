@@ -24,12 +24,21 @@ const authTTL = 5 * time.Minute
 
 // TelegramStatus represents the current connection status.
 type TelegramStatus struct {
-	Connected   bool       `json:"connected"`
-	Username    *string    `json:"username,omitempty"`
-	PhoneNumber *string    `json:"phone_number,omitempty"`
-	LastSyncAt  *time.Time `json:"last_sync_at,omitempty"`
-	Error       *string    `json:"error,omitempty"`
-	ConnectedAt *time.Time `json:"connected_at,omitempty"`
+	Connected          bool       `json:"connected"`
+	Username           *string    `json:"username,omitempty"`
+	PhoneNumber        *string    `json:"phone_number,omitempty"`
+	LastSyncAt         *time.Time `json:"last_sync_at,omitempty"`
+	Error              *string    `json:"error,omitempty"`
+	ConnectedAt        *time.Time `json:"connected_at,omitempty"`
+	BackfillInProgress bool       `json:"backfill_in_progress,omitempty"`
+	BackfillTotal      int        `json:"backfill_total,omitempty"`
+	BackfillCompleted  int        `json:"backfill_completed,omitempty"`
+}
+
+// ChatWithTracking wraps a chat config with the computed effective_tracked flag.
+type ChatWithTracking struct {
+	repository.TelegramChatConfig
+	EffectiveTracked bool
 }
 
 // TelegramManager orchestrates the long-lived MTProto connection lifecycle.
@@ -37,6 +46,7 @@ type TelegramManager struct {
 	sessionRepo     *repository.TelegramSessionRepository
 	updateStateRepo *repository.TelegramUpdateStateRepository
 	chatConfigRepo  *repository.TelegramChatConfigRepository
+	messageRepo     *repository.TelegramMessageRepository
 	syncRepo        *repository.SyncRepository
 	encryptor       *crypto.TokenEncryptor
 	apiID           int
@@ -47,12 +57,18 @@ type TelegramManager struct {
 
 	mu           sync.Mutex
 	client       *telegram.Client
+	clientCtx    context.Context
 	cancel       context.CancelFunc
 	running      bool
 	status       TelegramStatus
 	startupErr   error
 	disconnected bool       // set on explicit Disconnect — prevents stale DB fallback
 	syncStateID  *uuid.UUID // cached sync state row UUID
+
+	backfillMu         sync.Mutex
+	backfillInProgress bool
+	backfillTotal      int
+	backfillCompleted  int
 }
 
 // NewTelegramManager creates the manager and its embedded AuthSessionManager.
@@ -60,6 +76,7 @@ func NewTelegramManager(
 	sessionRepo *repository.TelegramSessionRepository,
 	updateStateRepo *repository.TelegramUpdateStateRepository,
 	chatConfigRepo *repository.TelegramChatConfigRepository,
+	messageRepo *repository.TelegramMessageRepository,
 	syncRepo *repository.SyncRepository,
 	encryptor *crypto.TokenEncryptor,
 	apiID int,
@@ -70,6 +87,7 @@ func NewTelegramManager(
 		sessionRepo:     sessionRepo,
 		updateStateRepo: updateStateRepo,
 		chatConfigRepo:  chatConfigRepo,
+		messageRepo:     messageRepo,
 		syncRepo:        syncRepo,
 		encryptor:       encryptor,
 		apiID:           apiID,
@@ -130,6 +148,7 @@ func (m *TelegramManager) startConnection(ctx context.Context) error {
 	clientCtx, cancel := context.WithCancel(context.Background())
 
 	m.mu.Lock()
+	m.clientCtx = clientCtx
 	m.cancel = cancel
 	m.running = true
 	m.startupErr = nil
@@ -148,17 +167,35 @@ const (
 
 // runWithReconnect runs the MTProto client with automatic reconnection on failure.
 func (m *TelegramManager) runWithReconnect(clientCtx context.Context, cancel context.CancelFunc, sessionStorage *DatabaseSessionStorage, stateStorage *PostgresStateStorage) {
+	// Resolve selfUserID from stored session
+	var selfUserID int64
+	if sess, err := m.sessionRepo.GetSession(clientCtx); err == nil && sess.TelegramUserID != nil {
+		selfUserID = *sess.TelegramUserID
+	}
+
+	// Create message handler
+	handler := NewMessageHandler(
+		m.messageRepo,
+		m.chatConfigRepo,
+		m.syncRepo,
+		m.syncStateID,
+		selfUserID,
+		m.cfg.GroupMaxMembers,
+	)
+
+	// Create dispatcher with real handlers
+	dispatcher := tg.NewUpdateDispatcher()
+	dispatcher.OnNewMessage(handler.HandleNewMessage)
+	dispatcher.OnEditMessage(handler.HandleEditMessage)
+	dispatcher.OnDeleteMessages(handler.HandleDeleteMessages)
+	dispatcher.OnChatParticipant(handler.HandleChatParticipant)
+
 	delay := reconnectBaseDelay
 	for {
-		// No-op handler for Phase 2 — update handlers wired in Phase 3
-		noopHandler := telegram.UpdateHandlerFunc(func(ctx context.Context, u tg.UpdatesClass) error {
-			return nil
-		})
-
 		client := telegram.NewClient(m.apiID, m.apiHash, telegram.Options{
 			SessionStorage: sessionStorage,
 			UpdateHandler: updates.New(updates.Config{
-				Handler:      noopHandler,
+				Handler:      dispatcher,
 				Storage:      stateStorage,
 				AccessHasher: NewPostgresChannelHasher(m.updateStateRepo),
 			}),
@@ -169,6 +206,9 @@ func (m *TelegramManager) runWithReconnect(clientCtx context.Context, cancel con
 		m.mu.Unlock()
 
 		runErr := client.Run(clientCtx, func(runCtx context.Context) error {
+			// Give handler access to the API client (valid for this Run callback's lifetime)
+			handler.SetAPI(tg.NewClient(client))
+
 			m.mu.Lock()
 			now := accelerated.GetCurrentTime()
 			m.status = TelegramStatus{Connected: true, ConnectedAt: &now}
@@ -184,6 +224,9 @@ func (m *TelegramManager) runWithReconnect(clientCtx context.Context, cancel con
 			m.updateSyncStatus(runCtx, repository.SyncStatusIdle, nil)
 			log.Info().Msg("telegram: connection established")
 			delay = reconnectBaseDelay // reset on successful connect
+
+			// Trigger backfill if needed
+			m.maybeStartBackfill(runCtx, client, handler)
 
 			<-runCtx.Done()
 			return runCtx.Err()
@@ -243,6 +286,11 @@ func (m *TelegramManager) Status() TelegramStatus {
 	if m.running {
 		status := m.status
 		m.enrichStatusFromSyncState(&status)
+		m.backfillMu.Lock()
+		status.BackfillInProgress = m.backfillInProgress
+		status.BackfillTotal = m.backfillTotal
+		status.BackfillCompleted = m.backfillCompleted
+		m.backfillMu.Unlock()
 		return status
 	}
 
@@ -365,6 +413,144 @@ func (m *TelegramManager) Disconnect(ctx context.Context) error {
 
 	log.Info().Msg("telegram: disconnected")
 	return nil
+}
+
+// ListChats returns all group chat configs with effective_tracked computed.
+func (m *TelegramManager) ListChats(ctx context.Context) ([]ChatWithTracking, error) {
+	cfgs, err := m.chatConfigRepo.ListConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ChatWithTracking, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		if cfg.ChatType == "private" {
+			continue // only group chats
+		}
+		result = append(result, ChatWithTracking{
+			TelegramChatConfig: cfg,
+			EffectiveTracked:   EffectiveTracked(cfg.Status, cfg.MemberCount, m.cfg.GroupMaxMembers),
+		})
+	}
+	return result, nil
+}
+
+// GetChatStatus returns the current status string for a chat, or empty if not found.
+func (m *TelegramManager) GetChatStatus(ctx context.Context, chatID int64) (string, error) {
+	cfg, err := m.chatConfigRepo.GetConfig(ctx, chatID)
+	if err != nil {
+		return "", err
+	}
+	return cfg.Status, nil
+}
+
+// UpdateChatStatus updates a chat's status and returns the updated config.
+func (m *TelegramManager) UpdateChatStatus(ctx context.Context, chatID int64, status string) (*ChatWithTracking, error) {
+	cfg, err := m.chatConfigRepo.UpdateStatus(ctx, chatID, status)
+	if err != nil {
+		return nil, err
+	}
+	result := &ChatWithTracking{
+		TelegramChatConfig: *cfg,
+		EffectiveTracked:   EffectiveTracked(cfg.Status, cfg.MemberCount, m.cfg.GroupMaxMembers),
+	}
+	return result, nil
+}
+
+// TriggerChatBackfill resets backfill state and starts async backfill for a chat.
+func (m *TelegramManager) TriggerChatBackfill(ctx context.Context, telegramChatID int64) error {
+	if err := m.chatConfigRepo.ResetBackfill(ctx, telegramChatID); err != nil {
+		return fmt.Errorf("reset backfill: %w", err)
+	}
+
+	m.mu.Lock()
+	isRunning := m.running
+	client := m.client
+	clientCtx := m.clientCtx
+	m.mu.Unlock()
+
+	if isRunning && client != nil && clientCtx != nil {
+		go func() {
+			backfiller := NewBackfiller(
+				tg.NewClient(client),
+				m.messageRepo,
+				m.chatConfigRepo,
+				m.syncRepo,
+				m.syncStateID,
+				m.selfUserID(clientCtx),
+				m.cfg.GroupMaxMembers,
+				m.cfg.BackfillSince,
+				func(total, completed int) {
+					m.backfillMu.Lock()
+					m.backfillInProgress = completed < total
+					m.backfillTotal = total
+					m.backfillCompleted = completed
+					m.backfillMu.Unlock()
+				},
+			)
+			if err := backfiller.BackfillChat(clientCtx, telegramChatID); err != nil {
+				log.Warn().Err(err).Int64("chat_id", telegramChatID).Msg("telegram: retroactive backfill failed")
+			}
+			m.backfillMu.Lock()
+			m.backfillInProgress = false
+			m.backfillMu.Unlock()
+		}()
+	}
+	return nil
+}
+
+func (m *TelegramManager) selfUserID(ctx context.Context) int64 {
+	sess, err := m.sessionRepo.GetSession(ctx)
+	if err != nil || sess.TelegramUserID == nil {
+		return 0
+	}
+	return *sess.TelegramUserID
+}
+
+// maybeStartBackfill checks if backfill is needed and starts it in a goroutine.
+func (m *TelegramManager) maybeStartBackfill(ctx context.Context, client *telegram.Client, handler *MessageHandler) {
+	chats, err := m.chatConfigRepo.ListForBackfill(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("telegram: failed to check backfill state")
+		return
+	}
+
+	// If no chats exist at all, this is first connect — backfill will discover them
+	allConfigs, err := m.chatConfigRepo.ListConfigs(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("telegram: failed to list configs for backfill check")
+		return
+	}
+	needsBackfill := len(chats) > 0 || len(allConfigs) == 0
+
+	if !needsBackfill {
+		return
+	}
+
+	go func() {
+		backfiller := NewBackfiller(
+			tg.NewClient(client),
+			m.messageRepo,
+			m.chatConfigRepo,
+			m.syncRepo,
+			m.syncStateID,
+			m.selfUserID(ctx),
+			m.cfg.GroupMaxMembers,
+			m.cfg.BackfillSince,
+			func(total, completed int) {
+				m.backfillMu.Lock()
+				m.backfillInProgress = completed < total
+				m.backfillTotal = total
+				m.backfillCompleted = completed
+				m.backfillMu.Unlock()
+			},
+		)
+		if err := backfiller.Run(ctx); err != nil {
+			log.Warn().Err(err).Msg("telegram: backfill failed")
+		}
+		m.backfillMu.Lock()
+		m.backfillInProgress = false
+		m.backfillMu.Unlock()
+	}()
 }
 
 // updateSyncStatus updates the external_sync_state row for Telegram.
