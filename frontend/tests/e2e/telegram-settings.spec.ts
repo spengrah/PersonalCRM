@@ -283,26 +283,23 @@ test.describe('Telegram Settings @area:settings', () => {
   })
 
   test('disconnect flow returns to disconnected state', async ({ page }) => {
-    // Mock status as connected initially
+    // Single route handler for all /telegram/auth/* to avoid Playwright route ordering issues
     let disconnected = false
-    await page.route('**/api/v1/telegram/auth/status', route =>
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          success: true,
-          data: disconnected
-            ? { status: 'disconnected', connected: false }
-            : { status: 'connected', connected: true, username: 'testuser' },
-        }),
-      })
-    )
-
-    // Mock disconnect — match DELETE to the exact auth path
-    await page.route('**/api/v1/telegram/auth', async route => {
-      // Only intercept DELETE on the exact path (not /auth/status, /auth/start, etc.)
-      const url = new URL(route.request().url())
-      if (route.request().method() === 'DELETE' && url.pathname.endsWith('/telegram/auth')) {
+    await page.route(/\/api\/v1\/telegram\/auth/, route => {
+      const url = route.request().url()
+      if (url.includes('/auth/status')) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: disconnected
+              ? { status: 'disconnected', connected: false }
+              : { status: 'connected', connected: true, username: 'testuser' },
+          }),
+        })
+      }
+      if (route.request().method() === 'DELETE') {
         disconnected = true
         return route.fulfill({
           status: 200,
