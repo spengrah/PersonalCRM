@@ -347,4 +347,112 @@ test.describe('Telegram Settings @area:settings', () => {
     // Should show error
     await expect(page.getByText(/Invalid verification code/i)).toBeVisible({ timeout: 5000 })
   })
+
+  test('group chat management: shows chat list', async ({ page }) => {
+    await page.route('**/api/v1/telegram/auth/status', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: { status: 'connected', connected: true, username: 'testuser' },
+        }),
+      })
+    )
+
+    await page.route('**/api/v1/telegram/chats', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: [
+            {
+              telegram_chat_id: -100111,
+              chat_title: 'Close Friends',
+              chat_type: 'group',
+              member_count: 5,
+              status: 'auto',
+              effective_tracked: true,
+            },
+            {
+              telegram_chat_id: -100222,
+              chat_title: 'Work Team',
+              chat_type: 'group',
+              member_count: 25,
+              status: 'auto',
+              effective_tracked: false,
+            },
+          ],
+        }),
+      })
+    )
+
+    await page.goto('/settings')
+    await page.waitForLoadState('domcontentloaded')
+
+    await expect(page.getByText('Close Friends')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Work Team')).toBeVisible()
+    await expect(page.getByText('5 members')).toBeVisible()
+    await expect(page.getByText('25 members')).toBeVisible()
+  })
+
+  test('group chat management: empty state', async ({ page }) => {
+    await page.route('**/api/v1/telegram/auth/status', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: { status: 'connected', connected: true, username: 'testuser' },
+        }),
+      })
+    )
+
+    await page.route('**/api/v1/telegram/chats', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: [] }),
+      })
+    )
+
+    await page.goto('/settings')
+    await page.waitForLoadState('domcontentloaded')
+
+    await expect(page.getByText(/No group chats discovered yet/i)).toBeVisible({ timeout: 10000 })
+  })
+
+  test('group chat management: backfill progress', async ({ page }) => {
+    await page.route('**/api/v1/telegram/auth/status', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            status: 'connected',
+            connected: true,
+            username: 'testuser',
+            backfill_in_progress: true,
+            backfill_total: 42,
+            backfill_completed: 15,
+          },
+        }),
+      })
+    )
+
+    await page.route('**/api/v1/telegram/chats', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: [] }),
+      })
+    )
+
+    await page.goto('/settings')
+    await page.waitForLoadState('domcontentloaded')
+
+    await expect(page.getByText(/Syncing messages.*15\/42/)).toBeVisible({ timeout: 10000 })
+  })
 })

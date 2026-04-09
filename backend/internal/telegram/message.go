@@ -160,10 +160,12 @@ func classifyMedia(media tg.MessageMediaClass) string {
 			return "video"
 		}
 		// Check document attributes for sticker
-		if doc, ok := m.Document.AsNotEmpty(); ok {
-			for _, attr := range doc.Attributes {
-				if _, isSticker := attr.(*tg.DocumentAttributeSticker); isSticker {
-					return "sticker"
+		if m.Document != nil {
+			if doc, ok := m.Document.AsNotEmpty(); ok {
+				for _, attr := range doc.Attributes {
+					if _, isSticker := attr.(*tg.DocumentAttributeSticker); isSticker {
+						return "sticker"
+					}
 				}
 			}
 		}
