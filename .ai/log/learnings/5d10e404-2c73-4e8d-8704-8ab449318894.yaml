@@ -302,3 +302,139 @@ detail: |
   Implement HandleChatParticipant update handler that calls h.api.MessagesGetFullChat() to query current participant count, then calls chatConfigRepo.UpdateMemberCount(). This keeps `member_count` in `telegram_chat_config` up-to-date as group membership changes. Important for auto-tracking logic: if a group grows past the threshold and status='auto', it should stop being tracked. Fresh member count ensures accurate threshold checks.
 actionable: true
 
+---
+timestamp: "2026-04-09T12:18:43.266412"
+type: gotcha
+summary: Telegram OffsetDate parameter semantics are reversed from expectations
+detail: |
+  Telegram's messages.getHistory `offset_date` parameter means "return messages BEFORE this date", not "since this date". Using `OffsetDate(2026-01-01)` returns messages from BEFORE January 2026, which is the opposite of what a backfill horizon suggests. For fresh backfills, start from newest messages (no OffsetDate) and iterate backwards until hitting the horizon in the loop. Only use OffsetDate for resuming from a cursor (message ID-based pagination).
+actionable: true
+
+---
+timestamp: "2026-04-09T12:18:43.266412"
+type: gotcha
+summary: Telegram dialog peers with access hashes must be used immediately, not reconstructed
+detail: |
+  InputPeerUser requires an access hash to fetch message history. A two-pass approach (discover all dialogs → reconstruct peers → backfill) loses the access hashes from the dialog iterator. The gotd library's dialog.Elem includes both the Peer (with access hash) and the Last message. Discovery and backfill must happen in one pass: iterate dialogs, process each dialog's history immediately using the Elem.Peer, not later with a reconstructed peer.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:18:43.266412"
+type: rule
+summary: Filter Telegram dialogs by last message date before creating config records
+detail: |
+  Telegram's getDialogs returns every dialog in history (thousands), even those with no activity in years. Before creating a telegram_chat_config or attempting backfill, check `elem.Last.GetDate()` (Unix timestamp of dialog's most recent message). Skip dialogs where the last message is older than the backfill horizon. This prevents creating 1000+ chat configs for inactive conversations that would all be marked backfill_complete instantly.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:18:43.266412"
+type: gotcha
+summary: Playwright route patterns with ** suffix match path + descendants
+detail: |
+  Playwright's `page.route('**/api/v1/telegram/chats', ...)` matches GET to `/chats` but NOT PATCH to `/chats/-100111` (path with ID suffix). The glob `**/chats` matches the exact path only. Use `**/chats**` (double-star suffix) to match both `/chats` and `/chats/:id`, or register separate route handlers for each pattern. This applies to any API with resource-level operations (GET /resource, PATCH /resource/:id).
+actionable: true
+
+---
+timestamp: "2026-04-09T12:18:43.266412"
+type: gotcha
+summary: E2E strict mode violations from real backend data during mocked tests
+detail: |
+  When E2E tests mock API responses but the test server is connected to a real backend (e.g., Telegram), `getByText('5 members')` may match multiple elements: the mocked chat AND real backend data rendered elsewhere on the page. Solution: scope assertions to the specific section using `page.locator('section', { has: page.getByRole(...) }).getByText(...)` instead of global selectors. Always consider data pollution from live integrations during E2E mocking.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:18:43.266412"
+type: gotcha
+summary: Timezone-naive date parsing affects backfill horizons in UTC-stored systems
+detail: |
+  When using `time.Parse('2006-01-02', '2026-04-01')` for a backfill horizon, Go defaults to UTC midnight (2026-04-01 00:00:00 UTC). For users in CT (UTC-5), a message sent at 11pm CT on March 31st is stored as April 1st 04:00 UTC and gets included, even though it's conceptually "before" the horizon. Phase 4 aggregation logic must either: (1) parse the horizon in the user's local timezone, (2) document that horizon is UTC-based, or (3) add timezone awareness to occurred_at comparisons.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:18:43.266412"
+type: gotcha
+summary: Crypto TokenEncryptor requires hex-encoded keys, not raw strings
+detail: |
+  When creating a crypto.NewTokenEncryptor(key), the key must be hex-encoded (64 hex chars = 32 bytes), not a raw string like `'test-encryption-key-32-bytes!!'`. The constructor validates with encoding/hex and fails with 'invalid byte: U+0074 't'' on non-hex input. Test keys should use a valid hex string like `'0123456789abcdef...'` (64 chars). Check existing crypto setup code for the pattern before creating test fixtures.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:18:43.266412"
+type: distinction
+summary: SendValidationError returns 400, not 422 for invalid request bodies
+detail: |
+  The api.SendValidationError helper returns HTTP 400 (Bad Request), not 422 (Unprocessable Entity). When testing validation failures (invalid status values, malformed payloads), assert `StatusBadRequest` not `StatusUnprocessableEntity`. The codebase convention is: 400 for client errors in request syntax/values, 404 for not found, 500 for server errors. This is consistent across all handlers using the api package.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:18:43.266412"
+type: architecture
+summary: Codex review catches progressively subtler issues over multiple rounds
+detail: |
+  Codex review is designed to run iteratively, not as one-shot approval. This session went through 5 rounds: (1) critical errors (error handling, backfill logic), (2) test coverage gaps, (3) edge cases (chat status change detection), (4) E2E test quality (post-mutation assertions), (5) API test robustness (encryption key format). Each round caught different issue types. Budget time for multiple review cycles and treat early passes as 'surface issues fixed', not 'production ready'.
+actionable: false
+
+---
+timestamp: "2026-04-09T12:18:43.266412"
+type: documentation_gap
+summary: Common Gotchas table doesn't include Playwright route pattern pitfalls
+detail: |
+  The `.ai/rules/core.md` Common Gotchas table has entries for SQL, git, E2E page loads, but nothing about Playwright route matching patterns. The `**/path` vs `**/path**` distinction caused E2E test failures where PATCH requests hit the real backend instead of mocks. This is a common pattern for any API with resource-level operations. Should add: 'Playwright route with `**/api/path` | Use `**/api/path**` to match both `/path` and `/path/:id` routes, or register separate handlers' to the gotchas table.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:39:44.334516"
+type: gotcha
+summary: Pre-push E2E tests fail when dev server is already running
+detail: |
+  The pre-push hook runs the full E2E test suite which starts its own test server on port 8080. If `make dev` is already running the development server on that port, E2E tests fail with port conflicts. This manifests as mysterious E2E failures during git push that pass when run manually. Solution: run `make stop` before pushing, or configure E2E tests to use a different port during hook execution. The hook doesn't automatically stop the dev server because that would disrupt active development work.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:39:44.334516"
+type: architecture
+summary: Flood wait should return partial results, not fail entirely
+detail: |
+  When Telegram API returns a flood wait error during dialog discovery (e.g., rate limit after processing 100 dialogs), the backfill should return the successfully processed dialogs rather than treating it as total failure. Pattern: catch `tgerr.FloodWait`, log the delay requirement, return what was collected so far with `nil` error. This provides graceful degradation - partial sync is better than no sync. Without this, a flood wait late in discovery discards all prior work and forces full restart.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:39:44.334516"
+type: rule
+summary: Single-operation async tasks must call progress callbacks at start and completion
+detail: |
+  When implementing async operations with progress reporting (e.g., BackfillChat for retroactive single-chat backfill), must call `onProgress(1, 0)` before starting and `onProgress(1, 1)` after completion, even though it's a single operation. Without these calls, the UI shows no feedback during execution. Multi-operation batches naturally call progress on each iteration, but single operations need explicit bookend calls. The total=1, completed=0→1 pattern signals 'operation in progress' → 'operation done'.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:39:44.334516"
+type: gotcha
+summary: Long-lived async goroutines need stored context, not context.Background()
+detail: |
+  When managers trigger background operations in goroutines (e.g., TelegramManager.TriggerChatBackfill), those goroutines need a context with proper cancellation tied to the manager's lifecycle. Using `context.Background()` means the goroutine ignores manager shutdown. Pattern: store the long-lived context in the manager (`clientCtx context.Context` field) during initialization, then use that stored context for triggered goroutines. This was caught by code review when `TriggerChatBackfill` used `context.Background()` instead of the client lifecycle context.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:39:44.334516"
+type: gotcha
+summary: Ignored errors from existence checks can trigger false-positive flows
+detail: |
+  When checking for existence before optional operations (e.g., `allConfigs, _ := chatConfigRepo.ListConfigs(ctx)`), ignoring the error can trigger false-positive behavior. If the DB query fails, an empty slice is returned, which might trigger 'no configs exist' logic (like starting initial backfill) when configs actually DO exist but were unreachable. Pattern: always check errors from existence queries; only ignore errors where the absence/presence distinction doesn't change program behavior.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:39:44.334516"
+type: distinction
+summary: Unknown resource (ErrNotFound) vs operational errors require different handler responses
+detail: |
+  In handlers checking group chat tracking status, distinguishing `db.ErrNotFound` (chat not in database yet) from other errors matters for user experience. Unknown chat should trigger auto-upsert with default 'auto' status and continue processing. DB connection failure or constraint violation should abort with 500. Initial implementation treated both as 'not tracked', which masked real errors. Pattern: `if errors.Is(err, db.ErrNotFound) { upsertDefault(); continue } else if err != nil { return 500 }`. This ensures first-time chats get auto-configured while actual errors surface properly.
+actionable: true
+
+---
+timestamp: "2026-04-09T12:39:44.334516"
+type: documentation_gap
+summary: Common Gotchas table missing pre-push hook environment conflicts
+detail: |
+  The `.ai/rules/core.md` Common Gotchas table documents test execution gotchas but doesn't cover pre-push hook environment conflicts. The E2E-with-running-dev-server port conflict caused push failures that weren't obvious to diagnose. This pattern applies to any hook-executed test that assumes clean environment. Suggestion: add row 'Pre-push E2E fails | Run `make stop` before push — hook's test server conflicts with dev server on port 8080'.
+actionable: true
+
