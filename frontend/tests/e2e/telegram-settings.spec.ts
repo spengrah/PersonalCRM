@@ -24,14 +24,12 @@ test.describe('Telegram Settings @area:settings', () => {
       has: page.getByRole('heading', { name: 'Telegram', exact: true }),
     })
 
-    // Should show either "Configuration Required" (404) or "Connect Telegram" (disconnected)
+    // Wait for loading to finish — either "Configuration Required" or "Connect Telegram" should appear
     const configRequired = telegramSection.getByText('Configuration Required')
     const connectButton = telegramSection.getByRole('button', { name: /Connect Telegram/i })
 
-    const hasConfig = await configRequired.isVisible().catch(() => false)
-    const hasConnect = await connectButton.isVisible().catch(() => false)
-
-    expect(hasConfig || hasConnect).toBe(true)
+    // Use Playwright's built-in polling instead of instant snapshot
+    await expect(configRequired.or(connectButton)).toBeVisible({ timeout: 10000 })
   })
 
   test('auth flow: phone input shows on Connect click', async ({ page }) => {
