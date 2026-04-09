@@ -250,14 +250,15 @@ func TestMarkExternalContactMatched_AlreadyMatched(t *testing.T) {
 			ID:          uuid.New(),
 			MatchStatus: repository.MatchStatusMatched,
 		},
+		updateMatchCalls: make([]updateMatchCall, 0),
 	}
 	matcher := &PeerMatcher{
 		externalContactRepo: ecMock,
 	}
 
-	// Should not upsert — already matched
+	// Should not call UpdateMatch — already matched
 	matcher.markExternalContactMatched(context.Background(), 12345, contactID)
-	assert.Empty(t, ecMock.upsertCalls)
+	assert.Empty(t, ecMock.updateMatchCalls)
 }
 
 func TestMarkExternalContactMatched_Unmatched(t *testing.T) {
