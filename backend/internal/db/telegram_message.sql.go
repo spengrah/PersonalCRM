@@ -47,6 +47,7 @@ const GetTelegramMessage = `-- name: GetTelegramMessage :one
 SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at FROM telegram_message
 WHERE telegram_chat_id = $1
   AND telegram_message_id = $2
+  AND deleted_at IS NULL
 `
 
 type GetTelegramMessageParams struct {

@@ -241,10 +241,9 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 	err = repo.SoftDeleteMessages(ctx, []int32{90004})
 	require.NoError(t, err)
 
-	// Verify deleted
-	msg, err := repo.GetMessage(ctx, 12345, 90004)
-	require.NoError(t, err)
-	assert.NotNil(t, msg.DeletedAt)
+	// Verify deleted — GetMessage filters deleted_at IS NULL, so should return not found
+	_, err = repo.GetMessage(ctx, 12345, 90004)
+	assert.Error(t, err)
 }
 
 func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
@@ -291,9 +290,8 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 	err = repo.SoftDeleteChannelMessages(ctx, -100555, []int32{90005})
 	require.NoError(t, err)
 
-	msg, err := repo.GetMessage(ctx, -100555, 90005)
-	require.NoError(t, err)
-	assert.NotNil(t, msg.DeletedAt)
+	_, err = repo.GetMessage(ctx, -100555, 90005)
+	assert.Error(t, err)
 }
 
 func TestTelegramMessage_ListUnprocessed(t *testing.T) {

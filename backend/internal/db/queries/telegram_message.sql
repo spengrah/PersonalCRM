@@ -35,7 +35,8 @@ WHERE telegram_chat_id = @telegram_chat_id
 -- name: GetTelegramMessage :one
 SELECT * FROM telegram_message
 WHERE telegram_chat_id = @telegram_chat_id
-  AND telegram_message_id = @telegram_message_id;
+  AND telegram_message_id = @telegram_message_id
+  AND deleted_at IS NULL;
 
 -- name: ListTelegramMessagesByChatUnprocessed :many
 SELECT * FROM telegram_message

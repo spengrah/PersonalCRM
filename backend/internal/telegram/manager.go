@@ -57,6 +57,7 @@ type TelegramManager struct {
 
 	mu           sync.Mutex
 	client       *telegram.Client
+	clientCtx    context.Context
 	cancel       context.CancelFunc
 	running      bool
 	status       TelegramStatus
@@ -147,6 +148,7 @@ func (m *TelegramManager) startConnection(ctx context.Context) error {
 	clientCtx, cancel := context.WithCancel(context.Background())
 
 	m.mu.Lock()
+	m.clientCtx = clientCtx
 	m.cancel = cancel
 	m.running = true
 	m.startupErr = nil
@@ -463,9 +465,10 @@ func (m *TelegramManager) TriggerChatBackfill(ctx context.Context, telegramChatI
 	m.mu.Lock()
 	isRunning := m.running
 	client := m.client
+	clientCtx := m.clientCtx
 	m.mu.Unlock()
 
-	if isRunning && client != nil {
+	if isRunning && client != nil && clientCtx != nil {
 		go func() {
 			backfiller := NewBackfiller(
 				tg.NewClient(client),
@@ -473,7 +476,7 @@ func (m *TelegramManager) TriggerChatBackfill(ctx context.Context, telegramChatI
 				m.chatConfigRepo,
 				m.syncRepo,
 				m.syncStateID,
-				m.selfUserID(),
+				m.selfUserID(clientCtx),
 				m.cfg.GroupMaxMembers,
 				m.cfg.BackfillSince,
 				func(total, completed int) {
@@ -484,7 +487,7 @@ func (m *TelegramManager) TriggerChatBackfill(ctx context.Context, telegramChatI
 					m.backfillMu.Unlock()
 				},
 			)
-			if err := backfiller.BackfillChat(context.Background(), telegramChatID); err != nil {
+			if err := backfiller.BackfillChat(clientCtx, telegramChatID); err != nil {
 				log.Warn().Err(err).Int64("chat_id", telegramChatID).Msg("telegram: retroactive backfill failed")
 			}
 		}()
@@ -492,8 +495,8 @@ func (m *TelegramManager) TriggerChatBackfill(ctx context.Context, telegramChatI
 	return nil
 }
 
-func (m *TelegramManager) selfUserID() int64 {
-	sess, err := m.sessionRepo.GetSession(context.Background())
+func (m *TelegramManager) selfUserID(ctx context.Context) int64 {
+	sess, err := m.sessionRepo.GetSession(ctx)
 	if err != nil || sess.TelegramUserID == nil {
 		return 0
 	}
@@ -509,7 +512,11 @@ func (m *TelegramManager) maybeStartBackfill(ctx context.Context, client *telegr
 	}
 
 	// If no chats exist at all, this is first connect — backfill will discover them
-	allConfigs, _ := m.chatConfigRepo.ListConfigs(ctx)
+	allConfigs, err := m.chatConfigRepo.ListConfigs(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("telegram: failed to list configs for backfill check")
+		return
+	}
 	needsBackfill := len(chats) > 0 || len(allConfigs) == 0
 
 	if !needsBackfill {
@@ -523,7 +530,7 @@ func (m *TelegramManager) maybeStartBackfill(ctx context.Context, client *telegr
 			m.chatConfigRepo,
 			m.syncRepo,
 			m.syncStateID,
-			m.selfUserID(),
+			m.selfUserID(ctx),
 			m.cfg.GroupMaxMembers,
 			m.cfg.BackfillSince,
 			func(total, completed int) {

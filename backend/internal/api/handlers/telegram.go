@@ -12,6 +12,7 @@ import (
 	tg "personal-crm/backend/internal/telegram"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 )
 
 var phoneRegex = regexp.MustCompile(`^\+[0-9]{7,15}$`)
@@ -237,15 +238,7 @@ func (h *TelegramHandler) ListChats(c *gin.Context) {
 
 	result := make([]gin.H, len(chats))
 	for i, chat := range chats {
-		item := gin.H{
-			"telegram_chat_id":  chat.TelegramChatID,
-			"chat_title":        chat.ChatTitle,
-			"chat_type":         chat.ChatType,
-			"member_count":      chat.MemberCount,
-			"status":            chat.Status,
-			"effective_tracked": chat.EffectiveTracked,
-		}
-		result[i] = item
+		result[i] = chatToResponse(chat)
 	}
 
 	api.SendSuccess(c, http.StatusOK, result, nil)
@@ -292,17 +285,20 @@ func (h *TelegramHandler) UpdateChatStatus(c *gin.Context) {
 	// Trigger retroactive backfill only when status changes TO "tracked"
 	if status == "tracked" && previousStatus != "tracked" {
 		if err := h.manager.TriggerChatBackfill(c.Request.Context(), chatID); err != nil {
-			// Log but don't fail the request
-			_ = c.Error(err)
+			log.Warn().Err(err).Int64("chat_id", chatID).Msg("telegram: failed to trigger backfill")
 		}
 	}
 
-	api.SendSuccess(c, http.StatusOK, gin.H{
+	api.SendSuccess(c, http.StatusOK, chatToResponse(*chat), nil)
+}
+
+func chatToResponse(chat tg.ChatWithTracking) gin.H {
+	return gin.H{
 		"telegram_chat_id":  chat.TelegramChatID,
 		"chat_title":        chat.ChatTitle,
 		"chat_type":         chat.ChatType,
 		"member_count":      chat.MemberCount,
 		"status":            chat.Status,
 		"effective_tracked": chat.EffectiveTracked,
-	}, nil)
+	}
 }

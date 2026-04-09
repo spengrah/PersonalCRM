@@ -230,6 +230,9 @@ func (b *Backfiller) discoverDialogs(ctx context.Context, sinceUnix int) ([]dial
 			if waitErr != nil {
 				return dialogs, fmt.Errorf("flood wait during dialog discovery: %w", waitErr)
 			}
+			// Wait succeeded — return partial dialogs
+			log.Warn().Int("dialogs", len(dialogs)).Msg("telegram: flood wait during dialog discovery, returning partial results")
+			return dialogs, nil
 		}
 		return dialogs, fmt.Errorf("iterate dialogs: %w", err)
 	}
