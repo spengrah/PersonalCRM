@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -212,6 +213,84 @@ func (h *TelegramHandler) GetStatus(c *gin.Context) {
 	if status.Error != nil {
 		response["error"] = *status.Error
 	}
+	if status.BackfillInProgress {
+		response["backfill_in_progress"] = true
+		response["backfill_total"] = status.BackfillTotal
+		response["backfill_completed"] = status.BackfillCompleted
+	}
 
 	api.SendSuccess(c, http.StatusOK, response, nil)
+}
+
+type updateChatStatusRequest struct {
+	Status string `json:"status"`
+}
+
+// ListChats handles GET /api/v1/telegram/chats
+func (h *TelegramHandler) ListChats(c *gin.Context) {
+	chats, err := h.manager.ListChats(c.Request.Context())
+	if err != nil {
+		api.SendInternalError(c, "Failed to list chats")
+		return
+	}
+
+	result := make([]gin.H, len(chats))
+	for i, chat := range chats {
+		item := gin.H{
+			"telegram_chat_id":  chat.TelegramChatID,
+			"chat_title":        chat.ChatTitle,
+			"chat_type":         chat.ChatType,
+			"member_count":      chat.MemberCount,
+			"status":            chat.Status,
+			"effective_tracked": chat.EffectiveTracked,
+		}
+		result[i] = item
+	}
+
+	api.SendSuccess(c, http.StatusOK, result, nil)
+}
+
+// UpdateChatStatus handles PATCH /api/v1/telegram/chats/:chat_id
+func (h *TelegramHandler) UpdateChatStatus(c *gin.Context) {
+	chatIDStr := c.Param("chat_id")
+	var chatID int64
+	if _, err := fmt.Sscanf(chatIDStr, "%d", &chatID); err != nil {
+		api.SendValidationError(c, "Invalid chat ID", "chat_id must be a number")
+		return
+	}
+
+	var req updateChatStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.SendValidationError(c, "Invalid request body", err.Error())
+		return
+	}
+
+	status := strings.TrimSpace(req.Status)
+	if status != "auto" && status != "ignored" && status != "tracked" {
+		api.SendValidationError(c, "Invalid status", "status must be 'auto', 'ignored', or 'tracked'")
+		return
+	}
+
+	chat, err := h.manager.UpdateChatStatus(c.Request.Context(), chatID, status)
+	if err != nil {
+		api.SendNotFound(c, "Chat")
+		return
+	}
+
+	// Trigger retroactive backfill if status changed to "tracked"
+	if status == "tracked" {
+		if err := h.manager.TriggerChatBackfill(c.Request.Context(), chatID); err != nil {
+			// Log but don't fail the request
+			c.Error(err)
+		}
+	}
+
+	api.SendSuccess(c, http.StatusOK, gin.H{
+		"telegram_chat_id":  chat.TelegramChatID,
+		"chat_title":        chat.ChatTitle,
+		"chat_type":         chat.ChatType,
+		"member_count":      chat.MemberCount,
+		"status":            chat.Status,
+		"effective_tracked": chat.EffectiveTracked,
+	}, nil)
 }
