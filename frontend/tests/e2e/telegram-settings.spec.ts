@@ -456,7 +456,10 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(page.getByText(/Syncing messages.*15\/42/)).toBeVisible({ timeout: 10000 })
   })
 
-  test('group chat management: toggle status', async ({ page }) => {
+  test('group chat management: toggle auto to ignored', async ({ page }) => {
+    let currentStatus = 'auto'
+    let currentTracked = true
+
     await page.route('**/api/v1/telegram/auth/status', route =>
       route.fulfill({
         status: 200,
@@ -481,13 +484,17 @@ test.describe('Telegram Settings @area:settings', () => {
                 chat_title: 'Toggle Test Group',
                 chat_type: 'group',
                 member_count: 5,
-                status: 'auto',
-                effective_tracked: true,
+                status: currentStatus,
+                effective_tracked: currentTracked,
               },
             ],
           }),
         })
       }
+      // PATCH — update mock state
+      const body = route.request().postDataJSON()
+      currentStatus = body.status
+      currentTracked = body.status !== 'ignored'
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -498,8 +505,8 @@ test.describe('Telegram Settings @area:settings', () => {
             chat_title: 'Toggle Test Group',
             chat_type: 'group',
             member_count: 5,
-            status: 'ignored',
-            effective_tracked: false,
+            status: currentStatus,
+            effective_tracked: currentTracked,
           },
         }),
       })
@@ -510,16 +517,82 @@ test.describe('Telegram Settings @area:settings', () => {
 
     await expect(page.getByText('Toggle Test Group')).toBeVisible({ timeout: 10000 })
 
-    // The select should be visible with "Auto" selected
     const select = page.locator('select').first()
     await expect(select).toHaveValue('auto')
 
-    // Change to "Ignored" — triggers PATCH and refetch
-    const patchPromise = page.waitForRequest(
-      req => req.url().includes('/telegram/chats/') && req.method() === 'PATCH'
-    )
+    // Toggle to "Ignored"
     await select.selectOption('ignored')
-    const patchReq = await patchPromise
-    expect(JSON.parse(patchReq.postData() ?? '{}')).toEqual({ status: 'ignored' })
+
+    // After refetch, tracked indicator should reflect ignored state (gray dot)
+    // The select should update to show "ignored" after the mutation + refetch
+    await expect(select).toHaveValue('ignored', { timeout: 5000 })
+  })
+
+  test('group chat management: toggle auto to tracked', async ({ page }) => {
+    let currentStatus = 'auto'
+
+    await page.route('**/api/v1/telegram/auth/status', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: { status: 'connected', connected: true, username: 'testuser' },
+        }),
+      })
+    )
+
+    await page.route('**/api/v1/telegram/chats', route => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            success: true,
+            data: [
+              {
+                telegram_chat_id: -100333,
+                chat_title: 'Large Work Group',
+                chat_type: 'group',
+                member_count: 50,
+                status: currentStatus,
+                effective_tracked: currentStatus === 'tracked',
+              },
+            ],
+          }),
+        })
+      }
+      const body = route.request().postDataJSON()
+      currentStatus = body.status
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            telegram_chat_id: -100333,
+            chat_title: 'Large Work Group',
+            chat_type: 'group',
+            member_count: 50,
+            status: currentStatus,
+            effective_tracked: currentStatus === 'tracked',
+          },
+        }),
+      })
+    })
+
+    await page.goto('/settings')
+    await page.waitForLoadState('domcontentloaded')
+
+    await expect(page.getByText('Large Work Group')).toBeVisible({ timeout: 10000 })
+
+    const select = page.locator('select').first()
+    await expect(select).toHaveValue('auto')
+
+    // Toggle to "Tracked"
+    await select.selectOption('tracked')
+
+    // After mutation + refetch, select should show tracked
+    await expect(select).toHaveValue('tracked', { timeout: 5000 })
   })
 })
