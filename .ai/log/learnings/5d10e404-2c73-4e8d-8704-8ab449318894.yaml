@@ -642,3 +642,15 @@ detail: |
   The agent discovered the cleanup gap only after CI review feedback, causing wasted effort (failed CI, debugging, fix, re-run). The 'Common Gotchas' table documents many patterns but has no entry about integration test cleanup helpers. Adding guidance like 'When adding test data with shared cleanup helpers → Update ALL cleanup locations (inline + shared) to prevent CI flakiness' would prevent this class of error. The pattern of having shared cleanup helpers (cleanupAggregationMessages, etc.) is established in the codebase but not documented in CLAUDE.md or Session Hints.
 actionable: true
 
+---
+timestamp: "2026-04-09T15:20:26.160272"
+type: distinction
+summary: Live event aggregation must use chat-scoped incremental mode, not batch
+detail: |
+  When processing real-time events (webhooks, incoming messages), use `AggregateForContact(ctx, contactID, chatID)` (incremental, chat-scoped) not `AggregateForContactBatch(ctx, contactID)` (processes all chats). Incremental mode coalesces interactions within a 2h window, preventing separate interactions for burst messages in a conversation. Batch mode skips coalescing logic entirely and is for historical backfill only. Using batch mode for live events makes burst coalescing dead code, degrading UX (multiple separate interactions instead of one coalesced interaction per conversation).
+  
+  **Why:** Incremental mode checks for recent interactions in the same chat and coalesces within the window; batch processes all historical messages without time-based coalescing.
+  
+  **How to apply:** Any webhook or real-time event handler that triggers aggregation should use the chat-scoped incremental method. Reserve batch aggregation for backfill operations (e.g., post-sync historical data processing, OnPeerLinked for discovering old messages across chats).
+actionable: true
+
