@@ -150,7 +150,9 @@ func (m *AuthSessionManager) StartAuth(ctx context.Context, phone string) (strin
 	go func() {
 		runErr := client.Run(clientCtx, func(runCtx context.Context) error {
 			authClient := auth.NewClient(tg.NewClient(client), rand.Reader, m.apiID, m.apiHash)
-			sentCode, err := authClient.SendCode(runCtx, phone, auth.SendCodeOptions{})
+			sendCtx, sendCancel := context.WithTimeout(runCtx, 30*time.Second)
+			sentCode, err := authClient.SendCode(sendCtx, phone, auth.SendCodeOptions{})
+			sendCancel()
 			if err != nil {
 				return fmt.Errorf("send code: %w", err)
 			}
@@ -190,7 +192,9 @@ func (m *AuthSessionManager) StartAuth(ctx context.Context, phone string) (strin
 					return runCtx.Err()
 				}
 
-				result, signInErr := authClient.SignIn(runCtx, phone, code.Code, codeHash)
+				signInCtx, signInCancel := context.WithTimeout(runCtx, 30*time.Second)
+				result, signInErr := authClient.SignIn(signInCtx, phone, code.Code, codeHash)
+				signInCancel()
 				if signInErr == nil {
 					authResultTG = result
 					break
@@ -212,7 +216,9 @@ func (m *AuthSessionManager) StartAuth(ctx context.Context, phone string) (strin
 							return runCtx.Err()
 						}
 
-						pwResult, pwErr := authClient.Password(runCtx, password)
+						pwCtx, pwCancel := context.WithTimeout(runCtx, 30*time.Second)
+						pwResult, pwErr := authClient.Password(pwCtx, password)
+						pwCancel()
 						if pwErr == nil {
 							authResultTG = pwResult
 							break

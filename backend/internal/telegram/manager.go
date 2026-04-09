@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/updates"
+	"github.com/gotd/td/tg"
 	"github.com/rs/zerolog/log"
 )
 
@@ -149,9 +150,15 @@ const (
 func (m *TelegramManager) runWithReconnect(clientCtx context.Context, cancel context.CancelFunc, sessionStorage *DatabaseSessionStorage, stateStorage *PostgresStateStorage) {
 	delay := reconnectBaseDelay
 	for {
+		// No-op handler for Phase 2 — update handlers wired in Phase 3
+		noopHandler := telegram.UpdateHandlerFunc(func(ctx context.Context, u tg.UpdatesClass) error {
+			return nil
+		})
+
 		client := telegram.NewClient(m.apiID, m.apiHash, telegram.Options{
 			SessionStorage: sessionStorage,
 			UpdateHandler: updates.New(updates.Config{
+				Handler:      noopHandler,
 				Storage:      stateStorage,
 				AccessHasher: NewPostgresChannelHasher(m.updateStateRepo),
 			}),
