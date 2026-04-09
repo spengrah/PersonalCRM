@@ -15,7 +15,11 @@ export function useTelegramStatus() {
     retry: false,
     refetchInterval: query => {
       const data = query.state.data
-      return data?.backfill_in_progress ? 3000 : false
+      if (!data) return false
+      // Poll during backfill, or right after connect before backfill status is known
+      if (data.backfill_in_progress) return 3000
+      if (data.connected && !data.last_sync_at) return 3000
+      return false
     },
   })
   return query
