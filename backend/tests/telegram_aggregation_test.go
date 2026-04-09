@@ -270,3 +270,66 @@ func TestAggregation_IncrementalReplyBridge(t *testing.T) {
 	require.Len(t, interactions, 1) // still 1, promoted
 	assert.Equal(t, "mutual", interactions[0].Direction)
 }
+
+func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {
+	messageRepo, interactionRepo, contactRepo, _, engine, database := setupAggregationTest(t)
+	ctx := context.Background()
+
+	contact := createTestContact(t, contactRepo, "Aggregation Explicit Reply Bridge")
+	t.Cleanup(func() {
+		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
+	})
+
+	// Use timestamps >48h apart to prove explicit reply bridges regardless of time
+	outboundTime := accelerated.GetCurrentTime().Add(-72 * time.Hour).Truncate(time.Microsecond)
+	inboundTime := accelerated.GetCurrentTime().Add(-1 * time.Hour).Truncate(time.Microsecond)
+
+	// Step 1: outbound message → aggregate → creates outbound interaction
+	insertTestMessage(t, messageRepo, 80061, 303, true, outboundTime, &contact.ID, 70007)
+	err := engine.AggregateForContact(ctx, contact.ID, 303)
+	require.NoError(t, err)
+
+	interactions, err := interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
+	require.NoError(t, err)
+	require.Len(t, interactions, 1)
+	assert.Equal(t, "outbound", interactions[0].Direction)
+
+	// Step 2: inbound message with reply_to_msg_id pointing to the outbound message
+	replyToID := int32(80061)
+	text := "reply message"
+	_, err = messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 80062,
+		TelegramChatID:    303,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            inboundTime,
+		IsOutgoing:        false,
+		PeerUserID:        ptrInt64(70007),
+		ReplyToMsgID:      &replyToID,
+	})
+	require.NoError(t, err)
+	err = messageRepo.UpdateMessageContact(ctx, 70007, contact.ID)
+	require.NoError(t, err)
+
+	// Need to mark the outbound message as processed with the interaction_id
+	// so tryExplicitReplyBridge can find it
+	outboundMsg, err := messageRepo.GetMessage(ctx, 303, 80061)
+	require.NoError(t, err)
+	err = messageRepo.MarkMessagesProcessed(ctx, []uuid.UUID{outboundMsg.ID}, interactions[0].ID)
+	require.NoError(t, err)
+
+	// Step 3: aggregate incrementally
+	err = engine.AggregateForContact(ctx, contact.ID, 303)
+	require.NoError(t, err)
+
+	// Assert: 1 mutual interaction (bridged via explicit reply despite >48h gap)
+	interactions, err = interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
+	require.NoError(t, err)
+	require.Len(t, interactions, 1)
+	assert.Equal(t, "mutual", interactions[0].Direction)
+
+	// Clean up test-specific data
+	_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE telegram_message_id IN (80061, 80062)")
+	_, _ = database.Pool.Exec(ctx, "DELETE FROM interaction WHERE source_ref LIKE 'tg:303:%'")
+}
