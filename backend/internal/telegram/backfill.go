@@ -75,7 +75,7 @@ func (b *Backfiller) Run(ctx context.Context) error {
 	log.Info().Str("since", b.backfillSince).Msg("telegram: starting backfill")
 
 	// Discover dialogs and collect peers (with access hashes) for backfill
-	dialogs, err := b.discoverDialogs(ctx)
+	dialogs, err := b.discoverDialogs(ctx, sinceUnix)
 	if err != nil {
 		return fmt.Errorf("discover dialogs: %w", err)
 	}
@@ -159,7 +159,7 @@ func (b *Backfiller) BackfillChat(ctx context.Context, chatID int64) error {
 	return b.backfillChatWithPeer(ctx, *cfg, peer, int(sinceTime.Unix()))
 }
 
-func (b *Backfiller) discoverDialogs(ctx context.Context) ([]dialogInfo, error) {
+func (b *Backfiller) discoverDialogs(ctx context.Context, sinceUnix int) ([]dialogInfo, error) {
 	q := query.NewQuery(b.api)
 	iter := q.GetDialogs().BatchSize(backfillBatchSize).Iter()
 
@@ -167,6 +167,11 @@ func (b *Backfiller) discoverDialogs(ctx context.Context) ([]dialogInfo, error) 
 
 	for iter.Next(ctx) {
 		elem := iter.Value()
+
+		// Skip dialogs with no recent activity
+		if elem.Last != nil && elem.Last.GetDate() < sinceUnix {
+			continue
+		}
 
 		switch peer := elem.Peer.(type) {
 		case *tg.InputPeerUser:
