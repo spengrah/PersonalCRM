@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
@@ -47,7 +48,7 @@ func TestTelegramMessage_UpsertAndGet(t *testing.T) {
 	cleanupTelegramMessages(t, database.Queries)
 	t.Cleanup(func() { cleanupTelegramMessages(t, database.Queries) })
 
-	sentAt := time.Now().Truncate(time.Microsecond)
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Hello, world!"
 	username := "testuser"
 	firstName := "Test"
@@ -108,7 +109,7 @@ func TestTelegramMessage_UpsertIdempotent(t *testing.T) {
 	cleanupTelegramMessages(t, database.Queries)
 	t.Cleanup(func() { cleanupTelegramMessages(t, database.Queries) })
 
-	sentAt := time.Now().Truncate(time.Microsecond)
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text1 := "First version"
 
 	msg1, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
@@ -164,7 +165,7 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 	cleanupTelegramMessages(t, database.Queries)
 	t.Cleanup(func() { cleanupTelegramMessages(t, database.Queries) })
 
-	sentAt := time.Now().Truncate(time.Microsecond)
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Original"
 
 	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
@@ -180,7 +181,7 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 
 	// Upsert with edit
 	editedText := "Edited text"
-	editedAt := time.Now().Add(time.Minute).Truncate(time.Microsecond)
+	editedAt := accelerated.GetCurrentTime().Add(time.Minute).Truncate(time.Microsecond)
 	msg, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90003,
 		TelegramChatID:    12345,
@@ -222,7 +223,7 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 	cleanupTelegramMessages(t, database.Queries)
 	t.Cleanup(func() { cleanupTelegramMessages(t, database.Queries) })
 
-	sentAt := time.Now().Truncate(time.Microsecond)
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "To be deleted"
 
 	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
@@ -272,7 +273,7 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 	cleanupTelegramMessages(t, database.Queries)
 	t.Cleanup(func() { cleanupTelegramMessages(t, database.Queries) })
 
-	sentAt := time.Now().Truncate(time.Microsecond)
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Channel message"
 
 	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
@@ -321,7 +322,7 @@ func TestTelegramMessage_ListUnprocessed(t *testing.T) {
 	cleanupTelegramMessages(t, database.Queries)
 	t.Cleanup(func() { cleanupTelegramMessages(t, database.Queries) })
 
-	sentAt := time.Now().Truncate(time.Microsecond)
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Unprocessed msg"
 
 	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{

@@ -293,7 +293,7 @@ func (h *TelegramHandler) UpdateChatStatus(c *gin.Context) {
 	if status == "tracked" && previousStatus != "tracked" {
 		if err := h.manager.TriggerChatBackfill(c.Request.Context(), chatID); err != nil {
 			// Log but don't fail the request
-			c.Error(err)
+			_ = c.Error(err)
 		}
 	}
 
