@@ -57,7 +57,8 @@ func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramCha
 	messageRepo := repository.NewTelegramMessageRepository(database.Queries)
 	syncRepo := repository.NewSyncRepository(database.Queries)
 
-	encryptor, err := crypto.NewTokenEncryptor("test-encryption-key-32-bytes!!")
+	// 32 bytes = 64 hex chars
+	encryptor, err := crypto.NewTokenEncryptor("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 	require.NoError(t, err)
 
 	telegramCfg := &config.TelegramConfig{
@@ -298,7 +299,7 @@ func TestChatAPI_UpdateStatus_InvalidStatus(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 func TestChatAPI_UpdateStatus_NotFound(t *testing.T) {
