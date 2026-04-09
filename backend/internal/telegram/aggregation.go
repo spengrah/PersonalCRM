@@ -214,24 +214,41 @@ func (e *AggregationEngine) AggregateForContact(ctx context.Context, contactID u
 		}
 
 		// Check same-direction coalescing (burst window)
-		coalesceDir := sess.direction
-		if coalesceDir == repository.InteractionDirectionMutual {
-			coalesceDir = repository.InteractionDirectionOutbound
-		}
-		windowStart := sess.messages[0].SentAt.Add(-time.Duration(e.burstWindowHours) * time.Hour)
-		existing, err := e.interactionRepo.FindRecentTelegramInteraction(
-			ctx, contactID, coalesceDir, sourceRefPrefix, windowStart, now,
-		)
-		if err == nil {
-			// Extend existing interaction
-			desc := sess.description()
-			if err := e.extender.ExtendInteraction(ctx, existing.ID, contactID, sess.direction, sess.lastSentAt(), &desc); err != nil {
-				log.Warn().Err(err).Msg("telegram: failed to extend interaction")
-			} else {
-				if err := e.messageRepo.MarkMessagesProcessed(ctx, sess.messageIDs(), existing.ID); err != nil {
-					log.Warn().Err(err).Msg("telegram: failed to mark messages processed after extension")
+		// For mutual sessions: check if there's an outbound interaction to promote
+		// rather than extend, since ExtendInteraction doesn't update direction.
+		if sess.direction == repository.InteractionDirectionMutual {
+			windowStart := sess.messages[0].SentAt.Add(-time.Duration(e.burstWindowHours) * time.Hour)
+			existing, err := e.interactionRepo.FindRecentTelegramInteraction(
+				ctx, contactID, repository.InteractionDirectionOutbound, sourceRefPrefix, windowStart, now,
+			)
+			if err == nil {
+				// Promote outbound → mutual (updates direction + contact fields)
+				if err := e.promoter.PromoteInteractionToMutual(ctx, existing.ID, contactID, sess.lastSentAt()); err != nil {
+					log.Warn().Err(err).Msg("telegram: failed to promote interaction to mutual during coalescing")
+				} else {
+					if err := e.messageRepo.MarkMessagesProcessed(ctx, sess.messageIDs(), existing.ID); err != nil {
+						log.Warn().Err(err).Msg("telegram: failed to mark messages processed after promotion")
+					}
+					continue
 				}
-				continue
+			}
+			// No outbound to promote — fall through to create new mutual interaction
+		} else {
+			// Same-direction coalescing: extend the existing interaction
+			windowStart := sess.messages[0].SentAt.Add(-time.Duration(e.burstWindowHours) * time.Hour)
+			existing, err := e.interactionRepo.FindRecentTelegramInteraction(
+				ctx, contactID, sess.direction, sourceRefPrefix, windowStart, now,
+			)
+			if err == nil {
+				desc := sess.description()
+				if err := e.extender.ExtendInteraction(ctx, existing.ID, contactID, sess.direction, sess.lastSentAt(), &desc); err != nil {
+					log.Warn().Err(err).Msg("telegram: failed to extend interaction")
+				} else {
+					if err := e.messageRepo.MarkMessagesProcessed(ctx, sess.messageIDs(), existing.ID); err != nil {
+						log.Warn().Err(err).Msg("telegram: failed to mark messages processed after extension")
+					}
+					continue
+				}
 			}
 		}
 

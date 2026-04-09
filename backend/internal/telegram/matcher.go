@@ -69,8 +69,10 @@ func (m *PeerMatcher) MatchPeer(ctx context.Context, peerUserID int64, peerUsern
 			log.Warn().Err(err).Str("username", *peerUsername).Msg("telegram: failed to match username")
 		} else if result.ContactID != nil {
 			// Matched via username
-			if err := m.messageRepo.UpdateMessageContact(ctx, peerUserID, *result.ContactID); err != nil {
-				log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: failed to update message contacts")
+			if m.messageRepo != nil {
+				if err := m.messageRepo.UpdateMessageContact(ctx, peerUserID, *result.ContactID); err != nil {
+					log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: failed to update message contacts")
+				}
 			}
 			m.markExternalContactMatched(ctx, peerUserID, *result.ContactID)
 			log.Info().
@@ -95,8 +97,10 @@ func (m *PeerMatcher) MatchPeer(ctx context.Context, peerUserID int64, peerUsern
 			log.Warn().Err(err).Str("phone", *peerPhone).Msg("telegram: failed to match phone")
 		} else if result.ContactID != nil {
 			// Matched via phone — also link the telegram identity
-			if err := m.messageRepo.UpdateMessageContact(ctx, peerUserID, *result.ContactID); err != nil {
-				log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: failed to update message contacts")
+			if m.messageRepo != nil {
+				if err := m.messageRepo.UpdateMessageContact(ctx, peerUserID, *result.ContactID); err != nil {
+					log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: failed to update message contacts")
+				}
 			}
 			m.markExternalContactMatched(ctx, peerUserID, *result.ContactID)
 
