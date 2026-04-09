@@ -298,9 +298,11 @@ test.describe('Telegram Settings @area:settings', () => {
       })
     )
 
-    // Mock disconnect
-    await page.route('**/api/v1/telegram/auth', route => {
-      if (route.request().method() === 'DELETE') {
+    // Mock disconnect — match DELETE to the exact auth path
+    await page.route('**/api/v1/telegram/auth', async route => {
+      // Only intercept DELETE on the exact path (not /auth/status, /auth/start, etc.)
+      const url = new URL(route.request().url())
+      if (route.request().method() === 'DELETE' && url.pathname.endsWith('/telegram/auth')) {
         disconnected = true
         return route.fulfill({
           status: 200,

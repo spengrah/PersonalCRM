@@ -510,3 +510,51 @@ detail: |
   Import candidates test failed with 'No import candidates' despite seeding data. Attributed to shared DB state where other tests consume the seeded data. Tests that depend on specific seeded data being present can fail intermittently when run in parallel or in different orders. The test passed on retry, indicating timing/state dependency rather than a code bug.
 actionable: false
 
+---
+timestamp: "2026-04-08T19:45:43.979226"
+type: gotcha
+summary: E2E async state checks fail in CI with instant isVisible() checks
+detail: |
+  In E2E tests, `await expect(locator).toBeVisible()` with instant checks like `locator.or(locator)` works locally but can fail in CI where API calls take longer. The component may still be in loading state when the assertion runs. Solution: Use polling assertions with explicit timeout: `await expect(locator.or(locator)).toBeVisible({ timeout: 5000 })`. The `.or()` pattern ensures Playwright polls until one of the states becomes visible rather than checking instantly.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:45:43.979226"
+type: rule
+summary: Never silently discard errors in critical callbacks
+detail: |
+  Silent error discards (`_ = callback()`) in async operations can hide critical failures. Example: `onComplete` callback creating sync state and starting connections - if it fails silently, user receives 'connected' status but backend connection never starts. **Why:** Callbacks often perform critical setup that must succeed for the system to work. **How to apply:** At minimum, log callback errors even when you can't return them (e.g., in goroutines or fire-and-forget operations). Use `log.Warn().Err(err).Msg("context about what failed")` for non-fatal but important failures.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:45:43.979226"
+type: architecture
+summary: Soft-delete tables need partial index on deleted_at IS NULL
+detail: |
+  Any table with soft-delete (deleted_at column) needs a partial index `CREATE INDEX idx_tablename_not_deleted ON tablename(id) WHERE deleted_at IS NULL` for query performance. All queries filter `deleted_at IS NULL` (enforced in sqlc), and without this index, queries do full table scans. Add the index in the same migration that creates the table with soft-delete support.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:45:43.979226"
+type: distinction
+summary: Static vs dynamic imports for API modules in React
+detail: |
+  Use static imports for API modules that are already loaded elsewhere in the component. Dynamic imports (`const { api } = await import('@/lib/api')`) only make sense for code-splitting when the import is truly conditional and not used in the main render path. If hooks in the same component already import the module statically, adding a dynamic import in a handler provides no bundle-splitting benefit and adds complexity. **When to use dynamic:** Large modules used in rare edge cases (e.g., export functionality). **When to use static:** API clients, utilities already imported by the component's dependencies.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:45:43.979226"
+type: gotcha
+summary: Type guards for unexported error classes require duck typing
+detail: |
+  When API error classes aren't exported (e.g., internal `ApiError` in api-client.ts), you can't use `instanceof ApiError`. Use duck typing with property checks instead: `statusError instanceof Error && 'status' in statusError ? statusError.status : undefined`. This is safer than type assertions `(statusError as { status?: number })?.status` which skip runtime validation. The `instanceof Error` check ensures you're dealing with an Error object before accessing properties.
+actionable: true
+
+---
+timestamp: "2026-04-08T19:45:43.979226"
+type: documentation_gap
+summary: Soft-delete guidance missing index requirement
+detail: |
+  **Existing guidance:** `.ai/rules/core.md` states 'All queries must filter `WHERE deleted_at IS NULL`' and mentions sqlc enforcement. **What was missed:** No mention that soft-delete tables need a partial index for performance. Agent added index only after CI review flagged it. **Why missed:** The rule focuses on query syntax, not database performance implications. **How to strengthen:** Add to core.md soft-deletes section: 'Tables with deleted_at must include partial index `CREATE INDEX idx_table_not_deleted ON table(id) WHERE deleted_at IS NULL` in the same migration that adds soft-delete support.' Also add to 'When You Change X, Check Y' table: 'New soft-delete table → Add partial index on deleted_at IS NULL'.
+actionable: true
+
