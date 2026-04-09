@@ -5,6 +5,7 @@ import type {
   TelegramAuthStartRequest,
   TelegramAuthVerifyCodeRequest,
   TelegramAuthVerifyPasswordRequest,
+  UpdateChatStatusRequest,
 } from '@/lib/telegram-api'
 
 export function useTelegramStatus() {
@@ -50,6 +51,30 @@ export function useDisconnectTelegram() {
   return useMutation({
     mutationFn: () => telegramApi.disconnect(),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: telegramKeys.status() })
+    },
+  })
+}
+
+export function useTelegramChats() {
+  return useQuery({
+    queryKey: telegramKeys.chats(),
+    queryFn: telegramApi.listChats,
+  })
+}
+
+export function useUpdateTelegramChatStatus() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      chatId,
+      status,
+    }: {
+      chatId: number
+      status: UpdateChatStatusRequest['status']
+    }) => telegramApi.updateChatStatus(chatId, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: telegramKeys.chats() })
       queryClient.invalidateQueries({ queryKey: telegramKeys.status() })
     },
   })
