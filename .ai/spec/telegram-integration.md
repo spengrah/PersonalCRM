@@ -712,10 +712,11 @@ func (e *AggregationEngine) AggregateForContact(ctx context.Context, contactID u
 
 Telegram peers are matched to CRM contacts in priority order:
 
-1. **Primary: Telegram username** — Match `peer_username` against `external_identity(identifier_type='telegram')`. Also check `contact_method(type='telegram')`.
-2. **Secondary: Phone number** — Match `peer_phone` (if available; Telegram only shares phone for mutual contacts) against `external_identity(identifier_type='phone')`.
-3. **Tertiary: Fuzzy name** — Match `peer_first_name + peer_last_name` against contact names using existing fuzzy matching infrastructure.
-4. **Unmatched** — Upsert `external_contact(source='telegram', source_id=peer_user_id)` for discovery. Also create `external_identity(identifier_type='telegram', source='telegram', contact_id=NULL)` for future matching.
+1. **Primary: Telegram username** — Match `peer_username` against `external_identity(identifier_type='telegram')`. Also check `contact_method(type='telegram')`. Uses `IdentityService.MatchOrCreate` in discovery mode.
+2. **Secondary: Phone number** — Match `peer_phone` (if available; Telegram only shares phone for mutual contacts) against `external_identity(identifier_type='phone')`. Uses `IdentityService.MatchOrCreate`.
+3. **Unmatched** — Upsert `external_contact(source='telegram', source_id=peer_user_id)` for discovery. Also create `external_identity(identifier_type='telegram', source='telegram', contact_id=NULL)` for future matching.
+
+**No fuzzy name matching (v1):** Fuzzy auto-matching by peer name is deferred. The risk of false positives from common first names (e.g., "John", "Alex") outweighs the benefit. Unmatched peers flow to the import candidates page, where the existing fuzzy suggested-match UI helps users make informed manual matches. This follows the same approach used by Google Contacts and iCloud import channels.
 
 ### 5.7 Discovery via external_contact
 

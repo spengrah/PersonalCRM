@@ -69,6 +69,10 @@ type TelegramManager struct {
 	backfillInProgress bool
 	backfillTotal      int
 	backfillCompleted  int
+
+	// Phase 4: identity matching + aggregation
+	peerMatcher       *PeerMatcher
+	aggregationEngine *AggregationEngine
 }
 
 // NewTelegramManager creates the manager and its embedded AuthSessionManager.
@@ -82,17 +86,32 @@ func NewTelegramManager(
 	apiID int,
 	apiHash string,
 	cfg *config.TelegramConfig,
+	identityService identityMatcher,
+	externalContactRepo externalContactUpserter,
+	interactionRepo *repository.InteractionRepository,
+	recorder interactionRecorder,
+	promoter interactionPromoter,
+	extender interactionExtender,
 ) *TelegramManager {
+	peerMatcher := NewPeerMatcher(identityService, messageRepo, externalContactRepo, cfg.DiscoveryMinMessages)
+	aggregationEngine := NewAggregationEngine(
+		cfg.BurstWindowHours, cfg.ReplyBridgeHours,
+		messageRepo, interactionRepo,
+		recorder, promoter, extender,
+	)
+
 	m := &TelegramManager{
-		sessionRepo:     sessionRepo,
-		updateStateRepo: updateStateRepo,
-		chatConfigRepo:  chatConfigRepo,
-		messageRepo:     messageRepo,
-		syncRepo:        syncRepo,
-		encryptor:       encryptor,
-		apiID:           apiID,
-		apiHash:         apiHash,
-		cfg:             cfg,
+		sessionRepo:       sessionRepo,
+		updateStateRepo:   updateStateRepo,
+		chatConfigRepo:    chatConfigRepo,
+		messageRepo:       messageRepo,
+		syncRepo:          syncRepo,
+		encryptor:         encryptor,
+		apiID:             apiID,
+		apiHash:           apiHash,
+		cfg:               cfg,
+		peerMatcher:       peerMatcher,
+		aggregationEngine: aggregationEngine,
 	}
 
 	m.authManager = NewAuthSessionManager(
@@ -181,6 +200,8 @@ func (m *TelegramManager) runWithReconnect(clientCtx context.Context, cancel con
 		m.syncStateID,
 		selfUserID,
 		m.cfg.GroupMaxMembers,
+		m.peerMatcher,
+		m.aggregationEngine,
 	)
 
 	// Create dispatcher with real handlers
@@ -547,10 +568,35 @@ func (m *TelegramManager) maybeStartBackfill(ctx context.Context, client *telegr
 		if err := backfiller.Run(ctx); err != nil {
 			log.Warn().Err(err).Msg("telegram: backfill failed")
 		}
+
+		// Phase 4: batch identity matching + aggregation after backfill
+		if err := m.peerMatcher.MatchAllUnmatched(ctx); err != nil {
+			log.Warn().Err(err).Msg("telegram: batch identity matching failed")
+		}
+		if err := m.aggregationEngine.AggregateAll(ctx); err != nil {
+			log.Warn().Err(err).Msg("telegram: batch aggregation failed")
+		}
+		if err := m.peerMatcher.UpdateDiscoveryCandidates(ctx); err != nil {
+			log.Warn().Err(err).Msg("telegram: discovery candidate update failed")
+		}
+
 		m.backfillMu.Lock()
 		m.backfillInProgress = false
 		m.backfillMu.Unlock()
 	}()
+}
+
+// OnPeerLinked satisfies handlers.PostImportHook. Called after a Telegram candidate
+// is imported/linked to back-fill message matching and trigger aggregation.
+func (m *TelegramManager) OnPeerLinked(ctx context.Context, peerUserID int64, peerUsername string, contactID uuid.UUID) error {
+	if err := m.peerMatcher.OnPeerLinked(ctx, peerUserID, peerUsername, contactID); err != nil {
+		return err
+	}
+	// Aggregate only the newly-matched contact (not all contacts)
+	if err := m.aggregationEngine.AggregateForContactBatch(ctx, contactID); err != nil {
+		log.Warn().Err(err).Msg("telegram: post-import aggregation failed")
+	}
+	return nil
 }
 
 // updateSyncStatus updates the external_sync_state row for Telegram.

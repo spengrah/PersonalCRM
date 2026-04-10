@@ -250,6 +250,11 @@ func main() {
 		telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
 		telegramSyncRepo := repository.NewSyncRepository(database.Queries)
 
+		// Phase 4: identity + aggregation dependencies
+		tgIdentityRepo := repository.NewIdentityRepository(database.Queries)
+		tgIdentityService := service.NewIdentityService(tgIdentityRepo)
+		tgExternalContactRepo := repository.NewExternalContactRepository(database.Queries)
+
 		encryptor, err := crypto.NewTokenEncryptor(cfg.External.TokenEncryptionKey)
 		if err != nil {
 			logger.Fatal().Err(err).Msg("failed to initialize Telegram encryptor (TOKEN_ENCRYPTION_KEY required)")
@@ -265,6 +270,12 @@ func main() {
 			cfg.External.TelegramAPIID,
 			cfg.External.TelegramAPIHash,
 			&cfg.Telegram,
+			tgIdentityService,
+			tgExternalContactRepo,
+			interactionRepo,
+			contactService,
+			contactService,
+			contactService,
 		)
 
 		if err := telegramManager.Start(ctx); err != nil {
@@ -274,6 +285,11 @@ func main() {
 
 		telegramHandler = handlers.NewTelegramHandler(telegramManager)
 		logger.Info().Msg("Telegram integration initialized")
+	}
+
+	// Wire Telegram post-import hook (if both Telegram and imports are enabled)
+	if telegramManager != nil && importHandler != nil {
+		importHandler.SetPostImportHook(telegramManager)
 	}
 
 	// Initialize handlers

@@ -132,6 +132,96 @@ func (q *Queries) FindInteractionInWindow(ctx context.Context, arg FindInteracti
 	return &i, err
 }
 
+const FindRecentOutboundTelegramInteraction = `-- name: FindRecentOutboundTelegramInteraction :one
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction FROM interaction
+WHERE contact_id = $1
+  AND source = 'telegram'
+  AND direction = 'outbound'
+  AND source_ref LIKE $2
+  AND occurred_at >= $3
+  AND occurred_at <= $4
+  AND deleted_at IS NULL
+ORDER BY occurred_at DESC
+LIMIT 1
+`
+
+type FindRecentOutboundTelegramInteractionParams struct {
+	ContactID       pgtype.UUID        `json:"contact_id"`
+	SourceRefPrefix pgtype.Text        `json:"source_ref_prefix"`
+	WindowStart     pgtype.Timestamptz `json:"window_start"`
+	WindowEnd       pgtype.Timestamptz `json:"window_end"`
+}
+
+// Find the most recent outbound telegram interaction for a contact in a specific chat
+// within a time window. source_ref_prefix should include trailing % for LIKE match.
+func (q *Queries) FindRecentOutboundTelegramInteraction(ctx context.Context, arg FindRecentOutboundTelegramInteractionParams) (*Interaction, error) {
+	row := q.db.QueryRow(ctx, FindRecentOutboundTelegramInteraction,
+		arg.ContactID,
+		arg.SourceRefPrefix,
+		arg.WindowStart,
+		arg.WindowEnd,
+	)
+	var i Interaction
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Source,
+		&i.SourceRef,
+		&i.OccurredAt,
+		&i.Description,
+		&i.CreatedAt,
+		&i.DeletedAt,
+		&i.Direction,
+	)
+	return &i, err
+}
+
+const FindRecentTelegramInteraction = `-- name: FindRecentTelegramInteraction :one
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction FROM interaction
+WHERE contact_id = $1
+  AND source = 'telegram'
+  AND direction = $2
+  AND source_ref LIKE $3
+  AND occurred_at >= $4
+  AND occurred_at <= $5
+  AND deleted_at IS NULL
+ORDER BY occurred_at DESC
+LIMIT 1
+`
+
+type FindRecentTelegramInteractionParams struct {
+	ContactID       pgtype.UUID        `json:"contact_id"`
+	Direction       string             `json:"direction"`
+	SourceRefPrefix pgtype.Text        `json:"source_ref_prefix"`
+	WindowStart     pgtype.Timestamptz `json:"window_start"`
+	WindowEnd       pgtype.Timestamptz `json:"window_end"`
+}
+
+// Find the most recent telegram interaction for a contact in a specific chat
+// with a given direction. Used for incremental coalescing.
+func (q *Queries) FindRecentTelegramInteraction(ctx context.Context, arg FindRecentTelegramInteractionParams) (*Interaction, error) {
+	row := q.db.QueryRow(ctx, FindRecentTelegramInteraction,
+		arg.ContactID,
+		arg.Direction,
+		arg.SourceRefPrefix,
+		arg.WindowStart,
+		arg.WindowEnd,
+	)
+	var i Interaction
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Source,
+		&i.SourceRef,
+		&i.OccurredAt,
+		&i.Description,
+		&i.CreatedAt,
+		&i.DeletedAt,
+		&i.Direction,
+	)
+	return &i, err
+}
+
 const GetInteraction = `-- name: GetInteraction :one
 
 SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction FROM interaction WHERE id = $1 AND deleted_at IS NULL
@@ -226,6 +316,39 @@ type UpdateInteractionDirectionParams struct {
 // Promote an outbound interaction to mutual when a reply arrives (in-place update)
 func (q *Queries) UpdateInteractionDirection(ctx context.Context, arg UpdateInteractionDirectionParams) (*Interaction, error) {
 	row := q.db.QueryRow(ctx, UpdateInteractionDirection, arg.Direction, arg.OccurredAt, arg.ID)
+	var i Interaction
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Source,
+		&i.SourceRef,
+		&i.OccurredAt,
+		&i.Description,
+		&i.CreatedAt,
+		&i.DeletedAt,
+		&i.Direction,
+	)
+	return &i, err
+}
+
+const UpdateInteractionTimestamp = `-- name: UpdateInteractionTimestamp :one
+UPDATE interaction
+SET occurred_at = $1,
+    description = $2
+WHERE id = $3
+  AND deleted_at IS NULL
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction
+`
+
+type UpdateInteractionTimestampParams struct {
+	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
+	Description pgtype.Text        `json:"description"`
+	ID          pgtype.UUID        `json:"id"`
+}
+
+// Extend an existing interaction's occurred_at and description (incremental coalescing)
+func (q *Queries) UpdateInteractionTimestamp(ctx context.Context, arg UpdateInteractionTimestampParams) (*Interaction, error) {
+	row := q.db.QueryRow(ctx, UpdateInteractionTimestamp, arg.OccurredAt, arg.Description, arg.ID)
 	var i Interaction
 	err := row.Scan(
 		&i.ID,

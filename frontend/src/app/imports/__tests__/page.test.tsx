@@ -453,6 +453,7 @@ describe('ImportsPage - Source Filter', () => {
     expect(screen.getByRole('button', { name: 'All Sources' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Google Contacts' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Telegram' })).toBeInTheDocument()
   })
 
   it('All Sources filter is selected by default', () => {
@@ -491,6 +492,19 @@ describe('ImportsPage - Source Filter', () => {
     // useImportCandidates should be called with source filter
     expect(useImportCandidates).toHaveBeenCalledWith(
       expect.objectContaining({ source: 'gcal_attendee' })
+    )
+  })
+
+  it('clicking Telegram filter updates selection', async () => {
+    const user = userEvent.setup()
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    const telegramButton = screen.getByRole('button', { name: 'Telegram' })
+    await user.click(telegramButton)
+
+    // useImportCandidates should be called with source filter
+    expect(useImportCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'telegram' })
     )
   })
 

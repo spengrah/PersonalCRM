@@ -50,3 +50,76 @@ SELECT telegram_chat_id, COUNT(*) as message_count
 FROM telegram_message
 WHERE deleted_at IS NULL
 GROUP BY telegram_chat_id;
+
+-- name: ListUnprocessedTelegramMessagesByContactAndChat :many
+SELECT * FROM telegram_message
+WHERE matched_contact_id = @matched_contact_id
+  AND telegram_chat_id = @telegram_chat_id
+  AND processed_at IS NULL
+  AND deleted_at IS NULL
+ORDER BY sent_at;
+
+-- name: ListUnprocessedTelegramMessagesByContact :many
+SELECT * FROM telegram_message
+WHERE matched_contact_id = @matched_contact_id
+  AND processed_at IS NULL
+  AND deleted_at IS NULL
+ORDER BY telegram_chat_id, sent_at;
+
+-- name: ListDistinctUnmatchedPeers :many
+-- Prefer rows with username/phone for identity matching
+SELECT DISTINCT ON (peer_user_id)
+    peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone
+FROM telegram_message
+WHERE matched_contact_id IS NULL
+  AND peer_user_id IS NOT NULL
+  AND deleted_at IS NULL
+ORDER BY peer_user_id,
+    CASE WHEN peer_username IS NOT NULL THEN 0 ELSE 1 END,
+    CASE WHEN peer_phone IS NOT NULL THEN 0 ELSE 1 END,
+    sent_at DESC;
+
+-- name: UpdateTelegramMessageContact :exec
+UPDATE telegram_message
+SET matched_contact_id = @matched_contact_id
+WHERE peer_user_id = @peer_user_id
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL;
+
+-- name: MarkTelegramMessagesProcessed :exec
+UPDATE telegram_message
+SET processed_at = NOW(),
+    interaction_id = @interaction_id
+WHERE id = ANY(@message_ids::uuid[])
+  AND deleted_at IS NULL;
+
+-- name: ListUnprocessedContactIDs :many
+SELECT DISTINCT matched_contact_id
+FROM telegram_message
+WHERE matched_contact_id IS NOT NULL
+  AND processed_at IS NULL
+  AND deleted_at IS NULL;
+
+-- name: CountTelegramMessagesByPeer :many
+SELECT peer_user_id,
+       COUNT(*) as total_count,
+       COUNT(*) FILTER (WHERE is_outgoing) as outbound_count,
+       COUNT(*) FILTER (WHERE NOT is_outgoing) as inbound_count,
+       MAX(sent_at) as last_message_at
+FROM telegram_message
+WHERE peer_user_id IS NOT NULL
+  AND deleted_at IS NULL
+GROUP BY peer_user_id;
+
+-- name: CountTelegramMessagesByPeerID :one
+-- Count messages for a single peer (for incremental discovery threshold check)
+SELECT COUNT(*) as total_count,
+       COUNT(*) FILTER (WHERE is_outgoing) as outbound_count,
+       COUNT(*) FILTER (WHERE NOT is_outgoing) as inbound_count,
+       MAX(sent_at) as last_message_at
+FROM telegram_message
+WHERE peer_user_id = @peer_user_id
+  AND deleted_at IS NULL;
+
+-- GetTelegramMessageByReplyTo removed: identical to GetTelegramMessage.
+-- Use GetMessage repo method for reply resolution.
