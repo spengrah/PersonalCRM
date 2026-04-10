@@ -29,6 +29,7 @@ const SOURCE_FILTERS = [
   { value: '', label: 'All Sources' },
   { value: 'gcontacts', label: 'Google Contacts' },
   { value: 'gcal_attendee', label: 'Calendar' },
+  { value: 'telegram', label: 'Telegram' },
 ] as const
 
 // Trusted domains for photo URLs (Google profile photos)

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { getSourceDisplay } from '../source-display'
-import { Users, Calendar, HelpCircle } from 'lucide-react'
+import { Users, Calendar, Send, HelpCircle } from 'lucide-react'
 
 describe('getSourceDisplay', () => {
   it('returns friendly name and icon for gcontacts', () => {
@@ -13,6 +13,12 @@ describe('getSourceDisplay', () => {
     const result = getSourceDisplay('gcal_attendee')
     expect(result.label).toBe('Google Calendar')
     expect(result.icon).toBe(Calendar)
+  })
+
+  it('returns friendly name and icon for telegram', () => {
+    const result = getSourceDisplay('telegram')
+    expect(result.label).toBe('Telegram')
+    expect(result.icon).toBe(Send)
   })
 
   it('returns raw source name for unknown sources', () => {
