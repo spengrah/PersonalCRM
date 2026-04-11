@@ -694,3 +694,51 @@ detail: |
   Initial plan proposed same-package unit tests in `backend/internal/todoist/provider_dismissal_test.go`. Codex review flagged this: provider tests should be DB-backed integration tests in `backend/tests/` (mirroring existing `followup_service_test.go` pattern). The `.ai/rules/testing.md` states "integration tests for DB operations" but doesn't explicitly call out where sync provider tests belong. Strengthen: add example to testing.md or architecture.md showing sync provider tests live in `backend/tests/` with full DB setup, not in `internal/todoist/`.
 actionable: true
 
+---
+timestamp: "2026-04-11T16:49:18.516258"
+type: architecture
+summary: Todoist sync cursor is opaque — abort-on-error and replay the batch is the only coherent error-recovery pattern
+detail: |
+  The Todoist Sync API returns an opaque sync_token cursor with incremental diffs. There is no way to partially commit a response batch. On any fatal error during batch processing, the sync MUST abort without advancing the cursor so the entire batch is redelivered on the next tick. This is analogous to Kafka consumer semantics. Attempting to 'skip bad items and continue' silently drops events permanently because incremental sync won't redeliver unchanged items. Why: This constraint shapes the entire error-handling strategy in CadenceSyncProvider.Sync and all processItem handlers. How to apply: When adding new Todoist sync handlers or modifying error paths, always propagate fatal errors to abort the sync. Never log-and-continue for state-changing operations unless explicitly justified (see conditional abort pattern).
+actionable: true
+
+---
+timestamp: "2026-04-11T16:49:18.516258"
+type: gotcha
+summary: Some Todoist handlers are NOT replay-safe — requires conditional abort-on-error logic
+detail: |
+  handleSkipTrigger commits non-state-changing side effects (advances contact_by, appends item_add command) while leaving the task state='managed'. If the sync aborts and replays, these side effects double. This means processItem cannot unconditionally abort on all errors — it must track whether a non-replay-safe operation succeeded earlier in the batch via a replayCommittedUnsafe flag. If set, subsequent fatal errors MUST log-and-continue (not abort) to prevent double-execution. Why: Replay idempotency is critical for correctness. A blanket abort-on-error strategy breaks for handlers that commit side effects without state transitions. How to apply: When adding new Todoist handlers, analyze whether they are replay-safe. If a handler commits any non-transactional side effect (updating contact fields, appending commands) without changing task state, it must set Unsafe=true in processItemResult.
+actionable: true
+
+---
+timestamp: "2026-04-11T16:49:18.516258"
+type: gotcha
+summary: Incremental sync semantics mean DB failures can permanently strand rows — not auto-retried
+detail: |
+  Todoist incremental sync only delivers items that changed since the last cursor. If a DB error occurs mid-processing (e.g., UpdateContactTaskState fails during dismissal) and the code log-and-continues, the cursor advances and the failed item is never redelivered unless it changes again externally. For deleted items (IsDeleted=true), the item is gone forever — no second chance. This violates the 'will retry on next sync' assumption that might be intuitive from polling systems. Why: This was a subtle bug in handleFollowUpDismissal's original implementation that Codex caught. The comment claimed retry-on-next-sync but incremental semantics made that false. How to apply: For state-changing operations in Todoist handlers, DB failures should propagate as fatal errors to abort the sync (unless replayCommittedUnsafe=true). Never assume incremental sync will redeliver on the next tick.
+actionable: true
+
+---
+timestamp: "2026-04-11T16:49:18.516258"
+type: distinction
+summary: Classify Todoist handler DB errors as fatal vs best-effort based on reconcile-loop recoverability
+detail: |
+  Not all DB failures in Todoist sync handlers should abort the sync. Operations that are reconciled on every tick (UpdateContactBy for deadline changes, UpdateContactTaskMetadata for synced_deadline) can be best-effort: log-and-continue on error because the next sync will fix them. Only state transitions and operations that won't self-heal via reconciliation should be fatal. Example fatal: UpdateContactTaskState (state won't change until item changes), GetContact non-NotFound (can't process without contact). Example best-effort: UpdateContactBy (reconcile loop compares item.Deadline to contact.ContactBy every tick). Why: This distinction prevents wedging the sync on transient errors for non-critical fields while still failing fast for correctness-critical state changes. How to apply: When adding DB operations in Todoist handlers, ask: 'Will the reconcile loop fix this if it fails?' If yes, log-and-continue. If no, propagate as fatal error.
+actionable: true
+
+---
+timestamp: "2026-04-11T16:49:18.516258"
+type: architecture
+summary: Plan-and-review loop can be used mid-implementation when Codex identifies architectural issues
+detail: |
+  During local Codex review of the #264 dismissal feature, Codex flagged a correctness gap: handleFollowUpDismissal returns (false, nil) on DB failure but the sync advances the cursor unconditionally, permanently dropping failed dismissals. This required expanding scope into error-propagation plumbing across processItem and all handlers — well beyond the original 'add follow-up dismissal' plan. Instead of either (A) cargo-culting the existing flawed pattern or (C) expanding scope without permission, the correct move was to escalate to the user, get approval to expand scope, then re-enter plan-and-review to design the refactor. The plan-and-review skill successfully caught three non-obvious issues (handleSkipTrigger replay non-idempotency, handleTaskCompletion guardrail test fixture mismatch, stale tuple language) across 4 Codex rounds before approving. Why: Plan-and-review isn't just for greenfield features — it's valuable for mid-implementation scope expansions when Codex surfaces architectural issues. How to apply: If Codex review identifies a correctness gap that requires touching pre-existing code paths, escalate to the user and use plan-and-review to design the fix before implementing.
+actionable: true
+
+---
+timestamp: "2026-04-11T16:49:18.516258"
+type: rule
+summary: Use pgxpool.Close() for integration test error injection, not mocks
+detail: |
+  To test fatal error propagation in Todoist handlers (e.g., 'does handleFollowUpDismissal return an error when UpdateContactTaskState fails?'), close the underlying pgxpool connection with env.database.Close() after setting up the test fixture. Subsequent DB operations return connection-closed errors. This is superior to mocking because: (1) tests actual error paths with real pgx error types, (2) no need to build elaborate fakes, (3) works for same-package tests where mocking internal dependencies is awkward. The test file added a closeDB(t, env) helper that calls env.database.Close() and tracks closure state to prevent double-close. Why: This technique wasn't obvious from existing test patterns and required experimentation. It's now the established pattern for error-injection tests in provider_dismissal_test.go. How to apply: When adding integration tests for DB error handling in Todoist handlers, use closeDB(t, env) to force failures after fixture setup.
+actionable: true
+
