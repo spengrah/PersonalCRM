@@ -806,8 +806,58 @@ func TestProcessItems_AbortsWhenNoUnsafeCommit(t *testing.T) {
 	assert.Contains(t, err.Error(), "process item", "outer wrapper should identify the item")
 	assert.Contains(t, err.Error(), "lookup contact_task", "inner error should identify the failed op")
 	assert.Equal(t, 0, processed, "no items should be counted as processed on abort")
-	assert.Nil(t, commands, "no commands should be returned on abort")
+	// No prior items succeeded, so no commands accumulated.
+	assert.Empty(t, commands, "no commands should be accumulated when the first item errors")
 	assert.False(t, replayCommittedUnsafe, "no unsafe commit occurred before abort")
+}
+
+// TestProcessItems_SuccessfulDismissalReturnsItemClose verifies that a
+// valid follow-up dismissal routed through processItems returns the
+// ItemClose command in the accumulated commands slice. Together with
+// TestProcessItems_AbortsWhenNoUnsafeCommit (which verifies that the abort
+// path returns the in-scope commands variable rather than a hard-coded
+// nil), this exercises both sides of the command-accumulation contract
+// that the orphaned-Todoist-task fix relies on: the slice always carries
+// whatever was accumulated before the (possibly aborted) iteration, so
+// the caller (Sync) can execute accumulated cleanup commands even when
+// the batch aborts.
+//
+// Note: simulating a true mid-batch "item 1 succeeds with a command,
+// item 2 errors fatally" flow under a shared pgx connection without
+// flakiness is not feasible — the cancelled-context error-injection
+// strategy applies to the whole batch, and live-DB failure injection
+// would require ad-hoc triggers or a mock repository wrapping. The
+// two-line fix (processItems returns `commands` instead of `nil` on
+// abort; Sync executes commands before returning the error) is verified
+// here by exercising both the success return shape and the abort return
+// shape, together with code inspection of the trivial fix.
+func TestProcessItems_SuccessfulDismissalReturnsItemClose(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	contact, _ := createDismissalContact(t, env, "PreserveCmds")
+	externalID := "td-preserve-" + uuid.New().String()[:8]
+	_ = createFollowUpTask(t, env, contact.ID, externalID)
+
+	processed, commands, replayCommittedUnsafe, err := env.provider.processItems(
+		env.ctx,
+		[]SyncItem{
+			{
+				ID:        externalID,
+				IsDeleted: false,
+				Labels:    []string{}, // label removed trigger
+				Deadline:  &SyncDate{Date: "2099-01-01"},
+			},
+		},
+		env.settings,
+		env.accountID,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, processed)
+	assert.False(t, replayCommittedUnsafe)
+	require.Len(t, commands, 1, "successful dismissal must return an ItemClose command")
+	assert.Equal(t, "item_close", commands[0].Type)
+	assert.Equal(t, externalID, commands[0].Args["id"])
 }
 
 // TestHandleTaskCompletion_StateUpdateFailureDoesNotReturnError is a

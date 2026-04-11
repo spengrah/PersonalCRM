@@ -205,18 +205,16 @@ func (p *CadenceSyncProvider) Sync(
 		}
 	}
 
-	// Process synced items. On a fatal error from processItems, we return
-	// early WITHOUT setting result.NewCursor so the next sync replays the
-	// batch from the pre-batch cursor.
-	processedTasks, commands, _, err := p.processItems(ctx, syncResp.Items, settings, accountID)
-	if err != nil {
-		result.ItemsProcessed = processedTasks
-		return result, err
-	}
-
+	// Process synced items.
+	processedTasks, commands, _, processErr := p.processItems(ctx, syncResp.Items, settings, accountID)
 	result.ItemsProcessed = processedTasks
 
-	// If we have commands to execute, send them
+	// Execute any accumulated commands BEFORE checking processErr. If
+	// processItems aborted mid-batch, the commands accumulated up to that
+	// point are all cleanup commands (ItemClose / ItemDelete) for already-
+	// persisted local state transitions — executing them prevents orphaning
+	// Todoist tasks whose local rows are already in terminal states. See the
+	// comment in processItems's abort path for why this is safe.
 	if len(commands) > 0 {
 		for _, batch := range BatchCommands(commands, 100) {
 			cmdResp, err := client.Sync(ctx, syncResp.SyncToken, []string{}, batch)
@@ -226,6 +224,13 @@ func (p *CadenceSyncProvider) Sync(
 				p.processTempIDMappings(ctx, cmdResp.TempIDMap)
 			}
 		}
+	}
+
+	// On a fatal error from processItems, return WITHOUT setting
+	// result.NewCursor so the next sync replays the batch from the pre-batch
+	// cursor.
+	if processErr != nil {
+		return result, processErr
 	}
 
 	// Store new sync token
@@ -328,7 +333,22 @@ func (p *CadenceSyncProvider) processItems(
 			if shouldContinue {
 				continue
 			}
-			return processed, nil, false, wrappedErr
+			// On abort, return the commands accumulated from earlier items
+			// (not nil). These are all cleanup commands — ItemClose from
+			// successful handleFollowUpDismissal and ItemDelete from the
+			// contact-not-found branch in processItem — for local state
+			// transitions that have already been persisted. The caller
+			// (Sync) executes them before returning the error so we don't
+			// orphan Todoist tasks whose local rows are already in terminal
+			// states. Replay is still safe: on the next sync, the replayed
+			// items short-circuit at processItem's state != managed early-
+			// return and do not re-emit their commands.
+			//
+			// replayCommittedUnsafe is always false on this branch (by
+			// construction — we only reach this return when
+			// replayCommittedUnsafe==false) but we return the variable for
+			// clarity rather than a literal.
+			return processed, commands, replayCommittedUnsafe, wrappedErr
 		}
 		if r.Processed {
 			processed++
