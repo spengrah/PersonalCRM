@@ -560,28 +560,37 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 // cadence clock is driven by real engagement and continues from its last real
 // mutual/inbound interaction.
 //
-// For non-deletion triggers we return an ItemClose command so the batched sync
-// path cleans up the orphaned task in Todoist. No retry flag is set — if the
-// batch fails, the local row is still correctly 'dismissed' and subsequent
-// syncs will skip it via the existing state != 'managed' early-return in
-// processItem.
+// State is persisted BEFORE any ItemClose command is queued. If the state
+// update fails, we return (false, nil) so the sync loop does not forward an
+// ItemClose that would close the Todoist task while leaving the local row
+// `managed` — that combination would permanently suppress cadence
+// reconciliation via FindPendingFollowUp. Returning false also means the next
+// sync tick will see the still-managed task and retry dismissal.
+//
+// For non-deletion triggers, once the state transition succeeds we queue an
+// ItemClose command so the batched sync path cleans up the orphaned task in
+// Todoist. No retry flag is set — if the batch fails, the local row is still
+// correctly 'dismissed' and subsequent syncs will skip it via the existing
+// state != 'managed' early-return in processItem.
 func (p *CadenceSyncProvider) handleFollowUpDismissal(
 	ctx context.Context,
 	item SyncItem,
 	task *repository.ContactTask,
 	contact *repository.Contact,
 ) (bool, []SyncCommand) {
-	var commands []SyncCommand
-	if !item.IsDeleted {
-		commands = append(commands, NewItemCloseCommand(item.ID))
-	}
-
 	if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateDismissed); err != nil {
 		logger.Warn().Err(err).
 			Str("taskId", task.ID.String()).
 			Str("contactId", contact.ID.String()).
-			Msg("failed to mark follow-up task as dismissed")
-		return true, commands
+			Msg("failed to mark follow-up task as dismissed — will retry on next sync")
+		// Return false + nil commands so the sync loop does not forward an
+		// ItemClose that would strand the local row in 'managed'.
+		return false, nil
+	}
+
+	var commands []SyncCommand
+	if !item.IsDeleted {
+		commands = append(commands, NewItemCloseCommand(item.ID))
 	}
 
 	logger.Info().

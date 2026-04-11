@@ -136,8 +136,8 @@ func (h *ContactTaskHandler) CreateActionTask(c *gin.Context) {
 // @Tags contact-tasks
 // @Produce json
 // @Param id path string true "Contact ID"
-// @Param state query string false "Filter by state (managed, completed, unmanaged)"
-// @Param kind query string false "Filter by kind (action, cadence)"
+// @Param state query string false "Filter by state (managed, completed, unmanaged, dismissed)"
+// @Param kind query string false "Filter by kind (action, cadence, follow_up)"
 // @Success 200 {object} api.APIResponse{data=[]ContactTaskResponse}
 // @Failure 400 {object} api.APIResponse{error=api.APIError}
 // @Failure 404 {object} api.APIResponse{error=api.APIError}

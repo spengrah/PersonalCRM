@@ -299,7 +299,8 @@ func TestFollowUpDismissal_DeadlineRemoved(t *testing.T) {
 }
 
 // Case 4: dismissing a follow-up must not touch a coexisting managed cadence
-// task for the same contact.
+// task for the same contact — state, external ID, metadata, and updated_at
+// stay exactly as they were.
 func TestFollowUpDismissal_CadenceTaskUnaffected(t *testing.T) {
 	env, cleanup := setupDismissalTest(t)
 	defer cleanup()
@@ -307,15 +308,21 @@ func TestFollowUpDismissal_CadenceTaskUnaffected(t *testing.T) {
 	contact, _ := createDismissalContact(t, env, "CadenceUnaffected")
 
 	cadenceExtID := "td-cadence-" + uuid.New().String()[:8]
+	cadenceMetadata := map[string]any{
+		"synced_deadline":       "2099-01-01",
+		"synced_last_contacted": "2026-01-01T00:00:00Z",
+		"pending_temp_id":       "temp-123",
+	}
 	cadenceTask, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
 		Kind:           TaskKindCadence,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
-		Metadata:       map[string]any{"synced_deadline": "2099-01-01"},
+		Metadata:       cadenceMetadata,
 	})
 	require.NoError(t, err)
+	originalUpdatedAt := cadenceTask.UpdatedAt
 
 	followupExtID := "td-followup-" + uuid.New().String()[:8]
 	_ = createFollowUpTask(t, env, contact.ID, followupExtID)
@@ -331,6 +338,10 @@ func TestFollowUpDismissal_CadenceTaskUnaffected(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, repository.ContactTaskStateManaged, reloaded.State, "cadence task must remain managed")
 	assert.Equal(t, cadenceExtID, reloaded.ExternalTaskID, "cadence external ID must be unchanged")
+	assert.Equal(t, cadenceMetadata["synced_deadline"], reloaded.Metadata["synced_deadline"], "cadence synced_deadline must be unchanged")
+	assert.Equal(t, cadenceMetadata["synced_last_contacted"], reloaded.Metadata["synced_last_contacted"], "cadence synced_last_contacted must be unchanged")
+	assert.Equal(t, cadenceMetadata["pending_temp_id"], reloaded.Metadata["pending_temp_id"], "cadence pending_temp_id must be unchanged")
+	assert.True(t, reloaded.UpdatedAt.Equal(originalUpdatedAt), "cadence updated_at must not have been bumped")
 }
 
 // Case 5: after dismissal, a subsequent processItem call on the same external
@@ -411,43 +422,84 @@ func TestFollowUpDismissal_ContactFollowUpFiltersIgnoreDismissed(t *testing.T) {
 	assert.True(t, contactInFilter("no_followup"), "contact with only a dismissed follow-up should appear in no_followup")
 }
 
-// Case 8a: dispatch for cadence is unchanged — a cadence task hit with a skip
-// trigger still routes through handleSkipTrigger (observable via a new
-// item_add command being returned).
+// Case 8a: dispatch for cadence is unchanged — a cadence task hit with any
+// skip trigger (deleted / label removed / deadline removed) still routes
+// through handleSkipTrigger (observable via a new item_add command being
+// returned for the replacement cadence task). This is the regression guardrail
+// for the processItem skip-trigger switch: a broken precedence would fail to
+// dispatch one of the three trigger variants.
 func TestFollowUpDismissal_CadenceDispatchUnchanged(t *testing.T) {
-	env, cleanup := setupDismissalTest(t)
-	defer cleanup()
-
-	contact, _ := createDismissalContact(t, env, "CadenceDispatch")
-
-	cadenceExtID := "td-cadence-" + uuid.New().String()[:8]
-	_, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
-		ContactID:      contact.ID,
-		Provider:       SourceName,
-		Kind:           TaskKindCadence,
-		ExternalTaskID: cadenceExtID,
-		State:          string(repository.ContactTaskStateManaged),
-		Metadata:       map[string]any{"synced_deadline": "2099-01-01"},
-	})
-	require.NoError(t, err)
-
-	ok, commands := env.provider.processItem(env.ctx, SyncItem{
-		ID:        cadenceExtID,
-		IsDeleted: true,
-		Labels:    []string{env.settings.LabelName},
-		Deadline:  &SyncDate{Date: "2099-01-01"},
-	}, env.settings, env.accountID)
-
-	assert.True(t, ok)
-	require.NotEmpty(t, commands, "handleSkipTrigger should return an item_add command for the replacement cadence task")
-
-	sawItemAdd := false
-	for _, cmd := range commands {
-		if cmd.Type == "item_add" {
-			sawItemAdd = true
-		}
+	cases := []struct {
+		name string
+		item func(externalID, label string) SyncItem
+	}{
+		{
+			name: "deleted",
+			item: func(externalID, label string) SyncItem {
+				return SyncItem{
+					ID:        externalID,
+					IsDeleted: true,
+					Labels:    []string{label},
+					Deadline:  &SyncDate{Date: "2099-01-01"},
+				}
+			},
+		},
+		{
+			name: "label_removed",
+			item: func(externalID, _ string) SyncItem {
+				return SyncItem{
+					ID:        externalID,
+					IsDeleted: false,
+					Labels:    []string{}, // CRM label absent
+					Deadline:  &SyncDate{Date: "2099-01-01"},
+				}
+			},
+		},
+		{
+			name: "deadline_removed",
+			item: func(externalID, label string) SyncItem {
+				return SyncItem{
+					ID:        externalID,
+					IsDeleted: false,
+					Labels:    []string{label},
+					Deadline:  nil,
+				}
+			},
+		},
 	}
-	assert.True(t, sawItemAdd, "expected at least one item_add command from cadence skip-trigger")
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env, cleanup := setupDismissalTest(t)
+			defer cleanup()
+
+			contact, _ := createDismissalContact(t, env, "CadenceDispatch_"+tc.name)
+
+			cadenceExtID := "td-cadence-" + uuid.New().String()[:8]
+			_, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+				ContactID:      contact.ID,
+				Provider:       SourceName,
+				Kind:           TaskKindCadence,
+				ExternalTaskID: cadenceExtID,
+				State:          string(repository.ContactTaskStateManaged),
+				Metadata:       map[string]any{"synced_deadline": "2099-01-01"},
+			})
+			require.NoError(t, err)
+
+			ok, commands := env.provider.processItem(env.ctx, tc.item(cadenceExtID, env.settings.LabelName), env.settings, env.accountID)
+
+			assert.True(t, ok)
+			require.NotEmpty(t, commands, "handleSkipTrigger should return an item_add command for the replacement cadence task")
+
+			sawItemAdd := false
+			for _, cmd := range commands {
+				if cmd.Type == "item_add" {
+					sawItemAdd = true
+				}
+			}
+			assert.True(t, sawItemAdd, "expected at least one item_add command from cadence skip-trigger (%s)", tc.name)
+		})
+	}
 }
 
 // Case 8b: dispatch for action is unchanged — an action task being deleted
