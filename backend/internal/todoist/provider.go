@@ -561,11 +561,19 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 // mutual/inbound interaction.
 //
 // State is persisted BEFORE any ItemClose command is queued. If the state
-// update fails, we return (false, nil) so the sync loop does not forward an
-// ItemClose that would close the Todoist task while leaving the local row
-// `managed` — that combination would permanently suppress cadence
-// reconciliation via FindPendingFollowUp. Returning false also means the next
-// sync tick will see the still-managed task and retry dismissal.
+// update fails, we return (false, nil) — crucially, we do NOT forward the
+// ItemClose — so the Todoist task is never closed while the local row is
+// stranded in 'managed'. That combination would permanently suppress cadence
+// reconciliation via FindPendingFollowUp with no obvious recovery path.
+//
+// Failure recovery caveat: on a DB error mid-dismissal, the local row stays
+// 'managed' but the incremental Todoist sync advances its cursor, so the
+// dismissal event will not be redelivered unless the user touches the task
+// again in Todoist or a full sync (`*` cursor) is performed. We log this at
+// error level so the stuck row is visible; the operator can manually mark the
+// row dismissed, or a full sync will re-present the item (for label/deadline
+// removed; IsDeleted=true is unrecoverable because the Todoist item is gone).
+// This matches the best-effort failure semantics of handleTaskCompletion.
 //
 // For non-deletion triggers, once the state transition succeeds we queue an
 // ItemClose command so the batched sync path cleans up the orphaned task in
@@ -579,12 +587,14 @@ func (p *CadenceSyncProvider) handleFollowUpDismissal(
 	contact *repository.Contact,
 ) (bool, []SyncCommand) {
 	if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateDismissed); err != nil {
-		logger.Warn().Err(err).
+		logger.Error().Err(err).
 			Str("taskId", task.ID.String()).
 			Str("contactId", contact.ID.String()).
-			Msg("failed to mark follow-up task as dismissed — will retry on next sync")
-		// Return false + nil commands so the sync loop does not forward an
-		// ItemClose that would strand the local row in 'managed'.
+			Str("todoistTaskId", task.ExternalTaskID).
+			Bool("itemDeleted", item.IsDeleted).
+			Msg("failed to mark follow-up task as dismissed — local row stranded in 'managed'; ItemClose suppressed. Recover via full sync or manual state update.")
+		// Do NOT forward the ItemClose command — stranding local 'managed' +
+		// closed Todoist would break FindPendingFollowUp permanently.
 		return false, nil
 	}
 
