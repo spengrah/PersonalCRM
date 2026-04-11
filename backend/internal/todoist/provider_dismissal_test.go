@@ -38,6 +38,19 @@ func (r *countingRecorder) RecordInteraction(_ context.Context, _ repository.Rec
 	return &repository.Interaction{ID: uuid.New()}, nil
 }
 
+// permissiveRecorder records call counts without failing the test. Used by
+// tests that exercise code paths which legitimately call RecordInteraction
+// (e.g., handleTaskCompletion) where the test only cares about the caller's
+// return value, not whether the interaction succeeds.
+type permissiveRecorder struct {
+	count int
+}
+
+func (r *permissiveRecorder) RecordInteraction(_ context.Context, _ repository.RecordInteractionRequest) (*repository.Interaction, error) {
+	r.count++
+	return &repository.Interaction{ID: uuid.New()}, nil
+}
+
 type dismissalTestEnv struct {
 	ctx             context.Context
 	provider        *CadenceSyncProvider
@@ -48,10 +61,24 @@ type dismissalTestEnv struct {
 	accountID       string
 }
 
-// setupDismissalTest builds a CadenceSyncProvider wired to a real DB and a test
-// interactionRecorder that asserts it is never called. Skips if DATABASE_URL is
-// unset, matching the pattern in backend/tests/followup_service_test.go.
-func setupDismissalTest(t *testing.T) (*dismissalTestEnv, func()) {
+// providerTestEnv is a lightweight variant of dismissalTestEnv used by tests
+// that need a permissive recorder (notably the handleTaskCompletion guardrail
+// test, where RecordInteraction is legitimately called during the handler's
+// normal flow).
+type providerTestEnv struct {
+	ctx             context.Context
+	provider        *CadenceSyncProvider
+	contactRepo     *repository.ContactRepository
+	contactTaskRepo *repository.ContactTaskRepository
+	settings        Settings
+	accountID       string
+}
+
+// newProviderTestEnv builds the shared DB + repos + provider infrastructure
+// used by both setupDismissalTest and setupProviderTestPermissive. Takes the
+// recorder as a parameter so callers can pass either the strict countingRecorder
+// or the permissiveRecorder.
+func newProviderTestEnv(t *testing.T, recorder interactionRecorder) (*CadenceSyncProvider, *repository.ContactRepository, *repository.ContactTaskRepository, context.Context, Settings, string, func()) {
 	t.Helper()
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -77,34 +104,76 @@ func setupDismissalTest(t *testing.T) (*dismissalTestEnv, func()) {
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	cfg := config.TestConfig()
-	recorder := &countingRecorder{t: t}
 
 	provider := NewCadenceSyncProvider(
-		nil, // oauthService: not consulted on the dismissal path
+		nil, // oauthService: not consulted on this code path
 		contactTaskRepo,
 		contactRepo,
-		nil, // syncRepo: not consulted on the dismissal path
+		nil, // syncRepo: not consulted on this code path
 		cfg,
 		recorder,
 	)
 
-	env := &dismissalTestEnv{
+	settings := Settings{
+		ProjectID:             "test-project",
+		ProjectName:           "CRM",
+		LabelID:               "test-label-id",
+		LabelName:             "crm",
+		IntegrationInstanceID: "test-instance",
+	}
+	accountID := "test-account"
+
+	return provider, contactRepo, contactTaskRepo, ctx, settings, accountID, func() { database.Close() }
+}
+
+// setupDismissalTest builds a CadenceSyncProvider wired to a real DB and a test
+// interactionRecorder that asserts it is never called. Skips if DATABASE_URL is
+// unset, matching the pattern in backend/tests/followup_service_test.go.
+func setupDismissalTest(t *testing.T) (*dismissalTestEnv, func()) {
+	t.Helper()
+
+	recorder := &countingRecorder{t: t}
+	provider, contactRepo, contactTaskRepo, ctx, settings, accountID, cleanup := newProviderTestEnv(t, recorder)
+
+	return &dismissalTestEnv{
 		ctx:             ctx,
 		provider:        provider,
 		contactRepo:     contactRepo,
 		contactTaskRepo: contactTaskRepo,
 		recorder:        recorder,
-		settings: Settings{
-			ProjectID:             "test-project",
-			ProjectName:           "CRM",
-			LabelID:               "test-label-id",
-			LabelName:             "crm",
-			IntegrationInstanceID: "test-instance",
-		},
-		accountID: "test-account",
-	}
+		settings:        settings,
+		accountID:       accountID,
+	}, cleanup
+}
 
-	return env, func() { database.Close() }
+// setupProviderTestPermissive builds a CadenceSyncProvider with a permissive
+// recorder that does not fail the test on RecordInteraction calls. Used by
+// tests that exercise handleTaskCompletion directly, since it calls
+// RecordInteraction as part of its normal flow.
+func setupProviderTestPermissive(t *testing.T) (*providerTestEnv, func()) {
+	t.Helper()
+
+	recorder := &permissiveRecorder{}
+	provider, contactRepo, contactTaskRepo, ctx, settings, accountID, cleanup := newProviderTestEnv(t, recorder)
+
+	return &providerTestEnv{
+		ctx:             ctx,
+		provider:        provider,
+		contactRepo:     contactRepo,
+		contactTaskRepo: contactTaskRepo,
+		settings:        settings,
+		accountID:       accountID,
+	}, cleanup
+}
+
+// cancelledContext returns a context that is already cancelled. Used by
+// error-injection tests to force pgx repository calls to fail deterministically
+// with context.Canceled. More reliable than closing the DB pool, which may
+// allow in-flight queries to succeed non-deterministically.
+func cancelledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
 }
 
 // migrationsPathForTest returns the absolute path to backend/migrations from the
@@ -578,4 +647,249 @@ func assertDismissedAndInvariants(t *testing.T, env *dismissalTestEnv, contactID
 
 	// All contact date fields unchanged.
 	assertDatesUnchanged(t, env, contactID, snap)
+}
+
+// ============================================================================
+// Error-propagation regression tests (Option C / #264)
+// ============================================================================
+//
+// These tests exercise the fatal-error propagation paths added in Step 2 of
+// the todoist-processitem-error-propagation plan. They use a cancelled
+// context to force repository calls to fail deterministically with
+// context.Canceled (more reliable than closing the pool mid-test).
+//
+// The tests call handlers directly, not through processItem, because
+// processItem's GetContactTaskByExternalID lookup would fail first under the
+// cancelled-context strategy, masking the target handler's error path.
+
+// TestHandleFollowUpDismissal_StateUpdateErrorPropagates verifies that a DB
+// failure in UpdateContactTaskState is propagated via processItemResult.Err
+// rather than swallowed. The handler must NOT forward an ItemClose command
+// on failure (stranding the local row in 'managed' while closing Todoist
+// would break FindPendingFollowUp permanently).
+func TestHandleFollowUpDismissal_StateUpdateErrorPropagates(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	contact, _ := createDismissalContact(t, env, "DismissalError")
+	externalID := "td-err-" + uuid.New().String()[:8]
+	task := createFollowUpTask(t, env, contact.ID, externalID)
+
+	// Use a cancelled context to force the next repository call to fail.
+	badCtx := cancelledContext()
+
+	r := env.provider.handleFollowUpDismissal(badCtx, SyncItem{
+		ID:        externalID,
+		IsDeleted: false,
+		Labels:    []string{}, // label removed trigger (but any trigger is fine)
+		Deadline:  &SyncDate{Date: "2099-01-01"},
+	}, task, contact)
+
+	require.Error(t, r.Err)
+	assert.Contains(t, r.Err.Error(), "dismiss follow-up", "error should be wrapped with dismiss follow-up")
+	assert.Contains(t, r.Err.Error(), "contact_task state", "error should identify the failed operation")
+	assert.False(t, r.Processed, "failed dismissal must not report Processed=true")
+	assert.False(t, r.Unsafe, "follow-up dismissal is replay-safe")
+	assert.Nil(t, r.Commands, "ItemClose must NOT be forwarded on state-update failure")
+	assert.Equal(t, 0, env.recorder.count, "dismissal path must never record interactions")
+}
+
+// TestHandleActionTaskTriggers_StateUpdateErrorPropagates_Deleted verifies
+// that the deleted-branch state-update failure propagates via Err.
+func TestHandleActionTaskTriggers_StateUpdateErrorPropagates_Deleted(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	contact, _ := createDismissalContact(t, env, "ActionErrDeleted")
+	actionExtID := "td-action-err-" + uuid.New().String()[:8]
+	action, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindAction,
+		ExternalTaskID: actionExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata:       map[string]any{},
+	})
+	require.NoError(t, err)
+
+	badCtx := cancelledContext()
+
+	r := env.provider.handleActionTaskTriggers(badCtx, SyncItem{
+		ID:        actionExtID,
+		IsDeleted: true,
+		Labels:    []string{env.settings.LabelName},
+		Deadline:  &SyncDate{Date: "2099-01-01"},
+	}, action, env.settings)
+
+	require.Error(t, r.Err)
+	assert.Contains(t, r.Err.Error(), "action task triggers (deleted)")
+	assert.False(t, r.Processed)
+	assert.False(t, r.Unsafe, "action unmanagement is replay-safe")
+	assert.Nil(t, r.Commands)
+}
+
+// TestHandleActionTaskTriggers_StateUpdateErrorPropagates_LabelRemoved verifies
+// that the label-removed branch state-update failure propagates via Err.
+func TestHandleActionTaskTriggers_StateUpdateErrorPropagates_LabelRemoved(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	contact, _ := createDismissalContact(t, env, "ActionErrLabel")
+	actionExtID := "td-action-err2-" + uuid.New().String()[:8]
+	action, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindAction,
+		ExternalTaskID: actionExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata:       map[string]any{},
+	})
+	require.NoError(t, err)
+
+	badCtx := cancelledContext()
+
+	r := env.provider.handleActionTaskTriggers(badCtx, SyncItem{
+		ID:        actionExtID,
+		IsDeleted: false,
+		Labels:    []string{}, // CRM label removed
+		Deadline:  &SyncDate{Date: "2099-01-01"},
+	}, action, env.settings)
+
+	require.Error(t, r.Err)
+	assert.Contains(t, r.Err.Error(), "action task triggers (label removed)")
+	assert.False(t, r.Processed)
+	assert.False(t, r.Unsafe)
+	assert.Nil(t, r.Commands)
+}
+
+// TestProcessItem_LookupErrorPropagates verifies that a failed
+// GetContactTaskByExternalID lookup is propagated as a fatal error rather
+// than silently skipped.
+func TestProcessItem_LookupErrorPropagates(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	badCtx := cancelledContext()
+
+	r := env.provider.processItem(badCtx, SyncItem{
+		ID:     "td-lookup-err-" + uuid.New().String()[:8],
+		Labels: []string{env.settings.LabelName},
+	}, env.settings, env.accountID)
+
+	require.Error(t, r.Err)
+	assert.Contains(t, r.Err.Error(), "lookup contact_task", "error should identify the failed lookup")
+	assert.False(t, r.Processed)
+	assert.False(t, r.Unsafe)
+	assert.Nil(t, r.Commands)
+}
+
+// TestProcessItems_AbortsWhenNoUnsafeCommit verifies that a fatal error from
+// processItem with no earlier non-replay-safe commit causes processItems to
+// abort (return the error) and leave replayCommittedUnsafe==false so the
+// caller knows the cursor must not advance.
+func TestProcessItems_AbortsWhenNoUnsafeCommit(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	badCtx := cancelledContext()
+
+	processed, commands, replayCommittedUnsafe, err := env.provider.processItems(
+		badCtx,
+		[]SyncItem{
+			{ID: "td-abort-" + uuid.New().String()[:8], Labels: []string{env.settings.LabelName}},
+		},
+		env.settings,
+		env.accountID,
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "process item", "outer wrapper should identify the item")
+	assert.Contains(t, err.Error(), "lookup contact_task", "inner error should identify the failed op")
+	assert.Equal(t, 0, processed, "no items should be counted as processed on abort")
+	assert.Nil(t, commands, "no commands should be returned on abort")
+	assert.False(t, replayCommittedUnsafe, "no unsafe commit occurred before abort")
+}
+
+// TestHandleTaskCompletion_StateUpdateFailureDoesNotReturnError is a
+// guardrail test: handleTaskCompletion intentionally retains log-and-continue
+// semantics on DB failure, because a fatal-error conversion would break the
+// state→interaction ordering invariant documented in the handler's comment.
+// If someone later changes this to return an error without addressing the
+// ordering, this test fails loudly.
+//
+// Uses setupProviderTestPermissive because handleTaskCompletion calls
+// RecordInteraction as part of its normal flow, which would trip the strict
+// countingRecorder.
+//
+// TODO(followup-issue): when the deferred transactional refactor lands, this
+// guardrail test should be updated or removed to reflect the new semantics.
+func TestHandleTaskCompletion_StateUpdateFailureDoesNotReturnError(t *testing.T) {
+	env, cleanup := setupProviderTestPermissive(t)
+	defer cleanup()
+
+	// Create contact + managed cadence task.
+	cadenceStr := "monthly"
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "CompletionGuard " + uuid.New().String()[:8],
+		Cadence:  &cadenceStr,
+	})
+	require.NoError(t, err)
+
+	cadenceExtID := "td-cad-guard-" + uuid.New().String()[:8]
+	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindCadence,
+		ExternalTaskID: cadenceExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata:       map[string]any{},
+	})
+	require.NoError(t, err)
+
+	badCtx := cancelledContext()
+
+	r := env.provider.handleTaskCompletion(badCtx, SyncItem{
+		ID:      cadenceExtID,
+		Checked: true,
+	}, task, contact, env.settings, env.accountID)
+
+	// Behavior intentionally unchanged: never returns an error.
+	require.NoError(t, r.Err, "handleTaskCompletion must retain log-and-continue semantics on DB failure")
+	assert.False(t, r.Unsafe, "completion's state transition is replay-safe")
+}
+
+// TestHandleSkipTrigger_FailureDoesNotReturnErrorAndSetsUnsafe is a guardrail
+// test: handleSkipTrigger intentionally retains log-and-continue semantics
+// on DB failure because it commits non-idempotent side effects (contact_by
+// advancement). Critically, it must set Unsafe: true even on partial
+// failures, because UpdateContactBy may already have fired before the
+// failure, advancing contact_by in the DB.
+//
+// TODO(followup-issue): when the deferred transactional refactor lands, this
+// guardrail test should be updated or removed to reflect the new semantics.
+func TestHandleSkipTrigger_FailureDoesNotReturnErrorAndSetsUnsafe(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	contact, _ := createDismissalContact(t, env, "SkipGuard")
+	cadenceExtID := "td-skip-guard-" + uuid.New().String()[:8]
+	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindCadence,
+		ExternalTaskID: cadenceExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata:       map[string]any{},
+	})
+	require.NoError(t, err)
+
+	badCtx := cancelledContext()
+
+	r := env.provider.handleSkipTrigger(badCtx, task, contact, env.settings, env.accountID)
+
+	// Behavior intentionally unchanged: never returns an error.
+	require.NoError(t, r.Err, "handleSkipTrigger must retain log-and-continue semantics on DB failure")
+	// CRUCIAL: Unsafe must still be true. UpdateContactBy may have advanced
+	// contact_by before the failure, so replay would double-advance.
+	assert.True(t, r.Unsafe, "skip trigger must report Unsafe=true even on partial failure")
 }
