@@ -821,7 +821,7 @@ func TestProcessItems_AbortsWhenNoUnsafeCommit(t *testing.T) {
 // RecordInteraction as part of its normal flow, which would trip the strict
 // countingRecorder.
 //
-// TODO(followup-issue): when the deferred transactional refactor lands, this
+// TODO(#265): when the deferred transactional refactor lands, this
 // guardrail test should be updated or removed to reflect the new semantics.
 func TestHandleTaskCompletion_StateUpdateFailureDoesNotReturnError(t *testing.T) {
 	env, cleanup := setupProviderTestPermissive(t)
@@ -865,7 +865,7 @@ func TestHandleTaskCompletion_StateUpdateFailureDoesNotReturnError(t *testing.T)
 // failures, because UpdateContactBy may already have fired before the
 // failure, advancing contact_by in the DB.
 //
-// TODO(followup-issue): when the deferred transactional refactor lands, this
+// TODO(#265): when the deferred transactional refactor lands, this
 // guardrail test should be updated or removed to reflect the new semantics.
 func TestHandleSkipTrigger_FailureDoesNotReturnErrorAndSetsUnsafe(t *testing.T) {
 	env, cleanup := setupDismissalTest(t)

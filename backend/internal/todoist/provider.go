@@ -480,7 +480,7 @@ func (p *CadenceSyncProvider) processItem(
 // failure (returns Err: nil always). The state→interaction ordering comment
 // below documents why a naive fatal-error conversion would break the follow-up
 // cycle; correct fix requires repository-layer transaction threading.
-// TODO(followup-issue): see the deferred refactor tracking issue — this
+// TODO(#265): see the deferred refactor tracking issue — this
 // handler is on the list for transactional rewrite.
 //
 // Returns Unsafe: false because on success the row transitions to 'completed'
@@ -566,7 +566,7 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 // short-circuit (state is still managed), so the same skip trigger would run
 // a second time and double-advance the cadence clock. Fixing this requires
 // transactional state tracking or an idempotency marker.
-// TODO(followup-issue): see the deferred refactor tracking issue — this
+// TODO(#265): see the deferred refactor tracking issue — this
 // handler is on the list for transactional rewrite.
 //
 // Returns Unsafe: true on every successful return. This flag tells the sync
@@ -1069,6 +1069,11 @@ func isPendingTempID(task *repository.ContactTask) bool {
 // It parses the CRM marker in the item description to find the contact, then checks
 // if there's a managed cadence task with a pending temp ID for that contact.
 // If found, it migrates the external_task_id to the real ID.
+//
+// TODO(#265): this recovery path's internal DB calls currently swallow
+// failures silently. Not on the critical correctness path but deserves audit
+// under the same transactional treatment as handleTaskCompletion and
+// handleSkipTrigger — tracked in the deferred refactor issue.
 func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item SyncItem) *repository.ContactTask {
 	// Parse CRM marker from description to get contact ID
 	var marker struct {
