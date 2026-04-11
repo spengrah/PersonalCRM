@@ -205,11 +205,11 @@ func (p *CadenceSyncProvider) Sync(
 		}
 	}
 
-	// Process synced items
+	// Process synced items. On a fatal error from processItems, we return
+	// early WITHOUT setting result.NewCursor so the next sync replays the
+	// batch from the pre-batch cursor.
 	processedTasks, commands, _, err := p.processItems(ctx, syncResp.Items, settings, accountID)
 	if err != nil {
-		// commit 1: processItems never returns a non-nil err. commit 2 turns on
-		// real fatal-error handling with the conditional-abort logic.
 		result.ItemsProcessed = processedTasks
 		return result, err
 	}
@@ -324,17 +324,11 @@ func (p *CadenceSyncProvider) processItems(
 	for _, item := range items {
 		r := p.processItem(ctx, item, settings, accountID)
 		if r.Err != nil {
-			if replayCommittedUnsafe {
-				logger.Error().Err(r.Err).
-					Str("itemId", item.ID).
-					Msg("processItem fatal error after non-replay-safe commit — forced to log-and-continue; cursor will advance and event is dropped")
+			shouldContinue, wrappedErr := p.decideFatalErrorPolicy(r, item, processed, replayCommittedUnsafe)
+			if shouldContinue {
 				continue
 			}
-			logger.Error().Err(r.Err).
-				Str("itemId", item.ID).
-				Int("processedBeforeAbort", processed).
-				Msg("processItem fatal error — aborting sync without advancing cursor")
-			return processed, nil, false, fmt.Errorf("process item %s: %w", item.ID, r.Err)
+			return processed, nil, false, wrappedErr
 		}
 		if r.Processed {
 			processed++
@@ -345,6 +339,40 @@ func (p *CadenceSyncProvider) processItems(
 		commands = append(commands, r.Commands...)
 	}
 	return processed, commands, replayCommittedUnsafe, nil
+}
+
+// decideFatalErrorPolicy implements the conditional-abort semantics for
+// processItems. Extracted from the loop so tests can verify both branches
+// (abort vs log-and-continue) without needing to simulate a mid-batch DB
+// failure under a shared connection.
+//
+// Returns shouldContinue=true when replayCommittedUnsafe is true: the sync
+// loop must not abort because an earlier unsafe handler (handleSkipTrigger)
+// already committed side effects that cannot be safely replayed. In that
+// case, the error is logged but the cursor will advance past this batch —
+// matching the pre-existing log-and-continue failure mode for the mixed-
+// batch scenario.
+//
+// Returns shouldContinue=false and a wrapped error when no unsafe commit has
+// occurred yet in the batch. The sync loop should return the wrapped error
+// without advancing the cursor, so the next tick replays the batch.
+func (p *CadenceSyncProvider) decideFatalErrorPolicy(
+	r processItemResult,
+	item SyncItem,
+	processedBeforeAbort int,
+	replayCommittedUnsafe bool,
+) (shouldContinue bool, wrappedErr error) {
+	if replayCommittedUnsafe {
+		logger.Error().Err(r.Err).
+			Str("itemId", item.ID).
+			Msg("processItem fatal error after non-replay-safe commit — forced to log-and-continue; cursor will advance and event is dropped")
+		return true, nil
+	}
+	logger.Error().Err(r.Err).
+		Str("itemId", item.ID).
+		Int("processedBeforeAbort", processedBeforeAbort).
+		Msg("processItem fatal error — aborting sync without advancing cursor")
+	return false, fmt.Errorf("process item %s: %w", item.ID, r.Err)
 }
 
 // processItem processes a single Todoist item from sync
@@ -392,14 +420,7 @@ func (p *CadenceSyncProvider) processItem(
 
 	// Check for recurring detection (transition to unmanaged)
 	if item.Due != nil && item.Due.IsRecurring {
-		logger.Info().
-			Str("taskId", item.ID).
-			Str("contactId", task.ContactID.String()).
-			Msg("task became recurring, transitioning to unmanaged")
-		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateUnmanaged); err != nil {
-			return processItemResult{Err: fmt.Errorf("process item: update state to unmanaged (recurring): %w", err)}
-		}
-		return processItemResult{Processed: true}
+		return p.handleRecurringDetection(ctx, item, task)
 	}
 
 	// Check for completion
@@ -472,6 +493,28 @@ func (p *CadenceSyncProvider) processItem(
 	}
 
 	return processItemResult{Processed: true, Commands: commands}
+}
+
+// handleRecurringDetection transitions a task to 'unmanaged' when it has been
+// edited in Todoist to become recurring. Recurring tasks are not cadence-
+// tracked because they manage their own lifecycle in Todoist.
+//
+// Returns a fatal error via processItemResult.Err on state-update failure.
+// This state transition is the entire point of the branch, so a silent failure
+// would leave the row permanently mis-managed.
+func (p *CadenceSyncProvider) handleRecurringDetection(
+	ctx context.Context,
+	item SyncItem,
+	task *repository.ContactTask,
+) processItemResult {
+	logger.Info().
+		Str("taskId", item.ID).
+		Str("contactId", task.ContactID.String()).
+		Msg("task became recurring, transitioning to unmanaged")
+	if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateUnmanaged); err != nil {
+		return processItemResult{Err: fmt.Errorf("process item: update state to unmanaged (recurring): %w", err)}
+	}
+	return processItemResult{Processed: true}
 }
 
 // handleTaskCompletion handles a completed Todoist task.

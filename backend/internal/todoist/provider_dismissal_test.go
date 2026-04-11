@@ -858,6 +858,105 @@ func TestHandleTaskCompletion_StateUpdateFailureDoesNotReturnError(t *testing.T)
 	assert.False(t, r.Unsafe, "completion's state transition is replay-safe")
 }
 
+// TestHandleRecurringDetection_StateUpdateErrorPropagates verifies that a DB
+// failure in the recurring-detection branch is propagated via
+// processItemResult.Err. Without this, a silent failure would leave the row
+// permanently mis-managed.
+func TestHandleRecurringDetection_StateUpdateErrorPropagates(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	contact, _ := createDismissalContact(t, env, "Recurring")
+	cadenceExtID := "td-recur-" + uuid.New().String()[:8]
+	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindCadence,
+		ExternalTaskID: cadenceExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata:       map[string]any{},
+	})
+	require.NoError(t, err)
+
+	badCtx := cancelledContext()
+
+	r := env.provider.handleRecurringDetection(badCtx, SyncItem{
+		ID: cadenceExtID,
+		Due: &SyncDue{
+			Date:        "2099-01-01",
+			IsRecurring: true,
+		},
+	}, task)
+
+	require.Error(t, r.Err)
+	assert.Contains(t, r.Err.Error(), "update state to unmanaged (recurring)",
+		"error should identify the recurring state-update failure")
+	assert.False(t, r.Processed, "failed state update must not report Processed=true")
+	assert.False(t, r.Unsafe, "recurring transition is replay-safe")
+	assert.Nil(t, r.Commands)
+}
+
+// TestDecideFatalErrorPolicy_AbortsWhenReplaySafe verifies that
+// decideFatalErrorPolicy returns shouldContinue=false and a wrapped error
+// when no earlier unsafe commit has occurred in the batch. This is the
+// direct unit test for the abort path in the conditional-abort logic.
+func TestDecideFatalErrorPolicy_AbortsWhenReplaySafe(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	itemID := "td-abort-policy-" + uuid.New().String()[:8]
+	fakeResult := processItemResult{
+		Err: errors.New("underlying db failure"),
+	}
+
+	shouldContinue, wrappedErr := env.provider.decideFatalErrorPolicy(
+		fakeResult,
+		SyncItem{ID: itemID},
+		0,     // processedBeforeAbort
+		false, // replayCommittedUnsafe
+	)
+
+	assert.False(t, shouldContinue, "no earlier unsafe commit → must abort")
+	require.Error(t, wrappedErr)
+	assert.Contains(t, wrappedErr.Error(), "process item "+itemID,
+		"wrapped error should include item ID")
+	assert.Contains(t, wrappedErr.Error(), "underlying db failure",
+		"wrapped error should chain the original cause")
+}
+
+// TestDecideFatalErrorPolicy_LogsAndContinuesAfterUnsafe verifies that
+// decideFatalErrorPolicy returns shouldContinue=true and nil error when an
+// earlier item in the batch already committed non-replay-safe state via
+// handleSkipTrigger. This is the direct unit test for the log-and-continue
+// path — it exists because simulating mid-batch DB failure with a shared
+// connection is non-trivial, and extracting this policy into a testable
+// helper lets us verify the branch without DB-level failure injection.
+//
+// Together with TestHandleSkipTrigger_FailureDoesNotReturnErrorAndSetsUnsafe
+// (which locks in Unsafe=true on the skip-trigger success path) and
+// TestProcessItems_AbortsWhenNoUnsafeCommit (which verifies the loop wiring
+// for the abort path), this test completes coverage of the conditional-
+// abort semantics.
+func TestDecideFatalErrorPolicy_LogsAndContinuesAfterUnsafe(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	itemID := "td-continue-policy-" + uuid.New().String()[:8]
+	fakeResult := processItemResult{
+		Err: errors.New("underlying db failure"),
+	}
+
+	shouldContinue, wrappedErr := env.provider.decideFatalErrorPolicy(
+		fakeResult,
+		SyncItem{ID: itemID},
+		1,    // processedBeforeAbort — an earlier item succeeded
+		true, // replayCommittedUnsafe — earlier skip trigger advanced contact_by
+	)
+
+	assert.True(t, shouldContinue, "unsafe commit already occurred → must log and continue")
+	assert.NoError(t, wrappedErr, "continuing must not return an error")
+}
+
 // TestHandleSkipTrigger_FailureDoesNotReturnErrorAndSetsUnsafe is a guardrail
 // test: handleSkipTrigger intentionally retains log-and-continue semantics
 // on DB failure because it commits non-idempotent side effects (contact_by
