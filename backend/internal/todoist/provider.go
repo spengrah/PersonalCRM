@@ -205,21 +205,16 @@ func (p *CadenceSyncProvider) Sync(
 		}
 	}
 
-	// Process synced items
-	var commands []SyncCommand
-	processedTasks := 0
-
-	for _, item := range syncResp.Items {
-		processed, cmds := p.processItem(ctx, item, settings, accountID)
-		if processed {
-			processedTasks++
-		}
-		commands = append(commands, cmds...)
-	}
-
+	// Process synced items.
+	processedTasks, commands, _, processErr := p.processItems(ctx, syncResp.Items, settings, accountID)
 	result.ItemsProcessed = processedTasks
 
-	// If we have commands to execute, send them
+	// Execute any accumulated commands BEFORE checking processErr. If
+	// processItems aborted mid-batch, the commands accumulated up to that
+	// point are all cleanup commands (ItemClose / ItemDelete) for already-
+	// persisted local state transitions — executing them prevents orphaning
+	// Todoist tasks whose local rows are already in terminal states. See the
+	// comment in processItems's abort path for why this is safe.
 	if len(commands) > 0 {
 		for _, batch := range BatchCommands(commands, 100) {
 			cmdResp, err := client.Sync(ctx, syncResp.SyncToken, []string{}, batch)
@@ -229,6 +224,13 @@ func (p *CadenceSyncProvider) Sync(
 				p.processTempIDMappings(ctx, cmdResp.TempIDMap)
 			}
 		}
+	}
+
+	// On a fatal error from processItems, return WITHOUT setting
+	// result.NewCursor so the next sync replays the batch from the pre-batch
+	// cursor.
+	if processErr != nil {
+		return result, processErr
 	}
 
 	// Store new sync token
@@ -285,34 +287,141 @@ func (p *CadenceSyncProvider) ValidateCredentials(ctx context.Context, accountID
 	return nil
 }
 
+// processItemResult is the structured return from processItem and its handlers.
+//
+// Fields:
+//   - Processed: true if the item was owned by CRM and handled (not skipped).
+//   - Commands:  Todoist commands to enqueue in the batch.
+//   - Unsafe:    true if a non-replay-safe side effect was committed. Today, only
+//     handleSkipTrigger's success path sets this — it advances contact_by and
+//     appends a replacement item_add while leaving the row state='managed',
+//     which is non-idempotent on replay. When the sync loop sees this flag, any
+//     subsequent fatal error in the same batch falls back to log-and-continue
+//     instead of aborting (which would cause double-advancement on replay).
+//   - Err:       non-nil for fatal errors. Callers inspect Unsafe to decide
+//     whether to abort the sync or log-and-continue.
+type processItemResult struct {
+	Processed bool
+	Commands  []SyncCommand
+	Unsafe    bool
+	Err       error
+}
+
+// processItems iterates over the items returned by a Todoist sync, dispatching
+// each through processItem. It is the single point at which fatal-error
+// propagation and replay-safe abort are enforced.
+//
+// Abort semantics: on a fatal processItem error (r.Err != nil), processItems
+// aborts only if no earlier item in this batch committed non-replay-safe
+// state. The replayCommittedUnsafe flag is set by any successful
+// handleSkipTrigger (see its docstring). Aborting after an unsafe commit
+// would cause the next sync to replay the skip trigger, double-advancing the
+// cadence clock — so when the flag is set, we fall back to log-and-continue.
+//
+// The returned replayCommittedUnsafe is discarded by the Sync call site but
+// returned so tests can observe the flag directly.
+func (p *CadenceSyncProvider) processItems(
+	ctx context.Context,
+	items []SyncItem,
+	settings Settings,
+	accountID string,
+) (processed int, commands []SyncCommand, replayCommittedUnsafe bool, err error) {
+	for _, item := range items {
+		r := p.processItem(ctx, item, settings, accountID)
+		if r.Err != nil {
+			shouldContinue, wrappedErr := p.decideFatalErrorPolicy(r, item, processed, replayCommittedUnsafe)
+			if shouldContinue {
+				continue
+			}
+			// On abort, return the commands accumulated from earlier items
+			// (not nil). These are all cleanup commands — ItemClose from
+			// successful handleFollowUpDismissal and ItemDelete from the
+			// contact-not-found branch in processItem — for local state
+			// transitions that have already been persisted. The caller
+			// (Sync) executes them before returning the error so we don't
+			// orphan Todoist tasks whose local rows are already in terminal
+			// states. Replay is still safe: on the next sync, the replayed
+			// items short-circuit at processItem's state != managed early-
+			// return and do not re-emit their commands.
+			//
+			// replayCommittedUnsafe is always false on this branch (by
+			// construction — we only reach this return when
+			// replayCommittedUnsafe==false) but we return the variable for
+			// clarity rather than a literal.
+			return processed, commands, replayCommittedUnsafe, wrappedErr
+		}
+		if r.Processed {
+			processed++
+		}
+		if r.Unsafe {
+			replayCommittedUnsafe = true
+		}
+		commands = append(commands, r.Commands...)
+	}
+	return processed, commands, replayCommittedUnsafe, nil
+}
+
+// decideFatalErrorPolicy implements the conditional-abort semantics for
+// processItems. Extracted from the loop so tests can verify both branches
+// (abort vs log-and-continue) without needing to simulate a mid-batch DB
+// failure under a shared connection.
+//
+// Returns shouldContinue=true when replayCommittedUnsafe is true: the sync
+// loop must not abort because an earlier unsafe handler (handleSkipTrigger)
+// already committed side effects that cannot be safely replayed. In that
+// case, the error is logged but the cursor will advance past this batch —
+// matching the pre-existing log-and-continue failure mode for the mixed-
+// batch scenario.
+//
+// Returns shouldContinue=false and a wrapped error when no unsafe commit has
+// occurred yet in the batch. The sync loop should return the wrapped error
+// without advancing the cursor, so the next tick replays the batch.
+func (p *CadenceSyncProvider) decideFatalErrorPolicy(
+	r processItemResult,
+	item SyncItem,
+	processedBeforeAbort int,
+	replayCommittedUnsafe bool,
+) (shouldContinue bool, wrappedErr error) {
+	if replayCommittedUnsafe {
+		logger.Error().Err(r.Err).
+			Str("itemId", item.ID).
+			Msg("processItem fatal error after non-replay-safe commit — forced to log-and-continue; cursor will advance and event is dropped")
+		return true, nil
+	}
+	logger.Error().Err(r.Err).
+		Str("itemId", item.ID).
+		Int("processedBeforeAbort", processedBeforeAbort).
+		Msg("processItem fatal error — aborting sync without advancing cursor")
+	return false, fmt.Errorf("process item %s: %w", item.ID, r.Err)
+}
+
 // processItem processes a single Todoist item from sync
 func (p *CadenceSyncProvider) processItem(
 	ctx context.Context,
 	item SyncItem,
 	settings Settings,
 	accountID string,
-) (bool, []SyncCommand) {
+) processItemResult {
 	var commands []SyncCommand
 
 	// Find if this task is linked to a contact
 	task, err := p.contactTaskRepo.GetContactTaskByExternalID(ctx, SourceName, item.ID)
 	if err != nil {
 		if !errors.Is(err, db.ErrNotFound) {
-			logger.Warn().Err(err).Str("taskId", item.ID).Msg("failed to find contact task")
-			return false, nil
+			return processItemResult{Err: fmt.Errorf("process item: lookup contact_task: %w", err)}
 		}
 		// Fallback: if processTempIDMappings failed, the contact_task still has a
 		// temp ID while Todoist uses the real ID. Try to recover by matching the
 		// CRM marker in the description to find a task with a pending temp ID.
 		task = p.tryRecoverPendingTempID(ctx, item)
 		if task == nil {
-			return false, nil // Not a managed task
+			return processItemResult{} // Not a managed task
 		}
 	}
 
 	// Skip unmanaged tasks
 	if task.State != repository.ContactTaskStateManaged {
-		return false, nil
+		return processItemResult{}
 	}
 
 	// Get the contact
@@ -324,20 +433,14 @@ func (p *CadenceSyncProvider) processItem(
 			if err := p.contactTaskRepo.DeleteContactTask(ctx, task.ID); err != nil {
 				logger.Warn().Err(err).Str("taskId", task.ID.String()).Msg("failed to delete contact task")
 			}
+			return processItemResult{Commands: commands}
 		}
-		return false, commands
+		return processItemResult{Err: fmt.Errorf("process item: load contact: %w", err)}
 	}
 
 	// Check for recurring detection (transition to unmanaged)
 	if item.Due != nil && item.Due.IsRecurring {
-		logger.Info().
-			Str("taskId", item.ID).
-			Str("contactId", task.ContactID.String()).
-			Msg("task became recurring, transitioning to unmanaged")
-		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateUnmanaged); err != nil {
-			logger.Warn().Err(err).Msg("failed to update task state to unmanaged")
-		}
-		return true, nil
+		return p.handleRecurringDetection(ctx, item, task)
 	}
 
 	// Check for completion
@@ -345,33 +448,33 @@ func (p *CadenceSyncProvider) processItem(
 		return p.handleTaskCompletion(ctx, item, task, contact, settings, accountID)
 	}
 
-	// Handle action tasks vs cadence tasks differently for skip triggers
+	// Handle action tasks vs cadence/follow-up tasks differently for skip triggers.
 	if task.Kind == TaskKindAction {
 		return p.handleActionTaskTriggers(ctx, item, task, settings)
 	}
 
-	// Skip triggers for cadence tasks only
+	// Detect skip triggers (shared between cadence and follow_up kinds).
 	skipTriggered := false
-
-	// 1. Task deleted
-	if item.IsDeleted {
-		skipTriggered = true
-		logger.Info().Str("taskId", item.ID).Str("reason", "deleted").Msg("skip trigger detected")
-	}
-
-	// 2. Label removed (check if our label is still present)
-	if !skipTriggered && !containsLabel(item.Labels, settings.LabelName) {
-		skipTriggered = true
-		logger.Info().Str("taskId", item.ID).Str("reason", "label_removed").Msg("skip trigger detected")
-	}
-
-	// 3. Deadline removed
-	if !skipTriggered && item.Deadline == nil {
-		skipTriggered = true
-		logger.Info().Str("taskId", item.ID).Str("reason", "deadline_removed").Msg("skip trigger detected")
+	reason := ""
+	switch {
+	case item.IsDeleted:
+		skipTriggered, reason = true, "deleted"
+	case !containsLabel(item.Labels, settings.LabelName):
+		skipTriggered, reason = true, "label_removed"
+	case item.Deadline == nil:
+		skipTriggered, reason = true, "deadline_removed"
 	}
 
 	if skipTriggered {
+		logger.Info().
+			Str("taskId", item.ID).
+			Str("reason", reason).
+			Str("kind", task.Kind).
+			Msg("skip trigger detected")
+
+		if task.Kind == TaskKindFollowUp {
+			return p.handleFollowUpDismissal(ctx, item, task, contact)
+		}
 		return p.handleSkipTrigger(ctx, task, contact, settings, accountID)
 	}
 
@@ -409,10 +512,45 @@ func (p *CadenceSyncProvider) processItem(
 		}
 	}
 
-	return true, commands
+	return processItemResult{Processed: true, Commands: commands}
 }
 
-// handleTaskCompletion handles a completed Todoist task
+// handleRecurringDetection transitions a task to 'unmanaged' when it has been
+// edited in Todoist to become recurring. Recurring tasks are not cadence-
+// tracked because they manage their own lifecycle in Todoist.
+//
+// Returns a fatal error via processItemResult.Err on state-update failure.
+// This state transition is the entire point of the branch, so a silent failure
+// would leave the row permanently mis-managed.
+func (p *CadenceSyncProvider) handleRecurringDetection(
+	ctx context.Context,
+	item SyncItem,
+	task *repository.ContactTask,
+) processItemResult {
+	logger.Info().
+		Str("taskId", item.ID).
+		Str("contactId", task.ContactID.String()).
+		Msg("task became recurring, transitioning to unmanaged")
+	if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateUnmanaged); err != nil {
+		return processItemResult{Err: fmt.Errorf("process item: update state to unmanaged (recurring): %w", err)}
+	}
+	return processItemResult{Processed: true}
+}
+
+// handleTaskCompletion handles a completed Todoist task.
+//
+// Failure semantics: this handler intentionally retains log-and-continue on DB
+// failure (returns Err: nil always). The state→interaction ordering comment
+// below documents why a naive fatal-error conversion would break the follow-up
+// cycle; correct fix requires repository-layer transaction threading.
+// TODO(#265): see the deferred refactor tracking issue — this
+// handler is on the list for transactional rewrite.
+//
+// Returns Unsafe: false because on success the row transitions to 'completed'
+// and replay short-circuits at processItem's state != 'managed' early-return.
+// (On partial failure — state=completed but RecordInteraction failed — the
+// interaction record is lost, but replay is still idempotent because of the
+// early-return, so `Unsafe: false` is defensible.)
 func (p *CadenceSyncProvider) handleTaskCompletion(
 	ctx context.Context,
 	item SyncItem,
@@ -420,7 +558,7 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 	contact *repository.Contact,
 	settings Settings,
 	accountID string,
-) (bool, []SyncCommand) {
+) processItemResult {
 	var commands []SyncCommand
 
 	// Parse completion timestamp
@@ -446,7 +584,7 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateCompleted); err != nil {
 			logger.Warn().Err(err).Msg("failed to update action task state to completed")
 		}
-		return true, nil
+		return processItemResult{Processed: true}
 	}
 
 	// For cadence and follow_up tasks: mark completed FIRST, then record outbound interaction.
@@ -479,17 +617,36 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 		Time("completedAt", completedAt).
 		Msg("recorded outbound interaction from Todoist task completion")
 
-	return true, commands
+	return processItemResult{Processed: true, Commands: commands}
 }
 
-// handleSkipTrigger handles a skip trigger (task deleted, label removed, deadline removed)
+// handleSkipTrigger handles a skip trigger (task deleted, label removed, deadline removed).
+//
+// Failure semantics: this handler intentionally retains log-and-continue on DB
+// failure (returns Err: nil always). It commits non-idempotent side effects —
+// advances contact.contact_by and appends a replacement item_add command while
+// leaving the row state='managed'. On replay, processItem would NOT
+// short-circuit (state is still managed), so the same skip trigger would run
+// a second time and double-advance the cadence clock. Fixing this requires
+// transactional state tracking or an idempotency marker.
+// TODO(#265): see the deferred refactor tracking issue — this
+// handler is on the list for transactional rewrite.
+//
+// Returns Unsafe: true on every successful return. This flag tells the sync
+// loop's processItems method that a non-replay-safe side effect was committed
+// in this batch; subsequent fatal errors in the same batch fall back to
+// log-and-continue instead of aborting (which would cause replay
+// double-advancement of this contact's cadence clock). The flag is set
+// unconditionally because partial failures (e.g., UpdateContactBy succeeded
+// but UpdateContactTaskMetadata failed) still advance contact_by — so even a
+// "failed" skip is unsafe to replay.
 func (p *CadenceSyncProvider) handleSkipTrigger(
 	ctx context.Context,
 	task *repository.ContactTask,
 	contact *repository.Contact,
 	settings Settings,
 	accountID string,
-) (bool, []SyncCommand) {
+) processItemResult {
 	var commands []SyncCommand
 
 	// Calculate new contact_by using skip semantics
@@ -548,7 +705,59 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 		}
 	}
 
-	return true, commands
+	return processItemResult{Processed: true, Commands: commands, Unsafe: true}
+}
+
+// handleFollowUpDismissal handles a follow-up task being dismissed via Todoist.
+// Triggered when the user deletes the task, removes the CRM label, or removes
+// the deadline on a follow_up kind task. Marks the local contact_task as
+// 'dismissed' and does NOT record an interaction, does NOT create a successor
+// follow-up, and does NOT touch any contact date field (last_contacted,
+// last_interaction_at, last_response_at, contact_by, last_outreach_at). The
+// cadence clock is driven by real engagement and continues from its last real
+// mutual/inbound interaction.
+//
+// State is persisted BEFORE any ItemClose command is queued. On state-update
+// failure, this handler returns a fatal error via processItemResult.Err; the
+// sync loop (processItems) then decides whether to abort or log-and-continue
+// based on whether any earlier item in the same batch committed non-replay-
+// safe state. If no earlier unsafe commit occurred, the sync aborts without
+// advancing the cursor and the next tick replays the item. If an earlier
+// handleSkipTrigger already advanced contact_by in this batch, the dismissal
+// falls back to log-and-continue (the pre-existing failure mode for that
+// specific mixed-batch scenario).
+//
+// For non-deletion triggers, once the state transition succeeds we queue an
+// ItemClose command so the batched sync path cleans up the orphaned task in
+// Todoist. No retry flag is set — if the batch fails, the local row is still
+// correctly 'dismissed' and subsequent syncs will skip it via the existing
+// state != 'managed' early-return in processItem.
+func (p *CadenceSyncProvider) handleFollowUpDismissal(
+	ctx context.Context,
+	item SyncItem,
+	task *repository.ContactTask,
+	contact *repository.Contact,
+) processItemResult {
+	if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateDismissed); err != nil {
+		// Do NOT forward the ItemClose command — stranding local 'managed' +
+		// closed Todoist would break FindPendingFollowUp permanently.
+		return processItemResult{Err: fmt.Errorf("dismiss follow-up: update contact_task state: %w", err)}
+	}
+
+	var commands []SyncCommand
+	if !item.IsDeleted {
+		commands = append(commands, NewItemCloseCommand(item.ID))
+	}
+
+	logger.Info().
+		Str("contactId", contact.ID.String()).
+		Str("contactName", contact.FullName).
+		Str("todoistTaskId", task.ExternalTaskID).
+		Bool("itemDeleted", item.IsDeleted).
+		Int("commandsQueued", len(commands)).
+		Msg("follow-up dismissed via Todoist")
+
+	return processItemResult{Processed: true, Commands: commands}
 }
 
 // handleActionTaskTriggers handles unmanagement triggers for action tasks
@@ -559,7 +768,7 @@ func (p *CadenceSyncProvider) handleActionTaskTriggers(
 	item SyncItem,
 	task *repository.ContactTask,
 	settings Settings,
-) (bool, []SyncCommand) {
+) processItemResult {
 	// Task deleted - mark as unmanaged
 	if item.IsDeleted {
 		logger.Info().
@@ -567,9 +776,9 @@ func (p *CadenceSyncProvider) handleActionTaskTriggers(
 			Str("contactTaskId", task.ID.String()).
 			Msg("action task deleted in Todoist, marking as unmanaged")
 		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateUnmanaged); err != nil {
-			logger.Warn().Err(err).Msg("failed to update action task state to unmanaged")
+			return processItemResult{Err: fmt.Errorf("action task triggers (deleted): update state to unmanaged: %w", err)}
 		}
-		return true, nil
+		return processItemResult{Processed: true}
 	}
 
 	// Label removed - mark as unmanaged
@@ -579,9 +788,9 @@ func (p *CadenceSyncProvider) handleActionTaskTriggers(
 			Str("contactTaskId", task.ID.String()).
 			Msg("CRM label removed from action task, marking as unmanaged")
 		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateUnmanaged); err != nil {
-			logger.Warn().Err(err).Msg("failed to update action task state to unmanaged")
+			return processItemResult{Err: fmt.Errorf("action task triggers (label removed): update state to unmanaged: %w", err)}
 		}
-		return true, nil
+		return processItemResult{Processed: true}
 	}
 
 	// Update metadata with current task state (content, due_date, project)
@@ -603,7 +812,7 @@ func (p *CadenceSyncProvider) handleActionTaskTriggers(
 		logger.Warn().Err(err).Msg("failed to update action task metadata")
 	}
 
-	return true, nil
+	return processItemResult{Processed: true}
 }
 
 // reconcileContactTasks ensures all contacts with cadence have managed tasks
@@ -923,6 +1132,11 @@ func isPendingTempID(task *repository.ContactTask) bool {
 // It parses the CRM marker in the item description to find the contact, then checks
 // if there's a managed cadence task with a pending temp ID for that contact.
 // If found, it migrates the external_task_id to the real ID.
+//
+// TODO(#265): this recovery path's internal DB calls currently swallow
+// failures silently. Not on the critical correctness path but deserves audit
+// under the same transactional treatment as handleTaskCompletion and
+// handleSkipTrigger — tracked in the deferred refactor issue.
 func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item SyncItem) *repository.ContactTask {
 	// Parse CRM marker from description to get contact ID
 	var marker struct {

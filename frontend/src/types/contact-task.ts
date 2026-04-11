@@ -8,7 +8,7 @@ export interface ContactTask {
   content?: string
   due_date?: string
   project_id?: string
-  state: 'managed' | 'completed' | 'unmanaged'
+  state: 'managed' | 'completed' | 'unmanaged' | 'dismissed'
   created_at: string
 }
 
@@ -18,6 +18,6 @@ export interface CreateActionTaskRequest {
 }
 
 export interface ContactTaskListParams {
-  state?: 'managed' | 'completed' | 'unmanaged'
+  state?: 'managed' | 'completed' | 'unmanaged' | 'dismissed'
   kind?: 'action' | 'cadence' | 'follow_up'
 }
