@@ -654,3 +654,43 @@ detail: |
   **How to apply:** Any webhook or real-time event handler that triggers aggregation should use the chat-scoped incremental method. Reserve batch aggregation for backfill operations (e.g., post-sync historical data processing, OnPeerLinked for discovering old messages across chats).
 actionable: true
 
+---
+timestamp: "2026-04-11T16:31:54.276345"
+type: gotcha
+summary: Ghostty terminal type not in remote Pi terminfo causes nano/editor failures
+detail: |
+  When SSH'ing to production Pi from Ghostty terminal, `nano` fails with "Error opening terminal: xterm-ghostty" because the terminfo entry doesn't exist on the remote system. Fix permanently: `infocmp -x xterm-ghostty | ssh raspberet 'sudo tic -x -'`. Applies to any remote system that hasn't seen Ghostty before. Alternative: use `TERM=xterm-256color` prefix for one-off commands.
+actionable: true
+
+---
+timestamp: "2026-04-11T16:31:54.276345"
+type: distinction
+summary: Dismissed follow-ups don't trigger Todoist close (unlike completed follow-ups)
+detail: |
+  Follow-up task completion (`handleTaskCompletion`) issues `ItemClose` command with retry on failure. Follow-up dismissal (`handleFollowUpDismissal`) does NOT issue `ItemClose` — the Todoist task becomes orphaned. This matches the existing skip-trigger pattern for cadence tasks (which also leave orphaned tasks). Rationale: dismissal is triggered by user action in Todoist itself (delete/label-remove/deadline-remove), so the task state in Todoist is already what the user wanted. Closing it would be redundant or wrong.
+actionable: true
+
+---
+timestamp: "2026-04-11T16:31:54.276345"
+type: architecture
+summary: Todoist sync provider doesn't reconcile per-command success/failure
+detail: |
+  The `CadenceSyncProvider.processItem` batches multiple `SyncCommand`s but has no mechanism to observe which specific commands succeeded vs failed in the response. Commands are fire-and-forget within a sync cycle. This means setting retry flags (like `todoist_close_pending`) must only happen in contexts where failure is observed synchronously (e.g., `FollowUpService.CompleteFollowUp` calls Sync API directly and sees error), NOT in the provider where commands are queued. This architectural constraint shapes retry design for any new Todoist operations.
+actionable: true
+
+---
+timestamp: "2026-04-11T16:31:54.276345"
+type: rule
+summary: "Contact task state changes require updating 3 layers: DB constraint, API validator, and frontend types"
+detail: |
+  Adding a new `contact_task.state` value (e.g., 'dismissed') requires changes in: (1) Migration to widen CHECK constraint, (2) `backend/internal/api/handlers/contact_task.go` ListContactTasksQuery.State oneof validator, (3) `frontend/src/types/contact-task.ts` ContactTask.state union AND ContactTaskListParams.state union. Missing any layer causes validation failures or type errors. This is a cross-cutting change that Codex review caught in round 1.
+actionable: true
+
+---
+timestamp: "2026-04-11T16:31:54.276345"
+type: documentation_gap
+summary: Todoist provider test location guidance wasn't followed initially
+detail: |
+  Initial plan proposed same-package unit tests in `backend/internal/todoist/provider_dismissal_test.go`. Codex review flagged this: provider tests should be DB-backed integration tests in `backend/tests/` (mirroring existing `followup_service_test.go` pattern). The `.ai/rules/testing.md` states "integration tests for DB operations" but doesn't explicitly call out where sync provider tests belong. Strengthen: add example to testing.md or architecture.md showing sync provider tests live in `backend/tests/` with full DB setup, not in `internal/todoist/`.
+actionable: true
+
