@@ -50,7 +50,7 @@ type ContactTaskResponse struct {
 
 // ListContactTasksQuery represents query parameters for listing tasks
 type ListContactTasksQuery struct {
-	State string `form:"state" validate:"omitempty,oneof=managed completed unmanaged"`
+	State string `form:"state" validate:"omitempty,oneof=managed completed unmanaged dismissed"`
 	Kind  string `form:"kind" validate:"omitempty,oneof=action cadence follow_up"`
 }
 

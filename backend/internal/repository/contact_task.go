@@ -19,6 +19,7 @@ const (
 	ContactTaskStateManaged   ContactTaskState = "managed"
 	ContactTaskStateUnmanaged ContactTaskState = "unmanaged"
 	ContactTaskStateCompleted ContactTaskState = "completed"
+	ContactTaskStateDismissed ContactTaskState = "dismissed"
 )
 
 // ContactTask represents a link between a contact and an external task provider
