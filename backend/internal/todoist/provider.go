@@ -345,33 +345,33 @@ func (p *CadenceSyncProvider) processItem(
 		return p.handleTaskCompletion(ctx, item, task, contact, settings, accountID)
 	}
 
-	// Handle action tasks vs cadence tasks differently for skip triggers
+	// Handle action tasks vs cadence/follow-up tasks differently for skip triggers.
 	if task.Kind == TaskKindAction {
 		return p.handleActionTaskTriggers(ctx, item, task, settings)
 	}
 
-	// Skip triggers for cadence tasks only
+	// Detect skip triggers (shared between cadence and follow_up kinds).
 	skipTriggered := false
-
-	// 1. Task deleted
-	if item.IsDeleted {
-		skipTriggered = true
-		logger.Info().Str("taskId", item.ID).Str("reason", "deleted").Msg("skip trigger detected")
-	}
-
-	// 2. Label removed (check if our label is still present)
-	if !skipTriggered && !containsLabel(item.Labels, settings.LabelName) {
-		skipTriggered = true
-		logger.Info().Str("taskId", item.ID).Str("reason", "label_removed").Msg("skip trigger detected")
-	}
-
-	// 3. Deadline removed
-	if !skipTriggered && item.Deadline == nil {
-		skipTriggered = true
-		logger.Info().Str("taskId", item.ID).Str("reason", "deadline_removed").Msg("skip trigger detected")
+	reason := ""
+	switch {
+	case item.IsDeleted:
+		skipTriggered, reason = true, "deleted"
+	case !containsLabel(item.Labels, settings.LabelName):
+		skipTriggered, reason = true, "label_removed"
+	case item.Deadline == nil:
+		skipTriggered, reason = true, "deadline_removed"
 	}
 
 	if skipTriggered {
+		logger.Info().
+			Str("taskId", item.ID).
+			Str("reason", reason).
+			Str("kind", task.Kind).
+			Msg("skip trigger detected")
+
+		if task.Kind == TaskKindFollowUp {
+			return p.handleFollowUpDismissal(ctx, item, task, contact)
+		}
 		return p.handleSkipTrigger(ctx, task, contact, settings, accountID)
 	}
 
@@ -547,6 +547,50 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 				Msg("processed skip trigger, created new task")
 		}
 	}
+
+	return true, commands
+}
+
+// handleFollowUpDismissal handles a follow-up task being dismissed via Todoist.
+// Triggered when the user deletes the task, removes the CRM label, or removes
+// the deadline on a follow_up kind task. Marks the local contact_task as
+// 'dismissed' and does NOT record an interaction, does NOT create a successor
+// follow-up, and does NOT touch any contact date field (last_contacted,
+// last_interaction_at, last_response_at, contact_by, last_outreach_at). The
+// cadence clock is driven by real engagement and continues from its last real
+// mutual/inbound interaction.
+//
+// For non-deletion triggers we return an ItemClose command so the batched sync
+// path cleans up the orphaned task in Todoist. No retry flag is set — if the
+// batch fails, the local row is still correctly 'dismissed' and subsequent
+// syncs will skip it via the existing state != 'managed' early-return in
+// processItem.
+func (p *CadenceSyncProvider) handleFollowUpDismissal(
+	ctx context.Context,
+	item SyncItem,
+	task *repository.ContactTask,
+	contact *repository.Contact,
+) (bool, []SyncCommand) {
+	var commands []SyncCommand
+	if !item.IsDeleted {
+		commands = append(commands, NewItemCloseCommand(item.ID))
+	}
+
+	if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateDismissed); err != nil {
+		logger.Warn().Err(err).
+			Str("taskId", task.ID.String()).
+			Str("contactId", contact.ID.String()).
+			Msg("failed to mark follow-up task as dismissed")
+		return true, commands
+	}
+
+	logger.Info().
+		Str("contactId", contact.ID.String()).
+		Str("contactName", contact.FullName).
+		Str("todoistTaskId", task.ExternalTaskID).
+		Bool("itemDeleted", item.IsDeleted).
+		Int("commandsQueued", len(commands)).
+		Msg("follow-up dismissed via Todoist")
 
 	return true, commands
 }
