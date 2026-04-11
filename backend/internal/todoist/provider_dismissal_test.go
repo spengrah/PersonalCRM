@@ -232,15 +232,17 @@ func TestFollowUpDismissal_IsDeleted(t *testing.T) {
 	externalID := "td-task-" + uuid.New().String()[:8]
 	task := createFollowUpTask(t, env, contact.ID, externalID)
 
-	ok, commands := env.provider.processItem(env.ctx, SyncItem{
+	r := env.provider.processItem(env.ctx, SyncItem{
 		ID:        externalID,
 		IsDeleted: true,
 		Labels:    []string{env.settings.LabelName},
 		Deadline:  &SyncDate{Date: "2099-01-01"},
 	}, env.settings, env.accountID)
 
-	assert.True(t, ok, "processItem should return true (task was handled)")
-	assert.Empty(t, commands, "no Todoist commands should be emitted when item is already deleted")
+	require.NoError(t, r.Err)
+	assert.False(t, r.Unsafe, "follow-up dismissal is replay-safe")
+	assert.True(t, r.Processed, "processItem should return processed=true (task was handled)")
+	assert.Empty(t, r.Commands, "no Todoist commands should be emitted when item is already deleted")
 	assert.Equal(t, 0, env.recorder.count, "RecordInteraction must not be called during dismissal")
 
 	assertDismissedAndInvariants(t, env, contact.ID, task.ID, snap)
@@ -256,17 +258,19 @@ func TestFollowUpDismissal_LabelRemoved(t *testing.T) {
 	externalID := "td-task-" + uuid.New().String()[:8]
 	task := createFollowUpTask(t, env, contact.ID, externalID)
 
-	ok, commands := env.provider.processItem(env.ctx, SyncItem{
+	r := env.provider.processItem(env.ctx, SyncItem{
 		ID:        externalID,
 		IsDeleted: false,
 		Labels:    []string{}, // CRM label removed
 		Deadline:  &SyncDate{Date: "2099-01-01"},
 	}, env.settings, env.accountID)
 
-	assert.True(t, ok)
-	require.Len(t, commands, 1, "exactly one ItemClose command expected")
-	assert.Equal(t, "item_close", commands[0].Type)
-	assert.Equal(t, externalID, commands[0].Args["id"])
+	require.NoError(t, r.Err)
+	assert.False(t, r.Unsafe, "follow-up dismissal is replay-safe")
+	assert.True(t, r.Processed)
+	require.Len(t, r.Commands, 1, "exactly one ItemClose command expected")
+	assert.Equal(t, "item_close", r.Commands[0].Type)
+	assert.Equal(t, externalID, r.Commands[0].Args["id"])
 	assert.Equal(t, 0, env.recorder.count)
 
 	assertDismissedAndInvariants(t, env, contact.ID, task.ID, snap)
@@ -282,17 +286,19 @@ func TestFollowUpDismissal_DeadlineRemoved(t *testing.T) {
 	externalID := "td-task-" + uuid.New().String()[:8]
 	task := createFollowUpTask(t, env, contact.ID, externalID)
 
-	ok, commands := env.provider.processItem(env.ctx, SyncItem{
+	r := env.provider.processItem(env.ctx, SyncItem{
 		ID:        externalID,
 		IsDeleted: false,
 		Labels:    []string{env.settings.LabelName},
 		Deadline:  nil,
 	}, env.settings, env.accountID)
 
-	assert.True(t, ok)
-	require.Len(t, commands, 1)
-	assert.Equal(t, "item_close", commands[0].Type)
-	assert.Equal(t, externalID, commands[0].Args["id"])
+	require.NoError(t, r.Err)
+	assert.False(t, r.Unsafe, "follow-up dismissal is replay-safe")
+	assert.True(t, r.Processed)
+	require.Len(t, r.Commands, 1)
+	assert.Equal(t, "item_close", r.Commands[0].Type)
+	assert.Equal(t, externalID, r.Commands[0].Args["id"])
 	assert.Equal(t, 0, env.recorder.count)
 
 	assertDismissedAndInvariants(t, env, contact.ID, task.ID, snap)
@@ -327,7 +333,7 @@ func TestFollowUpDismissal_CadenceTaskUnaffected(t *testing.T) {
 	followupExtID := "td-followup-" + uuid.New().String()[:8]
 	_ = createFollowUpTask(t, env, contact.ID, followupExtID)
 
-	_, _ = env.provider.processItem(env.ctx, SyncItem{
+	_ = env.provider.processItem(env.ctx, SyncItem{
 		ID:        followupExtID,
 		IsDeleted: true,
 		Labels:    []string{env.settings.LabelName},
@@ -356,7 +362,7 @@ func TestFollowUpDismissal_SubsequentProcessItemSkipsDismissedRow(t *testing.T) 
 	_ = createFollowUpTask(t, env, contact.ID, externalID)
 
 	// First dismissal.
-	_, _ = env.provider.processItem(env.ctx, SyncItem{
+	_ = env.provider.processItem(env.ctx, SyncItem{
 		ID:        externalID,
 		IsDeleted: false,
 		Labels:    []string{env.settings.LabelName},
@@ -364,15 +370,17 @@ func TestFollowUpDismissal_SubsequentProcessItemSkipsDismissedRow(t *testing.T) 
 	}, env.settings, env.accountID)
 
 	// Second call — simulates the next sync tick seeing the same task.
-	ok, commands := env.provider.processItem(env.ctx, SyncItem{
+	r := env.provider.processItem(env.ctx, SyncItem{
 		ID:        externalID,
 		IsDeleted: false,
 		Labels:    []string{env.settings.LabelName},
 		Deadline:  nil,
 	}, env.settings, env.accountID)
 
-	assert.False(t, ok, "subsequent processItem should report the row was skipped")
-	assert.Empty(t, commands, "no commands should be emitted on subsequent calls")
+	require.NoError(t, r.Err)
+	assert.False(t, r.Processed, "subsequent processItem should report the row was skipped")
+	assert.False(t, r.Unsafe)
+	assert.Empty(t, r.Commands, "no commands should be emitted on subsequent calls")
 	assert.Equal(t, 0, env.recorder.count)
 }
 
@@ -486,13 +494,15 @@ func TestFollowUpDismissal_CadenceDispatchUnchanged(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			ok, commands := env.provider.processItem(env.ctx, tc.item(cadenceExtID, env.settings.LabelName), env.settings, env.accountID)
+			r := env.provider.processItem(env.ctx, tc.item(cadenceExtID, env.settings.LabelName), env.settings, env.accountID)
 
-			assert.True(t, ok)
-			require.NotEmpty(t, commands, "handleSkipTrigger should return an item_add command for the replacement cadence task")
+			require.NoError(t, r.Err)
+			assert.True(t, r.Processed)
+			assert.True(t, r.Unsafe, "cadence skip trigger commits non-replay-safe state")
+			require.NotEmpty(t, r.Commands, "handleSkipTrigger should return an item_add command for the replacement cadence task")
 
 			sawItemAdd := false
-			for _, cmd := range commands {
+			for _, cmd := range r.Commands {
 				if cmd.Type == "item_add" {
 					sawItemAdd = true
 				}
@@ -521,14 +531,16 @@ func TestFollowUpDismissal_ActionDispatchUnchanged(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ok, _ := env.provider.processItem(env.ctx, SyncItem{
+	r := env.provider.processItem(env.ctx, SyncItem{
 		ID:        actionExtID,
 		IsDeleted: true,
 		Labels:    []string{env.settings.LabelName},
 		Deadline:  &SyncDate{Date: "2099-01-01"},
 	}, env.settings, env.accountID)
 
-	assert.True(t, ok)
+	require.NoError(t, r.Err)
+	assert.True(t, r.Processed)
+	assert.False(t, r.Unsafe, "action task unmanagement is replay-safe")
 
 	reloaded, err := env.contactTaskRepo.GetContactTask(env.ctx, action.ID)
 	require.NoError(t, err)
