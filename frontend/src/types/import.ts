@@ -9,10 +9,13 @@ export interface SuggestedMatch {
 }
 
 export interface ImportCandidateMetadata {
+  // Calendar attendee metadata (source: 'gcal_attendee')
   meeting_title?: string
   meeting_date?: string
   meeting_link?: string
   discovered_at?: string
+  // Telegram peer metadata (source: 'telegram'). Stored with leading '@'.
+  username?: string
 }
 
 export interface ImportCandidate {

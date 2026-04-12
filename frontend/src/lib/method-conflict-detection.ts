@@ -3,15 +3,6 @@ import type { ImportCandidate, MethodComparison, ConflictType, MethodState } fro
 import { normalizeContactMethodValueForComparison } from './contact-methods'
 
 /**
- * Get the display name from an import candidate.
- */
-export function getCandidateDisplayName(candidate: ImportCandidate): string {
-  if (candidate.display_name) return candidate.display_name
-  const parts = [candidate.first_name, candidate.last_name].filter(Boolean)
-  return parts.join(' ') || 'Unknown'
-}
-
-/**
  * Extract external contact methods from an import candidate.
  * Preserves original type information for conflict resolution.
  */

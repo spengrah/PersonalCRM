@@ -15,11 +15,8 @@ import {
   useIgnoreCandidate,
   useImportCandidates,
 } from '@/hooks/use-imports'
-import {
-  detectMethodConflicts,
-  getCandidateDisplayName,
-  areNamesSimilar,
-} from '@/lib/method-conflict-detection'
+import { detectMethodConflicts, areNamesSimilar } from '@/lib/method-conflict-detection'
+import { getCandidateDisplayName } from '@/lib/candidate-display'
 import { getSourceDisplay } from '@/lib/source-display'
 import type { ImportCandidate, SelectedMethod, MethodComparison } from '@/types/import'
 import type { ContactMethodType } from '@/types/contact'

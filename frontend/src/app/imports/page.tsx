@@ -21,6 +21,7 @@ import { Pagination } from '@/components/ui/pagination'
 import { ImportLinkModal } from '@/components/imports/import-link-modal'
 import { useImportCandidates, useIgnoreCandidate, useTriggerSync } from '@/hooks/use-imports'
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
+import { getCandidateDisplayName } from '@/lib/candidate-display'
 import type { ImportCandidate, ImportCandidatesListParams } from '@/types/import'
 
 // Constants
@@ -98,10 +99,7 @@ function CandidateCard({
   importLoading: boolean
   ignoreLoading: boolean
 }) {
-  const displayName =
-    candidate.display_name ||
-    [candidate.first_name, candidate.last_name].filter(Boolean).join(' ') ||
-    'Unknown'
+  const displayName = getCandidateDisplayName(candidate)
 
   // Get meeting context for calendar attendees
   const meetingContext =
@@ -275,10 +273,7 @@ export default function ImportsPage() {
   }
 
   const handleIgnore = async (candidate: ImportCandidate) => {
-    const displayName =
-      candidate.display_name ||
-      [candidate.first_name, candidate.last_name].filter(Boolean).join(' ') ||
-      'contact'
+    const displayName = getCandidateDisplayName(candidate)
 
     setActionInProgress(candidate.id)
     try {

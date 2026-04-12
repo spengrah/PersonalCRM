@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   detectMethodConflicts,
-  getCandidateDisplayName,
   calculateNameSimilarity,
   areNamesSimilar,
   getMethodStateClasses,
@@ -12,58 +11,6 @@ import type { ImportCandidate } from '@/types/import'
 import type { ContactMethod } from '@/types/contact'
 
 describe('method-conflict-detection', () => {
-  describe('getCandidateDisplayName', () => {
-    it('uses display_name if available', () => {
-      const candidate = {
-        id: '1',
-        display_name: 'John Doe',
-        first_name: 'Johnny',
-        last_name: 'Doer',
-        emails: [],
-        phones: [],
-        source: 'test',
-      } as ImportCandidate
-
-      expect(getCandidateDisplayName(candidate)).toBe('John Doe')
-    })
-
-    it('combines first and last name if no display_name', () => {
-      const candidate = {
-        id: '1',
-        first_name: 'John',
-        last_name: 'Doe',
-        emails: [],
-        phones: [],
-        source: 'test',
-      } as ImportCandidate
-
-      expect(getCandidateDisplayName(candidate)).toBe('John Doe')
-    })
-
-    it('uses only first name if no last name', () => {
-      const candidate = {
-        id: '1',
-        first_name: 'John',
-        emails: [],
-        phones: [],
-        source: 'test',
-      } as ImportCandidate
-
-      expect(getCandidateDisplayName(candidate)).toBe('John')
-    })
-
-    it('returns Unknown if no name parts', () => {
-      const candidate = {
-        id: '1',
-        emails: [],
-        phones: [],
-        source: 'test',
-      } as ImportCandidate
-
-      expect(getCandidateDisplayName(candidate)).toBe('Unknown')
-    })
-  })
-
   describe('calculateNameSimilarity', () => {
     it('returns 1 for identical names', () => {
       expect(calculateNameSimilarity('John Doe', 'John Doe')).toBe(1)
