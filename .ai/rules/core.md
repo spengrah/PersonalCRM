@@ -121,7 +121,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Todoist QuickAdd `note` parameter for descriptions | `note` creates comments, not descriptions - use two-step: QuickAdd then Sync API `item_update` |
 | Todoist v9 numeric IDs with v1 API | v1 returns alphanumeric IDs (e.g., `6fw9cQQ5JppCp7qX`) - migration complete as of Feb 2026; `tryRecoverPendingTempID` handles only failed temp ID resolution |
 | Parsing Todoist CRM markers as full description | CRM markers are embedded after markdown prefix or as standalone JSON - `tryRecoverPendingTempID` uses `strings.LastIndex` to extract |
-| Adding new Todoist task metadata key to only one path | Must update ALL 5 task creation/update paths: reconcileContactTasks, handleTaskCompletion, handleSkipTrigger, reconcileExistingTask (drift + backfill) |
+| Adding new Todoist task metadata key to only one path | Must update ALL 6 task creation/update paths: handleSkipTrigger, reconcileContactTasks (new task), reconcileExistingTask (3 backfill paths + drift), plus closeOnOutreach (outreach detection + pre-gate backfill) |
 | Using UUID for external source references | Use TEXT - only GCal uses UUIDs; Todoist uses alphanumeric strings (e.g., `6fw9cQQ5JppCp7qX`) |
 | Forward-only update semantics for all sources | Manual source must always update (user correction); forward-only is only for automated sources (gcal, todoist) |
 | Creating FK-referencing record without existence check | Check parent exists first and return ErrNotFound - otherwise FK constraint violation returns 500 instead of 404 |

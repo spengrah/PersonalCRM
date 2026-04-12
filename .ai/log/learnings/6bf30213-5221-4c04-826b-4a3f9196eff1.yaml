@@ -1,0 +1,72 @@
+---
+timestamp: "2026-04-12T11:20:52.444554"
+type: gotcha
+summary: Functions returning nil for semantically different cases create ambiguity bugs
+detail: |
+  In this session, `closeOnOutreach` initially returned `nil` for both "no outreach detected" AND "outreach detected but pending temp ID (can't close yet)". The caller couldn't distinguish these cases, causing it to skip the follow-up gate check when it should have continued processing. Codex caught this in review even though all 5 comprehensive integration tests passed. **Fix:** Return `([]SyncCommand, bool)` where the bool indicates whether the condition was handled, allowing the caller to distinguish "not applicable" from "handled but no commands".
+actionable: true
+
+---
+timestamp: "2026-04-12T11:20:52.444554"
+type: rule
+summary: When adding parallel metadata keys, update ALL write locations atomically
+detail: |
+  The plan explicitly identified 6 locations where `synced_last_contacted` is written and required adding `synced_last_outreach_at` to all 6 in the same commit: handleSkipTrigger, reconcileContactTasks (new task), reconcileExistingTask (3 backfill/drift locations). Missing even one location creates subtle desync bugs. This is already partially documented in the gotchas table ("Adding new Todoist task metadata key to only one path") but this session demonstrates why: the reconciler has multiple code paths that can create or update tasks, and each path must maintain the same metadata invariants.
+actionable: true
+
+---
+timestamp: "2026-04-12T11:20:52.444554"
+type: architecture
+summary: Detection logic must run before conditional gates that might skip it
+detail: |
+  The outreach detection needed to run BEFORE the existing `FindPendingFollowUp` gate at line 854 because that gate skips the entire contact when a follow-up exists. Initially, the cadence task lookup happened at line 870 (after the gate), making it unreachable when a follow-up existed—but outreach detection specifically needed to fire in that case. The fix moved the lookup and outreach check before the gate. **General pattern:** When adding new detection/cleanup logic to a reconciler with early-exit gates, consider whether the logic should run unconditionally (before gates) or only when certain conditions don't hold (after gates).
+actionable: true
+
+---
+timestamp: "2026-04-12T11:20:52.444554"
+type: distinction
+summary: Codex review catches control flow bugs that comprehensive tests miss
+detail: |
+  All 5 integration tests passed after the initial implementation, including tests for the exact scenario (outreach with pending follow-up). But Codex review identified that the nil-return ambiguity would cause the reconciler to skip the follow-up gate check when outreach was detected with a pending temp ID. The tests verified "output matches expected state" but didn't catch the control flow bug because the bug's impact (skipping the gate check) only matters in edge cases the tests didn't exercise. **Takeaway:** Tests verify "does this produce the right output"; code review verifies "does the control flow make sense". Both are necessary.
+actionable: false
+
+---
+timestamp: "2026-04-12T11:20:52.444554"
+type: gotcha
+summary: Pending temp ID tasks require special handling in close/delete paths
+detail: |
+  When a cadence task has `MetadataKeyPendingTempID` matching `external_task_id` (Todoist hasn't confirmed the creation yet), you can't send an `item_close` command to Todoist (no real ID exists). But you must still transition the local `contact_task` state to completed. The `closeOnOutreach` function had to return `(nil, true)` for this case: no Sync commands to send, but outreach WAS handled. This is why the bool return was critical—otherwise the caller would interpret `nil` as "no outreach, continue processing" instead of "outreach handled, stop processing this contact".
+actionable: true
+
+---
+timestamp: "2026-04-12T12:47:49.617463"
+type: gotcha
+summary: Contact task metadata updates without in-memory state sync cause stale data bugs
+detail: |
+  After UpdateContactTaskMetadata succeeds, you MUST set task.Metadata = metadata to sync the in-memory state. Without this, subsequent code in the same sync cycle sees stale metadata and may make incorrect control flow decisions or perform redundant DB writes. This pattern appears in reconcileExistingTask and was missed in closeOnOutreach's backfill path until CI review caught it. Tests passed because they don't verify in-memory state between operations in the same cycle.
+actionable: true
+
+---
+timestamp: "2026-04-12T12:47:49.617463"
+type: architecture
+summary: Todoist sync loop guarantees processItems runs before reconcileContactTasks
+detail: |
+  In CadenceSyncProvider.Sync(), processItems (which calls tryRecoverPendingTempID) always executes before reconcileContactTasks. This ordering ensures that temp-ID-to-real-ID recovery happens before any close/complete/reconcile logic runs. When adding new reconciliation logic that depends on external_task_id state or makes state transitions, this execution order guarantee means recovery will have run first. A P2 reviewer raised a concern about pending temp IDs being orphaned by state transitions, but this turned out to be invalid due to this architectural guarantee - worth documenting to prevent future confusion.
+actionable: true
+
+---
+timestamp: "2026-04-12T12:47:49.617463"
+type: rule
+summary: Functions returning nil for semantically different outcomes create untestable control flow bugs
+detail: |
+  When closeOnOutreach returned nil for both "no outreach detected" and "outreach handled but can't close yet (pending temp ID)", the caller couldn't distinguish these cases. This caused it to skip follow-up gate checks when it should have continued processing. Five comprehensive integration tests all passed because they didn't cover the cross-case control flow. Fix: return ([]SyncCommand, bool) where bool indicates whether the function handled the condition, letting callers distinguish "not applicable" from "handled with no commands". Codex caught this in review even though tests passed - shows value of architectural review beyond test coverage.
+actionable: true
+
+---
+timestamp: "2026-04-12T12:47:49.617463"
+type: documentation_gap
+summary: Learnings extraction identified in-memory state sync pattern but didn't validate consistency
+detail: |
+  The pre-push learnings extraction correctly identified the in-memory state sync pattern (learning #4 in the yaml) by analyzing the implementation, but didn't verify the pattern was followed everywhere in the code being pushed. The same bug was then caught by CI review. This reveals that extracted learnings should either: (a) trigger immediate consistency checks across the changeset, or (b) be clearly marked as "pattern observed, not validated" so the commit+push doesn't create false confidence. The learning was correct, but its presence in the learnings file didn't prevent the bug from being shipped to CI.
+actionable: true
+
