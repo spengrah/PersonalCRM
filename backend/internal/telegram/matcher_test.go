@@ -34,14 +34,14 @@ type updateMatchCall struct {
 }
 
 type mockExternalContactUpserter struct {
-	upsertCalls      []repository.UpsertExternalContactRequest
+	upsertCalls      []repository.UpsertTelegramDiscoveryCandidateRequest
 	getResult        *repository.ExternalContact
 	updateMatchCalls []updateMatchCall
 }
 
-func (m *mockExternalContactUpserter) Upsert(_ context.Context, req repository.UpsertExternalContactRequest) (*repository.ExternalContact, error) {
+func (m *mockExternalContactUpserter) UpsertTelegramDiscoveryCandidate(_ context.Context, req repository.UpsertTelegramDiscoveryCandidateRequest) (*repository.ExternalContact, error) {
 	m.upsertCalls = append(m.upsertCalls, req)
-	return &repository.ExternalContact{ID: uuid.New(), Source: req.Source, SourceID: req.SourceID}, nil
+	return &repository.ExternalContact{ID: uuid.New(), Source: "telegram", SourceID: req.SourceID}, nil
 }
 
 func (m *mockExternalContactUpserter) GetBySource(_ context.Context, _, _ string, _ *string) (*repository.ExternalContact, error) {
@@ -322,10 +322,67 @@ func TestUpdateDiscoveryCandidatesForPeer_AtThreshold(t *testing.T) {
 
 	// At threshold — should upsert
 	require.Len(t, ecMock.upsertCalls, 1)
-	assert.Equal(t, "telegram", ecMock.upsertCalls[0].Source)
 	assert.Equal(t, "12345", ecMock.upsertCalls[0].SourceID)
 	assert.Equal(t, int64(3), ecMock.upsertCalls[0].Metadata["message_count"])
 	assert.Equal(t, "@alice", ecMock.upsertCalls[0].Metadata["username"])
+	require.NotNil(t, ecMock.upsertCalls[0].SyncedAt, "synced_at should be set on live-path upsert")
+}
+
+// TestUpdateDiscoveryCandidatesForPeer_NilNames_StillSendsUpsert documents the
+// Go-layer contract after the null-overwrite fix: the live path keeps passing
+// whatever names it has (including all-nil). The SQL COALESCE in the dedicated
+// UpsertTelegramDiscoveryCandidate query is what actually preserves stored
+// values. The metadata map must not carry a "username" key when peerUsername
+// is nil — otherwise the JSONB merge would overwrite an earlier non-null handle
+// with a bogus null-ish entry.
+func TestUpdateDiscoveryCandidatesForPeer_NilNames_StillSendsUpsert(t *testing.T) {
+	ecMock := &mockExternalContactUpserter{}
+	matcher := &PeerMatcher{
+		messageCounter: &mockMessageCounter{counts: map[int64]*repository.PeerMessageCount{
+			12345: {TotalCount: 3, OutboundCount: 1, InboundCount: 2},
+		}},
+		externalContactRepo: ecMock,
+		discoveryMinMsgs:    3,
+	}
+
+	matcher.UpdateDiscoveryCandidatesForPeer(context.Background(), 12345, nil, nil, nil)
+
+	require.Len(t, ecMock.upsertCalls, 1)
+	call := ecMock.upsertCalls[0]
+	assert.Equal(t, "12345", call.SourceID)
+	assert.Nil(t, call.FirstName)
+	assert.Nil(t, call.LastName)
+	assert.Nil(t, call.DisplayName)
+	_, hasUsername := call.Metadata["username"]
+	assert.False(t, hasUsername, "no username key when peerUsername is nil")
+	require.NotNil(t, call.SyncedAt)
+}
+
+// TestUpdateDiscoveryCandidatesForPeer_EmptyStringsTreatedAsNil covers the
+// normalization applied before the upsert: Telegram sometimes carries blank
+// entity strings (not NULL) on outbound private chats. If we wrote "" through
+// the COALESCE upsert, the stored value would be overwritten with a
+// meaningless empty string, or the metadata would gain a "@" username.
+func TestUpdateDiscoveryCandidatesForPeer_EmptyStringsTreatedAsNil(t *testing.T) {
+	ecMock := &mockExternalContactUpserter{}
+	matcher := &PeerMatcher{
+		messageCounter: &mockMessageCounter{counts: map[int64]*repository.PeerMessageCount{
+			12345: {TotalCount: 3, OutboundCount: 1, InboundCount: 2},
+		}},
+		externalContactRepo: ecMock,
+		discoveryMinMsgs:    3,
+	}
+
+	empty := ""
+	matcher.UpdateDiscoveryCandidatesForPeer(context.Background(), 12345, &empty, &empty, &empty)
+
+	require.Len(t, ecMock.upsertCalls, 1)
+	call := ecMock.upsertCalls[0]
+	assert.Nil(t, call.FirstName, "empty first_name pointer should normalize to nil")
+	assert.Nil(t, call.LastName, "empty last_name pointer should normalize to nil")
+	assert.Nil(t, call.DisplayName)
+	_, hasUsername := call.Metadata["username"]
+	assert.False(t, hasUsername, "empty username pointer should not write a metadata key")
 }
 
 func ptr(s string) *string { return &s }

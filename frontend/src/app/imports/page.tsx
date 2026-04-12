@@ -14,6 +14,7 @@ import {
   AlertCircle,
   CloudDownload,
   Calendar,
+  Send,
 } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
@@ -21,6 +22,7 @@ import { Pagination } from '@/components/ui/pagination'
 import { ImportLinkModal } from '@/components/imports/import-link-modal'
 import { useImportCandidates, useIgnoreCandidate, useTriggerSync } from '@/hooks/use-imports'
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
+import { getCandidateDisplayName } from '@/lib/candidate-display'
 import type { ImportCandidate, ImportCandidatesListParams } from '@/types/import'
 
 // Constants
@@ -98,10 +100,7 @@ function CandidateCard({
   importLoading: boolean
   ignoreLoading: boolean
 }) {
-  const displayName =
-    candidate.display_name ||
-    [candidate.first_name, candidate.last_name].filter(Boolean).join(' ') ||
-    'Unknown'
+  const displayName = getCandidateDisplayName(candidate)
 
   // Get meeting context for calendar attendees
   const meetingContext =
@@ -202,6 +201,19 @@ function CandidateCard({
                   {phone}
                 </a>
               ))}
+              {candidate.source === 'telegram' &&
+                candidate.metadata?.username &&
+                displayName !== candidate.metadata.username && (
+                  <a
+                    href={`https://t.me/${encodeURIComponent(candidate.metadata.username.replace(/^@/, ''))}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                  >
+                    <Send className="w-3.5 h-3.5 mr-1.5 text-gray-400" />
+                    {candidate.metadata.username}
+                  </a>
+                )}
             </div>
           </div>
         </div>
@@ -275,10 +287,7 @@ export default function ImportsPage() {
   }
 
   const handleIgnore = async (candidate: ImportCandidate) => {
-    const displayName =
-      candidate.display_name ||
-      [candidate.first_name, candidate.last_name].filter(Boolean).join(' ') ||
-      'contact'
+    const displayName = getCandidateDisplayName(candidate)
 
     setActionInProgress(candidate.id)
     try {

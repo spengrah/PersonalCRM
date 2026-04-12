@@ -48,11 +48,15 @@ export interface SeedContactsResponse {
 }
 
 export interface SeedExternalContactInput {
-  display_name: string
+  display_name?: string
+  first_name?: string
+  last_name?: string
+  source?: 'test' | 'telegram' | 'gcontacts' | 'gcal_attendee'
   emails?: string[]
   phones?: string[]
   organization?: string
   job_title?: string
+  metadata?: Record<string, unknown>
 }
 
 export interface SeedExternalContactsRequest {

@@ -14,6 +14,7 @@ import (
 	tgpkg "personal-crm/backend/internal/telegram"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -332,4 +333,150 @@ func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {
 	// Clean up test-specific data
 	_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE telegram_message_id IN (80061, 80062)")
 	_, _ = database.Pool.Exec(ctx, "DELETE FROM interaction WHERE source_ref LIKE 'tg:303:%'")
+}
+
+// TestListDistinctUnmatchedPeers_PrefersPopulatedNameRow locks in the
+// ORDER BY extension: with two unmatched rows for the same peer, the one with
+// non-null first/last names wins the DISTINCT ON, even if it's older. Ensures
+// a single aggregation pass picks the most-populated row.
+func TestListDistinctUnmatchedPeers_PrefersPopulatedNameRow(t *testing.T) {
+	messageRepo, _, _, _, _, database := setupAggregationTest(t)
+	ctx := context.Background()
+
+	const testPeerID int64 = 90001
+	const testChatID int64 = 900
+	username := "dale"
+	firstName := "Dale"
+	lastName := "Dobeck"
+
+	// Narrow cleanup scoped to this test's peer/chat — use the sqlc helper
+	// (the "Never write raw SQL in Go" rule applies in tests too).
+	t.Cleanup(func() {
+		_, _ = database.Queries.DeleteTelegramMessagesByPeerUserID(
+			ctx,
+			pgtype.Int8{Int64: testPeerID, Valid: true},
+		)
+	})
+
+	base := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+	text := "hi"
+
+	// Newer row: has username but no names.
+	_, err := messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 90001,
+		TelegramChatID:    testChatID,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            base,
+		IsOutgoing:        false,
+		PeerUserID:        ptrInt64(testPeerID),
+		PeerUsername:      &username,
+	})
+	require.NoError(t, err)
+
+	// Older row: has username AND names. Older means it'd lose the sent_at DESC
+	// tiebreak; the name-prefering ORDER BY clauses should still pick it.
+	_, err = messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 90002,
+		TelegramChatID:    testChatID,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            base.Add(-1 * time.Hour),
+		IsOutgoing:        false,
+		PeerUserID:        ptrInt64(testPeerID),
+		PeerUsername:      &username,
+		PeerFirstName:     &firstName,
+		PeerLastName:      &lastName,
+	})
+	require.NoError(t, err)
+
+	peers, err := messageRepo.ListDistinctUnmatchedPeers(ctx)
+	require.NoError(t, err)
+
+	var got *repository.UnmatchedPeer
+	for i := range peers {
+		if peers[i].PeerUserID == testPeerID {
+			got = &peers[i]
+			break
+		}
+	}
+	require.NotNil(t, got, "expected test peer to be returned by ListDistinctUnmatchedPeers")
+	require.NotNil(t, got.PeerFirstName, "populated-name row should win even though it is older")
+	assert.Equal(t, "Dale", *got.PeerFirstName)
+	require.NotNil(t, got.PeerLastName)
+	assert.Equal(t, "Dobeck", *got.PeerLastName)
+}
+
+// TestListDistinctUnmatchedPeers_TreatsBlankStringsAsAbsent guards the ORDER BY
+// clauses: a row with blank peer_first_name / peer_last_name must not outrank
+// a row with a real name. Without the `<> ”` guards the outbound-private-chat
+// shape (blank strings instead of NULL) would keep winning the tiebreak and
+// the batch path would re-seed external_contact with blanks.
+func TestListDistinctUnmatchedPeers_TreatsBlankStringsAsAbsent(t *testing.T) {
+	messageRepo, _, _, _, _, database := setupAggregationTest(t)
+	ctx := context.Background()
+
+	const testPeerID int64 = 90002
+	const testChatID int64 = 901
+	empty := ""
+	firstName := "Dale"
+	lastName := "Dobeck"
+
+	t.Cleanup(func() {
+		_, _ = database.Queries.DeleteTelegramMessagesByPeerUserID(
+			ctx,
+			pgtype.Int8{Int64: testPeerID, Valid: true},
+		)
+	})
+
+	base := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+	text := "hi"
+
+	// Newer row: blank entity strings.
+	_, err := messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 90003,
+		TelegramChatID:    testChatID,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            base,
+		IsOutgoing:        true,
+		PeerUserID:        ptrInt64(testPeerID),
+		PeerFirstName:     &empty,
+		PeerLastName:      &empty,
+	})
+	require.NoError(t, err)
+
+	// Older row: populated entity data.
+	_, err = messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 90004,
+		TelegramChatID:    testChatID,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            base.Add(-1 * time.Hour),
+		IsOutgoing:        false,
+		PeerUserID:        ptrInt64(testPeerID),
+		PeerFirstName:     &firstName,
+		PeerLastName:      &lastName,
+	})
+	require.NoError(t, err)
+
+	peers, err := messageRepo.ListDistinctUnmatchedPeers(ctx)
+	require.NoError(t, err)
+
+	var got *repository.UnmatchedPeer
+	for i := range peers {
+		if peers[i].PeerUserID == testPeerID {
+			got = &peers[i]
+			break
+		}
+	}
+	require.NotNil(t, got)
+	require.NotNil(t, got.PeerFirstName)
+	assert.Equal(t, "Dale", *got.PeerFirstName, "blank-string row must not outrank a real-name row")
+	require.NotNil(t, got.PeerLastName)
+	assert.Equal(t, "Dobeck", *got.PeerLastName)
 }

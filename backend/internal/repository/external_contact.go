@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -66,6 +67,18 @@ type ExternalContact struct {
 	SyncedAt      *time.Time     `json:"synced_at,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
+}
+
+// UpsertTelegramDiscoveryCandidateRequest carries the Telegram-specific fields
+// used by the peer matcher. Nil name fields are preserved (never overwrite a
+// previously-captured name). Metadata is merged with existing stored metadata.
+type UpsertTelegramDiscoveryCandidateRequest struct {
+	SourceID    string         `json:"source_id"`
+	DisplayName *string        `json:"display_name,omitempty"`
+	FirstName   *string        `json:"first_name,omitempty"`
+	LastName    *string        `json:"last_name,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	SyncedAt    *time.Time     `json:"synced_at,omitempty"`
 }
 
 // UpsertExternalContactRequest holds parameters for creating/updating an external contact
@@ -299,6 +312,40 @@ func (r *ExternalContactRepository) Upsert(ctx context.Context, req UpsertExtern
 	dbContact, err := r.queries.UpsertExternalContact(ctx, params)
 	if err != nil {
 		return nil, err
+	}
+	return convertDbExternalContact(dbContact)
+}
+
+// UpsertTelegramDiscoveryCandidate inserts or updates a Telegram discovery
+// candidate via the dedicated SQL query. Unlike the shared Upsert, nil name
+// fields are preserved (never overwrite a stored value) and metadata is merged
+// with the existing stored map instead of replacing it. Unrelated columns
+// (emails, phones, addresses, organization, job_title, birthday, photo_url,
+// etag, account_id) are not touched on update.
+func (r *ExternalContactRepository) UpsertTelegramDiscoveryCandidate(
+	ctx context.Context,
+	req UpsertTelegramDiscoveryCandidateRequest,
+) (*ExternalContact, error) {
+	metadata := req.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadataBytes, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, fmt.Errorf("marshal metadata: %w", err)
+	}
+
+	params := db.UpsertTelegramDiscoveryCandidateParams{
+		SourceID:    req.SourceID,
+		DisplayName: stringToPgText(req.DisplayName),
+		FirstName:   stringToPgText(req.FirstName),
+		LastName:    stringToPgText(req.LastName),
+		Metadata:    metadataBytes,
+		SyncedAt:    timeToPgTimestamptz(req.SyncedAt),
+	}
+	dbContact, err := r.queries.UpsertTelegramDiscoveryCandidate(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("upsert telegram discovery candidate: %w", err)
 	}
 	return convertDbExternalContact(dbContact)
 }

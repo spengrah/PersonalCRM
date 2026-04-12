@@ -91,6 +91,7 @@ type Querier interface {
 	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error
 	DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	DeleteExternalIdentitiesBySourceID(ctx context.Context, sourceID pgtype.Text) (int64, error)
 	DeleteIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) error
 	DeleteIdentity(ctx context.Context, id pgtype.UUID) error
 	DeleteNote(ctx context.Context, id pgtype.UUID) error
@@ -104,6 +105,7 @@ type Querier interface {
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
 	DeleteTelegramChannelState(ctx context.Context, channelID int64) error
 	DeleteTelegramChatConfig(ctx context.Context, telegramChatID int64) error
+	DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
 	DeleteTelegramSession(ctx context.Context) error
 	DeleteTelegramUpdateState(ctx context.Context, userID int64) error
 	// Demote source's primary contact methods when target already has a primary for that type
@@ -213,7 +215,12 @@ type Querier interface {
 	// Lists contacts that have a contact_by date set (used for testing mode filtering).
 	// Returns contacts ordered by contact_by (soonest first).
 	ListContactsWithContactBy(ctx context.Context, limit int32) ([]*Contact, error)
-	// Prefer rows with username/phone for identity matching
+	// Prefer rows with username/phone for identity matching, then rows with
+	// populated names so a single aggregation pass picks the most-populated row
+	// per peer (avoids depending on multi-pass COALESCE accumulation in Go).
+	// Treats blank strings as absent — Telegram sometimes persists '' instead of
+	// NULL for entity fields on outbound private chats, and those rows must not
+	// outrank a row with a real name.
 	ListDistinctUnmatchedPeers(ctx context.Context) ([]*ListDistinctUnmatchedPeersRow, error)
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
@@ -363,6 +370,11 @@ type Querier interface {
 	UpsertTelegramChannelAccessHash(ctx context.Context, arg UpsertTelegramChannelAccessHashParams) (*TelegramChannelState, error)
 	UpsertTelegramChannelState(ctx context.Context, arg UpsertTelegramChannelStateParams) (*TelegramChannelState, error)
 	UpsertTelegramChatConfig(ctx context.Context, arg UpsertTelegramChatConfigParams) (*TelegramChatConfig, error)
+	// Telegram-specific upsert that preserves populated peer fields when a later
+	// message arrives with null entity data. Never clears a name/handle that was
+	// previously captured. Metadata is merged (|| operator) so keys from earlier
+	// writes (e.g. username) are retained when the new map omits them.
+	UpsertTelegramDiscoveryCandidate(ctx context.Context, arg UpsertTelegramDiscoveryCandidateParams) (*ExternalContact, error)
 	UpsertTelegramMessage(ctx context.Context, arg UpsertTelegramMessageParams) (*TelegramMessage, error)
 	UpsertTelegramSession(ctx context.Context, arg UpsertTelegramSessionParams) (*TelegramSession, error)
 	// Used by gotd/td session.Storage — only updates encrypted session data,

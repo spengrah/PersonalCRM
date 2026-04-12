@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -22,7 +23,7 @@ type identityMatcher interface {
 
 // externalContactUpserter defines the interface for upserting/updating external contacts.
 type externalContactUpserter interface {
-	Upsert(ctx context.Context, req repository.UpsertExternalContactRequest) (*repository.ExternalContact, error)
+	UpsertTelegramDiscoveryCandidate(ctx context.Context, req repository.UpsertTelegramDiscoveryCandidateRequest) (*repository.ExternalContact, error)
 	GetBySource(ctx context.Context, source, sourceID string, accountID *string) (*repository.ExternalContact, error)
 	UpdateMatch(ctx context.Context, id uuid.UUID, crmContactID *uuid.UUID, status repository.MatchStatus) (*repository.ExternalContact, error)
 }
@@ -181,6 +182,7 @@ func (m *PeerMatcher) UpdateDiscoveryCandidates(ctx context.Context) error {
 		peerMap[p.PeerUserID] = p
 	}
 
+	now := accelerated.GetCurrentTime()
 	created := 0
 	for _, count := range counts {
 		if count.TotalCount < int64(m.discoveryMinMsgs) {
@@ -193,7 +195,14 @@ func (m *PeerMatcher) UpdateDiscoveryCandidates(ctx context.Context) error {
 			continue // peer was matched, skip
 		}
 
-		displayName := buildDisplayName(peer.PeerFirstName, peer.PeerLastName)
+		// Normalize empty-string peer fields to nil so the dedicated upsert's
+		// COALESCE preserves stored values (the prod symptom included rows with
+		// blank strings that would otherwise read as "populated" and clobber).
+		firstName := nilIfEmpty(peer.PeerFirstName)
+		lastName := nilIfEmpty(peer.PeerLastName)
+		username := nilIfEmpty(peer.PeerUsername)
+
+		displayName := buildDisplayName(firstName, lastName)
 		sourceID := strconv.FormatInt(count.PeerUserID, 10)
 
 		metadata := map[string]any{
@@ -204,17 +213,17 @@ func (m *PeerMatcher) UpdateDiscoveryCandidates(ctx context.Context) error {
 		if !count.LastMessageAt.IsZero() {
 			metadata["last_message_at"] = count.LastMessageAt.Format("2006-01-02T15:04:05Z")
 		}
-		if peer.PeerUsername != nil {
-			metadata["username"] = "@" + *peer.PeerUsername
+		if username != nil {
+			metadata["username"] = "@" + *username
 		}
 
-		_, err := m.externalContactRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
-			Source:      "telegram",
+		_, err := m.externalContactRepo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
 			SourceID:    sourceID,
 			DisplayName: displayName,
-			FirstName:   peer.PeerFirstName,
-			LastName:    peer.PeerLastName,
+			FirstName:   firstName,
+			LastName:    lastName,
 			Metadata:    metadata,
+			SyncedAt:    &now,
 		})
 		if err != nil {
 			log.Warn().Err(err).Int64("peer_user_id", count.PeerUserID).Msg("telegram: failed to upsert discovery candidate")
@@ -241,7 +250,14 @@ func (m *PeerMatcher) UpdateDiscoveryCandidatesForPeer(ctx context.Context, peer
 		return // below threshold
 	}
 
-	displayName := buildDisplayName(peerFirstName, peerLastName)
+	// Normalize empty strings to nil so the dedicated upsert's COALESCE
+	// preserves stored values (outbound private-chat messages often carry
+	// blank entity fields instead of nil).
+	firstName := nilIfEmpty(peerFirstName)
+	lastName := nilIfEmpty(peerLastName)
+	username := nilIfEmpty(peerUsername)
+
+	displayName := buildDisplayName(firstName, lastName)
 	sourceID := strconv.FormatInt(peerUserID, 10)
 
 	metadata := map[string]any{
@@ -252,20 +268,32 @@ func (m *PeerMatcher) UpdateDiscoveryCandidatesForPeer(ctx context.Context, peer
 	if !count.LastMessageAt.IsZero() {
 		metadata["last_message_at"] = count.LastMessageAt.Format("2006-01-02T15:04:05Z")
 	}
-	if peerUsername != nil {
-		metadata["username"] = "@" + *peerUsername
+	if username != nil {
+		metadata["username"] = "@" + *username
 	}
 
-	if _, err := m.externalContactRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
-		Source:      "telegram",
+	now := accelerated.GetCurrentTime()
+	if _, err := m.externalContactRepo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
 		SourceID:    sourceID,
 		DisplayName: displayName,
-		FirstName:   peerFirstName,
-		LastName:    peerLastName,
+		FirstName:   firstName,
+		LastName:    lastName,
 		Metadata:    metadata,
+		SyncedAt:    &now,
 	}); err != nil {
 		log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: failed to upsert discovery candidate for live peer")
 	}
+}
+
+// nilIfEmpty returns nil if the pointer is nil or dereferences to "".
+// Telegram often carries blank entity strings for outbound private chats;
+// treating them as absent keeps the COALESCE-preserve upsert semantics
+// from being subverted by an empty-string "write" that looks populated.
+func nilIfEmpty(s *string) *string {
+	if s == nil || *s == "" {
+		return nil
+	}
+	return s
 }
 
 // OnPeerLinked is called after a Telegram import/link to back-fill message matching.

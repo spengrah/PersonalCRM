@@ -199,8 +199,8 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 		}
 
 		// Neither has match: sort alphabetically by display name, empty names last
-		iName := getCandidateDisplayName(candidates[i].DisplayName, candidates[i].FirstName, candidates[i].LastName)
-		jName := getCandidateDisplayName(candidates[j].DisplayName, candidates[j].FirstName, candidates[j].LastName)
+		iName := getCandidateDisplayName(candidates[i].DisplayName, candidates[i].FirstName, candidates[i].LastName, candidates[i].Metadata, candidates[i].Source)
+		jName := getCandidateDisplayName(candidates[j].DisplayName, candidates[j].FirstName, candidates[j].LastName, candidates[j].Metadata, candidates[j].Source)
 
 		// Empty names sort to end
 		if iName == "" && jName != "" {
@@ -383,13 +383,27 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 
 // buildMethodsFromSelection builds contact methods from user selection
 func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalContact, selected []SelectedMethodInput) []service.ContactMethodInput {
-	// Build map of available values from external contact
-	availableValues := make(map[string]bool)
+	// Build map of available values from external contact. Tracks the value
+	// that should be persisted so telegram handles are stored without the
+	// leading '@' even when the frontend sends '@daledobeck' as the
+	// display-friendly original_value (matches buildMethodsAuto semantics).
+	availableValues := make(map[string]string)
 	for _, email := range external.Emails {
-		availableValues[email.Value] = true
+		availableValues[email.Value] = email.Value
 	}
 	for _, phone := range external.Phones {
-		availableValues[phone.Value] = true
+		availableValues[phone.Value] = phone.Value
+	}
+	// Telegram handle from metadata — accept both the stored ('@daledobeck')
+	// and bare ('daledobeck') forms as the original_value, but persist without
+	// the '@' so it matches buildMethodsAuto and downstream contact-method
+	// uniqueness checks.
+	if external.Source == "telegram" {
+		if handle, ok := external.Metadata["username"].(string); ok && handle != "" {
+			bare := strings.TrimPrefix(handle, "@")
+			availableValues[handle] = bare
+			availableValues[bare] = bare
+		}
 	}
 
 	methods := make([]service.ContactMethodInput, 0, len(selected))
@@ -397,13 +411,15 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 	hasPrimary := false // Track if we've already assigned a primary
 
 	for _, sel := range selected {
-		// Validate the value exists in external contact
-		if !availableValues[sel.OriginalValue] {
+		// Validate the value exists in external contact, and look up the
+		// canonical stored value (strips '@' for telegram handles).
+		storedValue, ok := availableValues[sel.OriginalValue]
+		if !ok {
 			logger.Warn().Str("value", sel.OriginalValue).Msg("selected value not found in external contact")
 			continue
 		}
 
-		normalized := repository.NormalizeContactMethodValue(sel.Type, sel.OriginalValue)
+		normalized := repository.NormalizeContactMethodValue(sel.Type, storedValue)
 		if normalized == "" {
 			continue
 		}
@@ -421,7 +437,7 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 
 		methods = append(methods, service.ContactMethodInput{
 			Type:      sel.Type,
-			Value:     sel.OriginalValue,
+			Value:     storedValue,
 			IsPrimary: isPrimary,
 		})
 		usedValues[key] = true
@@ -650,8 +666,11 @@ func (h *ImportHandler) toImportCandidateResponse(contact *repository.ExternalCo
 	return response
 }
 
-// getCandidateDisplayName extracts the display name from response fields for sorting
-func getCandidateDisplayName(displayName, firstName, lastName *string) string {
+// getCandidateDisplayName extracts the display name from response fields for
+// sorting. For Telegram candidates, falls back to metadata["username"] (with
+// the stored leading "@" stripped) so handle-only peers sort alphabetically
+// instead of being bunched at the end with an empty key.
+func getCandidateDisplayName(displayName, firstName, lastName *string, metadata map[string]any, source string) string {
 	if displayName != nil {
 		return *displayName
 	}
@@ -663,6 +682,11 @@ func getCandidateDisplayName(displayName, firstName, lastName *string) string {
 	}
 	if lastName != nil {
 		return *lastName
+	}
+	if source == "telegram" {
+		if u, ok := metadata["username"].(string); ok && u != "" {
+			return strings.TrimPrefix(u, "@")
+		}
 	}
 	return ""
 }

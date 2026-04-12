@@ -1,0 +1,120 @@
+---
+timestamp: "2026-04-12T16:59:02.966769"
+type: gotcha
+summary: Telegram API returns blank strings for missing peer fields, not NULL
+detail: |
+  When a Telegram message has no peer metadata (e.g., from deleted accounts), the Telegram API returns empty strings ("") for peer_username, peer_first_name, peer_last_name, not NULL. This breaks NULL-based upsert logic (COALESCE skips ""). **Fix:** Normalize empty strings to nil in Go before upserting (`if s == "" { return nil }`), and add `!= ''` filters to SQL aggregation ORDER BY clauses. The prod bug (peer 1504114951 showing "Unknown") was caused by a blank-string row winning the DISTINCT ON sort and then overwriting populated data via unconditional upsert.
+actionable: true
+
+---
+timestamp: "2026-04-12T16:59:02.966769"
+type: architecture
+summary: DISTINCT ON with ORDER BY can select 'best' row per group in one pass
+detail: |
+  For Telegram peer aggregation across messages, using `SELECT DISTINCT ON (peer_user_id) ... ORDER BY peer_user_id, (peer_username IS NOT NULL AND peer_username != '') DESC, ... peer_first_name ...` picks the most-populated row per peer in a single query. This avoids multi-pass COALESCE accumulation in Go. The tiebreaker order matters: (1) username/phone for identity matching, (2) non-empty name fields, (3) message_id DESC for recency. Without the `!= ''` guards, blank strings sort equal to populated strings and the result is non-deterministic.
+actionable: true
+
+---
+timestamp: "2026-04-12T16:59:02.966769"
+type: rule
+summary: Integration tests must call db.RunMigrations before db.NewDatabase
+detail: |
+  CI runs tests against a bare PostgreSQL container with no pre-existing schema. Tests in `backend/tests/` MUST call `db.RunMigrations(databaseURL, getMigrationsPath())` before `db.NewDatabase()`, otherwise queries fail with "relation does not exist". Local dev often has migrations already applied, masking this. Add the RunMigrations call in test setup (e.g., `func setupExternalContactRepo(t *testing.T)`) to ensure tests work in CI.
+actionable: true
+
+---
+timestamp: "2026-04-12T16:59:02.966769"
+type: rule
+summary: Test cleanup must use sqlc-generated queries, not raw SQL
+detail: |
+  Core rule: "Never write raw SQL in Go." This applies to test cleanup too. Use `database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, pgtype.Text{String: prefix, Valid: true})` instead of `database.Pool.Exec(ctx, "DELETE FROM external_contact WHERE source_id LIKE ...")`. The test.sql file already has prefix-based cleanup queries. Codex caught three instances of raw SQL in test cleanup that violated this rule.
+actionable: true
+
+---
+timestamp: "2026-04-12T16:59:02.966769"
+type: distinction
+summary: Codex review catches subtle bugs that slip past local testing
+detail: |
+  The implement-and-review skill runs Codex before push. In this session, Codex identified three real issues: (1) blank-string normalization missing from both SQL and Go, (2) missing batch-path test coverage, (3) raw SQL in test cleanup. All three would have passed local tests but broken production or violated codebase rules. The empty-string bug was particularly subtle — it only manifests when Telegram returns "" for a peer that previously had populated names, then the next sync overwrites the good data. Codex saw this because it cross-referenced the prod symptom in the plan against the code.
+actionable: false
+
+---
+timestamp: "2026-04-12T16:59:02.966769"
+type: gotcha
+summary: sqlc test cleanup queries require pgtype wrappers, not raw strings
+detail: |
+  When calling generated test cleanup queries like `DeleteExternalContactsBySourceIDPrefix`, the parameter type is `pgtype.Text`, not `string`. Must pass `pgtype.Text{String: "test-prefix-", Valid: true}`. Passing a raw string causes a compilation error. This is different from production queries which often take plain strings due to sqlc's `emit_pointers_for_null_types: false`. Test queries use pgtype because they're in a separate file (test.sql) with different emit settings.
+actionable: true
+
+---
+timestamp: "2026-04-12T17:14:04.195725"
+type: architecture
+summary: Use DISTINCT ON with multi-field ORDER BY for PostgreSQL aggregation in one pass
+detail: |
+  For Telegram peer aggregation across messages, `SELECT DISTINCT ON (peer_user_id) ... ORDER BY peer_user_id, (peer_username IS NOT NULL AND peer_username != '') DESC, (peer_first_name IS NOT NULL AND peer_first_name != '') DESC, message_id DESC` picks the most-populated row per peer in a single query. This avoids multi-pass queries or Go-side COALESCE accumulation. The tiebreaker order matters: prioritize fields needed for identity matching (username/phone), then name fields for display, then recency. Without `!= ''` guards, blank strings sort equal to populated strings making results non-deterministic.
+actionable: true
+
+---
+timestamp: "2026-04-12T17:14:04.195725"
+type: gotcha
+summary: Test cleanup queries require pgtype wrappers, not raw strings
+detail: |
+  When calling generated test cleanup queries like DeleteExternalContactsBySourceIDPrefix, the parameter type is pgtype.Text, not string. Must pass pgtype.Text{String: "prefix", Valid: true}. Passing raw strings causes compilation errors. This differs from production queries which often accept plain strings due to emit_pointers_for_null_types: false. Test queries in test.sql use different emit settings, hence require pgtype wrappers.
+actionable: true
+
+---
+timestamp: "2026-04-12T17:14:04.195725"
+type: architecture
+summary: Display name fallbacks from metadata must be sent explicitly on import
+detail: |
+  When adding display name fallbacks that pull from metadata (e.g., Telegram @username when first_name/last_name/display_name are missing), the import logic must explicitly send this fallback value to the backend. Frontend pattern: check if candidate lacks source name fields (display_name, first_name, last_name all null/empty), and if so, always include the derived displayName in the import payload even if user didn't edit it. Otherwise the backend receives empty name fields and import fails. See ImportLinkModal.handleImport for reference implementation.
+actionable: true
+
+---
+timestamp: "2026-04-12T17:14:04.195725"
+type: rule
+summary: "\"Never write raw SQL in Go\" applies to test code too"
+detail: |
+  The core rule "Never write raw SQL in Go" extends to test cleanup code. Use sqlc-generated queries from test.sql (e.g., DeleteTelegramMessagesByPeerUserID, DeleteExternalContactsBySourceIDPrefix) instead of database.Pool.Exec("DELETE FROM ..."). Create new test.sql queries if needed. Codex will catch violations of this rule in review, but it's better to follow the pattern from the start.
+actionable: true
+
+---
+timestamp: "2026-04-12T17:14:04.195725"
+type: documentation_gap
+summary: Integration test setup requirement not prominent enough for test cleanup
+detail: |
+  The Common Gotchas table documents that integration tests must call db.RunMigrations before db.NewDatabase for CI compatibility. However, it doesn't emphasize that the "Never write raw SQL" rule applies equally to test cleanup code. Agents may think test code is exempt from sqlc requirements. The gap: test-specific patterns (cleanup, setup) should be explicitly called out as following the same rules as production code. Strengthen by adding example in Anti-Patterns section showing wrong (raw SQL cleanup) vs right (sqlc cleanup).
+actionable: false
+
+---
+timestamp: "2026-04-12T17:24:28.292762"
+type: gotcha
+summary: Import modal display and backend method creation are separate concerns
+detail: |
+  Backend `buildMethodsAuto` may correctly create a contact method from metadata (e.g., Telegram username) on import, but the import/link modal won't display it in the Contact Methods section unless you also update: (1) `extractExternalMethods` in method-conflict-detection.ts to extract from metadata for Link mode conflict detection, (2) modal's `methodSelections` initialization to include the metadata field, (3) the "no contact methods available" guard condition. The backend creating it ≠ the modal showing it.
+actionable: true
+
+---
+timestamp: "2026-04-12T17:24:28.292762"
+type: architecture
+summary: Adding contact method types from metadata requires 6-location update pattern
+detail: |
+  When adding a new contact method type that comes from metadata (not emails/phones arrays on ImportCandidate), you must update: **Backend:** (1) `buildMethodsAuto` to create the method, (2) `buildMethodsFromSelection` to add the value to `availableValues` map for validation. **Frontend:** (3) `extractExternalMethods` to extract and return the handle from metadata, (4) modal's `methodSelections` useEffect to add the handle to selections, (5) "no contact methods available" guard to check metadata fields, (6) MethodSelector to support the method's icon and readonly/editable pattern. Missing any location causes display gaps or validation failures.
+actionable: true
+
+---
+timestamp: "2026-04-12T17:24:28.292762"
+type: architecture
+summary: MethodSelector supports two UI patterns based on HANDLE_METHOD_TYPES
+detail: |
+  MethodSelector renders differently based on method type: **Email methods** (email, gchat) get a type dropdown (personal/work/other/etc.) because users commonly have multiple emails with distinct purposes. **Handle methods** (telegram, discord, twitter) get a readonly type label and Send icon because handles are typically singular and non-categorizable. The distinction is determined by `HANDLE_METHOD_TYPES` set in contact-methods.ts. When adding a new handle-based method type, add it to `HANDLE_METHOD_TYPES` and update MethodSelector's icon rendering logic.
+actionable: true
+
+---
+timestamp: "2026-04-12T17:24:28.292762"
+type: documentation_gap
+summary: "\"When You Change X, Check Y\" entry for contact methods incomplete"
+detail: |
+  The "When You Change X, Check Y" table has an entry for "Contact method types" that mentions updating the `contact_method` CHECK constraint and `identity.IdentifierType` enum. This is correct but incomplete — it doesn't mention the 6-location pattern required when adding method types from metadata (not standard emails/phones arrays). **Why missed:** The table focuses on database/type system changes, not UI display patterns. **How to strengthen:** Add a second row distinguishing "Contact method types (standard)" vs "Contact method types (from metadata)" with the latter listing all 6 update locations: buildMethodsAuto, buildMethodsFromSelection availableValues, extractExternalMethods, methodSelections init, no-methods guard, MethodSelector.
+actionable: true
+

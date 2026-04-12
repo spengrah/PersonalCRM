@@ -15,11 +15,8 @@ import {
   useIgnoreCandidate,
   useImportCandidates,
 } from '@/hooks/use-imports'
-import {
-  detectMethodConflicts,
-  getCandidateDisplayName,
-  areNamesSimilar,
-} from '@/lib/method-conflict-detection'
+import { detectMethodConflicts, areNamesSimilar } from '@/lib/method-conflict-detection'
+import { getCandidateDisplayName } from '@/lib/candidate-display'
 import { getSourceDisplay } from '@/lib/source-display'
 import type { ImportCandidate, SelectedMethod, MethodComparison } from '@/types/import'
 import type { ContactMethodType } from '@/types/contact'
@@ -177,6 +174,21 @@ export function ImportLinkModal({
         isEmail: false,
       })
     })
+
+    // Add Telegram @username from metadata as a telegram method.
+    // Mirrors the backend's buildMethodsAuto behavior in handlers/import.go so
+    // the UI reflects the method that will actually be created on import.
+    // Display the handle with a leading '@' for consistency with the card chip.
+    if (candidate.source === 'telegram' && candidate.metadata?.username) {
+      const rawHandle = candidate.metadata.username
+      const displayValue = rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`
+      selections.set(displayValue, {
+        value: displayValue,
+        selected: true,
+        type: 'telegram',
+        isEmail: false,
+      })
+    }
 
     setMethodSelections(selections)
     setConflictResolutions(new Map())
@@ -370,8 +382,18 @@ export function ImportLinkModal({
     }
     const selectedMethods = buildSelectedMethods()
     const cadence = selectedCadence || undefined
-    // Only include name if it differs from external source
-    const nameToSend = editedName.trim() !== displayName ? editedName.trim() : undefined
+    // Only include name if it differs from external source.
+    // For candidates with no source name fields (e.g. Telegram peers where the
+    // displayed heading is a metadata.username fallback), always send the name
+    // — the backend cannot derive one from display_name/first_name/last_name.
+    const candidateHasSourceName = Boolean(
+      candidate.display_name || candidate.first_name || candidate.last_name
+    )
+    const nameToSend = candidateHasSourceName
+      ? editedName.trim() !== displayName
+        ? editedName.trim()
+        : undefined
+      : editedName.trim()
 
     try {
       await importMutation.mutateAsync({
@@ -711,7 +733,7 @@ export function ImportLinkModal({
         >
           <h4 className="text-sm font-medium text-gray-700 mb-3">Contact Methods</h4>
 
-          {candidate.emails.length === 0 && candidate.phones.length === 0 ? (
+          {methodSelections.size === 0 ? (
             <p className="text-sm text-gray-500">No contact methods available</p>
           ) : mode === 'import' ? (
             // Import mode: Simple method selection

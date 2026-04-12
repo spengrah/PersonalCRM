@@ -536,3 +536,95 @@ describe('ImportsPage - Source Filter', () => {
     expect(useImportCandidates).toHaveBeenCalledWith(expect.objectContaining({ page: 1 }))
   })
 })
+
+describe('ImportsPage - Telegram @username', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+
+    vi.mocked(useImportAsContact).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    } as any)
+    vi.mocked(useLinkCandidate).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    } as any)
+    vi.mocked(useIgnoreCandidate).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    } as any)
+    vi.mocked(useTriggerSync).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    } as any)
+    vi.mocked(useGoogleAccounts).mockReturnValue({ data: [] } as any)
+    vi.mocked(useContacts).mockReturnValue({
+      data: { contacts: [], total: 0, page: 1, limit: 500 },
+    } as any)
+    vi.mocked(useContact).mockReturnValue({ data: null } as any)
+  })
+
+  it('renders @username chip for Telegram candidate with a handle', () => {
+    vi.mocked(useImportCandidates).mockReturnValue({
+      data: {
+        candidates: [
+          {
+            id: 'tg-candidate-1',
+            source: 'telegram',
+            display_name: 'Dale Dobeck',
+            emails: [],
+            phones: [],
+            metadata: { username: '@daledobeck' },
+          },
+        ],
+        total: 1,
+        page: 1,
+        limit: 20,
+        pages: 1,
+      },
+      isLoading: false,
+      error: null,
+    } as any)
+
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    // Heading shows the display name
+    expect(screen.getByRole('heading', { name: 'Dale Dobeck' })).toBeInTheDocument()
+    // Chip is a link to t.me/<handle> (no '@' in the URL path)
+    const chip = screen.getByRole('link', { name: '@daledobeck' })
+    expect(chip).toHaveAttribute('href', 'https://t.me/daledobeck')
+    expect(chip).toHaveAttribute('target', '_blank')
+    expect(chip).toHaveAttribute('rel', expect.stringContaining('noopener'))
+  })
+
+  it('falls back to @username heading and hides the chip when no names are set', () => {
+    vi.mocked(useImportCandidates).mockReturnValue({
+      data: {
+        candidates: [
+          {
+            id: 'tg-candidate-2',
+            source: 'telegram',
+            emails: [],
+            phones: [],
+            metadata: { username: '@daledobeck' },
+          },
+        ],
+        total: 1,
+        page: 1,
+        limit: 20,
+        pages: 1,
+      },
+      isLoading: false,
+      error: null,
+    } as any)
+
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    // @username becomes the primary heading
+    expect(screen.getByRole('heading', { name: '@daledobeck' })).toBeInTheDocument()
+    // No "Unknown" rendered
+    expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
+    // Chip is suppressed — no duplicate link rendered for the same handle
+    expect(screen.queryByRole('link', { name: '@daledobeck' })).not.toBeInTheDocument()
+  })
+})

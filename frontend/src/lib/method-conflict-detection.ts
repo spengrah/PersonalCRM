@@ -3,15 +3,6 @@ import type { ImportCandidate, MethodComparison, ConflictType, MethodState } fro
 import { normalizeContactMethodValueForComparison } from './contact-methods'
 
 /**
- * Get the display name from an import candidate.
- */
-export function getCandidateDisplayName(candidate: ImportCandidate): string {
-  if (candidate.display_name) return candidate.display_name
-  const parts = [candidate.first_name, candidate.last_name].filter(Boolean)
-  return parts.join(' ') || 'Unknown'
-}
-
-/**
  * Extract external contact methods from an import candidate.
  * Preserves original type information for conflict resolution.
  */
@@ -118,6 +109,43 @@ export function detectMethodConflicts(
     comparisons.push({
       external_value: phone,
       external_type: 'phone',
+      suggested_crm_type: suggestedType,
+      crm_method: crmMethod,
+      conflict_type: conflictType,
+      state,
+    })
+  }
+
+  // Process Telegram @username from metadata (source-gated). Mirrors the
+  // backend's buildMethodsAuto — a Telegram peer's handle is itself a
+  // contact method that should appear in the Link modal's comparison UI.
+  // The external_value is kept in display form ('@handle') so the modal's
+  // methodSelections lookup (keyed by @handle) matches.
+  if (candidate.source === 'telegram' && candidate.metadata?.username) {
+    const rawHandle = candidate.metadata.username
+    const displayValue = rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`
+    const suggestedType: ContactMethodType = 'telegram'
+    const normalized = normalizeContactMethodValueForComparison(suggestedType, displayValue)
+
+    const existingByValue = crmByNormalizedValue.get(normalized)
+
+    let conflictType: ConflictType = 'none'
+    let state: MethodState = 'adding'
+    let crmMethod: MethodComparison['crm_method'] | undefined
+
+    if (existingByValue) {
+      crmMethod = {
+        id: existingByValue.id || '',
+        type: existingByValue.type,
+        value: existingByValue.value,
+      }
+      conflictType = 'identical'
+      state = 'unchanged'
+    }
+
+    comparisons.push({
+      external_value: displayValue,
+      external_type: 'telegram',
       suggested_crm_type: suggestedType,
       crm_method: crmMethod,
       conflict_type: conflictType,

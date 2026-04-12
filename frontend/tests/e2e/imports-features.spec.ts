@@ -254,4 +254,154 @@ test.describe('Imports Features @area:imports', () => {
       expect(mediumConfidenceIdx).toBeLessThan(noMatchIdx)
     })
   })
+
+  test.describe('Telegram @username display', () => {
+    let testApi: TestAPI
+
+    test.beforeEach(async ({ request }, testInfo) => {
+      testApi = createTestAPI(request, testInfo)
+    })
+
+    test.afterEach(async () => {
+      await testApi.cleanup()
+    })
+
+    test('shows @username chip on Telegram candidate card', async ({ page }) => {
+      // Use a prefix-scoped handle so parallel test runs don't collide on the
+      // link selector and so we can scope assertions to our card.
+      const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
+      const telegramPath = handle.replace(/^@/, '')
+
+      await testApi.seedExternalContacts([
+        {
+          source: 'telegram',
+          display_name: 'Dale Dobeck',
+          metadata: { username: handle },
+        },
+      ])
+
+      await page.goto('/imports')
+      await page.waitForLoadState('domcontentloaded')
+
+      // Filter to Telegram so only our seeded card is visible even on a busy DB.
+      await page.getByRole('button', { name: 'Telegram', exact: true }).click()
+
+      const displayName = `${testApi.prefix}-Dale Dobeck`
+      await findCandidateByName(page, displayName)
+
+      // Heading shows the display_name; chip shows the handle and links to t.me
+      await expect(page.getByRole('heading', { name: displayName })).toBeVisible()
+      const handleLink = page.getByRole('link', { name: handle })
+      await expect(handleLink).toBeVisible()
+      await expect(handleLink).toHaveAttribute('href', `https://t.me/${telegramPath}`)
+    })
+
+    test('falls back to @username when no name is set on Telegram candidate', async ({ page }) => {
+      const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
+
+      await testApi.seedExternalContacts([
+        {
+          source: 'telegram',
+          // No display_name, no first/last
+          metadata: { username: handle },
+        },
+      ])
+
+      await page.goto('/imports')
+      await page.waitForLoadState('domcontentloaded')
+
+      await page.getByRole('button', { name: 'Telegram', exact: true }).click()
+
+      // @username becomes the primary heading
+      await expect(page.getByRole('heading', { name: handle })).toBeVisible()
+      // Chip is suppressed when the handle is already the heading. Scoping
+      // by the unique prefix-based handle avoids clashing with other seeded
+      // rows on a shared DB.
+      const handleLinks = page.getByRole('link', { name: handle })
+      await expect(handleLinks).toHaveCount(0)
+    })
+
+    // Regression for Codex review feedback on PR #273: a candidate with no
+    // source name fields must still be importable without editing the name —
+    // the frontend needs to send the @handle as `name` explicitly, because
+    // the backend can't derive it from display_name/first_name/last_name.
+    test('imports a handle-only Telegram candidate without requiring a name edit', async ({
+      page,
+    }) => {
+      const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
+
+      await testApi.seedExternalContacts([
+        {
+          source: 'telegram',
+          metadata: { username: handle },
+        },
+      ])
+
+      await page.goto('/imports')
+      await page.waitForLoadState('domcontentloaded')
+      await page.getByRole('button', { name: 'Telegram', exact: true }).click()
+
+      // The candidate card heading shows the handle (display-name fallback).
+      await expect(page.getByRole('heading', { name: handle })).toBeVisible()
+
+      // Open the Import action for this candidate.
+      const candidateCard = page.locator('[class*="border-gray-200"]').filter({ hasText: handle })
+      await candidateCard.getByRole('button', { name: /Import/i }).click()
+
+      // Modal opens in import mode (mode toggle is visible).
+      await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+      // Contact Methods section shows the @handle as a selectable method row —
+      // NOT "No contact methods available". The row carries the handle as its
+      // visible value and defaults to selected.
+      await expect(page.getByText('No contact methods available')).not.toBeVisible()
+      await expect(page.locator('.space-y-2').getByText(handle)).toBeVisible()
+
+      // Import without editing the name — click "Import as New Contact" submit button.
+      await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
+
+      // Success notification confirms the contact was created with the handle as name.
+      await expect(page.getByText(`${handle} imported successfully!`)).toBeVisible({
+        timeout: 10000,
+      })
+    })
+
+    test('shows @username method in Link to Existing modal', async ({ page }) => {
+      const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
+
+      // Seed a CRM contact to link to
+      await testApi.seedContacts([
+        {
+          full_name: 'Link Target For Telegram',
+        },
+      ])
+
+      // Seed a Telegram candidate with no name fields
+      await testApi.seedExternalContacts([
+        {
+          source: 'telegram',
+          metadata: { username: handle },
+        },
+      ])
+
+      await page.goto('/imports')
+      await page.waitForLoadState('domcontentloaded')
+      await page.getByRole('button', { name: 'Telegram', exact: true }).click()
+
+      const candidateCard = page.locator('[class*="border-gray-200"]').filter({ hasText: handle })
+      await candidateCard.getByRole('button', { name: /Link/i }).click()
+
+      // Switch to Link mode
+      await page.getByRole('button', { name: 'Link to Existing', exact: true }).click()
+
+      // Select the CRM contact
+      await page.getByText('Search for a contact...').click()
+      await page.getByText(`${testApi.prefix}-Link Target For Telegram`).click()
+
+      // The handle is rendered in the methods list as "Will be added" / "Same as CRM"
+      // rather than "No contact methods available".
+      await expect(page.getByText('No contact methods available')).not.toBeVisible()
+      await expect(page.locator('.space-y-2').getByText(handle).first()).toBeVisible()
+    })
+  })
 })
