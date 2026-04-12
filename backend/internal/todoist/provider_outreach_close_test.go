@@ -286,6 +286,51 @@ func TestReconcile_OutreachDetectionStateFailureSkipsClose(t *testing.T) {
 	assert.Equal(t, 0, env.recorder.count, "outreach detection must not record interactions")
 }
 
+// TestCloseOnOutreach_PendingTempID verifies that when outreach is detected but
+// the cadence task has a pending temp ID (no real Todoist ID yet), closeOnOutreach
+// still returns handled=true (so the caller skips further processing) but emits
+// no item_close command (can't close what Todoist hasn't confirmed yet). The DB
+// row must still transition to completed.
+func TestCloseOnOutreach_PendingTempID(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	contact, snap := createDismissalContact(t, env, "PendingTemp")
+
+	// Seed cadence task with a pending temp ID (simulating a task whose Todoist
+	// ID hasn't been resolved yet) and old synced_last_outreach_at.
+	oldOutreach := snap.LastOutreachAt.Add(-24 * time.Hour)
+	tempID := "tmp-" + uuid.New().String()[:8]
+	cadenceTask := createCadenceTask(t, env, contact.ID, tempID, map[string]any{
+		MetadataKeySyncedDeadline:       contact.ContactBy.Format(DateFormat),
+		MetadataKeySyncedLastContacted:  snap.LastContacted.Format(time.RFC3339),
+		MetadataKeySyncedLastOutreachAt: oldOutreach.Format(time.RFC3339),
+		MetadataKeyPendingTempID:        tempID, // marks this as a pending temp ID
+	})
+
+	// Advance last_outreach_at so outreach is detected.
+	newOutreach := accelerated.GetCurrentTime().UTC().Truncate(time.Second)
+	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, newOutreach, true))
+
+	// Reload contact.
+	reloadedContact, err := env.contactRepo.GetContact(env.ctx, contact.ID)
+	require.NoError(t, err)
+
+	commands, handled := env.provider.closeOnOutreach(env.ctx, cadenceTask, reloadedContact)
+
+	// Assert: handled=true (outreach was detected and processed).
+	assert.True(t, handled, "outreach must be handled even with pending temp ID")
+
+	// Assert: no item_close command (can't close a pending temp task in Todoist).
+	assert.Empty(t, commands, "no item_close command should be emitted for pending temp ID tasks")
+
+	// Assert: DB row transitioned to completed.
+	reloadedTask, err := env.contactTaskRepo.GetContactTask(env.ctx, cadenceTask.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.ContactTaskStateCompleted, reloadedTask.State,
+		"cadence task must be marked completed even with pending temp ID")
+}
+
 // TestCloseOnOutreach_NilLastOutreachAt verifies that closeOnOutreach returns
 // nil when the contact has no last_outreach_at (wasReachedOutSinceSync returns
 // false).
