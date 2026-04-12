@@ -320,5 +320,44 @@ test.describe('Imports Features @area:imports', () => {
       const handleLinks = page.getByRole('link', { name: handle })
       await expect(handleLinks).toHaveCount(0)
     })
+
+    // Regression for Codex review feedback on PR #273: a candidate with no
+    // source name fields must still be importable without editing the name —
+    // the frontend needs to send the @handle as `name` explicitly, because
+    // the backend can't derive it from display_name/first_name/last_name.
+    test('imports a handle-only Telegram candidate without requiring a name edit', async ({
+      page,
+    }) => {
+      const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
+
+      await testApi.seedExternalContacts([
+        {
+          source: 'telegram',
+          metadata: { username: handle },
+        },
+      ])
+
+      await page.goto('/imports')
+      await page.waitForLoadState('domcontentloaded')
+      await page.getByRole('button', { name: 'Telegram', exact: true }).click()
+
+      // The candidate card heading shows the handle (display-name fallback).
+      await expect(page.getByRole('heading', { name: handle })).toBeVisible()
+
+      // Open the Import action for this candidate.
+      const candidateCard = page.locator('[class*="border-gray-200"]').filter({ hasText: handle })
+      await candidateCard.getByRole('button', { name: /Import/i }).click()
+
+      // Modal opens in import mode (mode toggle is visible).
+      await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+
+      // Import without editing the name — click "Import as New Contact" submit button.
+      await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
+
+      // Success notification confirms the contact was created with the handle as name.
+      await expect(page.getByText(`${handle} imported successfully!`)).toBeVisible({
+        timeout: 10000,
+      })
+    })
   })
 })

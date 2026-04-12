@@ -367,8 +367,18 @@ export function ImportLinkModal({
     }
     const selectedMethods = buildSelectedMethods()
     const cadence = selectedCadence || undefined
-    // Only include name if it differs from external source
-    const nameToSend = editedName.trim() !== displayName ? editedName.trim() : undefined
+    // Only include name if it differs from external source.
+    // For candidates with no source name fields (e.g. Telegram peers where the
+    // displayed heading is a metadata.username fallback), always send the name
+    // — the backend cannot derive one from display_name/first_name/last_name.
+    const candidateHasSourceName = Boolean(
+      candidate.display_name || candidate.first_name || candidate.last_name
+    )
+    const nameToSend = candidateHasSourceName
+      ? editedName.trim() !== displayName
+        ? editedName.trim()
+        : undefined
+      : editedName.trim()
 
     try {
       await importMutation.mutateAsync({
