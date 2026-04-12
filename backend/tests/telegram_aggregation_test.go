@@ -333,3 +333,73 @@ func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {
 	_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE telegram_message_id IN (80061, 80062)")
 	_, _ = database.Pool.Exec(ctx, "DELETE FROM interaction WHERE source_ref LIKE 'tg:303:%'")
 }
+
+// TestListDistinctUnmatchedPeers_PrefersPopulatedNameRow locks in the
+// ORDER BY extension: with two unmatched rows for the same peer, the one with
+// non-null first/last names wins the DISTINCT ON, even if it's older. Ensures
+// a single aggregation pass picks the most-populated row.
+func TestListDistinctUnmatchedPeers_PrefersPopulatedNameRow(t *testing.T) {
+	messageRepo, _, _, _, _, database := setupAggregationTest(t)
+	ctx := context.Background()
+
+	const testPeerID int64 = 90001
+	const testChatID int64 = 900
+	username := "dale"
+	firstName := "Dale"
+	lastName := "Dobeck"
+
+	// Narrow cleanup scoped to this test's peer/chat.
+	t.Cleanup(func() {
+		_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE peer_user_id = $1", testPeerID)
+	})
+
+	base := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+	text := "hi"
+
+	// Newer row: has username but no names.
+	_, err := messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 90001,
+		TelegramChatID:    testChatID,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            base,
+		IsOutgoing:        false,
+		PeerUserID:        ptrInt64(testPeerID),
+		PeerUsername:      &username,
+	})
+	require.NoError(t, err)
+
+	// Older row: has username AND names. Older means it'd lose the sent_at DESC
+	// tiebreak; the name-prefering ORDER BY clauses should still pick it.
+	_, err = messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 90002,
+		TelegramChatID:    testChatID,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            base.Add(-1 * time.Hour),
+		IsOutgoing:        false,
+		PeerUserID:        ptrInt64(testPeerID),
+		PeerUsername:      &username,
+		PeerFirstName:     &firstName,
+		PeerLastName:      &lastName,
+	})
+	require.NoError(t, err)
+
+	peers, err := messageRepo.ListDistinctUnmatchedPeers(ctx)
+	require.NoError(t, err)
+
+	var got *repository.UnmatchedPeer
+	for i := range peers {
+		if peers[i].PeerUserID == testPeerID {
+			got = &peers[i]
+			break
+		}
+	}
+	require.NotNil(t, got, "expected test peer to be returned by ListDistinctUnmatchedPeers")
+	require.NotNil(t, got.PeerFirstName, "populated-name row should win even though it is older")
+	assert.Equal(t, "Dale", *got.PeerFirstName)
+	require.NotNil(t, got.PeerLastName)
+	assert.Equal(t, "Dobeck", *got.PeerLastName)
+}
