@@ -363,6 +363,11 @@ type Querier interface {
 	UpsertTelegramChannelAccessHash(ctx context.Context, arg UpsertTelegramChannelAccessHashParams) (*TelegramChannelState, error)
 	UpsertTelegramChannelState(ctx context.Context, arg UpsertTelegramChannelStateParams) (*TelegramChannelState, error)
 	UpsertTelegramChatConfig(ctx context.Context, arg UpsertTelegramChatConfigParams) (*TelegramChatConfig, error)
+	// Telegram-specific upsert that preserves populated peer fields when a later
+	// message arrives with null entity data. Never clears a name/handle that was
+	// previously captured. Metadata is merged (|| operator) so keys from earlier
+	// writes (e.g. username) are retained when the new map omits them.
+	UpsertTelegramDiscoveryCandidate(ctx context.Context, arg UpsertTelegramDiscoveryCandidateParams) (*ExternalContact, error)
 	UpsertTelegramMessage(ctx context.Context, arg UpsertTelegramMessageParams) (*TelegramMessage, error)
 	UpsertTelegramSession(ctx context.Context, arg UpsertTelegramSessionParams) (*TelegramSession, error)
 	// Used by gotd/td session.Storage — only updates encrypted session data,

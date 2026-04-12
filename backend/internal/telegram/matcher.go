@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -22,7 +23,7 @@ type identityMatcher interface {
 
 // externalContactUpserter defines the interface for upserting/updating external contacts.
 type externalContactUpserter interface {
-	Upsert(ctx context.Context, req repository.UpsertExternalContactRequest) (*repository.ExternalContact, error)
+	UpsertTelegramDiscoveryCandidate(ctx context.Context, req repository.UpsertTelegramDiscoveryCandidateRequest) (*repository.ExternalContact, error)
 	GetBySource(ctx context.Context, source, sourceID string, accountID *string) (*repository.ExternalContact, error)
 	UpdateMatch(ctx context.Context, id uuid.UUID, crmContactID *uuid.UUID, status repository.MatchStatus) (*repository.ExternalContact, error)
 }
@@ -181,6 +182,7 @@ func (m *PeerMatcher) UpdateDiscoveryCandidates(ctx context.Context) error {
 		peerMap[p.PeerUserID] = p
 	}
 
+	now := accelerated.GetCurrentTime()
 	created := 0
 	for _, count := range counts {
 		if count.TotalCount < int64(m.discoveryMinMsgs) {
@@ -208,13 +210,13 @@ func (m *PeerMatcher) UpdateDiscoveryCandidates(ctx context.Context) error {
 			metadata["username"] = "@" + *peer.PeerUsername
 		}
 
-		_, err := m.externalContactRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
-			Source:      "telegram",
+		_, err := m.externalContactRepo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
 			SourceID:    sourceID,
 			DisplayName: displayName,
 			FirstName:   peer.PeerFirstName,
 			LastName:    peer.PeerLastName,
 			Metadata:    metadata,
+			SyncedAt:    &now,
 		})
 		if err != nil {
 			log.Warn().Err(err).Int64("peer_user_id", count.PeerUserID).Msg("telegram: failed to upsert discovery candidate")
@@ -256,13 +258,14 @@ func (m *PeerMatcher) UpdateDiscoveryCandidatesForPeer(ctx context.Context, peer
 		metadata["username"] = "@" + *peerUsername
 	}
 
-	if _, err := m.externalContactRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
-		Source:      "telegram",
+	now := accelerated.GetCurrentTime()
+	if _, err := m.externalContactRepo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
 		SourceID:    sourceID,
 		DisplayName: displayName,
 		FirstName:   peerFirstName,
 		LastName:    peerLastName,
 		Metadata:    metadata,
+		SyncedAt:    &now,
 	}); err != nil {
 		log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: failed to upsert discovery candidate for live peer")
 	}

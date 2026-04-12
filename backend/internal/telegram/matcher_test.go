@@ -34,14 +34,14 @@ type updateMatchCall struct {
 }
 
 type mockExternalContactUpserter struct {
-	upsertCalls      []repository.UpsertExternalContactRequest
+	upsertCalls      []repository.UpsertTelegramDiscoveryCandidateRequest
 	getResult        *repository.ExternalContact
 	updateMatchCalls []updateMatchCall
 }
 
-func (m *mockExternalContactUpserter) Upsert(_ context.Context, req repository.UpsertExternalContactRequest) (*repository.ExternalContact, error) {
+func (m *mockExternalContactUpserter) UpsertTelegramDiscoveryCandidate(_ context.Context, req repository.UpsertTelegramDiscoveryCandidateRequest) (*repository.ExternalContact, error) {
 	m.upsertCalls = append(m.upsertCalls, req)
-	return &repository.ExternalContact{ID: uuid.New(), Source: req.Source, SourceID: req.SourceID}, nil
+	return &repository.ExternalContact{ID: uuid.New(), Source: "telegram", SourceID: req.SourceID}, nil
 }
 
 func (m *mockExternalContactUpserter) GetBySource(_ context.Context, _, _ string, _ *string) (*repository.ExternalContact, error) {
@@ -322,10 +322,10 @@ func TestUpdateDiscoveryCandidatesForPeer_AtThreshold(t *testing.T) {
 
 	// At threshold — should upsert
 	require.Len(t, ecMock.upsertCalls, 1)
-	assert.Equal(t, "telegram", ecMock.upsertCalls[0].Source)
 	assert.Equal(t, "12345", ecMock.upsertCalls[0].SourceID)
 	assert.Equal(t, int64(3), ecMock.upsertCalls[0].Metadata["message_count"])
 	assert.Equal(t, "@alice", ecMock.upsertCalls[0].Metadata["username"])
+	require.NotNil(t, ecMock.upsertCalls[0].SyncedAt, "synced_at should be set on live-path upsert")
 }
 
 func ptr(s string) *string { return &s }

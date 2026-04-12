@@ -109,6 +109,23 @@ WHERE source = $1 AND COALESCE(account_id, '') = COALESCE($2, '');
 -- name: DeleteExternalContact :exec
 DELETE FROM external_contact WHERE id = $1;
 
+-- name: UpsertTelegramDiscoveryCandidate :one
+-- Telegram-specific upsert that preserves populated peer fields when a later
+-- message arrives with null entity data. Never clears a name/handle that was
+-- previously captured. Metadata is merged (|| operator) so keys from earlier
+-- writes (e.g. username) are retained when the new map omits them.
+INSERT INTO external_contact (
+    source, source_id, display_name, first_name, last_name, metadata, synced_at
+) VALUES ('telegram', $1, $2, $3, $4, $5, $6)
+ON CONFLICT (source, source_id, COALESCE(account_id, '')) DO UPDATE SET
+    display_name = COALESCE(EXCLUDED.display_name, external_contact.display_name),
+    first_name   = COALESCE(EXCLUDED.first_name,   external_contact.first_name),
+    last_name    = COALESCE(EXCLUDED.last_name,    external_contact.last_name),
+    metadata     = external_contact.metadata || EXCLUDED.metadata,
+    synced_at    = EXCLUDED.synced_at,
+    updated_at   = NOW()
+RETURNING *;
+
 -- Contact Enrichment queries
 
 -- name: GetEnrichmentsForContact :many

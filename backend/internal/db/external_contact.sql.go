@@ -822,3 +822,67 @@ func (q *Queries) UpsertExternalContact(ctx context.Context, arg UpsertExternalC
 	)
 	return &i, err
 }
+
+const UpsertTelegramDiscoveryCandidate = `-- name: UpsertTelegramDiscoveryCandidate :one
+INSERT INTO external_contact (
+    source, source_id, display_name, first_name, last_name, metadata, synced_at
+) VALUES ('telegram', $1, $2, $3, $4, $5, $6)
+ON CONFLICT (source, source_id, COALESCE(account_id, '')) DO UPDATE SET
+    display_name = COALESCE(EXCLUDED.display_name, external_contact.display_name),
+    first_name   = COALESCE(EXCLUDED.first_name,   external_contact.first_name),
+    last_name    = COALESCE(EXCLUDED.last_name,    external_contact.last_name),
+    metadata     = external_contact.metadata || EXCLUDED.metadata,
+    synced_at    = EXCLUDED.synced_at,
+    updated_at   = NOW()
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at
+`
+
+type UpsertTelegramDiscoveryCandidateParams struct {
+	SourceID    string             `json:"source_id"`
+	DisplayName pgtype.Text        `json:"display_name"`
+	FirstName   pgtype.Text        `json:"first_name"`
+	LastName    pgtype.Text        `json:"last_name"`
+	Metadata    []byte             `json:"metadata"`
+	SyncedAt    pgtype.Timestamptz `json:"synced_at"`
+}
+
+// Telegram-specific upsert that preserves populated peer fields when a later
+// message arrives with null entity data. Never clears a name/handle that was
+// previously captured. Metadata is merged (|| operator) so keys from earlier
+// writes (e.g. username) are retained when the new map omits them.
+func (q *Queries) UpsertTelegramDiscoveryCandidate(ctx context.Context, arg UpsertTelegramDiscoveryCandidateParams) (*ExternalContact, error) {
+	row := q.db.QueryRow(ctx, UpsertTelegramDiscoveryCandidate,
+		arg.SourceID,
+		arg.DisplayName,
+		arg.FirstName,
+		arg.LastName,
+		arg.Metadata,
+		arg.SyncedAt,
+	)
+	var i ExternalContact
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.SourceID,
+		&i.AccountID,
+		&i.DisplayName,
+		&i.FirstName,
+		&i.LastName,
+		&i.Emails,
+		&i.Phones,
+		&i.Addresses,
+		&i.Organization,
+		&i.JobTitle,
+		&i.Birthday,
+		&i.PhotoUrl,
+		&i.CrmContactID,
+		&i.MatchStatus,
+		&i.DuplicateOfID,
+		&i.Etag,
+		&i.Metadata,
+		&i.SyncedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}
