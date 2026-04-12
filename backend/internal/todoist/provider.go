@@ -56,6 +56,11 @@ const (
 	// as contacted from a non-Todoist source (e.g., calendar sync), even when contact_by
 	// doesn't change (same cadence period).
 	MetadataKeySyncedLastContacted = "synced_last_contacted"
+	// MetadataKeySyncedLastOutreachAt stores the last_outreach_at timestamp (RFC3339) at
+	// the time the task was created or last synced. Used to detect when a contact is
+	// reached out to from a non-Todoist source (e.g., Telegram), so the cadence task
+	// (outreach reminder) can be closed.
+	MetadataKeySyncedLastOutreachAt = "synced_last_outreach_at"
 )
 
 // DateFormat is the date format used for Todoist deadlines and synced_deadline metadata (YYYY-MM-DD)
@@ -702,6 +707,9 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 			if contact.LastContacted != nil {
 				metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
 			}
+			if contact.LastOutreachAt != nil {
+				metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+			}
 			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 				logger.Warn().Err(err).Msg("failed to store pending_temp_id and synced_deadline in task metadata")
 			}
@@ -851,22 +859,8 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 			continue
 		}
 
-		// Skip contacts with pending follow-up (grace period — waiting for response)
-		_, err := p.contactTaskRepo.FindPendingFollowUp(ctx, contact.ID)
-		if err == nil {
-			logger.Debug().
-				Str("contactId", contact.ID.String()).
-				Str("contactName", contact.FullName).
-				Msg("skipping reconciliation: pending follow-up task exists")
-			continue
-		}
-		if !errors.Is(err, db.ErrNotFound) {
-			continue // unexpected error, skip
-		}
-
-		currentDeadline := contact.ContactBy.Format(DateFormat)
-
-		// Check if contact has a managed task
+		// Look up existing cadence task (before follow-up gate so outreach detection
+		// can fire even when a pending follow-up exists).
 		task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contact.ID, SourceName, TaskKindCadence)
 		if err == nil && task.State == repository.ContactTaskStateCompleted {
 			// Clean up completed cadence task so a new one can be created.
@@ -880,6 +874,32 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 			}
 			err = db.ErrNotFound
 		}
+
+		// If a managed cadence task exists, check if the contact was reached out to
+		// from a non-Todoist source (e.g., Telegram). If so, close the cadence task.
+		if err == nil && task.State == repository.ContactTaskStateManaged {
+			closeCmds := p.closeOnOutreach(ctx, task, &contact)
+			if closeCmds != nil {
+				commands = append(commands, closeCmds...)
+				continue
+			}
+		}
+
+		// Skip contacts with pending follow-up (grace period — waiting for response)
+		_, followUpErr := p.contactTaskRepo.FindPendingFollowUp(ctx, contact.ID)
+		if followUpErr == nil {
+			logger.Debug().
+				Str("contactId", contact.ID.String()).
+				Str("contactName", contact.FullName).
+				Msg("skipping reconciliation: pending follow-up task exists")
+			continue
+		}
+		if !errors.Is(followUpErr, db.ErrNotFound) {
+			continue // unexpected error, skip
+		}
+
+		currentDeadline := contact.ContactBy.Format(DateFormat)
+
 		if err != nil {
 			if !errors.Is(err, db.ErrNotFound) {
 				continue
@@ -896,7 +916,10 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 			if contact.LastContacted != nil {
 				taskMetadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
 			}
-			_, err := p.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			if contact.LastOutreachAt != nil {
+				taskMetadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+			}
+			_, createErr := p.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 				ContactID:      contact.ID,
 				Provider:       SourceName,
 				Kind:           TaskKindCadence,
@@ -904,8 +927,8 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 				State:          string(repository.ContactTaskStateManaged),
 				Metadata:       taskMetadata,
 			})
-			if err != nil {
-				logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to create contact task")
+			if createErr != nil {
+				logger.Warn().Err(createErr).Str("contactId", contact.ID.String()).Msg("failed to create contact task")
 			}
 			continue
 		}
@@ -926,6 +949,73 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 	}
 
 	return commands
+}
+
+// closeOnOutreach closes a managed cadence task when the contact has been reached out to
+// from a non-Todoist source (e.g., Telegram). Returns commands to send to Todoist
+// (item_close), or nil if no outreach was detected. State transition must succeed before
+// the close command is enqueued (same pattern as handleFollowUpDismissal).
+func (p *CadenceSyncProvider) closeOnOutreach(
+	ctx context.Context,
+	task *repository.ContactTask,
+	contact *repository.Contact,
+) []SyncCommand {
+	if p.wasReachedOutSinceSync(contact, task) {
+		logger.Info().
+			Str("contactId", contact.ID.String()).
+			Str("contactName", contact.FullName).
+			Msg("contact was reached out to since last sync (non-Todoist source), closing cadence task")
+
+		// Mark completed locally FIRST — only enqueue the Todoist close if this succeeds.
+		// If state update fails, skip the remote close entirely to avoid leaving a
+		// local 'managed' row while the Todoist task is closed (same pattern as
+		// handleFollowUpDismissal).
+		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateCompleted); err != nil {
+			logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to mark cadence task completed after outreach detection — skipping close")
+			return nil
+		}
+
+		var commands []SyncCommand
+
+		// State transition succeeded — now safe to close in Todoist
+		if task.ExternalTaskID != "" && !isPendingTempID(task) {
+			commands = append(commands, NewItemCloseCommand(task.ExternalTaskID))
+		}
+
+		// Update synced_last_outreach_at so we don't re-fire on the next tick
+		metadata := task.Metadata
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		if contact.LastOutreachAt != nil {
+			metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+		}
+		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+			logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to update synced_last_outreach_at after outreach detection")
+		}
+
+		return commands
+	}
+
+	// No outreach detected. Backfill synced_last_outreach_at if missing (legacy tasks
+	// created before this feature). This backfill is critical here because
+	// reconcileExistingTask (the other backfill location) is only reached AFTER the
+	// follow-up gate — tasks with a pending follow-up would never get backfilled
+	// without this pre-gate path.
+	if _, hasSyncedLO := task.Metadata[MetadataKeySyncedLastOutreachAt].(string); !hasSyncedLO {
+		if contact.LastOutreachAt != nil {
+			metadata := task.Metadata
+			if metadata == nil {
+				metadata = make(map[string]any)
+			}
+			metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+				logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_last_outreach_at (pre-gate)")
+			}
+		}
+	}
+
+	return nil
 }
 
 // reconcileExistingTask checks if an existing managed task's deadline matches contact_by.
@@ -970,6 +1060,9 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 		if contact.LastContacted != nil {
 			metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
 		}
+		if contact.LastOutreachAt != nil {
+			metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+		}
 		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 			logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_deadline")
 		}
@@ -986,10 +1079,30 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 				metadata = make(map[string]any)
 			}
 			metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+			if contact.LastOutreachAt != nil {
+				metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+			}
 			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 				logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_last_contacted")
 			} else {
 				// Update task in memory so wasContactedSinceSync can use it this cycle
+				task.Metadata = metadata
+			}
+		}
+	}
+
+	// Backfill synced_last_outreach_at if missing (tasks created before this feature).
+	// Without this, wasReachedOutSinceSync would always return false for legacy tasks.
+	if _, hasSyncedLO := task.Metadata[MetadataKeySyncedLastOutreachAt].(string); !hasSyncedLO {
+		if contact.LastOutreachAt != nil {
+			metadata := task.Metadata
+			if metadata == nil {
+				metadata = make(map[string]any)
+			}
+			metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+				logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_last_outreach_at")
+			} else {
 				task.Metadata = metadata
 			}
 		}
@@ -1039,6 +1152,9 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 					if contact.LastContacted != nil {
 						metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
 					}
+					if contact.LastOutreachAt != nil {
+						metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+					}
 					if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 						logger.Warn().Err(err).Msg("failed to update metadata after non-Todoist contact")
 					}
@@ -1081,6 +1197,9 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 	if contact.LastContacted != nil {
 		metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
 	}
+	if contact.LastOutreachAt != nil {
+		metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+	}
 	if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 		logger.Error().
 			Err(err).
@@ -1116,6 +1235,29 @@ func (p *CadenceSyncProvider) wasContactedSinceSync(contact *repository.Contact,
 	}
 
 	return contact.LastContacted.Truncate(time.Second).After(syncedLastContacted)
+}
+
+// wasReachedOutSinceSync checks if the contact's last_outreach_at has advanced since the
+// task was last synced. This detects non-Todoist outbound events (e.g., Telegram messages)
+// that should trigger cadence task completion — the cadence task is an outreach reminder,
+// and the outreach has happened.
+func (p *CadenceSyncProvider) wasReachedOutSinceSync(contact *repository.Contact, task *repository.ContactTask) bool {
+	if contact.LastOutreachAt == nil {
+		return false
+	}
+
+	syncedLastOutreachStr, ok := task.Metadata[MetadataKeySyncedLastOutreachAt].(string)
+	if !ok || syncedLastOutreachStr == "" {
+		return false
+	}
+
+	syncedLastOutreach, err := time.Parse(time.RFC3339, syncedLastOutreachStr)
+	if err != nil {
+		logger.Warn().Err(err).Str("value", syncedLastOutreachStr).Msg("failed to parse synced_last_outreach_at")
+		return false
+	}
+
+	return contact.LastOutreachAt.Truncate(time.Second).After(syncedLastOutreach)
 }
 
 // isPendingTempID checks if the task's external ID is still a pending temp ID
