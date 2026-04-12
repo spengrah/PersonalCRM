@@ -328,4 +328,34 @@ func TestUpdateDiscoveryCandidatesForPeer_AtThreshold(t *testing.T) {
 	require.NotNil(t, ecMock.upsertCalls[0].SyncedAt, "synced_at should be set on live-path upsert")
 }
 
+// TestUpdateDiscoveryCandidatesForPeer_NilNames_StillSendsUpsert documents the
+// Go-layer contract after the null-overwrite fix: the live path keeps passing
+// whatever names it has (including all-nil). The SQL COALESCE in the dedicated
+// UpsertTelegramDiscoveryCandidate query is what actually preserves stored
+// values. The metadata map must not carry a "username" key when peerUsername
+// is nil — otherwise the JSONB merge would overwrite an earlier non-null handle
+// with a bogus null-ish entry.
+func TestUpdateDiscoveryCandidatesForPeer_NilNames_StillSendsUpsert(t *testing.T) {
+	ecMock := &mockExternalContactUpserter{}
+	matcher := &PeerMatcher{
+		messageCounter: &mockMessageCounter{counts: map[int64]*repository.PeerMessageCount{
+			12345: {TotalCount: 3, OutboundCount: 1, InboundCount: 2},
+		}},
+		externalContactRepo: ecMock,
+		discoveryMinMsgs:    3,
+	}
+
+	matcher.UpdateDiscoveryCandidatesForPeer(context.Background(), 12345, nil, nil, nil)
+
+	require.Len(t, ecMock.upsertCalls, 1)
+	call := ecMock.upsertCalls[0]
+	assert.Equal(t, "12345", call.SourceID)
+	assert.Nil(t, call.FirstName)
+	assert.Nil(t, call.LastName)
+	assert.Nil(t, call.DisplayName)
+	_, hasUsername := call.Metadata["username"]
+	assert.False(t, hasUsername, "no username key when peerUsername is nil")
+	require.NotNil(t, call.SyncedAt)
+}
+
 func ptr(s string) *string { return &s }
