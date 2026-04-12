@@ -45,13 +45,20 @@ func NewTestHandler(
 	}
 }
 
-// SeedExternalContactInput represents input for creating an external contact
+// SeedExternalContactInput represents input for creating an external contact.
+// Source defaults to "test"; pass "telegram"/"gcontacts"/"gcal_attendee" to
+// seed source-specific rows. display_name is optional for Telegram seeds
+// where the candidate may only have a metadata.username.
 type SeedExternalContactInput struct {
-	DisplayName  string   `json:"display_name" validate:"required,min=1,max=255"`
-	Emails       []string `json:"emails,omitempty"`
-	Phones       []string `json:"phones,omitempty"`
-	Organization string   `json:"organization,omitempty"`
-	JobTitle     string   `json:"job_title,omitempty"`
+	DisplayName  string         `json:"display_name,omitempty" validate:"omitempty,max=255"`
+	FirstName    string         `json:"first_name,omitempty" validate:"omitempty,max=255"`
+	LastName     string         `json:"last_name,omitempty" validate:"omitempty,max=255"`
+	Source       string         `json:"source,omitempty" validate:"omitempty,oneof=test telegram gcontacts gcal_attendee"`
+	Emails       []string       `json:"emails,omitempty"`
+	Phones       []string       `json:"phones,omitempty"`
+	Organization string         `json:"organization,omitempty"`
+	JobTitle     string         `json:"job_title,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
 // SeedExternalContactsRequest represents the request to seed external contacts
@@ -115,17 +122,41 @@ func (h *TestHandler) SeedExternalContacts(c *gin.Context) {
 			})
 		}
 
-		// Create upsert request with prefix in source_id for cleanup
-		displayName := req.Prefix + "-" + input.DisplayName
-		upsertReq := repository.UpsertExternalContactRequest{
-			Source:      "test",
-			SourceID:    fmt.Sprintf("%s-contact-%d", req.Prefix, i),
-			DisplayName: &displayName,
-			Emails:      emails,
-			Phones:      phones,
-			SyncedAt:    &now,
+		source := input.Source
+		if source == "" {
+			source = "test"
 		}
 
+		// Pick a source-aware source_id format so Cleanup's prefix-based
+		// DeleteExternalContactsBySourceIDPrefix picks up the rows later.
+		sourceIDSuffix := "contact"
+		if source == "telegram" {
+			sourceIDSuffix = "tg"
+		}
+
+		// Create upsert request with prefix in source_id for cleanup.
+		// display_name keeps the prefix when provided so cleanup-by-display_name works too.
+		upsertReq := repository.UpsertExternalContactRequest{
+			Source:   source,
+			SourceID: fmt.Sprintf("%s-%s-%d", req.Prefix, sourceIDSuffix, i),
+			Emails:   emails,
+			Phones:   phones,
+			Metadata: input.Metadata,
+			SyncedAt: &now,
+		}
+
+		if input.DisplayName != "" {
+			displayName := req.Prefix + "-" + input.DisplayName
+			upsertReq.DisplayName = &displayName
+		}
+		if input.FirstName != "" {
+			firstName := input.FirstName
+			upsertReq.FirstName = &firstName
+		}
+		if input.LastName != "" {
+			lastName := input.LastName
+			upsertReq.LastName = &lastName
+		}
 		if input.Organization != "" {
 			upsertReq.Organization = &input.Organization
 		}

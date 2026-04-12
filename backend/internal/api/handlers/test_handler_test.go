@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -83,13 +85,14 @@ func TestEscapeSQLLikeWildcards(t *testing.T) {
 }
 
 func TestSeedExternalContactInput_Validation(t *testing.T) {
+	v := validator.New()
 	tests := []struct {
 		name    string
 		input   SeedExternalContactInput
 		isValid bool
 	}{
 		{
-			name: "valid minimal input",
+			name: "valid minimal input (display_name only)",
 			input: SeedExternalContactInput{
 				DisplayName: "Test User",
 			},
@@ -107,9 +110,33 @@ func TestSeedExternalContactInput_Validation(t *testing.T) {
 			isValid: true,
 		},
 		{
-			name: "empty display name",
+			name: "valid telegram seed with metadata.username and no display_name",
 			input: SeedExternalContactInput{
-				DisplayName: "",
+				Source:   "telegram",
+				Metadata: map[string]any{"username": "@daledobeck"},
+			},
+			isValid: true,
+		},
+		{
+			name: "valid with first/last name, no display_name",
+			input: SeedExternalContactInput{
+				FirstName: "Dale",
+				LastName:  "Dobeck",
+			},
+			isValid: true,
+		},
+		{
+			name: "invalid source rejected",
+			input: SeedExternalContactInput{
+				DisplayName: "Test User",
+				Source:      "bogus",
+			},
+			isValid: false,
+		},
+		{
+			name: "display_name exceeds max length",
+			input: SeedExternalContactInput{
+				DisplayName: strings.Repeat("a", 256),
 			},
 			isValid: false,
 		},
@@ -117,11 +144,11 @@ func TestSeedExternalContactInput_Validation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Test that display_name is required
+			err := v.Struct(tt.input)
 			if tt.isValid {
-				assert.NotEmpty(t, tt.input.DisplayName)
+				assert.NoError(t, err)
 			} else {
-				assert.Empty(t, tt.input.DisplayName)
+				assert.Error(t, err)
 			}
 		})
 	}
