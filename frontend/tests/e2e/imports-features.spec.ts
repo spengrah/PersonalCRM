@@ -254,4 +254,71 @@ test.describe('Imports Features @area:imports', () => {
       expect(mediumConfidenceIdx).toBeLessThan(noMatchIdx)
     })
   })
+
+  test.describe('Telegram @username display', () => {
+    let testApi: TestAPI
+
+    test.beforeEach(async ({ request }, testInfo) => {
+      testApi = createTestAPI(request, testInfo)
+    })
+
+    test.afterEach(async () => {
+      await testApi.cleanup()
+    })
+
+    test('shows @username chip on Telegram candidate card', async ({ page }) => {
+      // Use a prefix-scoped handle so parallel test runs don't collide on the
+      // link selector and so we can scope assertions to our card.
+      const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
+      const telegramPath = handle.replace(/^@/, '')
+
+      await testApi.seedExternalContacts([
+        {
+          source: 'telegram',
+          display_name: 'Dale Dobeck',
+          metadata: { username: handle },
+        },
+      ])
+
+      await page.goto('/imports')
+      await page.waitForLoadState('domcontentloaded')
+
+      // Filter to Telegram so only our seeded card is visible even on a busy DB.
+      await page.getByRole('button', { name: 'Telegram', exact: true }).click()
+
+      const displayName = `${testApi.prefix}-Dale Dobeck`
+      await findCandidateByName(page, displayName)
+
+      // Heading shows the display_name; chip shows the handle and links to t.me
+      await expect(page.getByRole('heading', { name: displayName })).toBeVisible()
+      const handleLink = page.getByRole('link', { name: handle })
+      await expect(handleLink).toBeVisible()
+      await expect(handleLink).toHaveAttribute('href', `https://t.me/${telegramPath}`)
+    })
+
+    test('falls back to @username when no name is set on Telegram candidate', async ({ page }) => {
+      const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
+
+      await testApi.seedExternalContacts([
+        {
+          source: 'telegram',
+          // No display_name, no first/last
+          metadata: { username: handle },
+        },
+      ])
+
+      await page.goto('/imports')
+      await page.waitForLoadState('domcontentloaded')
+
+      await page.getByRole('button', { name: 'Telegram', exact: true }).click()
+
+      // @username becomes the primary heading
+      await expect(page.getByRole('heading', { name: handle })).toBeVisible()
+      // Chip is suppressed when the handle is already the heading. Scoping
+      // by the unique prefix-based handle avoids clashing with other seeded
+      // rows on a shared DB.
+      const handleLinks = page.getByRole('link', { name: handle })
+      await expect(handleLinks).toHaveCount(0)
+    })
+  })
 })
