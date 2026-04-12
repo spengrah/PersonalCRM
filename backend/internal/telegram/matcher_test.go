@@ -358,4 +358,31 @@ func TestUpdateDiscoveryCandidatesForPeer_NilNames_StillSendsUpsert(t *testing.T
 	require.NotNil(t, call.SyncedAt)
 }
 
+// TestUpdateDiscoveryCandidatesForPeer_EmptyStringsTreatedAsNil covers the
+// normalization applied before the upsert: Telegram sometimes carries blank
+// entity strings (not NULL) on outbound private chats. If we wrote "" through
+// the COALESCE upsert, the stored value would be overwritten with a
+// meaningless empty string, or the metadata would gain a "@" username.
+func TestUpdateDiscoveryCandidatesForPeer_EmptyStringsTreatedAsNil(t *testing.T) {
+	ecMock := &mockExternalContactUpserter{}
+	matcher := &PeerMatcher{
+		messageCounter: &mockMessageCounter{counts: map[int64]*repository.PeerMessageCount{
+			12345: {TotalCount: 3, OutboundCount: 1, InboundCount: 2},
+		}},
+		externalContactRepo: ecMock,
+		discoveryMinMsgs:    3,
+	}
+
+	empty := ""
+	matcher.UpdateDiscoveryCandidatesForPeer(context.Background(), 12345, &empty, &empty, &empty)
+
+	require.Len(t, ecMock.upsertCalls, 1)
+	call := ecMock.upsertCalls[0]
+	assert.Nil(t, call.FirstName, "empty first_name pointer should normalize to nil")
+	assert.Nil(t, call.LastName, "empty last_name pointer should normalize to nil")
+	assert.Nil(t, call.DisplayName)
+	_, hasUsername := call.Metadata["username"]
+	assert.False(t, hasUsername, "empty username pointer should not write a metadata key")
+}
+
 func ptr(s string) *string { return &s }

@@ -21,3 +21,9 @@ DELETE FROM calendar_event WHERE title LIKE $1 || '%';
 
 -- name: DeleteCalendarEventsByGcalEventIdPrefix :execrows
 DELETE FROM calendar_event WHERE gcal_event_id LIKE $1 || '%';
+
+-- name: DeleteTelegramMessagesByPeerUserID :execrows
+DELETE FROM telegram_message WHERE peer_user_id = $1;
+
+-- name: DeleteExternalIdentitiesBySourceID :execrows
+DELETE FROM external_identity WHERE source_id = $1;

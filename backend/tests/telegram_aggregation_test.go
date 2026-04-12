@@ -403,3 +403,72 @@ func TestListDistinctUnmatchedPeers_PrefersPopulatedNameRow(t *testing.T) {
 	require.NotNil(t, got.PeerLastName)
 	assert.Equal(t, "Dobeck", *got.PeerLastName)
 }
+
+// TestListDistinctUnmatchedPeers_TreatsBlankStringsAsAbsent guards the ORDER BY
+// clauses: a row with blank peer_first_name / peer_last_name must not outrank
+// a row with a real name. Without the `<> ”` guards the outbound-private-chat
+// shape (blank strings instead of NULL) would keep winning the tiebreak and
+// the batch path would re-seed external_contact with blanks.
+func TestListDistinctUnmatchedPeers_TreatsBlankStringsAsAbsent(t *testing.T) {
+	messageRepo, _, _, _, _, database := setupAggregationTest(t)
+	ctx := context.Background()
+
+	const testPeerID int64 = 90002
+	const testChatID int64 = 901
+	empty := ""
+	firstName := "Dale"
+	lastName := "Dobeck"
+
+	t.Cleanup(func() {
+		_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE peer_user_id = $1", testPeerID)
+	})
+
+	base := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+	text := "hi"
+
+	// Newer row: blank entity strings.
+	_, err := messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 90003,
+		TelegramChatID:    testChatID,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            base,
+		IsOutgoing:        true,
+		PeerUserID:        ptrInt64(testPeerID),
+		PeerFirstName:     &empty,
+		PeerLastName:      &empty,
+	})
+	require.NoError(t, err)
+
+	// Older row: populated entity data.
+	_, err = messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 90004,
+		TelegramChatID:    testChatID,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            base.Add(-1 * time.Hour),
+		IsOutgoing:        false,
+		PeerUserID:        ptrInt64(testPeerID),
+		PeerFirstName:     &firstName,
+		PeerLastName:      &lastName,
+	})
+	require.NoError(t, err)
+
+	peers, err := messageRepo.ListDistinctUnmatchedPeers(ctx)
+	require.NoError(t, err)
+
+	var got *repository.UnmatchedPeer
+	for i := range peers {
+		if peers[i].PeerUserID == testPeerID {
+			got = &peers[i]
+			break
+		}
+	}
+	require.NotNil(t, got)
+	require.NotNil(t, got.PeerFirstName)
+	assert.Equal(t, "Dale", *got.PeerFirstName, "blank-string row must not outrank a real-name row")
+	require.NotNil(t, got.PeerLastName)
+	assert.Equal(t, "Dobeck", *got.PeerLastName)
+}

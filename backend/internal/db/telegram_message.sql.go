@@ -168,10 +168,10 @@ WHERE matched_contact_id IS NULL
   AND peer_user_id IS NOT NULL
   AND deleted_at IS NULL
 ORDER BY peer_user_id,
-    CASE WHEN peer_username   IS NOT NULL THEN 0 ELSE 1 END,
-    CASE WHEN peer_phone      IS NOT NULL THEN 0 ELSE 1 END,
-    CASE WHEN peer_first_name IS NOT NULL THEN 0 ELSE 1 END,
-    CASE WHEN peer_last_name  IS NOT NULL THEN 0 ELSE 1 END,
+    CASE WHEN peer_username   IS NOT NULL AND peer_username   <> '' THEN 0 ELSE 1 END,
+    CASE WHEN peer_phone      IS NOT NULL AND peer_phone      <> '' THEN 0 ELSE 1 END,
+    CASE WHEN peer_first_name IS NOT NULL AND peer_first_name <> '' THEN 0 ELSE 1 END,
+    CASE WHEN peer_last_name  IS NOT NULL AND peer_last_name  <> '' THEN 0 ELSE 1 END,
     sent_at DESC
 `
 
@@ -186,6 +186,9 @@ type ListDistinctUnmatchedPeersRow struct {
 // Prefer rows with username/phone for identity matching, then rows with
 // populated names so a single aggregation pass picks the most-populated row
 // per peer (avoids depending on multi-pass COALESCE accumulation in Go).
+// Treats blank strings as absent — Telegram sometimes persists ” instead of
+// NULL for entity fields on outbound private chats, and those rows must not
+// outrank a row with a real name.
 func (q *Queries) ListDistinctUnmatchedPeers(ctx context.Context) ([]*ListDistinctUnmatchedPeersRow, error) {
 	rows, err := q.db.Query(ctx, ListDistinctUnmatchedPeers)
 	if err != nil {

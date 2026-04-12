@@ -95,3 +95,27 @@ func (q *Queries) DeleteExternalContactsBySourceIDPrefix(ctx context.Context, do
 	}
 	return result.RowsAffected(), nil
 }
+
+const DeleteExternalIdentitiesBySourceID = `-- name: DeleteExternalIdentitiesBySourceID :execrows
+DELETE FROM external_identity WHERE source_id = $1
+`
+
+func (q *Queries) DeleteExternalIdentitiesBySourceID(ctx context.Context, sourceID pgtype.Text) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteExternalIdentitiesBySourceID, sourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const DeleteTelegramMessagesByPeerUserID = `-- name: DeleteTelegramMessagesByPeerUserID :execrows
+DELETE FROM telegram_message WHERE peer_user_id = $1
+`
+
+func (q *Queries) DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID pgtype.Int8) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteTelegramMessagesByPeerUserID, peerUserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}

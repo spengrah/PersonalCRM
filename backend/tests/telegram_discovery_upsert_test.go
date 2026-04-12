@@ -10,7 +10,10 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
+	tgpkg "personal-crm/backend/internal/telegram"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,10 +46,11 @@ func setupDiscoveryUpsertTest(t *testing.T) (
 
 	cleanup := func() {
 		// Narrow cleanup: only touch rows this test file creates. All test
-		// source_ids are prefixed with "tg-discovery-upsert-".
-		_, _ = database.Pool.Exec(
+		// source_ids are prefixed with "tg-discovery-upsert-". Use the sqlc
+		// query (also used by the /test/cleanup handler) rather than raw SQL.
+		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
 			context.Background(),
-			"DELETE FROM external_contact WHERE source_id LIKE 'tg-discovery-upsert-%'",
+			pgtype.Text{String: "tg-discovery-upsert-", Valid: true},
 		)
 		database.Close()
 	}
@@ -261,7 +265,10 @@ func TestUpsertTelegramDiscoveryCandidate_DoesNotTouchMatchStatus(t *testing.T) 
 	})
 	require.NoError(t, err)
 	defer func() {
-		_, _ = database.Pool.Exec(ctx, "DELETE FROM contact WHERE id = $1", crmContact.ID)
+		_, _ = database.Queries.DeleteContactsByNamePrefix(
+			ctx,
+			pgtype.Text{String: "tg-discovery-upsert-match-contact", Valid: true},
+		)
 	}()
 
 	row, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
@@ -314,4 +321,119 @@ func TestUpsertExternalContact_SharedUpsertStillOverwrites(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Nil(t, got.FirstName, "shared UpsertExternalContact must still overwrite scalar fields with NULL for Google flows")
+}
+
+// TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData
+// exercises the end-to-end prod-healing path that caused the original bug:
+// two unmatched messages for the same peer — one with blank entity strings
+// (outbound private chat), one with real first/last name — are aggregated,
+// and the batch UpdateDiscoveryCandidates call is expected to leave the
+// external_contact row with populated names and a metadata.username, not
+// wipe them.
+func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	require.NoError(t, db.RunMigrations(databaseURL, getMigrationsPath()))
+
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	defer database.Close()
+
+	const testPeerID int64 = 99001
+	const testChatID int64 = 9900
+	username := "daledobeck"
+	empty := ""
+	firstName := "Dale"
+	lastName := "Dobeck"
+	text := "hi"
+
+	messageRepo := repository.NewTelegramMessageRepository(database.Queries)
+	externalRepo := repository.NewExternalContactRepository(database.Queries)
+	identityRepo := repository.NewIdentityRepository(database.Queries)
+	identitySvc := service.NewIdentityService(identityRepo)
+	matcher := tgpkg.NewPeerMatcher(identitySvc, messageRepo, externalRepo, 2) // threshold = 2
+
+	t.Cleanup(func() {
+		_, _ = database.Queries.DeleteTelegramMessagesByPeerUserID(
+			ctx,
+			pgtype.Int8{Int64: testPeerID, Valid: true},
+		)
+		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
+			ctx,
+			pgtype.Text{String: "99001", Valid: true},
+		)
+		// External_identity row created by MatchOrCreate — also keyed by source_id.
+		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(
+			ctx,
+			pgtype.Text{String: "99001", Valid: true},
+		)
+	})
+
+	base := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+
+	// Newer row: blank entity strings (the outbound private-chat shape).
+	_, err = messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 99001,
+		TelegramChatID:    testChatID,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            base,
+		IsOutgoing:        true,
+		PeerUserID:        ptrInt64(testPeerID),
+		PeerUsername:      &empty,
+		PeerFirstName:     &empty,
+		PeerLastName:      &empty,
+	})
+	require.NoError(t, err)
+
+	// Older row: good entity data.
+	_, err = messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 99002,
+		TelegramChatID:    testChatID,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            base.Add(-1 * time.Hour),
+		IsOutgoing:        false,
+		PeerUserID:        ptrInt64(testPeerID),
+		PeerUsername:      &username,
+		PeerFirstName:     &firstName,
+		PeerLastName:      &lastName,
+	})
+	require.NoError(t, err)
+
+	// Required: MatchAllUnmatched creates the external_identity row so the
+	// peer shows up as unmatched in ListDistinctUnmatchedPeers. Discovery then
+	// populates external_contact.
+	require.NoError(t, matcher.MatchAllUnmatched(ctx))
+	require.NoError(t, matcher.UpdateDiscoveryCandidates(ctx))
+
+	got, err := externalRepo.GetBySource(ctx, "telegram", "99001", nil)
+	require.NoError(t, err)
+	require.NotNil(t, got, "discovery should have inserted an external_contact row")
+	require.NotNil(t, got.FirstName)
+	assert.Equal(t, "Dale", *got.FirstName, "batch path must surface the populated-name row, not the blank-string row")
+	require.NotNil(t, got.LastName)
+	assert.Equal(t, "Dobeck", *got.LastName)
+	assert.Equal(t, "@daledobeck", got.Metadata["username"])
+
+	// Running the batch again must be idempotent — existing names survive
+	// even when future aggregation picks the blank-string row.
+	require.NoError(t, matcher.UpdateDiscoveryCandidates(ctx))
+
+	got, err = externalRepo.GetBySource(ctx, "telegram", "99001", nil)
+	require.NoError(t, err)
+	require.NotNil(t, got.FirstName)
+	assert.Equal(t, "Dale", *got.FirstName, "re-running discovery must not clobber stored names")
+	assert.Equal(t, "@daledobeck", got.Metadata["username"])
 }
