@@ -478,8 +478,15 @@ func (p *CadenceSyncProvider) processItem(
 		return p.handleSkipTrigger(ctx, task, contact, settings, accountID)
 	}
 
-	// Check for deadline edit (Todoist wins)
-	if item.Deadline != nil && contact.ContactBy != nil {
+	// Check for deadline edit (Todoist wins) — only for cadence tasks.
+	// Follow-up tasks use a separate grace-period deadline (last_outreach_at +
+	// watchdog_days) that is unrelated to contact_by; allowing them through
+	// here previously regressed contact_by via UpdateContactBy on the next
+	// sync tick (see fix/followup-deadline-regression). Action tasks are
+	// already routed out at the TaskKindAction dispatch above and cannot
+	// reach here in normal flow, but the explicit TaskKindCadence check is
+	// self-documenting and load-bearing for follow-ups.
+	if task.Kind == TaskKindCadence && item.Deadline != nil && contact.ContactBy != nil {
 		todoistDeadline, err := time.Parse(DateFormat, item.Deadline.Date)
 		if err == nil {
 			// Compare dates using UTC year/month/day to avoid timezone issues
@@ -505,6 +512,7 @@ func (p *CadenceSyncProvider) processItem(
 
 					logger.Info().
 						Str("contactId", contact.ID.String()).
+						Str("taskKind", task.Kind).
 						Time("newContactBy", todoistDeadline).
 						Msg("updated contact_by and synced_deadline from Todoist deadline edit")
 				}

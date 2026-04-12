@@ -1,0 +1,32 @@
+---
+timestamp: "2026-04-11T18:37:09.520439"
+type: gotcha
+summary: Todoist processItem branches may have implicit cadence-only assumptions
+detail: |
+  When the follow-up task feature (#266) was added, it exposed a bug in the deadline-edit branch of processItem. The branch had an implicit assumption that only cadence tasks would reach it, but follow-up tasks (which use grace-period deadlines unrelated to contact_by) also fell through and regressed contact.contact_by via UpdateContactBy. The fix required adding an explicit `task.Kind == TaskKindCadence` guard. When adding new task kinds or modifying processItem routing, audit all downstream branches for similar implicit assumptions and add defensive guards.
+actionable: true
+
+---
+timestamp: "2026-04-11T18:37:09.520439"
+type: distinction
+summary: make test vs CI test scope differs for package-level tests
+detail: |
+  `make test` runs `go test ./tests/...` which only covers integration tests in `backend/tests/`. Package-level unit tests (e.g., `internal/todoist/*_test.go`) are NOT run by `make test` locally but ARE run by CI via `go test -short ./...`. When adding package-level tests, run them explicitly with `cd backend && go test ./internal/package/...` in addition to `make test`, or you may have false confidence that your changes are fully tested locally. CI will catch them, but that adds latency.
+actionable: true
+
+---
+timestamp: "2026-04-11T18:37:09.520439"
+type: rule
+summary: Guard-based bug fixes need both negative and positive regression tests
+detail: |
+  When fixing a bug by adding a guard condition (like `if task.Kind == TaskKindCadence`), write two regression tests: (1) negative case confirming the guard blocks the unwanted behavior (e.g., follow-up deadline does NOT update contact_by), and (2) positive case confirming the guard still allows the intended behavior (e.g., cadence deadline DOES update contact_by). This verifies the guard is both necessary (prevents regression) and sufficient (preserves correct behavior).
+actionable: true
+
+---
+timestamp: "2026-04-11T18:37:09.520439"
+type: architecture
+summary: Todoist sync provider uses multi-stage task kind dispatch with defensive guards
+detail: |
+  processItem has multiple dispatch points for task kinds: early return for actions, skip-trigger routing for deletions/label removals/deadline removals, and downstream branches like deadline-edit. While the routing logic theoretically ensures certain branches only see certain task kinds, defensive guards (like `task.Kind == TaskKindCadence`) are still valuable as self-documentation and regression prevention when new task kinds are added. The fix/followup-deadline-regression demonstrates this: even though actions dispatch early, the deadline-edit branch still benefits from an explicit cadence check.
+actionable: true
+
