@@ -14,6 +14,7 @@ import (
 	tgpkg "personal-crm/backend/internal/telegram"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -348,9 +349,13 @@ func TestListDistinctUnmatchedPeers_PrefersPopulatedNameRow(t *testing.T) {
 	firstName := "Dale"
 	lastName := "Dobeck"
 
-	// Narrow cleanup scoped to this test's peer/chat.
+	// Narrow cleanup scoped to this test's peer/chat — use the sqlc helper
+	// (the "Never write raw SQL in Go" rule applies in tests too).
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE peer_user_id = $1", testPeerID)
+		_, _ = database.Queries.DeleteTelegramMessagesByPeerUserID(
+			ctx,
+			pgtype.Int8{Int64: testPeerID, Valid: true},
+		)
 	})
 
 	base := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -420,7 +425,10 @@ func TestListDistinctUnmatchedPeers_TreatsBlankStringsAsAbsent(t *testing.T) {
 	lastName := "Dobeck"
 
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE peer_user_id = $1", testPeerID)
+		_, _ = database.Queries.DeleteTelegramMessagesByPeerUserID(
+			ctx,
+			pgtype.Int8{Int64: testPeerID, Valid: true},
+		)
 	})
 
 	base := accelerated.GetCurrentTime().Truncate(time.Microsecond)
