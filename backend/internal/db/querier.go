@@ -213,7 +213,9 @@ type Querier interface {
 	// Lists contacts that have a contact_by date set (used for testing mode filtering).
 	// Returns contacts ordered by contact_by (soonest first).
 	ListContactsWithContactBy(ctx context.Context, limit int32) ([]*Contact, error)
-	// Prefer rows with username/phone for identity matching
+	// Prefer rows with username/phone for identity matching, then rows with
+	// populated names so a single aggregation pass picks the most-populated row
+	// per peer (avoids depending on multi-pass COALESCE accumulation in Go).
 	ListDistinctUnmatchedPeers(ctx context.Context) ([]*ListDistinctUnmatchedPeersRow, error)
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)

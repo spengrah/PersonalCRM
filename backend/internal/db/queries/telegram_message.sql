@@ -67,7 +67,9 @@ WHERE matched_contact_id = @matched_contact_id
 ORDER BY telegram_chat_id, sent_at;
 
 -- name: ListDistinctUnmatchedPeers :many
--- Prefer rows with username/phone for identity matching
+-- Prefer rows with username/phone for identity matching, then rows with
+-- populated names so a single aggregation pass picks the most-populated row
+-- per peer (avoids depending on multi-pass COALESCE accumulation in Go).
 SELECT DISTINCT ON (peer_user_id)
     peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone
 FROM telegram_message
@@ -75,8 +77,10 @@ WHERE matched_contact_id IS NULL
   AND peer_user_id IS NOT NULL
   AND deleted_at IS NULL
 ORDER BY peer_user_id,
-    CASE WHEN peer_username IS NOT NULL THEN 0 ELSE 1 END,
-    CASE WHEN peer_phone IS NOT NULL THEN 0 ELSE 1 END,
+    CASE WHEN peer_username   IS NOT NULL THEN 0 ELSE 1 END,
+    CASE WHEN peer_phone      IS NOT NULL THEN 0 ELSE 1 END,
+    CASE WHEN peer_first_name IS NOT NULL THEN 0 ELSE 1 END,
+    CASE WHEN peer_last_name  IS NOT NULL THEN 0 ELSE 1 END,
     sent_at DESC;
 
 -- name: UpdateTelegramMessageContact :exec
