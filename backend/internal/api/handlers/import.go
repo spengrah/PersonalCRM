@@ -199,8 +199,8 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 		}
 
 		// Neither has match: sort alphabetically by display name, empty names last
-		iName := getCandidateDisplayName(candidates[i].DisplayName, candidates[i].FirstName, candidates[i].LastName)
-		jName := getCandidateDisplayName(candidates[j].DisplayName, candidates[j].FirstName, candidates[j].LastName)
+		iName := getCandidateDisplayName(candidates[i].DisplayName, candidates[i].FirstName, candidates[i].LastName, candidates[i].Metadata, candidates[i].Source)
+		jName := getCandidateDisplayName(candidates[j].DisplayName, candidates[j].FirstName, candidates[j].LastName, candidates[j].Metadata, candidates[j].Source)
 
 		// Empty names sort to end
 		if iName == "" && jName != "" {
@@ -650,8 +650,11 @@ func (h *ImportHandler) toImportCandidateResponse(contact *repository.ExternalCo
 	return response
 }
 
-// getCandidateDisplayName extracts the display name from response fields for sorting
-func getCandidateDisplayName(displayName, firstName, lastName *string) string {
+// getCandidateDisplayName extracts the display name from response fields for
+// sorting. For Telegram candidates, falls back to metadata["username"] (with
+// the stored leading "@" stripped) so handle-only peers sort alphabetically
+// instead of being bunched at the end with an empty key.
+func getCandidateDisplayName(displayName, firstName, lastName *string, metadata map[string]any, source string) string {
 	if displayName != nil {
 		return *displayName
 	}
@@ -663,6 +666,11 @@ func getCandidateDisplayName(displayName, firstName, lastName *string) string {
 	}
 	if lastName != nil {
 		return *lastName
+	}
+	if source == "telegram" {
+		if u, ok := metadata["username"].(string); ok && u != "" {
+			return strings.TrimPrefix(u, "@")
+		}
 	}
 	return ""
 }

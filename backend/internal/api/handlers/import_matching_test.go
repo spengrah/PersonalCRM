@@ -439,8 +439,8 @@ func TestCandidateSorting_ByConfidence(t *testing.T) {
 				}
 
 				// Neither has match: sort alphabetically by display name, empty names last
-				iName := getCandidateDisplayName(tt.candidates[i].DisplayName, tt.candidates[i].FirstName, tt.candidates[i].LastName)
-				jName := getCandidateDisplayName(tt.candidates[j].DisplayName, tt.candidates[j].FirstName, tt.candidates[j].LastName)
+				iName := getCandidateDisplayName(tt.candidates[i].DisplayName, tt.candidates[i].FirstName, tt.candidates[i].LastName, tt.candidates[i].Metadata, tt.candidates[i].Source)
+				jName := getCandidateDisplayName(tt.candidates[j].DisplayName, tt.candidates[j].FirstName, tt.candidates[j].LastName, tt.candidates[j].Metadata, tt.candidates[j].Source)
 
 				// Empty names sort to end
 				if iName == "" && jName != "" {
@@ -473,6 +473,54 @@ func TestCandidateSorting_ByConfidence(t *testing.T) {
 	}
 }
 
+// TestSortCandidates_TelegramUsername verifies that Telegram candidates with
+// only a metadata.username sort alphabetically by the handle (instead of being
+// bunched at the end with an empty key). Regression for anthropics/personal-crm#270.
+func TestSortCandidates_TelegramUsername(t *testing.T) {
+	candidates := []ImportCandidateResponse{
+		{
+			Source:   "telegram",
+			Metadata: map[string]any{"username": "@zara"},
+		},
+		{
+			Source:      "telegram",
+			DisplayName: stringPtr("Alice"),
+		},
+		{
+			Source:   "telegram",
+			Metadata: map[string]any{"username": "@bob"},
+		},
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		iName := getCandidateDisplayName(candidates[i].DisplayName, candidates[i].FirstName, candidates[i].LastName, candidates[i].Metadata, candidates[i].Source)
+		jName := getCandidateDisplayName(candidates[j].DisplayName, candidates[j].FirstName, candidates[j].LastName, candidates[j].Metadata, candidates[j].Source)
+		if iName == "" && jName != "" {
+			return false
+		}
+		if iName != "" && jName == "" {
+			return true
+		}
+		return iName < jName
+	})
+
+	// Expected order: Alice, bob, zara — handle-only peers sort in line with
+	// named ones rather than landing in the nameless tail.
+	got := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if c.DisplayName != nil {
+			got = append(got, *c.DisplayName)
+			continue
+		}
+		if u, ok := c.Metadata["username"].(string); ok {
+			got = append(got, u)
+			continue
+		}
+		got = append(got, "")
+	}
+	assert.Equal(t, []string{"Alice", "@bob", "@zara"}, got)
+}
+
 // TestGetCandidateDisplayName tests the helper function for extracting display names
 func TestGetCandidateDisplayName(t *testing.T) {
 	tests := []struct {
@@ -480,6 +528,8 @@ func TestGetCandidateDisplayName(t *testing.T) {
 		displayName *string
 		firstName   *string
 		lastName    *string
+		metadata    map[string]any
+		source      string
 		expected    string
 	}{
 		{
@@ -514,11 +564,43 @@ func TestGetCandidateDisplayName(t *testing.T) {
 			name:     "all nil - returns empty",
 			expected: "",
 		},
+		{
+			name:     "telegram with username, no names — strips @ for sort",
+			metadata: map[string]any{"username": "@alice"},
+			source:   "telegram",
+			expected: "alice",
+		},
+		{
+			name:     "telegram with username but no leading @",
+			metadata: map[string]any{"username": "alice"},
+			source:   "telegram",
+			expected: "alice",
+		},
+		{
+			name:     "non-telegram source with username ignored",
+			metadata: map[string]any{"username": "@alice"},
+			source:   "gcontacts",
+			expected: "",
+		},
+		{
+			name:     "telegram with empty username string",
+			metadata: map[string]any{"username": ""},
+			source:   "telegram",
+			expected: "",
+		},
+		{
+			name:      "telegram with names present — name wins over username",
+			firstName: stringPtr("Dale"),
+			lastName:  stringPtr("Dobeck"),
+			metadata:  map[string]any{"username": "@daledobeck"},
+			source:    "telegram",
+			expected:  "Dale Dobeck",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := getCandidateDisplayName(tt.displayName, tt.firstName, tt.lastName)
+			result := getCandidateDisplayName(tt.displayName, tt.firstName, tt.lastName, tt.metadata, tt.source)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
