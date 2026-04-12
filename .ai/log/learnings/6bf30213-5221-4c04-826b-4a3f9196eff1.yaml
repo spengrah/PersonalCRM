@@ -38,3 +38,35 @@ detail: |
   When a cadence task has `MetadataKeyPendingTempID` matching `external_task_id` (Todoist hasn't confirmed the creation yet), you can't send an `item_close` command to Todoist (no real ID exists). But you must still transition the local `contact_task` state to completed. The `closeOnOutreach` function had to return `(nil, true)` for this case: no Sync commands to send, but outreach WAS handled. This is why the bool return was critical—otherwise the caller would interpret `nil` as "no outreach, continue processing" instead of "outreach handled, stop processing this contact".
 actionable: true
 
+---
+timestamp: "2026-04-12T12:47:49.617463"
+type: gotcha
+summary: Contact task metadata updates without in-memory state sync cause stale data bugs
+detail: |
+  After UpdateContactTaskMetadata succeeds, you MUST set task.Metadata = metadata to sync the in-memory state. Without this, subsequent code in the same sync cycle sees stale metadata and may make incorrect control flow decisions or perform redundant DB writes. This pattern appears in reconcileExistingTask and was missed in closeOnOutreach's backfill path until CI review caught it. Tests passed because they don't verify in-memory state between operations in the same cycle.
+actionable: true
+
+---
+timestamp: "2026-04-12T12:47:49.617463"
+type: architecture
+summary: Todoist sync loop guarantees processItems runs before reconcileContactTasks
+detail: |
+  In CadenceSyncProvider.Sync(), processItems (which calls tryRecoverPendingTempID) always executes before reconcileContactTasks. This ordering ensures that temp-ID-to-real-ID recovery happens before any close/complete/reconcile logic runs. When adding new reconciliation logic that depends on external_task_id state or makes state transitions, this execution order guarantee means recovery will have run first. A P2 reviewer raised a concern about pending temp IDs being orphaned by state transitions, but this turned out to be invalid due to this architectural guarantee - worth documenting to prevent future confusion.
+actionable: true
+
+---
+timestamp: "2026-04-12T12:47:49.617463"
+type: rule
+summary: Functions returning nil for semantically different outcomes create untestable control flow bugs
+detail: |
+  When closeOnOutreach returned nil for both "no outreach detected" and "outreach handled but can't close yet (pending temp ID)", the caller couldn't distinguish these cases. This caused it to skip follow-up gate checks when it should have continued processing. Five comprehensive integration tests all passed because they didn't cover the cross-case control flow. Fix: return ([]SyncCommand, bool) where bool indicates whether the function handled the condition, letting callers distinguish "not applicable" from "handled with no commands". Codex caught this in review even though tests passed - shows value of architectural review beyond test coverage.
+actionable: true
+
+---
+timestamp: "2026-04-12T12:47:49.617463"
+type: documentation_gap
+summary: Learnings extraction identified in-memory state sync pattern but didn't validate consistency
+detail: |
+  The pre-push learnings extraction correctly identified the in-memory state sync pattern (learning #4 in the yaml) by analyzing the implementation, but didn't verify the pattern was followed everywhere in the code being pushed. The same bug was then caught by CI review. This reveals that extracted learnings should either: (a) trigger immediate consistency checks across the changeset, or (b) be clearly marked as "pattern observed, not validated" so the commit+push doesn't create false confidence. The learning was correct, but its presence in the learnings file didn't prevent the bug from being shipped to CI.
+actionable: true
+
