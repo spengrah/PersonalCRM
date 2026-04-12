@@ -14,6 +14,7 @@ import {
   AlertCircle,
   CloudDownload,
   Calendar,
+  Send,
 } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
@@ -200,6 +201,19 @@ function CandidateCard({
                   {phone}
                 </a>
               ))}
+              {candidate.source === 'telegram' &&
+                candidate.metadata?.username &&
+                displayName !== candidate.metadata.username && (
+                  <a
+                    href={`https://t.me/${encodeURIComponent(candidate.metadata.username.replace(/^@/, ''))}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                  >
+                    <Send className="w-3.5 h-3.5 mr-1.5 text-gray-400" />
+                    {candidate.metadata.username}
+                  </a>
+                )}
             </div>
           </div>
         </div>
