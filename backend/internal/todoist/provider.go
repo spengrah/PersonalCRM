@@ -1013,6 +1013,8 @@ func (p *CadenceSyncProvider) closeOnOutreach(
 			metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
 			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 				logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_last_outreach_at (pre-gate)")
+			} else {
+				task.Metadata = metadata
 			}
 		}
 	}
