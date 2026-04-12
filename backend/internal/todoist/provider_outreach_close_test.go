@@ -270,9 +270,10 @@ func TestReconcile_OutreachDetectionStateFailureSkipsClose(t *testing.T) {
 
 	// Call closeOnOutreach with a cancelled context to force state update failure.
 	badCtx := cancelledContext()
-	commands := env.provider.closeOnOutreach(badCtx, cadenceTask, reloadedContact)
+	commands, handled := env.provider.closeOnOutreach(badCtx, cadenceTask, reloadedContact)
 
-	// Assert: no commands returned (safe failure — don't close remote).
+	// Assert: not handled and no commands returned (safe failure — don't close remote).
+	assert.False(t, handled, "outreach must not be handled when state update fails")
 	assert.Nil(t, commands, "no commands must be returned when state update fails")
 
 	// Assert: cadence task remains managed (state update failed).
@@ -305,7 +306,8 @@ func TestCloseOnOutreach_NilLastOutreachAt(t *testing.T) {
 	})
 
 	// contact.LastOutreachAt is nil — wasReachedOutSinceSync should return false.
-	commands := env.provider.closeOnOutreach(env.ctx, task, contact)
+	commands, handled := env.provider.closeOnOutreach(env.ctx, task, contact)
+	assert.False(t, handled, "closeOnOutreach must not handle when LastOutreachAt is nil")
 	assert.Nil(t, commands, "closeOnOutreach must return nil when LastOutreachAt is nil")
 
 	// Verify task is still managed.

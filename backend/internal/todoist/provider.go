@@ -878,8 +878,8 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 		// If a managed cadence task exists, check if the contact was reached out to
 		// from a non-Todoist source (e.g., Telegram). If so, close the cadence task.
 		if err == nil && task.State == repository.ContactTaskStateManaged {
-			closeCmds := p.closeOnOutreach(ctx, task, &contact)
-			if closeCmds != nil {
+			closeCmds, handled := p.closeOnOutreach(ctx, task, &contact)
+			if handled {
 				commands = append(commands, closeCmds...)
 				continue
 			}
@@ -952,14 +952,16 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 }
 
 // closeOnOutreach closes a managed cadence task when the contact has been reached out to
-// from a non-Todoist source (e.g., Telegram). Returns commands to send to Todoist
-// (item_close), or nil if no outreach was detected. State transition must succeed before
-// the close command is enqueued (same pattern as handleFollowUpDismissal).
+// from a non-Todoist source (e.g., Telegram). Returns (commands, true) when outreach was
+// detected and handled, (nil, false) otherwise. The bool distinguishes "no outreach" from
+// "outreach handled but no Todoist command needed" (e.g., pending temp ID). State
+// transition must succeed before the close command is enqueued (same pattern as
+// handleFollowUpDismissal).
 func (p *CadenceSyncProvider) closeOnOutreach(
 	ctx context.Context,
 	task *repository.ContactTask,
 	contact *repository.Contact,
-) []SyncCommand {
+) ([]SyncCommand, bool) {
 	if p.wasReachedOutSinceSync(contact, task) {
 		logger.Info().
 			Str("contactId", contact.ID.String()).
@@ -972,7 +974,7 @@ func (p *CadenceSyncProvider) closeOnOutreach(
 		// handleFollowUpDismissal).
 		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateCompleted); err != nil {
 			logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to mark cadence task completed after outreach detection — skipping close")
-			return nil
+			return nil, false
 		}
 
 		var commands []SyncCommand
@@ -994,7 +996,7 @@ func (p *CadenceSyncProvider) closeOnOutreach(
 			logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to update synced_last_outreach_at after outreach detection")
 		}
 
-		return commands
+		return commands, true
 	}
 
 	// No outreach detected. Backfill synced_last_outreach_at if missing (legacy tasks
@@ -1015,7 +1017,7 @@ func (p *CadenceSyncProvider) closeOnOutreach(
 		}
 	}
 
-	return nil
+	return nil, false
 }
 
 // reconcileExistingTask checks if an existing managed task's deadline matches contact_by.
