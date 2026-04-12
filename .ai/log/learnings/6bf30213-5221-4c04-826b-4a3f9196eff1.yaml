@@ -1,0 +1,40 @@
+---
+timestamp: "2026-04-12T11:20:52.444554"
+type: gotcha
+summary: Functions returning nil for semantically different cases create ambiguity bugs
+detail: |
+  In this session, `closeOnOutreach` initially returned `nil` for both "no outreach detected" AND "outreach detected but pending temp ID (can't close yet)". The caller couldn't distinguish these cases, causing it to skip the follow-up gate check when it should have continued processing. Codex caught this in review even though all 5 comprehensive integration tests passed. **Fix:** Return `([]SyncCommand, bool)` where the bool indicates whether the condition was handled, allowing the caller to distinguish "not applicable" from "handled but no commands".
+actionable: true
+
+---
+timestamp: "2026-04-12T11:20:52.444554"
+type: rule
+summary: When adding parallel metadata keys, update ALL write locations atomically
+detail: |
+  The plan explicitly identified 6 locations where `synced_last_contacted` is written and required adding `synced_last_outreach_at` to all 6 in the same commit: handleSkipTrigger, reconcileContactTasks (new task), reconcileExistingTask (3 backfill/drift locations). Missing even one location creates subtle desync bugs. This is already partially documented in the gotchas table ("Adding new Todoist task metadata key to only one path") but this session demonstrates why: the reconciler has multiple code paths that can create or update tasks, and each path must maintain the same metadata invariants.
+actionable: true
+
+---
+timestamp: "2026-04-12T11:20:52.444554"
+type: architecture
+summary: Detection logic must run before conditional gates that might skip it
+detail: |
+  The outreach detection needed to run BEFORE the existing `FindPendingFollowUp` gate at line 854 because that gate skips the entire contact when a follow-up exists. Initially, the cadence task lookup happened at line 870 (after the gate), making it unreachable when a follow-up existed—but outreach detection specifically needed to fire in that case. The fix moved the lookup and outreach check before the gate. **General pattern:** When adding new detection/cleanup logic to a reconciler with early-exit gates, consider whether the logic should run unconditionally (before gates) or only when certain conditions don't hold (after gates).
+actionable: true
+
+---
+timestamp: "2026-04-12T11:20:52.444554"
+type: distinction
+summary: Codex review catches control flow bugs that comprehensive tests miss
+detail: |
+  All 5 integration tests passed after the initial implementation, including tests for the exact scenario (outreach with pending follow-up). But Codex review identified that the nil-return ambiguity would cause the reconciler to skip the follow-up gate check when outreach was detected with a pending temp ID. The tests verified "output matches expected state" but didn't catch the control flow bug because the bug's impact (skipping the gate check) only matters in edge cases the tests didn't exercise. **Takeaway:** Tests verify "does this produce the right output"; code review verifies "does the control flow make sense". Both are necessary.
+actionable: false
+
+---
+timestamp: "2026-04-12T11:20:52.444554"
+type: gotcha
+summary: Pending temp ID tasks require special handling in close/delete paths
+detail: |
+  When a cadence task has `MetadataKeyPendingTempID` matching `external_task_id` (Todoist hasn't confirmed the creation yet), you can't send an `item_close` command to Todoist (no real ID exists). But you must still transition the local `contact_task` state to completed. The `closeOnOutreach` function had to return `(nil, true)` for this case: no Sync commands to send, but outreach WAS handled. This is why the bool return was critical—otherwise the caller would interpret `nil` as "no outreach, continue processing" instead of "outreach handled, stop processing this contact".
+actionable: true
+
