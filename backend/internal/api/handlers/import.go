@@ -383,13 +383,27 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 
 // buildMethodsFromSelection builds contact methods from user selection
 func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalContact, selected []SelectedMethodInput) []service.ContactMethodInput {
-	// Build map of available values from external contact
-	availableValues := make(map[string]bool)
+	// Build map of available values from external contact. Tracks the value
+	// that should be persisted so telegram handles are stored without the
+	// leading '@' even when the frontend sends '@daledobeck' as the
+	// display-friendly original_value (matches buildMethodsAuto semantics).
+	availableValues := make(map[string]string)
 	for _, email := range external.Emails {
-		availableValues[email.Value] = true
+		availableValues[email.Value] = email.Value
 	}
 	for _, phone := range external.Phones {
-		availableValues[phone.Value] = true
+		availableValues[phone.Value] = phone.Value
+	}
+	// Telegram handle from metadata — accept both the stored ('@daledobeck')
+	// and bare ('daledobeck') forms as the original_value, but persist without
+	// the '@' so it matches buildMethodsAuto and downstream contact-method
+	// uniqueness checks.
+	if external.Source == "telegram" {
+		if handle, ok := external.Metadata["username"].(string); ok && handle != "" {
+			bare := strings.TrimPrefix(handle, "@")
+			availableValues[handle] = bare
+			availableValues[bare] = bare
+		}
 	}
 
 	methods := make([]service.ContactMethodInput, 0, len(selected))
@@ -397,13 +411,15 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 	hasPrimary := false // Track if we've already assigned a primary
 
 	for _, sel := range selected {
-		// Validate the value exists in external contact
-		if !availableValues[sel.OriginalValue] {
+		// Validate the value exists in external contact, and look up the
+		// canonical stored value (strips '@' for telegram handles).
+		storedValue, ok := availableValues[sel.OriginalValue]
+		if !ok {
 			logger.Warn().Str("value", sel.OriginalValue).Msg("selected value not found in external contact")
 			continue
 		}
 
-		normalized := repository.NormalizeContactMethodValue(sel.Type, sel.OriginalValue)
+		normalized := repository.NormalizeContactMethodValue(sel.Type, storedValue)
 		if normalized == "" {
 			continue
 		}
@@ -421,7 +437,7 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 
 		methods = append(methods, service.ContactMethodInput{
 			Type:      sel.Type,
-			Value:     sel.OriginalValue,
+			Value:     storedValue,
 			IsPrimary: isPrimary,
 		})
 		usedValues[key] = true

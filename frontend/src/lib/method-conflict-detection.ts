@@ -116,6 +116,43 @@ export function detectMethodConflicts(
     })
   }
 
+  // Process Telegram @username from metadata (source-gated). Mirrors the
+  // backend's buildMethodsAuto — a Telegram peer's handle is itself a
+  // contact method that should appear in the Link modal's comparison UI.
+  // The external_value is kept in display form ('@handle') so the modal's
+  // methodSelections lookup (keyed by @handle) matches.
+  if (candidate.source === 'telegram' && candidate.metadata?.username) {
+    const rawHandle = candidate.metadata.username
+    const displayValue = rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`
+    const suggestedType: ContactMethodType = 'telegram'
+    const normalized = normalizeContactMethodValueForComparison(suggestedType, displayValue)
+
+    const existingByValue = crmByNormalizedValue.get(normalized)
+
+    let conflictType: ConflictType = 'none'
+    let state: MethodState = 'adding'
+    let crmMethod: MethodComparison['crm_method'] | undefined
+
+    if (existingByValue) {
+      crmMethod = {
+        id: existingByValue.id || '',
+        type: existingByValue.type,
+        value: existingByValue.value,
+      }
+      conflictType = 'identical'
+      state = 'unchanged'
+    }
+
+    comparisons.push({
+      external_value: displayValue,
+      external_type: 'telegram',
+      suggested_crm_type: suggestedType,
+      crm_method: crmMethod,
+      conflict_type: conflictType,
+      state,
+    })
+  }
+
   return comparisons
 }
 

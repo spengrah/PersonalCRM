@@ -175,6 +175,21 @@ export function ImportLinkModal({
       })
     })
 
+    // Add Telegram @username from metadata as a telegram method.
+    // Mirrors the backend's buildMethodsAuto behavior in handlers/import.go so
+    // the UI reflects the method that will actually be created on import.
+    // Display the handle with a leading '@' for consistency with the card chip.
+    if (candidate.source === 'telegram' && candidate.metadata?.username) {
+      const rawHandle = candidate.metadata.username
+      const displayValue = rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`
+      selections.set(displayValue, {
+        value: displayValue,
+        selected: true,
+        type: 'telegram',
+        isEmail: false,
+      })
+    }
+
     setMethodSelections(selections)
     setConflictResolutions(new Map())
     setSelectedCadence('')
@@ -718,7 +733,7 @@ export function ImportLinkModal({
         >
           <h4 className="text-sm font-medium text-gray-700 mb-3">Contact Methods</h4>
 
-          {candidate.emails.length === 0 && candidate.phones.length === 0 ? (
+          {methodSelections.size === 0 ? (
             <p className="text-sm text-gray-500">No contact methods available</p>
           ) : mode === 'import' ? (
             // Import mode: Simple method selection

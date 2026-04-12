@@ -1,6 +1,6 @@
 'use client'
 
-import { Check, Mail, Phone } from 'lucide-react'
+import { Check, Mail, Phone, Send } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Select } from '@/components/ui/select'
 import { CONTACT_METHOD_OPTIONS } from '@/lib/contact-methods'
@@ -13,21 +13,21 @@ import type { MethodState } from '@/types/import'
 import type { ContactMethodType } from '@/types/contact'
 
 interface MethodSelectorProps {
-  /** The method value to display (email or phone) */
+  /** The method value to display (email, phone, or handle) */
   value: string
   /** Whether this method is selected for import/link */
   selected: boolean
-  /** The assigned CRM type (email, phone, etc.) */
+  /** The assigned CRM type (email, phone, telegram, etc.) */
   selectedType: ContactMethodType
   /** Visual state for styling */
   state: MethodState
   /** Callback when checkbox is toggled */
   onToggle: () => void
-  /** Callback when type is changed */
+  /** Callback when type is changed (only used for emails, which support subtypes) */
   onTypeChange: (type: ContactMethodType) => void
   /** Whether the selector is disabled */
   disabled?: boolean
-  /** Whether this is an email (vs phone) */
+  /** Whether this is an email (vs phone/handle). When false, no type dropdown is shown. */
   isEmail: boolean
   /** Whether this method is marked as primary */
   isPrimary?: boolean
@@ -47,12 +47,11 @@ export function MethodSelector({
   isPrimary = false,
   onPrimaryToggle,
 }: MethodSelectorProps) {
-  // Filter options to only show relevant types
+  // Filter options to only show relevant types. Email has multiple subtypes;
+  // phone and handle-based types (telegram, signal, etc.) just render a label.
   const relevantOptions = CONTACT_METHOD_OPTIONS.filter(opt => {
-    if (isEmail) {
-      return opt.value === 'email'
-    }
-    return opt.value === 'phone'
+    if (isEmail) return opt.value === 'email'
+    return opt.value === selectedType
   })
 
   const stateClasses = getMethodStateClasses(state)
@@ -86,7 +85,13 @@ export function MethodSelector({
 
       {/* Icon */}
       <div className="flex-shrink-0 text-gray-400">
-        {isEmail ? <Mail className="w-4 h-4" /> : <Phone className="w-4 h-4" />}
+        {isEmail ? (
+          <Mail className="w-4 h-4" />
+        ) : selectedType === 'telegram' ? (
+          <Send className="w-4 h-4" />
+        ) : (
+          <Phone className="w-4 h-4" />
+        )}
       </div>
 
       {/* Value */}

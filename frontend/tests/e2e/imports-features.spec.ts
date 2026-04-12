@@ -351,6 +351,12 @@ test.describe('Imports Features @area:imports', () => {
       // Modal opens in import mode (mode toggle is visible).
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
+      // Contact Methods section shows the @handle as a selectable method row —
+      // NOT "No contact methods available". The row carries the handle as its
+      // visible value and defaults to selected.
+      await expect(page.getByText('No contact methods available')).not.toBeVisible()
+      await expect(page.locator('.space-y-2').getByText(handle)).toBeVisible()
+
       // Import without editing the name — click "Import as New Contact" submit button.
       await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
 
@@ -358,6 +364,44 @@ test.describe('Imports Features @area:imports', () => {
       await expect(page.getByText(`${handle} imported successfully!`)).toBeVisible({
         timeout: 10000,
       })
+    })
+
+    test('shows @username method in Link to Existing modal', async ({ page }) => {
+      const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
+
+      // Seed a CRM contact to link to
+      await testApi.seedContacts([
+        {
+          full_name: 'Link Target For Telegram',
+        },
+      ])
+
+      // Seed a Telegram candidate with no name fields
+      await testApi.seedExternalContacts([
+        {
+          source: 'telegram',
+          metadata: { username: handle },
+        },
+      ])
+
+      await page.goto('/imports')
+      await page.waitForLoadState('domcontentloaded')
+      await page.getByRole('button', { name: 'Telegram', exact: true }).click()
+
+      const candidateCard = page.locator('[class*="border-gray-200"]').filter({ hasText: handle })
+      await candidateCard.getByRole('button', { name: /Link/i }).click()
+
+      // Switch to Link mode
+      await page.getByRole('button', { name: 'Link to Existing', exact: true }).click()
+
+      // Select the CRM contact
+      await page.getByText('Search for a contact...').click()
+      await page.getByText(`${testApi.prefix}-Link Target For Telegram`).click()
+
+      // The handle is rendered in the methods list as "Will be added" / "Same as CRM"
+      // rather than "No contact methods available".
+      await expect(page.getByText('No contact methods available')).not.toBeVisible()
+      await expect(page.locator('.space-y-2').getByText(handle).first()).toBeVisible()
     })
   })
 })
