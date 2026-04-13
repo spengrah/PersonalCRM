@@ -386,3 +386,311 @@ func TestUpdateDiscoveryCandidatesForPeer_EmptyStringsTreatedAsNil(t *testing.T)
 }
 
 func ptr(s string) *string { return &s }
+
+// --- Enrichment-on-match coverage ---
+
+type capturedSync struct {
+	contactID uuid.UUID
+	external  *repository.ExternalContact
+}
+
+type mockContactEnricher struct {
+	captured []capturedSync
+	err      error
+}
+
+func (m *mockContactEnricher) SyncMethodsFromExternal(_ context.Context, contactID uuid.UUID, external *repository.ExternalContact) error {
+	// Snapshot the external pointer's metadata to detect mutation after the fact
+	// being called. We just record the pointer and current map keys.
+	m.captured = append(m.captured, capturedSync{contactID: contactID, external: external})
+	return m.err
+}
+
+func TestMatchPeer_UsernameMatch_FiresEnricher(t *testing.T) {
+	contactID := uuid.New()
+	identityMock := &mockIdentityMatcher{
+		results: map[string]*service.MatchResult{
+			"alice": {ContactID: &contactID, MatchType: repository.MatchTypeExact},
+		},
+	}
+	enricher := &mockContactEnricher{}
+	matcher := &PeerMatcher{
+		identityService:     identityMock,
+		externalContactRepo: &mockExternalContactUpserter{}, // GetBySource returns nil
+		enricher:            enricher,
+		discoveryMinMsgs:    3,
+	}
+
+	username := "alice"
+	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, contactID, *result)
+
+	require.Len(t, enricher.captured, 1)
+	assert.Equal(t, contactID, enricher.captured[0].contactID)
+	assert.Equal(t, "@alice", enricher.captured[0].external.Metadata["username"])
+}
+
+func TestMatchPeer_PhoneMatchWithUsername_FiresEnricher(t *testing.T) {
+	contactID := uuid.New()
+	identityMock := &mockIdentityMatcher{
+		results: map[string]*service.MatchResult{
+			"bob":          {MatchType: repository.MatchTypeUnmatched},
+			"+15551234567": {ContactID: &contactID, MatchType: repository.MatchTypeExact},
+		},
+	}
+	enricher := &mockContactEnricher{}
+	matcher := &PeerMatcher{
+		identityService:     identityMock,
+		externalContactRepo: &mockExternalContactUpserter{},
+		enricher:            enricher,
+		discoveryMinMsgs:    3,
+	}
+
+	username := "bob"
+	phone := "+15551234567"
+	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Bob"), nil, &phone)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, enricher.captured, 1)
+	assert.Equal(t, contactID, enricher.captured[0].contactID)
+	assert.Equal(t, "@bob", enricher.captured[0].external.Metadata["username"])
+}
+
+func TestMatchPeer_PhoneMatchWithoutUsername_NoUsernameInMetadata(t *testing.T) {
+	contactID := uuid.New()
+	identityMock := &mockIdentityMatcher{
+		results: map[string]*service.MatchResult{
+			"+15551234567": {ContactID: &contactID, MatchType: repository.MatchTypeExact},
+		},
+	}
+	enricher := &mockContactEnricher{}
+	matcher := &PeerMatcher{
+		identityService:     identityMock,
+		externalContactRepo: &mockExternalContactUpserter{},
+		enricher:            enricher,
+		discoveryMinMsgs:    3,
+	}
+
+	phone := "+15551234567"
+	result, err := matcher.MatchPeer(context.Background(), 12345, nil, nil, nil, &phone)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, enricher.captured, 1)
+	_, hasUsername := enricher.captured[0].external.Metadata["username"]
+	assert.False(t, hasUsername, "no username key when peerUsername is nil")
+}
+
+func TestMatchPeer_Unmatched_NoEnricherCall(t *testing.T) {
+	identityMock := &mockIdentityMatcher{results: map[string]*service.MatchResult{}}
+	enricher := &mockContactEnricher{}
+	matcher := &PeerMatcher{
+		identityService:     identityMock,
+		externalContactRepo: &mockExternalContactUpserter{},
+		enricher:            enricher,
+		discoveryMinMsgs:    3,
+	}
+
+	username := "nobody"
+	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Nobody"), nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+	assert.Empty(t, enricher.captured)
+}
+
+func TestMatchPeer_NilEnricher_NoPanic(t *testing.T) {
+	contactID := uuid.New()
+	identityMock := &mockIdentityMatcher{
+		results: map[string]*service.MatchResult{
+			"alice": {ContactID: &contactID, MatchType: repository.MatchTypeExact},
+		},
+	}
+	matcher := &PeerMatcher{
+		identityService:     identityMock,
+		externalContactRepo: &mockExternalContactUpserter{},
+		enricher:            nil,
+		discoveryMinMsgs:    3,
+	}
+
+	username := "alice"
+	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, contactID, *result)
+}
+
+func TestMatchPeer_EnricherError_DoesNotFailMatch(t *testing.T) {
+	contactID := uuid.New()
+	identityMock := &mockIdentityMatcher{
+		results: map[string]*service.MatchResult{
+			"alice": {ContactID: &contactID, MatchType: repository.MatchTypeExact},
+		},
+	}
+	enricher := &mockContactEnricher{err: assert.AnError}
+	matcher := &PeerMatcher{
+		identityService:     identityMock,
+		externalContactRepo: &mockExternalContactUpserter{},
+		enricher:            enricher,
+		discoveryMinMsgs:    3,
+	}
+
+	username := "alice"
+	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, contactID, *result)
+}
+
+func TestMatchPeer_PersistedExternalPreferred(t *testing.T) {
+	contactID := uuid.New()
+	persistedID := uuid.New()
+	identityMock := &mockIdentityMatcher{
+		results: map[string]*service.MatchResult{
+			"newhandle": {ContactID: &contactID, MatchType: repository.MatchTypeExact},
+		},
+	}
+	enricher := &mockContactEnricher{}
+	matcher := &PeerMatcher{
+		identityService: identityMock,
+		externalContactRepo: &mockExternalContactUpserter{
+			getResult: &repository.ExternalContact{
+				ID:          persistedID,
+				Source:      "telegram",
+				SourceID:    "12345",
+				Emails:      []repository.EmailEntry{{Value: "stored@example.com"}},
+				MatchStatus: repository.MatchStatusUnmatched,
+				Metadata:    map[string]any{"username": "@oldhandle"},
+			},
+		},
+		enricher:         enricher,
+		discoveryMinMsgs: 3,
+	}
+
+	username := "newhandle"
+	_, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("New"), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, enricher.captured, 1)
+	got := enricher.captured[0].external
+	assert.Equal(t, persistedID, got.ID)
+	// Original emails preserved
+	require.Len(t, got.Emails, 1)
+	assert.Equal(t, "stored@example.com", got.Emails[0].Value)
+	// Current message wins for username
+	assert.Equal(t, "@newhandle", got.Metadata["username"])
+}
+
+func TestMatchPeer_AbsentExternal_Synthesized(t *testing.T) {
+	contactID := uuid.New()
+	identityMock := &mockIdentityMatcher{
+		results: map[string]*service.MatchResult{
+			"alice": {ContactID: &contactID, MatchType: repository.MatchTypeExact},
+		},
+	}
+	enricher := &mockContactEnricher{}
+	matcher := &PeerMatcher{
+		identityService:     identityMock,
+		externalContactRepo: &mockExternalContactUpserter{}, // getResult: nil
+		enricher:            enricher,
+		discoveryMinMsgs:    3,
+	}
+
+	username := "alice"
+	_, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, enricher.captured, 1)
+	got := enricher.captured[0].external
+	assert.Equal(t, uuid.Nil, got.ID)
+	assert.Equal(t, "telegram", got.Source)
+	assert.Equal(t, "12345", got.SourceID)
+	assert.Equal(t, "@alice", got.Metadata["username"])
+}
+
+func TestMatchPeer_PersistedNilMetadata_Initialized(t *testing.T) {
+	contactID := uuid.New()
+	identityMock := &mockIdentityMatcher{
+		results: map[string]*service.MatchResult{
+			"alice": {ContactID: &contactID, MatchType: repository.MatchTypeExact},
+		},
+	}
+	enricher := &mockContactEnricher{}
+	matcher := &PeerMatcher{
+		identityService: identityMock,
+		externalContactRepo: &mockExternalContactUpserter{
+			getResult: &repository.ExternalContact{
+				ID:          uuid.New(),
+				Source:      "telegram",
+				SourceID:    "12345",
+				Metadata:    nil,
+				MatchStatus: repository.MatchStatusUnmatched,
+			},
+		},
+		enricher:         enricher,
+		discoveryMinMsgs: 3,
+	}
+
+	username := "alice"
+	_, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, enricher.captured, 1)
+	assert.Equal(t, "@alice", enricher.captured[0].external.Metadata["username"])
+}
+
+func TestMatchPeer_PersistedEmptyMetadata_GapFilled(t *testing.T) {
+	contactID := uuid.New()
+	identityMock := &mockIdentityMatcher{
+		results: map[string]*service.MatchResult{
+			"alice": {ContactID: &contactID, MatchType: repository.MatchTypeExact},
+		},
+	}
+	enricher := &mockContactEnricher{}
+	matcher := &PeerMatcher{
+		identityService: identityMock,
+		externalContactRepo: &mockExternalContactUpserter{
+			getResult: &repository.ExternalContact{
+				ID:          uuid.New(),
+				Source:      "telegram",
+				SourceID:    "12345",
+				Metadata:    map[string]any{},
+				MatchStatus: repository.MatchStatusUnmatched,
+			},
+		},
+		enricher:         enricher,
+		discoveryMinMsgs: 3,
+	}
+
+	username := "alice"
+	_, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "@alice", enricher.captured[0].external.Metadata["username"])
+}
+
+func TestMatchPeer_NoUsernameAnywhere_NoUsernameWritten(t *testing.T) {
+	contactID := uuid.New()
+	identityMock := &mockIdentityMatcher{
+		results: map[string]*service.MatchResult{
+			"+15551234567": {ContactID: &contactID, MatchType: repository.MatchTypeExact},
+		},
+	}
+	enricher := &mockContactEnricher{}
+	matcher := &PeerMatcher{
+		identityService: identityMock,
+		externalContactRepo: &mockExternalContactUpserter{
+			getResult: &repository.ExternalContact{
+				ID:          uuid.New(),
+				Source:      "telegram",
+				SourceID:    "12345",
+				Metadata:    map[string]any{},
+				MatchStatus: repository.MatchStatusUnmatched,
+			},
+		},
+		enricher:         enricher,
+		discoveryMinMsgs: 3,
+	}
+
+	phone := "+15551234567"
+	_, err := matcher.MatchPeer(context.Background(), 12345, nil, nil, nil, &phone)
+	require.NoError(t, err)
+	require.Len(t, enricher.captured, 1)
+	_, has := enricher.captured[0].external.Metadata["username"]
+	assert.False(t, has, "no username key — neither persisted nor current message had one")
+}
