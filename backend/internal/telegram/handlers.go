@@ -293,21 +293,22 @@ func (h *MessageHandler) enrichSparseEntity(ctx context.Context, parsed *ParsedM
 
 func parsedToUpsertParams(p *ParsedMessage) repository.UpsertTelegramMessageParams {
 	return repository.UpsertTelegramMessageParams{
-		TelegramMessageID: p.TelegramMessageID,
-		TelegramChatID:    p.TelegramChatID,
-		ChatType:          p.ChatType,
-		ChatTitle:         p.ChatTitle,
-		MessageText:       p.MessageText,
-		MessageType:       p.MessageType,
-		SentAt:            p.SentAt,
-		EditedAt:          p.EditedAt,
-		IsOutgoing:        p.IsOutgoing,
-		ReplyToMsgID:      p.ReplyToMsgID,
-		PeerUserID:        p.PeerUserID,
-		PeerUsername:      p.PeerUsername,
-		PeerFirstName:     p.PeerFirstName,
-		PeerLastName:      p.PeerLastName,
-		PeerPhone:         p.PeerPhone,
+		TelegramMessageID:  p.TelegramMessageID,
+		TelegramChatID:     p.TelegramChatID,
+		ChatType:           p.ChatType,
+		ChatTitle:          p.ChatTitle,
+		MessageText:        p.MessageText,
+		MessageType:        p.MessageType,
+		SentAt:             p.SentAt,
+		EditedAt:           p.EditedAt,
+		IsOutgoing:         p.IsOutgoing,
+		ReplyToMsgID:       p.ReplyToMsgID,
+		PeerUserID:         p.PeerUserID,
+		PeerUsername:       p.PeerUsername,
+		PeerFirstName:      p.PeerFirstName,
+		PeerLastName:       p.PeerLastName,
+		PeerPhone:          p.PeerPhone,
+		PeerEntityResolved: p.PeerEntityResolved,
 	}
 }
 

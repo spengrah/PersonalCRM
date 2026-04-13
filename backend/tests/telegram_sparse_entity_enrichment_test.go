@@ -351,6 +351,57 @@ func TestSparseEntityEnrichment_UntrackedGroupSkipsBeforeEnrichment(t *testing.T
 	assert.Equal(t, int64(0), counter.Count(), "enrichSparseEntity must not run for ignored group chats")
 }
 
+// TestSparseEntityEnrichment_HandleEditMessage_FillsFromHistory has already
+// covered the "older row is rich, sparse new arrives" path. This test covers
+// the inverse recency edge case Codex flagged in PR #278: after the user has
+// removed their handle in an authoritative update (Username=""), a SUBSEQUENT
+// sparse update must NOT resurrect the old handle from the historical row.
+// The fix relies on the persisted peer_entity_resolved flag so that
+// GetPeerEntityByUserID prefers the most recent authoritative row over any
+// older non-blank value.
+func TestSparseEntityEnrichment_AuthoritativeRemovalSticksAcrossSparseUpdates(t *testing.T) {
+	env := setupSparseEnrichTest(t)
+	ctx := context.Background()
+	peerUserID, peerIDStr := uniqueTestIDs(t)
+	chatID := peerUserID
+	t.Cleanup(func() { cleanupSparseEnrichTestData(t, env, chatID) })
+
+	// Step 1: legacy historical row with rich entity data (resolved=false).
+	oldHandle := "oldhandle" + peerIDStr
+	_, err := env.messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 70001,
+		TelegramChatID:    chatID,
+		ChatType:          "private",
+		MessageType:       "text",
+		SentAt:            accelerated.GetCurrentTime().Add(-2 * time.Hour),
+		IsOutgoing:        false,
+		PeerUserID:        &peerUserID,
+		PeerUsername:      &oldHandle,
+		PeerFirstName:     strPtr("OldName"),
+	})
+	require.NoError(t, err)
+
+	// Step 2: authoritative update arrives with Username="" (handle removed)
+	// but FirstName populated. Drives HandleNewMessage so the row is stored
+	// with peer_entity_resolved=true and peer_username=NULL.
+	authMsg := makePrivateMessage(peerUserID, 70002, accelerated.GetCurrentTime().Add(-1*time.Hour), "removed my handle")
+	authEntities := tg.Entities{Users: map[int64]*tg.User{
+		peerUserID: {ID: peerUserID, Username: "", FirstName: "NewName"},
+	}}
+	require.NoError(t, env.handler.HandleNewMessage(ctx, authEntities, &tg.UpdateNewMessage{Message: authMsg}))
+
+	// Step 3: a NEW sparse update arrives. Without the recency fix, the
+	// fallback would prefer the older non-blank row and resurrect oldHandle.
+	sparseMsg := makePrivateMessage(peerUserID, 70003, accelerated.GetCurrentTime(), "next message")
+	require.NoError(t, env.handler.HandleNewMessage(ctx, tg.Entities{Users: map[int64]*tg.User{}}, &tg.UpdateNewMessage{Message: sparseMsg}))
+
+	got, err := env.messageRepo.GetMessage(ctx, chatID, 70003)
+	require.NoError(t, err)
+	assert.Nil(t, got.PeerUsername, "removal must stick — sparse update must NOT resurrect old handle")
+	require.NotNil(t, got.PeerFirstName, "first_name from authoritative row should still flow through")
+	assert.Equal(t, "NewName", *got.PeerFirstName)
+}
+
 // TestSparseEntityEnrichment_EnrichedFieldsFlowToDiscoveryCandidate verifies
 // the user-visible "Unknown card → real name" outcome: when a sparse
 // incoming message arrives for an unmatched peer that has historical entity

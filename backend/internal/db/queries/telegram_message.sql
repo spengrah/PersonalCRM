@@ -3,12 +3,12 @@ INSERT INTO telegram_message (
     telegram_message_id, telegram_chat_id, chat_type, chat_title,
     message_text, message_type, sent_at, edited_at, is_outgoing,
     reply_to_msg_id, peer_user_id, peer_username, peer_first_name,
-    peer_last_name, peer_phone
+    peer_last_name, peer_phone, peer_entity_resolved
 ) VALUES (
     @telegram_message_id, @telegram_chat_id, @chat_type, @chat_title,
     @message_text, @message_type, @sent_at, @edited_at, @is_outgoing,
     @reply_to_msg_id, @peer_user_id, @peer_username, @peer_first_name,
-    @peer_last_name, @peer_phone
+    @peer_last_name, @peer_phone, @peer_entity_resolved
 )
 ON CONFLICT (telegram_chat_id, telegram_message_id) DO UPDATE SET
     message_text = EXCLUDED.message_text,
@@ -16,7 +16,10 @@ ON CONFLICT (telegram_chat_id, telegram_message_id) DO UPDATE SET
     peer_username = COALESCE(EXCLUDED.peer_username, telegram_message.peer_username),
     peer_first_name = COALESCE(EXCLUDED.peer_first_name, telegram_message.peer_first_name),
     peer_last_name = COALESCE(EXCLUDED.peer_last_name, telegram_message.peer_last_name),
-    peer_phone = COALESCE(EXCLUDED.peer_phone, telegram_message.peer_phone)
+    peer_phone = COALESCE(EXCLUDED.peer_phone, telegram_message.peer_phone),
+    -- An authoritative update (resolved=true) must "stick" — never let a
+    -- subsequent sparse re-ingest of the same message id downgrade the row.
+    peer_entity_resolved = telegram_message.peer_entity_resolved OR EXCLUDED.peer_entity_resolved
 RETURNING *;
 
 -- name: SoftDeleteTelegramMessages :exec
@@ -161,19 +164,28 @@ ORDER BY peer_user_id,
     sent_at DESC;
 
 -- name: GetPeerEntityByUserID :one
--- Returns the best-known entity data for a given peer_user_id by selecting
--- the telegram_message row with the most-populated peer entity fields.
--- Ordering mirrors ListDistinctUnmatchedPeers: prefer non-blank username,
--- then phone, then first_name/last_name, then the most recent message.
--- Used by the live-message handler to backfill sparse entity data from the
--- gotd/td dispatcher before upserting the new message. Does NOT filter on
+-- Returns the best-known entity data for a given peer_user_id, used by the
+-- live-message handler to backfill sparse entity data from the gotd/td
+-- dispatcher before upserting the new message. Does NOT filter on
 -- matched_contact_id — needed for rematching previously-matched peers after
 -- a contact soft-delete.
+--
+-- Ordering: prefer the MOST RECENT row marked peer_entity_resolved (i.e.,
+-- whose entity fields came from an authoritative tg.User in the update's
+-- entities). This way, an authoritative-empty event ("user removed their
+-- username") is respected on subsequent sparse updates rather than being
+-- undone by resurrecting an older non-blank handle. Falls back to the
+-- best-non-blank ordering for legacy rows where no resolved=true history
+-- exists yet.
 SELECT peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone
 FROM telegram_message
 WHERE peer_user_id = @peer_user_id
   AND deleted_at IS NULL
 ORDER BY
+    -- Authoritative rows first; among them, the most recent wins.
+    peer_entity_resolved DESC,
+    CASE WHEN peer_entity_resolved THEN sent_at END DESC NULLS LAST,
+    -- Fallback for legacy data with no resolved=true history.
     CASE WHEN peer_username   IS NOT NULL AND peer_username   <> '' THEN 0 ELSE 1 END,
     CASE WHEN peer_phone      IS NOT NULL AND peer_phone      <> '' THEN 0 ELSE 1 END,
     CASE WHEN peer_first_name IS NOT NULL AND peer_first_name <> '' THEN 0 ELSE 1 END,

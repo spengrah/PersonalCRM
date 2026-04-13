@@ -39,21 +39,22 @@ type TelegramMessage struct {
 
 // UpsertTelegramMessageParams holds parameters for upserting a message.
 type UpsertTelegramMessageParams struct {
-	TelegramMessageID int32
-	TelegramChatID    int64
-	ChatType          string
-	ChatTitle         *string
-	MessageText       *string
-	MessageType       string
-	SentAt            time.Time
-	EditedAt          *time.Time
-	IsOutgoing        bool
-	ReplyToMsgID      *int32
-	PeerUserID        *int64
-	PeerUsername      *string
-	PeerFirstName     *string
-	PeerLastName      *string
-	PeerPhone         *string
+	TelegramMessageID  int32
+	TelegramChatID     int64
+	ChatType           string
+	ChatTitle          *string
+	MessageText        *string
+	MessageType        string
+	SentAt             time.Time
+	EditedAt           *time.Time
+	IsOutgoing         bool
+	ReplyToMsgID       *int32
+	PeerUserID         *int64
+	PeerUsername       *string
+	PeerFirstName      *string
+	PeerLastName       *string
+	PeerPhone          *string
+	PeerEntityResolved bool
 }
 
 // TelegramMessageRepository handles telegram message persistence.
@@ -130,21 +131,22 @@ func convertDbTelegramMessage(m *db.TelegramMessage) TelegramMessage {
 // UpsertMessage creates or updates a telegram message.
 func (r *TelegramMessageRepository) UpsertMessage(ctx context.Context, params UpsertTelegramMessageParams) (*TelegramMessage, error) {
 	dbMsg, err := r.queries.UpsertTelegramMessage(ctx, db.UpsertTelegramMessageParams{
-		TelegramMessageID: params.TelegramMessageID,
-		TelegramChatID:    params.TelegramChatID,
-		ChatType:          params.ChatType,
-		ChatTitle:         stringToPgText(params.ChatTitle),
-		MessageText:       stringToPgText(params.MessageText),
-		MessageType:       params.MessageType,
-		SentAt:            timeToPgTimestamptz(&params.SentAt),
-		EditedAt:          timeToPgTimestamptz(params.EditedAt),
-		IsOutgoing:        params.IsOutgoing,
-		ReplyToMsgID:      int32ToPgInt4(params.ReplyToMsgID),
-		PeerUserID:        int64ToPgInt8(params.PeerUserID),
-		PeerUsername:      stringToPgText(params.PeerUsername),
-		PeerFirstName:     stringToPgText(params.PeerFirstName),
-		PeerLastName:      stringToPgText(params.PeerLastName),
-		PeerPhone:         stringToPgText(params.PeerPhone),
+		TelegramMessageID:  params.TelegramMessageID,
+		TelegramChatID:     params.TelegramChatID,
+		ChatType:           params.ChatType,
+		ChatTitle:          stringToPgText(params.ChatTitle),
+		MessageText:        stringToPgText(params.MessageText),
+		MessageType:        params.MessageType,
+		SentAt:             timeToPgTimestamptz(&params.SentAt),
+		EditedAt:           timeToPgTimestamptz(params.EditedAt),
+		IsOutgoing:         params.IsOutgoing,
+		ReplyToMsgID:       int32ToPgInt4(params.ReplyToMsgID),
+		PeerUserID:         int64ToPgInt8(params.PeerUserID),
+		PeerUsername:       stringToPgText(params.PeerUsername),
+		PeerFirstName:      stringToPgText(params.PeerFirstName),
+		PeerLastName:       stringToPgText(params.PeerLastName),
+		PeerPhone:          stringToPgText(params.PeerPhone),
+		PeerEntityResolved: params.PeerEntityResolved,
 	})
 	if err != nil {
 		return nil, err
