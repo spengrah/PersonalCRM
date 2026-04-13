@@ -403,12 +403,16 @@ func (h *TestHandler) SeedOverdueContacts(c *gin.Context) {
 
 // SeedCalendarEventInput represents input for creating a calendar event
 type SeedCalendarEventInput struct {
-	Title     string `json:"title" validate:"required,min=1,max=255"`
-	Location  string `json:"location,omitempty"`
-	HtmlLink  string `json:"html_link,omitempty"`
-	IsPast    bool   `json:"is_past,omitempty"`    // If true, event is set in the past
-	DaysAgo   int    `json:"days_ago,omitempty"`   // If is_past, how many days ago (default: 7)
-	DaysAhead int    `json:"days_ahead,omitempty"` // If not is_past, how many days ahead (default: 7)
+	Title          string   `json:"title" validate:"required,min=1,max=255"`
+	Location       string   `json:"location,omitempty"`
+	HtmlLink       string   `json:"html_link,omitempty"`
+	IsPast         bool     `json:"is_past,omitempty"`    // If true, event is set in the past
+	DaysAgo        int      `json:"days_ago,omitempty"`   // If is_past, how many days ago (default: 7)
+	DaysAhead      int      `json:"days_ahead,omitempty"` // If not is_past, how many days ahead (default: 7)
+	AttendeeEmails []string `json:"attendee_emails,omitempty"`
+	// Unmatched, when true, seeds the event with attendee emails but does NOT
+	// add contact_id to matched_contact_ids. Used for rematch E2E tests.
+	Unmatched bool `json:"unmatched,omitempty"`
 }
 
 // SeedCalendarEventsRequest represents the request to seed calendar events
@@ -481,6 +485,20 @@ func (h *TestHandler) SeedCalendarEvents(c *gin.Context) {
 		// Build title with prefix
 		title := req.Prefix + "-" + input.Title
 
+		// Build attendee list from optional attendee_emails.
+		attendees := make([]repository.Attendee, 0, len(input.AttendeeEmails))
+		for _, email := range input.AttendeeEmails {
+			attendees = append(attendees, repository.Attendee{Email: email})
+		}
+
+		// matched_contact_ids defaults to the request's primary contact, but
+		// is empty when Unmatched is set so rematch E2E tests can drive the
+		// "no link until method is added" flow.
+		matchedIDs := []uuid.UUID{contactID}
+		if input.Unmatched {
+			matchedIDs = []uuid.UUID{}
+		}
+
 		// Build upsert request
 		upsertReq := repository.UpsertCalendarEventRequest{
 			GcalEventID:          fmt.Sprintf("%s-event-%d", req.Prefix, i),
@@ -490,7 +508,8 @@ func (h *TestHandler) SeedCalendarEvents(c *gin.Context) {
 			StartTime:            startTime,
 			EndTime:              endTime,
 			Status:               "confirmed",
-			MatchedContactIDs:    []uuid.UUID{contactID},
+			Attendees:            attendees,
+			MatchedContactIDs:    matchedIDs,
 			SyncedAt:             now,
 			LastContactedUpdated: false,
 		}

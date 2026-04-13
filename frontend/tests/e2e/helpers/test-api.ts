@@ -93,6 +93,10 @@ export interface SeedCalendarEventInput {
   is_past?: boolean
   days_ago?: number
   days_ahead?: number
+  attendee_emails?: string[]
+  // Seed the event with attendees but no matched_contact_ids — the caller
+  // intends to drive the rematch flow from the UI.
+  unmatched?: boolean
 }
 
 export interface SeedCalendarEventsRequest {
