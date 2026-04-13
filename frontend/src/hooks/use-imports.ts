@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { importsApi } from '@/lib/imports-api'
 import { contactKeys, importKeys, invalidateFor } from '@/lib/query-invalidation'
+import { useRegisterRematchJob } from '@/components/providers/rematch-jobs-provider'
 import type {
   ImportCandidatesListParams,
   ImportContactRequest,
@@ -32,14 +33,22 @@ export function useImportCandidate(id: string) {
 // Supports optional method selection for enhanced UI
 export function useImportAsContact() {
   const queryClient = useQueryClient()
+  const registerJob = useRegisterRematchJob()
 
   return useMutation({
     mutationFn: ({ id, request }: { id: string; request?: ImportContactRequest }) =>
       importsApi.importCandidate(id, request),
-    onSuccess: newContact => {
+    onSuccess: response => {
       // Populate the contact detail cache with the new contact
-      queryClient.setQueryData(contactKeys.detail(newContact.id), newContact)
+      queryClient.setQueryData(contactKeys.detail(response.contact.id), response.contact)
       invalidateFor('import:imported')
+      if (response.rematch_job_id) {
+        registerJob({
+          jobId: response.rematch_job_id,
+          contactId: response.contact.id,
+          invalidateImports: true,
+        })
+      }
     },
   })
 }
@@ -47,11 +56,20 @@ export function useImportAsContact() {
 // Link candidate to existing CRM contact
 // Supports method selection and conflict resolutions for enhanced UI
 export function useLinkCandidate() {
+  const registerJob = useRegisterRematchJob()
+
   return useMutation({
     mutationFn: ({ id, request }: { id: string; request: LinkContactRequest }) =>
       importsApi.linkCandidate(id, request),
-    onSuccess: () => {
+    onSuccess: (response, vars) => {
       invalidateFor('import:linked')
+      if (response.rematch_job_id) {
+        registerJob({
+          jobId: response.rematch_job_id,
+          contactId: vars.request.crm_contact_id,
+          invalidateImports: true,
+        })
+      }
     },
   })
 }

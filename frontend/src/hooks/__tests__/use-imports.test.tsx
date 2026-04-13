@@ -43,6 +43,12 @@ vi.mock('@/lib/query-invalidation', () => ({
   },
 }))
 
+// Mock the rematch jobs provider — useImportAsContact / useLinkCandidate
+// register jobs through this context. Tests don't exercise the provider.
+vi.mock('@/components/providers/rematch-jobs-provider', () => ({
+  useRegisterRematchJob: () => vi.fn(),
+}))
+
 // Import mocked modules
 import { importsApi } from '@/lib/imports-api'
 import { invalidateFor } from '@/lib/query-invalidation'
@@ -314,8 +320,8 @@ describe('use-imports hooks', () => {
 
   describe('useImportAsContact', () => {
     it('imports candidate and invalidates queries on success', async () => {
-      const mockContact = { id: 'crm-456', full_name: 'John Doe' }
-      mockedImportsApi.importCandidate.mockResolvedValueOnce(mockContact)
+      const mockResponse = { contact: { id: 'crm-456', full_name: 'John Doe' } }
+      mockedImportsApi.importCandidate.mockResolvedValueOnce(mockResponse)
 
       const { result } = renderHook(() => useImportAsContact(), {
         wrapper: createWrapper(queryClient),
@@ -328,8 +334,8 @@ describe('use-imports hooks', () => {
     })
 
     it('imports candidate with method selection', async () => {
-      const mockContact = { id: 'crm-456', full_name: 'John Doe' }
-      mockedImportsApi.importCandidate.mockResolvedValueOnce(mockContact)
+      const mockResponse = { contact: { id: 'crm-456', full_name: 'John Doe' } }
+      mockedImportsApi.importCandidate.mockResolvedValueOnce(mockResponse)
 
       const { result } = renderHook(() => useImportAsContact(), {
         wrapper: createWrapper(queryClient),
@@ -349,7 +355,7 @@ describe('use-imports hooks', () => {
 
     it('populates contact detail cache on success', async () => {
       const mockContact = { id: 'crm-456', full_name: 'John Doe' }
-      mockedImportsApi.importCandidate.mockResolvedValueOnce(mockContact)
+      mockedImportsApi.importCandidate.mockResolvedValueOnce({ contact: mockContact })
 
       const { result } = renderHook(() => useImportAsContact(), {
         wrapper: createWrapper(queryClient),
@@ -365,7 +371,7 @@ describe('use-imports hooks', () => {
 
   describe('useLinkCandidate', () => {
     it('links candidate and invalidates queries on success', async () => {
-      mockedImportsApi.linkCandidate.mockResolvedValueOnce(undefined)
+      mockedImportsApi.linkCandidate.mockResolvedValueOnce({ external_contact: { id: 'ext-123' } })
 
       const { result } = renderHook(() => useLinkCandidate(), {
         wrapper: createWrapper(queryClient),
@@ -383,7 +389,7 @@ describe('use-imports hooks', () => {
     })
 
     it('links candidate with method selection and conflict resolutions', async () => {
-      mockedImportsApi.linkCandidate.mockResolvedValueOnce(undefined)
+      mockedImportsApi.linkCandidate.mockResolvedValueOnce({ external_contact: { id: 'ext-123' } })
 
       const { result } = renderHook(() => useLinkCandidate(), {
         wrapper: createWrapper(queryClient),

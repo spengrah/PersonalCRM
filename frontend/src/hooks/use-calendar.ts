@@ -1,14 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { calendarApi } from '@/lib/calendar-api'
+import { calendarKeys } from '@/lib/query-keys'
 
-// Query key factory for calendar events
-export const calendarKeys = {
-  all: ['calendar-events'] as const,
-  forContact: (contactId: string) => [...calendarKeys.all, 'contact', contactId] as const,
-  upcomingForContact: (contactId: string) =>
-    [...calendarKeys.all, 'upcoming', 'contact', contactId] as const,
-  upcoming: () => [...calendarKeys.all, 'upcoming'] as const,
-}
+// Re-export for backward compatibility (key was previously defined here).
+export { calendarKeys }
 
 // Get all events for a contact
 export function useEventsForContact(
