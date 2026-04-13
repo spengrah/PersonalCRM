@@ -13,17 +13,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// peerEntityFetcher returns the best-known entity data for a Telegram peer
+// PeerEntityFetcher returns the best-known entity data for a Telegram peer
 // from the telegram_message cache. Satisfied by *repository.TelegramMessageRepository;
-// exposed as an interface so the handler can be unit-tested with a mock.
-type peerEntityFetcher interface {
+// exposed so tests can substitute a counting/recording wrapper.
+type PeerEntityFetcher interface {
 	GetPeerEntityByUserID(ctx context.Context, peerUserID int64) (*repository.PeerEntity, error)
 }
 
 // MessageHandler processes Telegram update events and stores messages.
 type MessageHandler struct {
 	messageRepo       *repository.TelegramMessageRepository
-	peerEntityFetcher peerEntityFetcher
+	peerEntityFetcher PeerEntityFetcher
 	chatConfigRepo    *repository.TelegramChatConfigRepository
 	syncRepo          *repository.SyncRepository
 	syncStateID       *uuid.UUID
@@ -62,6 +62,13 @@ func NewMessageHandler(
 // callback before handlers process updates.
 func (h *MessageHandler) SetAPI(api *tg.Client) {
 	h.api = api
+}
+
+// SetPeerEntityFetcher overrides the fetcher used by enrichSparseEntity.
+// Tests use this to install a counting/recording wrapper around the real
+// repository so they can assert on fallback-lookup call counts.
+func (h *MessageHandler) SetPeerEntityFetcher(f PeerEntityFetcher) {
+	h.peerEntityFetcher = f
 }
 
 // HandleNewMessage processes OnNewMessage updates (private + group chats).

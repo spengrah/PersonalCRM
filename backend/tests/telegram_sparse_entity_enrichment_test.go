@@ -3,6 +3,8 @@ package tests
 import (
 	"context"
 	"os"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,12 +12,29 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	tgpkg "personal-crm/backend/internal/telegram"
 
 	"github.com/gotd/td/tg"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// countingFetcher wraps a real PeerEntityFetcher and records call counts.
+// Used to assert the sparse-entity fallback lookup did/didn't fire — for
+// example, to verify the tracking-gate short-circuits before enrichment.
+type countingFetcher struct {
+	inner tgpkg.PeerEntityFetcher
+	count int64
+}
+
+func (c *countingFetcher) GetPeerEntityByUserID(ctx context.Context, peerUserID int64) (*repository.PeerEntity, error) {
+	atomic.AddInt64(&c.count, 1)
+	return c.inner.GetPeerEntityByUserID(ctx, peerUserID)
+}
+
+func (c *countingFetcher) Count() int64 { return atomic.LoadInt64(&c.count) }
 
 // sparseEnrichEnv bundles the dependencies needed to drive HandleNewMessage /
 // HandleEditMessage end-to-end against a real DB.
@@ -23,12 +42,15 @@ type sparseEnrichEnv struct {
 	handler        *tgpkg.MessageHandler
 	messageRepo    *repository.TelegramMessageRepository
 	chatConfigRepo *repository.TelegramChatConfigRepository
+	externalRepo   *repository.ExternalContactRepository
+	contactRepo    *repository.ContactRepository
 	database       *db.Database
 }
 
-// setupSparseEnrichTest builds a MessageHandler with real repos, a nil
-// peerMatcher (matcher logic is out of scope for these tests) and nil
-// syncStateID (so the sync update is a no-op).
+// setupSparseEnrichTest builds a MessageHandler with real repos and a real
+// PeerMatcher (discoveryMinMsgs=1 so a single message is enough to upsert
+// the discovery candidate and exercise the enriched-fields-into-discovery
+// path).
 func setupSparseEnrichTest(t *testing.T) *sparseEnrichEnv {
 	t.Helper()
 	if testing.Short() {
@@ -51,6 +73,15 @@ func setupSparseEnrichTest(t *testing.T) *sparseEnrichEnv {
 	messageRepo := repository.NewTelegramMessageRepository(database.Queries)
 	chatConfigRepo := repository.NewTelegramChatConfigRepository(database.Queries)
 	syncRepo := repository.NewSyncRepository(database.Queries)
+	externalRepo := repository.NewExternalContactRepository(database.Queries)
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
+	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+	identityRepo := repository.NewIdentityRepository(database.Queries)
+
+	identitySvc := service.NewIdentityService(identityRepo)
+	enrichmentSvc := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
+	matcher := tgpkg.NewPeerMatcher(identitySvc, messageRepo, externalRepo, enrichmentSvc, 1)
 
 	handler := tgpkg.NewMessageHandler(
 		messageRepo,
@@ -59,16 +90,27 @@ func setupSparseEnrichTest(t *testing.T) *sparseEnrichEnv {
 		nil,    // syncStateID — nil → updateSyncTimestamp is a no-op
 		111111, // selfUserID — never matches any test peer
 		10,     // groupMaxMembers
-		nil,    // peerMatcher — nil means matching path is skipped
-		nil,    // aggregationEngine
+		matcher,
+		nil, // aggregationEngine — exercised separately
 	)
 
 	return &sparseEnrichEnv{
 		handler:        handler,
 		messageRepo:    messageRepo,
 		chatConfigRepo: chatConfigRepo,
+		externalRepo:   externalRepo,
+		contactRepo:    contactRepo,
 		database:       database,
 	}
+}
+
+// cleanupExternalBySource deletes any external_contact rows associated with
+// the given source ID (decimal peer user ID). Lets a test that exercises the
+// matcher/discovery path leave no orphans.
+func cleanupExternalBySource(t *testing.T, env *sparseEnrichEnv, peerIDStr string) {
+	t.Helper()
+	ctx := context.Background()
+	_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, pgtype.Text{String: peerIDStr, Valid: true})
 }
 
 // cleanupSparseEnrichTestData hard-deletes any telegram_message rows for the
@@ -275,6 +317,10 @@ func TestSparseEntityEnrichment_UntrackedGroupSkipsBeforeEnrichment(t *testing.T
 	groupChatID := peerUserID + 1 // distinct from peer id
 	t.Cleanup(func() { cleanupSparseEnrichTestData(t, env, groupChatID) })
 
+	// Wrap the real fetcher so we can prove the fallback was NOT consulted.
+	counter := &countingFetcher{inner: env.messageRepo}
+	env.handler.SetPeerEntityFetcher(counter)
+
 	// Pre-mark the group chat as ignored.
 	_, err := env.chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: groupChatID,
@@ -299,4 +345,58 @@ func TestSparseEntityEnrichment_UntrackedGroupSkipsBeforeEnrichment(t *testing.T
 	// No row should have been inserted for the ignored chat.
 	_, err = env.messageRepo.GetMessage(ctx, groupChatID, 70001)
 	require.Error(t, err, "ignored group chat must not insert any message row")
+
+	// And the enrichment fallback must have been short-circuited by the
+	// tracking gate — proves enrichment is placed AFTER shouldTrackChat.
+	assert.Equal(t, int64(0), counter.Count(), "enrichSparseEntity must not run for ignored group chats")
+}
+
+// TestSparseEntityEnrichment_EnrichedFieldsFlowToDiscoveryCandidate verifies
+// the user-visible "Unknown card → real name" outcome: when a sparse
+// incoming message arrives for an unmatched peer that has historical entity
+// data, the enriched username/first_name flows through MatchPeer →
+// UpdateDiscoveryCandidatesForPeer and lands on the external_contact row.
+func TestSparseEntityEnrichment_EnrichedFieldsFlowToDiscoveryCandidate(t *testing.T) {
+	env := setupSparseEnrichTest(t)
+	ctx := context.Background()
+	peerUserID, peerIDStr := uniqueTestIDs(t)
+	chatID := peerUserID
+	t.Cleanup(func() {
+		cleanupSparseEnrichTestData(t, env, chatID)
+		cleanupExternalBySource(t, env, peerIDStr)
+	})
+
+	// Seed history with rich entity data; the handler must consult this when
+	// the new sparse update arrives.
+	username := "connor" + peerIDStr
+	firstName := "Connor" + peerIDStr
+	_, err := env.messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 70001,
+		TelegramChatID:    chatID,
+		ChatType:          "private",
+		MessageType:       "text",
+		SentAt:            accelerated.GetCurrentTime().Add(-1 * time.Hour),
+		IsOutgoing:        false,
+		PeerUserID:        &peerUserID,
+		PeerUsername:      &username,
+		PeerFirstName:     &firstName,
+	})
+	require.NoError(t, err)
+
+	// Sparse incoming message — no tg.User in entities.
+	msg := makePrivateMessage(peerUserID, 70002, accelerated.GetCurrentTime(), "ping")
+	entities := tg.Entities{Users: map[int64]*tg.User{}}
+	update := &tg.UpdateNewMessage{Message: msg}
+
+	require.NoError(t, env.handler.HandleNewMessage(ctx, entities, update))
+
+	// The external_contact (discovery candidate) must reflect the ENRICHED
+	// fields, not nils. Without the enrichment fix this row's first_name
+	// would be NULL and metadata.username would be absent → "Unknown" card.
+	got, err := env.externalRepo.GetBySource(ctx, "telegram", strconv.FormatInt(peerUserID, 10), nil)
+	require.NoError(t, err)
+	require.NotNil(t, got, "external_contact must be upserted with enriched fields")
+	require.NotNil(t, got.FirstName, "first_name must be populated from history")
+	assert.Equal(t, firstName, *got.FirstName)
+	assert.Equal(t, "@"+username, got.Metadata["username"], "metadata.username must reflect enriched handle")
 }
