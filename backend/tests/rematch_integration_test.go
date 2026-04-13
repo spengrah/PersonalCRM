@@ -584,6 +584,100 @@ func TestRematch_RescanContact_UnknownContactReturnsNotFound(t *testing.T) {
 	assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound for unknown contact, got %v", err)
 }
 
+// TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction
+// simulates what happens on the Telegram import/link HTTP path: rematch
+// links the messages and runs aggregation, AND the PostImportHook (which
+// ImportContact / LinkContact still call) runs afterwards and performs the
+// same work. The DB unique index on (contact_id, source, source_ref) must
+// prevent duplicate interactions even though the two paths overlap.
+// Regression test for plan Test Case 5.
+func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *testing.T) {
+	env := setupRematchEnv(t)
+
+	// Build the shared matcher + aggregator — the manager normally owns these.
+	cfg := config.TestConfig()
+	messageRepo := repository.NewTelegramMessageRepository(env.database.Queries)
+	identityRepo := repository.NewIdentityRepository(env.database.Queries)
+	identityService := service.NewIdentityService(identityRepo)
+	peerMatcher := tgpkg.NewPeerMatcher(identityService, messageRepo, env.externalRepo, cfg.Telegram.DiscoveryMinMessages)
+	aggregationEngine := tgpkg.NewAggregationEngine(
+		cfg.Telegram.BurstWindowHours, cfg.Telegram.ReplyBridgeHours,
+		messageRepo, env.interactionRepo,
+		env.contactSvc, env.contactSvc, env.contactSvc,
+	)
+	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))
+
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "Rematch TG Combined " + uuid.NewString()[:8],
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+
+	suffix := uuid.NewString()[:8]
+	chatID := int64(900300)
+	peerUserID := int64(800300)
+	username := "combinedpath_" + suffix
+	t.Cleanup(func() {
+		_, _ = env.database.Pool.Exec(env.ctx,
+			"DELETE FROM telegram_message WHERE peer_user_id = $1", peerUserID)
+		_, _ = env.database.Pool.Exec(env.ctx,
+			"DELETE FROM interaction WHERE contact_id = $1 AND source = 'telegram'", contact.ID)
+	})
+
+	// Seed three outbound messages so the aggregation engine produces a single
+	// outbound-burst interaction.
+	now := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+	text := "ping"
+	for i := range 3 {
+		_, err = messageRepo.UpsertMessage(env.ctx, repository.UpsertTelegramMessageParams{
+			TelegramMessageID: int32(90300 + i),
+			TelegramChatID:    chatID,
+			ChatType:          "private",
+			MessageText:       &text,
+			MessageType:       "text",
+			SentAt:            now.Add(-time.Duration(3-i) * 30 * time.Minute),
+			IsOutgoing:        true,
+			PeerUserID:        ptrInt64(peerUserID),
+			PeerUsername:      &username,
+		})
+		require.NoError(t, err)
+	}
+
+	// Step 1: rematch — this mirrors what UpdateContact dispatches when the
+	// user adds a telegram handle to an existing contact.
+	jobID := env.rematchSvc.StartRematchForContact(contact.ID, []service.Method{
+		{Type: "telegram", Value: username},
+	})
+	require.NotEqual(t, uuid.Nil, jobID)
+	job := waitForRematchJob(t, env.rematchSvc, jobID)
+	require.Equal(t, service.JobStatusCompleted, job.Status)
+	require.Equal(t, 3, job.Matched)
+
+	// Step 2: simulate the ImportContact/LinkContact PostImportHook firing
+	// AFTER rematch. peerMatcher.OnPeerLinked is idempotent
+	// (matched_contact_id IS NULL filter) and aggregation reruns over the
+	// already-processed messages (processed_at IS NULL filter) — both should
+	// be no-ops.
+	require.NoError(t, peerMatcher.OnPeerLinked(env.ctx, peerUserID, username, contact.ID))
+	require.NoError(t, aggregationEngine.AggregateForContactBatch(env.ctx, contact.ID))
+
+	// Invariant: exactly one telegram interaction for this contact.
+	var total int
+	require.NoError(t, env.database.Pool.QueryRow(env.ctx,
+		"SELECT COUNT(*) FROM interaction WHERE contact_id = $1 AND source = 'telegram' AND deleted_at IS NULL",
+		contact.ID,
+	).Scan(&total))
+	assert.Equal(t, 1, total, "rematch + PostImportHook together must not produce duplicate interactions")
+
+	// All seeded messages should be linked and processed.
+	var processed int
+	require.NoError(t, env.database.Pool.QueryRow(env.ctx,
+		"SELECT COUNT(*) FROM telegram_message WHERE peer_user_id = $1 AND matched_contact_id = $2 AND processed_at IS NOT NULL",
+		peerUserID, contact.ID,
+	).Scan(&processed))
+	assert.Equal(t, 3, processed)
+}
+
 func TestRematch_ContactServiceUpdateContact_FiresForNewMethodOnly(t *testing.T) {
 	env := setupRematchEnv(t)
 
