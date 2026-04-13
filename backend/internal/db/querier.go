@@ -49,6 +49,9 @@ type Querier interface {
 	CountTelegramMessagesByPeerID(ctx context.Context, peerUserID pgtype.Int8) (*CountTelegramMessagesByPeerIDRow, error)
 	CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error)
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
+	// Counts messages about to be linked for a given peer. Read BEFORE
+	// OnPeerLinked so the matched-count reporting observes the pre-link state.
+	CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
 	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
 	CreateContactTask(ctx context.Context, arg CreateContactTaskParams) (*ContactTask, error)
@@ -116,6 +119,18 @@ type Querier interface {
 	// Demote source's primary contact methods when target already has a primary for that type
 	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
 	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
+	// peer_phone is stored raw from MTProto (typically digits only); contact_method
+	// value_normalized is E.164 with leading '+'. Compare on digits-only.
+	// Same DISTINCT ON ordering as the username variant — prefer rows with a
+	// non-blank peer_username so OnPeerLinked can create the identity even when
+	// the matched row is found by phone.
+	FindDistinctUnmatchedPeerUserIDsByPhone(ctx context.Context, phone string) ([]*FindDistinctUnmatchedPeerUserIDsByPhoneRow, error)
+	// Returns distinct peer_user_ids whose unmatched messages carry the given
+	// normalized telegram handle. Mirrors ListDistinctUnmatchedPeers ordering:
+	// when a peer has multiple rows, prefer the one with a non-blank
+	// peer_username so OnPeerLinked can create the identity. Treats blank
+	// strings as absent (Telegram persists '' for outbound private chats).
+	FindDistinctUnmatchedPeerUserIDsByUsername(ctx context.Context, username string) ([]*FindDistinctUnmatchedPeerUserIDsByUsernameRow, error)
 	// Find contact methods that exist in both source and target
 	// Used to identify duplicates that will be skipped during merge
 	FindDuplicateContactMethods(ctx context.Context, arg FindDuplicateContactMethodsParams) ([]*FindDuplicateContactMethodsRow, error)

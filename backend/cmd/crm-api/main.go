@@ -300,6 +300,14 @@ func main() {
 		defer telegramManager.Stop()
 
 		telegramHandler = handlers.NewTelegramHandler(telegramManager)
+
+		// Register telegram rematch handlers (telegram + phone identifiers)
+		// against the same matcher/aggregator instances the manager owns so
+		// rematch behavior is identical to the post-import path.
+		rematchService.Register(tgpkg.NewUsernameRematchHandler(telegramMessageRepo, telegramManager.PeerMatcher(), telegramManager.AggregationEngine()))
+		rematchService.Register(tgpkg.NewPhoneRematchHandler(telegramMessageRepo, telegramManager.PeerMatcher(), telegramManager.AggregationEngine()))
+		logger.Info().Msg("Telegram rematch handlers registered")
+
 		logger.Info().Msg("Telegram integration initialized")
 	}
 

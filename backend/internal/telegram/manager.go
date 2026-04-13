@@ -587,6 +587,14 @@ func (m *TelegramManager) maybeStartBackfill(ctx context.Context, client *telegr
 	}()
 }
 
+// PeerMatcher returns the manager's PeerMatcher instance for use by external
+// rematch handlers that need to call OnPeerLinked.
+func (m *TelegramManager) PeerMatcher() *PeerMatcher { return m.peerMatcher }
+
+// AggregationEngine returns the manager's AggregationEngine instance for use
+// by external rematch handlers that need to call AggregateForContactBatch.
+func (m *TelegramManager) AggregationEngine() *AggregationEngine { return m.aggregationEngine }
+
 // OnPeerLinked satisfies handlers.PostImportHook. Called after a Telegram candidate
 // is imported/linked to back-fill message matching and trigger aggregation.
 func (m *TelegramManager) OnPeerLinked(ctx context.Context, peerUserID int64, peerUsername string, contactID uuid.UUID) error {
