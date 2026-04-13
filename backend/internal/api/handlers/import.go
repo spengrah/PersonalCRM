@@ -346,7 +346,7 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	if len(req.SelectedMethods) > 0 {
 		methods = h.buildMethodsFromSelection(external, req.SelectedMethods)
 	} else {
-		methods = h.buildMethodsAuto(external)
+		methods = service.BuildMethodsFromExternal(external)
 	}
 
 	// Build create request
@@ -441,41 +441,6 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 			IsPrimary: isPrimary,
 		})
 		usedValues[key] = true
-	}
-
-	return methods
-}
-
-// buildMethodsAuto builds contact methods using automatic selection (legacy behavior)
-func (h *ImportHandler) buildMethodsAuto(external *repository.ExternalContact) []service.ContactMethodInput {
-	methods := make([]service.ContactMethodInput, 0)
-
-	// Handle emails - store all available emails
-	// Note: external email labels (work/home/etc.) are intentionally discarded.
-	for _, email := range external.Emails {
-		methods = append(methods, service.ContactMethodInput{
-			Type:  "email",
-			Value: email.Value,
-		})
-	}
-
-	// Handle phones - store all available phones
-	for _, phone := range external.Phones {
-		methods = append(methods, service.ContactMethodInput{
-			Type:  "phone",
-			Value: phone.Value,
-		})
-	}
-
-	// Handle Telegram username from metadata
-	if external.Source == "telegram" {
-		if username, ok := external.Metadata["username"].(string); ok && username != "" {
-			username = strings.TrimPrefix(username, "@")
-			methods = append(methods, service.ContactMethodInput{
-				Type:  "telegram",
-				Value: username,
-			})
-		}
 	}
 
 	return methods

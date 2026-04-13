@@ -2193,3 +2193,280 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 	})
 }
+
+func TestImportAPI_TelegramLinkWithMethodSelection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Use a separate enrichment repo to verify audit rows.
+	databaseURL2 := os.Getenv("DATABASE_URL")
+	dbCfg := config.DatabaseConfig{
+		URL:               databaseURL2,
+		MaxConns:          config.DefaultDBMaxConns,
+		MinConns:          config.DefaultDBMinConns,
+		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
+		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
+		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
+	}
+	auditDB, err := db.NewDatabase(ctx, dbCfg)
+	require.NoError(t, err)
+	defer auditDB.Close()
+	enrichmentRepo := repository.NewEnrichmentRepository(auditDB.Queries)
+
+	seed := func(t *testing.T, tgUsername string) (*repository.Contact, *repository.ExternalContact, func()) {
+		t.Helper()
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "TG Link Target " + uuid.New().String()[:8],
+		})
+		require.NoError(t, err)
+
+		_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+			ContactID: contact.ID,
+			Type:      "email",
+			Value:     "existing@example.com",
+		})
+		require.NoError(t, err)
+
+		displayName := "TG Candidate " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "telegram",
+			SourceID:    "tg-link-" + uuid.New().String()[:8],
+			DisplayName: &displayName,
+			Metadata:    map[string]any{"username": "@" + tgUsername},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		cleanup := func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		}
+		return contact, external, cleanup
+	}
+
+	link := func(t *testing.T, externalID uuid.UUID, body handlers.LinkRequest) *httptest.ResponseRecorder {
+		t.Helper()
+		jsonBody, _ := json.Marshal(body)
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+externalID.String()+"/link", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	findTelegramMethod := func(methods []repository.ContactMethod) *repository.ContactMethod {
+		for i := range methods {
+			if methods[i].Type == "telegram" {
+				return &methods[i]
+			}
+		}
+		return nil
+	}
+
+	t.Run("LinkTelegram_BareHandle_StoresBareLowerNormalized", func(t *testing.T) {
+		contact, external, cleanupSeed := seed(t, "TestLink")
+		defer cleanupSeed()
+
+		w := link(t, external.ID, handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "TestLink", Type: "telegram"},
+			},
+		})
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contact.ID)
+		require.NoError(t, err)
+		tg := findTelegramMethod(methods)
+		require.NotNil(t, tg, "telegram method should be created")
+		assert.Equal(t, "TestLink", tg.Value)
+		assert.Equal(t, "testlink", tg.ValueNormalized)
+		assert.False(t, tg.IsPrimary)
+
+		// Audit row written with persisted external_contact_id set.
+		enrichments, err := enrichmentRepo.ListForContact(ctx, contact.ID)
+		require.NoError(t, err)
+		var auditFound bool
+		for _, e := range enrichments {
+			if e.Field == "method:telegram:testlink" {
+				auditFound = true
+				require.NotNil(t, e.ExternalContactID, "external_contact_id should reference the persisted row")
+				assert.Equal(t, external.ID, *e.ExternalContactID)
+			}
+		}
+		assert.True(t, auditFound, "expected contact_enrichment audit row for telegram method")
+	})
+
+	t.Run("LinkTelegram_WithAtPrefix_StoresBareForm", func(t *testing.T) {
+		contact, external, cleanupSeed := seed(t, "TestLink")
+		defer cleanupSeed()
+
+		w := link(t, external.ID, handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "@TestLink", Type: "telegram"},
+			},
+		})
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contact.ID)
+		require.NoError(t, err)
+		tg := findTelegramMethod(methods)
+		require.NotNil(t, tg)
+		assert.Equal(t, "TestLink", tg.Value, "leading @ stripped to match import-new storage")
+		assert.Equal(t, "testlink", tg.ValueNormalized)
+	})
+
+	t.Run("LinkTelegram_SelectionsModeWithoutTelegram_NoTelegramAdded", func(t *testing.T) {
+		contact, external, cleanupSeed := seed(t, "Skipped")
+		defer cleanupSeed()
+
+		// Cadence triggers the Selections enrichment path with zero method selections.
+		// Under the Selections path, auto-enrichment is NOT applied — the user's
+		// explicit (empty) selection list determines what methods are added.
+		cadence := "weekly"
+		w := link(t, external.ID, handlers.LinkRequest{
+			CRMContactID:    contact.ID.String(),
+			SelectedMethods: []handlers.SelectedMethodInput{},
+			Cadence:         &cadence,
+		})
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contact.ID)
+		require.NoError(t, err)
+		assert.Nil(t, findTelegramMethod(methods), "no telegram method when not in selections")
+	})
+
+	t.Run("LinkTelegram_AlreadyPresent_NoDuplicate", func(t *testing.T) {
+		contact, external, cleanupSeed := seed(t, "TestLink")
+		defer cleanupSeed()
+
+		_, err := contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+			ContactID: contact.ID,
+			Type:      "telegram",
+			Value:     "TestLink",
+		})
+		require.NoError(t, err)
+
+		w := link(t, external.ID, handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "@TestLink", Type: "telegram"},
+			},
+		})
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contact.ID)
+		require.NoError(t, err)
+		count := 0
+		for _, m := range methods {
+			if m.Type == "telegram" {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "idempotent — no duplicate on re-link")
+	})
+
+	t.Run("LinkTelegram_AutoFallback_NoSelectionsOrCadence", func(t *testing.T) {
+		contact, external, cleanupSeed := seed(t, "AutoFall")
+		defer cleanupSeed()
+
+		// Empty selections + no cadence/name → hits EnrichContactFromExternal (auto mode).
+		// Auto mode DOES apply BuildMethodsFromExternal, so telegram is added from metadata.
+		w := link(t, external.ID, handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+		})
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contact.ID)
+		require.NoError(t, err)
+		tg := findTelegramMethod(methods)
+		require.NotNil(t, tg, "auto-mode link should enrich telegram from metadata.username")
+		assert.Equal(t, "AutoFall", tg.Value)
+	})
+
+	t.Run("LinkTelegram_ProfileFieldsUntouched", func(t *testing.T) {
+		contact, external, cleanupSeed := seed(t, "TestLink")
+		defer cleanupSeed()
+
+		before, err := contactRepo.GetContact(ctx, contact.ID)
+		require.NoError(t, err)
+
+		w := link(t, external.ID, handlers.LinkRequest{
+			CRMContactID: contact.ID.String(),
+			SelectedMethods: []handlers.SelectedMethodInput{
+				{OriginalValue: "TestLink", Type: "telegram"},
+			},
+		})
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		after, err := contactRepo.GetContact(ctx, contact.ID)
+		require.NoError(t, err)
+		assert.Equal(t, before.FullName, after.FullName)
+		assert.Equal(t, before.ProfilePhoto, after.ProfilePhoto)
+		assert.Equal(t, before.Birthday, after.Birthday)
+		assert.Equal(t, before.Location, after.Location)
+		assert.Equal(t, before.Cadence, after.Cadence)
+	})
+}
+
+func TestImportAPI_TelegramImportNewRegression(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	defer cleanup()
+
+	ctx := context.Background()
+
+	displayName := "TG Import Regression " + uuid.New().String()[:8]
+	external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:      "telegram",
+		SourceID:    "tg-import-" + uuid.New().String()[:8],
+		DisplayName: &displayName,
+		Metadata:    map[string]any{"username": "@RegressionUser"},
+	})
+	require.NoError(t, err)
+	defer func() { _ = externalRepo.Delete(ctx, external.ID) }()
+
+	// Auto-select import (no selected_methods) — exercises BuildMethodsFromExternal
+	// replacing buildMethodsAuto on the import-new path.
+	name := "Regression User"
+	body, _ := json.Marshal(handlers.ImportRequest{Name: &name})
+	req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var response api.APIResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	contactData := response.Data.(map[string]interface{})
+	contactID, err := uuid.Parse(contactData["id"].(string))
+	require.NoError(t, err)
+	defer func() { _ = contactRepo.HardDeleteContact(ctx, contactID) }()
+
+	methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, contactID)
+	require.NoError(t, err)
+	require.Len(t, methods, 1)
+	assert.Equal(t, "telegram", methods[0].Type)
+	assert.Equal(t, "RegressionUser", methods[0].Value, "bare handle — matches legacy buildMethodsAuto output")
+	assert.Equal(t, "regressionuser", methods[0].ValueNormalized)
+}

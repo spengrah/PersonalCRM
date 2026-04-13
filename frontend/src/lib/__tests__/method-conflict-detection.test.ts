@@ -236,6 +236,52 @@ describe('method-conflict-detection', () => {
       expect(result.every(r => r.conflict_type === 'none')).toBe(true)
       expect(result.every(r => r.state === 'adding')).toBe(true)
     })
+
+    it('telegram handle sharing normalized value with twitter is added, not marked identical', () => {
+      // Dedup must be type-scoped: an existing `twitter:foo` must NOT mask an
+      // incoming Telegram `@foo` as "same as CRM". The two normalize to the
+      // same handle (`foo`) but live in separate type buckets; the backend
+      // admits both, and the UI must not lie.
+      const candidate: ImportCandidate = {
+        id: 'ext-1',
+        source: 'telegram',
+        display_name: 'Test User',
+        emails: [],
+        phones: [],
+        metadata: { username: '@foo' },
+      }
+      const crmMethods = [createMethod('twitter', '@foo')]
+
+      const result = detectMethodConflicts(candidate, crmMethods)
+
+      expect(result).toHaveLength(1)
+      expect(result[0]).toMatchObject({
+        external_value: '@foo',
+        external_type: 'telegram',
+        suggested_crm_type: 'telegram',
+        conflict_type: 'none',
+        state: 'adding',
+      })
+      expect(result[0].crm_method).toBeUndefined()
+    })
+
+    it('email sharing normalized value with telegram is added, not marked identical', () => {
+      // Opposite direction: existing telegram:foo must not mask a new email
+      // value that normalizes to the same string (hypothetical but covered
+      // for completeness).
+      const candidate = createCandidate(['foo@example.com'])
+      const crmMethods = [createMethod('telegram', 'foo@example.com')]
+
+      const result = detectMethodConflicts(candidate, crmMethods)
+
+      expect(result).toHaveLength(1)
+      expect(result[0]).toMatchObject({
+        external_value: 'foo@example.com',
+        suggested_crm_type: 'email',
+        conflict_type: 'none',
+        state: 'adding',
+      })
+    })
   })
 
   describe('getMethodStateClasses', () => {

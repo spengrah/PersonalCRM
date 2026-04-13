@@ -92,6 +92,7 @@ func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramCha
 		telegramCfg,
 		identityService,
 		externalContactRepo,
+		nil,
 		interactionRepo,
 		contactService,
 		contactService,

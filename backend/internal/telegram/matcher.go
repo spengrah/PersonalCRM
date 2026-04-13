@@ -33,12 +33,19 @@ type peerMessageCounter interface {
 	CountMessagesByPeerID(ctx context.Context, peerUserID int64) (*repository.PeerMessageCount, error)
 }
 
+// contactEnricher performs narrow method-only enrichment on a bound CRM
+// contact. Satisfied by *service.EnrichmentService. May be nil in tests.
+type contactEnricher interface {
+	SyncMethodsFromExternal(ctx context.Context, crmContactID uuid.UUID, external *repository.ExternalContact) error
+}
+
 // PeerMatcher matches Telegram peers to CRM contacts using the identity service.
 type PeerMatcher struct {
 	identityService     identityMatcher
 	messageRepo         *repository.TelegramMessageRepository
 	messageCounter      peerMessageCounter // defaults to messageRepo; separate for testing
 	externalContactRepo externalContactUpserter
+	enricher            contactEnricher // may be nil (tests)
 	discoveryMinMsgs    int
 }
 
@@ -47,6 +54,7 @@ func NewPeerMatcher(
 	identityService identityMatcher,
 	messageRepo *repository.TelegramMessageRepository,
 	externalContactRepo externalContactUpserter,
+	enricher contactEnricher,
 	discoveryMinMsgs int,
 ) *PeerMatcher {
 	return &PeerMatcher{
@@ -54,6 +62,7 @@ func NewPeerMatcher(
 		messageRepo:         messageRepo,
 		messageCounter:      messageRepo, // default: use the same repo
 		externalContactRepo: externalContactRepo,
+		enricher:            enricher,
 		discoveryMinMsgs:    discoveryMinMsgs,
 	}
 }
@@ -83,6 +92,7 @@ func (m *PeerMatcher) MatchPeer(ctx context.Context, peerUserID int64, peerUsern
 				}
 			}
 			m.markExternalContactMatched(ctx, peerUserID, *result.ContactID)
+			m.ensureMethodsOnMatch(ctx, *result.ContactID, peerUserID, peerUsername)
 			log.Info().
 				Int64("peer_user_id", peerUserID).
 				Str("contact_id", result.ContactID.String()).
@@ -126,6 +136,8 @@ func (m *PeerMatcher) MatchPeer(ctx context.Context, peerUserID int64, peerUsern
 					log.Warn().Err(linkErr).Msg("telegram: failed to link telegram identity after phone match")
 				}
 			}
+
+			m.ensureMethodsOnMatch(ctx, *result.ContactID, peerUserID, peerUsername)
 
 			log.Info().
 				Int64("peer_user_id", peerUserID).
@@ -327,6 +339,56 @@ func (m *PeerMatcher) OnPeerLinked(ctx context.Context, peerUserID int64, peerUs
 		Str("contact_id", contactID.String()).
 		Msg("telegram: peer linked via import, messages updated")
 	return nil
+}
+
+// ensureMethodsOnMatch syncs contact methods from known peer data onto the
+// matched CRM contact. Called after every successful identity match in
+// MatchPeer, regardless of discovery threshold or prior match status.
+//
+// Data sourcing: reads the persisted external_contact if present (preserves
+// audit linkage + any stored emails/phones). Whether persisted or synthesized,
+// the current-message peerUsername overlays onto metadata.username when
+// present — the current message is the freshest source of the peer's handle
+// and wins over any stored value. This handles both handle-renames and gaps
+// in rows that predate username capture.
+//
+// Errors are logged at warn and do NOT fail the match.
+func (m *PeerMatcher) ensureMethodsOnMatch(ctx context.Context, contactID uuid.UUID, peerUserID int64, peerUsername *string) {
+	if m.enricher == nil {
+		return
+	}
+	peerIDStr := strconv.FormatInt(peerUserID, 10)
+
+	external, err := m.externalContactRepo.GetBySource(ctx, "telegram", peerIDStr, nil)
+	if err != nil {
+		// Transient repository error — bail out rather than synthesize.
+		// Synthesizing here would risk dropping persisted emails/phones and
+		// emitting a NULL external_contact_id audit row when a real row exists.
+		log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: get external_contact for method sync failed")
+		return
+	}
+	if external == nil {
+		external = &repository.ExternalContact{
+			Source:   "telegram",
+			SourceID: peerIDStr,
+			Metadata: map[string]any{},
+		}
+	} else if external.Metadata == nil {
+		external.Metadata = map[string]any{}
+	}
+
+	// Merge: current-message peerUsername wins over any stored metadata.username.
+	// Safe to mutate in place — GetBySource returns a fresh instance per call.
+	if peerUsername != nil && *peerUsername != "" {
+		external.Metadata["username"] = "@" + *peerUsername
+	}
+
+	if err := m.enricher.SyncMethodsFromExternal(ctx, contactID, external); err != nil {
+		log.Warn().Err(err).
+			Str("contact_id", contactID.String()).
+			Int64("peer_user_id", peerUserID).
+			Msg("telegram: sync methods from external failed")
+	}
 }
 
 // markExternalContactMatched updates any existing external_contact for this peer to "matched" status.
