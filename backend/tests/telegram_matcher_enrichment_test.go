@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"testing"
 
-	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/identity"
@@ -20,10 +20,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// matcherEnrichTestEnv bundles repos + services constructed in the test setup.
+type matcherEnrichTestEnv struct {
+	matcher        *tgpkg.PeerMatcher
+	contactRepo    *repository.ContactRepository
+	methodRepo     *repository.ContactMethodRepository
+	externalRepo   *repository.ExternalContactRepository
+	enrichmentRepo *repository.EnrichmentRepository
+	identitySvc    *service.IdentityService
+	database       *db.Database
+}
+
 // setupMatcherEnrichmentTest builds a real PeerMatcher backed by a real
-// IdentityService and EnrichmentService. Tests inject identity links and
-// external_contact rows, then call MatchPeer to drive the full flow.
-func setupMatcherEnrichmentTest(t *testing.T) (*tgpkg.PeerMatcher, *repository.ContactRepository, *repository.ContactMethodRepository, *repository.ExternalContactRepository, *repository.EnrichmentRepository, *service.IdentityService, *db.Database, func()) {
+// IdentityService and EnrichmentService.
+//
+// DB lifecycle: registers database.Close via t.Cleanup so any per-test
+// t.Cleanup the caller adds runs BEFORE the connection is closed (Go runs
+// t.Cleanup callbacks in LIFO order — opposite of `defer cleanup()`).
+func setupMatcherEnrichmentTest(t *testing.T) *matcherEnrichTestEnv {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -40,6 +54,7 @@ func setupMatcherEnrichmentTest(t *testing.T) (*tgpkg.PeerMatcher, *repository.C
 
 	database, err := db.NewDatabase(context.Background(), cfg.Database)
 	require.NoError(t, err)
+	t.Cleanup(database.Close)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -53,9 +68,39 @@ func setupMatcherEnrichmentTest(t *testing.T) (*tgpkg.PeerMatcher, *repository.C
 
 	matcher := tgpkg.NewPeerMatcher(identitySvc, messageRepo, externalRepo, enrichmentSvc, 100)
 
-	cleanup := func() { database.Close() }
+	return &matcherEnrichTestEnv{
+		matcher:        matcher,
+		contactRepo:    contactRepo,
+		methodRepo:     methodRepo,
+		externalRepo:   externalRepo,
+		enrichmentRepo: enrichmentRepo,
+		identitySvc:    identitySvc,
+		database:       database,
+	}
+}
 
-	return matcher, contactRepo, methodRepo, externalRepo, enrichmentRepo, identitySvc, database, cleanup
+// uniqueTestIDs returns a peer user ID and matching string ID derived from a
+// fresh UUID. Each test invocation gets unique values so cross-test or
+// cross-run pollution in the shared test DB cannot affect results.
+//
+// The integer is offset by 9_000_000_000 to keep it well above any
+// hand-picked low test IDs elsewhere in the suite. The string form is the
+// decimal representation of that int — digit-only, safe for phone-shaped values.
+func uniqueTestIDs(t *testing.T) (int64, string) {
+	t.Helper()
+	suffix := uuid.New().String()[:8]
+	var n int64
+	for _, c := range suffix {
+		n <<= 4
+		switch {
+		case c >= '0' && c <= '9':
+			n |= int64(c - '0')
+		case c >= 'a' && c <= 'f':
+			n |= int64(c-'a') + 10
+		}
+	}
+	id := int64(9_000_000_000) + n
+	return id, strconv.FormatInt(id, 10)
 }
 
 func newTestContact(t *testing.T, ctx context.Context, contactRepo *repository.ContactRepository, name string) *repository.Contact {
@@ -65,24 +110,32 @@ func newTestContact(t *testing.T, ctx context.Context, contactRepo *repository.C
 	return c
 }
 
-func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
-	matcher, contactRepo, methodRepo, externalRepo, enrichmentRepo, identitySvc, database, cleanup := setupMatcherEnrichmentTest(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	const peerUserID int64 = 770001
-	peerIDStr := "770001"
-
-	contact := newTestContact(t, ctx, contactRepo, "Above Thresh "+uuid.New().String()[:8])
+// registerCleanupBySource removes any external_contact, external_identity, and
+// contact rows tied to the given peer ID string after the test runs. Hard
+// deletes — keeps the shared DB free of orphans. Order matters: identity and
+// external_contact rows clear first so the contact's FK references drop before
+// the contact itself is deleted.
+func registerCleanupBySource(t *testing.T, env *matcherEnrichTestEnv, ctx context.Context, contactID uuid.UUID, peerIDStr string) {
+	t.Helper()
 	t.Cleanup(func() {
-		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
-		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, pgtype.Text{String: peerIDStr, Valid: true})
-		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(ctx, pgtype.Text{String: peerIDStr, Valid: true})
+		_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, pgtype.Text{String: peerIDStr, Valid: true})
+		_, _ = env.database.Queries.DeleteExternalIdentitiesBySourceID(ctx, pgtype.Text{String: peerIDStr, Valid: true})
+		_ = env.contactRepo.HardDeleteContact(ctx, contactID)
 	})
+}
+
+func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
+	env := setupMatcherEnrichmentTest(t)
+	ctx := context.Background()
+	peerUserID, peerIDStr := uniqueTestIDs(t)
+	username := "AboveUser" + peerIDStr
+
+	contact := newTestContact(t, ctx, env.contactRepo, "Above Thresh "+peerIDStr)
+	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
 
 	// Pre-link the username via cached identity (mimics #272 name match path).
-	_, err := identitySvc.MatchOrCreate(ctx, service.MatchRequest{
-		RawIdentifier:  "AutoUser",
+	_, err := env.identitySvc.MatchOrCreate(ctx, service.MatchRequest{
+		RawIdentifier:  username,
 		Type:           identity.IdentifierTypeTelegram,
 		Source:         "telegram",
 		SourceID:       &peerIDStr,
@@ -91,39 +144,35 @@ func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Pre-seed external_contact (above-threshold path).
-	displayName := "Above Thresh External"
-	external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+	displayName := "Above Thresh External " + peerIDStr
+	external, err := env.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source:      "telegram",
 		SourceID:    peerIDStr,
 		DisplayName: &displayName,
-		Metadata:    map[string]any{"username": "@AutoUser"},
+		Metadata:    map[string]any{"username": "@" + username},
 	})
 	require.NoError(t, err)
 
-	// Snapshot profile fields for "untouched" assertion.
-	before, err := contactRepo.GetContact(ctx, contact.ID)
+	before, err := env.contactRepo.GetContact(ctx, contact.ID)
 	require.NoError(t, err)
 
-	username := "AutoUser"
-	result, err := matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, nil)
+	result, err := env.matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, contact.ID, *result)
 
-	methods, err := methodRepo.ListContactMethodsByContact(ctx, contact.ID)
+	methods, err := env.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
 	require.NoError(t, err)
 	require.Len(t, methods, 1)
 	assert.Equal(t, "telegram", methods[0].Type)
-	assert.Equal(t, "AutoUser", methods[0].Value)
-	assert.Equal(t, "autouser", methods[0].ValueNormalized)
+	assert.Equal(t, username, methods[0].Value)
 
-	// Audit row references the persisted external_contact.
-	enrichments, err := enrichmentRepo.ListForContact(ctx, contact.ID)
+	enrichments, err := env.enrichmentRepo.ListForContact(ctx, contact.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, enrichments)
 	var found bool
 	for _, e := range enrichments {
-		if e.Field == "method:telegram:autouser" {
+		if e.Field == "method:telegram:"+identity.Normalize(username, identity.IdentifierTypeTelegram) {
 			found = true
 			require.NotNil(t, e.ExternalContactID, "persisted external_contact_id should be set")
 			assert.Equal(t, external.ID, *e.ExternalContactID)
@@ -131,7 +180,7 @@ func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
 	}
 	assert.True(t, found, "expected enrichment audit row for telegram method")
 
-	after, err := contactRepo.GetContact(ctx, contact.ID)
+	after, err := env.contactRepo.GetContact(ctx, contact.ID)
 	require.NoError(t, err)
 	assert.Equal(t, before.FullName, after.FullName)
 	assert.Equal(t, before.ProfilePhoto, after.ProfilePhoto)
@@ -141,22 +190,17 @@ func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
 }
 
 func TestMatcherEnrichment_BelowThreshold_NoExternalContact(t *testing.T) {
-	matcher, contactRepo, methodRepo, _, enrichmentRepo, identitySvc, database, cleanup := setupMatcherEnrichmentTest(t)
-	defer cleanup()
-
+	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
-	const peerUserID int64 = 770002
-	peerIDStr := "770002"
+	peerUserID, peerIDStr := uniqueTestIDs(t)
+	username := "BelowUser" + peerIDStr
 
-	contact := newTestContact(t, ctx, contactRepo, "Below Thresh "+uuid.New().String()[:8])
-	t.Cleanup(func() {
-		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
-		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(ctx, pgtype.Text{String: peerIDStr, Valid: true})
-	})
+	contact := newTestContact(t, ctx, env.contactRepo, "Below Thresh "+peerIDStr)
+	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
 
 	// Pre-link the username; do NOT seed an external_contact row.
-	_, err := identitySvc.MatchOrCreate(ctx, service.MatchRequest{
-		RawIdentifier:  "BelowUser",
+	_, err := env.identitySvc.MatchOrCreate(ctx, service.MatchRequest{
+		RawIdentifier:  username,
 		Type:           identity.IdentifierTypeTelegram,
 		Source:         "telegram",
 		SourceID:       &peerIDStr,
@@ -164,25 +208,24 @@ func TestMatcherEnrichment_BelowThreshold_NoExternalContact(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	username := "BelowUser"
-	result, err := matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, nil)
+	result, err := env.matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, contact.ID, *result)
 
-	methods, err := methodRepo.ListContactMethodsByContact(ctx, contact.ID)
+	methods, err := env.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
 	require.NoError(t, err)
 	require.Len(t, methods, 1)
 	assert.Equal(t, "telegram", methods[0].Type)
-	assert.Equal(t, "BelowUser", methods[0].Value)
+	assert.Equal(t, username, methods[0].Value)
 
 	// Audit row's external_contact_id must be NULL (synthesized — no persisted row).
-	enrichments, err := enrichmentRepo.ListForContact(ctx, contact.ID)
+	enrichments, err := env.enrichmentRepo.ListForContact(ctx, contact.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, enrichments)
 	var found bool
 	for _, e := range enrichments {
-		if e.Field == "method:telegram:belowuser" {
+		if e.Field == "method:telegram:"+identity.Normalize(username, identity.IdentifierTypeTelegram) {
 			found = true
 			assert.Nil(t, e.ExternalContactID, "synthesized — external_contact_id should be NULL")
 		}
@@ -191,39 +234,32 @@ func TestMatcherEnrichment_BelowThreshold_NoExternalContact(t *testing.T) {
 }
 
 func TestMatcherEnrichment_PhoneMatchWithUsername(t *testing.T) {
-	matcher, contactRepo, methodRepo, _, _, _, database, cleanup := setupMatcherEnrichmentTest(t)
-	defer cleanup()
-
+	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
-	const peerUserID int64 = 770003
-	peerIDStr := "770003"
+	peerUserID, peerIDStr := uniqueTestIDs(t)
+	username := "PhoneMatched" + peerIDStr
+	// Build a unique 11-digit phone number from peerUserID's last 8 digits.
+	phone := "+1555" + peerIDStr[:7]
 
-	contact := newTestContact(t, ctx, contactRepo, "Phone Match "+uuid.New().String()[:8])
-	// Pre-create phone contact_method so identity service finds the contact via phone.
-	_, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+	contact := newTestContact(t, ctx, env.contactRepo, "Phone Match "+peerIDStr)
+	_, err := env.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 		ContactID: contact.ID,
 		Type:      "phone",
-		Value:     "+15557770003",
+		Value:     phone,
 	})
 	require.NoError(t, err)
+	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
 
-	t.Cleanup(func() {
-		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
-		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(ctx, pgtype.Text{String: peerIDStr, Valid: true})
-	})
-
-	username := "PhoneMatched"
-	phone := "+15557770003"
-	result, err := matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, &phone)
+	result, err := env.matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, &phone)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, contact.ID, *result)
 
-	methods, err := methodRepo.ListContactMethodsByContact(ctx, contact.ID)
+	methods, err := env.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
 	require.NoError(t, err)
 	var hasTelegram bool
 	for _, m := range methods {
-		if m.Type == "telegram" && m.Value == "PhoneMatched" {
+		if m.Type == "telegram" && m.Value == username {
 			hasTelegram = true
 		}
 	}
@@ -231,32 +267,25 @@ func TestMatcherEnrichment_PhoneMatchWithUsername(t *testing.T) {
 }
 
 func TestMatcherEnrichment_PhoneMatchWithoutUsername(t *testing.T) {
-	matcher, contactRepo, methodRepo, _, _, _, database, cleanup := setupMatcherEnrichmentTest(t)
-	defer cleanup()
-
+	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
-	const peerUserID int64 = 770004
-	peerIDStr := "770004"
+	peerUserID, peerIDStr := uniqueTestIDs(t)
+	phone := "+1555" + peerIDStr[:7]
 
-	contact := newTestContact(t, ctx, contactRepo, "Phone Only "+uuid.New().String()[:8])
-	_, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+	contact := newTestContact(t, ctx, env.contactRepo, "Phone Only "+peerIDStr)
+	_, err := env.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 		ContactID: contact.ID,
 		Type:      "phone",
-		Value:     "+15557770004",
+		Value:     phone,
 	})
 	require.NoError(t, err)
+	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
 
-	t.Cleanup(func() {
-		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
-		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(ctx, pgtype.Text{String: peerIDStr, Valid: true})
-	})
-
-	phone := "+15557770004"
-	result, err := matcher.MatchPeer(ctx, peerUserID, nil, nil, nil, &phone)
+	result, err := env.matcher.MatchPeer(ctx, peerUserID, nil, nil, nil, &phone)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	methods, err := methodRepo.ListContactMethodsByContact(ctx, contact.ID)
+	methods, err := env.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
 	require.NoError(t, err)
 	for _, m := range methods {
 		assert.NotEqual(t, "telegram", m.Type, "no telegram method when peerUsername absent")
@@ -264,21 +293,16 @@ func TestMatcherEnrichment_PhoneMatchWithoutUsername(t *testing.T) {
 }
 
 func TestMatcherEnrichment_Idempotency(t *testing.T) {
-	matcher, contactRepo, methodRepo, _, _, identitySvc, database, cleanup := setupMatcherEnrichmentTest(t)
-	defer cleanup()
-
+	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
-	const peerUserID int64 = 770005
-	peerIDStr := "770005"
+	peerUserID, peerIDStr := uniqueTestIDs(t)
+	username := "IdemUser" + peerIDStr
 
-	contact := newTestContact(t, ctx, contactRepo, "Idem "+uuid.New().String()[:8])
-	t.Cleanup(func() {
-		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
-		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(ctx, pgtype.Text{String: peerIDStr, Valid: true})
-	})
+	contact := newTestContact(t, ctx, env.contactRepo, "Idem "+peerIDStr)
+	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
 
-	_, err := identitySvc.MatchOrCreate(ctx, service.MatchRequest{
-		RawIdentifier:  "IdemUser",
+	_, err := env.identitySvc.MatchOrCreate(ctx, service.MatchRequest{
+		RawIdentifier:  username,
 		Type:           identity.IdentifierTypeTelegram,
 		Source:         "telegram",
 		SourceID:       &peerIDStr,
@@ -286,13 +310,12 @@ func TestMatcherEnrichment_Idempotency(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	username := "IdemUser"
 	for range 2 {
-		_, err := matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, nil)
+		_, err := env.matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, nil)
 		require.NoError(t, err)
 	}
 
-	methods, err := methodRepo.ListContactMethodsByContact(ctx, contact.ID)
+	methods, err := env.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
 	require.NoError(t, err)
 	count := 0
 	for _, m := range methods {
@@ -325,11 +348,11 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 	cfg.Database.URL = databaseURL
 	database, err := db.NewDatabase(context.Background(), cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	t.Cleanup(database.Close)
 
 	ctx := context.Background()
-	const peerUserID int64 = 770006
-	peerIDStr := "770006"
+	peerUserID, peerIDStr := uniqueTestIDs(t)
+	username := "FaultyUser" + peerIDStr
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -340,14 +363,14 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 
 	matcher := tgpkg.NewPeerMatcher(identitySvc, messageRepo, externalRepo, failingEnricher{}, 100)
 
-	contact := newTestContact(t, ctx, contactRepo, "Faulty Enricher "+uuid.New().String()[:8])
+	contact := newTestContact(t, ctx, contactRepo, "Faulty Enricher "+peerIDStr)
 	t.Cleanup(func() {
-		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
 		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(ctx, pgtype.Text{String: peerIDStr, Valid: true})
+		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
 	})
 
 	_, err = identitySvc.MatchOrCreate(ctx, service.MatchRequest{
-		RawIdentifier:  "FaultyUser",
+		RawIdentifier:  username,
 		Type:           identity.IdentifierTypeTelegram,
 		Source:         "telegram",
 		SourceID:       &peerIDStr,
@@ -355,7 +378,6 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	username := "FaultyUser"
 	result, err := matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, nil)
 	require.NoError(t, err, "enricher errors must NOT fail the match")
 	require.NotNil(t, result)
@@ -366,6 +388,4 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 	for _, m := range methods {
 		assert.NotEqual(t, "telegram", m.Type, "no telegram method when enricher fails")
 	}
-
-	_ = accelerated.GetCurrentTime()
 }
