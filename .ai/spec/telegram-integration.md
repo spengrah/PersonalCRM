@@ -716,7 +716,11 @@ Telegram peers are matched to CRM contacts in priority order:
 2. **Secondary: Phone number** — Match `peer_phone` (if available; Telegram only shares phone for mutual contacts) against `external_identity(identifier_type='phone')`. Uses `IdentityService.MatchOrCreate`.
 3. **Unmatched** — Upsert `external_contact(source='telegram', source_id=peer_user_id)` for discovery. Also create `external_identity(identifier_type='telegram', source='telegram', contact_id=NULL)` for future matching.
 
-**No fuzzy name matching (v1):** Fuzzy auto-matching by peer name is deferred. The risk of false positives from common first names (e.g., "John", "Alex") outweighs the benefit. Unmatched peers flow to the import candidates page, where the existing fuzzy suggested-match UI helps users make informed manual matches. This follows the same approach used by Google Contacts and iCloud import channels.
+**No fuzzy auto-linking by peer name (v1):** Authoritative `PeerMatcher` still does exact username/phone only — fuzzy name matching is never used to auto-link a peer to a CRM contact. The risk of false positives from common first names (e.g., "John", "Alex") outweighs the benefit.
+
+**Read-time suggested matches include `@username` (issue #272):** On the import-candidates endpoint, `ImportMatchService` additionally compares a normalized `@username` against `contact.full_name` via pg_trgm to populate `suggested_match` on handle-only candidates. This is a read-time computation only — it does not affect authoritative linking or the `external_contact.match_status`. Two safeguards keep the signal clean: an exact-handle bonus (same strict-equality normalization on both sides) pushes clear matches over the confidence threshold, and a collision-gap rule suppresses ambiguous handles where top-1 and runner-up are within 0.15 of each other. Users still confirm each suggestion via the existing link UI.
+
+**Reverse-direction back-linking (deferred to #182):** Adding a Telegram `contact_method` to an existing CRM contact does NOT retroactively link previously-unmatched `telegram_message` rows or `external_contact` discovery rows for that handle. Users can still link via the import-candidate UI (`POST /imports/:id/link`), which calls the existing `OnPeerLinked` path. Generic back-linking is tracked under #182's `RematchService`.
 
 ### 5.7 Discovery via external_contact
 
