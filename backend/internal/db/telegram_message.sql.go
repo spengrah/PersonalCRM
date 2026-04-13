@@ -119,6 +119,106 @@ func (q *Queries) CountTelegramMessagesByPeerID(ctx context.Context, peerUserID 
 	return &i, err
 }
 
+const CountUnmatchedMessagesByPeer = `-- name: CountUnmatchedMessagesByPeer :one
+SELECT COUNT(*) FROM telegram_message
+WHERE peer_user_id = $1
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL
+`
+
+// Counts messages about to be linked for a given peer. Read BEFORE
+// OnPeerLinked so the matched-count reporting observes the pre-link state.
+func (q *Queries) CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error) {
+	row := q.db.QueryRow(ctx, CountUnmatchedMessagesByPeer, peerUserID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const FindDistinctUnmatchedPeerUserIDsByPhone = `-- name: FindDistinctUnmatchedPeerUserIDsByPhone :many
+SELECT DISTINCT ON (peer_user_id) peer_user_id, peer_username
+FROM telegram_message
+WHERE regexp_replace(peer_phone, '[^0-9]', '', 'g') = regexp_replace($1::text, '[^0-9]', '', 'g')
+  AND matched_contact_id IS NULL
+  AND peer_user_id IS NOT NULL
+  AND deleted_at IS NULL
+ORDER BY peer_user_id,
+    CASE WHEN peer_username IS NOT NULL AND peer_username <> '' THEN 0 ELSE 1 END,
+    sent_at DESC
+`
+
+type FindDistinctUnmatchedPeerUserIDsByPhoneRow struct {
+	PeerUserID   pgtype.Int8 `json:"peer_user_id"`
+	PeerUsername pgtype.Text `json:"peer_username"`
+}
+
+// peer_phone is stored raw from MTProto (typically digits only); contact_method
+// value_normalized is E.164 with leading '+'. Compare on digits-only.
+// Same DISTINCT ON ordering as the username variant — prefer rows with a
+// non-blank peer_username so OnPeerLinked can create the identity even when
+// the matched row is found by phone.
+func (q *Queries) FindDistinctUnmatchedPeerUserIDsByPhone(ctx context.Context, phone string) ([]*FindDistinctUnmatchedPeerUserIDsByPhoneRow, error) {
+	rows, err := q.db.Query(ctx, FindDistinctUnmatchedPeerUserIDsByPhone, phone)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*FindDistinctUnmatchedPeerUserIDsByPhoneRow{}
+	for rows.Next() {
+		var i FindDistinctUnmatchedPeerUserIDsByPhoneRow
+		if err := rows.Scan(&i.PeerUserID, &i.PeerUsername); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const FindDistinctUnmatchedPeerUserIDsByUsername = `-- name: FindDistinctUnmatchedPeerUserIDsByUsername :many
+SELECT DISTINCT ON (peer_user_id) peer_user_id, peer_username
+FROM telegram_message
+WHERE LOWER(peer_username) = LOWER($1::text)
+  AND matched_contact_id IS NULL
+  AND peer_user_id IS NOT NULL
+  AND deleted_at IS NULL
+ORDER BY peer_user_id,
+    CASE WHEN peer_username IS NOT NULL AND peer_username <> '' THEN 0 ELSE 1 END,
+    sent_at DESC
+`
+
+type FindDistinctUnmatchedPeerUserIDsByUsernameRow struct {
+	PeerUserID   pgtype.Int8 `json:"peer_user_id"`
+	PeerUsername pgtype.Text `json:"peer_username"`
+}
+
+// Returns distinct peer_user_ids whose unmatched messages carry the given
+// normalized telegram handle. Mirrors ListDistinctUnmatchedPeers ordering:
+// when a peer has multiple rows, prefer the one with a non-blank
+// peer_username so OnPeerLinked can create the identity. Treats blank
+// strings as absent (Telegram persists ” for outbound private chats).
+func (q *Queries) FindDistinctUnmatchedPeerUserIDsByUsername(ctx context.Context, username string) ([]*FindDistinctUnmatchedPeerUserIDsByUsernameRow, error) {
+	rows, err := q.db.Query(ctx, FindDistinctUnmatchedPeerUserIDsByUsername, username)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*FindDistinctUnmatchedPeerUserIDsByUsernameRow{}
+	for rows.Next() {
+		var i FindDistinctUnmatchedPeerUserIDsByUsernameRow
+		if err := rows.Scan(&i.PeerUserID, &i.PeerUsername); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const GetTelegramMessage = `-- name: GetTelegramMessage :one
 SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at FROM telegram_message
 WHERE telegram_chat_id = $1

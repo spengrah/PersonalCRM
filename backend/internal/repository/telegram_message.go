@@ -341,6 +341,52 @@ func (r *TelegramMessageRepository) CountMessagesByPeer(ctx context.Context) ([]
 	return counts, nil
 }
 
+// FindDistinctUnmatchedPeerUserIDsByUsername returns one row per peer_user_id
+// whose unmatched messages carry the given Telegram handle (case-insensitive).
+// Used by the rematch service when a "telegram" contact_method is added.
+func (r *TelegramMessageRepository) FindDistinctUnmatchedPeerUserIDsByUsername(ctx context.Context, username string) ([]UnmatchedPeer, error) {
+	rows, err := r.queries.FindDistinctUnmatchedPeerUserIDsByUsername(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	peers := make([]UnmatchedPeer, 0, len(rows))
+	for _, row := range rows {
+		p := UnmatchedPeer{PeerUserID: row.PeerUserID.Int64}
+		if row.PeerUsername.Valid {
+			val := row.PeerUsername.String
+			p.PeerUsername = &val
+		}
+		peers = append(peers, p)
+	}
+	return peers, nil
+}
+
+// FindDistinctUnmatchedPeerUserIDsByPhone returns one row per peer_user_id
+// whose unmatched messages carry the given phone (compared digits-only).
+func (r *TelegramMessageRepository) FindDistinctUnmatchedPeerUserIDsByPhone(ctx context.Context, phone string) ([]UnmatchedPeer, error) {
+	rows, err := r.queries.FindDistinctUnmatchedPeerUserIDsByPhone(ctx, phone)
+	if err != nil {
+		return nil, err
+	}
+	peers := make([]UnmatchedPeer, 0, len(rows))
+	for _, row := range rows {
+		p := UnmatchedPeer{PeerUserID: row.PeerUserID.Int64}
+		if row.PeerUsername.Valid {
+			val := row.PeerUsername.String
+			p.PeerUsername = &val
+		}
+		peers = append(peers, p)
+	}
+	return peers, nil
+}
+
+// CountUnmatchedMessagesByPeer returns the number of messages for a peer that
+// are not yet linked to a contact. Read this BEFORE OnPeerLinked so the
+// rematch handler reports a meaningful pre-link count.
+func (r *TelegramMessageRepository) CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID int64) (int64, error) {
+	return r.queries.CountUnmatchedMessagesByPeer(ctx, int64ToPgInt8(&peerUserID))
+}
+
 // CountMessagesByPeerID returns message counts for a single peer.
 func (r *TelegramMessageRepository) CountMessagesByPeerID(ctx context.Context, peerUserID int64) (*PeerMessageCount, error) {
 	row, err := r.queries.CountTelegramMessagesByPeerID(ctx, int64ToPgInt8(&peerUserID))

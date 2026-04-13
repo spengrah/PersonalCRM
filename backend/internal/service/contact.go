@@ -44,6 +44,7 @@ type ContactService struct {
 	interactionRepo   *repository.InteractionRepository
 	contactTaskRepo   *repository.ContactTaskRepository
 	followUpMgr       followUpManager
+	rematchSvc        *RematchService
 }
 
 func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository, interactionRepo *repository.InteractionRepository, contactTaskRepo *repository.ContactTaskRepository) *ContactService {
@@ -59,6 +60,12 @@ func NewContactService(database *db.Database, contactRepo *repository.ContactRep
 // SetFollowUpManager injects the follow-up manager after construction (resolves circular dependency)
 func (s *ContactService) SetFollowUpManager(fm followUpManager) {
 	s.followUpMgr = fm
+}
+
+// SetRematchService injects the rematch service. Safe to leave unset — CreateContact
+// and UpdateContact return uuid.Nil as the jobID when nil.
+func (s *ContactService) SetRematchService(r *RematchService) {
+	s.rematchSvc = r
 }
 
 // HasPendingFollowUp checks if a contact has a pending follow-up task
@@ -156,10 +163,10 @@ func (s *ContactService) ListContactIDs(ctx context.Context, params repository.L
 	return s.contactRepo.ListContactIDs(ctx, params)
 }
 
-func (s *ContactService) CreateContact(ctx context.Context, req repository.CreateContactRequest, methods []ContactMethodInput) (contact *repository.Contact, err error) {
+func (s *ContactService) CreateContact(ctx context.Context, req repository.CreateContactRequest, methods []ContactMethodInput) (contact *repository.Contact, jobID uuid.UUID, err error) {
 	tx, err := s.database.Pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, uuid.Nil, err
 	}
 	defer func() {
 		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
@@ -175,26 +182,29 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 
 	contact, err = contactRepo.CreateContact(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, uuid.Nil, err
 	}
 
 	createdMethods, err := createContactMethods(ctx, contactMethodRepo, contact.ID, methods)
 	if err != nil {
-		return nil, err
+		return nil, uuid.Nil, err
 	}
 
 	if err = tx.Commit(ctx); err != nil {
-		return nil, err
+		return nil, uuid.Nil, err
 	}
 
 	assignMethods(contact, createdMethods)
-	return contact, nil
+	if s.rematchSvc != nil && len(createdMethods) > 0 {
+		jobID = s.rematchSvc.StartRematchForContact(contact.ID, toRematchMethods(createdMethods))
+	}
+	return contact, jobID, nil
 }
 
-func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest, methods []ContactMethodInput, replaceMethods bool) (contact *repository.Contact, err error) {
+func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest, methods []ContactMethodInput, replaceMethods bool) (contact *repository.Contact, jobID uuid.UUID, err error) {
 	tx, err := s.database.Pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, uuid.Nil, err
 	}
 	defer func() {
 		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
@@ -210,7 +220,7 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 
 	existingContact, err := contactRepo.GetContact(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, uuid.Nil, err
 	}
 
 	// Calculate contact_by based on cadence change
@@ -233,33 +243,46 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 
 	contact, err = contactRepo.UpdateContact(ctx, id, req)
 	if err != nil {
-		return nil, err
+		return nil, uuid.Nil, err
 	}
 
-	var updatedMethods []repository.ContactMethod
+	var (
+		updatedMethods []repository.ContactMethod
+		existingBefore []repository.ContactMethod
+	)
 	if replaceMethods {
+		existingBefore, err = contactMethodRepo.ListContactMethodsByContact(ctx, id)
+		if err != nil {
+			return nil, uuid.Nil, err
+		}
 		if err := contactMethodRepo.DeleteContactMethodsByContact(ctx, id); err != nil {
-			return nil, err
+			return nil, uuid.Nil, err
 		}
 
 		updatedMethods, err = createContactMethods(ctx, contactMethodRepo, id, methods)
 		if err != nil {
-			return nil, err
+			return nil, uuid.Nil, err
 		}
 	} else {
 		updatedMethods, err = contactMethodRepo.ListContactMethodsByContact(ctx, id)
 		if err != nil {
-			return nil, err
+			return nil, uuid.Nil, err
 		}
 		sortContactMethods(updatedMethods)
 	}
 
 	if err = tx.Commit(ctx); err != nil {
-		return nil, err
+		return nil, uuid.Nil, err
 	}
 
 	assignMethods(contact, updatedMethods)
-	return contact, nil
+	if replaceMethods && s.rematchSvc != nil {
+		newlyAdded := diffNewMethods(existingBefore, updatedMethods)
+		if len(newlyAdded) > 0 {
+			jobID = s.rematchSvc.StartRematchForContact(id, newlyAdded)
+		}
+	}
+	return contact, jobID, nil
 }
 
 func (s *ContactService) DeleteContact(ctx context.Context, id uuid.UUID) error {

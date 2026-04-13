@@ -144,8 +144,10 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, response.Success)
 
-		// Verify created contact
-		contactData := response.Data.(map[string]interface{})
+		// Verify created contact. Import responses wrap the contact in an
+		// ImportContactResponse to carry an optional rematch_job_id.
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -215,7 +217,8 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, response.Success)
 
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -275,7 +278,8 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, response.Success)
 
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -324,7 +328,8 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, response.Success)
 
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -693,7 +698,8 @@ func TestImportAPI_ImportWithCadence(t *testing.T) {
 		assert.True(t, response.Success)
 
 		// Verify created contact has cadence
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -748,7 +754,8 @@ func TestImportAPI_ImportWithCadence(t *testing.T) {
 		assert.True(t, response.Success)
 
 		// Verify created contact has no cadence
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -1044,7 +1051,8 @@ func TestImportAPI_ImportWithName(t *testing.T) {
 		assert.True(t, response.Success)
 
 		// Verify created contact has custom name
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -1097,7 +1105,8 @@ func TestImportAPI_ImportWithName(t *testing.T) {
 		assert.True(t, response.Success)
 
 		// Verify created contact uses external name
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -1167,7 +1176,8 @@ func TestImportAPI_ImportWithPrimaryMethod(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, response.Success)
 
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -1233,7 +1243,8 @@ func TestImportAPI_ImportWithPrimaryMethod(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, response.Success)
 
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -1641,7 +1652,8 @@ func TestImportAPI_EdgeCases(t *testing.T) {
 		assert.True(t, response.Success)
 
 		// Verify contact uses original name
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -1696,7 +1708,8 @@ func TestImportAPI_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, response.Success)
 
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -1751,7 +1764,8 @@ func TestImportAPI_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, response.Success)
 
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -1884,7 +1898,8 @@ func TestImportAPI_EdgeCases(t *testing.T) {
 		assert.True(t, response.Success)
 
 		// Verify contact uses original name
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -1940,7 +1955,8 @@ func TestImportAPI_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, response.Success)
 
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -2050,7 +2066,8 @@ func TestImportAPI_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, response.Success)
 
-		contactData := response.Data.(map[string]interface{})
+		responseData := response.Data.(map[string]interface{})
+		contactData := responseData["contact"].(map[string]interface{})
 		contactID, err := uuid.Parse(contactData["id"].(string))
 		require.NoError(t, err)
 
@@ -2458,7 +2475,8 @@ func TestImportAPI_TelegramImportNewRegression(t *testing.T) {
 
 	var response api.APIResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
-	contactData := response.Data.(map[string]interface{})
+	responseData := response.Data.(map[string]interface{})
+	contactData := responseData["contact"].(map[string]interface{})
 	contactID, err := uuid.Parse(contactData["id"].(string))
 	require.NoError(t, err)
 	defer func() { _ = contactRepo.HardDeleteContact(ctx, contactID) }()

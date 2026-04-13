@@ -128,5 +128,45 @@ FROM telegram_message
 WHERE peer_user_id = @peer_user_id
   AND deleted_at IS NULL;
 
+-- name: FindDistinctUnmatchedPeerUserIDsByUsername :many
+-- Returns distinct peer_user_ids whose unmatched messages carry the given
+-- normalized telegram handle. Mirrors ListDistinctUnmatchedPeers ordering:
+-- when a peer has multiple rows, prefer the one with a non-blank
+-- peer_username so OnPeerLinked can create the identity. Treats blank
+-- strings as absent (Telegram persists '' for outbound private chats).
+SELECT DISTINCT ON (peer_user_id) peer_user_id, peer_username
+FROM telegram_message
+WHERE LOWER(peer_username) = LOWER(@username::text)
+  AND matched_contact_id IS NULL
+  AND peer_user_id IS NOT NULL
+  AND deleted_at IS NULL
+ORDER BY peer_user_id,
+    CASE WHEN peer_username IS NOT NULL AND peer_username <> '' THEN 0 ELSE 1 END,
+    sent_at DESC;
+
+-- name: FindDistinctUnmatchedPeerUserIDsByPhone :many
+-- peer_phone is stored raw from MTProto (typically digits only); contact_method
+-- value_normalized is E.164 with leading '+'. Compare on digits-only.
+-- Same DISTINCT ON ordering as the username variant — prefer rows with a
+-- non-blank peer_username so OnPeerLinked can create the identity even when
+-- the matched row is found by phone.
+SELECT DISTINCT ON (peer_user_id) peer_user_id, peer_username
+FROM telegram_message
+WHERE regexp_replace(peer_phone, '[^0-9]', '', 'g') = regexp_replace(@phone::text, '[^0-9]', '', 'g')
+  AND matched_contact_id IS NULL
+  AND peer_user_id IS NOT NULL
+  AND deleted_at IS NULL
+ORDER BY peer_user_id,
+    CASE WHEN peer_username IS NOT NULL AND peer_username <> '' THEN 0 ELSE 1 END,
+    sent_at DESC;
+
+-- name: CountUnmatchedMessagesByPeer :one
+-- Counts messages about to be linked for a given peer. Read BEFORE
+-- OnPeerLinked so the matched-count reporting observes the pre-link state.
+SELECT COUNT(*) FROM telegram_message
+WHERE peer_user_id = @peer_user_id
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL;
+
 -- GetTelegramMessageByReplyTo removed: identical to GetTelegramMessage.
 -- Use GetMessage repo method for reply resolution.

@@ -32,6 +32,12 @@ export interface Contact {
   created_at: string
   updated_at: string
   deleted_at?: string
+  /**
+   * Set when create/update kicked off a rematch job to retroactively link
+   * historical calendar events / telegram messages. Null when no methods
+   * matched a registered handler. Polled by RematchJobsProvider.
+   */
+  rematch_job_id?: string | null
 }
 
 export interface OverdueContact extends Contact {

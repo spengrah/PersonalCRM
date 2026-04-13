@@ -11,6 +11,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const AppendMatchedContact = `-- name: AppendMatchedContact :exec
+UPDATE calendar_event
+SET matched_contact_ids = array_append(matched_contact_ids, $1::uuid),
+    updated_at = NOW()
+WHERE id = $2::uuid
+  AND NOT ($1::uuid = ANY(matched_contact_ids))
+`
+
+type AppendMatchedContactParams struct {
+	ContactID pgtype.UUID `json:"contact_id"`
+	EventID   pgtype.UUID `json:"event_id"`
+}
+
+// Atomically appends a contact to an event's matched_contact_ids iff it isn't
+// already present. Does NOT reset last_contacted_updated — the rematch handler
+// records interactions directly for past events (see rematch plan Design
+// Decision 6) so the scheduler race is avoided at the source.
+func (q *Queries) AppendMatchedContact(ctx context.Context, arg AppendMatchedContactParams) error {
+	_, err := q.db.Exec(ctx, AppendMatchedContact, arg.ContactID, arg.EventID)
+	return err
+}
+
 const CountEventsForContact = `-- name: CountEventsForContact :one
 SELECT COUNT(*) FROM calendar_event
 WHERE $1::uuid = ANY(matched_contact_ids)
@@ -34,6 +56,67 @@ WHERE google_account_id = $1
 func (q *Queries) DeleteEventsByAccount(ctx context.Context, googleAccountID string) error {
 	_, err := q.db.Exec(ctx, DeleteEventsByAccount, googleAccountID)
 	return err
+}
+
+const FindEventsByAttendeeEmailUnmatchedForContact = `-- name: FindEventsByAttendeeEmailUnmatchedForContact :many
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
+WHERE EXISTS (
+    SELECT 1 FROM jsonb_array_elements(attendees) AS a
+    WHERE LOWER(a->>'email') = LOWER($1::text)
+)
+  AND NOT ($2::uuid = ANY(matched_contact_ids))
+  AND status != 'cancelled'
+`
+
+type FindEventsByAttendeeEmailUnmatchedForContactParams struct {
+	Email     string      `json:"email"`
+	ContactID pgtype.UUID `json:"contact_id"`
+}
+
+// Finds events whose JSONB attendees contain the given normalized email but
+// do not yet have the contact in matched_contact_ids. Used by the rematch
+// service to retroactively link historical calendar events when a contact
+// method is added to a CRM contact.
+// calendar_event has no deleted_at column — do not filter on it.
+func (q *Queries) FindEventsByAttendeeEmailUnmatchedForContact(ctx context.Context, arg FindEventsByAttendeeEmailUnmatchedForContactParams) ([]*CalendarEvent, error) {
+	rows, err := q.db.Query(ctx, FindEventsByAttendeeEmailUnmatchedForContact, arg.Email, arg.ContactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*CalendarEvent{}
+	for rows.Next() {
+		var i CalendarEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.GcalEventID,
+			&i.GcalCalendarID,
+			&i.GoogleAccountID,
+			&i.Title,
+			&i.Description,
+			&i.Location,
+			&i.StartTime,
+			&i.EndTime,
+			&i.AllDay,
+			&i.Status,
+			&i.UserResponse,
+			&i.OrganizerEmail,
+			&i.Attendees,
+			&i.MatchedContactIds,
+			&i.SyncedAt,
+			&i.LastContactedUpdated,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HtmlLink,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const GetCalendarEventByGcalID = `-- name: GetCalendarEventByGcalID :one

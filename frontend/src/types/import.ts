@@ -99,3 +99,15 @@ export interface MethodComparison {
   conflict_type: ConflictType
   state: MethodState
 }
+
+/** Response from POST /imports/:id/import — wraps the new contact and an optional rematch job ID. */
+export interface ImportContactResponse {
+  contact: import('./contact').Contact
+  rematch_job_id?: string | null
+}
+
+/** Response from POST /imports/:id/link — wraps the linked external contact and an optional rematch job ID. */
+export interface LinkContactResponse {
+  external_contact: ImportCandidate
+  rematch_job_id?: string | null
+}

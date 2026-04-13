@@ -364,10 +364,12 @@ func (p *ContactsProvider) attemptMatch(
 				return fmt.Errorf("update match: %w", err)
 			}
 
-			// Enrich the CRM contact with external data
+			// Enrich the CRM contact with external data.
+			// Any rematch job kicked off by the newly-added methods is fire-and-forget —
+			// sync paths have no HTTP response to surface it on.
 			enrichedContact, _ := p.externalRepo.GetByID(ctx, contact.ID)
 			if enrichedContact != nil {
-				if err := p.enricher.EnrichContactFromExternal(ctx, *result.ContactID, enrichedContact); err != nil {
+				if _, err := p.enricher.EnrichContactFromExternal(ctx, *result.ContactID, enrichedContact); err != nil {
 					logger.Warn().Err(err).Msg("enrichment failed")
 				}
 			}
@@ -393,10 +395,10 @@ func (p *ContactsProvider) attemptMatch(
 				return fmt.Errorf("update match: %w", err)
 			}
 
-			// Enrich the CRM contact
+			// Enrich the CRM contact. Any rematch job is fire-and-forget (see above).
 			enrichedContact, _ := p.externalRepo.GetByID(ctx, contact.ID)
 			if enrichedContact != nil {
-				if err := p.enricher.EnrichContactFromExternal(ctx, *result.ContactID, enrichedContact); err != nil {
+				if _, err := p.enricher.EnrichContactFromExternal(ctx, *result.ContactID, enrichedContact); err != nil {
 					logger.Warn().Err(err).Msg("enrichment failed")
 				}
 			}

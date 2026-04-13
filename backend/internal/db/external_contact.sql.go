@@ -226,6 +226,64 @@ func (q *Queries) FindExternalContactsByNormalizedEmail(ctx context.Context, low
 	return items, nil
 }
 
+const FindExternalContactsBySourceAndSourceID = `-- name: FindExternalContactsBySourceAndSourceID :many
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at FROM external_contact
+WHERE source = $1
+  AND source_id = $2
+  AND match_status = 'unmatched'
+`
+
+type FindExternalContactsBySourceAndSourceIDParams struct {
+	Source   string `json:"source"`
+	SourceID string `json:"source_id"`
+}
+
+// Finds all unmatched external_contact rows for a (source, source_id) pair
+// regardless of account_id. Used by the calendar rematch handler to mark
+// gcal_attendee import candidates as matched after a CRM contact links them.
+func (q *Queries) FindExternalContactsBySourceAndSourceID(ctx context.Context, arg FindExternalContactsBySourceAndSourceIDParams) ([]*ExternalContact, error) {
+	rows, err := q.db.Query(ctx, FindExternalContactsBySourceAndSourceID, arg.Source, arg.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ExternalContact{}
+	for rows.Next() {
+		var i ExternalContact
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.SourceID,
+			&i.AccountID,
+			&i.DisplayName,
+			&i.FirstName,
+			&i.LastName,
+			&i.Emails,
+			&i.Phones,
+			&i.Addresses,
+			&i.Organization,
+			&i.JobTitle,
+			&i.Birthday,
+			&i.PhotoUrl,
+			&i.CrmContactID,
+			&i.MatchStatus,
+			&i.DuplicateOfID,
+			&i.Etag,
+			&i.Metadata,
+			&i.SyncedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const GetEnrichmentByField = `-- name: GetEnrichmentByField :one
 SELECT id, contact_id, source, account_id, field, external_contact_id, original_value, enriched_at FROM contact_enrichment
 WHERE contact_id = $1 AND field = $2

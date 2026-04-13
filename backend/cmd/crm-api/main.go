@@ -102,6 +102,12 @@ func main() {
 	// scope so both feature blocks share a single instance.
 	enrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
 
+	// Rematch service — wired now so downstream services can call SetRematchService.
+	// Handlers are registered below once their dependencies are constructed.
+	rematchService := service.NewRematchService()
+	contactService.SetRematchService(rematchService)
+	enrichmentService.SetRematchService(rematchService)
+
 	// Initialize external sync components (feature-flagged)
 	var syncService *service.SyncService
 	var syncHandler *handlers.SyncHandler
@@ -167,6 +173,15 @@ func main() {
 		// so the Telegram block can share it).
 		identityService := service.NewIdentityService(identityRepo)
 
+		// Calendar repo + handler + rematch handler are wired whenever external
+		// sync is enabled, regardless of OAuth configuration. Rematch over
+		// calendar_event is pure DB work and must run in test/local environments
+		// that don't have Google OAuth set up.
+		calendarRepo := repository.NewCalendarEventRepository(database.Queries)
+		calendarHandler = handlers.NewCalendarHandler(calendarRepo)
+		rematchService.Register(google.NewCalendarRematchHandler(calendarRepo, externalContactRepo, contactService))
+		logger.Info().Msg("Calendar rematch handler registered")
+
 		// Register Google Contacts provider if OAuth is configured
 		if googleOAuthService != nil {
 			gcontactsProvider := google.NewContactsProvider(
@@ -179,7 +194,6 @@ func main() {
 			logger.Info().Msg("Google Contacts sync provider registered")
 
 			// Register Google Calendar provider
-			calendarRepo := repository.NewCalendarEventRepository(database.Queries)
 			gcalProvider := google.NewCalendarSyncProvider(
 				googleOAuthService,
 				calendarRepo,
@@ -190,9 +204,6 @@ func main() {
 			)
 			providerRegistry.Register(gcalProvider)
 			logger.Info().Msg("Google Calendar sync provider registered")
-
-			// Initialize calendar handler
-			calendarHandler = handlers.NewCalendarHandler(calendarRepo)
 		}
 
 		// Register Todoist Cadence provider if OAuth is configured
@@ -289,6 +300,14 @@ func main() {
 		defer telegramManager.Stop()
 
 		telegramHandler = handlers.NewTelegramHandler(telegramManager)
+
+		// Register telegram rematch handlers (telegram + phone identifiers)
+		// against the same matcher/aggregator instances the manager owns so
+		// rematch behavior is identical to the post-import path.
+		rematchService.Register(tgpkg.NewUsernameRematchHandler(telegramMessageRepo, telegramManager.PeerMatcher(), telegramManager.AggregationEngine()))
+		rematchService.Register(tgpkg.NewPhoneRematchHandler(telegramMessageRepo, telegramManager.PeerMatcher(), telegramManager.AggregationEngine()))
+		logger.Info().Msg("Telegram rematch handlers registered")
+
 		logger.Info().Msg("Telegram integration initialized")
 	}
 
@@ -302,6 +321,7 @@ func main() {
 	noteHandler := handlers.NewNoteHandler(noteService)
 	interactionHandler := handlers.NewInteractionHandler(contactService, interactionRepo)
 	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
+	rematchHandler := handlers.NewRematchHandler(rematchService, contactService)
 
 	// Initialize and start scheduler
 	cronScheduler := scheduler.NewScheduler(syncService, cfg.Features.EnableExternalSync)
@@ -364,6 +384,14 @@ func main() {
 		interactions := v1.Group("/interactions")
 		{
 			interactions.DELETE("/:id", interactionHandler.DeleteInteraction)
+		}
+
+		// Rematch routes — always registered; service no-ops when no handlers
+		// are registered (e.g. telegram-disabled deployments still get calendar).
+		rematchRoutes := v1.Group("/rematch")
+		{
+			rematchRoutes.GET("/jobs/:jobID", rematchHandler.GetJob)
+			rematchRoutes.POST("/contacts/:id/rescan", rematchHandler.Rescan)
 		}
 
 		// System routes

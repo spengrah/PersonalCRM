@@ -405,6 +405,34 @@
     "tags": ["@area:contacts"]
   },
   {
+    "pattern": "^frontend/tests/e2e/rematch-on-add-email\\.spec\\.ts$",
+    "tags": ["@area:contacts", "@area:meetings"]
+  },
+  {
+    "pattern": "^backend/internal/service/rematch\\.go$",
+    "tags": ["@area:contacts", "@area:meetings"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/rematch\\.go$",
+    "tags": ["@area:contacts", "@area:meetings"]
+  },
+  {
+    "pattern": "^backend/internal/google/calendar_rematch\\.go$",
+    "tags": ["@area:meetings"]
+  },
+  {
+    "pattern": "^backend/internal/telegram/rematch\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/lib/rematch-api\\.ts$",
+    "tags": ["@area:contacts", "@area:meetings"]
+  },
+  {
+    "pattern": "^frontend/src/components/providers/rematch-",
+    "tags": ["@area:contacts", "@area:meetings"]
+  },
+  {
     "pattern": "^backend/internal/service/followup\\.go$",
     "tags": ["@area:contacts", "@area:tasks"]
   },

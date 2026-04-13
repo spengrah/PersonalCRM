@@ -108,6 +108,18 @@ type LinkRequest struct {
 	Name                *string               `json:"name,omitempty"`
 }
 
+// ImportContactResponse wraps the created contact along with an optional rematch job ID.
+type ImportContactResponse struct {
+	Contact      ContactResponse `json:"contact"`
+	RematchJobID *string         `json:"rematch_job_id,omitempty"`
+}
+
+// LinkContactResponse wraps the linked external contact along with an optional rematch job ID.
+type LinkContactResponse struct {
+	ExternalContact *repository.ExternalContact `json:"external_contact"`
+	RematchJobID    *string                     `json:"rematch_job_id,omitempty"`
+}
+
 // ListImportCandidates returns unmatched external contacts
 // @Summary List import candidates
 // @Description Get unmatched external contacts that can be imported as CRM contacts
@@ -281,7 +293,7 @@ func (h *ImportHandler) GetImportCandidate(c *gin.Context) {
 // @Produce json
 // @Param id path string true "External contact ID"
 // @Param body body ImportRequest false "Optional method selection"
-// @Success 201 {object} api.APIResponse{data=repository.Contact}
+// @Success 201 {object} api.APIResponse{data=ImportContactResponse}
 // @Failure 400 {object} api.APIResponse{error=api.APIError}
 // @Failure 404 {object} api.APIResponse{error=api.APIError}
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
@@ -362,23 +374,28 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	}
 
 	// Create the CRM contact
-	contact, err := h.contactSvc.CreateContact(ctx, createReq, methods)
+	contact, rematchJobID, err := h.contactSvc.CreateContact(ctx, createReq, methods)
 	if err != nil {
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
 		return
 	}
 
+	response := ImportContactResponse{
+		Contact:      contactToResponse(contact),
+		RematchJobID: nilStringPtrFromUUID(rematchJobID),
+	}
+
 	// Update external contact to link to new CRM contact
 	if _, err := h.externalRepo.UpdateMatch(ctx, id, &contact.ID, repository.MatchStatusImported); err != nil {
 		logger.Warn().Err(err).Str("external_id", id.String()).Msg("failed to update match status after import")
-		api.SendSuccess(c, http.StatusCreated, contact, nil)
+		api.SendSuccess(c, http.StatusCreated, response, nil)
 		return
 	}
 
 	// Post-import hook: back-link Telegram message history
 	h.triggerPostImportHook(ctx, external, contact.ID)
 
-	api.SendSuccess(c, http.StatusCreated, contact, nil)
+	api.SendSuccess(c, http.StatusCreated, response, nil)
 }
 
 // buildMethodsFromSelection builds contact methods from user selection
@@ -454,7 +471,7 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 // @Produce json
 // @Param id path string true "External contact ID"
 // @Param body body LinkRequest true "Link request"
-// @Success 200 {object} api.APIResponse{data=repository.ExternalContact}
+// @Success 200 {object} api.APIResponse{data=LinkContactResponse}
 // @Failure 400 {object} api.APIResponse{error=api.APIError}
 // @Failure 404 {object} api.APIResponse{error=api.APIError}
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
@@ -505,9 +522,12 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	}
 
 	// Enrich the CRM contact - use method selections if provided
-	var enrichErr error
+	var (
+		enrichErr    error
+		rematchJobID uuid.UUID
+	)
 	if len(req.SelectedMethods) > 0 || len(req.ConflictResolutions) > 0 || req.Cadence != nil || req.Name != nil {
-		enrichErr = h.enricher.EnrichContactFromExternalWithSelections(
+		rematchJobID, enrichErr = h.enricher.EnrichContactFromExternalWithSelections(
 			ctx,
 			crmContactID,
 			updated,
@@ -517,7 +537,7 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 			req.Name,
 		)
 	} else {
-		enrichErr = h.enricher.EnrichContactFromExternal(ctx, crmContactID, updated)
+		rematchJobID, enrichErr = h.enricher.EnrichContactFromExternal(ctx, crmContactID, updated)
 	}
 
 	if enrichErr != nil {
@@ -532,7 +552,10 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	// Post-import hook: back-link Telegram message history
 	h.triggerPostImportHook(ctx, external, crmContactID)
 
-	api.SendSuccess(c, http.StatusOK, updated, nil)
+	api.SendSuccess(c, http.StatusOK, LinkContactResponse{
+		ExternalContact: updated,
+		RematchJobID:    nilStringPtrFromUUID(rematchJobID),
+	}, nil)
 }
 
 // triggerPostImportHook calls the post-import hook for Telegram candidates (best-effort).

@@ -3,6 +3,15 @@
 -- name: GetExternalContact :one
 SELECT * FROM external_contact WHERE id = $1;
 
+-- name: FindExternalContactsBySourceAndSourceID :many
+-- Finds all unmatched external_contact rows for a (source, source_id) pair
+-- regardless of account_id. Used by the calendar rematch handler to mark
+-- gcal_attendee import candidates as matched after a CRM contact links them.
+SELECT * FROM external_contact
+WHERE source = sqlc.arg('source')
+  AND source_id = sqlc.arg('source_id')
+  AND match_status = 'unmatched';
+
 -- name: GetExternalContactBySource :one
 SELECT * FROM external_contact
 WHERE source = $1 AND source_id = $2 AND COALESCE(account_id, '') = COALESCE($3, '');

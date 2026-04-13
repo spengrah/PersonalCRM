@@ -4,9 +4,10 @@ import type {
   ImportCandidatesListParams,
   ImportCandidatesListResponse,
   ImportContactRequest,
+  ImportContactResponse,
   LinkContactRequest,
+  LinkContactResponse,
 } from '@/types/import'
-import type { Contact } from '@/types/contact'
 
 export const importsApi = {
   // Get import candidates (paginated)
@@ -39,15 +40,23 @@ export const importsApi = {
   },
 
   // Import candidate as new CRM contact
-  // Accepts optional method selection for enhanced UI
-  importCandidate: async (id: string, request?: ImportContactRequest): Promise<Contact> => {
-    return apiClient.post<Contact>(`/api/v1/imports/${id}/import`, request)
+  // Accepts optional method selection for enhanced UI. Returns the new
+  // contact wrapped with an optional rematch_job_id (set when historical
+  // calendar events / telegram messages may be retroactively linked).
+  importCandidate: async (
+    id: string,
+    request?: ImportContactRequest
+  ): Promise<ImportContactResponse> => {
+    return apiClient.post<ImportContactResponse>(`/api/v1/imports/${id}/import`, request)
   },
 
   // Link candidate to existing CRM contact
-  // Accepts method selection and conflict resolutions for enhanced UI
-  linkCandidate: async (id: string, request: LinkContactRequest): Promise<void> => {
-    return apiClient.post<void>(`/api/v1/imports/${id}/link`, request)
+  // Accepts method selection and conflict resolutions for enhanced UI.
+  // Returns the linked external contact wrapped with an optional
+  // rematch_job_id (set when newly-enriched methods may retroactively link
+  // historical events / messages).
+  linkCandidate: async (id: string, request: LinkContactRequest): Promise<LinkContactResponse> => {
+    return apiClient.post<LinkContactResponse>(`/api/v1/imports/${id}/link`, request)
   },
 
   // Ignore candidate (won't appear in list anymore)

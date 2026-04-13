@@ -58,3 +58,18 @@ export const telegramKeys = {
   status: () => [...telegramKeys.all, 'status'] as const,
   chats: () => [...telegramKeys.all, 'chats'] as const,
 }
+
+// Calendar event query keys
+export const calendarKeys = {
+  all: ['calendar-events'] as const,
+  forContact: (contactId: string) => [...calendarKeys.all, 'contact', contactId] as const,
+  upcomingForContact: (contactId: string) =>
+    [...calendarKeys.all, 'upcoming', 'contact', contactId] as const,
+  upcoming: () => [...calendarKeys.all, 'upcoming'] as const,
+}
+
+// Rematch job query keys
+export const rematchKeys = {
+  all: ['rematch'] as const,
+  job: (jobId: string) => [...rematchKeys.all, 'job', jobId] as const,
+}

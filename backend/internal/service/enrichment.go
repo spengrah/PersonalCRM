@@ -26,6 +26,7 @@ type EnrichmentService struct {
 	contactRepo    *repository.ContactRepository
 	methodRepo     *repository.ContactMethodRepository
 	enrichmentRepo *repository.EnrichmentRepository
+	rematchSvc     *RematchService
 }
 
 // NewEnrichmentService creates a new enrichment service
@@ -41,17 +42,24 @@ func NewEnrichmentService(
 	}
 }
 
+// SetRematchService injects the rematch service. Safe to leave unset —
+// Enrich* methods return uuid.Nil as the jobID when nil.
+func (s *EnrichmentService) SetRematchService(r *RematchService) {
+	s.rematchSvc = r
+}
+
 // EnrichContactFromExternal enriches a CRM contact with data from an external contact.
-// Only fills in missing fields - never overwrites existing data.
+// Only fills in missing fields - never overwrites existing data. Returns a rematch
+// job ID (uuid.Nil when no handlers match any newly-added method).
 func (s *EnrichmentService) EnrichContactFromExternal(
 	ctx context.Context,
 	crmContactID uuid.UUID,
 	external *repository.ExternalContact,
-) error {
+) (uuid.UUID, error) {
 	// Get current contact
 	contact, err := s.contactRepo.GetContact(ctx, crmContactID)
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 
 	// Track what needs updating
@@ -95,17 +103,28 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 	}
 
 	// Enrich contact methods (emails, phones)
-	if err := s.enrichContactMethods(ctx, contact, external); err != nil {
+	addedMethods, err := s.enrichContactMethods(ctx, contact, external)
+	if err != nil {
 		logger.Warn().Err(err).Msg("failed to enrich contact methods")
 	}
 
-	return nil
+	return s.startRematchIfEligible(crmContactID, addedMethods), nil
+}
+
+// startRematchIfEligible dispatches a rematch job when the service is wired and
+// at least one method was added. Returns uuid.Nil otherwise.
+func (s *EnrichmentService) startRematchIfEligible(contactID uuid.UUID, added []Method) uuid.UUID {
+	if s.rematchSvc == nil || len(added) == 0 {
+		return uuid.Nil
+	}
+	return s.rematchSvc.StartRematchForContact(contactID, added)
 }
 
 // EnrichContactFromExternalWithSelections enriches a CRM contact with user-selected methods.
 // Unlike EnrichContactFromExternal, this uses explicit method selections and conflict resolutions.
 // If cadence is provided, it will update the contact's cadence.
 // If name is provided, it will update the contact's full name.
+// Returns a rematch job ID (uuid.Nil when no handlers match any added method).
 func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 	ctx context.Context,
 	crmContactID uuid.UUID,
@@ -114,11 +133,11 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 	conflictResolutions map[string]string,
 	cadence *string,
 	name *string,
-) error {
+) (uuid.UUID, error) {
 	// Get current contact
 	contact, err := s.contactRepo.GetContact(ctx, crmContactID)
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 
 	// Track what needs updating
@@ -175,29 +194,33 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 	}
 
 	// Enrich contact methods using selections
-	if err := s.enrichContactMethodsWithSelections(ctx, contact, external, selectedMethods, conflictResolutions); err != nil {
-		return err
+	addedMethods, err := s.enrichContactMethodsWithSelections(ctx, contact, external, selectedMethods, conflictResolutions)
+	if err != nil {
+		return uuid.Nil, err
 	}
 
-	return nil
+	return s.startRematchIfEligible(crmContactID, addedMethods), nil
 }
 
-// enrichContactMethodsWithSelections adds methods based on user selection and conflict resolution
+// enrichContactMethodsWithSelections adds methods based on user selection and conflict resolution.
+// Returns the list of newly-created methods (for rematch dispatch) plus any error.
 func (s *EnrichmentService) enrichContactMethodsWithSelections(
 	ctx context.Context,
 	contact *repository.Contact,
 	external *repository.ExternalContact,
 	selectedMethods []MethodSelection,
 	conflictResolutions map[string]string,
-) error {
+) ([]Method, error) {
 	// conflictResolutions is kept for API compatibility; type conflicts are no longer applicable.
 	_ = conflictResolutions
 
 	// Get existing methods
 	existingMethods, err := s.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
+
+	added := make([]Method, 0)
 
 	// Build maps for existing methods, keyed as (type + ":" + normalized).
 	// Type-scoped keys mirror the DB unique index (contact_id, type, value_normalized)
@@ -297,6 +320,7 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 			newPrimaryMethodID = &newMethod.ID
 		}
 
+		added = append(added, Method{Type: newMethod.Type, Value: newMethod.ValueNormalized})
 		s.recordEnrichment(ctx, contact.ID, external,
 			"method:"+sel.Type+":"+identity.Normalize(storedValue, mapMethodTypeToIdentifier(sel.Type)),
 			storedValue)
@@ -320,22 +344,22 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 			m := &existingMethods[i]
 			if m.IsPrimary && m.ID != *primaryMethodID {
 				if err := s.methodRepo.SetPrimary(ctx, m.ID, false); err != nil {
-					return fmt.Errorf("failed to clear existing primary method: %w", err)
+					return added, fmt.Errorf("failed to clear existing primary method: %w", err)
 				}
 			}
 		}
 		// Set new primary
 		if err := s.methodRepo.SetPrimary(ctx, *primaryMethodID, true); err != nil {
-			return fmt.Errorf("failed to set primary method: %w", err)
+			return added, fmt.Errorf("failed to set primary method: %w", err)
 		}
 	}
 
 	// Return error if any method operations failed
 	if len(methodErrors) > 0 {
-		return fmt.Errorf("method enrichment errors: %s", strings.Join(methodErrors, "; "))
+		return added, fmt.Errorf("method enrichment errors: %s", strings.Join(methodErrors, "; "))
 	}
 
-	return nil
+	return added, nil
 }
 
 // enrichContactMethods adds missing contact methods from external contact.
@@ -343,14 +367,15 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 // source-specific methods (emails, phones, telegram username). Dedup is
 // type-scoped normalized to match the DB unique index on
 // (contact_id, type, value_normalized).
+// Returns the list of newly-created methods (for rematch dispatch).
 func (s *EnrichmentService) enrichContactMethods(
 	ctx context.Context,
 	contact *repository.Contact,
 	external *repository.ExternalContact,
-) error {
+) ([]Method, error) {
 	existingMethods, err := s.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	existingSet := make(map[string]bool)
@@ -358,12 +383,14 @@ func (s *EnrichmentService) enrichContactMethods(
 		existingSet[methodDedupKey(m.Type, m.Value)] = true
 	}
 
+	added := make([]Method, 0)
+
 	for _, input := range BuildMethodsFromExternal(external) {
 		key := methodDedupKey(input.Type, input.Value)
 		if existingSet[key] {
 			continue
 		}
-		_, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+		created, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
 			Type:      input.Type,
 			Value:     input.Value,
@@ -381,12 +408,13 @@ func (s *EnrichmentService) enrichContactMethods(
 				Msg("failed to add method from enrichment")
 			continue
 		}
+		added = append(added, Method{Type: created.Type, Value: created.ValueNormalized})
 		s.recordEnrichment(ctx, contact.ID, external,
 			"method:"+input.Type+":"+identity.Normalize(input.Value, mapMethodTypeToIdentifier(input.Type)),
 			input.Value)
 		existingSet[key] = true
 	}
-	return nil
+	return added, nil
 }
 
 // methodDedupKey returns the dedup key used to compare an incoming method
@@ -449,7 +477,10 @@ func (s *EnrichmentService) SyncMethodsFromExternal(
 	if err != nil {
 		return fmt.Errorf("get contact for method sync: %w", err)
 	}
-	return s.enrichContactMethods(ctx, contact, external)
+	// Matcher paths don't need the list of added methods; rematch is only
+	// dispatched from the HTTP-facing Enrich* entry points.
+	_, err = s.enrichContactMethods(ctx, contact, external)
+	return err
 }
 
 // HasEnrichment checks if a field has been enriched for a contact

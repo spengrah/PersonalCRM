@@ -12,6 +12,11 @@ import (
 
 type Querier interface {
 	AddContactTag(ctx context.Context, arg AddContactTagParams) error
+	// Atomically appends a contact to an event's matched_contact_ids iff it isn't
+	// already present. Does NOT reset last_contacted_updated — the rematch handler
+	// records interactions directly for past events (see rematch plan Design
+	// Decision 6) so the scheduler race is avoided at the source.
+	AppendMatchedContact(ctx context.Context, arg AppendMatchedContactParams) error
 	BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error
 	// Mark all pending follow-up tasks as completed for a contact (when a response arrives)
 	CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
@@ -44,6 +49,9 @@ type Querier interface {
 	CountTelegramMessagesByPeerID(ctx context.Context, peerUserID pgtype.Int8) (*CountTelegramMessagesByPeerIDRow, error)
 	CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error)
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
+	// Counts messages about to be linked for a given peer. Read BEFORE
+	// OnPeerLinked so the matched-count reporting observes the pre-link state.
+	CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
 	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
 	CreateContactTask(ctx context.Context, arg CreateContactTaskParams) (*ContactTask, error)
@@ -111,11 +119,33 @@ type Querier interface {
 	// Demote source's primary contact methods when target already has a primary for that type
 	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
 	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
+	// peer_phone is stored raw from MTProto (typically digits only); contact_method
+	// value_normalized is E.164 with leading '+'. Compare on digits-only.
+	// Same DISTINCT ON ordering as the username variant — prefer rows with a
+	// non-blank peer_username so OnPeerLinked can create the identity even when
+	// the matched row is found by phone.
+	FindDistinctUnmatchedPeerUserIDsByPhone(ctx context.Context, phone string) ([]*FindDistinctUnmatchedPeerUserIDsByPhoneRow, error)
+	// Returns distinct peer_user_ids whose unmatched messages carry the given
+	// normalized telegram handle. Mirrors ListDistinctUnmatchedPeers ordering:
+	// when a peer has multiple rows, prefer the one with a non-blank
+	// peer_username so OnPeerLinked can create the identity. Treats blank
+	// strings as absent (Telegram persists '' for outbound private chats).
+	FindDistinctUnmatchedPeerUserIDsByUsername(ctx context.Context, username string) ([]*FindDistinctUnmatchedPeerUserIDsByUsernameRow, error)
 	// Find contact methods that exist in both source and target
 	// Used to identify duplicates that will be skipped during merge
 	FindDuplicateContactMethods(ctx context.Context, arg FindDuplicateContactMethodsParams) ([]*FindDuplicateContactMethodsRow, error)
+	// Finds events whose JSONB attendees contain the given normalized email but
+	// do not yet have the contact in matched_contact_ids. Used by the rematch
+	// service to retroactively link historical calendar events when a contact
+	// method is added to a CRM contact.
+	// calendar_event has no deleted_at column — do not filter on it.
+	FindEventsByAttendeeEmailUnmatchedForContact(ctx context.Context, arg FindEventsByAttendeeEmailUnmatchedForContactParams) ([]*CalendarEvent, error)
 	FindExternalContactsByEmail(ctx context.Context, dollar_1 []byte) ([]*ExternalContact, error)
 	FindExternalContactsByNormalizedEmail(ctx context.Context, lower string) ([]*ExternalContact, error)
+	// Finds all unmatched external_contact rows for a (source, source_id) pair
+	// regardless of account_id. Used by the calendar rematch handler to mark
+	// gcal_attendee import candidates as matched after a CRM contact links them.
+	FindExternalContactsBySourceAndSourceID(ctx context.Context, arg FindExternalContactsBySourceAndSourceIDParams) ([]*ExternalContact, error)
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
 	// Find an existing interaction by contact, source, and source_ref (for deduplication)
 	FindInteractionBySourceRef(ctx context.Context, arg FindInteractionBySourceRefParams) (*Interaction, error)
