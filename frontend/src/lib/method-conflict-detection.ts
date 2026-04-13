@@ -35,12 +35,17 @@ export function detectMethodConflicts(
 ): MethodComparison[] {
   const comparisons: MethodComparison[] = []
 
-  // Build map for CRM methods by normalized value
-  const crmByNormalizedValue = new Map<string, ContactMethod>()
+  // Build map for CRM methods keyed by `type:normalized_value`. Type-scoping
+  // mirrors the backend dedup shape (DB unique index on
+  // `(contact_id, type, value_normalized)`) so a Telegram `@foo` is not
+  // falsely marked as "same as CRM" when the only existing row is
+  // `twitter:foo` — the two live in separate type buckets.
+  const crmByTypedKey = new Map<string, ContactMethod>()
+  const typedKey = (type: string, normalized: string) => `${type}:${normalized}`
 
   for (const method of crmMethods) {
     const normalized = normalizeContactMethodValueForComparison(method.type, method.value)
-    crmByNormalizedValue.set(normalized, method)
+    crmByTypedKey.set(typedKey(method.type, normalized), method)
   }
 
   // Process emails
@@ -48,8 +53,8 @@ export function detectMethodConflicts(
     const suggestedType: ContactMethodType = 'email'
     const normalized = normalizeContactMethodValueForComparison(suggestedType, email)
 
-    // Check if value already exists in CRM
-    const existingByValue = crmByNormalizedValue.get(normalized)
+    // Check if value already exists in CRM (type-scoped)
+    const existingByValue = crmByTypedKey.get(typedKey(suggestedType, normalized))
 
     let conflictType: ConflictType = 'none'
     let state: MethodState = 'adding'
@@ -85,8 +90,8 @@ export function detectMethodConflicts(
     const normalized = normalizeContactMethodValueForComparison('phone', phone)
     const suggestedType: ContactMethodType = 'phone'
 
-    // Check if value already exists in CRM
-    const existingByValue = crmByNormalizedValue.get(normalized)
+    // Check if value already exists in CRM (type-scoped)
+    const existingByValue = crmByTypedKey.get(typedKey(suggestedType, normalized))
 
     let conflictType: ConflictType = 'none'
     let state: MethodState = 'adding'
@@ -127,7 +132,7 @@ export function detectMethodConflicts(
     const suggestedType: ContactMethodType = 'telegram'
     const normalized = normalizeContactMethodValueForComparison(suggestedType, displayValue)
 
-    const existingByValue = crmByNormalizedValue.get(normalized)
+    const existingByValue = crmByTypedKey.get(typedKey(suggestedType, normalized))
 
     let conflictType: ConflictType = 'none'
     let state: MethodState = 'adding'
