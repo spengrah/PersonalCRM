@@ -2475,7 +2475,8 @@ func TestImportAPI_TelegramImportNewRegression(t *testing.T) {
 
 	var response api.APIResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
-	contactData := response.Data.(map[string]interface{})
+	responseData := response.Data.(map[string]interface{})
+	contactData := responseData["contact"].(map[string]interface{})
 	contactID, err := uuid.Parse(contactData["id"].(string))
 	require.NoError(t, err)
 	defer func() { _ = contactRepo.HardDeleteContact(ctx, contactID) }()

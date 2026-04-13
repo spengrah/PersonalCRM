@@ -173,6 +173,15 @@ func main() {
 		// so the Telegram block can share it).
 		identityService := service.NewIdentityService(identityRepo)
 
+		// Calendar repo + handler + rematch handler are wired whenever external
+		// sync is enabled, regardless of OAuth configuration. Rematch over
+		// calendar_event is pure DB work and must run in test/local environments
+		// that don't have Google OAuth set up.
+		calendarRepo := repository.NewCalendarEventRepository(database.Queries)
+		calendarHandler = handlers.NewCalendarHandler(calendarRepo)
+		rematchService.Register(google.NewCalendarRematchHandler(calendarRepo, externalContactRepo, contactService))
+		logger.Info().Msg("Calendar rematch handler registered")
+
 		// Register Google Contacts provider if OAuth is configured
 		if googleOAuthService != nil {
 			gcontactsProvider := google.NewContactsProvider(
@@ -185,7 +194,6 @@ func main() {
 			logger.Info().Msg("Google Contacts sync provider registered")
 
 			// Register Google Calendar provider
-			calendarRepo := repository.NewCalendarEventRepository(database.Queries)
 			gcalProvider := google.NewCalendarSyncProvider(
 				googleOAuthService,
 				calendarRepo,
@@ -196,14 +204,6 @@ func main() {
 			)
 			providerRegistry.Register(gcalProvider)
 			logger.Info().Msg("Google Calendar sync provider registered")
-
-			// Register calendar rematch handler — same contactService instance
-			// passed to the sync provider so per-source dedup behavior matches.
-			rematchService.Register(google.NewCalendarRematchHandler(calendarRepo, externalContactRepo, contactService))
-			logger.Info().Msg("Calendar rematch handler registered")
-
-			// Initialize calendar handler
-			calendarHandler = handlers.NewCalendarHandler(calendarRepo)
 		}
 
 		// Register Todoist Cadence provider if OAuth is configured

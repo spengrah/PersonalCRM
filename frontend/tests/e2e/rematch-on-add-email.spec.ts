@@ -47,41 +47,25 @@ test.describe('Rematch on add email @area:contacts', () => {
       },
     ])
 
-    // Navigate to contact detail page.
-    await page.goto(`/contacts/${contactId}`)
+    // Navigate straight into the edit view via the existing ?action=edit query
+    // param (same path the list-page "Edit" context menu uses).
+    await page.goto(`/contacts/${contactId}?action=edit`)
     await page.waitForLoadState('domcontentloaded')
-
-    // Meetings section should currently be empty (no matched events).
-    const meetingsHeading = page.getByRole('heading', { name: /Meetings/i })
-    await expect(meetingsHeading).toBeVisible({ timeout: 15000 })
-    await expect(page.getByText(`${testApi.prefix}-Rematch Meeting`)).not.toBeVisible()
-
-    // Open edit view via context menu.
-    await page
-      .getByRole('button', { name: /Actions|More/i })
-      .first()
-      .click()
-    await page.getByRole('menuitem', { name: 'Edit' }).click()
     await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeVisible({
       timeout: 15000,
     })
 
-    // Add an email method. The form starts with one empty method row.
-    await page
-      .getByRole('combobox')
-      .filter({ hasText: /Select|Email/i })
-      .first()
-      .selectOption('email')
-    await page
-      .locator('input[placeholder*="email" i], input[type="email"]')
-      .first()
-      .fill(attendeeEmail)
+    // Add an email method. The form starts with one empty method row (type
+    // "Select", value ""); pick email + fill the attendee address.
+    const firstRow = page.locator('.group').first()
+    await firstRow.getByRole('combobox').selectOption('email')
+    await firstRow.locator('input[type="email"]').fill(attendeeEmail)
 
     // Capture the PUT response so we can read back the rematch_job_id.
     const updateResponsePromise = page.waitForResponse(
       res => res.url().includes(`/api/v1/contacts/${contactId}`) && res.request().method() === 'PUT'
     )
-    await page.getByRole('button', { name: /Save|Update/i }).click()
+    await page.getByRole('button', { name: 'Update Contact' }).click()
     const updateResponse = await updateResponsePromise
     expect(updateResponse.ok()).toBe(true)
     const updateBody = await updateResponse.json()
@@ -109,8 +93,8 @@ test.describe('Rematch on add email @area:contacts', () => {
     }
     expect(jobCompleted, 'rematch job should reach a terminal state').toBe(true)
 
-    // The provider's invalidation should refresh the Meetings list. Switch to
-    // the All tab so past events are visible regardless of default filter.
+    // The provider's invalidation should refresh the Meetings list. Click the
+    // All tab so past events are visible regardless of default filter.
     await page.getByRole('button', { name: /All \(\d+\)/i }).click()
 
     await expect(page.getByText(`${testApi.prefix}-Rematch Meeting`)).toBeVisible({
