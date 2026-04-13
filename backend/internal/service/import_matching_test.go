@@ -167,6 +167,46 @@ func stringPtr(s string) *string {
 	return &s
 }
 
+// TestSelectBestSuggestion_DeterministicTieBreak pins the tiebreaker rule
+// in selectBestSuggestion: when two contacts score equally, order is
+// resolved by contactID asc so results don't flip with Go map iteration.
+// Runs the selector many times to catch non-determinism.
+func TestSelectBestSuggestion_DeterministicTieBreak(t *testing.T) {
+	// Use lexical IDs so we can assert the expected winner/runner-up.
+	idA := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	idB := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+	makeMap := func() map[string]*contactScore {
+		return map[string]*contactScore{
+			idB: {contactID: idB, contactName: "B", score: 0.7, fromUsername: false},
+			idA: {contactID: idA, contactName: "A", score: 0.7, fromUsername: false},
+		}
+	}
+
+	for range 50 {
+		got := selectBestSuggestion(makeMap())
+		if assert.NotNil(t, got) {
+			assert.Equal(t, idA, got.ContactID, "tied scores must resolve to lexically smallest contactID")
+		}
+	}
+}
+
+// TestSelectBestSuggestion_TieTripsUsernameGap: two contacts at exactly the
+// same score where top-1 is username-derived. Gap = 0 < 0.15 → dropped,
+// deterministically.
+func TestSelectBestSuggestion_TieTripsUsernameGap(t *testing.T) {
+	idA := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	idB := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+	byContact := map[string]*contactScore{
+		idA: {contactID: idA, contactName: "A", score: 0.7, fromUsername: true},
+		idB: {contactID: idB, contactName: "B", score: 0.7, fromUsername: true},
+	}
+
+	got := selectBestSuggestion(byContact)
+	assert.Nil(t, got, "tied username-derived scores must deterministically drop via collision gap")
+}
+
 // --- FindBestMatch (singular) tests for Telegram handle behavior ---
 
 // TestFindBestMatch_ExactHandleBonusBaseline: handle-only Telegram candidate
