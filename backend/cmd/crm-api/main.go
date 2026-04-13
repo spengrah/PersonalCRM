@@ -102,6 +102,12 @@ func main() {
 	// scope so both feature blocks share a single instance.
 	enrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
 
+	// Rematch service — wired now so downstream services can call SetRematchService.
+	// Handlers are registered below once their dependencies are constructed.
+	rematchService := service.NewRematchService()
+	contactService.SetRematchService(rematchService)
+	enrichmentService.SetRematchService(rematchService)
+
 	// Initialize external sync components (feature-flagged)
 	var syncService *service.SyncService
 	var syncHandler *handlers.SyncHandler
@@ -302,6 +308,7 @@ func main() {
 	noteHandler := handlers.NewNoteHandler(noteService)
 	interactionHandler := handlers.NewInteractionHandler(contactService, interactionRepo)
 	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
+	rematchHandler := handlers.NewRematchHandler(rematchService, contactService, contactMethodRepo)
 
 	// Initialize and start scheduler
 	cronScheduler := scheduler.NewScheduler(syncService, cfg.Features.EnableExternalSync)
@@ -364,6 +371,14 @@ func main() {
 		interactions := v1.Group("/interactions")
 		{
 			interactions.DELETE("/:id", interactionHandler.DeleteInteraction)
+		}
+
+		// Rematch routes — always registered; service no-ops when no handlers
+		// are registered (e.g. telegram-disabled deployments still get calendar).
+		rematchRoutes := v1.Group("/rematch")
+		{
+			rematchRoutes.GET("/jobs/:jobID", rematchHandler.GetJob)
+			rematchRoutes.POST("/contacts/:id/rescan", rematchHandler.Rescan)
 		}
 
 		// System routes

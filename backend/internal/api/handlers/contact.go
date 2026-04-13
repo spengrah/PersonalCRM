@@ -92,6 +92,7 @@ type ContactResponse struct {
 	ProfilePhoto       *string                 `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
 	CreatedAt          time.Time               `json:"created_at" example:"2024-01-01T00:00:00Z"`
 	UpdatedAt          time.Time               `json:"updated_at" example:"2024-01-15T10:30:00Z"`
+	RematchJobID       *string                 `json:"rematch_job_id,omitempty"`
 }
 
 // ContactMethodResponse represents a contact method in responses
@@ -201,6 +202,16 @@ func contactToResponse(contact *repository.Contact) ContactResponse {
 	}
 }
 
+// nilStringPtrFromUUID converts a uuid to a *string, returning nil for uuid.Nil.
+// Used to populate optional rematch_job_id fields on response DTOs.
+func nilStringPtrFromUUID(id uuid.UUID) *string {
+	if id == uuid.Nil {
+		return nil
+	}
+	s := id.String()
+	return &s
+}
+
 func contactMethodToResponse(method repository.ContactMethod) ContactMethodResponse {
 	return ContactMethodResponse{
 		ID:        method.ID.String(),
@@ -283,7 +294,7 @@ func (h *ContactHandler) CreateContact(c *gin.Context) {
 		return
 	}
 
-	contact, err := h.contactService.CreateContact(
+	contact, rematchJobID, err := h.contactService.CreateContact(
 		c.Request.Context(),
 		createRequestToRepo(req),
 		buildContactMethodInputs(req.Methods),
@@ -294,6 +305,7 @@ func (h *ContactHandler) CreateContact(c *gin.Context) {
 	}
 
 	response := contactToResponse(contact)
+	response.RematchJobID = nilStringPtrFromUUID(rematchJobID)
 	api.SendSuccess(c, http.StatusCreated, response, nil)
 }
 
@@ -512,7 +524,7 @@ func (h *ContactHandler) UpdateContact(c *gin.Context) {
 		return
 	}
 
-	contact, err := h.contactService.UpdateContact(
+	contact, rematchJobID, err := h.contactService.UpdateContact(
 		c.Request.Context(),
 		id,
 		updateRequestToRepo(req),
@@ -529,6 +541,7 @@ func (h *ContactHandler) UpdateContact(c *gin.Context) {
 	}
 
 	response := contactToResponse(contact)
+	response.RematchJobID = nilStringPtrFromUUID(rematchJobID)
 	api.SendSuccess(c, http.StatusOK, response, nil)
 }
 

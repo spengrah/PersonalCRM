@@ -286,7 +286,7 @@ func (h *TestHandler) SeedContacts(c *gin.Context) {
 			createReq.Cadence = &input.Cadence
 		}
 
-		contact, err := h.contactSvc.CreateContact(ctx, createReq, methods)
+		contact, _, err := h.contactSvc.CreateContact(ctx, createReq, methods)
 		if err != nil {
 			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal,
 				fmt.Sprintf("Contact %d (%s): creation failed", i+1, input.FullName), err.Error())
@@ -386,7 +386,7 @@ func (h *TestHandler) SeedOverdueContacts(c *gin.Context) {
 			LastContacted: &lastContacted,
 		}
 
-		contact, err := h.contactSvc.CreateContact(ctx, createReq, methods)
+		contact, _, err := h.contactSvc.CreateContact(ctx, createReq, methods)
 		if err != nil {
 			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
 			return
