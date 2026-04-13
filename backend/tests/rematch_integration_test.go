@@ -347,7 +347,7 @@ func TestRematch_TelegramUsernameMatch(t *testing.T) {
 	messageRepo := repository.NewTelegramMessageRepository(env.database.Queries)
 	identityRepo := repository.NewIdentityRepository(env.database.Queries)
 	identityService := service.NewIdentityService(identityRepo)
-	peerMatcher := tgpkg.NewPeerMatcher(identityService, messageRepo, env.externalRepo, cfg.Telegram.DiscoveryMinMessages)
+	peerMatcher := tgpkg.NewPeerMatcher(identityService, messageRepo, env.externalRepo, env.enrichmentSvc, cfg.Telegram.DiscoveryMinMessages)
 	aggregationEngine := tgpkg.NewAggregationEngine(
 		cfg.Telegram.BurstWindowHours, cfg.Telegram.ReplyBridgeHours,
 		messageRepo, env.interactionRepo,
@@ -432,7 +432,7 @@ func registerTelegramHandlers(t *testing.T, env *rematchTestEnv) *repository.Tel
 	messageRepo := repository.NewTelegramMessageRepository(env.database.Queries)
 	identityRepo := repository.NewIdentityRepository(env.database.Queries)
 	identityService := service.NewIdentityService(identityRepo)
-	peerMatcher := tgpkg.NewPeerMatcher(identityService, messageRepo, env.externalRepo, cfg.Telegram.DiscoveryMinMessages)
+	peerMatcher := tgpkg.NewPeerMatcher(identityService, messageRepo, env.externalRepo, env.enrichmentSvc, cfg.Telegram.DiscoveryMinMessages)
 	aggregationEngine := tgpkg.NewAggregationEngine(
 		cfg.Telegram.BurstWindowHours, cfg.Telegram.ReplyBridgeHours,
 		messageRepo, env.interactionRepo,
@@ -599,7 +599,7 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 	messageRepo := repository.NewTelegramMessageRepository(env.database.Queries)
 	identityRepo := repository.NewIdentityRepository(env.database.Queries)
 	identityService := service.NewIdentityService(identityRepo)
-	peerMatcher := tgpkg.NewPeerMatcher(identityService, messageRepo, env.externalRepo, cfg.Telegram.DiscoveryMinMessages)
+	peerMatcher := tgpkg.NewPeerMatcher(identityService, messageRepo, env.externalRepo, env.enrichmentSvc, cfg.Telegram.DiscoveryMinMessages)
 	aggregationEngine := tgpkg.NewAggregationEngine(
 		cfg.Telegram.BurstWindowHours, cfg.Telegram.ReplyBridgeHours,
 		messageRepo, env.interactionRepo,
