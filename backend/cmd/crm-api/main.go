@@ -91,11 +91,16 @@ func main() {
 	noteRepo := repository.NewNoteRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 
 	// Initialize services
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 	importMatchService := service.NewImportMatchService(contactRepo)
+	// EnrichmentService is shared by the import handler (link/import flows) and
+	// the Telegram peer matcher (auto-match enrichment). Constructed at outer
+	// scope so both feature blocks share a single instance.
+	enrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
 
 	// Initialize external sync components (feature-flagged)
 	var syncService *service.SyncService
@@ -155,13 +160,12 @@ func main() {
 			logger.Info().Msg("Todoist OAuth not configured (TODOIST_CLIENT_ID and TODOIST_CLIENT_SECRET required)")
 		}
 
-		// Initialize external contact and enrichment repositories
+		// Initialize external contact repository
 		externalContactRepo = repository.NewExternalContactRepository(database.Queries)
-		enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 
-		// Initialize identity and enrichment services
+		// Initialize identity service (enrichmentService is constructed at outer scope
+		// so the Telegram block can share it).
 		identityService := service.NewIdentityService(identityRepo)
-		enrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
 
 		// Register Google Contacts provider if OAuth is configured
 		if googleOAuthService != nil {
@@ -254,8 +258,6 @@ func main() {
 		tgIdentityRepo := repository.NewIdentityRepository(database.Queries)
 		tgIdentityService := service.NewIdentityService(tgIdentityRepo)
 		tgExternalContactRepo := repository.NewExternalContactRepository(database.Queries)
-		tgEnrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
-		tgEnrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, tgEnrichmentRepo)
 
 		encryptor, err := crypto.NewTokenEncryptor(cfg.External.TokenEncryptionKey)
 		if err != nil {
@@ -274,7 +276,7 @@ func main() {
 			&cfg.Telegram,
 			tgIdentityService,
 			tgExternalContactRepo,
-			tgEnrichmentService,
+			enrichmentService,
 			interactionRepo,
 			contactService,
 			contactService,
