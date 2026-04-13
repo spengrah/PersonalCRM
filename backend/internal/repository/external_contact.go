@@ -434,6 +434,29 @@ func (r *ExternalContactRepository) Ignore(ctx context.Context, id uuid.UUID) er
 	return r.queries.IgnoreExternalContact(ctx, pgtype.UUID{Bytes: id, Valid: true})
 }
 
+// FindBySourceAndSourceID finds all unmatched external_contact rows for a
+// (source, source_id) pair regardless of account_id. Used by the calendar
+// rematch handler to mark gcal_attendee candidates as matched.
+func (r *ExternalContactRepository) FindBySourceAndSourceID(ctx context.Context, source, sourceID string) ([]ExternalContact, error) {
+	dbContacts, err := r.queries.FindExternalContactsBySourceAndSourceID(ctx, db.FindExternalContactsBySourceAndSourceIDParams{
+		Source:   source,
+		SourceID: sourceID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	contacts := make([]ExternalContact, 0, len(dbContacts))
+	for _, dbContact := range dbContacts {
+		contact, err := convertDbExternalContact(dbContact)
+		if err != nil {
+			continue
+		}
+		contacts = append(contacts, *contact)
+	}
+	return contacts, nil
+}
+
 // FindByNormalizedEmail finds external contacts by normalized email
 func (r *ExternalContactRepository) FindByNormalizedEmail(ctx context.Context, email string) ([]ExternalContact, error) {
 	dbContacts, err := r.queries.FindExternalContactsByNormalizedEmail(ctx, email)

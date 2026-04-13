@@ -132,3 +132,28 @@ ORDER BY start_time ASC;
 -- Delete all events for a Google account (used when revoking access)
 DELETE FROM calendar_event
 WHERE google_account_id = $1;
+
+-- name: FindEventsByAttendeeEmailUnmatchedForContact :many
+-- Finds events whose JSONB attendees contain the given normalized email but
+-- do not yet have the contact in matched_contact_ids. Used by the rematch
+-- service to retroactively link historical calendar events when a contact
+-- method is added to a CRM contact.
+-- calendar_event has no deleted_at column — do not filter on it.
+SELECT * FROM calendar_event
+WHERE EXISTS (
+    SELECT 1 FROM jsonb_array_elements(attendees) AS a
+    WHERE LOWER(a->>'email') = LOWER(@email::text)
+)
+  AND NOT (@contact_id::uuid = ANY(matched_contact_ids))
+  AND status != 'cancelled';
+
+-- name: AppendMatchedContact :exec
+-- Atomically appends a contact to an event's matched_contact_ids iff it isn't
+-- already present. Does NOT reset last_contacted_updated — the rematch handler
+-- records interactions directly for past events (see rematch plan Design
+-- Decision 6) so the scheduler race is avoided at the source.
+UPDATE calendar_event
+SET matched_contact_ids = array_append(matched_contact_ids, @contact_id::uuid),
+    updated_at = NOW()
+WHERE id = @event_id::uuid
+  AND NOT (@contact_id::uuid = ANY(matched_contact_ids));

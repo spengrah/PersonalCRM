@@ -197,6 +197,11 @@ func main() {
 			providerRegistry.Register(gcalProvider)
 			logger.Info().Msg("Google Calendar sync provider registered")
 
+			// Register calendar rematch handler — same contactService instance
+			// passed to the sync provider so per-source dedup behavior matches.
+			rematchService.Register(google.NewCalendarRematchHandler(calendarRepo, externalContactRepo, contactService))
+			logger.Info().Msg("Calendar rematch handler registered")
+
 			// Initialize calendar handler
 			calendarHandler = handlers.NewCalendarHandler(calendarRepo)
 		}

@@ -12,6 +12,11 @@ import (
 
 type Querier interface {
 	AddContactTag(ctx context.Context, arg AddContactTagParams) error
+	// Atomically appends a contact to an event's matched_contact_ids iff it isn't
+	// already present. Does NOT reset last_contacted_updated — the rematch handler
+	// records interactions directly for past events (see rematch plan Design
+	// Decision 6) so the scheduler race is avoided at the source.
+	AppendMatchedContact(ctx context.Context, arg AppendMatchedContactParams) error
 	BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error
 	// Mark all pending follow-up tasks as completed for a contact (when a response arrives)
 	CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
@@ -114,8 +119,18 @@ type Querier interface {
 	// Find contact methods that exist in both source and target
 	// Used to identify duplicates that will be skipped during merge
 	FindDuplicateContactMethods(ctx context.Context, arg FindDuplicateContactMethodsParams) ([]*FindDuplicateContactMethodsRow, error)
+	// Finds events whose JSONB attendees contain the given normalized email but
+	// do not yet have the contact in matched_contact_ids. Used by the rematch
+	// service to retroactively link historical calendar events when a contact
+	// method is added to a CRM contact.
+	// calendar_event has no deleted_at column — do not filter on it.
+	FindEventsByAttendeeEmailUnmatchedForContact(ctx context.Context, arg FindEventsByAttendeeEmailUnmatchedForContactParams) ([]*CalendarEvent, error)
 	FindExternalContactsByEmail(ctx context.Context, dollar_1 []byte) ([]*ExternalContact, error)
 	FindExternalContactsByNormalizedEmail(ctx context.Context, lower string) ([]*ExternalContact, error)
+	// Finds all unmatched external_contact rows for a (source, source_id) pair
+	// regardless of account_id. Used by the calendar rematch handler to mark
+	// gcal_attendee import candidates as matched after a CRM contact links them.
+	FindExternalContactsBySourceAndSourceID(ctx context.Context, arg FindExternalContactsBySourceAndSourceIDParams) ([]*ExternalContact, error)
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
 	// Find an existing interaction by contact, source, and source_ref (for deduplication)
 	FindInteractionBySourceRef(ctx context.Context, arg FindInteractionBySourceRefParams) (*Interaction, error)

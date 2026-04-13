@@ -342,6 +342,35 @@ func (r *CalendarEventRepository) CountEventsForContact(ctx context.Context, con
 	return r.queries.CountEventsForContact(ctx, uuidToPgUUID(contactID))
 }
 
+// FindEventsByAttendeeEmailUnmatchedForContact returns events whose attendees JSONB
+// contains the given normalized email but where the given contact is not yet in
+// matched_contact_ids. Used by the rematch service.
+func (r *CalendarEventRepository) FindEventsByAttendeeEmailUnmatchedForContact(ctx context.Context, email string, contactID uuid.UUID) ([]CalendarEvent, error) {
+	dbEvents, err := r.queries.FindEventsByAttendeeEmailUnmatchedForContact(ctx, db.FindEventsByAttendeeEmailUnmatchedForContactParams{
+		Email:     email,
+		ContactID: uuidToPgUUID(contactID),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	events := make([]CalendarEvent, len(dbEvents))
+	for i, dbEvent := range dbEvents {
+		events[i] = convertDbCalendarEvent(dbEvent)
+	}
+
+	return events, nil
+}
+
+// AppendMatchedContact appends contactID to an event's matched_contact_ids array
+// iff it isn't already present. Does NOT reset last_contacted_updated.
+func (r *CalendarEventRepository) AppendMatchedContact(ctx context.Context, eventID, contactID uuid.UUID) error {
+	return r.queries.AppendMatchedContact(ctx, db.AppendMatchedContactParams{
+		ContactID: uuidToPgUUID(contactID),
+		EventID:   uuidToPgUUID(eventID),
+	})
+}
+
 // DeleteEventsByAccount deletes all events for a Google account
 func (r *CalendarEventRepository) DeleteEventsByAccount(ctx context.Context, googleAccountID string) error {
 	return r.queries.DeleteEventsByAccount(ctx, googleAccountID)
