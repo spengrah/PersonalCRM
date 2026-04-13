@@ -360,7 +360,7 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 	externalRepo := repository.NewExternalContactRepository(database.Queries)
 	identityRepo := repository.NewIdentityRepository(database.Queries)
 	identitySvc := service.NewIdentityService(identityRepo)
-	matcher := tgpkg.NewPeerMatcher(identitySvc, messageRepo, externalRepo, 2) // threshold = 2
+	matcher := tgpkg.NewPeerMatcher(identitySvc, messageRepo, externalRepo, nil, 2) // threshold = 2
 
 	t.Cleanup(func() {
 		_, _ = database.Queries.DeleteTelegramMessagesByPeerUserID(

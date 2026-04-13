@@ -88,12 +88,13 @@ func NewTelegramManager(
 	cfg *config.TelegramConfig,
 	identityService identityMatcher,
 	externalContactRepo externalContactUpserter,
+	enricher contactEnricher,
 	interactionRepo *repository.InteractionRepository,
 	recorder interactionRecorder,
 	promoter interactionPromoter,
 	extender interactionExtender,
 ) *TelegramManager {
-	peerMatcher := NewPeerMatcher(identityService, messageRepo, externalContactRepo, cfg.DiscoveryMinMessages)
+	peerMatcher := NewPeerMatcher(identityService, messageRepo, externalContactRepo, enricher, cfg.DiscoveryMinMessages)
 	aggregationEngine := NewAggregationEngine(
 		cfg.BurstWindowHours, cfg.ReplyBridgeHours,
 		messageRepo, interactionRepo,

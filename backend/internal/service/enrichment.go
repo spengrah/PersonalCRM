@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // MethodSelection represents a user-selected method for enrichment
@@ -197,23 +199,25 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 		return err
 	}
 
-	// Build maps for existing methods (value -> method ID)
-	existingNormalized := make(map[string]bool)
-	existingMethodByNormalized := make(map[string]*repository.ContactMethod)
+	// Build maps for existing methods, keyed as (type + ":" + normalized).
+	// Type-scoped keys mirror the DB unique index (contact_id, type, value_normalized)
+	// so cross-type collisions (e.g., telegram:foo vs twitter:foo) stay distinct.
+	existingKeys := make(map[string]bool)
+	existingMethodByKey := make(map[string]*repository.ContactMethod)
 	for i := range existingMethods {
 		m := &existingMethods[i]
-		normalized := identity.Normalize(m.Value, mapMethodTypeToIdentifier(m.Type))
-		existingNormalized[normalized] = true
-		existingMethodByNormalized[normalized] = m
+		key := methodDedupKey(m.Type, m.Value)
+		existingKeys[key] = true
+		existingMethodByKey[key] = m
 	}
 
-	// Build map of available values from external contact
-	externalValues := make(map[string]bool)
-	for _, email := range external.Emails {
-		externalValues[email.Value] = true
-	}
-	for _, phone := range external.Phones {
-		externalValues[phone.Value] = true
+	// Build admissible-external lookup via the shared helper, keyed by
+	// methodDedupKey. Because the helper canonicalizes telegram handles
+	// (stripping leading '@'), both "@handle" and "handle" from the
+	// frontend produce the same dedup key and are both admitted.
+	externalKeys := make(map[string]bool)
+	for _, m := range BuildMethodsFromExternal(external) {
+		externalKeys[methodDedupKey(m.Type, m.Value)] = true
 	}
 
 	// Collect errors for reporting
@@ -225,35 +229,43 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 
 	// Process selected methods
 	for _, sel := range selectedMethods {
-		// Validate the value exists in external contact
-		if !externalValues[sel.OriginalValue] {
+		selKey := methodDedupKey(sel.Type, sel.OriginalValue)
+
+		// Validate the value exists in external contact (type-scoped normalized)
+		if !externalKeys[selKey] {
 			methodErrors = append(methodErrors, fmt.Sprintf("value %q not found in external contact", sel.OriginalValue))
 			continue
 		}
 
-		// Check if value is already in CRM (normalized)
-		identType := mapMethodTypeToIdentifier(sel.Type)
-		normalized := identity.Normalize(sel.OriginalValue, identType)
-		if existingNormalized[normalized] {
+		if existingKeys[selKey] {
 			// Method already exists - check if we need to update primary status
 			if sel.IsPrimary {
-				existingMethod := existingMethodByNormalized[normalized]
-				if existingMethod != nil {
+				if existingMethod := existingMethodByKey[selKey]; existingMethod != nil {
 					existingPrimaryMethodID = &existingMethod.ID
 				}
 			}
 			continue // Already have this value
 		}
 
-		// Add the method
+		// Canonicalize the stored value to match storage convention across paths:
+		//   - telegram/twitter/discord: strip leading '@' and trim whitespace (bare handle)
+		//   - email/phone: preserve as-is
+		// Mirrors buildMethodsAuto's import-new behavior so link-flow storage
+		// is consistent with import-new storage.
+		storedValue := canonicalizeMethodValue(sel.Type, sel.OriginalValue)
+
 		newMethod, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
 			Type:      sel.Type,
-			Value:     sel.OriginalValue,
+			Value:     storedValue,
 			IsPrimary: false, // We'll update primary status separately
 		})
 		if err != nil {
-			methodErrors = append(methodErrors, fmt.Sprintf("failed to add method %s: %v", sel.OriginalValue, err))
+			if isUniqueViolation(err) {
+				existingKeys[selKey] = true
+				continue
+			}
+			methodErrors = append(methodErrors, fmt.Sprintf("failed to add method %s: %v", storedValue, err))
 			continue
 		}
 
@@ -262,8 +274,10 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 			newPrimaryMethodID = &newMethod.ID
 		}
 
-		s.recordEnrichment(ctx, contact.ID, external, "method:"+sel.Type+":"+normalized, sel.OriginalValue)
-		existingNormalized[normalized] = true
+		s.recordEnrichment(ctx, contact.ID, external,
+			"method:"+sel.Type+":"+identity.Normalize(storedValue, mapMethodTypeToIdentifier(sel.Type)),
+			storedValue)
+		existingKeys[selKey] = true
 	}
 
 	// Handle primary method updates - first clear any existing primary, then set the new one.
@@ -301,77 +315,77 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 	return nil
 }
 
-// enrichContactMethods adds missing contact methods from external contact
+// enrichContactMethods adds missing contact methods from external contact.
+// Uses BuildMethodsFromExternal as the single source of truth for emitting
+// source-specific methods (emails, phones, telegram username). Dedup is
+// type-scoped normalized to match the DB unique index on
+// (contact_id, type, value_normalized).
 func (s *EnrichmentService) enrichContactMethods(
 	ctx context.Context,
 	contact *repository.Contact,
 	external *repository.ExternalContact,
 ) error {
-	// Get existing methods
 	existingMethods, err := s.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
 	if err != nil {
 		return err
 	}
 
-	// Build set of normalized existing values
 	existingSet := make(map[string]bool)
 	for _, m := range existingMethods {
-		normalized := identity.Normalize(m.Value, mapMethodTypeToIdentifier(m.Type))
-		existingSet[normalized] = true
+		existingSet[methodDedupKey(m.Type, m.Value)] = true
 	}
 
-	// Add missing emails
-	for _, email := range external.Emails {
-		normalized := identity.Normalize(email.Value, identity.IdentifierTypeEmail)
-		if existingSet[normalized] {
-			continue // Already have this email
+	for _, input := range BuildMethodsFromExternal(external) {
+		key := methodDedupKey(input.Type, input.Value)
+		if existingSet[key] {
+			continue
 		}
-
-		methodType := string(repository.ContactMethodEmail)
-
 		_, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
-			Type:      methodType,
-			Value:     email.Value,
+			Type:      input.Type,
+			Value:     input.Value,
 			IsPrimary: false, // Never set primary for enriched methods
 		})
 		if err != nil {
-			logger.Warn().Err(err).Str("email", email.Value).Msg("failed to add email from enrichment")
+			if isUniqueViolation(err) {
+				// Concurrent insert — already there, treat as success
+				existingSet[key] = true
+				continue
+			}
+			logger.Warn().Err(err).
+				Str("type", input.Type).
+				Str("value", input.Value).
+				Msg("failed to add method from enrichment")
 			continue
 		}
-
-		s.recordEnrichment(ctx, contact.ID, external, "method:"+methodType+":"+normalized, email.Value)
-		existingSet[normalized] = true // Mark as added
+		s.recordEnrichment(ctx, contact.ID, external,
+			"method:"+input.Type+":"+identity.Normalize(input.Value, mapMethodTypeToIdentifier(input.Type)),
+			input.Value)
+		existingSet[key] = true
 	}
-
-	// Add missing phones
-	for _, phone := range external.Phones {
-		normalized := identity.Normalize(phone.Value, identity.IdentifierTypePhone)
-		if existingSet[normalized] {
-			continue // Already have this phone
-		}
-
-		methodType := string(repository.ContactMethodPhone)
-
-		_, err := s.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
-			ContactID: contact.ID,
-			Type:      methodType,
-			Value:     phone.Value,
-			IsPrimary: false,
-		})
-		if err != nil {
-			logger.Warn().Err(err).Str("phone", phone.Value).Msg("failed to add phone from enrichment")
-			continue
-		}
-
-		s.recordEnrichment(ctx, contact.ID, external, "method:phone:"+normalized, phone.Value)
-		existingSet[normalized] = true
-	}
-
 	return nil
 }
 
-// recordEnrichment records that a field was enriched from an external source
+// methodDedupKey returns the dedup key used to compare an incoming method
+// against existing methods on a contact. Mirrors the DB unique index shape
+// (contact_id, type, value_normalized) — without type scoping, cross-type
+// duplicates like telegram:foo vs twitter:foo would collide incorrectly
+// because they normalize to the same handle but live in different type buckets.
+func methodDedupKey(methodType, value string) string {
+	return methodType + ":" + identity.Normalize(value, mapMethodTypeToIdentifier(methodType))
+}
+
+// isUniqueViolation returns true if err is a PostgreSQL unique_violation (23505).
+// Used to treat concurrent-insert races as idempotent no-ops.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// recordEnrichment records that a field was enriched from an external source.
+// Passes ExternalContactID=nil when external.ID is the zero UUID so matcher
+// paths that synthesize an *ExternalContact (no persisted row for
+// below-threshold peers) produce SQL NULL in the audit, not a zero UUID.
 func (s *EnrichmentService) recordEnrichment(
 	ctx context.Context,
 	contactID uuid.UUID,
@@ -379,17 +393,40 @@ func (s *EnrichmentService) recordEnrichment(
 	field string,
 	value string,
 ) {
+	var externalContactID *uuid.UUID
+	if external.ID != uuid.Nil {
+		externalContactID = &external.ID
+	}
 	_, err := s.enrichmentRepo.Create(ctx, repository.CreateEnrichmentRequest{
 		ContactID:         contactID,
 		Source:            external.Source,
 		AccountID:         external.AccountID,
 		Field:             field,
-		ExternalContactID: &external.ID,
+		ExternalContactID: externalContactID,
 		OriginalValue:     &value,
 	})
 	if err != nil {
 		logger.Warn().Err(err).Str("field", field).Msg("failed to record enrichment")
 	}
+}
+
+// SyncMethodsFromExternal adds any missing contact methods from an
+// ExternalContact to the given CRM contact. Unlike EnrichContactFromExternal,
+// it does NOT touch profile fields (photo, birthday, location, name, cadence).
+// Intended for auto-match flows where silent profile overwrites are undesirable.
+//
+// Audit rows are written via recordEnrichment. Idempotent: duplicate methods
+// (either via normalized-value dedup or PG unique-violation race) are no-ops.
+func (s *EnrichmentService) SyncMethodsFromExternal(
+	ctx context.Context,
+	crmContactID uuid.UUID,
+	external *repository.ExternalContact,
+) error {
+	contact, err := s.contactRepo.GetContact(ctx, crmContactID)
+	if err != nil {
+		return fmt.Errorf("get contact for method sync: %w", err)
+	}
+	return s.enrichContactMethods(ctx, contact, external)
 }
 
 // HasEnrichment checks if a field has been enriched for a contact

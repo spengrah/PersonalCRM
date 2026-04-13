@@ -254,6 +254,8 @@ func main() {
 		tgIdentityRepo := repository.NewIdentityRepository(database.Queries)
 		tgIdentityService := service.NewIdentityService(tgIdentityRepo)
 		tgExternalContactRepo := repository.NewExternalContactRepository(database.Queries)
+		tgEnrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+		tgEnrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, tgEnrichmentRepo)
 
 		encryptor, err := crypto.NewTokenEncryptor(cfg.External.TokenEncryptionKey)
 		if err != nil {
@@ -272,6 +274,7 @@ func main() {
 			&cfg.Telegram,
 			tgIdentityService,
 			tgExternalContactRepo,
+			tgEnrichmentService,
 			interactionRepo,
 			contactService,
 			contactService,
