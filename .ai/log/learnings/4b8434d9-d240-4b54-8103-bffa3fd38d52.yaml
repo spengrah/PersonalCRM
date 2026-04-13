@@ -1,0 +1,56 @@
+---
+timestamp: "2026-04-12T19:42:12.794638"
+type: gotcha
+summary: Integration test cleanup must use hard DELETE, not soft-delete
+detail: |
+  Test cleanup helpers that use soft-delete (e.g., `SoftDeleteTelegramMessages`) combined with upsert queries that don't clear `deleted_at` will cause test pollution — upserts resurrect soft-deleted rows from previous test runs. Integration tests in `backend/tests/` must use hard DELETE (direct SQL `DELETE FROM table WHERE ...`) for cleanup, not repository soft-delete methods. This prevents test data from leaking between runs when the local DB persists across test executions.
+actionable: true
+
+---
+timestamp: "2026-04-12T19:42:12.794638"
+type: gotcha
+summary: Upsert queries must explicitly clear deleted_at to avoid resurrecting soft-deleted rows
+detail: |
+  SQL upsert patterns (INSERT ... ON CONFLICT DO UPDATE) that don't include `deleted_at = NULL` in the UPDATE clause will preserve the soft-delete state. This means upserting a previously soft-deleted row won't un-delete it. For any upsert query on a table with soft-delete support, the ON CONFLICT UPDATE clause must explicitly set `deleted_at = NULL` to ensure the record becomes active again. Without this, soft-deleted rows remain deleted even after being upserted with new data.
+actionable: true
+
+---
+timestamp: "2026-04-12T19:42:12.794638"
+type: gotcha
+summary: Integration test sub-tests must use unique data to avoid DB pollution
+detail: |
+  When writing integration tests with multiple sub-tests (via `t.Run`), each sub-test must create contacts/entities with unique names or IDs. Reusing the same name (e.g., "Alice Smith") across sub-tests causes pollution in the shared database — later sub-tests will find records created by earlier ones, breaking assertions. Use unique prefixes per sub-test (e.g., "ExactMatch Alice", "SeparatorNorm Bob") or generate random/UUID-based names. This is especially critical for fuzzy-matching tests where string similarity can match unintended records.
+actionable: true
+
+---
+timestamp: "2026-04-12T19:42:12.794638"
+type: gotcha
+summary: Map iteration for top-N selection requires stable sorting for determinism
+detail: |
+  Go map iteration order is randomized. When selecting the top N items from a map (e.g., finding the best-scoring match from a `map[string]*score`), iterating and comparing directly produces non-deterministic results — tie-scored items can swap positions across runs. To fix: collect all candidates into a slice, sort with `sort.Slice` using a stable comparator that includes tie-breakers (e.g., sort by score DESC, then by contactID ASC for determinism), then select top-N from the sorted slice. Never rely on map iteration order for ranking or selection logic.
+actionable: true
+
+---
+timestamp: "2026-04-12T19:42:12.794638"
+type: distinction
+summary: Local integration test failures from DB pollution don't block pushing if feature tests pass
+detail: |
+  When integration tests fail locally due to DB pollution (leftover data from previous runs), but the actual feature-specific tests pass cleanly, it's acceptable to push and let CI be the source of truth. CI runs with a fresh database (no pollution), so local failures from shared DB state won't reproduce in CI. Before pushing: (1) verify your feature-specific tests pass (`go test ./internal/matching/... ./internal/service/...`), (2) confirm the failures are pre-existing or pollution-related (check if they fail on main too), (3) push with confidence that CI will validate correctly. Don't spend excessive time debugging local DB state issues when CI will have a clean environment.
+actionable: true
+
+---
+timestamp: "2026-04-12T19:42:12.794638"
+type: rule
+summary: Codex review before push catches plan misinterpretations and non-determinism
+detail: |
+  Running local Codex review before pushing (`codex exec --json` with plan + code-review.md) successfully catches: (1) plan interpretation errors (e.g., misreading "< 4" as "<= 4"), (2) non-deterministic behavior from map iteration, (3) test coverage gaps for new code paths, (4) off-by-one errors in thresholds. In this session, Codex caught that the agent had kept 4-char handles despite the plan explicitly calling them "noise to suppress" — the agent had misinterpreted an ambiguous plan section. The automated review re-read the plan more carefully and found the correct intent. This pre-push review step reduces CI round-trips and catches subtle bugs that pass tests but violate requirements.
+actionable: true
+
+---
+timestamp: "2026-04-12T19:42:12.794638"
+type: documentation_gap
+summary: Gotchas table missing integration test cleanup and map iteration patterns
+detail: |
+  The `.ai/rules/core.md` Common Gotchas table doesn't warn about: (1) using soft-delete in test cleanup (should use hard DELETE), (2) upserts not clearing deleted_at (resurrects soft-deleted rows), (3) map iteration non-determinism when selecting top-N items. These are non-obvious patterns that tripped up the implementation and required Codex review to catch. **Why missed**: These are Go/testing-specific patterns that don't fit the existing gotchas categories (which focus on sqlc, time, paths, etc.). **How to strengthen**: Add new gotcha entries: "Integration test cleanup with soft-delete" → "Use hard DELETE in test cleanup, not SoftDeleteX methods — upserts resurrect soft-deleted rows", "Finding top-N from map" → "Collect to slice and sort with stable tie-breaker — map iteration is non-deterministic", "Upsert on soft-delete table" → "ON CONFLICT UPDATE must set deleted_at = NULL explicitly".
+actionable: true
+
