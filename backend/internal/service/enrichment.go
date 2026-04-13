@@ -262,6 +262,20 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 		})
 		if err != nil {
 			if isUniqueViolation(err) {
+				// Concurrent insert won the race — refetch the contact's methods
+				// to recover the raced row's ID. Required when sel.IsPrimary is
+				// set, otherwise the user's primary selection is silently dropped.
+				if sel.IsPrimary {
+					raced, refetchErr := s.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
+					if refetchErr == nil {
+						for i := range raced {
+							if methodDedupKey(raced[i].Type, raced[i].Value) == selKey {
+								existingPrimaryMethodID = &raced[i].ID
+								break
+							}
+						}
+					}
+				}
 				existingKeys[selKey] = true
 				continue
 			}

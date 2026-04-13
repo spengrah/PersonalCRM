@@ -2209,6 +2209,21 @@ func TestImportAPI_TelegramLinkWithMethodSelection(t *testing.T) {
 
 	ctx := context.Background()
 
+	// Use a separate enrichment repo to verify audit rows.
+	databaseURL2 := os.Getenv("DATABASE_URL")
+	dbCfg := config.DatabaseConfig{
+		URL:               databaseURL2,
+		MaxConns:          config.DefaultDBMaxConns,
+		MinConns:          config.DefaultDBMinConns,
+		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
+		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
+		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
+	}
+	auditDB, err := db.NewDatabase(ctx, dbCfg)
+	require.NoError(t, err)
+	defer auditDB.Close()
+	enrichmentRepo := repository.NewEnrichmentRepository(auditDB.Queries)
+
 	seed := func(t *testing.T, tgUsername string) (*repository.Contact, *repository.ExternalContact, func()) {
 		t.Helper()
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -2278,6 +2293,19 @@ func TestImportAPI_TelegramLinkWithMethodSelection(t *testing.T) {
 		assert.Equal(t, "TestLink", tg.Value)
 		assert.Equal(t, "testlink", tg.ValueNormalized)
 		assert.False(t, tg.IsPrimary)
+
+		// Audit row written with persisted external_contact_id set.
+		enrichments, err := enrichmentRepo.ListForContact(ctx, contact.ID)
+		require.NoError(t, err)
+		var auditFound bool
+		for _, e := range enrichments {
+			if e.Field == "method:telegram:testlink" {
+				auditFound = true
+				require.NotNil(t, e.ExternalContactID, "external_contact_id should reference the persisted row")
+				assert.Equal(t, external.ID, *e.ExternalContactID)
+			}
+		}
+		assert.True(t, auditFound, "expected contact_enrichment audit row for telegram method")
 	})
 
 	t.Run("LinkTelegram_WithAtPrefix_StoresBareForm", func(t *testing.T) {

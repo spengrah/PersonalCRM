@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -324,6 +325,107 @@ func TestMatcherEnrichment_Idempotency(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, count, "idempotent — exactly one telegram method after two MatchPeer calls")
+}
+
+// TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess
+// drives two concurrent MatchPeer calls for the same peer to race the
+// CreateContactMethod insert. One should win; the other should see PG 23505,
+// treat it as success, and produce no warn-level error or duplicate row.
+func TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess(t *testing.T) {
+	env := setupMatcherEnrichmentTest(t)
+	ctx := context.Background()
+	peerUserID, peerIDStr := uniqueTestIDs(t)
+	username := "RaceUser" + peerIDStr
+
+	contact := newTestContact(t, ctx, env.contactRepo, "Race "+peerIDStr)
+	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
+
+	_, err := env.identitySvc.MatchOrCreate(ctx, service.MatchRequest{
+		RawIdentifier:  username,
+		Type:           identity.IdentifierTypeTelegram,
+		Source:         "telegram",
+		SourceID:       &peerIDStr,
+		KnownContactID: &contact.ID,
+	})
+	require.NoError(t, err)
+
+	// Run two MatchPeer calls concurrently. The first to insert wins; the
+	// second hits PG unique_violation (23505) and must treat it as success.
+	const concurrency = 2
+	errs := make(chan error, concurrency)
+	var wg sync.WaitGroup
+	for range concurrency {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := env.matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, nil)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err, "concurrent MatchPeer must not return an error")
+	}
+
+	methods, err := env.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
+	require.NoError(t, err)
+	count := 0
+	for _, m := range methods {
+		if m.Type == "telegram" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "exactly one telegram method even after concurrent matches")
+}
+
+// TestMatcherEnrichment_AlreadyMatchedExternalContact_RepairsMissingMethod
+// covers the original bug: an external_contact whose match_status is already
+// 'matched'/'imported' but the bound CRM contact lacks the telegram method.
+// markExternalContactMatched early-returns in this case, so enrichment must
+// run from MatchPeer regardless of stored match status.
+func TestMatcherEnrichment_AlreadyMatchedExternalContact_RepairsMissingMethod(t *testing.T) {
+	env := setupMatcherEnrichmentTest(t)
+	ctx := context.Background()
+	peerUserID, peerIDStr := uniqueTestIDs(t)
+	username := "RepairUser" + peerIDStr
+
+	contact := newTestContact(t, ctx, env.contactRepo, "Repair "+peerIDStr)
+	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
+
+	// Pre-link the username so the matcher resolves to this contact via cache.
+	_, err := env.identitySvc.MatchOrCreate(ctx, service.MatchRequest{
+		RawIdentifier:  username,
+		Type:           identity.IdentifierTypeTelegram,
+		Source:         "telegram",
+		SourceID:       &peerIDStr,
+		KnownContactID: &contact.ID,
+	})
+	require.NoError(t, err)
+
+	// Pre-seed external_contact already in 'matched' status pointing at the contact —
+	// this is the exact prod state of Jack Laing's row. No telegram contact_method.
+	displayName := "Repair External " + peerIDStr
+	external, err := env.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:      "telegram",
+		SourceID:    peerIDStr,
+		DisplayName: &displayName,
+		Metadata:    map[string]any{"username": "@" + username},
+	})
+	require.NoError(t, err)
+	_, err = env.externalRepo.UpdateMatch(ctx, external.ID, &contact.ID, repository.MatchStatusMatched)
+	require.NoError(t, err)
+
+	result, err := env.matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, contact.ID, *result)
+
+	methods, err := env.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
+	require.NoError(t, err)
+	require.Len(t, methods, 1, "telegram method should be added even though external_contact was already matched")
+	assert.Equal(t, "telegram", methods[0].Type)
+	assert.Equal(t, username, methods[0].Value)
 }
 
 // failingEnricher always errors on SyncMethodsFromExternal — used to verify

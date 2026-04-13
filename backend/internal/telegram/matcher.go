@@ -361,9 +361,11 @@ func (m *PeerMatcher) ensureMethodsOnMatch(ctx context.Context, contactID uuid.U
 
 	external, err := m.externalContactRepo.GetBySource(ctx, "telegram", peerIDStr, nil)
 	if err != nil {
+		// Transient repository error — bail out rather than synthesize.
+		// Synthesizing here would risk dropping persisted emails/phones and
+		// emitting a NULL external_contact_id audit row when a real row exists.
 		log.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: get external_contact for method sync failed")
-		// fall through — synthesize below
-		external = nil
+		return
 	}
 	if external == nil {
 		external = &repository.ExternalContact{
