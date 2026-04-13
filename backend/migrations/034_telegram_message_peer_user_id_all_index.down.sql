@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_telegram_message_peer_user_id_all;

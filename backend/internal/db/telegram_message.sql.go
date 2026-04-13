@@ -219,8 +219,60 @@ func (q *Queries) FindDistinctUnmatchedPeerUserIDsByUsername(ctx context.Context
 	return items, nil
 }
 
+const GetPeerEntityByUserID = `-- name: GetPeerEntityByUserID :one
+SELECT peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone
+FROM telegram_message
+WHERE peer_user_id = $1
+  AND deleted_at IS NULL
+ORDER BY
+    -- Authoritative rows first; among them, the most recent wins.
+    peer_entity_resolved DESC,
+    CASE WHEN peer_entity_resolved THEN sent_at END DESC NULLS LAST,
+    -- Fallback for legacy data with no resolved=true history.
+    CASE WHEN peer_username   IS NOT NULL AND peer_username   <> '' THEN 0 ELSE 1 END,
+    CASE WHEN peer_phone      IS NOT NULL AND peer_phone      <> '' THEN 0 ELSE 1 END,
+    CASE WHEN peer_first_name IS NOT NULL AND peer_first_name <> '' THEN 0 ELSE 1 END,
+    CASE WHEN peer_last_name  IS NOT NULL AND peer_last_name  <> '' THEN 0 ELSE 1 END,
+    sent_at DESC
+LIMIT 1
+`
+
+type GetPeerEntityByUserIDRow struct {
+	PeerUserID    pgtype.Int8 `json:"peer_user_id"`
+	PeerUsername  pgtype.Text `json:"peer_username"`
+	PeerFirstName pgtype.Text `json:"peer_first_name"`
+	PeerLastName  pgtype.Text `json:"peer_last_name"`
+	PeerPhone     pgtype.Text `json:"peer_phone"`
+}
+
+// Returns the best-known entity data for a given peer_user_id, used by the
+// live-message handler to backfill sparse entity data from the gotd/td
+// dispatcher before upserting the new message. Does NOT filter on
+// matched_contact_id — needed for rematching previously-matched peers after
+// a contact soft-delete.
+//
+// Ordering: prefer the MOST RECENT row marked peer_entity_resolved (i.e.,
+// whose entity fields came from an authoritative tg.User in the update's
+// entities). This way, an authoritative-empty event ("user removed their
+// username") is respected on subsequent sparse updates rather than being
+// undone by resurrecting an older non-blank handle. Falls back to the
+// best-non-blank ordering for legacy rows where no resolved=true history
+// exists yet.
+func (q *Queries) GetPeerEntityByUserID(ctx context.Context, peerUserID pgtype.Int8) (*GetPeerEntityByUserIDRow, error) {
+	row := q.db.QueryRow(ctx, GetPeerEntityByUserID, peerUserID)
+	var i GetPeerEntityByUserIDRow
+	err := row.Scan(
+		&i.PeerUserID,
+		&i.PeerUsername,
+		&i.PeerFirstName,
+		&i.PeerLastName,
+		&i.PeerPhone,
+	)
+	return &i, err
+}
+
 const GetTelegramMessage = `-- name: GetTelegramMessage :one
-SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at FROM telegram_message
+SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved FROM telegram_message
 WHERE telegram_chat_id = $1
   AND telegram_message_id = $2
   AND deleted_at IS NULL
@@ -256,6 +308,7 @@ func (q *Queries) GetTelegramMessage(ctx context.Context, arg GetTelegramMessage
 		&i.ProcessedAt,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.PeerEntityResolved,
 	)
 	return &i, err
 }
@@ -316,7 +369,7 @@ func (q *Queries) ListDistinctUnmatchedPeers(ctx context.Context) ([]*ListDistin
 }
 
 const ListTelegramMessagesByChatUnprocessed = `-- name: ListTelegramMessagesByChatUnprocessed :many
-SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at FROM telegram_message
+SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved FROM telegram_message
 WHERE telegram_chat_id = $1
   AND processed_at IS NULL
   AND deleted_at IS NULL
@@ -354,6 +407,7 @@ func (q *Queries) ListTelegramMessagesByChatUnprocessed(ctx context.Context, tel
 			&i.ProcessedAt,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.PeerEntityResolved,
 		); err != nil {
 			return nil, err
 		}
@@ -394,7 +448,7 @@ func (q *Queries) ListUnprocessedContactIDs(ctx context.Context) ([]pgtype.UUID,
 }
 
 const ListUnprocessedTelegramMessagesByContact = `-- name: ListUnprocessedTelegramMessagesByContact :many
-SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at FROM telegram_message
+SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved FROM telegram_message
 WHERE matched_contact_id = $1
   AND processed_at IS NULL
   AND deleted_at IS NULL
@@ -432,6 +486,7 @@ func (q *Queries) ListUnprocessedTelegramMessagesByContact(ctx context.Context, 
 			&i.ProcessedAt,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.PeerEntityResolved,
 		); err != nil {
 			return nil, err
 		}
@@ -444,7 +499,7 @@ func (q *Queries) ListUnprocessedTelegramMessagesByContact(ctx context.Context, 
 }
 
 const ListUnprocessedTelegramMessagesByContactAndChat = `-- name: ListUnprocessedTelegramMessagesByContactAndChat :many
-SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at FROM telegram_message
+SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved FROM telegram_message
 WHERE matched_contact_id = $1
   AND telegram_chat_id = $2
   AND processed_at IS NULL
@@ -488,6 +543,7 @@ func (q *Queries) ListUnprocessedTelegramMessagesByContactAndChat(ctx context.Co
 			&i.ProcessedAt,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.PeerEntityResolved,
 		); err != nil {
 			return nil, err
 		}
@@ -570,12 +626,12 @@ INSERT INTO telegram_message (
     telegram_message_id, telegram_chat_id, chat_type, chat_title,
     message_text, message_type, sent_at, edited_at, is_outgoing,
     reply_to_msg_id, peer_user_id, peer_username, peer_first_name,
-    peer_last_name, peer_phone
+    peer_last_name, peer_phone, peer_entity_resolved
 ) VALUES (
     $1, $2, $3, $4,
     $5, $6, $7, $8, $9,
     $10, $11, $12, $13,
-    $14, $15
+    $14, $15, $16
 )
 ON CONFLICT (telegram_chat_id, telegram_message_id) DO UPDATE SET
     message_text = EXCLUDED.message_text,
@@ -583,26 +639,30 @@ ON CONFLICT (telegram_chat_id, telegram_message_id) DO UPDATE SET
     peer_username = COALESCE(EXCLUDED.peer_username, telegram_message.peer_username),
     peer_first_name = COALESCE(EXCLUDED.peer_first_name, telegram_message.peer_first_name),
     peer_last_name = COALESCE(EXCLUDED.peer_last_name, telegram_message.peer_last_name),
-    peer_phone = COALESCE(EXCLUDED.peer_phone, telegram_message.peer_phone)
-RETURNING id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at
+    peer_phone = COALESCE(EXCLUDED.peer_phone, telegram_message.peer_phone),
+    -- An authoritative update (resolved=true) must "stick" — never let a
+    -- subsequent sparse re-ingest of the same message id downgrade the row.
+    peer_entity_resolved = telegram_message.peer_entity_resolved OR EXCLUDED.peer_entity_resolved
+RETURNING id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved
 `
 
 type UpsertTelegramMessageParams struct {
-	TelegramMessageID int32              `json:"telegram_message_id"`
-	TelegramChatID    int64              `json:"telegram_chat_id"`
-	ChatType          string             `json:"chat_type"`
-	ChatTitle         pgtype.Text        `json:"chat_title"`
-	MessageText       pgtype.Text        `json:"message_text"`
-	MessageType       string             `json:"message_type"`
-	SentAt            pgtype.Timestamptz `json:"sent_at"`
-	EditedAt          pgtype.Timestamptz `json:"edited_at"`
-	IsOutgoing        bool               `json:"is_outgoing"`
-	ReplyToMsgID      pgtype.Int4        `json:"reply_to_msg_id"`
-	PeerUserID        pgtype.Int8        `json:"peer_user_id"`
-	PeerUsername      pgtype.Text        `json:"peer_username"`
-	PeerFirstName     pgtype.Text        `json:"peer_first_name"`
-	PeerLastName      pgtype.Text        `json:"peer_last_name"`
-	PeerPhone         pgtype.Text        `json:"peer_phone"`
+	TelegramMessageID  int32              `json:"telegram_message_id"`
+	TelegramChatID     int64              `json:"telegram_chat_id"`
+	ChatType           string             `json:"chat_type"`
+	ChatTitle          pgtype.Text        `json:"chat_title"`
+	MessageText        pgtype.Text        `json:"message_text"`
+	MessageType        string             `json:"message_type"`
+	SentAt             pgtype.Timestamptz `json:"sent_at"`
+	EditedAt           pgtype.Timestamptz `json:"edited_at"`
+	IsOutgoing         bool               `json:"is_outgoing"`
+	ReplyToMsgID       pgtype.Int4        `json:"reply_to_msg_id"`
+	PeerUserID         pgtype.Int8        `json:"peer_user_id"`
+	PeerUsername       pgtype.Text        `json:"peer_username"`
+	PeerFirstName      pgtype.Text        `json:"peer_first_name"`
+	PeerLastName       pgtype.Text        `json:"peer_last_name"`
+	PeerPhone          pgtype.Text        `json:"peer_phone"`
+	PeerEntityResolved bool               `json:"peer_entity_resolved"`
 }
 
 func (q *Queries) UpsertTelegramMessage(ctx context.Context, arg UpsertTelegramMessageParams) (*TelegramMessage, error) {
@@ -622,6 +682,7 @@ func (q *Queries) UpsertTelegramMessage(ctx context.Context, arg UpsertTelegramM
 		arg.PeerFirstName,
 		arg.PeerLastName,
 		arg.PeerPhone,
+		arg.PeerEntityResolved,
 	)
 	var i TelegramMessage
 	err := row.Scan(
@@ -646,6 +707,7 @@ func (q *Queries) UpsertTelegramMessage(ctx context.Context, arg UpsertTelegramM
 		&i.ProcessedAt,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.PeerEntityResolved,
 	)
 	return &i, err
 }

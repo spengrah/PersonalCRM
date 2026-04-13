@@ -24,6 +24,12 @@ type ParsedMessage struct {
 	PeerFirstName     *string
 	PeerLastName      *string
 	PeerPhone         *string
+	// PeerEntityResolved is true iff the peer's tg.User record was resolved
+	// from the update's entities.Users map (and passed the bot filter). When
+	// false, the parser saw no authoritative entity data — handlers may then
+	// safely fall back to cached entity data without overriding a user-removed
+	// field. Not persisted; transient signal from the parser to the handler.
+	PeerEntityResolved bool
 }
 
 // ParseMessage converts a tg.Message and handler entities into a ParsedMessage.
@@ -87,6 +93,7 @@ func ParseMessage(msg *tg.Message, entities tg.Entities, selfUserID int64) *Pars
 				return nil // skip bot conversations
 			}
 			fillUserInfo(parsed, user)
+			parsed.PeerEntityResolved = true
 		}
 
 	case *tg.PeerChat:
@@ -112,6 +119,7 @@ func ParseMessage(msg *tg.Message, entities tg.Entities, selfUserID int64) *Pars
 							return nil
 						}
 						fillUserInfo(parsed, user)
+						parsed.PeerEntityResolved = true
 					}
 				}
 			}

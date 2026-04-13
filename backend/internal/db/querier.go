@@ -202,6 +202,20 @@ type Querier interface {
 	GetOAuthCredentialByID(ctx context.Context, id pgtype.UUID) (*OauthCredential, error)
 	// Get non-sensitive credential info for display
 	GetOAuthCredentialStatus(ctx context.Context, id pgtype.UUID) (*GetOAuthCredentialStatusRow, error)
+	// Returns the best-known entity data for a given peer_user_id, used by the
+	// live-message handler to backfill sparse entity data from the gotd/td
+	// dispatcher before upserting the new message. Does NOT filter on
+	// matched_contact_id — needed for rematching previously-matched peers after
+	// a contact soft-delete.
+	//
+	// Ordering: prefer the MOST RECENT row marked peer_entity_resolved (i.e.,
+	// whose entity fields came from an authoritative tg.User in the update's
+	// entities). This way, an authoritative-empty event ("user removed their
+	// username") is respected on subsequent sparse updates rather than being
+	// undone by resurrecting an older non-blank handle. Falls back to the
+	// best-non-blank ordering for legacy rows where no resolved=true history
+	// exists yet.
+	GetPeerEntityByUserID(ctx context.Context, peerUserID pgtype.Int8) (*GetPeerEntityByUserIDRow, error)
 	GetSyncLog(ctx context.Context, id pgtype.UUID) (*ExternalSyncLog, error)
 	// External Sync State Queries
 	GetSyncState(ctx context.Context, id pgtype.UUID) (*ExternalSyncState, error)

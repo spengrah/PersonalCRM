@@ -262,27 +262,28 @@ type TelegramChatConfig struct {
 }
 
 type TelegramMessage struct {
-	ID                pgtype.UUID        `json:"id"`
-	TelegramMessageID int32              `json:"telegram_message_id"`
-	TelegramChatID    int64              `json:"telegram_chat_id"`
-	ChatType          string             `json:"chat_type"`
-	ChatTitle         pgtype.Text        `json:"chat_title"`
-	MessageText       pgtype.Text        `json:"message_text"`
-	MessageType       string             `json:"message_type"`
-	SentAt            pgtype.Timestamptz `json:"sent_at"`
-	EditedAt          pgtype.Timestamptz `json:"edited_at"`
-	IsOutgoing        bool               `json:"is_outgoing"`
-	ReplyToMsgID      pgtype.Int4        `json:"reply_to_msg_id"`
-	PeerUserID        pgtype.Int8        `json:"peer_user_id"`
-	PeerUsername      pgtype.Text        `json:"peer_username"`
-	PeerFirstName     pgtype.Text        `json:"peer_first_name"`
-	PeerLastName      pgtype.Text        `json:"peer_last_name"`
-	PeerPhone         pgtype.Text        `json:"peer_phone"`
-	MatchedContactID  pgtype.UUID        `json:"matched_contact_id"`
-	InteractionID     pgtype.UUID        `json:"interaction_id"`
-	ProcessedAt       pgtype.Timestamptz `json:"processed_at"`
-	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	ID                 pgtype.UUID        `json:"id"`
+	TelegramMessageID  int32              `json:"telegram_message_id"`
+	TelegramChatID     int64              `json:"telegram_chat_id"`
+	ChatType           string             `json:"chat_type"`
+	ChatTitle          pgtype.Text        `json:"chat_title"`
+	MessageText        pgtype.Text        `json:"message_text"`
+	MessageType        string             `json:"message_type"`
+	SentAt             pgtype.Timestamptz `json:"sent_at"`
+	EditedAt           pgtype.Timestamptz `json:"edited_at"`
+	IsOutgoing         bool               `json:"is_outgoing"`
+	ReplyToMsgID       pgtype.Int4        `json:"reply_to_msg_id"`
+	PeerUserID         pgtype.Int8        `json:"peer_user_id"`
+	PeerUsername       pgtype.Text        `json:"peer_username"`
+	PeerFirstName      pgtype.Text        `json:"peer_first_name"`
+	PeerLastName       pgtype.Text        `json:"peer_last_name"`
+	PeerPhone          pgtype.Text        `json:"peer_phone"`
+	MatchedContactID   pgtype.UUID        `json:"matched_contact_id"`
+	InteractionID      pgtype.UUID        `json:"interaction_id"`
+	ProcessedAt        pgtype.Timestamptz `json:"processed_at"`
+	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	PeerEntityResolved bool               `json:"peer_entity_resolved"`
 }
 
 type TelegramSession struct {
