@@ -26,9 +26,15 @@ type peerRematchBase struct {
 
 // rematchPeers iterates the peer set, links each via OnPeerLinked, sums the
 // pre-link unmatched message counts as the "matched" total, and runs
-// aggregation once if anything changed.
+// aggregation once if any peer was linked.
+//
+// Aggregation is gated on "did we link any peer", NOT on the summed count.
+// A transient count-query failure drops the reported total to 0 for that
+// peer, but the link itself already happened — skipping aggregation there
+// would leave those messages unprocessed until the next batch pass.
 func (b *peerRematchBase) rematchPeers(ctx context.Context, contactID uuid.UUID, peers []repository.UnmatchedPeer) (int, error) {
 	matched := 0
+	linked := false
 	for _, p := range peers {
 		// Read pre-link count first so we report what the link will affect.
 		// Failures are non-fatal; a 0 just means we under-report this peer.
@@ -49,9 +55,10 @@ func (b *peerRematchBase) rematchPeers(ctx context.Context, contactID uuid.UUID,
 				Msg("telegram rematch: peer link failed")
 			continue
 		}
+		linked = true
 		matched += int(n)
 	}
-	if matched > 0 {
+	if linked {
 		if err := b.aggregationEngine.AggregateForContactBatch(ctx, contactID); err != nil {
 			log.Warn().Err(err).Str("contact_id", contactID.String()).
 				Msg("telegram rematch: aggregation failed")

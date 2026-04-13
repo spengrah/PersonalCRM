@@ -422,3 +422,212 @@ func TestRematch_NoHandlerForType_ReturnsNilJobID(t *testing.T) {
 	})
 	assert.Equal(t, uuid.Nil, jobID)
 }
+
+// registerTelegramHandlers wires the username + phone handlers against env's
+// rematch service using the same PeerMatcher and AggregationEngine the
+// production manager would own. Returns the message repo for seeding.
+func registerTelegramHandlers(t *testing.T, env *rematchTestEnv) *repository.TelegramMessageRepository {
+	t.Helper()
+	cfg := config.TestConfig()
+	messageRepo := repository.NewTelegramMessageRepository(env.database.Queries)
+	identityRepo := repository.NewIdentityRepository(env.database.Queries)
+	identityService := service.NewIdentityService(identityRepo)
+	peerMatcher := tgpkg.NewPeerMatcher(identityService, messageRepo, env.externalRepo, cfg.Telegram.DiscoveryMinMessages)
+	aggregationEngine := tgpkg.NewAggregationEngine(
+		cfg.Telegram.BurstWindowHours, cfg.Telegram.ReplyBridgeHours,
+		messageRepo, env.interactionRepo,
+		env.contactSvc, env.contactSvc, env.contactSvc,
+	)
+	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))
+	env.rematchSvc.Register(tgpkg.NewPhoneRematchHandler(messageRepo, peerMatcher, aggregationEngine))
+	return messageRepo
+}
+
+func TestRematch_TelegramPhoneMatch(t *testing.T) {
+	env := setupRematchEnv(t)
+	messageRepo := registerTelegramHandlers(t, env)
+
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "Rematch TG Phone " + uuid.NewString()[:8],
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+
+	chatID := int64(900200)
+	peerUserID := int64(800200)
+	// peer_phone is raw MTProto (digits only); contact_method value_normalized
+	// carries a leading '+'. Rematch must compare on digits-only.
+	rawPhone := "14155550101"
+	normalizedPhone := "+14155550101"
+	t.Cleanup(func() {
+		_, _ = env.database.Pool.Exec(env.ctx,
+			"DELETE FROM telegram_message WHERE peer_user_id = $1", peerUserID)
+	})
+
+	now := accelerated.GetCurrentTime()
+	text := "Hi"
+	_, err = messageRepo.UpsertMessage(env.ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 90200,
+		TelegramChatID:    chatID,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            now.Add(-time.Hour).Truncate(time.Microsecond),
+		IsOutgoing:        false,
+		PeerUserID:        ptrInt64(peerUserID),
+		PeerPhone:         &rawPhone,
+	})
+	require.NoError(t, err)
+
+	jobID := env.rematchSvc.StartRematchForContact(contact.ID, []service.Method{
+		{Type: "phone", Value: normalizedPhone},
+	})
+	require.NotEqual(t, uuid.Nil, jobID)
+	job := waitForRematchJob(t, env.rematchSvc, jobID)
+	assert.Equal(t, service.JobStatusCompleted, job.Status)
+	assert.Equal(t, 1, job.Matched)
+
+	var matchedCount int
+	require.NoError(t, env.database.Pool.QueryRow(env.ctx,
+		"SELECT COUNT(*) FROM telegram_message WHERE peer_user_id = $1 AND matched_contact_id = $2",
+		peerUserID, contact.ID,
+	).Scan(&matchedCount))
+	assert.Equal(t, 1, matchedCount)
+}
+
+func TestRematch_ConcurrentJobs_PerContactMutex(t *testing.T) {
+	env := setupRematchEnv(t)
+
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "Rematch Concurrent " + uuid.NewString()[:8],
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+
+	accountID := "rematch-concurrent-" + uuid.NewString()
+	email1 := "conc1@example.com"
+	email2 := "conc2@example.com"
+	t.Cleanup(func() { _ = env.calendarRepo.DeleteEventsByAccount(env.ctx, accountID) })
+
+	// Seed two distinct past events so both rematch calls have work to do.
+	pastEnd := accelerated.GetCurrentTime().Add(-time.Hour)
+	seedCalendarEventWithAttendee(t, env, accountID, email1, pastEnd, "confirmed")
+	seedCalendarEventWithAttendee(t, env, accountID, email2, pastEnd.Add(-30*time.Minute), "confirmed")
+
+	// Fire two jobs targeting the same contact — the per-contact mutex should
+	// serialize them, and both should ultimately complete cleanly.
+	job1 := env.rematchSvc.StartRematchForContact(contact.ID, []service.Method{{Type: "email", Value: email1}})
+	job2 := env.rematchSvc.StartRematchForContact(contact.ID, []service.Method{{Type: "email", Value: email2}})
+	require.NotEqual(t, uuid.Nil, job1)
+	require.NotEqual(t, uuid.Nil, job2)
+
+	p1 := waitForRematchJob(t, env.rematchSvc, job1)
+	p2 := waitForRematchJob(t, env.rematchSvc, job2)
+	assert.Equal(t, service.JobStatusCompleted, p1.Status)
+	assert.Equal(t, service.JobStatusCompleted, p2.Status)
+	assert.Equal(t, 1, p1.Matched)
+	assert.Equal(t, 1, p2.Matched)
+
+	// Both events should be linked to the contact, with no torn writes.
+	var linkedCount int
+	require.NoError(t, env.database.Pool.QueryRow(env.ctx,
+		"SELECT COUNT(*) FROM calendar_event WHERE google_account_id = $1 AND $2 = ANY(matched_contact_ids)",
+		accountID, contact.ID,
+	).Scan(&linkedCount))
+	assert.Equal(t, 2, linkedCount)
+}
+
+func TestRematch_RescanContact_RunsForAllMethods(t *testing.T) {
+	env := setupRematchEnv(t)
+
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "Rematch Rescan " + uuid.NewString()[:8],
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+
+	// Create the method directly on the repo so the create path doesn't
+	// trigger a rematch job we don't care about.
+	email := "rescan@example.com"
+	_, err = env.contactMethodRepo.CreateContactMethod(env.ctx, repository.CreateContactMethodRequest{
+		ContactID: contact.ID,
+		Type:      "email",
+		Value:     email,
+		IsPrimary: true,
+	})
+	require.NoError(t, err)
+
+	accountID := "rematch-rescan-" + uuid.NewString()
+	t.Cleanup(func() { _ = env.calendarRepo.DeleteEventsByAccount(env.ctx, accountID) })
+
+	pastEnd := accelerated.GetCurrentTime().Add(-time.Hour)
+	event := seedCalendarEventWithAttendee(t, env, accountID, email, pastEnd, "confirmed")
+
+	// Manual rescan — exercise the service-level method the handler calls.
+	jobID, err := env.rematchSvc.RescanContact(env.ctx, env.contactSvc, contact.ID)
+	require.NoError(t, err)
+	require.NotEqual(t, uuid.Nil, jobID)
+
+	job := waitForRematchJob(t, env.rematchSvc, jobID)
+	assert.Equal(t, service.JobStatusCompleted, job.Status)
+	assert.Equal(t, 1, job.Matched)
+
+	updatedEvent, err := env.calendarRepo.GetByID(env.ctx, event.ID)
+	require.NoError(t, err)
+	assert.Contains(t, updatedEvent.MatchedContactIDs, contact.ID)
+}
+
+func TestRematch_RescanContact_UnknownContactReturnsNotFound(t *testing.T) {
+	env := setupRematchEnv(t)
+
+	_, err := env.rematchSvc.RescanContact(env.ctx, env.contactSvc, uuid.New())
+	assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound for unknown contact, got %v", err)
+}
+
+func TestRematch_ContactServiceUpdateContact_FiresForNewMethodOnly(t *testing.T) {
+	env := setupRematchEnv(t)
+
+	existingEmail := "existing@example.com"
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "Rematch Diff " + uuid.NewString()[:8],
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+
+	// Seed an existing email method outside the service so no rematch fires.
+	_, err = env.contactMethodRepo.CreateContactMethod(env.ctx, repository.CreateContactMethodRequest{
+		ContactID: contact.ID, Type: "email", Value: existingEmail, IsPrimary: true,
+	})
+	require.NoError(t, err)
+
+	accountID := "rematch-diff-" + uuid.NewString()
+	t.Cleanup(func() { _ = env.calendarRepo.DeleteEventsByAccount(env.ctx, accountID) })
+
+	pastEnd := accelerated.GetCurrentTime().Add(-time.Hour)
+	// Event whose attendee matches the PRE-EXISTING email. Rematch should
+	// NOT link this on the update — diffNewMethods filters it out.
+	_ = seedCalendarEventWithAttendee(t, env, accountID, existingEmail, pastEnd, "confirmed")
+	// Event whose attendee matches the NEWLY-ADDED email. Should be linked.
+	newEmail := "added@example.com"
+	newEvent := seedCalendarEventWithAttendee(t, env, accountID, newEmail, pastEnd, "confirmed")
+
+	_, jobID, err := env.contactSvc.UpdateContact(env.ctx, contact.ID, repository.UpdateContactRequest{
+		FullName: contact.FullName,
+	}, []service.ContactMethodInput{
+		{Type: "email", Value: existingEmail, IsPrimary: true},
+		{Type: "email", Value: newEmail, IsPrimary: false},
+	}, true)
+	require.NoError(t, err)
+	require.NotEqual(t, uuid.Nil, jobID, "UpdateContact should dispatch rematch for newly-added email")
+
+	job := waitForRematchJob(t, env.rematchSvc, jobID)
+	assert.Equal(t, service.JobStatusCompleted, job.Status)
+	// matched is the number of new events linked — only the newEmail event.
+	assert.Equal(t, 1, job.Matched)
+
+	// Verify: new event linked, existing-email event still unlinked from this
+	// contact (since rematch was only for the new email diff).
+	newEventState, err := env.calendarRepo.GetByID(env.ctx, newEvent.ID)
+	require.NoError(t, err)
+	assert.Contains(t, newEventState.MatchedContactIDs, contact.ID)
+}

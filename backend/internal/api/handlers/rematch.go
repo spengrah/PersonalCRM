@@ -7,7 +7,6 @@ import (
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/db"
-	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -19,15 +18,13 @@ import (
 type RematchHandler struct {
 	rematchSvc *service.RematchService
 	contactSvc *service.ContactService
-	methodRepo *repository.ContactMethodRepository
 }
 
 // NewRematchHandler constructs a RematchHandler.
-func NewRematchHandler(rematchSvc *service.RematchService, contactSvc *service.ContactService, methodRepo *repository.ContactMethodRepository) *RematchHandler {
+func NewRematchHandler(rematchSvc *service.RematchService, contactSvc *service.ContactService) *RematchHandler {
 	return &RematchHandler{
 		rematchSvc: rematchSvc,
 		contactSvc: contactSvc,
-		methodRepo: methodRepo,
 	}
 }
 
@@ -103,23 +100,15 @@ func (h *RematchHandler) Rescan(c *gin.Context) {
 		return
 	}
 
-	// Confirm the contact exists (and is not soft-deleted).
-	if _, err := h.contactSvc.GetContact(ctx, id); err != nil {
+	jobID, err := h.rematchSvc.RescanContact(ctx, h.contactSvc, id)
+	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			api.SendNotFound(c, "Contact")
 			return
 		}
-		api.SendInternalError(c, "Failed to load contact")
+		api.SendInternalError(c, "Failed to start rematch")
 		return
 	}
-
-	methods, err := h.methodRepo.ListContactMethodsByContact(ctx, id)
-	if err != nil {
-		api.SendInternalError(c, "Failed to load contact methods")
-		return
-	}
-
-	jobID := h.rematchSvc.StartRematchForContact(id, serviceMethodsFromContactMethods(methods))
 	api.SendSuccess(c, http.StatusOK, RescanResponse{
 		RematchJobID: nilStringPtrFromUUID(jobID),
 	}, nil)
@@ -140,14 +129,4 @@ func toRematchJobResponse(j service.JobProgress) RematchJobResponse {
 		CompletedAt: j.CompletedAt,
 		Error:       j.Error,
 	}
-}
-
-// serviceMethodsFromContactMethods is a handler-local helper that mirrors
-// service.toRematchMethods (unexported in the service package).
-func serviceMethodsFromContactMethods(methods []repository.ContactMethod) []service.Method {
-	out := make([]service.Method, len(methods))
-	for i, m := range methods {
-		out[i] = service.Method{Type: m.Type, Value: m.ValueNormalized}
-	}
-	return out
 }

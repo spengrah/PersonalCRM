@@ -22,30 +22,32 @@ interface Props {
 export function RematchJobWatcher({ jobId, contactId, invalidateImports, onDone }: Props) {
   const queryClient = useQueryClient()
 
-  const { data } = useQuery({
+  const { data, error } = useQuery({
     queryKey: rematchKeys.job(jobId),
     queryFn: () => rematchApi.getJob(jobId),
     refetchInterval: query => {
       const status = query.state.data?.status
-      // Poll while running or while we don't yet have a status; stop on any
-      // terminal state (completed, failed) or on a 404 (server lost the job).
+      const errStatus = getErrStatus(query.state.error)
+      // Stop polling on any terminal state: completed/failed, or a 404 (the
+      // server lost the job — e.g. after a restart). Poll while running or
+      // before the first response arrives.
+      if (errStatus === 404) return false
       return status === 'running' || status == null ? 1000 : false
     },
-    // 404 is terminal — don't keep retrying when the job is gone.
+    // 404 is terminal — don't retry. Anything else gets a couple of retries.
     retry: (count, err: unknown) => {
-      if (typeof err === 'object' && err !== null && 'status' in err) {
-        const status = (err as { status?: number }).status
-        if (status === 404) {
-          return false
-        }
-      }
+      if (getErrStatus(err) === 404) return false
       return count < 2
     },
   })
 
   useEffect(() => {
-    if (!data || data.status === 'running') return
+    const errStatus = getErrStatus(error)
+    const isTerminal = (data && data.status !== 'running') || errStatus === 404
+    if (!isTerminal) return
 
+    // On 404 we can't prove the rematch completed vs. was never started —
+    // invalidate anyway so stale reads are corrected at the next render.
     queryClient.invalidateQueries({ queryKey: contactKeys.detail(contactId) })
     queryClient.invalidateQueries({ queryKey: contactKeys.lists() })
     queryClient.invalidateQueries({ queryKey: calendarKeys.forContact(contactId) })
@@ -54,7 +56,14 @@ export function RematchJobWatcher({ jobId, contactId, invalidateImports, onDone 
       queryClient.invalidateQueries({ queryKey: importKeys.all })
     }
     onDone()
-  }, [data, contactId, invalidateImports, queryClient, onDone])
+  }, [data, error, contactId, invalidateImports, queryClient, onDone])
 
   return null
+}
+
+function getErrStatus(err: unknown): number | undefined {
+  if (typeof err === 'object' && err !== null && 'status' in err) {
+    return (err as { status?: number }).status
+  }
+  return undefined
 }

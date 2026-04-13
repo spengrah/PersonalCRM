@@ -321,7 +321,7 @@ func main() {
 	noteHandler := handlers.NewNoteHandler(noteService)
 	interactionHandler := handlers.NewInteractionHandler(contactService, interactionRepo)
 	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
-	rematchHandler := handlers.NewRematchHandler(rematchService, contactService, contactMethodRepo)
+	rematchHandler := handlers.NewRematchHandler(rematchService, contactService)
 
 	// Initialize and start scheduler
 	cronScheduler := scheduler.NewScheduler(syncService, cfg.Features.EnableExternalSync)
