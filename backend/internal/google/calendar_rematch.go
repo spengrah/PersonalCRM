@@ -78,12 +78,15 @@ func (h *CalendarRematchHandler) Rematch(ctx context.Context, contactID uuid.UUI
 				Msg("calendar rematch: append failed")
 			continue
 		}
-		// Past events: record the interaction now so last_contacted reflects
-		// the event without a scheduler race. RecordInteraction dedupes on
+		// Past confirmed events: record the interaction now so last_contacted
+		// reflects the event without a scheduler race. Match
+		// ListPastEventsNeedingUpdate's filter (status = 'confirmed') so
+		// rematch doesn't record interactions the scheduler would have
+		// skipped for tentative events. RecordInteraction dedupes on
 		// (contact_id, source, source_ref) — both at the service layer
 		// (ContactService.RecordInteraction → FindBySourceRef) and at the DB
 		// layer (idx_interaction_source_ref UNIQUE). Safe to call repeatedly.
-		if e.EndTime.Before(now) {
+		if e.EndTime.Before(now) && e.Status == "confirmed" {
 			eventIDStr := e.ID.String()
 			title := ""
 			if e.Title != nil {

@@ -144,6 +144,12 @@ func (s *RematchService) Register(h RematchHandler) {
 	s.handlers[h.IdentifierType()] = h
 }
 
+// jobRetention bounds how long terminal jobs remain queryable via GetJob.
+// After a job completes/fails, clients have this long to poll for the final
+// state before the entry is evicted on the next StartRematchForContact call.
+// Keeps the in-memory job map bounded without requiring a separate reaper.
+const jobRetention = 10 * time.Minute
+
 // StartRematchForContact filters the given methods to those that have a
 // registered handler, then spawns a detached goroutine to run them. Returns
 // uuid.Nil when no methods map to a registered handler — this is the normal
@@ -159,6 +165,10 @@ func (s *RematchService) StartRematchForContact(contactID uuid.UUID, methods []M
 		return uuid.Nil
 	}
 
+	// Opportunistic prune on dispatch — keeps the map bounded for long-running
+	// processes without a dedicated reaper goroutine.
+	s.pruneTerminalJobs()
+
 	j := &job{
 		id:        uuid.New(),
 		contactID: contactID,
@@ -170,6 +180,26 @@ func (s *RematchService) StartRematchForContact(contactID uuid.UUID, methods []M
 
 	go s.run(j)
 	return j.id
+}
+
+// pruneTerminalJobs evicts completed/failed jobs whose terminal timestamp is
+// older than jobRetention. Called opportunistically before each new dispatch.
+func (s *RematchService) pruneTerminalJobs() {
+	cutoff := accelerated.GetCurrentTime().Add(-jobRetention)
+	s.jobs.Range(func(key, value any) bool {
+		j := value.(*job)
+		j.mu.RLock()
+		terminal := j.status != JobStatusRunning
+		var completedAt time.Time
+		if j.completedAt != nil {
+			completedAt = *j.completedAt
+		}
+		j.mu.RUnlock()
+		if terminal && completedAt.Before(cutoff) {
+			s.jobs.Delete(key)
+		}
+		return true
+	})
 }
 
 func (s *RematchService) run(j *job) {

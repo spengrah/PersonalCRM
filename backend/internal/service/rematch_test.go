@@ -201,6 +201,36 @@ func TestGetJob_NotFound(t *testing.T) {
 	}
 }
 
+func TestPruneTerminalJobs_EvictsOldTerminalButKeepsFresh(t *testing.T) {
+	svc := NewRematchService()
+	svc.Register(&stubHandler{typ: "email"})
+
+	// Dispatch a job and let it complete.
+	oldID := svc.StartRematchForContact(uuid.New(), []Method{{Type: "email", Value: "x@y.z"}})
+	waitForJob(t, svc, oldID)
+
+	// Backdate completedAt so the prune considers it expired. Use a fixed
+	// epoch-anchored past time — well beyond jobRetention regardless of the
+	// current clock.
+	v, _ := svc.jobs.Load(oldID)
+	oldJob := v.(*job)
+	oldJob.mu.Lock()
+	stale := time.Unix(0, 0)
+	oldJob.completedAt = &stale
+	oldJob.mu.Unlock()
+
+	// A fresh dispatch should prune the stale job but keep the new one.
+	freshID := svc.StartRematchForContact(uuid.New(), []Method{{Type: "email", Value: "new@y.z"}})
+	waitForJob(t, svc, freshID)
+
+	if _, err := svc.GetJob(oldID); !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("expected stale terminal job to be pruned, got err=%v", err)
+	}
+	if _, err := svc.GetJob(freshID); err != nil {
+		t.Fatalf("expected fresh job to still be queryable, got err=%v", err)
+	}
+}
+
 func TestDiffNewMethods_NormalizedKey(t *testing.T) {
 	before := []repository.ContactMethod{
 		{Type: "email", ValueNormalized: "alice@example.com"},
