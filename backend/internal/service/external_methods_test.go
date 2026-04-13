@@ -1,10 +1,13 @@
 package service
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"personal-crm/backend/internal/repository"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -117,6 +120,26 @@ func TestBuildMethodsFromExternal_AllCombined_StableOrder(t *testing.T) {
 		{Type: "phone", Value: "+15551234"},
 		{Type: "telegram", Value: "handle"},
 	}, got)
+}
+
+func TestIsUniqueViolation(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"plain error", errors.New("some failure"), false},
+		{"pg 23505 directly", &pgconn.PgError{Code: "23505"}, true},
+		{"pg 23505 wrapped via fmt.Errorf %w", fmt.Errorf("create failed: %w", &pgconn.PgError{Code: "23505"}), true},
+		{"pg 23503 (foreign key) is not 23505", &pgconn.PgError{Code: "23503"}, false},
+		{"pg 23502 (not null) is not 23505", &pgconn.PgError{Code: "23502"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isUniqueViolation(tt.err))
+		})
+	}
 }
 
 func TestCanonicalizeMethodValue(t *testing.T) {

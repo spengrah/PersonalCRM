@@ -267,12 +267,21 @@ func (s *EnrichmentService) enrichContactMethodsWithSelections(
 				// set, otherwise the user's primary selection is silently dropped.
 				if sel.IsPrimary {
 					raced, refetchErr := s.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
-					if refetchErr == nil {
+					if refetchErr != nil {
+						methodErrors = append(methodErrors,
+							fmt.Sprintf("recover raced primary for %s: %v", storedValue, refetchErr))
+					} else {
+						var recovered bool
 						for i := range raced {
 							if methodDedupKey(raced[i].Type, raced[i].Value) == selKey {
 								existingPrimaryMethodID = &raced[i].ID
+								recovered = true
 								break
 							}
+						}
+						if !recovered {
+							methodErrors = append(methodErrors,
+								fmt.Sprintf("raced row for %s not visible after refetch — primary selection dropped", storedValue))
 						}
 					}
 				}

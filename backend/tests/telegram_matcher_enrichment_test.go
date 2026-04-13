@@ -328,9 +328,11 @@ func TestMatcherEnrichment_Idempotency(t *testing.T) {
 }
 
 // TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess
-// drives two concurrent MatchPeer calls for the same peer to race the
-// CreateContactMethod insert. One should win; the other should see PG 23505,
-// treat it as success, and produce no warn-level error or duplicate row.
+// drives multiple concurrent MatchPeer calls released by a barrier so the
+// CreateContactMethod inserts overlap. Exactly one wins; the rest hit PG
+// unique_violation (23505) and must treat it as success — no error returned,
+// no duplicate row. Higher concurrency is used to make 23505 path coverage
+// deterministic in practice; a single sequential run cannot trigger it.
 func TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess(t *testing.T) {
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
@@ -349,23 +351,27 @@ func TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess(t *tes
 	})
 	require.NoError(t, err)
 
-	// Run two MatchPeer calls concurrently. The first to insert wins; the
-	// second hits PG unique_violation (23505) and must treat it as success.
-	const concurrency = 2
+	// Barrier release — every goroutine waits, then races into MatchPeer
+	// simultaneously. With 8 concurrent callers any sequential interleaving
+	// is vanishingly unlikely; at least one is guaranteed to hit 23505.
+	const concurrency = 8
+	start := make(chan struct{})
 	errs := make(chan error, concurrency)
 	var wg sync.WaitGroup
 	for range concurrency {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			<-start
 			_, err := env.matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, nil)
 			errs <- err
 		}()
 	}
+	close(start)
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		require.NoError(t, err, "concurrent MatchPeer must not return an error")
+		require.NoError(t, err, "concurrent MatchPeer must not return an error even on 23505 race")
 	}
 
 	methods, err := env.methodRepo.ListContactMethodsByContact(ctx, contact.ID)
