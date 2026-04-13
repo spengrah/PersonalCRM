@@ -167,6 +167,157 @@ func stringPtr(s string) *string {
 	return &s
 }
 
+// --- FindBestMatch (singular) tests for Telegram handle behavior ---
+
+// TestFindBestMatch_ExactHandleBonusBaseline: handle-only Telegram candidate
+// whose normalized form equals the contact's strict-equality form. Bonus
+// pushes a 0.82-similarity match above the 0.5 threshold.
+func TestFindBestMatch_ExactHandleBonusBaseline(t *testing.T) {
+	contactID := uuid.New()
+	repo := &fakeContactRepo{
+		matches: []repository.ContactMatch{
+			{
+				Contact: repository.Contact{
+					ID:       contactID,
+					FullName: "Alice Smith",
+				},
+				Similarity: 0.82,
+			},
+		},
+	}
+	svc := NewImportMatchService(repo)
+	external := &repository.ExternalContact{
+		ID:       uuid.New(),
+		Source:   "telegram",
+		Metadata: map[string]any{"username": "@alicesmith"},
+	}
+
+	match, err := svc.FindBestMatch(context.Background(), external)
+	assert.NoError(t, err)
+	if assert.NotNil(t, match) {
+		assert.Equal(t, contactID.String(), match.ContactID)
+		// 0.82 * 0.6 + 0.4 bonus = 0.892
+		assert.InDelta(t, 0.892, match.Confidence, 0.001)
+	}
+	// The search term passed to the repo should be the normalized handle.
+	assert.Equal(t, "alicesmith", repo.lastName)
+}
+
+// TestFindBestMatch_BelowMinLengthHandle: handle is 3 chars → no search
+// term generated, no suggestion.
+func TestFindBestMatch_BelowMinLengthHandle(t *testing.T) {
+	repo := &fakeContactRepo{}
+	svc := NewImportMatchService(repo)
+	external := &repository.ExternalContact{
+		ID:       uuid.New(),
+		Source:   "telegram",
+		Metadata: map[string]any{"username": "@bob"},
+	}
+
+	match, err := svc.FindBestMatch(context.Background(), external)
+	assert.NoError(t, err)
+	assert.Nil(t, match)
+	assert.Equal(t, "", repo.lastName) // no repo call
+}
+
+// TestFindBestMatch_CollisionSuppressionUsername: ambiguous username-derived
+// top match where top-1 − runner-up < 0.15 → suggestion dropped.
+func TestFindBestMatch_CollisionSuppressionUsername(t *testing.T) {
+	repo := &fakeContactRepo{
+		matches: []repository.ContactMatch{
+			{
+				Contact:    repository.Contact{ID: uuid.New(), FullName: "Alex Johnson"},
+				Similarity: 0.90,
+			},
+			{
+				Contact:    repository.Contact{ID: uuid.New(), FullName: "Alexander Chen"},
+				Similarity: 0.88,
+			},
+		},
+	}
+	svc := NewImportMatchService(repo)
+	external := &repository.ExternalContact{
+		ID:       uuid.New(),
+		Source:   "telegram",
+		Metadata: map[string]any{"username": "@alexey"},
+	}
+
+	match, err := svc.FindBestMatch(context.Background(), external)
+	assert.NoError(t, err)
+	assert.Nil(t, match, "collision gap should drop ambiguous username-derived top match")
+}
+
+// TestFindBestMatch_NonTelegramSourceNoUsername: non-Telegram source never
+// produces a username term, even with metadata.username present.
+func TestFindBestMatch_NonTelegramSourceNoUsername(t *testing.T) {
+	repo := &fakeContactRepo{}
+	svc := NewImportMatchService(repo)
+	external := &repository.ExternalContact{
+		ID:       uuid.New(),
+		Source:   "google",
+		Metadata: map[string]any{"username": "alicesmith"},
+	}
+
+	match, err := svc.FindBestMatch(context.Background(), external)
+	assert.NoError(t, err)
+	assert.Nil(t, match)
+	assert.Equal(t, "", repo.lastName)
+}
+
+// TestFindBestMatch_UsernameBonusBeatsDisplay: display + username terms
+// resolve to different contacts; username's exact-handle bonus wins.
+func TestFindBestMatch_UsernameBonusBeatsDisplay(t *testing.T) {
+	aliceID := uuid.New()
+	bobID := uuid.New()
+	callCount := 0
+	repo := &fakeContactRepoMultiCall{
+		responses: [][]repository.ContactMatch{
+			// Call 1: display term "Bob J" → Bob Johnson sim 1.0
+			{{Contact: repository.Contact{ID: bobID, FullName: "Bob Johnson"}, Similarity: 1.0}},
+			// Call 2: username term "alicesmith" → Alice Smith sim 0.82
+			{{Contact: repository.Contact{ID: aliceID, FullName: "Alice Smith"}, Similarity: 0.82}},
+		},
+		callCount: &callCount,
+	}
+	svc := NewImportMatchService(repo)
+	external := &repository.ExternalContact{
+		ID:          uuid.New(),
+		Source:      "telegram",
+		DisplayName: stringPtr("Bob J"),
+		Metadata:    map[string]any{"username": "@alicesmith"},
+	}
+
+	match, err := svc.FindBestMatch(context.Background(), external)
+	assert.NoError(t, err)
+	if assert.NotNil(t, match) {
+		// Bob: 1.0 * 0.6 = 0.6 (display, no bonus)
+		// Alice: 0.82 * 0.6 + 0.4 bonus = 0.892 (username, bonus fires)
+		assert.Equal(t, aliceID.String(), match.ContactID)
+		assert.InDelta(t, 0.892, match.Confidence, 0.001)
+	}
+	assert.Equal(t, 2, callCount, "both display and username terms should hit the repo")
+}
+
+// fakeContactRepoMultiCall returns a different matches slice per call to
+// FindSimilarContacts, matching the order of search terms issued.
+type fakeContactRepoMultiCall struct {
+	responses [][]repository.ContactMatch
+	callCount *int
+}
+
+func (f *fakeContactRepoMultiCall) FindSimilarContacts(_ context.Context, _ string, _ float64, _ int32) ([]repository.ContactMatch, error) {
+	idx := *f.callCount
+	*f.callCount++
+	if idx >= len(f.responses) {
+		return nil, nil
+	}
+	return f.responses[idx], nil
+}
+
+func (f *fakeContactRepoMultiCall) FindSimilarContactsBatch(_ context.Context, _ []repository.BatchContactInput, _ float64, _ int32) ([]repository.BatchContactMatch, error) {
+	return nil, nil
+}
+
 // Tests for FindBestMatchesBatch
 
 func TestFindBestMatchesBatch_EmptyInput(t *testing.T) {
@@ -886,12 +1037,12 @@ func TestFindBestMatchesBatch_CollisionSuppressionUsername(t *testing.T) {
 	svc := NewImportMatchService(repo)
 
 	externals := []*repository.ExternalContact{
-		telegramExternalWithUsername(externalID, "@alex"),
+		telegramExternalWithUsername(externalID, "@alexey"),
 	}
 
 	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
 	assert.NoError(t, err)
-	// Alex Johnson: 0.90*0.6 = 0.54 (no bonus, strict "alex" vs "alexjohnson")
+	// Alex Johnson: 0.90*0.6 = 0.54 (no bonus, strict "alexey" vs "alexjohnson")
 	// Alexander Chen: 0.88*0.6 = 0.528 (no bonus)
 	// Gap 0.012 < 0.15, top-1 from username → dropped
 	assert.Nil(t, results[0])

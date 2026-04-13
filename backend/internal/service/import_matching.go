@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -123,19 +124,29 @@ func applyExactHandleBonus(score float64, fromUsername bool, usernameTerm, fullN
 // selectBestSuggestion picks a suggestion from the per-contact score map for
 // one candidate. Returns nil if no top match or if the top match is
 // username-derived and too close to the runner-up (ambiguous handle).
+//
+// Sorts by score desc, then by contactID asc as a tiebreaker, so tie-scored
+// candidates produce the same top-1 / top-2 across runs (Go map iteration
+// order is otherwise non-deterministic).
 func selectBestSuggestion(byContact map[string]*contactScore) *ImportSuggestedMatch {
-	var top1, top2 *contactScore
-	for _, cs := range byContact {
-		switch {
-		case top1 == nil || cs.score > top1.score:
-			top2 = top1
-			top1 = cs
-		case top2 == nil || cs.score > top2.score:
-			top2 = cs
-		}
-	}
-	if top1 == nil {
+	if len(byContact) == 0 {
 		return nil
+	}
+	scores := make([]*contactScore, 0, len(byContact))
+	for _, cs := range byContact {
+		scores = append(scores, cs)
+	}
+	sort.Slice(scores, func(i, j int) bool {
+		if scores[i].score != scores[j].score {
+			return scores[i].score > scores[j].score
+		}
+		return scores[i].contactID < scores[j].contactID
+	})
+
+	top1 := scores[0]
+	var top2 *contactScore
+	if len(scores) > 1 {
+		top2 = scores[1]
 	}
 	if top1.fromUsername && top2 != nil && top1.score-top2.score < usernameMatchGap {
 		return nil

@@ -10,9 +10,10 @@ import (
 )
 
 // MinHandleLenForNameMatch is the minimum length of a normalized username
-// handle before it is usable as a name-search term. Shorter handles produce
-// too many trigram matches (e.g., "bob", "jim", "alex").
-const MinHandleLenForNameMatch = 4
+// handle before it is usable as a name-search term. Handles shorter than
+// this produce too many trigram matches (e.g., "bob", "jim", "alex") and
+// too many false-positive suggestions.
+const MinHandleLenForNameMatch = 5
 
 // NormalizeHandleForNameMatch converts a Telegram (or similar) username into
 // a search term suitable for pg_trgm comparison against contact.full_name.

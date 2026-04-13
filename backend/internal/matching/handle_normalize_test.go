@@ -19,7 +19,7 @@ func TestNormalizeHandleForNameMatch(t *testing.T) {
 		{name: "interior digit kept", input: "alice2smith", wantTerm: "alice2smith", wantUsable: true},
 		{name: "diacritic fold", input: "josé_smith", wantTerm: "jose smith", wantUsable: true},
 		{name: "trim whitespace", input: "  @alice  ", wantTerm: "alice", wantUsable: true},
-		{name: "at min length alex kept", input: "alex", wantTerm: "alex", wantUsable: true},
+		{name: "below min length alex", input: "alex", wantTerm: "", wantUsable: false},
 		{name: "below min length bob", input: "bob", wantTerm: "", wantUsable: false},
 		{name: "empty", input: "", wantTerm: "", wantUsable: false},
 		{name: "punctuation only", input: "@@@", wantTerm: "", wantUsable: false},
