@@ -13,9 +13,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// peerEntityFetcher returns the best-known entity data for a Telegram peer
+// from the telegram_message cache. Satisfied by *repository.TelegramMessageRepository;
+// exposed as an interface so the handler can be unit-tested with a mock.
+type peerEntityFetcher interface {
+	GetPeerEntityByUserID(ctx context.Context, peerUserID int64) (*repository.PeerEntity, error)
+}
+
 // MessageHandler processes Telegram update events and stores messages.
 type MessageHandler struct {
 	messageRepo       *repository.TelegramMessageRepository
+	peerEntityFetcher peerEntityFetcher
 	chatConfigRepo    *repository.TelegramChatConfigRepository
 	syncRepo          *repository.SyncRepository
 	syncStateID       *uuid.UUID
@@ -39,6 +47,7 @@ func NewMessageHandler(
 ) *MessageHandler {
 	return &MessageHandler{
 		messageRepo:       messageRepo,
+		peerEntityFetcher: messageRepo,
 		chatConfigRepo:    chatConfigRepo,
 		syncRepo:          syncRepo,
 		syncStateID:       syncStateID,
@@ -77,6 +86,8 @@ func (h *MessageHandler) HandleNewMessage(ctx context.Context, e tg.Entities, up
 			return nil
 		}
 	}
+
+	h.enrichSparseEntity(ctx, parsed)
 
 	if _, err := h.messageRepo.UpsertMessage(ctx, parsedToUpsertParams(parsed)); err != nil {
 		return fmt.Errorf("upsert message: %w", err)
@@ -133,6 +144,8 @@ func (h *MessageHandler) HandleEditMessage(ctx context.Context, e tg.Entities, u
 			return nil
 		}
 	}
+
+	h.enrichSparseEntity(ctx, parsed)
 
 	if _, err := h.messageRepo.UpsertMessage(ctx, parsedToUpsertParams(parsed)); err != nil {
 		return fmt.Errorf("upsert edited message: %w", err)
@@ -237,6 +250,38 @@ func EffectiveTracked(status string, memberCount *int32, groupMaxMembers int) bo
 		}
 		return int(*memberCount) <= groupMaxMembers
 	}
+}
+
+// enrichSparseEntity fills peer entity fields on a ParsedMessage using the
+// best-known historical data from telegram_message, but ONLY when the parser
+// reports that no authoritative tg.User was resolved from the update's
+// entities (PeerEntityResolved=false). If the update carried a tg.User, we
+// trust its field values — including empty ones, which indicate user removal.
+//
+// Called after ParseMessage + shouldTrackChat gate, before UpsertMessage.
+// Errors log at debug and do not fail ingest.
+func (h *MessageHandler) enrichSparseEntity(ctx context.Context, parsed *ParsedMessage) {
+	if parsed == nil || parsed.PeerUserID == nil {
+		return
+	}
+	if parsed.PeerEntityResolved {
+		return // update carried authoritative entity data — trust it verbatim
+	}
+	entity, err := h.peerEntityFetcher.GetPeerEntityByUserID(ctx, *parsed.PeerUserID)
+	if err != nil {
+		log.Debug().Err(err).Int64("peer_user_id", *parsed.PeerUserID).Msg("telegram: peer entity lookup failed, proceeding with sparse entity")
+		return
+	}
+	if entity == nil {
+		return // no cached data — proceed as-is
+	}
+	// Trigger fired iff the update had zero authoritative entity data, so
+	// every entity field on parsed is nil. Straight assignment from the
+	// fallback entity — no per-field nil-check needed.
+	parsed.PeerUsername = entity.PeerUsername
+	parsed.PeerFirstName = entity.PeerFirstName
+	parsed.PeerLastName = entity.PeerLastName
+	parsed.PeerPhone = entity.PeerPhone
 }
 
 func parsedToUpsertParams(p *ParsedMessage) repository.UpsertTelegramMessageParams {

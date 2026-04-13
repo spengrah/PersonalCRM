@@ -219,6 +219,49 @@ func (q *Queries) FindDistinctUnmatchedPeerUserIDsByUsername(ctx context.Context
 	return items, nil
 }
 
+const GetPeerEntityByUserID = `-- name: GetPeerEntityByUserID :one
+SELECT peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone
+FROM telegram_message
+WHERE peer_user_id = $1
+  AND deleted_at IS NULL
+ORDER BY
+    CASE WHEN peer_username   IS NOT NULL AND peer_username   <> '' THEN 0 ELSE 1 END,
+    CASE WHEN peer_phone      IS NOT NULL AND peer_phone      <> '' THEN 0 ELSE 1 END,
+    CASE WHEN peer_first_name IS NOT NULL AND peer_first_name <> '' THEN 0 ELSE 1 END,
+    CASE WHEN peer_last_name  IS NOT NULL AND peer_last_name  <> '' THEN 0 ELSE 1 END,
+    sent_at DESC
+LIMIT 1
+`
+
+type GetPeerEntityByUserIDRow struct {
+	PeerUserID    pgtype.Int8 `json:"peer_user_id"`
+	PeerUsername  pgtype.Text `json:"peer_username"`
+	PeerFirstName pgtype.Text `json:"peer_first_name"`
+	PeerLastName  pgtype.Text `json:"peer_last_name"`
+	PeerPhone     pgtype.Text `json:"peer_phone"`
+}
+
+// Returns the best-known entity data for a given peer_user_id by selecting
+// the telegram_message row with the most-populated peer entity fields.
+// Ordering mirrors ListDistinctUnmatchedPeers: prefer non-blank username,
+// then phone, then first_name/last_name, then the most recent message.
+// Used by the live-message handler to backfill sparse entity data from the
+// gotd/td dispatcher before upserting the new message. Does NOT filter on
+// matched_contact_id — needed for rematching previously-matched peers after
+// a contact soft-delete.
+func (q *Queries) GetPeerEntityByUserID(ctx context.Context, peerUserID pgtype.Int8) (*GetPeerEntityByUserIDRow, error) {
+	row := q.db.QueryRow(ctx, GetPeerEntityByUserID, peerUserID)
+	var i GetPeerEntityByUserIDRow
+	err := row.Scan(
+		&i.PeerUserID,
+		&i.PeerUsername,
+		&i.PeerFirstName,
+		&i.PeerLastName,
+		&i.PeerPhone,
+	)
+	return &i, err
+}
+
 const GetTelegramMessage = `-- name: GetTelegramMessage :one
 SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at FROM telegram_message
 WHERE telegram_chat_id = $1

@@ -183,6 +183,90 @@ func TestParseMessage_SkipChannel(t *testing.T) {
 	assert.Nil(t, parsed)
 }
 
+func TestParseMessage_PeerEntityResolved_PrivateWithUser(t *testing.T) {
+	msg := &tg.Message{
+		ID:     1,
+		Date:   1700000000,
+		PeerID: &tg.PeerUser{UserID: 222},
+	}
+	entities := makeEntities(map[int64]*tg.User{
+		222: {ID: 222, FirstName: "Alice", Username: "alice"},
+	}, nil)
+
+	parsed := ParseMessage(msg, entities, selfID)
+	require.NotNil(t, parsed)
+	assert.True(t, parsed.PeerEntityResolved)
+	require.NotNil(t, parsed.PeerUsername)
+	assert.Equal(t, "alice", *parsed.PeerUsername)
+}
+
+func TestParseMessage_PeerEntityResolved_PrivateSparse(t *testing.T) {
+	msg := &tg.Message{
+		ID:     1,
+		Date:   1700000000,
+		PeerID: &tg.PeerUser{UserID: 222},
+	}
+	parsed := ParseMessage(msg, makeEntities(map[int64]*tg.User{}, nil), selfID)
+	require.NotNil(t, parsed)
+	assert.False(t, parsed.PeerEntityResolved)
+	assert.Nil(t, parsed.PeerUsername)
+	assert.Nil(t, parsed.PeerFirstName)
+	assert.Nil(t, parsed.PeerLastName)
+	assert.Nil(t, parsed.PeerPhone)
+}
+
+func TestParseMessage_PeerEntityResolved_PrivateWithEmptyFields(t *testing.T) {
+	// User present in entities but Username/FirstName empty — user removed
+	// their handle. Resolved=true because the entity itself was authoritative.
+	msg := &tg.Message{
+		ID:     1,
+		Date:   1700000000,
+		PeerID: &tg.PeerUser{UserID: 222},
+	}
+	entities := makeEntities(map[int64]*tg.User{
+		222: {ID: 222, Username: "", FirstName: ""},
+	}, nil)
+	parsed := ParseMessage(msg, entities, selfID)
+	require.NotNil(t, parsed)
+	assert.True(t, parsed.PeerEntityResolved)
+	assert.Nil(t, parsed.PeerUsername)
+	assert.Nil(t, parsed.PeerFirstName)
+}
+
+func TestParseMessage_PeerEntityResolved_GroupWithSender(t *testing.T) {
+	msg := &tg.Message{
+		ID:     1,
+		Date:   1700000000,
+		PeerID: &tg.PeerChat{ChatID: 333},
+	}
+	msg.SetFromID(&tg.PeerUser{UserID: 444})
+	entities := makeEntities(
+		map[int64]*tg.User{444: {ID: 444, FirstName: "Bob", Username: "bob"}},
+		map[int64]*tg.Chat{333: {ID: 333, Title: "Test Group"}},
+	)
+	parsed := ParseMessage(msg, entities, selfID)
+	require.NotNil(t, parsed)
+	assert.True(t, parsed.PeerEntityResolved)
+}
+
+func TestParseMessage_PeerEntityResolved_GroupSenderMissing(t *testing.T) {
+	msg := &tg.Message{
+		ID:     1,
+		Date:   1700000000,
+		PeerID: &tg.PeerChat{ChatID: 333},
+	}
+	msg.SetFromID(&tg.PeerUser{UserID: 444})
+	entities := makeEntities(
+		map[int64]*tg.User{},
+		map[int64]*tg.Chat{333: {ID: 333, Title: "Test Group"}},
+	)
+	parsed := ParseMessage(msg, entities, selfID)
+	require.NotNil(t, parsed)
+	assert.False(t, parsed.PeerEntityResolved)
+	require.NotNil(t, parsed.PeerUserID)
+	assert.Equal(t, int64(444), *parsed.PeerUserID)
+}
+
 func TestParseMessage_MediaCaption(t *testing.T) {
 	msg := &tg.Message{
 		ID:      1,

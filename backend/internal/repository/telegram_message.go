@@ -208,6 +208,19 @@ func (r *TelegramMessageRepository) CountByChat(ctx context.Context) (map[int64]
 	return counts, nil
 }
 
+// PeerEntity captures the entity fields associated with a Telegram peer,
+// extracted from the best historical telegram_message row for that peer.
+// Used by the live-message handler to backfill sparse entity data that the
+// gotd/td dispatcher omits from incoming updates. Blank strings from storage
+// are promoted to nil here to match the matcher's nilIfEmpty convention.
+type PeerEntity struct {
+	PeerUserID    int64
+	PeerUsername  *string
+	PeerFirstName *string
+	PeerLastName  *string
+	PeerPhone     *string
+}
+
 // UnmatchedPeer holds distinct peer info for identity matching.
 type UnmatchedPeer struct {
 	PeerUserID    int64
@@ -385,6 +398,39 @@ func (r *TelegramMessageRepository) FindDistinctUnmatchedPeerUserIDsByPhone(ctx 
 // rematch handler reports a meaningful pre-link count.
 func (r *TelegramMessageRepository) CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID int64) (int64, error) {
 	return r.queries.CountUnmatchedMessagesByPeer(ctx, int64ToPgInt8(&peerUserID))
+}
+
+// GetPeerEntityByUserID returns the best-known entity data for a Telegram
+// peer, selected by preferring rows with non-blank username/phone/name over
+// rows with blank fields. Returns (nil, nil) when no non-deleted messages
+// exist for the peer — the caller should treat this as "no cached data".
+// Blank ("") fields are promoted to nil to match the matcher's convention.
+func (r *TelegramMessageRepository) GetPeerEntityByUserID(ctx context.Context, peerUserID int64) (*PeerEntity, error) {
+	row, err := r.queries.GetPeerEntityByUserID(ctx, int64ToPgInt8(&peerUserID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	entity := &PeerEntity{PeerUserID: peerUserID}
+	if row.PeerUsername.Valid && row.PeerUsername.String != "" {
+		v := row.PeerUsername.String
+		entity.PeerUsername = &v
+	}
+	if row.PeerFirstName.Valid && row.PeerFirstName.String != "" {
+		v := row.PeerFirstName.String
+		entity.PeerFirstName = &v
+	}
+	if row.PeerLastName.Valid && row.PeerLastName.String != "" {
+		v := row.PeerLastName.String
+		entity.PeerLastName = &v
+	}
+	if row.PeerPhone.Valid && row.PeerPhone.String != "" {
+		v := row.PeerPhone.String
+		entity.PeerPhone = &v
+	}
+	return entity, nil
 }
 
 // CountMessagesByPeerID returns message counts for a single peer.

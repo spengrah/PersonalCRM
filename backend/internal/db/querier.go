@@ -202,6 +202,15 @@ type Querier interface {
 	GetOAuthCredentialByID(ctx context.Context, id pgtype.UUID) (*OauthCredential, error)
 	// Get non-sensitive credential info for display
 	GetOAuthCredentialStatus(ctx context.Context, id pgtype.UUID) (*GetOAuthCredentialStatusRow, error)
+	// Returns the best-known entity data for a given peer_user_id by selecting
+	// the telegram_message row with the most-populated peer entity fields.
+	// Ordering mirrors ListDistinctUnmatchedPeers: prefer non-blank username,
+	// then phone, then first_name/last_name, then the most recent message.
+	// Used by the live-message handler to backfill sparse entity data from the
+	// gotd/td dispatcher before upserting the new message. Does NOT filter on
+	// matched_contact_id — needed for rematching previously-matched peers after
+	// a contact soft-delete.
+	GetPeerEntityByUserID(ctx context.Context, peerUserID pgtype.Int8) (*GetPeerEntityByUserIDRow, error)
 	GetSyncLog(ctx context.Context, id pgtype.UUID) (*ExternalSyncLog, error)
 	// External Sync State Queries
 	GetSyncState(ctx context.Context, id pgtype.UUID) (*ExternalSyncState, error)

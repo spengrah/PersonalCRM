@@ -160,6 +160,27 @@ ORDER BY peer_user_id,
     CASE WHEN peer_username IS NOT NULL AND peer_username <> '' THEN 0 ELSE 1 END,
     sent_at DESC;
 
+-- name: GetPeerEntityByUserID :one
+-- Returns the best-known entity data for a given peer_user_id by selecting
+-- the telegram_message row with the most-populated peer entity fields.
+-- Ordering mirrors ListDistinctUnmatchedPeers: prefer non-blank username,
+-- then phone, then first_name/last_name, then the most recent message.
+-- Used by the live-message handler to backfill sparse entity data from the
+-- gotd/td dispatcher before upserting the new message. Does NOT filter on
+-- matched_contact_id — needed for rematching previously-matched peers after
+-- a contact soft-delete.
+SELECT peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone
+FROM telegram_message
+WHERE peer_user_id = @peer_user_id
+  AND deleted_at IS NULL
+ORDER BY
+    CASE WHEN peer_username   IS NOT NULL AND peer_username   <> '' THEN 0 ELSE 1 END,
+    CASE WHEN peer_phone      IS NOT NULL AND peer_phone      <> '' THEN 0 ELSE 1 END,
+    CASE WHEN peer_first_name IS NOT NULL AND peer_first_name <> '' THEN 0 ELSE 1 END,
+    CASE WHEN peer_last_name  IS NOT NULL AND peer_last_name  <> '' THEN 0 ELSE 1 END,
+    sent_at DESC
+LIMIT 1;
+
 -- name: CountUnmatchedMessagesByPeer :one
 -- Counts messages about to be linked for a given peer. Read BEFORE
 -- OnPeerLinked so the matched-count reporting observes the pre-link state.
