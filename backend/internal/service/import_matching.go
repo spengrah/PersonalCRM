@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"sort"
+	"strconv"
+	"strings"
 
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/matching"
@@ -30,47 +33,177 @@ func NewImportMatchService(contactRepo contactMatchFinder) *ImportMatchService {
 	return &ImportMatchService{contactRepo: contactRepo}
 }
 
+// usernameMatchGap is the minimum score gap (top-1 minus runner-up) required
+// for a username-derived top match to be surfaced as a suggestion. Tighter
+// gaps mean the top match is ambiguous vs. common handles (e.g., "alex"),
+// and the UI shouldn't guess.
+const usernameMatchGap = 0.15
+
+// candidateSearchTerm is a single name-search string derived from an external
+// contact. FromUsername is true when the term came from a Telegram handle
+// rather than a display or first+last name.
+type candidateSearchTerm struct {
+	Text         string
+	FromUsername bool
+}
+
+// candidateSearchTerms returns up to two name-search terms for an external
+// contact: the primary (display/first+last) name, and — for Telegram — a
+// normalized username term. Callers use the per-term score max to pick the
+// best match.
+func candidateSearchTerms(external *repository.ExternalContact) []candidateSearchTerm {
+	var terms []candidateSearchTerm
+	if name := extractCandidateName(external); name != "" {
+		terms = append(terms, candidateSearchTerm{Text: name, FromUsername: false})
+	}
+	if external.Source == "telegram" {
+		if raw, ok := external.Metadata["username"].(string); ok {
+			if normalized, usable := matching.NormalizeHandleForNameMatch(raw); usable {
+				if len(terms) == 0 || !strings.EqualFold(terms[0].Text, normalized) {
+					terms = append(terms, candidateSearchTerm{Text: normalized, FromUsername: true})
+				}
+			}
+		}
+	}
+	return terms
+}
+
+// methodMaps holds normalized contact methods for a single external contact,
+// keyed for fast overlap counting against CRM contact methods.
+type methodMaps struct {
+	emails map[string]bool
+	phones map[string]bool
+}
+
+// buildMethodMaps pre-normalizes email/phone methods for every external
+// contact so score computation doesn't re-normalize per match.
+func buildMethodMaps(externals []*repository.ExternalContact) map[string]methodMaps {
+	out := make(map[string]methodMaps, len(externals))
+	for _, external := range externals {
+		emails := make(map[string]bool)
+		for _, email := range external.Emails {
+			emails[matching.NormalizeEmail(email.Value)] = true
+		}
+		phones := make(map[string]bool)
+		for _, phone := range external.Phones {
+			phones[matching.NormalizePhoneLoose(phone.Value)] = true
+		}
+		out[external.ID.String()] = methodMaps{emails: emails, phones: phones}
+	}
+	return out
+}
+
+// contactScore tracks the best score seen for a single (candidate, contact)
+// pair across all search terms for that candidate.
+type contactScore struct {
+	contactID    string
+	contactName  string
+	score        float64
+	fromUsername bool
+}
+
+// applyExactHandleBonus adds the method-weight bonus when the matching term
+// came from a username AND the username and contact full_name collapse to the
+// same strict-equality form. Capped at 1.0.
+func applyExactHandleBonus(score float64, fromUsername bool, usernameTerm, fullName string) float64 {
+	if !fromUsername {
+		return score
+	}
+	handleStrict := matching.NormalizeForExactHandleMatch(usernameTerm)
+	nameStrict := matching.NormalizeForExactHandleMatch(fullName)
+	if handleStrict == "" || handleStrict != nameStrict {
+		return score
+	}
+	score += matching.ImportConfig.MethodWeight
+	if score > 1.0 {
+		score = 1.0
+	}
+	return score
+}
+
+// selectBestSuggestion picks a suggestion from the per-contact score map for
+// one candidate. Returns nil if no top match or if the top match is
+// username-derived and too close to the runner-up (ambiguous handle).
+//
+// Sorts by score desc, then by contactID asc as a tiebreaker, so tie-scored
+// candidates produce the same top-1 / top-2 across runs (Go map iteration
+// order is otherwise non-deterministic).
+func selectBestSuggestion(byContact map[string]*contactScore) *ImportSuggestedMatch {
+	if len(byContact) == 0 {
+		return nil
+	}
+	scores := make([]*contactScore, 0, len(byContact))
+	for _, cs := range byContact {
+		scores = append(scores, cs)
+	}
+	sort.Slice(scores, func(i, j int) bool {
+		if scores[i].score != scores[j].score {
+			return scores[i].score > scores[j].score
+		}
+		return scores[i].contactID < scores[j].contactID
+	})
+
+	top1 := scores[0]
+	var top2 *contactScore
+	if len(scores) > 1 {
+		top2 = scores[1]
+	}
+	if top1.fromUsername && top2 != nil && top1.score-top2.score < usernameMatchGap {
+		return nil
+	}
+	return &ImportSuggestedMatch{
+		ContactID:   top1.contactID,
+		ContactName: top1.contactName,
+		Confidence:  top1.score,
+	}
+}
+
 // FindBestMatch finds the best matching CRM contact for an external contact.
 // Returns a suggested match if confidence >= matching.ImportConfig.ConfidenceThreshold.
 func (s *ImportMatchService) FindBestMatch(ctx context.Context, external *repository.ExternalContact) (*ImportSuggestedMatch, error) {
-	candidateName := extractCandidateName(external)
-	if candidateName == "" {
+	terms := candidateSearchTerms(external)
+	if len(terms) == 0 {
 		return nil, nil
 	}
 
-	matches, err := s.contactRepo.FindSimilarContacts(ctx, candidateName, matching.ImportConfig.MinSimilarityThreshold, 5)
-	if err != nil {
-		logger.Warn().Err(err).Str("name", candidateName).Msg("failed to find similar contacts")
-		return nil, err
+	methodMap := buildMethodMaps([]*repository.ExternalContact{external})[external.ID.String()]
+
+	var usernameText string
+	for _, term := range terms {
+		if term.FromUsername {
+			usernameText = term.Text
+			break
+		}
 	}
 
-	candidateEmails := make(map[string]bool)
-	for _, email := range external.Emails {
-		candidateEmails[matching.NormalizeEmail(email.Value)] = true
-	}
-	candidatePhones := make(map[string]bool)
-	for _, phone := range external.Phones {
-		candidatePhones[matching.NormalizePhoneLoose(phone.Value)] = true
-	}
-
-	var bestMatch *ImportSuggestedMatch
-	var bestScore float64
-
-	for _, match := range matches {
-		methodMatches, totalMethods := countMethodOverlap(match.Contact.Methods, candidateEmails, candidatePhones)
-		score := matching.ImportConfig.Score(match.Similarity, methodMatches, totalMethods)
-
-		if score >= matching.ImportConfig.ConfidenceThreshold && score > bestScore {
-			bestScore = score
-			bestMatch = &ImportSuggestedMatch{
-				ContactID:   match.Contact.ID.String(),
-				ContactName: match.Contact.FullName,
-				Confidence:  score,
+	byContact := make(map[string]*contactScore)
+	for _, term := range terms {
+		matches, err := s.contactRepo.FindSimilarContacts(ctx, term.Text, matching.ImportConfig.MinSimilarityThreshold, 5)
+		if err != nil {
+			logger.Warn().Err(err).Str("name", term.Text).Msg("failed to find similar contacts")
+			return nil, err
+		}
+		for _, m := range matches {
+			methodMatches, totalMethods := countMethodOverlap(m.Contact.Methods, methodMap.emails, methodMap.phones)
+			score := matching.ImportConfig.Score(m.Similarity, methodMatches, totalMethods)
+			score = applyExactHandleBonus(score, term.FromUsername, usernameText, m.Contact.FullName)
+			if score < matching.ImportConfig.ConfidenceThreshold {
+				continue
+			}
+			contactID := m.Contact.ID.String()
+			existing := byContact[contactID]
+			if existing == nil || score > existing.score {
+				byContact[contactID] = &contactScore{
+					contactID:    contactID,
+					contactName:  m.Contact.FullName,
+					score:        score,
+					fromUsername: term.FromUsername,
+				}
 			}
 		}
 	}
 
-	return bestMatch, nil
+	return selectBestSuggestion(byContact), nil
 }
 
 // FindBestMatchesBatch finds best matches for multiple external contacts in one batch.
@@ -79,30 +212,40 @@ func (s *ImportMatchService) FindBestMatchesBatch(
 	ctx context.Context,
 	externals []*repository.ExternalContact,
 ) ([]*ImportSuggestedMatch, error) {
-	// Build batch input with valid names only
-	var batchInputs []repository.BatchContactInput
-	indexMap := make(map[string]int) // candidate_id -> index in externals
-
-	for i, external := range externals {
-		candidateName := extractCandidateName(external)
-		if candidateName == "" {
-			continue
-		}
-
-		candidateID := external.ID.String()
-		batchInputs = append(batchInputs, repository.BatchContactInput{
-			CandidateID:   candidateID,
-			CandidateName: candidateName,
-		})
-		indexMap[candidateID] = i
+	type termMeta struct {
+		candidateIdx int
+		fromUsername bool
 	}
 
-	// Early return if no valid candidates
+	termIndex := make(map[string]termMeta)
+	var batchInputs []repository.BatchContactInput
+	usernameTerm := make(map[int]string) // candidateIdx -> normalized username term
+
+	for i, external := range externals {
+		terms := candidateSearchTerms(external)
+		if len(terms) > 0 {
+			logger.Debug().
+				Str("candidate_id", external.ID.String()).
+				Int("term_count", len(terms)).
+				Msg("generated search terms for candidate")
+		}
+		for ti, term := range terms {
+			compositeID := external.ID.String() + "|" + strconv.Itoa(ti)
+			batchInputs = append(batchInputs, repository.BatchContactInput{
+				CandidateID:   compositeID,
+				CandidateName: term.Text,
+			})
+			termIndex[compositeID] = termMeta{candidateIdx: i, fromUsername: term.FromUsername}
+			if term.FromUsername {
+				usernameTerm[i] = term.Text
+			}
+		}
+	}
+
 	if len(batchInputs) == 0 {
 		return make([]*ImportSuggestedMatch, len(externals)), nil
 	}
 
-	// Execute batch query
 	batchMatches, err := s.contactRepo.FindSimilarContactsBatch(
 		ctx,
 		batchInputs,
@@ -114,62 +257,50 @@ func (s *ImportMatchService) FindBestMatchesBatch(
 		return nil, err
 	}
 
-	// Prepare normalized contact methods for each candidate (by candidate ID)
-	type methodMaps struct {
-		emails map[string]bool
-		phones map[string]bool
-	}
-	candidateMethodMaps := make(map[string]methodMaps)
+	candidateMethodMaps := buildMethodMaps(externals)
 
-	for _, external := range externals {
-		candidateID := external.ID.String()
+	perCandidate := make(map[int]map[string]*contactScore)
 
-		emails := make(map[string]bool)
-		for _, email := range external.Emails {
-			emails[matching.NormalizeEmail(email.Value)] = true
+	for _, bm := range batchMatches {
+		meta, ok := termIndex[bm.CandidateID]
+		if !ok {
+			continue
 		}
+		ext := externals[meta.candidateIdx]
+		methodMap := candidateMethodMaps[ext.ID.String()]
 
-		phones := make(map[string]bool)
-		for _, phone := range external.Phones {
-			phones[matching.NormalizePhoneLoose(phone.Value)] = true
-		}
-
-		candidateMethodMaps[candidateID] = methodMaps{emails: emails, phones: phones}
-	}
-
-	// Process matches and compute scores
-	results := make([]*ImportSuggestedMatch, len(externals))
-
-	for _, batchMatch := range batchMatches {
-		methodMap := candidateMethodMaps[batchMatch.CandidateID]
-
-		var bestMatch *ImportSuggestedMatch
-		var bestScore float64
-
-		for _, match := range batchMatch.Matches {
+		for _, m := range bm.Matches {
 			methodMatches, totalMethods := countMethodOverlap(
-				match.Contact.Methods,
-				methodMap.emails,
-				methodMap.phones,
+				m.Contact.Methods, methodMap.emails, methodMap.phones,
 			)
-			score := matching.ImportConfig.Score(match.Similarity, methodMatches, totalMethods)
+			score := matching.ImportConfig.Score(m.Similarity, methodMatches, totalMethods)
+			score = applyExactHandleBonus(score, meta.fromUsername, usernameTerm[meta.candidateIdx], m.Contact.FullName)
 
-			if score >= matching.ImportConfig.ConfidenceThreshold && score > bestScore {
-				bestScore = score
-				bestMatch = &ImportSuggestedMatch{
-					ContactID:   match.Contact.ID.String(),
-					ContactName: match.Contact.FullName,
-					Confidence:  score,
+			if score < matching.ImportConfig.ConfidenceThreshold {
+				continue
+			}
+			contactID := m.Contact.ID.String()
+			byContact := perCandidate[meta.candidateIdx]
+			if byContact == nil {
+				byContact = make(map[string]*contactScore)
+				perCandidate[meta.candidateIdx] = byContact
+			}
+			existing := byContact[contactID]
+			if existing == nil || score > existing.score {
+				byContact[contactID] = &contactScore{
+					contactID:    contactID,
+					contactName:  m.Contact.FullName,
+					score:        score,
+					fromUsername: meta.fromUsername,
 				}
 			}
 		}
-
-		// Map back to original index
-		if idx, exists := indexMap[batchMatch.CandidateID]; exists {
-			results[idx] = bestMatch
-		}
 	}
 
+	results := make([]*ImportSuggestedMatch, len(externals))
+	for idx, byContact := range perCandidate {
+		results[idx] = selectBestSuggestion(byContact)
+	}
 	return results, nil
 }
 

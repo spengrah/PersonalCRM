@@ -142,8 +142,9 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Integration test asserting equality across separate count queries | Shared DB means other tests can create/delete rows between calls — assert per-query invariants (e.g., `>= 1`) instead of cross-query equality |
 | Todoist REST API `close` vs `delete` for cleanup | `POST /tasks/{id}/close` marks as completed (triggers `handleTaskCompletion` on next sync); `DELETE /tasks/{id}` permanently removes. Use DELETE for cleanup scripts |
 | Todoist Sync API incremental responses include completed/deleted items | Sync API returns all changed items including `Checked: true` and `IsDeleted: true` — matching logic must explicitly guard against these to avoid processing stale items as active |
-
-## Anti-Patterns
+| Test cleanup uses soft-delete on upsert-ed table | Upsert queries usually don't clear `deleted_at`, so soft-deleted rows from prior runs resurrect as phantom records. Use hard DELETE (or `DeleteExternalContactsBySourceIDPrefix`-style targeted queries) in integration-test cleanup |
+| Integration sub-test reuses identifying names across `t.Run` blocks | Shared DB + fuzzy trigram matching means two sub-tests with the same full_name pollute each other (collision-gap rule fires on tied scores). Generate randomized per-subtest suffixes so each sub-test's candidate pool is unique |
+| Selecting top-N from a Go map | Map iteration order is randomized — equal-score items can swap each run. Collect to slice and `sort.Slice` with an explicit tie-breaker (e.g., score desc then ID asc) |
 
 ### Never Do These
 
