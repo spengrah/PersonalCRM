@@ -120,6 +120,12 @@ type TelegramConfig struct {
 // RiverConfig holds River worker-queue settings. See .ai/spec/event-bus-foundation.md §3.9.
 type RiverConfig struct {
 	WorkerConcurrency int // Default: 10 (Pi-optimized; river's own default is much higher)
+	// JobTimeout is the per-job context deadline. River will cancel a
+	// worker's context after this duration. Default 6m covers the existing
+	// handler-layer 5m + 1m headroom (handlers/sync.go). Must be in
+	// [1s, 1h] — lower is unsafe (full provider syncs exceed a second);
+	// higher indicates a misbehaving provider that should be investigated.
+	JobTimeout time.Duration
 }
 
 // ValidationError represents a configuration validation error
@@ -170,6 +176,10 @@ const (
 	DefaultDBHealthCheckPeriod = 30 * time.Second
 	// River defaults (Pi-optimized; river's own default is much higher)
 	DefaultRiverWorkerConcurrency = 10
+	// DefaultRiverJobTimeout matches the pre-river handler's 5m sync
+	// budget + 1m headroom. River cancels the worker's context when the
+	// budget is exceeded.
+	DefaultRiverJobTimeout = 6 * time.Minute
 )
 
 // Load reads configuration from environment variables
@@ -247,6 +257,7 @@ func Load() (*Config, error) {
 		},
 		River: RiverConfig{
 			WorkerConcurrency: getEnvAsInt("RIVER_WORKER_CONCURRENCY", DefaultRiverWorkerConcurrency),
+			JobTimeout:        getEnvAsDuration("RIVER_JOB_TIMEOUT", DefaultRiverJobTimeout),
 		},
 	}
 
@@ -350,6 +361,16 @@ func (c *Config) Validate() error {
 		errors = append(errors, ValidationError{
 			Field:   "RIVER_WORKER_CONCURRENCY",
 			Message: fmt.Sprintf("must be between 1 and 1000, got %d", c.River.WorkerConcurrency),
+		})
+	}
+
+	// River job timeout range. Zero means "use river's own default" but
+	// we fill a sensible default in Load() so zero here always indicates
+	// an operator misconfiguration.
+	if c.River.JobTimeout < time.Second || c.River.JobTimeout > time.Hour {
+		errors = append(errors, ValidationError{
+			Field:   "RIVER_JOB_TIMEOUT",
+			Message: fmt.Sprintf("must be between 1s and 1h, got %s", c.River.JobTimeout),
 		})
 	}
 
@@ -516,6 +537,7 @@ func TestConfig() *Config {
 		},
 		River: RiverConfig{
 			WorkerConcurrency: DefaultRiverWorkerConcurrency,
+			JobTimeout:        DefaultRiverJobTimeout,
 		},
 	}
 }

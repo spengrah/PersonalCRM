@@ -4,24 +4,46 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/scheduler"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // SyncStatus represents the status of a sync source
 type SyncStatus string
 
 const (
-	SyncStatusIdle     SyncStatus = "idle"
+	SyncStatusIdle SyncStatus = "idle"
+	// SyncStatusSyncing is no longer written by any code path after #180 PR 3
+	// (the river-based scheduler). Kept for backward compatibility with
+	// pre-migration database rows (RecoverStuckSyncingStates resets them at
+	// boot) and so `SELECT ... WHERE status='syncing'` queries from legacy
+	// admin tooling still compile. Removal is scheduled for the #180 PR 12
+	// cleanup pass.
+	//
+	// Deprecated: do not write 'syncing' from new code; the scheduler and
+	// TriggerSync now dispatch via river jobs and rely on river_job state
+	// for "in-flight" semantics.
 	SyncStatusSyncing  SyncStatus = "syncing"
 	SyncStatusError    SyncStatus = "error"
 	SyncStatusDisabled SyncStatus = "disabled"
 )
+
+// JobEnqueuer is the minimal *river.Client surface the repository needs to
+// enqueue a job within a caller-supplied pgx.Tx. *river.Client[pgx.Tx]
+// satisfies this via its InsertTx method. Tests can substitute a fake.
+type JobEnqueuer interface {
+	InsertTx(ctx context.Context, tx pgx.Tx, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error)
+}
 
 // SyncStrategy represents how a source syncs data
 type SyncStrategy string
@@ -82,11 +104,25 @@ type CreateSyncStateRequest struct {
 // SyncRepository handles sync state and log persistence
 type SyncRepository struct {
 	queries db.Querier
+	// pool is only required by repository methods that need to open an
+	// explicit pgx.Tx (currently EnqueueAccountSyncIfNotInFlight). It is
+	// populated by NewSyncRepositoryWithPool; NewSyncRepository keeps it
+	// nil for call sites that don't need the transactional helpers.
+	pool *pgxpool.Pool
 }
 
-// NewSyncRepository creates a new sync repository
+// NewSyncRepository creates a new sync repository without a pool. Callers
+// that need EnqueueAccountSyncIfNotInFlight must use
+// NewSyncRepositoryWithPool instead.
 func NewSyncRepository(queries db.Querier) *SyncRepository {
 	return &SyncRepository{queries: queries}
+}
+
+// NewSyncRepositoryWithPool creates a new sync repository wired with a
+// pgxpool reference so transactional helpers (e.g.,
+// EnqueueAccountSyncIfNotInFlight) can open a pgx.Tx on the shared pool.
+func NewSyncRepositoryWithPool(queries db.Querier, pool *pgxpool.Pool) *SyncRepository {
+	return &SyncRepository{queries: queries, pool: pool}
 }
 
 // convertDbSyncState converts a database sync state to a repository sync state
@@ -515,4 +551,105 @@ func (r *SyncRepository) CountSyncLogsByState(ctx context.Context, stateID uuid.
 // DeleteOldSyncLogs deletes sync logs older than the given time
 func (r *SyncRepository) DeleteOldSyncLogs(ctx context.Context, before time.Time) error {
 	return r.queries.DeleteOldSyncLogs(ctx, pgtype.Timestamptz{Time: before, Valid: true})
+}
+
+// RecoverStuckSyncingStates is a one-shot boot helper that resets any rows
+// left in status='syncing' from a pre-PR-3 crash. Returns the number of
+// rows reset. Idempotent — after PR 3 no code writes 'syncing' so this
+// becomes a no-op on subsequent boots.
+func (r *SyncRepository) RecoverStuckSyncingStates(ctx context.Context) (int64, error) {
+	return r.queries.RecoverStuckSyncingStates(ctx)
+}
+
+// AbandonRunningLogsForState marks any pre-existing 'running' log rows for
+// this sync_state as 'abandoned' with a fixed explanatory error_message.
+// Called at the start of a retry attempt so that orphan rows from a prior
+// crashed run don't accumulate. Requires migration 037.
+func (r *SyncRepository) AbandonRunningLogsForState(ctx context.Context, stateID uuid.UUID) error {
+	return r.queries.AbandonRunningLogsForState(ctx, uuidToPgUUID(stateID))
+}
+
+// EnqueueAccountSyncIfNotInFlight atomically claims-and-enqueues a
+// SyncProviderAccountJob for (source, accountID) iff no in-flight job for
+// the same pair exists. Returns (enqueued=true, nil) when a job was
+// inserted, (enqueued=false, nil) when a duplicate was skipped, and
+// (false, err) on infrastructure errors.
+//
+// Atomicity story (see .ai/log/plan/event-bus-foundation-pr3-scheduler-river.md DD 1):
+//  1. Begin a pgx.Tx on the shared pool.
+//  2. Acquire a per-account advisory lock via
+//     pg_advisory_xact_lock(hashtextextended($1||'|'||COALESCE($2,”), 0)).
+//     The lock releases at transaction end.
+//  3. Inside the lock, CountInFlightSyncJobs checks river_job for a live
+//     job with matching (source, account_id) JSONB args.
+//  4. If count>0, rollback and return (false, nil).
+//  5. If count==0, InsertTx the new job and commit.
+//
+// Concurrent callers for the same (source, account_id) serialize on the
+// advisory lock, so the pre-check cannot race with a concurrent insert.
+// Different accounts enqueue in parallel.
+func (r *SyncRepository) EnqueueAccountSyncIfNotInFlight(
+	ctx context.Context,
+	enqueuer JobEnqueuer,
+	source string,
+	accountID *string,
+) (bool, error) {
+	if r.pool == nil {
+		return false, errors.New("sync repository was not constructed with a pool; use NewSyncRepositoryWithPool")
+	}
+	if enqueuer == nil {
+		return false, errors.New("nil JobEnqueuer passed to EnqueueAccountSyncIfNotInFlight")
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin enqueue tx: %w", err)
+	}
+	// defer Rollback is safe even after a successful Commit per pgx docs.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Acquire the per-account advisory lock. The key is a stable string so
+	// two concurrent callers for the same (source, account_id) hash to the
+	// same bigint and serialize. COALESCE handles nil accountID.
+	acct := ""
+	if accountID != nil {
+		acct = *accountID
+	}
+	lockKey := source + "|" + acct
+	if _, err := tx.Exec(
+		ctx,
+		`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		lockKey,
+	); err != nil {
+		return false, fmt.Errorf("acquire enqueue advisory lock: %w", err)
+	}
+
+	// In-flight check against river_job, scoped to the same tx so the
+	// advisory lock protects it from races. db.New(tx) wraps the pgx.Tx
+	// as a sqlc Queries so the check runs inside the enqueue tx.
+	cnt, err := db.New(tx).CountInFlightSyncJobs(ctx, db.CountInFlightSyncJobsParams{
+		Source:    source,
+		AccountID: stringToPgText(accountID),
+	})
+	if err != nil {
+		return false, fmt.Errorf("count in-flight sync jobs: %w", err)
+	}
+	if cnt > 0 {
+		// Duplicate skip. Commit the tx so the advisory lock releases
+		// promptly (Rollback would also release it, but Commit is slightly
+		// cheaper and makes the "no-op happy path" explicit).
+		if err := tx.Commit(ctx); err != nil {
+			return false, fmt.Errorf("commit enqueue dedup tx: %w", err)
+		}
+		return false, nil
+	}
+
+	args := scheduler.SyncProviderAccountArgs{Source: source, AccountID: accountID}
+	if _, err := enqueuer.InsertTx(ctx, tx, args, nil); err != nil {
+		return false, fmt.Errorf("insert sync_provider_account job: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit enqueue tx: %w", err)
+	}
+	return true, nil
 }

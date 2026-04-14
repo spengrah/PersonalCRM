@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
@@ -56,34 +57,9 @@ import (
 	_ "personal-crm/backend/docs" // Import generated docs
 )
 
-// noopJobArgs is a throwaway job type used only to prove that River's
-// AddWorker / client registration wiring works end-to-end in PR 1 of #180.
-// No jobs of this kind are ever enqueued at runtime. It will be removed in
-// PR 2 once a real consumer worker (the InteractionRecorder wrapper per
-// .ai/spec/event-bus-foundation.md §3.4) is registered.
-//
-// Kept inline in main.go (rather than a sibling file) because the repo's
-// build convention is `go build cmd/crm-api/main.go` (single-file), used
-// by the Makefile, CI cross-compile, and the Playwright webServer command.
-type noopJobArgs struct{}
-
-// Kind returns the River job kind identifier for noopJobArgs.
-func (noopJobArgs) Kind() string { return "noop" }
-
-// noopWorker is a no-op River worker paired with noopJobArgs.
-type noopWorker struct {
-	river.WorkerDefaults[noopJobArgs]
-}
-
-// Work implements river.Worker. Since no jobs of this kind are enqueued,
-// this method is never called at runtime.
-func (*noopWorker) Work(_ context.Context, _ *river.Job[noopJobArgs]) error {
-	return nil
-}
-
 func main() {
 	// Run the server body in a helper so its defers (database.Close,
-	// telegramManager.Stop, cronScheduler.Stop, shutdown-ctx cancel) all
+	// telegramManager.Stop, riverClient.Stop, shutdown-ctx cancel) all
 	// execute on a normal return — os.Exit would bypass them. The only
 	// non-zero exit path is a failed graceful HTTP shutdown, signalled
 	// via the return value.
@@ -122,30 +98,6 @@ func run() int {
 
 	logger.Info().Msg("database connected successfully")
 
-	// Build the River worker set and start the client. In PR 1 only a no-op
-	// worker is registered — this proves the River wiring works end-to-end.
-	// Real consumer workers arrive in later PRs per
-	// .ai/spec/event-bus-foundation.md §3.4.
-	riverWorkers := river.NewWorkers()
-	river.AddWorker(riverWorkers, &noopWorker{})
-
-	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
-		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
-		},
-		Workers: riverWorkers,
-	})
-	if err != nil {
-		logger.Fatal().Err(err).Msg("failed to build river client")
-	}
-
-	if err := riverClient.Start(ctx); err != nil {
-		logger.Fatal().Err(err).Msg("failed to start river client")
-	}
-	logger.Info().
-		Int("worker_concurrency", cfg.River.WorkerConcurrency).
-		Msg("river client started")
-
 	// Initialize repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -183,7 +135,19 @@ func run() int {
 	var externalContactRepo *repository.ExternalContactRepository
 
 	if cfg.Features.EnableExternalSync {
-		syncRepo := repository.NewSyncRepository(database.Queries)
+		syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+
+		// One-shot recovery for legacy stuck status='syncing' rows. After
+		// #180 PR 3 no live code writes 'syncing'; this call is a no-op on
+		// subsequent boots. Non-fatal on error: the scheduler will still
+		// pick up rows whose next_sync_at has come due.
+		if recovered, err := syncRepo.RecoverStuckSyncingStates(ctx); err != nil {
+			logger.Warn().Err(err).Msg("failed to recover stuck sync states (non-fatal)")
+		} else if recovered > 0 {
+			logger.Info().
+				Int64("recovered", recovered).
+				Msg("reset stuck status='syncing' rows from pre-PR-3 crash")
+		}
 		identityRepo := repository.NewIdentityRepository(database.Queries)
 		oauthRepo := repository.NewOAuthRepository(database.Queries)
 		providerRegistry := sync.NewProviderRegistry()
@@ -384,12 +348,52 @@ func run() int {
 	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
 	rematchHandler := handlers.NewRematchHandler(rematchService, contactService)
 
-	// Initialize and start scheduler
-	cronScheduler := scheduler.NewScheduler(syncService, cfg.Features.EnableExternalSync)
-	if err := cronScheduler.Start(); err != nil {
-		logger.Fatal().Err(err).Msg("failed to start scheduler")
+	// Build the River worker set, periodic-job list, and client. The
+	// scheduler-tick + sync-provider-account workers are only registered
+	// when external sync is enabled and we have a real syncService —
+	// otherwise there is nothing for them to do. See DD 6 in
+	// .ai/log/plan/event-bus-foundation-pr3-scheduler-river.md for the
+	// construction-order rationale.
+	riverWorkers := river.NewWorkers()
+	var periodicJobs []*river.PeriodicJob
+	if cfg.Features.EnableExternalSync && syncService != nil {
+		river.AddWorker(riverWorkers, scheduler.NewSchedulerTickWorker(syncService))
+		river.AddWorker(riverWorkers, scheduler.NewSyncProviderAccountWorker(syncService))
+		periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+			river.PeriodicInterval(5*time.Minute),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return scheduler.SchedulerTickArgs{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: true},
+		))
 	}
-	defer cronScheduler.Stop()
+
+	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		JobTimeout: cfg.River.JobTimeout,
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
+		},
+		Workers:      riverWorkers,
+		PeriodicJobs: periodicJobs,
+	})
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to build river client")
+	}
+
+	// Wire the enqueuer onto the service BEFORE starting the client so
+	// any tick fire or TriggerSync that races with bring-up goes through
+	// river instead of falling back to inline sync. See DD 6 step 8.
+	if syncService != nil && cfg.Features.EnableExternalSync {
+		syncService.SetRiverEnqueuer(riverClient)
+	}
+
+	if err := riverClient.Start(ctx); err != nil {
+		logger.Fatal().Err(err).Msg("failed to start river client")
+	}
+	logger.Info().
+		Int("worker_concurrency", cfg.River.WorkerConcurrency).
+		Dur("job_timeout", cfg.River.JobTimeout).
+		Msg("river client started")
 
 	// Set up Gin router
 	if cfg.IsProduction() {
@@ -697,7 +701,7 @@ func run() int {
 	if shutdownErr != nil {
 		// Surface the shutdown failure to supervisors via exit code
 		// once run() returns and its defers fire (database.Close,
-		// telegramManager.Stop, cronScheduler.Stop, cancel).
+		// telegramManager.Stop, riverClient.Stop, cancel).
 		return 1
 	}
 	return 0

@@ -567,6 +567,87 @@ func TestConfig_TestConfig_ValidatesCleanly(t *testing.T) {
 	}
 }
 
+// TestConfig_River_JobTimeout_Default asserts the default from Load()
+// matches DefaultRiverJobTimeout (6 minutes).
+func TestConfig_River_JobTimeout_Default(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.River.JobTimeout != DefaultRiverJobTimeout {
+		t.Errorf("Expected default JobTimeout=%s, got %s",
+			DefaultRiverJobTimeout, cfg.River.JobTimeout)
+	}
+}
+
+// TestConfig_River_JobTimeout_FromEnv asserts RIVER_JOB_TIMEOUT is
+// parsed as a Go duration (e.g., "45s", "2m30s").
+func TestConfig_River_JobTimeout_FromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "RIVER_JOB_TIMEOUT", "45s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.River.JobTimeout != 45*time.Second {
+		t.Errorf("Expected JobTimeout=45s, got %s", cfg.River.JobTimeout)
+	}
+}
+
+// TestConfig_Validate_RiverJobTimeout exercises the [1s, 1h] range.
+func TestConfig_Validate_RiverJobTimeout(t *testing.T) {
+	tests := []struct {
+		name       string
+		timeout    time.Duration
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{"zero", 0, true, "RIVER_JOB_TIMEOUT"},
+		{"below_min", 500 * time.Millisecond, true, "RIVER_JOB_TIMEOUT"},
+		{"at_min", 1 * time.Second, false, ""},
+		{"default", DefaultRiverJobTimeout, false, ""},
+		{"at_max", 1 * time.Hour, false, ""},
+		{"above_max", 61 * time.Minute, true, "RIVER_JOB_TIMEOUT"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TestConfig()
+			cfg.River.JobTimeout = tt.timeout
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Expected validation error for timeout=%s", tt.timeout)
+				}
+				verr, ok := err.(ValidationErrors)
+				if !ok {
+					t.Fatalf("Expected ValidationErrors, got %T", err)
+				}
+				found := false
+				for _, e := range verr {
+					if e.Field == tt.wantErrMsg {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected %s validation error, got: %v", tt.wantErrMsg, err)
+				}
+			} else if err != nil {
+				t.Errorf("Expected no error for timeout=%s, got: %v", tt.timeout, err)
+			}
+		})
+	}
+}
+
 func TestConfig_DatabasePoolInvalidDuration(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
