@@ -185,6 +185,44 @@ var kindPayloadTypes = map[Kind]reflect.Type{
 	KindInteractionRecorded:  reflect.TypeOf(InteractionRecordedPayload{}),
 }
 
+// IsKnownKind reports whether kind has a registered payload type. Used by
+// ingestion validation (spec §3.5) to reject unknown kinds pre-tx without
+// exposing the private kindPayloadTypes registry.
+func IsKnownKind(kind Kind) bool {
+	_, ok := kindPayloadTypes[kind]
+	return ok
+}
+
+// ValidatePayload decodes env.Payload into a zero-value of env.Kind's
+// canonical payload type (via reflect.New) and returns a descriptive error
+// on kind-mismatch / unknown kind / decode failure. The decoded value is
+// discarded — this is a validation-only helper for call sites that don't
+// know the payload type P at compile time (e.g., the HTTP ingestion
+// handler, which dispatches on a string-valued kind from the wire).
+//
+// Uses json.Unmarshal with default (lenient) settings: unknown fields are
+// silently dropped. This matches spec §3.2's Version-int evolution model —
+// forward-compat additions must not be rejected at the ingest boundary.
+// Required-field presence is NOT checked (absent non-pointer fields decode
+// to zero values); consumers enforce their own required-field contracts.
+func ValidatePayload(env *Envelope) error {
+	if env == nil {
+		return fmt.Errorf("validate: nil envelope")
+	}
+	expected, ok := kindPayloadTypes[env.Kind]
+	if !ok {
+		return fmt.Errorf("validate: unknown kind %q", env.Kind)
+	}
+	if len(env.Payload) == 0 {
+		return fmt.Errorf("validate %s: empty payload", env.Kind)
+	}
+	dst := reflect.New(expected).Interface() // *P
+	if err := json.Unmarshal(env.Payload, dst); err != nil {
+		return fmt.Errorf("validate %s: %w", env.Kind, err)
+	}
+	return nil
+}
+
 // Marshal serializes a typed payload for an Envelope's Payload field and
 // asserts the payload's type matches the canonical type for kind. Callers
 // should populate payload.Version before calling.

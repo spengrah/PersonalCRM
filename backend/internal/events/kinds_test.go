@@ -288,3 +288,131 @@ func TestKindPayloadTypes_CoversAllKinds(t *testing.T) {
 func TestAllKinds_ExpectedCount(t *testing.T) {
 	require.Len(t, AllKinds, 10)
 }
+
+// TestIsKnownKind_CoversAllKinds is the positive side: every Kind declared
+// in AllKinds must be reported as known. Guards against registry drift.
+func TestIsKnownKind_CoversAllKinds(t *testing.T) {
+	for _, k := range AllKinds {
+		require.True(t, IsKnownKind(k), "kind %s should be known", k)
+	}
+}
+
+func TestIsKnownKind_UnknownReturnsFalse(t *testing.T) {
+	require.False(t, IsKnownKind(Kind("made.up.kind")))
+	require.False(t, IsKnownKind(Kind("")))
+}
+
+// buildCanonicalPayload returns a round-trippable JSON payload for a given
+// Kind. Only test code needs this — it's the fixture for the
+// ValidatePayload round-trip test.
+func buildCanonicalPayload(t *testing.T, kind Kind) json.RawMessage {
+	t.Helper()
+	cid := uuid.New()
+	at := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+	switch kind {
+	case KindMessageReceived:
+		raw, err := Marshal(kind, MessageReceivedPayload{Version: 1, PeerRef: "tg:1:2", MessageAt: at})
+		require.NoError(t, err)
+		return raw
+	case KindMessageSent:
+		raw, err := Marshal(kind, MessageSentPayload{Version: 1, PeerRef: "tg:1:2", MessageAt: at})
+		require.NoError(t, err)
+		return raw
+	case KindCalendarAttended:
+		raw, err := Marshal(kind, CalendarAttendedPayload{Version: 1, ContactID: cid, EventID: "gcal-1", OccurredAt: at})
+		require.NoError(t, err)
+		return raw
+	case KindCalendarDeclined:
+		raw, err := Marshal(kind, CalendarDeclinedPayload{Version: 1, ContactID: cid, EventID: "gcal-1", OccurredAt: at})
+		require.NoError(t, err)
+		return raw
+	case KindTaskCompleted:
+		raw, err := Marshal(kind, TaskCompletedPayload{Version: 1, ContactID: cid, TaskID: "t1", TaskKind: "cadence", CompletedAt: at, Direction: "mutual"})
+		require.NoError(t, err)
+		return raw
+	case KindTaskSkipped:
+		raw, err := Marshal(kind, TaskSkippedPayload{Version: 1, ContactID: cid, TaskID: "t1", SkippedAt: at})
+		require.NoError(t, err)
+		return raw
+	case KindTaskOutreachDetected:
+		raw, err := Marshal(kind, TaskOutreachDetectedPayload{Version: 1, ContactID: cid, TaskID: "t1", DetectedAt: at})
+		require.NoError(t, err)
+		return raw
+	case KindInteractionManual:
+		raw, err := Marshal(kind, InteractionManualPayload{Version: 1, ContactID: cid, Direction: "mutual", OccurredAt: at})
+		require.NoError(t, err)
+		return raw
+	case KindContactMethodsAdded:
+		raw, err := Marshal(kind, ContactMethodsAddedPayload{Version: 1, ContactID: cid, Methods: []ContactMethodRef{{Type: "email", Value: "a@b.com"}}, RematchJobID: uuid.New()})
+		require.NoError(t, err)
+		return raw
+	case KindInteractionRecorded:
+		raw, err := Marshal(kind, InteractionRecordedPayload{Version: 1, ContactID: cid, InteractionID: uuid.New(), Direction: "mutual", OccurredAt: at, Source: "manual"})
+		require.NoError(t, err)
+		return raw
+	}
+	t.Fatalf("unhandled kind %s", kind)
+	return nil
+}
+
+// TestValidatePayload_AllKindsRoundTrip exercises the validate-only helper
+// against every declared Kind. Round-tripping a canonical payload must
+// succeed (no structural mismatch).
+func TestValidatePayload_AllKindsRoundTrip(t *testing.T) {
+	for _, k := range AllKinds {
+		t.Run(string(k), func(t *testing.T) {
+			env := &Envelope{Kind: k, Payload: buildCanonicalPayload(t, k)}
+			require.NoError(t, ValidatePayload(env))
+		})
+	}
+}
+
+func TestValidatePayload_MalformedJSON(t *testing.T) {
+	env := &Envelope{Kind: KindInteractionManual, Payload: json.RawMessage("{not json")}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "validate interaction.manual")
+}
+
+func TestValidatePayload_EmptyPayload(t *testing.T) {
+	env := &Envelope{Kind: KindInteractionManual}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty payload")
+}
+
+func TestValidatePayload_UnknownKind(t *testing.T) {
+	env := &Envelope{Kind: Kind("made.up.kind"), Payload: json.RawMessage(`{}`)}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown kind")
+}
+
+func TestValidatePayload_NilEnvelope(t *testing.T) {
+	err := ValidatePayload(nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil envelope")
+}
+
+// TestValidatePayload_StructuralTypeMismatch covers the case where the
+// payload JSON decodes but a field's type is wrong — e.g. Version is a
+// string instead of an int. json.UnmarshalTypeError surfaces through
+// ValidatePayload as a wrapped error. This is the primary "payload doesn't
+// match kind's type" guardrail.
+func TestValidatePayload_StructuralTypeMismatch(t *testing.T) {
+	// KindCalendarAttended's ContactID is uuid.UUID — if we pass an int the
+	// JSON decoder rejects it with UnmarshalTypeError.
+	bad := json.RawMessage(`{"version": "not-a-number", "contact_id": "00000000-0000-0000-0000-000000000000", "event_id": "e", "occurred_at": "2026-04-10T12:00:00Z"}`)
+	env := &Envelope{Kind: KindCalendarAttended, Payload: bad}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "validate calendar.attended")
+}
+
+// TestValidatePayload_NonObjectPayload rejects a top-level primitive JSON
+// value (e.g. "just a string") that can't unmarshal into any struct.
+func TestValidatePayload_NonObjectPayload(t *testing.T) {
+	env := &Envelope{Kind: KindInteractionManual, Payload: json.RawMessage(`"not an object"`)}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+}
