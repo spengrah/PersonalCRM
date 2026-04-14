@@ -106,6 +106,14 @@ func (r *EventRepository) GetEvent(ctx context.Context, id uuid.UUID) (*events.E
 	return convertDbEvent(row), nil
 }
 
+// CountBySource returns the number of events for a source. Used by
+// integration tests to assert ingest outcomes (and could power ops
+// dashboards later). The event log is append-only — no soft-delete
+// filter needed.
+func (r *EventRepository) CountBySource(ctx context.Context, source string) (int64, error) {
+	return r.queries.CountEventsBySource(ctx, source)
+}
+
 // FindEventBySource returns the event matching (source, source_id). Returns
 // db.ErrNotFound if absent OR if sourceID is empty. Used by batch ingestion
 // pre-filtering and tests.

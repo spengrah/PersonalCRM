@@ -32,3 +32,9 @@ SELECT * FROM event WHERE id = @id;
 SELECT * FROM event
 WHERE source = @source AND source_id = @source_id
 LIMIT 1;
+
+-- name: CountEventsBySource :one
+-- Used by integration tests (and potentially ops dashboards) to assert
+-- ingest outcomes per source. The event log is append-only, so no
+-- deleted_at filter is needed.
+SELECT COUNT(*) FROM event WHERE source = @source;
