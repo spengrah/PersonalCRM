@@ -354,20 +354,20 @@ func (c *Config) Validate() error {
 	}
 
 	// Cross-field sanity: River workers share the application pgxpool with
-	// HTTP request handlers. If concurrency can consume every connection
-	// plus one, web traffic will block on jobs. Require at least 2
-	// connections of headroom for request serving.
-	//
-	// Note: river.Client also uses a small number of connections for its
-	// leader/notify/queue loops, so in practice MaxConns should exceed
-	// WorkerConcurrency by more than 2. This validation catches the
-	// most severe misconfiguration.
-	if c.Database.MaxConns > 0 && c.River.WorkerConcurrency >= int(c.Database.MaxConns) {
+	// HTTP request handlers, and river.Client itself uses extra connections
+	// for its leader/notifier/completer loops. Require that DB_MAX_CONNS
+	// exceed RIVER_WORKER_CONCURRENCY by at least 3 — ~3 for river's
+	// internals plus headroom for HTTP traffic. This catches the common
+	// misconfiguration where a user raises concurrency without raising
+	// the pool. Operators who know what they're doing can still set
+	// DB_MAX_CONNS high enough to satisfy the check for any concurrency.
+	const riverPoolHeadroom = 3
+	if c.Database.MaxConns > 0 && c.River.WorkerConcurrency+riverPoolHeadroom > int(c.Database.MaxConns) {
 		errors = append(errors, ValidationError{
 			Field: "RIVER_WORKER_CONCURRENCY",
 			Message: fmt.Sprintf(
-				"river concurrency (%d) must leave at least 1 connection free for HTTP requests; DB_MAX_CONNS=%d",
-				c.River.WorkerConcurrency, c.Database.MaxConns,
+				"river concurrency (%d) plus river/HTTP headroom (%d) must not exceed DB_MAX_CONNS (%d)",
+				c.River.WorkerConcurrency, riverPoolHeadroom, c.Database.MaxConns,
 			),
 		})
 	}

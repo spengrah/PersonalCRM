@@ -635,8 +635,12 @@ func main() {
 	// Use logger.Error (not Fatal) for HTTP shutdown failure so that the
 	// River drain below still runs. logger.Fatal calls os.Exit and would
 	// skip Stop, leaving jobs holding leases until re-lease on next boot.
+	// We remember the error and exit non-zero at the end so supervisors
+	// (systemd, etc.) still see the failure.
+	var shutdownErr error
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Error().Err(err).Msg("server forced to shutdown")
+		shutdownErr = err
 	}
 
 	// Drain in-flight River jobs using the same shutdown timeout. If the ctx
@@ -651,4 +655,10 @@ func main() {
 
 	// Print the selected port on graceful exit for supervising processes
 	fmt.Printf("PORT=%d\n", selectedPort) //nolint:forbidigo // Intentional stdout output for supervisor
+
+	if shutdownErr != nil {
+		// Surface the shutdown failure to supervisors after both the River
+		// drain and the port print have run.
+		os.Exit(1)
+	}
 }

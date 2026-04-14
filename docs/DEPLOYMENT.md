@@ -202,7 +202,7 @@ The backend uses Pi-optimized connection pool defaults that work well for single
 
 These defaults are suitable for a Raspberry Pi 4/5. You typically don't need to change them, but they can be customized in `/srv/personalcrm/.env` if needed.
 
-`DB_MAX_CONNS` must be strictly greater than `RIVER_WORKER_CONCURRENCY` or the backend will refuse to start — otherwise job workers could consume every connection and starve HTTP requests. River itself uses a few extra connections internally (leader election, notifier, job completer), so leave headroom of ~3 on top of your worker count when tuning.
+`DB_MAX_CONNS` must exceed `RIVER_WORKER_CONCURRENCY` by at least 3 or the backend will refuse to start. River itself uses ~3 internal connections (leader election, notifier, job completer), and web request traffic needs at least one free connection beyond that — without the headroom, job workers will starve HTTP requests.
 
 For high-memory systems, you might increase `DB_MAX_CONNS`:
 ```bash

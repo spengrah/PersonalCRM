@@ -524,7 +524,8 @@ func TestConfig_Validate_RiverConcurrency(t *testing.T) {
 }
 
 // TestConfig_Validate_RiverConcurrencyExceedsPool asserts the cross-field
-// sanity check: river concurrency must be strictly less than DB_MAX_CONNS.
+// sanity check: DB_MAX_CONNS must exceed RIVER_WORKER_CONCURRENCY by at
+// least 3 (river's internal leader/notifier/completer overhead + HTTP).
 func TestConfig_Validate_RiverConcurrencyExceedsPool(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -534,7 +535,10 @@ func TestConfig_Validate_RiverConcurrencyExceedsPool(t *testing.T) {
 	}{
 		{"concurrency_equals_pool", 10, 10, true},
 		{"concurrency_exceeds_pool", 5, 10, true},
-		{"concurrency_below_pool", 11, 10, false},
+		{"headroom_of_one", 11, 10, true},    // 10+3 > 11 → fail
+		{"headroom_of_two", 12, 10, true},    // 10+3 > 12 → fail
+		{"headroom_of_three", 13, 10, false}, // 10+3 == 13 → ok
+		{"headroom_of_five", 15, 10, false},  // default
 		{"default_pool_default_concurrency", DefaultDBMaxConns, DefaultRiverWorkerConcurrency, false},
 	}
 	for _, tt := range tests {
