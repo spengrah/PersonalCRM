@@ -50,7 +50,7 @@ func setupTelegramImportSuggestionTest(t *testing.T) (
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	require.NoError(t, db.RunMigrations(databaseURL, getMigrationsPath()))
+	require.NoError(t, db.RunMigrations(context.Background(), databaseURL, getMigrationsPath()))
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

@@ -50,20 +50,20 @@ func TestRunMigrations_Integration(t *testing.T) {
 	t.Run("RunMigrations_NoChange", func(t *testing.T) {
 		// Running migrations on an already-migrated database should succeed
 		// and return nil (ErrNoChange is handled internally)
-		err := db.RunMigrations(databaseURL, migrationsPath)
+		err := db.RunMigrations(context.Background(), databaseURL, migrationsPath)
 		assert.NoError(t, err)
 	})
 
 	t.Run("RunMigrations_InvalidPath", func(t *testing.T) {
 		// Invalid migrations path should return error
-		err := db.RunMigrations(databaseURL, "/nonexistent/path")
+		err := db.RunMigrations(context.Background(), databaseURL, "/nonexistent/path")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to create migration instance")
 	})
 
 	t.Run("RunMigrations_InvalidDatabaseURL", func(t *testing.T) {
 		// Invalid database URL should return error
-		err := db.RunMigrations("postgres://invalid:invalid@localhost:9999/invalid?sslmode=disable", migrationsPath)
+		err := db.RunMigrations(context.Background(), "postgres://invalid:invalid@localhost:9999/invalid?sslmode=disable", migrationsPath)
 		assert.Error(t, err)
 	})
 }
@@ -381,7 +381,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 
 	// Run migrations first
 	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
 		t.Fatalf("Failed to run migrations: %v", err)
 	}
 
@@ -743,7 +743,7 @@ func TestOAuthRepository_Integration(t *testing.T) {
 
 	// Run migrations first
 	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
 		t.Fatalf("Failed to run migrations: %v", err)
 	}
 
@@ -1090,7 +1090,7 @@ func TestFindSimilarContactsBatch_Integration(t *testing.T) {
 
 	// Run migrations first
 	migrationsPath := getMigrationsPath()
-	err := db.RunMigrations(databaseURL, migrationsPath)
+	err := db.RunMigrations(context.Background(), databaseURL, migrationsPath)
 	require.NoError(t, err)
 
 	// Create database connection

@@ -30,7 +30,7 @@ func setupContactIDsTestRouter() (*gin.Engine, *repository.ContactRepository, fu
 
 	// Run migrations before connecting to database
 	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
 		panic("Failed to run migrations: " + err.Error())
 	}
 

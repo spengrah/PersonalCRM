@@ -44,7 +44,7 @@ func setupRematchEnv(t *testing.T) *rematchTestEnv {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	require.NoError(t, db.RunMigrations(databaseURL, getMigrationsPath()))
+	require.NoError(t, db.RunMigrations(context.Background(), databaseURL, getMigrationsPath()))
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

@@ -48,7 +48,7 @@ func setupMatcherEnrichmentTest(t *testing.T) *matcherEnrichTestEnv {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	require.NoError(t, db.RunMigrations(databaseURL, getMigrationsPath()))
+	require.NoError(t, db.RunMigrations(context.Background(), databaseURL, getMigrationsPath()))
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -450,7 +450,7 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
-	require.NoError(t, db.RunMigrations(databaseURL, getMigrationsPath()))
+	require.NoError(t, db.RunMigrations(context.Background(), databaseURL, getMigrationsPath()))
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

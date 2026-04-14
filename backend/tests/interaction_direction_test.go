@@ -24,7 +24,7 @@ func setupDirectionTestDeps(t *testing.T) (*service.ContactService, *repository.
 	}
 
 	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
 		t.Fatalf("Failed to run migrations: %v", err)
 	}
 

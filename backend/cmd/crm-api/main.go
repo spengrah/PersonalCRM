@@ -48,6 +48,8 @@ import (
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/gin-gonic/gin"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
@@ -69,14 +71,15 @@ func main() {
 		Str("log_level", cfg.Logger.Level).
 		Msg("configuration loaded successfully")
 
-	// Run migrations before connecting to database
+	// Run migrations before connecting to database (applies both our
+	// golang-migrate migrations and River's queue schema).
+	ctx := context.Background()
 	logger.Info().Msg("running database migrations")
-	if err := db.RunMigrations(cfg.Database.URL, cfg.Database.MigrationsPath); err != nil {
+	if err := db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath); err != nil {
 		logger.Fatal().Err(err).Msg("failed to run migrations")
 	}
 
 	// Initialize database
-	ctx := context.Background()
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to connect to database")
@@ -84,6 +87,30 @@ func main() {
 	defer database.Close()
 
 	logger.Info().Msg("database connected successfully")
+
+	// Build the River worker set and start the client. In PR 1 only a no-op
+	// worker is registered — this proves the River wiring works end-to-end.
+	// Real consumer workers arrive in later PRs per
+	// .ai/spec/event-bus-foundation.md §3.4.
+	riverWorkers := river.NewWorkers()
+	river.AddWorker(riverWorkers, &noopWorker{})
+
+	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
+		},
+		Workers: riverWorkers,
+	})
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to build river client")
+	}
+
+	if err := riverClient.Start(ctx); err != nil {
+		logger.Fatal().Err(err).Msg("failed to start river client")
+	}
+	logger.Info().
+		Int("worker_concurrency", cfg.River.WorkerConcurrency).
+		Msg("river client started")
 
 	// Initialize repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -607,6 +634,14 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Fatal().Err(err).Msg("server forced to shutdown")
+	}
+
+	// Drain in-flight River jobs using the same shutdown timeout. If the ctx
+	// expires, River returns and any unfinished jobs will be re-leased on
+	// next boot — operationally equivalent to a crash, which River already
+	// handles via its built-in retry/lease semantics.
+	if err := riverClient.Stop(ctx); err != nil {
+		logger.Warn().Err(err).Msg("river client stop returned error")
 	}
 
 	logger.Info().Msg("server exited")

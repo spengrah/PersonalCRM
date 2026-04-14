@@ -23,6 +23,7 @@ From project root:
 make setup          # First-time setup (install deps, git hooks)
 make dev            # Start dev server
 make test           # All backend tests
+make test-frontend  # All frontend tests
 make test-e2e       # Playwright E2E (for ci)
 make test-e2e-diff  # Diff-selected E2E (local default)
 make sqlc           # Regenerate from SQL

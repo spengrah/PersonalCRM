@@ -46,7 +46,7 @@ func setupAggregationTest(t *testing.T) (
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()

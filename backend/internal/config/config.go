@@ -21,6 +21,7 @@ type Config struct {
 	Todoist  TodoistConfig
 	Watchdog WatchdogConfig
 	Telegram TelegramConfig
+	River    RiverConfig
 }
 
 // DatabaseConfig holds database connection settings
@@ -116,6 +117,11 @@ type TelegramConfig struct {
 	GroupMaxMembers      int    // Default: 10
 }
 
+// RiverConfig holds River worker-queue settings. See .ai/spec/event-bus-foundation.md §3.9.
+type RiverConfig struct {
+	WorkerConcurrency int // Default: 10 (Pi-optimized; river's own default is much higher)
+}
+
 // ValidationError represents a configuration validation error
 type ValidationError struct {
 	Field   string
@@ -157,6 +163,8 @@ const (
 	DefaultDBMaxConnIdleTime   = 5 * time.Minute
 	DefaultDBMaxConnLifetime   = 30 * time.Minute
 	DefaultDBHealthCheckPeriod = 30 * time.Second
+	// River defaults (Pi-optimized; river's own default is much higher)
+	DefaultRiverWorkerConcurrency = 10
 )
 
 // Load reads configuration from environment variables
@@ -231,6 +239,9 @@ func Load() (*Config, error) {
 			BackfillSince:        getEnv("TELEGRAM_BACKFILL_SINCE", "2026-01-01"),
 			DiscoveryMinMessages: getEnvAsInt("TELEGRAM_DISCOVERY_MIN_MESSAGES", 3),
 			GroupMaxMembers:      getEnvAsInt("TELEGRAM_GROUP_MAX_MEMBERS", 10),
+		},
+		River: RiverConfig{
+			WorkerConcurrency: getEnvAsInt("RIVER_WORKER_CONCURRENCY", DefaultRiverWorkerConcurrency),
 		},
 	}
 
@@ -326,6 +337,14 @@ func (c *Config) Validate() error {
 		errors = append(errors, ValidationError{
 			Field:   "FRONTEND_URL",
 			Message: "frontend URL should be set when CORS_ALLOW_ALL is false",
+		})
+	}
+
+	// River worker concurrency range
+	if c.River.WorkerConcurrency <= 0 || c.River.WorkerConcurrency > 1000 {
+		errors = append(errors, ValidationError{
+			Field:   "RIVER_WORKER_CONCURRENCY",
+			Message: fmt.Sprintf("must be between 1 and 1000, got %d", c.River.WorkerConcurrency),
 		})
 	}
 
@@ -470,6 +489,9 @@ func TestConfig() *Config {
 			BackfillSince:        "2026-01-01",
 			DiscoveryMinMessages: 3,
 			GroupMaxMembers:      10,
+		},
+		River: RiverConfig{
+			WorkerConcurrency: DefaultRiverWorkerConcurrency,
 		},
 	}
 }

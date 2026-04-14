@@ -439,6 +439,90 @@ func TestConfig_DatabasePoolFromEnv(t *testing.T) {
 	}
 }
 
+func TestConfig_River_Default(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.River.WorkerConcurrency != DefaultRiverWorkerConcurrency {
+		t.Errorf("Expected default RiverWorkerConcurrency=%d, got %d",
+			DefaultRiverWorkerConcurrency, cfg.River.WorkerConcurrency)
+	}
+}
+
+func TestConfig_River_FromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "RIVER_WORKER_CONCURRENCY", "25")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.River.WorkerConcurrency != 25 {
+		t.Errorf("Expected RiverWorkerConcurrency=25, got %d", cfg.River.WorkerConcurrency)
+	}
+}
+
+func TestConfig_Validate_RiverConcurrency(t *testing.T) {
+	tests := []struct {
+		name         string
+		concurrency  int
+		wantErrField bool
+	}{
+		{"zero", 0, true},
+		{"negative", -1, true},
+		{"one", 1, false},
+		{"default", DefaultRiverWorkerConcurrency, false},
+		{"max", 1000, false},
+		{"over_max", 1001, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TestConfig()
+			cfg.River.WorkerConcurrency = tt.concurrency
+
+			err := cfg.Validate()
+			if tt.wantErrField {
+				if err == nil {
+					t.Fatalf("Expected validation error for concurrency=%d", tt.concurrency)
+				}
+				verr, ok := err.(ValidationErrors)
+				if !ok {
+					t.Fatalf("Expected ValidationErrors, got %T", err)
+				}
+				found := false
+				for _, e := range verr {
+					if e.Field == "RIVER_WORKER_CONCURRENCY" {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected RIVER_WORKER_CONCURRENCY validation error, got: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error for concurrency=%d, got: %v", tt.concurrency, err)
+				}
+			}
+		})
+	}
+}
+
+func TestConfig_TestConfig_ValidatesCleanly(t *testing.T) {
+	cfg := TestConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("TestConfig() should Validate cleanly, got: %v", err)
+	}
+}
+
 func TestConfig_DatabasePoolInvalidDuration(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")

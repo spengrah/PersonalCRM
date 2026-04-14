@@ -31,7 +31,7 @@ func TestSessionRepository_UpsertAndGet(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -81,7 +81,7 @@ func TestSessionRepository_UpdateAuthState(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -120,7 +120,7 @@ func TestSessionRepository_Delete(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -159,7 +159,7 @@ func TestDatabaseSessionStorage_EncryptDecrypt(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -200,7 +200,7 @@ func TestDatabaseSessionStorage_NoSession(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
