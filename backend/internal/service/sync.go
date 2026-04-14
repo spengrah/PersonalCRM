@@ -124,8 +124,17 @@ func (s *SyncService) TriggerSync(ctx context.Context, source string, accountID 
 	// the "create on first trigger" behavior from the pre-PR-3 flow so
 	// that callers who rely on TriggerSync to bootstrap a new sync_state
 	// keep working unchanged.
+	//
+	// Distinguish "state not found" (benign — create a fresh row) from a
+	// transient DB error (surface so the caller can retry) per .ai/rules/
+	// core.md. Pre-PR-3 this check was a blanket `err != nil`, which could
+	// mask a transient failure as a create attempt (and then fail with a
+	// unique-constraint error from the unique index on (source, account_id)).
 	state, err := s.syncRepo.GetSyncStateBySource(ctx, source, accountID)
-	if err != nil {
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		return fmt.Errorf("get sync state: %w", err)
+	}
+	if errors.Is(err, db.ErrNotFound) {
 		config := provider.Config()
 		state, err = s.syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
 			Source:    source,

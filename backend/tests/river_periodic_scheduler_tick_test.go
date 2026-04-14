@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -149,6 +150,121 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 		).Scan(&cnt))
 		assert.Equal(t, 1, cnt, "expected exactly one enqueued job for source=%s", src)
 	}
+}
+
+// TestPeriodicTick_FiresOnStart verifies the actual river PeriodicJob
+// wiring: a client configured with a 5-minute PeriodicJob and
+// RunOnStart:true must invoke SchedulerTickWorker.Work once shortly
+// after client.Start. This guards the production main.go wiring
+// (RunOnStart flag, PeriodicJob list) that the direct-Work test above
+// cannot exercise.
+//
+// We use a counting tick worker shim wrapped around SchedulerTickWorker
+// so the test can observe the Work invocation without scheduling any
+// downstream sync_provider_account jobs (registry empty → service
+// returns empty due list → tick Work returns nil fast).
+func TestPeriodicTick_FiresOnStart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	cfg.Database.MigrationsPath = getMigrationsPath()
+
+	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
+
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	t.Cleanup(func() { database.Close() })
+
+	// Empty registry → service.ListDueAccounts returns 0 due accounts →
+	// Work returns nil immediately with no downstream enqueues.
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+	contactRepo := repository.NewContactRepository(database.Queries)
+	registry := syncpkg.NewProviderRegistry()
+	svc := service.NewSyncService(syncRepo, contactRepo, registry)
+
+	// Counting tick worker: wraps the real tick worker. Shares the
+	// SchedulerTickArgs kind, so registering this satisfies river. Could
+	// also just inject a fake SyncServiceForTick, but reusing
+	// SchedulerTickWorker exercises more of the real code path.
+	var tickCalls atomic.Int32
+	counting := &countingTickWorker{
+		inner: scheduler.NewSchedulerTickWorker(svc),
+		calls: &tickCalls,
+	}
+
+	workers := river.NewWorkers()
+	river.AddWorker(workers, counting)
+	// A sync worker is also needed because the PeriodicJob construction
+	// in main.go registers both. For this test the sync worker never
+	// runs (no due accounts enumerated), but river rejects unknown
+	// kinds at client-build time in some code paths.
+	river.AddWorker(workers, scheduler.NewSyncProviderAccountWorker(svc))
+
+	periodicJobs := []*river.PeriodicJob{
+		river.NewPeriodicJob(
+			river.PeriodicInterval(5*time.Minute),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return scheduler.SchedulerTickArgs{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: true},
+		),
+	}
+
+	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: 2},
+		},
+		Workers:      workers,
+		PeriodicJobs: periodicJobs,
+	})
+	require.NoError(t, err)
+	svc.SetRiverEnqueuer(client)
+
+	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer startCancel()
+	require.NoError(t, client.Start(startCtx))
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		_ = client.Stop(stopCtx)
+	})
+
+	// RunOnStart should fire within a few seconds after Start returns.
+	waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer waitCancel()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for tickCalls.Load() < 1 {
+		select {
+		case <-waitCtx.Done():
+			t.Fatalf("expected tick worker to fire on start within 10s; got %d invocations", tickCalls.Load())
+		case <-tick.C:
+		}
+	}
+	assert.GreaterOrEqual(t, tickCalls.Load(), int32(1),
+		"tick worker should have fired at least once after client.Start with RunOnStart:true")
+}
+
+// countingTickWorker wraps a real SchedulerTickWorker and increments a
+// counter each time Work is invoked. Satisfies river.Worker for
+// SchedulerTickArgs.
+type countingTickWorker struct {
+	river.WorkerDefaults[scheduler.SchedulerTickArgs]
+	inner *scheduler.SchedulerTickWorker
+	calls *atomic.Int32
+}
+
+func (w *countingTickWorker) Work(ctx context.Context, job *river.Job[scheduler.SchedulerTickArgs]) error {
+	w.calls.Add(1)
+	return w.inner.Work(ctx, job)
 }
 
 // tickStubProvider satisfies sync.SyncProvider so a registry can be

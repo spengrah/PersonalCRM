@@ -301,3 +301,167 @@ type fastRetryPolicy struct{}
 func (fastRetryPolicy) NextRetry(_ *rivertype.JobRow) time.Time {
 	return accelerated.GetCurrentTime().Add(200 * time.Millisecond)
 }
+
+// TestSyncWorker_RescueOnCrash simulates the #208 scenario: a worker
+// begins processing a job, writes a `status='running'` external_sync_log
+// row, and then the process dies before CompleteSyncLog fires. The
+// river_job row is left in `state='running'` with an old `attempted_at`.
+// River's JobRescuer, on its next interval, moves the stuck job to
+// `state='retryable'`, and the worker re-runs. The retry's
+// AbandonRunningLogsForState sweep marks the orphan log row as
+// `'abandoned'`, and the fresh attempt creates a new `'success'` log.
+//
+// This test requires live river maintenance loops (JobRescuer), so it
+// runs a real non-TestOnly river client with:
+//   - JobTimeout: 2s
+//   - RescueStuckJobsAfter: 2s (minimum allowed; validator enforces
+//     >= JobTimeout)
+//   - Default rescuer interval of 30s — total wall-clock ~45s.
+//
+// Gated behind testing.Short() and the LONG_TESTS env var so developers
+// can opt in locally without always paying the 45s cost. CI runs the
+// full suite and gets the coverage.
+func TestSyncWorker_RescueOnCrash(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping long integration test in short mode")
+	}
+	if os.Getenv("LONG_TESTS") == "" && os.Getenv("CI") == "" {
+		t.Skip("skipping long integration test; set LONG_TESTS=1 or run in CI to enable")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	cfg.Database.MigrationsPath = getMigrationsPath()
+	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
+
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	t.Cleanup(func() { database.Close() })
+
+	source := "retry_test_rescue_on_crash"
+	// Clean up any leftovers from a prior test run.
+	_, _ = database.Pool.Exec(ctx,
+		`DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
+	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_log WHERE source = $1`, source)
+	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source = $1`, source)
+
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+	contactRepo := repository.NewContactRepository(database.Queries)
+	registry := syncpkg.NewProviderRegistry()
+
+	provider := &retryTestProvider{
+		cfg: syncpkg.SourceConfig{
+			Name:            source,
+			DisplayName:     source,
+			Strategy:        repository.SyncStrategyFetchAll,
+			DefaultInterval: 15 * time.Minute,
+		},
+	}
+	registry.Register(provider)
+	svc := service.NewSyncService(syncRepo, contactRepo, registry)
+
+	// Create the sync state.
+	past := accelerated.GetCurrentTime().Add(-1 * time.Minute)
+	state, err := syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+		Source:     source,
+		Enabled:    true,
+		Strategy:   repository.SyncStrategyFetchAll,
+		NextSyncAt: &past,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = database.Pool.Exec(context.Background(),
+			`DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_log WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+	})
+
+	// Simulate the "crashed mid-sync" pre-state directly:
+	//   1. Insert a river_job row in state='running' whose attempted_at is
+	//      older than RescueStuckJobsAfter — the rescuer will pick it up.
+	//   2. Insert a matching external_sync_log row with status='running' —
+	//      this is the orphan that the retry attempt must mark 'abandoned'.
+	orphanLog, err := syncRepo.CreateSyncLog(ctx, state)
+	require.NoError(t, err)
+
+	// Start the real river client (maintenance loops enabled). The sync
+	// provider worker will process the rescued job on its retry.
+	workers := river.NewWorkers()
+	river.AddWorker(workers, scheduler.NewSyncProviderAccountWorker(svc))
+	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: 2},
+		},
+		Workers:              workers,
+		JobTimeout:           2 * time.Second,
+		RescueStuckJobsAfter: 2 * time.Second,
+	})
+	require.NoError(t, err)
+	svc.SetRiverEnqueuer(client)
+
+	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer startCancel()
+	require.NoError(t, client.Start(startCtx))
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		_ = client.Stop(stopCtx)
+	})
+
+	// Insert a river_job row via the normal API, then manually back-date
+	// attempted_at to simulate a crashed prior attempt.
+	_, err = client.Insert(ctx, scheduler.SyncProviderAccountArgs{Source: source}, nil)
+	require.NoError(t, err)
+
+	// Directly mark the inserted row as stuck-running.
+	_, err = database.Pool.Exec(ctx,
+		`UPDATE river_job
+		   SET state = 'running',
+		       attempted_at = now() - interval '60 seconds',
+		       attempt = 1
+		 WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
+	require.NoError(t, err)
+
+	// Wait for the JobRescuer to notice (default interval 30s + 2s
+	// rescue-after = ~35s upper bound; budget 75s for CI noise).
+	waitCtx, waitCancel := context.WithTimeout(ctx, 75*time.Second)
+	defer waitCancel()
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+	for provider.calls.Load() < 1 {
+		select {
+		case <-waitCtx.Done():
+			t.Fatalf("expected rescued job to run within 75s; provider.calls=%d", provider.calls.Load())
+		case <-tick.C:
+		}
+	}
+
+	// One more beat so CompleteSyncLog has time to commit.
+	time.Sleep(500 * time.Millisecond)
+
+	// Assertion 1: the orphan log was marked 'abandoned'.
+	var status string
+	var errMsg *string
+	require.NoError(t, database.Pool.QueryRow(ctx,
+		`SELECT status, error_message FROM external_sync_log WHERE id = $1`, orphanLog.ID,
+	).Scan(&status, &errMsg))
+	assert.Equal(t, "abandoned", status, "orphan log should be abandoned by the rescued retry")
+
+	// Assertion 2: a new log row with status='success' exists.
+	var successCount int
+	require.NoError(t, database.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM external_sync_log WHERE source = $1 AND status = 'success'`, source,
+	).Scan(&successCount))
+	assert.Equal(t, 1, successCount, "rescued retry should produce exactly one success log")
+
+	// Assertion 3: state.status is not 'syncing' (the #208 invariant).
+	updatedState, err := syncRepo.GetSyncState(ctx, state.ID)
+	require.NoError(t, err)
+	assert.NotEqual(t, repository.SyncStatusSyncing, updatedState.Status,
+		"status='syncing' must not linger after rescue")
+}
