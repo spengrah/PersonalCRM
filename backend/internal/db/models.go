@@ -118,6 +118,21 @@ type Event struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type EventShadowObservation struct {
+	ID            pgtype.UUID        `json:"id"`
+	EventID       pgtype.UUID        `json:"event_id"`
+	Writer        string             `json:"writer"`
+	Kind          string             `json:"kind"`
+	Source        string             `json:"source"`
+	SourceRef     pgtype.Text        `json:"source_ref"`
+	ContactID     pgtype.UUID        `json:"contact_id"`
+	Direction     string             `json:"direction"`
+	OccurredAt    pgtype.Timestamptz `json:"occurred_at"`
+	InteractionID pgtype.UUID        `json:"interaction_id"`
+	Replay        bool               `json:"replay"`
+	ObservedAt    pgtype.Timestamptz `json:"observed_at"`
+}
+
 type ExternalContact struct {
 	ID            pgtype.UUID        `json:"id"`
 	Source        string             `json:"source"`
