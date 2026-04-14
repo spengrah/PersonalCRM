@@ -50,12 +50,32 @@ func NewIngestService(database *db.Database, bus *events.Bus) *IngestService {
 //
 // Duplicate detection relies on Bus.PublishTx returning nil for both
 // happy-path inserts and ON CONFLICT DO NOTHING hits. The repository
-// populates env.ID only on a real RETURNING row, so env.ID == uuid.Nil is
-// the duplicate sentinel. See PR 2 plan Design Decision 2 for the
+// populates env.ID only on a real RETURNING row, so env.ID == uuid.Nil
+// is the duplicate sentinel. See PR 2 plan Design Decision 2 for the
 // documented contract this depends on.
+//
+// Precondition: every envelope MUST have env.ID == uuid.Nil on entry.
+// EventRepository.InsertEvent supports caller-supplied IDs (via the
+// COALESCE in the sqlc query), which would collide with the sentinel
+// logic here and cause a duplicate to be miscounted as accepted. The
+// HTTP handler constructs fresh envelopes so this always holds; we
+// guard defensively to keep the contract visible at the service
+// boundary. A precondition violation is a caller bug — return an error
+// rather than silently miscounting.
 func (s *IngestService) IngestBatch(ctx context.Context, envs []*events.Envelope) (accepted, duplicate int, err error) {
 	if len(envs) == 0 {
 		return 0, 0, nil
+	}
+
+	for i, env := range envs {
+		if env == nil {
+			return 0, 0, fmt.Errorf("ingest: envelope at index %d is nil", i)
+		}
+		if env.ID != uuid.Nil {
+			return 0, 0, fmt.Errorf(
+				"ingest: envelope at index %d has a pre-assigned ID; IngestBatch "+
+					"requires ID=uuid.Nil so the duplicate sentinel works", i)
+		}
 	}
 
 	tx, err := s.database.Pool.Begin(ctx)

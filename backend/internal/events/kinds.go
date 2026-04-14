@@ -216,11 +216,40 @@ func ValidatePayload(env *Envelope) error {
 	if len(env.Payload) == 0 {
 		return fmt.Errorf("validate %s: empty payload", env.Kind)
 	}
+	// Reject literal `null`: json.Unmarshal of `null` into a struct
+	// pointer succeeds and leaves the struct zero-valued, which would
+	// silently pass a garbage event through to the event table. Rejecting
+	// here matches the ingest boundary's "payload is the kind's typed
+	// struct" contract.
+	if isJSONNull(env.Payload) {
+		return fmt.Errorf("validate %s: payload must be an object, got null", env.Kind)
+	}
 	dst := reflect.New(expected).Interface() // *P
 	if err := json.Unmarshal(env.Payload, dst); err != nil {
 		return fmt.Errorf("validate %s: %w", env.Kind, err)
 	}
 	return nil
+}
+
+// isJSONNull reports whether b is the literal JSON token `null`, ignoring
+// surrounding whitespace. Used to distinguish an absent/null payload from
+// a real object payload at the ingestion boundary.
+func isJSONNull(b []byte) bool {
+	lo, hi := 0, len(b)
+	for lo < hi && isJSONSpace(b[lo]) {
+		lo++
+	}
+	for hi > lo && isJSONSpace(b[hi-1]) {
+		hi--
+	}
+	trimmed := b[lo:hi]
+	return len(trimmed) == 4 &&
+		trimmed[0] == 'n' && trimmed[1] == 'u' &&
+		trimmed[2] == 'l' && trimmed[3] == 'l'
+}
+
+func isJSONSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
 
 // Marshal serializes a typed payload for an Envelope's Payload field and

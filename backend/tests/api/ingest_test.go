@@ -182,7 +182,7 @@ func buildManualEventReq(t *testing.T, source, sourceID string) handlers.IngestE
 		SourceID:   sourceID,
 		Kind:       string(events.KindInteractionManual),
 		Payload:    payload,
-		ObservedAt: observed,
+		ObservedAt: &observed,
 	}
 }
 
@@ -262,34 +262,44 @@ func TestIngest_MalformedJSON(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// TestIngest_MissingFields exercises spec §3.5's "batch continues" rule:
+// a mixed batch where events are missing source / kind / payload /
+// observed_at must return HTTP 200 with those events surfaced in
+// errors[] — NOT 400'd wholesale at gin's bind step.
 func TestIngest_MissingFields(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
 	setup := setupIngestTestRouter(t, true)
 
-	// Build one valid event + one with an empty source (post-bind check) +
-	// one with a zero observed_at (post-bind check). The top-level JSON
-	// body must be valid so gin's bind doesn't reject the whole request;
-	// per-event validation produces IngestError entries.
-	//
-	// Note: `binding:"required"` on source / kind rejects the whole POST
-	// if source or kind is "" at the wire level, so to get individual
-	// rejections we build the raw JSON ourselves where those fields are
-	// missing / zero-time.
 	source := uniqueIngestSource("missing-fields")
 	valid := buildManualEventReq(t, source, uuid.NewString())
 	rawValid := jsonBody(t, valid)
 
-	// Build a raw JSON body where event[0] is valid, event[1] has zero
-	// observed_at (passes binding but IsZero() rejects), event[2] has
-	// missing payload (rejected as MISSING_FIELD). gin's binding:"required"
-	// on Source/Kind would reject the whole batch, so we only test
-	// post-bind checks here.
+	// Construct raw JSON events that each violate a single required field.
+	// index=0: valid.
+	// index=1: observed_at is the zero-time (serializable as a literal RFC3339).
+	// index=2: source is absent.
+	// index=3: kind is absent.
+	// index=4: payload is absent.
+	// index=5: observed_at key absent entirely.
 	zeroTimeEv := fmt.Sprintf(`{"source":%q,"source_id":%q,"kind":%q,"payload":%s,"observed_at":"0001-01-01T00:00:00Z"}`,
 		source, uuid.NewString(), string(events.KindInteractionManual), string(valid.Payload))
+	missingSource := fmt.Sprintf(`{"source_id":%q,"kind":%q,"payload":%s,"observed_at":"2026-04-10T12:00:00Z"}`,
+		uuid.NewString(), string(events.KindInteractionManual), string(valid.Payload))
+	missingKind := fmt.Sprintf(`{"source":%q,"source_id":%q,"payload":%s,"observed_at":"2026-04-10T12:00:00Z"}`,
+		source, uuid.NewString(), string(valid.Payload))
+	missingPayload := fmt.Sprintf(`{"source":%q,"source_id":%q,"kind":%q,"observed_at":"2026-04-10T12:00:00Z"}`,
+		source, uuid.NewString(), string(events.KindInteractionManual))
+	missingObservedAt := fmt.Sprintf(`{"source":%q,"source_id":%q,"kind":%q,"payload":%s}`,
+		source, uuid.NewString(), string(events.KindInteractionManual), string(valid.Payload))
 
-	body := []byte(`{"events":[` + string(rawValid) + `,` + zeroTimeEv + `]}`)
+	body := []byte(`{"events":[` + string(rawValid) + `,` +
+		zeroTimeEv + `,` +
+		missingSource + `,` +
+		missingKind + `,` +
+		missingPayload + `,` +
+		missingObservedAt + `]}`)
 
 	w := postIngest(t, setup.router, setup.apiKey, body)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -297,11 +307,63 @@ func TestIngest_MissingFields(t *testing.T) {
 	var resp handlers.IngestResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.Equal(t, 1, resp.Accepted)
+	require.Equal(t, 5, resp.Rejected)
+	require.Len(t, resp.Errors, 5)
+
+	// Every per-event rejection should be coded MISSING_FIELD.
+	indexes := map[int]string{}
+	for _, e := range resp.Errors {
+		require.Equal(t, "MISSING_FIELD", e.Code)
+		indexes[e.Index] = e.Message
+	}
+	require.Contains(t, indexes, 1)
+	require.Contains(t, indexes[1], "observed_at")
+	require.Contains(t, indexes, 2)
+	require.Contains(t, indexes[2], "source")
+	require.Contains(t, indexes, 3)
+	require.Contains(t, indexes[3], "kind")
+	require.Contains(t, indexes, 4)
+	require.Contains(t, indexes[4], "payload")
+	require.Contains(t, indexes, 5)
+	require.Contains(t, indexes[5], "observed_at")
+
+	// The valid event at index 0 persisted.
+	count, err := setup.eventRepo.CountBySource(setup.ctx, source)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+}
+
+// TestIngest_NullPayload covers the `payload: null` case: stdlib json
+// would silently decode null into a zero-value struct, so the ingest
+// boundary must reject it as PAYLOAD_INVALID rather than persist a row
+// with all-zero payload fields.
+func TestIngest_NullPayload(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	setup := setupIngestTestRouter(t, true)
+	source := uniqueIngestSource("null-payload")
+	nullEv := fmt.Sprintf(`{"source":%q,"source_id":%q,"kind":%q,"payload":null,"observed_at":"2026-04-10T12:00:00Z"}`,
+		source, uuid.NewString(), string(events.KindInteractionManual))
+	body := []byte(`{"events":[` + nullEv + `]}`)
+
+	w := postIngest(t, setup.router, setup.apiKey, body)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var resp handlers.IngestResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Accepted)
 	require.Equal(t, 1, resp.Rejected)
+	// Null payload is caught by the per-event validator — either via
+	// the "payload is required" path (RawMessage is nil on `null`) or
+	// via ValidatePayload's null-rejection.
 	require.Len(t, resp.Errors, 1)
-	require.Equal(t, 1, resp.Errors[0].Index)
-	require.Equal(t, "MISSING_FIELD", resp.Errors[0].Code)
-	require.Contains(t, resp.Errors[0].Message, "observed_at")
+	require.Contains(t, []string{"MISSING_FIELD", "PAYLOAD_INVALID"}, resp.Errors[0].Code)
+
+	// Confirm nothing was persisted.
+	count, err := setup.eventRepo.CountBySource(setup.ctx, source)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), count)
 }
 
 func TestIngest_UnknownKind(t *testing.T) {
@@ -341,12 +403,13 @@ func TestIngest_PayloadStructurallyInvalid(t *testing.T) {
 	// with contact_id="not-a-uuid" — JSON decoder rejects with
 	// UnmarshalTypeError, which ValidatePayload wraps.
 	badPayload := json.RawMessage(`{"version":1,"contact_id":"not-a-uuid","event_id":"e","occurred_at":"2026-04-10T12:00:00Z"}`)
+	observed := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 	bad := handlers.IngestEventRequest{
 		Source:     source,
 		SourceID:   uuid.NewString(),
 		Kind:       string(events.KindCalendarAttended),
 		Payload:    badPayload,
-		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		ObservedAt: &observed,
 	}
 	batch := handlers.IngestBatchRequest{Events: []handlers.IngestEventRequest{bad}}
 	w := postIngest(t, setup.router, setup.apiKey, jsonBody(t, batch))

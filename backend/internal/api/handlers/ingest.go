@@ -55,19 +55,34 @@ func NewIngestHandler(s *service.IngestService) *IngestHandler {
 }
 
 // IngestEventRequest matches the per-event wire shape in spec §3.5.
+//
+// Fields are deliberately NOT tagged with `binding:"required"`: a single
+// bad event (missing source, unknown kind, empty payload, missing
+// observed_at) must NOT cause gin's bind step to fail the whole batch
+// with 400. Per-event validation runs in validateIngestEvent after bind
+// and surfaces each bad event in the response's errors[] — spec §3.5
+// "the batch continues" contract.
+//
+// ObservedAt is *time.Time so (a) an absent key is distinguishable from
+// a zero timestamp; (b) a syntactically invalid RFC3339 string still
+// fails the whole batch at bind (that's a wire-protocol error, not a
+// per-event logical error).
 type IngestEventRequest struct {
-	Source     string          `json:"source"      binding:"required"`
+	Source     string          `json:"source"`
 	SourceID   string          `json:"source_id,omitempty"`
-	Kind       string          `json:"kind"        binding:"required"`
-	Payload    json.RawMessage `json:"payload"     binding:"required"`
-	ObservedAt time.Time       `json:"observed_at" binding:"required"`
+	Kind       string          `json:"kind"`
+	Payload    json.RawMessage `json:"payload"`
+	ObservedAt *time.Time      `json:"observed_at"`
 }
 
-// IngestBatchRequest is the top-level POST body. events must be a non-empty
-// array; an empty array is rejected with 400 (spec deliberately unspecified;
-// plan Decision 9 chose 400 for client-bug visibility).
+// IngestBatchRequest is the top-level POST body.
+//
+// The Events slice is NOT `binding:"required"` — gin treats an explicit
+// empty array as satisfying that tag, so we'd check length explicitly
+// anyway. A missing `events` key decodes to a nil slice, which falls
+// into the same empty-batch path.
 type IngestBatchRequest struct {
-	Events []IngestEventRequest `json:"events" binding:"required"`
+	Events []IngestEventRequest `json:"events"`
 }
 
 // IngestError is a per-event validation failure reported in the response.
@@ -146,7 +161,7 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 			SourceID:   ev.SourceID,
 			Kind:       events.Kind(ev.Kind),
 			Payload:    ev.Payload,
-			ObservedAt: ev.ObservedAt,
+			ObservedAt: *ev.ObservedAt, // validator guarantees non-nil + non-zero
 		})
 	}
 
@@ -200,11 +215,11 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 // validateIngestEvent runs the per-event validation chain. Returns nil
 // when the event passes; otherwise returns a populated *IngestError. The
 // caller appends rejected events to the response's errors[] array.
+//
+// This function owns ALL per-event rejections — no binding:"required" tag
+// fires at gin-bind time, because that would 400 the whole batch and
+// violate spec §3.5's "batch continues" contract.
 func validateIngestEvent(index int, ev IngestEventRequest) *IngestError {
-	// Required-field bounds. binding:"required" catches missing keys and
-	// empty strings for source/kind, but ObservedAt's zero-time passes
-	// the tag since Go's zero-value time.Time isn't "empty" to gin's
-	// validator — we check IsZero() below.
 	if ev.Source == "" {
 		return &IngestError{Index: index, Code: ingestCodeMissingField, Message: "source is required"}
 	}
@@ -219,7 +234,10 @@ func validateIngestEvent(index int, ev IngestEventRequest) *IngestError {
 	if ev.Kind == "" {
 		return &IngestError{Index: index, Code: ingestCodeMissingField, Message: "kind is required"}
 	}
-	if ev.ObservedAt.IsZero() {
+	// *time.Time lets us distinguish "observed_at absent" (nil pointer)
+	// from "observed_at: 0001-01-01..." (IsZero). Both are rejected with
+	// MISSING_FIELD.
+	if ev.ObservedAt == nil || ev.ObservedAt.IsZero() {
 		return &IngestError{Index: index, Code: ingestCodeMissingField, Message: "observed_at is required"}
 	}
 	if len(ev.Payload) == 0 {
@@ -238,7 +256,9 @@ func validateIngestEvent(index int, ev IngestEventRequest) *IngestError {
 
 	// Structural payload check via reflection-backed helper. See
 	// events.ValidatePayload for the exact contract (lenient unknown
-	// fields; absent fields decode to zero values).
+	// fields; absent fields decode to zero values). ValidatePayload also
+	// rejects a literal JSON `null` payload — we don't want to persist a
+	// row whose payload decodes to an all-zero canonical struct.
 	tmp := &events.Envelope{Kind: kind, Payload: ev.Payload}
 	if err := events.ValidatePayload(tmp); err != nil {
 		return &IngestError{

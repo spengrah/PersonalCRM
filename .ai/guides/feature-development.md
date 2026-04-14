@@ -334,6 +334,7 @@ v1 := router.Group("/api/v1")
 | **System** | `/system/time` | GET | SystemHandler | Current time |
 | | `/export` | POST | SystemHandler | Export data |
 | | `/import` | POST | SystemHandler | Import data |
+| **Ingest** | `/ingest/events` | POST | IngestHandler | Batched event ingestion (gated by `EVENT_BUS_INGEST_ENABLED`) |
 
 Routes defined in `backend/cmd/crm-api/main.go`.
 

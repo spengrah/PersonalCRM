@@ -416,3 +416,23 @@ func TestValidatePayload_NonObjectPayload(t *testing.T) {
 	err := ValidatePayload(env)
 	require.Error(t, err)
 }
+
+// TestValidatePayload_NullPayload rejects a literal JSON `null`. stdlib
+// json.Unmarshal happily decodes `null` into a struct pointer (leaving
+// the struct zero-valued), which would silently admit garbage events
+// into the event log. The ingest boundary is the right place to reject.
+func TestValidatePayload_NullPayload(t *testing.T) {
+	env := &Envelope{Kind: KindInteractionManual, Payload: json.RawMessage(`null`)}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "got null")
+}
+
+// TestValidatePayload_NullPayloadWithWhitespace documents that whitespace
+// around the literal `null` still triggers the rejection.
+func TestValidatePayload_NullPayloadWithWhitespace(t *testing.T) {
+	env := &Envelope{Kind: KindInteractionManual, Payload: json.RawMessage("  null\n")}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "got null")
+}
