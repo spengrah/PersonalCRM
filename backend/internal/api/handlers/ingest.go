@@ -2,9 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"personal-crm/backend/internal/api"
@@ -116,14 +116,15 @@ type IngestResponse struct {
 //     single atomic batch. Return spec-shaped success response. If the
 //     service errors (unexpected DB failure), return 500.
 func (h *IngestHandler) IngestEvents(c *gin.Context) {
-	// Body size cap. MaxBytesReader returns an error from the JSON decoder
-	// when the body exceeds the limit; we detect that via string match
-	// since gin/pgx don't expose a typed error for it.
+	// Body size cap. MaxBytesReader returns *http.MaxBytesError (Go 1.21+)
+	// which propagates through json.Decoder without re-wrapping; detect it
+	// with errors.As rather than string-matching the message.
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxIngestBodyBytes)
 
 	var req IngestBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		if strings.Contains(err.Error(), "http: request body too large") {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
 			api.SendError(c, http.StatusRequestEntityTooLarge, api.ErrCodeValidation,
 				"Request body too large",
 				fmt.Sprintf("body exceeds %d bytes", maxIngestBodyBytes))
