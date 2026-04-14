@@ -57,6 +57,15 @@ import (
 )
 
 func main() {
+	// Run the server body in a helper so its defers (database.Close,
+	// telegramManager.Stop, cronScheduler.Stop, shutdown-ctx cancel) all
+	// execute on a normal return — os.Exit would bypass them. The only
+	// non-zero exit path is a failed graceful HTTP shutdown, signalled
+	// via the return value.
+	os.Exit(run())
+}
+
+func run() int {
 	// Load and validate configuration first (before logger)
 	cfg, err := config.Load()
 	if err != nil {
@@ -657,8 +666,10 @@ func main() {
 	fmt.Printf("PORT=%d\n", selectedPort) //nolint:forbidigo // Intentional stdout output for supervisor
 
 	if shutdownErr != nil {
-		// Surface the shutdown failure to supervisors after both the River
-		// drain and the port print have run.
-		os.Exit(1)
+		// Surface the shutdown failure to supervisors via exit code
+		// once run() returns and its defers fire (database.Close,
+		// telegramManager.Stop, cronScheduler.Stop, cancel).
+		return 1
 	}
+	return 0
 }

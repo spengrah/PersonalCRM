@@ -194,7 +194,7 @@ The backend uses Pi-optimized connection pool defaults that work well for single
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `DB_MAX_CONNS` | 15 | Maximum pool size (must exceed `RIVER_WORKER_CONCURRENCY`) |
+| `DB_MAX_CONNS` | 15 | Maximum pool size (must be >= `RIVER_WORKER_CONCURRENCY` + 3) |
 | `DB_MIN_CONNS` | 2 | Minimum idle connections (keeps connections warm) |
 | `DB_MAX_CONN_IDLE_TIME` | 5m | Idle connection timeout |
 | `DB_MAX_CONN_LIFETIME` | 30m | Maximum connection age |
@@ -217,7 +217,7 @@ The backend uses [River](https://riverqueue.com) for background jobs. See issue 
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `RIVER_WORKER_CONCURRENCY` | 10 | Maximum concurrent job workers; must be less than `DB_MAX_CONNS` |
+| `RIVER_WORKER_CONCURRENCY` | 10 | Maximum concurrent job workers; `DB_MAX_CONNS` must be at least this + 3 |
 
 ## Troubleshooting
 
