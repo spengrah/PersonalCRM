@@ -188,14 +188,24 @@ type Querier interface {
 	FindRecentTelegramInteraction(ctx context.Context, arg FindRecentTelegramInteractionParams) (*Interaction, error)
 	// Post-bake divergence query for manual (no-source_ref) kind. Joins on
 	// (source, contact_id, ts-second). Same semantics as the ref-bearing
-	// variant.
+	// variant: consumer side includes replay=true (consumer "observed" the
+	// direct-path row via FindInWindow dedup).
 	FindShadowDivergencesManual(ctx context.Context, arg FindShadowDivergencesManualParams) ([]*FindShadowDivergencesManualRow, error)
 	// Post-bake divergence query for ref-bearing kinds. FULL OUTER JOIN of
-	// direct-fresh-write rows vs consumer-fresh-write rows on
-	// (source, source_ref, contact_id). A non-empty result means one or more
-	// interactions disagreed between the two paths (direction mismatch,
-	// occurred_at mismatch, or one-side-only). Parameters bound the observation
-	// time range so the bake-window evidence is reproducible.
+	// direct fresh-writes vs ALL consumer observations (including replay=true,
+	// which is the expected shadow-mode state: direct wrote first, consumer
+	// saw the existing row and early-returned). A non-empty result means one
+	// or more interactions disagreed between the two paths (direction
+	// mismatch, occurred_at mismatch, or one-side-only). Parameters bound the
+	// observation time range so the bake-window evidence is reproducible.
+	//
+	// Direct side: only replay=false (fresh writes). Direct-path dedupe hits
+	// (replay=true) are excluded because they're re-observations of rows the
+	// consumer already accounted for at their fresh-write time.
+	//
+	// Consumer side: BOTH replay=true and replay=false are included — the
+	// consumer "observed" the event either way; replay=true just means it
+	// found the direct-path row in the dedupe check.
 	FindShadowDivergencesRefBearing(ctx context.Context, arg FindShadowDivergencesRefBearingParams) ([]*FindShadowDivergencesRefBearingRow, error)
 	FindSimilarContacts(ctx context.Context, arg FindSimilarContactsParams) ([]*FindSimilarContactsRow, error)
 	// Finds similar contacts for multiple candidate names in a single batch query.

@@ -125,7 +125,6 @@ consumer_writes AS (
            date_trunc('second', occurred_at)::timestamptz AS ts
     FROM event_shadow_observation
     WHERE writer = 'consumer'
-      AND replay = false
       AND source_ref IS NULL
       AND observed_at >= $1::timestamptz
       AND observed_at < $2::timestamptz
@@ -159,7 +158,8 @@ type FindShadowDivergencesManualRow struct {
 
 // Post-bake divergence query for manual (no-source_ref) kind. Joins on
 // (source, contact_id, ts-second). Same semantics as the ref-bearing
-// variant.
+// variant: consumer side includes replay=true (consumer "observed" the
+// direct-path row via FindInWindow dedup).
 func (q *Queries) FindShadowDivergencesManual(ctx context.Context, arg FindShadowDivergencesManualParams) ([]*FindShadowDivergencesManualRow, error) {
 	rows, err := q.db.Query(ctx, FindShadowDivergencesManual, arg.ObservedAtFrom, arg.ObservedAtTo)
 	if err != nil {
@@ -204,7 +204,6 @@ consumer_writes AS (
            date_trunc('second', occurred_at)::timestamptz AS ts
     FROM event_shadow_observation
     WHERE writer = 'consumer'
-      AND replay = false
       AND source_ref IS NOT NULL
       AND observed_at >= $1::timestamptz
       AND observed_at < $2::timestamptz
@@ -240,11 +239,20 @@ type FindShadowDivergencesRefBearingRow struct {
 }
 
 // Post-bake divergence query for ref-bearing kinds. FULL OUTER JOIN of
-// direct-fresh-write rows vs consumer-fresh-write rows on
-// (source, source_ref, contact_id). A non-empty result means one or more
-// interactions disagreed between the two paths (direction mismatch,
-// occurred_at mismatch, or one-side-only). Parameters bound the observation
-// time range so the bake-window evidence is reproducible.
+// direct fresh-writes vs ALL consumer observations (including replay=true,
+// which is the expected shadow-mode state: direct wrote first, consumer
+// saw the existing row and early-returned). A non-empty result means one
+// or more interactions disagreed between the two paths (direction
+// mismatch, occurred_at mismatch, or one-side-only). Parameters bound the
+// observation time range so the bake-window evidence is reproducible.
+//
+// Direct side: only replay=false (fresh writes). Direct-path dedupe hits
+// (replay=true) are excluded because they're re-observations of rows the
+// consumer already accounted for at their fresh-write time.
+//
+// Consumer side: BOTH replay=true and replay=false are included — the
+// consumer "observed" the event either way; replay=true just means it
+// found the direct-path row in the dedupe check.
 func (q *Queries) FindShadowDivergencesRefBearing(ctx context.Context, arg FindShadowDivergencesRefBearingParams) ([]*FindShadowDivergencesRefBearingRow, error) {
 	rows, err := q.db.Query(ctx, FindShadowDivergencesRefBearing, arg.ObservedAtFrom, arg.ObservedAtTo)
 	if err != nil {
