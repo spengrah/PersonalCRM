@@ -662,26 +662,30 @@ func run() int {
 	<-quit
 	logger.Info().Msg("shutting down server")
 
-	// Give outstanding requests a configured timeout to complete
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
-	defer cancel()
-
+	// Give outstanding HTTP requests a configured timeout to complete.
 	// Use logger.Error (not Fatal) for HTTP shutdown failure so that the
 	// River drain below still runs. logger.Fatal calls os.Exit and would
 	// skip Stop, leaving jobs holding leases until re-lease on next boot.
 	// We remember the error and exit non-zero at the end so supervisors
 	// (systemd, etc.) still see the failure.
+	httpCtx, httpCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+	defer httpCancel()
 	var shutdownErr error
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(httpCtx); err != nil {
 		logger.Error().Err(err).Msg("server forced to shutdown")
 		shutdownErr = err
 	}
 
-	// Drain in-flight River jobs using the same shutdown timeout. If the ctx
-	// expires, River returns and any unfinished jobs will be re-leased on
-	// next boot — operationally equivalent to a crash, which River already
-	// handles via its built-in retry/lease semantics.
-	if err := riverClient.Stop(ctx); err != nil {
+	// Drain in-flight River jobs with a FRESH budget so a slow HTTP drain
+	// doesn't steal River's deadline. Sharing one ctx between srv.Shutdown
+	// and riverClient.Stop means that if a long-polling HTTP request burns
+	// the full ShutdownTimeout, River gets an already-expired ctx and cannot
+	// drain — jobs stay leased until next boot. A separate ctx preserves the
+	// drain window. If River's own ctx does expire, its crash-resume
+	// semantics handle the re-lease on next boot.
+	riverCtx, riverCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+	defer riverCancel()
+	if err := riverClient.Stop(riverCtx); err != nil {
 		logger.Warn().Err(err).Msg("river client stop returned error")
 	}
 
