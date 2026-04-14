@@ -2,6 +2,7 @@ package unit
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -156,6 +158,121 @@ func TestSyncService_TriggerSync_FallsBackWhenEnqueuerNil(t *testing.T) {
 
 	// Fallback path: provider.Sync WAS called inline.
 	assert.Equal(t, 1, provider.count, "provider.Sync should be called inline when enqueuer is nil")
+}
+
+// TestSyncService_TriggerSync_DedupedIsNoError verifies that when the
+// atomic-claim helper reports a duplicate (another job is already
+// in-flight for this source), TriggerSync returns nil — the call is an
+// idempotent no-op. Pre-PR-3 the equivalent state would have been the
+// "sync already in progress" hard-block returning an error.
+func TestSyncService_TriggerSync_DedupedIsNoError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping db-backed service test in short mode")
+	}
+	database, ctx := newServiceSuiteDB(t)
+
+	source := "service_test_deduped_isnoerr"
+	_, _ = database.Pool.Exec(ctx, `DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
+	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source = $1`, source)
+	t.Cleanup(func() {
+		_, _ = database.Pool.Exec(context.Background(),
+			`DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+	})
+
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+	contactRepo := repository.NewContactRepository(database.Queries)
+	registry := syncpkg.NewProviderRegistry()
+	provider := &countingProvider{cfg: syncpkg.SourceConfig{
+		Name:            source,
+		DisplayName:     source,
+		Strategy:        repository.SyncStrategyFetchAll,
+		DefaultInterval: 15 * time.Minute,
+	}}
+	registry.Register(provider)
+	svc := service.NewSyncService(syncRepo, contactRepo, registry)
+
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &syncWorkerNoop{})
+	client := mustTestClient(t, database, workers)
+	svc.SetRiverEnqueuer(client)
+
+	// Seed an in-flight row directly so the atomic-claim helper sees
+	// count>0 and returns (enqueued=false, nil).
+	_, err := database.Pool.Exec(ctx,
+		`INSERT INTO river_job
+		  (args, kind, max_attempts, priority, queue, state,
+		   attempt, created_at, scheduled_at)
+		 VALUES ($1, 'sync_provider_account', 3, 1, 'default', 'running',
+		         1, now(), now())`, []byte(`{"source":"`+source+`"}`))
+	require.NoError(t, err)
+
+	// TriggerSync should observe the dedup and return nil — NOT an error.
+	require.NoError(t, svc.TriggerSync(ctx, source, nil))
+
+	// Provider was not called inline (enqueue path), and we didn't add
+	// a second row.
+	assert.Equal(t, 0, provider.count, "provider.Sync should not run on dedup")
+	var cnt int
+	require.NoError(t, database.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source,
+	).Scan(&cnt))
+	assert.Equal(t, 1, cnt, "dedup must not create a second row")
+}
+
+// TestSyncService_TriggerSync_EnqueueErrorWrapped verifies that an
+// infrastructure error from the enqueue path is returned wrapped with a
+// "enqueue sync job" prefix rather than silently swallowed.
+func TestSyncService_TriggerSync_EnqueueErrorWrapped(t *testing.T) {
+	// Pure unit test — no DB needed. Use a fake JobEnqueuer that returns
+	// an error from InsertTx. The repo method still opens a tx against
+	// a nil pool, so we need a real pool-backed repo, but we can build
+	// an in-memory one via the error-returning enqueuer path below.
+	// Simplest path: use a fake repo that has SyncRepository pointing at
+	// a minimal pool but the enqueuer errors — this is integration-
+	// adjacent, so gate on DB.
+	if testing.Short() {
+		t.Skip("skipping db-backed service test in short mode")
+	}
+	database, ctx := newServiceSuiteDB(t)
+
+	source := "service_test_enqueue_errwrapped"
+	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source = $1`, source)
+	t.Cleanup(func() {
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+	})
+
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+	contactRepo := repository.NewContactRepository(database.Queries)
+	registry := syncpkg.NewProviderRegistry()
+	registry.Register(&countingProvider{cfg: syncpkg.SourceConfig{
+		Name:            source,
+		DisplayName:     source,
+		Strategy:        repository.SyncStrategyFetchAll,
+		DefaultInterval: 15 * time.Minute,
+	}})
+
+	svc := service.NewSyncService(syncRepo, contactRepo, registry)
+
+	// Fake enqueuer whose InsertTx always fails.
+	fakeErr := errors.New("simulated enqueue failure")
+	svc.SetRiverEnqueuer(&failingEnqueuer{err: fakeErr})
+
+	err := svc.TriggerSync(ctx, source, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "enqueue sync job",
+		"enqueue error must be wrapped with a 'enqueue sync job' prefix")
+}
+
+// failingEnqueuer is a repository.JobEnqueuer that always returns the
+// configured error from InsertTx. Used to exercise the error-wrapping
+// branch of TriggerSync.
+type failingEnqueuer struct {
+	err error
+}
+
+func (f *failingEnqueuer) InsertTx(_ context.Context, _ pgx.Tx, _ river.JobArgs, _ *river.InsertOpts) (*rivertype.JobInsertResult, error) {
+	return nil, f.err
 }
 
 // TestSyncService_TriggerSync_NoLongerReadsSyncingStatus verifies that

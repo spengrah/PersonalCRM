@@ -382,12 +382,27 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	})
 
 	// Simulate the "crashed mid-sync" pre-state directly:
-	//   1. Insert a river_job row in state='running' whose attempted_at is
-	//      older than RescueStuckJobsAfter — the rescuer will pick it up.
-	//   2. Insert a matching external_sync_log row with status='running' —
-	//      this is the orphan that the retry attempt must mark 'abandoned'.
+	//   1. Insert an orphan external_sync_log row with status='running' —
+	//      this is the row the retry attempt must mark 'abandoned'.
+	//   2. Insert a river_job row DIRECTLY in state='running' with an
+	//      old attempted_at, BEFORE starting the river client. This is
+	//      what the rescuer will observe on its startup tick and move
+	//      to 'retryable'. Inserting via client.Insert first and then
+	//      rewriting state would race: the worker can fetch the
+	//      'available' row and run the happy path before we back-date.
 	orphanLog, err := syncRepo.CreateSyncLog(ctx, state)
 	require.NoError(t, err)
+
+	argsJSON := []byte(`{"source":"` + source + `"}`)
+	var insertedJobID int64
+	require.NoError(t, database.Pool.QueryRow(ctx,
+		`INSERT INTO river_job
+		  (args, kind, max_attempts, priority, queue, state,
+		   attempt, attempted_at, created_at, scheduled_at)
+		 VALUES ($1, 'sync_provider_account', 3, 1, 'default', 'running',
+		         1, now() - interval '60 seconds', now() - interval '60 seconds',
+		         now() - interval '60 seconds')
+		 RETURNING id`, argsJSON).Scan(&insertedJobID))
 
 	// Start the real river client (maintenance loops enabled). The sync
 	// provider worker will process the rescued job on its retry.
@@ -412,20 +427,6 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})
-
-	// Insert a river_job row via the normal API, then manually back-date
-	// attempted_at to simulate a crashed prior attempt.
-	_, err = client.Insert(ctx, scheduler.SyncProviderAccountArgs{Source: source}, nil)
-	require.NoError(t, err)
-
-	// Directly mark the inserted row as stuck-running.
-	_, err = database.Pool.Exec(ctx,
-		`UPDATE river_job
-		   SET state = 'running',
-		       attempted_at = now() - interval '60 seconds',
-		       attempt = 1
-		 WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
-	require.NoError(t, err)
 
 	// Wait for the JobRescuer to notice (default interval 30s + 2s
 	// rescue-after = ~35s upper bound; budget 75s for CI noise).
@@ -464,4 +465,15 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, repository.SyncStatusSyncing, updatedState.Status,
 		"status='syncing' must not linger after rescue")
+
+	// Assertion 4: the same river_job row we seeded ended up completed.
+	// This is what proves the rescuer (not a fresh Insert) drove the
+	// retry — if the row had been stuck forever, its final state would
+	// still be 'running'.
+	var finalJobState string
+	require.NoError(t, database.Pool.QueryRow(ctx,
+		`SELECT state FROM river_job WHERE id = $1`, insertedJobID,
+	).Scan(&finalJobState))
+	assert.Equal(t, "completed", finalJobState,
+		"the seeded stuck job should have been rescued and completed")
 }

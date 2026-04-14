@@ -131,6 +131,15 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 		TestOnly: true,
 	})
 	require.NoError(t, err)
+	// Even TestOnly clients release internal goroutines on Stop; call it
+	// here so this test's client doesn't linger into subsequent tests
+	// (TestPeriodicTick_FiresOnStart below opens its own non-TestOnly
+	// client and is sensitive to any residual notifier reconnect loops).
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		_ = client.Stop(stopCtx)
+	})
 
 	svc.SetRiverEnqueuer(client)
 
@@ -228,7 +237,7 @@ func TestPeriodicTick_FiresOnStart(t *testing.T) {
 	require.NoError(t, err)
 	svc.SetRiverEnqueuer(client)
 
-	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
+	startCtx, startCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer startCancel()
 	require.NoError(t, client.Start(startCtx))
 	t.Cleanup(func() {
@@ -238,14 +247,18 @@ func TestPeriodicTick_FiresOnStart(t *testing.T) {
 	})
 
 	// RunOnStart should fire within a few seconds after Start returns.
-	waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
+	// Budget is generous (30s) because when this test runs alongside many
+	// other river-client tests in the same binary, the shared pgxpool may
+	// need time to recycle connections used by prior clients' notifier
+	// reconnect loops (logged but harmless).
+	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer waitCancel()
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for tickCalls.Load() < 1 {
 		select {
 		case <-waitCtx.Done():
-			t.Fatalf("expected tick worker to fire on start within 10s; got %d invocations", tickCalls.Load())
+			t.Fatalf("expected tick worker to fire on start within 30s; got %d invocations", tickCalls.Load())
 		case <-tick.C:
 		}
 	}
