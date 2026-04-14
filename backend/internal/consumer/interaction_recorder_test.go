@@ -573,6 +573,86 @@ func TestHandleEvent_UnresolvedContactID_Errors(t *testing.T) {
 	require.Zero(t, b.publishCalls)
 }
 
+// TestHandleEvent_RefBearingKind_EmptySourceRef_Errors verifies that
+// ref-bearing kinds fail fast when their source_ref field is empty. The
+// consumer previously silently fell through to manual dedup (FindInWindow)
+// when the SourceRef was empty — a malformed calendar.attended could attach
+// to the wrong existing interaction. Codex round 2 finding #2.
+func TestHandleEvent_RefBearingKind_EmptySourceRef_Errors(t *testing.T) {
+	cid := uuid.New()
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		env     func() *events.Envelope
+		wantSub string
+	}{
+		{
+			name: "calendar.attended_empty_event_id",
+			env: func() *events.Envelope {
+				return mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
+					Version: 1, ContactID: cid, EventID: "",
+					OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+				})
+			},
+			wantSub: "empty event_id",
+		},
+		{
+			name: "task.completed_empty_task_id",
+			env: func() *events.Envelope {
+				return mustEnv(t, events.KindTaskCompleted, events.TaskCompletedPayload{
+					Version: 1, ContactID: cid, TaskID: "", TaskKind: "cadence",
+					CompletedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+				})
+			},
+			wantSub: "empty task_id",
+		},
+		{
+			name: "task.outreach_detected_empty_task_id",
+			env: func() *events.Envelope {
+				return mustEnv(t, events.KindTaskOutreachDetected, events.TaskOutreachDetectedPayload{
+					Version: 1, ContactID: cid, TaskID: "",
+					DetectedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+				})
+			},
+			wantSub: "empty task_id",
+		},
+		{
+			name: "message.received_empty_external_message_id",
+			env: func() *events.Envelope {
+				return mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
+					Version: 1, ContactID: &cid, PeerRef: "tg:1:2",
+					MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+					ExternalMessageID: "",
+				})
+			},
+			wantSub: "empty external_message_id",
+		},
+		{
+			name: "message.sent_empty_external_message_id",
+			env: func() *events.Envelope {
+				return mustEnv(t, events.KindMessageSent, events.MessageSentPayload{
+					Version: 1, ContactID: &cid, PeerRef: "tg:1:2",
+					MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+					ExternalMessageID: "",
+				})
+			},
+			wantSub: "empty external_message_id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec, _, ir, b, _ := newRecorderWithStubs(InteractionModeShadow)
+			err := rec.HandleEvent(ctx, nonNilTx(), tt.env())
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantSub)
+			require.Zero(t, ir.createCalls)
+			require.Zero(t, b.publishCalls)
+		})
+	}
+}
+
 func TestHandleEvent_PayloadUnmarshalFailure_Errors(t *testing.T) {
 	rec, _, _, _, _ := newRecorderWithStubs(InteractionModeShadow)
 	env := &events.Envelope{
@@ -584,6 +664,45 @@ func TestHandleEvent_PayloadUnmarshalFailure_Errors(t *testing.T) {
 	}
 	err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
+}
+
+// TestHandleEvent_Replay_InvokesInlineDivergenceLookup verifies the fix for
+// Codex round 2 finding #3. In shadow mode the replay path is the expected
+// normal case (direct always commits first), so the inline divergence
+// lookup must fire on the replay branch — not just on the fresh-write
+// branch.
+func TestHandleEvent_Replay_InvokesInlineDivergenceLookup(t *testing.T) {
+	cid := uuid.New()
+	existing := &repository.Interaction{
+		ID:        uuid.New(),
+		ContactID: cid,
+		Source:    repository.InteractionSourceGCal,
+		Direction: repository.InteractionDirectionMutual,
+	}
+
+	rec, _, ir, _, sr := newRecorderWithStubs(InteractionModeShadow)
+	ir.existingByRef = existing
+	// Peer row present → divergence compare runs; matching direction +
+	// occurred_at → no divergence log (but the FindMatchingDirectWrite
+	// call itself is the observable side-effect we care about).
+	sr.peerForMatch = &repository.ShadowObservation{
+		Writer:     repository.ShadowWriterDirect,
+		Kind:       repository.ShadowKindDirectRecord,
+		Source:     repository.InteractionSourceGCal,
+		ContactID:  cid,
+		Direction:  repository.InteractionDirectionMutual,
+		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	}
+
+	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
+		Version:    1,
+		ContactID:  cid,
+		EventID:    "gcal-evt-replay-div",
+		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	})
+
+	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
+	require.Len(t, sr.replays, 1, "replay path writes one consumer replay observation")
 }
 
 // -----------------------------------------------------------------------------

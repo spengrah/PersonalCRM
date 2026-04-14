@@ -167,19 +167,30 @@ func run() int {
 	// Initialize services
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
 
+	// Compute effective InteractionMode. PR 5 implements only shadow;
+	// cutover is forward-compat config and falls back to shadow in this
+	// release so an early-set cutover still produces useful bake evidence
+	// (plan Decision 12). Warn loudly so a misconfigured bake is visible.
+	effectiveMode := cfg.EventBus.InteractionMode
+	if effectiveMode == consumer.InteractionModeCutover {
+		logger.Warn().
+			Msg("EVENT_BUS_INTERACTION_MODE=cutover requested but PR 5 only implements shadow; treating as shadow")
+		effectiveMode = consumer.InteractionModeShadow
+	}
+
 	// PR 5 InteractionRecorder consumer + shadow helper (spec §3.4.1, plan
 	// Decisions 7/11). The consumer receives events from the 5 async-
 	// publisher kinds via the river worker and inline-invokes from the
 	// manual UI flow through ManualInteractionShadow.
 	interactionRecorder := consumer.NewInteractionRecorder(
-		cfg.EventBus.InteractionMode,
+		effectiveMode,
 		contactRepo,
 		interactionRepo,
 		eventBus,
 		shadowObsRepo,
 	)
 	manualShadow := service.NewManualInteractionShadow(
-		cfg.EventBus.InteractionMode,
+		effectiveMode,
 		database.Pool,
 		eventBus,
 		interactionRecorder,
@@ -195,11 +206,11 @@ func run() int {
 	// Nil when InteractionMode=off so publishers silently skip their
 	// shadow emits — zero observable behavior change vs. today's code.
 	var pubBus *events.Bus
-	if cfg.EventBus.InteractionMode != consumer.InteractionModeOff {
+	if effectiveMode != consumer.InteractionModeOff {
 		pubBus = eventBus
 		contactService.SetShadowObserver(shadowObsRepo)
 		logger.Info().
-			Str("mode", cfg.EventBus.InteractionMode).
+			Str("mode", effectiveMode).
 			Msg("event-bus shadow mode enabled")
 	}
 

@@ -214,19 +214,17 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 
 	// Shadow-mode publish + inline consumer (plan Decision 7). Runs AFTER
 	// the direct path committed so any failure here does not affect the
-	// persisted interaction row. Pass the effective direction the service
-	// used (defaults to "mutual" when empty to match RecordInteraction's
-	// own default at contact.go:363).
+	// persisted interaction row. Use the VALUES FROM THE RETURNED ROW
+	// (not the request params) so dedup-hits from RecordInteraction — which
+	// may return an older row with a different Direction / OccurredAt —
+	// don't manufacture false direct-vs-consumer mismatches in the
+	// divergence query.
 	if h.shadow != nil {
-		effectiveDirection := direction
-		if effectiveDirection == "" {
-			effectiveDirection = repository.InteractionDirectionMutual
-		}
 		desc := ""
-		if req.Description != nil {
-			desc = *req.Description
+		if interaction.Description != nil {
+			desc = *interaction.Description
 		}
-		h.shadow.Run(c.Request.Context(), contactID, effectiveDirection, occurredAt, desc)
+		h.shadow.Run(c.Request.Context(), interaction.ContactID, interaction.Direction, interaction.OccurredAt, desc)
 	}
 
 	api.SendSuccess(c, http.StatusCreated, interactionToResponse(interaction), nil)

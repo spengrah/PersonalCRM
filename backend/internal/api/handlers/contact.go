@@ -626,7 +626,7 @@ func (h *ContactHandler) UpdateContactLastContacted(c *gin.Context) {
 		lastContacted = req.LastContacted.Time
 	}
 
-	updatedContact, err := h.contactService.UpdateContactLastContacted(c.Request.Context(), id, lastContacted)
+	updatedContact, interaction, err := h.contactService.UpdateContactLastContacted(c.Request.Context(), id, lastContacted)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			api.SendNotFound(c, "Contact")
@@ -637,17 +637,16 @@ func (h *ContactHandler) UpdateContactLastContacted(c *gin.Context) {
 	}
 
 	// Shadow-mode publish + inline consumer for the PATCH path (plan
-	// Decision 7.1). UpdateContactLastContacted internally calls
-	// RecordInteraction with direction="" which defaults to "mutual", and
-	// OccurredAt = lastContacted if provided, else accelerated.GetCurrentTime().
-	// We mirror those defaults here so the consumer-path row FindInWindow
-	// matches the direct-path row's occurred_at.
-	if h.shadow != nil {
-		shadowOccurredAt := accelerated.GetCurrentTime()
-		if lastContacted != nil {
-			shadowOccurredAt = *lastContacted
+	// Decision 7.1). Use the RETURNED interaction's Direction / OccurredAt
+	// so the shadow envelope matches what the direct path committed —
+	// critical for dedup-hits where the service returned an older row with
+	// different values than the caller's request would have implied.
+	if h.shadow != nil && interaction != nil {
+		desc := ""
+		if interaction.Description != nil {
+			desc = *interaction.Description
 		}
-		h.shadow.Run(c.Request.Context(), id, repository.InteractionDirectionMutual, shadowOccurredAt, "")
+		h.shadow.Run(c.Request.Context(), interaction.ContactID, interaction.Direction, interaction.OccurredAt, desc)
 	}
 
 	response := contactToResponse(updatedContact)

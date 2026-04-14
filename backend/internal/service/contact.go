@@ -335,7 +335,13 @@ func (s *ContactService) DeleteContact(ctx context.Context, id uuid.UUID) error 
 // UpdateContactLastContacted updates the last contacted date for a contact.
 // If lastContacted is nil, the current time is used.
 // Also records an interaction and updates contact_by based on the new last_contacted date and cadence.
-func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted *time.Time) (*repository.Contact, error) {
+//
+// Returns both the refreshed contact and the interaction row
+// RecordInteraction produced. The interaction is needed by the PR 5
+// shadow-mode handler flow so the derived envelope carries the values
+// that were actually committed (vs. a dedup-hit returning an older row
+// with a different Direction / OccurredAt — see plan Decision 7).
+func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted *time.Time) (*repository.Contact, *repository.Interaction, error) {
 	// Use provided date or default to current time
 	dateToSet := accelerated.GetCurrentTime()
 	if lastContacted != nil {
@@ -343,25 +349,25 @@ func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid
 	}
 
 	// Record interaction (handles dedup, last_contacted update, and contact_by recalculation)
-	_, err := s.RecordInteraction(ctx, repository.RecordInteractionRequest{
+	interaction, err := s.RecordInteraction(ctx, repository.RecordInteractionRequest{
 		ContactID:  id,
 		Source:     repository.InteractionSourceManual,
 		OccurredAt: dateToSet,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("record interaction: %w", err)
+		return nil, nil, fmt.Errorf("record interaction: %w", err)
 	}
 
 	contact, err := s.contactRepo.GetContact(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if err := s.attachMethods(ctx, contact); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return contact, nil
+	return contact, interaction, nil
 }
 
 // RecordInteraction creates an interaction record and updates contact fields based on direction.

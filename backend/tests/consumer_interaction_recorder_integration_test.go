@@ -574,6 +574,120 @@ func TestIntegration_InteractionManual_NoAsyncJobEnqueued(t *testing.T) {
 		"KindInteractionManual must NOT enqueue an async worker (plan Decision 7)")
 }
 
+// TestIntegration_ManualShadowHelper_TwoTxFlow exercises plan Decision 7:
+// the direct path writes the authoritative row, then ManualInteractionShadow
+// opens a separate tx, publishes interaction.manual, and inline-invokes
+// HandleEvent. The consumer sees the direct-path row via FindInWindow,
+// early-returns, and writes a writer='consumer' replay=true observation.
+// Exactly one direct-path row + one consumer replay row result.
+func TestIntegration_ManualShadowHelper_TwoTxFlow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	env := newConsumerTestEnv(t, ctx, consumer.InteractionModeShadow)
+
+	// Wire a ManualInteractionShadow against the real pool + bus +
+	// recorder (exactly like main.go does).
+	shadow := service.NewManualInteractionShadow(
+		consumer.InteractionModeShadow,
+		env.database.Pool,
+		env.bus,
+		env.recorder,
+	)
+
+	contactID := env.newContact(t, "manual-two-tx")
+	occurredAt := time.Date(2026, 4, 10, 12, 30, 0, 0, time.UTC)
+	description := "manual two-tx test"
+
+	// 1. Direct path commits first (today's behavior — emulates the
+	//    handler's h.recorder.RecordInteraction call).
+	interaction, err := env.contactService.RecordInteraction(ctx, repository.RecordInteractionRequest{
+		ContactID:   contactID,
+		Source:      repository.InteractionSourceManual,
+		OccurredAt:  occurredAt,
+		Description: &description,
+		Direction:   repository.InteractionDirectionMutual,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, interaction)
+
+	// 2. Shadow tx runs. Pass the COMMITTED interaction's values (per the
+	//    handler fix for Codex round 2 finding 1).
+	shadow.Run(ctx, interaction.ContactID, interaction.Direction, interaction.OccurredAt, description)
+
+	// 3. Assertions: exactly one interaction row; one writer='direct'
+	//    observation (from RecordInteraction); one writer='consumer'
+	//    replay=true observation (from the inline HandleEvent); exactly
+	//    one interaction.manual event row; zero async river jobs for
+	//    interaction_recorder tied to this contact (manual doesn't route).
+	rows, err := env.interactionRepo.ListContactInteractions(ctx, contactID, 10, 0)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	require.True(t, hasDirectObservation(t, env, contactID, nil, false),
+		"expected writer=direct replay=false observation for contactID=%s", contactID)
+
+	// Consumer observation for this specific contact: exactly one
+	// writer=consumer replay=true row.
+	var consumerCount int
+	err = env.database.Pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM event_shadow_observation WHERE writer = 'consumer' AND contact_id = $1 AND replay = true",
+		contactID,
+	).Scan(&consumerCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, consumerCount, "expected exactly one writer=consumer replay=true row for contactID=%s", contactID)
+
+	// Exactly one interaction.manual event row for this contact.
+	var manualEventCount int
+	err = env.database.Pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM event WHERE kind = 'interaction.manual' AND (payload->>'contact_id')::uuid = $1",
+		contactID,
+	).Scan(&manualEventCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, manualEventCount, "expected exactly one interaction.manual event row")
+}
+
+// TestIntegration_ManualShadowHelper_OffMode confirms that Run is a no-op
+// when the mode is off. No event row, no observation row.
+func TestIntegration_ManualShadowHelper_OffMode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	env := newConsumerTestEnv(t, ctx, consumer.InteractionModeOff)
+
+	shadow := service.NewManualInteractionShadow(
+		consumer.InteractionModeOff,
+		env.database.Pool,
+		env.bus,
+		env.recorder,
+	)
+
+	contactID := env.newContact(t, "manual-shadow-off")
+	occurredAt := time.Date(2026, 4, 10, 12, 30, 0, 0, time.UTC)
+
+	shadow.Run(ctx, contactID, repository.InteractionDirectionMutual, occurredAt, "")
+
+	// No event row keyed to this contact.
+	var eventCount int
+	err := env.database.Pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM event WHERE kind = 'interaction.manual' AND (payload->>'contact_id')::uuid = $1",
+		contactID,
+	).Scan(&eventCount)
+	require.NoError(t, err)
+	require.Zero(t, eventCount, "mode=off must not publish any events")
+
+	// No observation row for this contact.
+	var obsCount int
+	err = env.database.Pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM event_shadow_observation WHERE contact_id = $1",
+		contactID,
+	).Scan(&obsCount)
+	require.NoError(t, err)
+	require.Zero(t, obsCount)
+}
+
 // TestIntegration_ModeOff_NoDirectObservationsWritten exercises the
 // startup-gate: in mode=off, ContactService.SetShadowObserver is not
 // called, so direct-path RecordInteraction does not write observation

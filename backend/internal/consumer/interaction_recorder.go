@@ -153,6 +153,14 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 				// wrote it). We still return the error so the worker retries.
 				return fmt.Errorf("record consumer replay: %w", err)
 			}
+
+			// Inline divergence detection (plan Decision 14 Part A). In
+			// shadow mode the replay path IS the expected case (direct
+			// always commits first); this is where drift between what
+			// direct and consumer would have written shows up. Compares
+			// the peer direct row's direction / occurred_at against what
+			// the consumer just extracted from the event envelope.
+			r.logInlineDivergence(ctx, tx, obs)
 		}
 		return nil
 	}
@@ -217,6 +225,9 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 		if err := events.Unmarshal(env, &p); err != nil {
 			return repository.RecordInteractionRequest{}, "", err
 		}
+		if p.ExternalMessageID == "" {
+			return repository.RecordInteractionRequest{}, "", errors.New("message.received: empty external_message_id (source_ref required)")
+		}
 		direction := p.Direction
 		if direction == "" {
 			direction = repository.InteractionDirectionInbound
@@ -228,6 +239,9 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 		if err := events.Unmarshal(env, &p); err != nil {
 			return repository.RecordInteractionRequest{}, "", err
 		}
+		if p.ExternalMessageID == "" {
+			return repository.RecordInteractionRequest{}, "", errors.New("message.sent: empty external_message_id (source_ref required)")
+		}
 		direction := p.Direction
 		if direction == "" {
 			direction = repository.InteractionDirectionOutbound
@@ -238,6 +252,9 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 		var p events.CalendarAttendedPayload
 		if err := events.Unmarshal(env, &p); err != nil {
 			return repository.RecordInteractionRequest{}, "", err
+		}
+		if p.EventID == "" {
+			return repository.RecordInteractionRequest{}, "", errors.New("calendar.attended: empty event_id (source_ref required)")
 		}
 		ref := p.EventID
 		return repository.RecordInteractionRequest{
@@ -252,6 +269,9 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 		var p events.TaskCompletedPayload
 		if err := events.Unmarshal(env, &p); err != nil {
 			return repository.RecordInteractionRequest{}, "", err
+		}
+		if p.TaskID == "" {
+			return repository.RecordInteractionRequest{}, "", errors.New("task.completed: empty task_id (source_ref required)")
 		}
 		direction := p.Direction
 		if direction == "" {
@@ -270,6 +290,9 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 		var p events.TaskOutreachDetectedPayload
 		if err := events.Unmarshal(env, &p); err != nil {
 			return repository.RecordInteractionRequest{}, "", err
+		}
+		if p.TaskID == "" {
+			return repository.RecordInteractionRequest{}, "", errors.New("task.outreach_detected: empty task_id (source_ref required)")
 		}
 		ref := p.TaskID
 		return repository.RecordInteractionRequest{
