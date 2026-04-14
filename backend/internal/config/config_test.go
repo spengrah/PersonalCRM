@@ -238,6 +238,34 @@ func TestConfig_TypeConversions(t *testing.T) {
 	}
 }
 
+// TestConfig_EventBusIngestFlag ensures EVENT_BUS_INGEST_ENABLED wires into
+// Features.EnableEventBusIngest (default false, env override true). The
+// ingest route registration in main.go reads this flag — spec §3.9.
+func TestConfig_EventBusIngestFlag(t *testing.T) {
+	t.Run("DefaultFalse", func(t *testing.T) {
+		WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() failed: %v", err)
+		}
+		if cfg.Features.EnableEventBusIngest {
+			t.Error("Expected EnableEventBusIngest=false by default")
+		}
+	})
+
+	t.Run("EnvOverrideTrue", func(t *testing.T) {
+		WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+		WithEnv(t, "EVENT_BUS_INGEST_ENABLED", "true")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() failed: %v", err)
+		}
+		if !cfg.Features.EnableEventBusIngest {
+			t.Error("Expected EnableEventBusIngest=true when EVENT_BUS_INGEST_ENABLED=true")
+		}
+	})
+}
+
 func TestConfig_IsProduction(t *testing.T) {
 	tests := []struct {
 		env  string

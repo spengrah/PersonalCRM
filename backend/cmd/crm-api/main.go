@@ -37,6 +37,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/crypto"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/health"
 	"personal-crm/backend/internal/logger"
@@ -145,6 +146,16 @@ func run() int {
 	logger.Info().
 		Int("worker_concurrency", cfg.River.WorkerConcurrency).
 		Msg("river client started")
+
+	// Event bus — first in-process publisher arrives in PR 4 of #180 (HTTP
+	// ingestion). Constructed unconditionally: the Bus is three pointers
+	// (pool, river client, event repo) and zero runtime cost when nothing
+	// publishes. The ingest handler/service/route are gated below by
+	// cfg.Features.EnableEventBusIngest.
+	eventRepo := repository.NewEventRepository(database.Queries)
+	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
+	ingestService := service.NewIngestService(database, eventBus)
+	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	// Initialize repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -579,6 +590,19 @@ func run() int {
 		// Export/Import routes
 		v1.POST("/export", systemHandler.ExportData)
 		v1.POST("/import", systemHandler.ImportData)
+
+		// Event bus ingestion endpoint (feature-flagged per spec §3.9).
+		// When the flag is off the route is NOT registered — gin's NoRoute
+		// handler returns 404 without running the API-key middleware, per
+		// plan Decision 1. This matches the spec's acceptance criterion:
+		// "EVENT_BUS_INGEST_ENABLED=false (default) returns 404."
+		if cfg.Features.EnableEventBusIngest {
+			ingest := v1.Group("/ingest")
+			{
+				ingest.POST("/events", ingestHandler.IngestEvents)
+			}
+			logger.Info().Msg("event bus ingestion endpoint enabled")
+		}
 
 		// Test routes (gated by CRM_ENV=testing or CRM_ENV=test)
 		if cfg.Runtime.CRMEnvironment == "testing" || cfg.Runtime.CRMEnvironment == "test" {
