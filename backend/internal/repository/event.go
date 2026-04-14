@@ -51,6 +51,9 @@ func convertDbEvent(row *db.Event) *events.Envelope {
 // On success, env.ID is populated with the DB-generated UUID (or the
 // caller-provided UUID if env.ID was non-zero on entry).
 func (r *EventRepository) InsertEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error {
+	if tx == nil {
+		return errors.New("insert event: nil tx")
+	}
 	if env == nil {
 		return errors.New("insert event: nil envelope")
 	}

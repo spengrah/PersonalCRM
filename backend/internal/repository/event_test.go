@@ -1,15 +1,24 @@
 package repository
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 )
+
+// stubTx is a pgx.Tx satisfier used by repository tests that want to
+// exercise validation guards without constructing a real transaction.
+// The embedded pgx.Tx is nil; methods are never called because the
+// validation check under test fires before any tx method runs.
+type stubTx struct{ pgx.Tx }
 
 // TestConvertDbEvent_FullRow asserts every column round-trips from the
 // sqlc-generated db.Event into the events.Envelope shape.
@@ -81,4 +90,31 @@ func TestConvertDbEvent_InvalidID(t *testing.T) {
 	}
 	env := convertDbEvent(row)
 	require.Equal(t, uuid.Nil, env.ID)
+}
+
+// TestInsertEvent_NilTx_ReturnsError is a regression guard: InsertEvent is
+// a public boundary method that later calls db.New(tx) which dereferences
+// tx. A nil tx must be rejected with an error, not a panic.
+func TestInsertEvent_NilTx_ReturnsError(t *testing.T) {
+	// Queries doesn't matter — the nil-tx check fires before anything else.
+	repo := NewEventRepository(nil)
+	env := &events.Envelope{
+		Source:     "telegram",
+		Kind:       events.KindInteractionManual,
+		Payload:    []byte(`{"version":1}`),
+		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	}
+	err := repo.InsertEvent(context.Background(), nil, env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil tx")
+}
+
+// TestInsertEvent_NilEnvelope_ReturnsError is the sibling guard for nil
+// envelopes. Uses a typed-nil pgx.Tx (non-nil interface) so the nil-tx
+// check passes and we hit the envelope check.
+func TestInsertEvent_NilEnvelope_ReturnsError(t *testing.T) {
+	repo := NewEventRepository(nil)
+	err := repo.InsertEvent(context.Background(), stubTx{}, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil envelope")
 }
