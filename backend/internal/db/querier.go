@@ -134,6 +134,15 @@ type Querier interface {
 	// Find contact methods that exist in both source and target
 	// Used to identify duplicates that will be skipped during merge
 	FindDuplicateContactMethods(ctx context.Context, arg FindDuplicateContactMethodsParams) ([]*FindDuplicateContactMethodsRow, error)
+	// Primary use: publisher-side dedup lookup BEFORE attempting insert (e.g.,
+	// batch ingestion can pre-filter duplicates). Also used by tests.
+	//
+	// source_id is nullable at the table level, but this lookup is only
+	// meaningful for non-null source_ids (NULL source_ids are not deduped —
+	// they always insert, see the partial unique index in migration 036).
+	// The repository layer rejects empty sourceID with db.ErrNotFound before
+	// calling this query.
+	FindEventBySource(ctx context.Context, arg FindEventBySourceParams) (*Event, error)
 	// Finds events whose JSONB attendees contain the given normalized email but
 	// do not yet have the contact in matched_contact_ids. Used by the rematch
 	// service to retroactively link historical calendar events when a contact
@@ -185,6 +194,7 @@ type Querier interface {
 	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
 	// Contact Enrichment queries
 	GetEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactEnrichment, error)
+	GetEvent(ctx context.Context, id pgtype.UUID) (*Event, error)
 	// External Contact queries
 	GetExternalContact(ctx context.Context, id pgtype.UUID) (*ExternalContact, error)
 	GetExternalContactBySource(ctx context.Context, arg GetExternalContactBySourceParams) (*ExternalContact, error)
@@ -231,6 +241,12 @@ type Querier interface {
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	HasEnrichmentForField(ctx context.Context, arg HasEnrichmentForFieldParams) (bool, error)
 	IgnoreExternalContact(ctx context.Context, id pgtype.UUID) error
+	// Event queries (spec §3.1, §3.3). Raw append-only event log.
+	// Insert an event; conflicts on (source, source_id) (when source_id is not
+	// NULL) return zero rows so the caller can treat as idempotent no-op. When
+	// sqlc.narg('id') is NULL, the DB generates a fresh UUID via
+	// gen_random_uuid().
+	InsertEvent(ctx context.Context, arg InsertEventParams) (*Event, error)
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
