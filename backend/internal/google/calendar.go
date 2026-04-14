@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/matching"
@@ -108,9 +109,15 @@ type CalendarSyncProvider struct {
 	identityService     identityServiceInterface
 	externalContactRepo externalContactRepoInterface
 	interactionRecorder interactionRecorder
+	// eventBus is the shadow-mode event bus. Nil when
+	// EVENT_BUS_INTERACTION_MODE=off; non-nil triggers sibling calendar.attended
+	// publishes after successful RecordInteraction (plan Step 5).
+	eventBus *events.Bus
 }
 
-// NewCalendarSyncProvider creates a new Google Calendar sync provider
+// NewCalendarSyncProvider creates a new Google Calendar sync provider.
+// eventBus may be nil; non-nil enables shadow-mode sibling publishes of
+// calendar.attended alongside the direct-path RecordInteraction.
 func NewCalendarSyncProvider(
 	oauthService *OAuthService,
 	calendarRepo *repository.CalendarEventRepository,
@@ -118,6 +125,7 @@ func NewCalendarSyncProvider(
 	identityService *service.IdentityService,
 	externalContactRepo *repository.ExternalContactRepository,
 	interactionRecorder interactionRecorder,
+	eventBus *events.Bus,
 ) *CalendarSyncProvider {
 	return &CalendarSyncProvider{
 		oauthService:        oauthService,
@@ -126,6 +134,7 @@ func NewCalendarSyncProvider(
 		identityService:     identityService,
 		externalContactRepo: externalContactRepo,
 		interactionRecorder: interactionRecorder,
+		eventBus:            eventBus,
 	}
 }
 
@@ -736,6 +745,17 @@ func (p *CalendarSyncProvider) updateLastContactedForPastEvents(ctx context.Cont
 					Str("eventId", event.ID.String()).
 					Msg("failed to record interaction from calendar event")
 				continue
+			}
+
+			// Shadow-mode sibling publish (plan Step 5). Failures are
+			// logged and discarded — direct-path write is authoritative.
+			if p.eventBus != nil {
+				if pubErr := publishCalendarAttended(ctx, p.eventBus, contactID, eventIDStr, event.EndTime); pubErr != nil {
+					logger.Warn().Err(pubErr).
+						Str("contactId", contactID.String()).
+						Str("eventId", eventIDStr).
+						Msg("calendar: shadow publish failed")
+				}
 			}
 
 			logger.Debug().

@@ -62,13 +62,20 @@ func (d DateOnly) MarshalJSON() ([]byte, error) {
 type ContactHandler struct {
 	contactService *service.ContactService
 	validator      *validator.Validate
+	// shadow runs the PR 5 shadow-mode publish + inline-consumer flow
+	// after PATCH /contacts/:id/last-contacted commits. Nil in
+	// EVENT_BUS_INTERACTION_MODE=off — zero overhead.
+	shadow *service.ManualInteractionShadow
 }
 
-// NewContactHandler creates a new contact handler
-func NewContactHandler(contactService *service.ContactService) *ContactHandler {
+// NewContactHandler creates a new contact handler. shadow may be nil;
+// non-nil enables shadow-mode observation on PATCH last-contacted (plan
+// Decision 7.1).
+func NewContactHandler(contactService *service.ContactService, shadow *service.ManualInteractionShadow) *ContactHandler {
 	return &ContactHandler{
 		contactService: contactService,
 		validator:      validator.New(),
+		shadow:         shadow,
 	}
 }
 
@@ -627,6 +634,20 @@ func (h *ContactHandler) UpdateContactLastContacted(c *gin.Context) {
 		}
 		api.SendInternalError(c, "Failed to update last contacted date")
 		return
+	}
+
+	// Shadow-mode publish + inline consumer for the PATCH path (plan
+	// Decision 7.1). UpdateContactLastContacted internally calls
+	// RecordInteraction with direction="" which defaults to "mutual", and
+	// OccurredAt = lastContacted if provided, else accelerated.GetCurrentTime().
+	// We mirror those defaults here so the consumer-path row FindInWindow
+	// matches the direct-path row's occurred_at.
+	if h.shadow != nil {
+		shadowOccurredAt := accelerated.GetCurrentTime()
+		if lastContacted != nil {
+			shadowOccurredAt = *lastContacted
+		}
+		h.shadow.Run(c.Request.Context(), id, repository.InteractionDirectionMutual, shadowOccurredAt, "")
 	}
 
 	response := contactToResponse(updatedContact)

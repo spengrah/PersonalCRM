@@ -11,6 +11,7 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -25,13 +26,24 @@ type interactionRecorder interface {
 type InteractionHandler struct {
 	recorder        interactionRecorder
 	interactionRepo *repository.InteractionRepository
+	// shadow runs the PR 5 shadow-mode publish + inline-consumer flow
+	// after the direct-path RecordInteraction commits. Nil in
+	// EVENT_BUS_INTERACTION_MODE=off (default) — zero overhead.
+	shadow *service.ManualInteractionShadow
 }
 
-// NewInteractionHandler creates a new interaction handler
-func NewInteractionHandler(recorder interactionRecorder, interactionRepo *repository.InteractionRepository) *InteractionHandler {
+// NewInteractionHandler creates a new interaction handler. shadow may be
+// nil; non-nil enables the shadow-mode publish + inline invocation on
+// successful POST /contacts/:id/interactions.
+func NewInteractionHandler(
+	recorder interactionRecorder,
+	interactionRepo *repository.InteractionRepository,
+	shadow *service.ManualInteractionShadow,
+) *InteractionHandler {
 	return &InteractionHandler{
 		recorder:        recorder,
 		interactionRepo: interactionRepo,
+		shadow:          shadow,
 	}
 }
 
@@ -198,6 +210,23 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 		}
 		api.SendInternalError(c, "Failed to create interaction")
 		return
+	}
+
+	// Shadow-mode publish + inline consumer (plan Decision 7). Runs AFTER
+	// the direct path committed so any failure here does not affect the
+	// persisted interaction row. Pass the effective direction the service
+	// used (defaults to "mutual" when empty to match RecordInteraction's
+	// own default at contact.go:363).
+	if h.shadow != nil {
+		effectiveDirection := direction
+		if effectiveDirection == "" {
+			effectiveDirection = repository.InteractionDirectionMutual
+		}
+		desc := ""
+		if req.Description != nil {
+			desc = *req.Description
+		}
+		h.shadow.Run(c.Request.Context(), contactID, effectiveDirection, occurredAt, desc)
 	}
 
 	api.SendSuccess(c, http.StatusCreated, interactionToResponse(interaction), nil)

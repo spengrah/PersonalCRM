@@ -35,6 +35,7 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/crypto"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -123,13 +124,26 @@ func run() int {
 
 	logger.Info().Msg("database connected successfully")
 
-	// Build the River worker set and start the client. In PR 1 only a no-op
-	// worker is registered — this proves the River wiring works end-to-end.
-	// Real consumer workers arrive in later PRs per
-	// .ai/spec/event-bus-foundation.md §3.4.
+	// Build the River worker set. In PR 1 only a no-op worker was registered;
+	// PR 5 adds the InteractionRecorder consumer. The client is built BELOW
+	// after the consumer is instantiated (AddWorker must happen before Start).
 	riverWorkers := river.NewWorkers()
 	river.AddWorker(riverWorkers, &noopWorker{})
 
+	// Initialize repositories
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
+	noteRepo := repository.NewNoteRepository(database.Queries)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+	// Shadow-observation repo is constructed unconditionally. When
+	// InteractionMode=off the direct path never calls RecordDirectWrite and
+	// no publisher emits events, so the repo's queries stay idle — zero
+	// runtime cost.
+	shadowObsRepo := repository.NewShadowObservationRepository(database.Queries, database.Pool)
+
+	// Construct river client (before Start; consumer worker is added below).
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
@@ -140,33 +154,61 @@ func run() int {
 		logger.Fatal().Err(err).Msg("failed to build river client")
 	}
 
+	// Event bus — first in-process publisher arrived in PR 4 (HTTP ingestion).
+	// Constructed unconditionally: the Bus is three pointers and zero runtime
+	// cost when nothing publishes. The ingest route is gated by
+	// cfg.Features.EnableEventBusIngest; the shadow publishers are gated by
+	// cfg.EventBus.InteractionMode below.
+	eventRepo := repository.NewEventRepository(database.Queries)
+	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
+	ingestService := service.NewIngestService(database, eventBus)
+	ingestHandler := handlers.NewIngestHandler(ingestService)
+
+	// Initialize services
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
+
+	// PR 5 InteractionRecorder consumer + shadow helper (spec §3.4.1, plan
+	// Decisions 7/11). The consumer receives events from the 5 async-
+	// publisher kinds via the river worker and inline-invokes from the
+	// manual UI flow through ManualInteractionShadow.
+	interactionRecorder := consumer.NewInteractionRecorder(
+		cfg.EventBus.InteractionMode,
+		contactRepo,
+		interactionRepo,
+		eventBus,
+		shadowObsRepo,
+	)
+	manualShadow := service.NewManualInteractionShadow(
+		cfg.EventBus.InteractionMode,
+		database.Pool,
+		eventBus,
+		interactionRecorder,
+	)
+
+	// Register the consumer worker. The worker is registered UNCONDITIONALLY —
+	// river rejects unknown job kinds at dequeue time, so having the worker
+	// present with mode=off costs nothing (no events route to it). Mode
+	// gating happens at the publisher sites via pubBus.
+	river.AddWorker(riverWorkers, consumer.NewInteractionRecorderWorker(eventBus, database.Pool, interactionRecorder))
+
+	// pubBus is the bus reference threaded into publisher constructors.
+	// Nil when InteractionMode=off so publishers silently skip their
+	// shadow emits — zero observable behavior change vs. today's code.
+	var pubBus *events.Bus
+	if cfg.EventBus.InteractionMode != consumer.InteractionModeOff {
+		pubBus = eventBus
+		contactService.SetShadowObserver(shadowObsRepo)
+		logger.Info().
+			Str("mode", cfg.EventBus.InteractionMode).
+			Msg("event-bus shadow mode enabled")
+	}
+
 	if err := riverClient.Start(ctx); err != nil {
 		logger.Fatal().Err(err).Msg("failed to start river client")
 	}
 	logger.Info().
 		Int("worker_concurrency", cfg.River.WorkerConcurrency).
 		Msg("river client started")
-
-	// Event bus — first in-process publisher arrives in PR 4 of #180 (HTTP
-	// ingestion). Constructed unconditionally: the Bus is three pointers
-	// (pool, river client, event repo) and zero runtime cost when nothing
-	// publishes. The ingest handler/service/route are gated below by
-	// cfg.Features.EnableEventBusIngest.
-	eventRepo := repository.NewEventRepository(database.Queries)
-	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
-	ingestService := service.NewIngestService(database, eventBus)
-	ingestHandler := handlers.NewIngestHandler(ingestService)
-
-	// Initialize repositories
-	contactRepo := repository.NewContactRepository(database.Queries)
-	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
-	noteRepo := repository.NewNoteRepository(database.Queries)
-	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
-	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
-
-	// Initialize services
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 	importMatchService := service.NewImportMatchService(contactRepo)
 	// EnrichmentService is shared by the import handler (link/import flows) and
@@ -251,7 +293,7 @@ func run() int {
 		// that don't have Google OAuth set up.
 		calendarRepo := repository.NewCalendarEventRepository(database.Queries)
 		calendarHandler = handlers.NewCalendarHandler(calendarRepo)
-		rematchService.Register(google.NewCalendarRematchHandler(calendarRepo, externalContactRepo, contactService))
+		rematchService.Register(google.NewCalendarRematchHandler(calendarRepo, externalContactRepo, contactService, pubBus))
 		logger.Info().Msg("Calendar rematch handler registered")
 
 		// Register Google Contacts provider if OAuth is configured
@@ -273,6 +315,7 @@ func run() int {
 				identityService,
 				externalContactRepo,
 				contactService,
+				pubBus,
 			)
 			providerRegistry.Register(gcalProvider)
 			logger.Info().Msg("Google Calendar sync provider registered")
@@ -364,6 +407,7 @@ func run() int {
 			contactService,
 			contactService,
 			contactService,
+			pubBus,
 		)
 
 		if err := telegramManager.Start(ctx); err != nil {
@@ -389,9 +433,9 @@ func run() int {
 	}
 
 	// Initialize handlers
-	contactHandler := handlers.NewContactHandler(contactService)
+	contactHandler := handlers.NewContactHandler(contactService, manualShadow)
 	noteHandler := handlers.NewNoteHandler(noteService)
-	interactionHandler := handlers.NewInteractionHandler(contactService, interactionRepo)
+	interactionHandler := handlers.NewInteractionHandler(contactService, interactionRepo, manualShadow)
 	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
 	rematchHandler := handlers.NewRematchHandler(rematchService, contactService)
 

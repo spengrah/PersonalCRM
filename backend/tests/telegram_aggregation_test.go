@@ -68,6 +68,7 @@ func setupAggregationTest(t *testing.T) (
 		2, 48, // burst window 2h, reply bridge 48h
 		messageRepo, interactionRepo,
 		contactService, contactService, contactService,
+		nil,
 	)
 
 	// Clean up test messages from previous runs
