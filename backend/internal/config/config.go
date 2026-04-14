@@ -157,8 +157,13 @@ const (
 	DefaultLogLevel           = "info"
 	DefaultEnvironment        = "development"
 	DefaultCRMEnvironment     = "production"
-	// Pi-optimized connection pool defaults
-	DefaultDBMaxConns          = 5
+	// Pi-optimized connection pool defaults. MaxConns must comfortably
+	// cover (a) the river worker concurrency, (b) river's internal
+	// leader/notifier/completer connections (~3), and (c) HTTP request
+	// traffic. With RIVER_WORKER_CONCURRENCY=10 as the default, a pool
+	// smaller than ~15 will starve either request handling or job
+	// processing under load.
+	DefaultDBMaxConns          = 15
 	DefaultDBMinConns          = 2
 	DefaultDBMaxConnIdleTime   = 5 * time.Minute
 	DefaultDBMaxConnLifetime   = 30 * time.Minute
@@ -345,6 +350,25 @@ func (c *Config) Validate() error {
 		errors = append(errors, ValidationError{
 			Field:   "RIVER_WORKER_CONCURRENCY",
 			Message: fmt.Sprintf("must be between 1 and 1000, got %d", c.River.WorkerConcurrency),
+		})
+	}
+
+	// Cross-field sanity: River workers share the application pgxpool with
+	// HTTP request handlers. If concurrency can consume every connection
+	// plus one, web traffic will block on jobs. Require at least 2
+	// connections of headroom for request serving.
+	//
+	// Note: river.Client also uses a small number of connections for its
+	// leader/notify/queue loops, so in practice MaxConns should exceed
+	// WorkerConcurrency by more than 2. This validation catches the
+	// most severe misconfiguration.
+	if c.Database.MaxConns > 0 && c.River.WorkerConcurrency >= int(c.Database.MaxConns) {
+		errors = append(errors, ValidationError{
+			Field: "RIVER_WORKER_CONCURRENCY",
+			Message: fmt.Sprintf(
+				"river concurrency (%d) must leave at least 1 connection free for HTTP requests; DB_MAX_CONNS=%d",
+				c.River.WorkerConcurrency, c.Database.MaxConns,
+			),
 		})
 	}
 

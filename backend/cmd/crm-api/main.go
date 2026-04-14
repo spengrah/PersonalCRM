@@ -632,8 +632,11 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
+	// Use logger.Error (not Fatal) for HTTP shutdown failure so that the
+	// River drain below still runs. logger.Fatal calls os.Exit and would
+	// skip Stop, leaving jobs holding leases until re-lease on next boot.
 	if err := srv.Shutdown(ctx); err != nil {
-		logger.Fatal().Err(err).Msg("server forced to shutdown")
+		logger.Error().Err(err).Msg("server forced to shutdown")
 	}
 
 	// Drain in-flight River jobs using the same shutdown timeout. If the ctx

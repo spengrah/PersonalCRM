@@ -194,7 +194,7 @@ The backend uses Pi-optimized connection pool defaults that work well for single
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `DB_MAX_CONNS` | 5 | Maximum pool size (limits memory usage) |
+| `DB_MAX_CONNS` | 15 | Maximum pool size (must exceed `RIVER_WORKER_CONCURRENCY`) |
 | `DB_MIN_CONNS` | 2 | Minimum idle connections (keeps connections warm) |
 | `DB_MAX_CONN_IDLE_TIME` | 5m | Idle connection timeout |
 | `DB_MAX_CONN_LIFETIME` | 30m | Maximum connection age |
@@ -202,12 +202,22 @@ The backend uses Pi-optimized connection pool defaults that work well for single
 
 These defaults are suitable for a Raspberry Pi 4/5. You typically don't need to change them, but they can be customized in `/srv/personalcrm/.env` if needed.
 
+`DB_MAX_CONNS` must be strictly greater than `RIVER_WORKER_CONCURRENCY` or the backend will refuse to start — otherwise job workers could consume every connection and starve HTTP requests. River itself uses a few extra connections internally (leader election, notifier, job completer), so leave headroom of ~3 on top of your worker count when tuning.
+
 For high-memory systems, you might increase `DB_MAX_CONNS`:
 ```bash
 # Example for 8GB+ systems
-DB_MAX_CONNS=10
+DB_MAX_CONNS=25
 DB_MIN_CONNS=3
 ```
+
+## Worker Queue Configuration
+
+The backend uses [River](https://riverqueue.com) for background jobs. See issue #180 and `.ai/spec/event-bus-foundation.md`.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `RIVER_WORKER_CONCURRENCY` | 10 | Maximum concurrent job workers; must be less than `DB_MAX_CONNS` |
 
 ## Troubleshooting
 

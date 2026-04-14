@@ -411,7 +411,7 @@ func TestConfig_DatabasePoolDefaults(t *testing.T) {
 func TestConfig_DatabasePoolFromEnv(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
-	WithEnv(t, "DB_MAX_CONNS", "10")
+	WithEnv(t, "DB_MAX_CONNS", "20")
 	WithEnv(t, "DB_MIN_CONNS", "3")
 	WithEnv(t, "DB_MAX_CONN_IDLE_TIME", "10m")
 	WithEnv(t, "DB_MAX_CONN_LIFETIME", "1h")
@@ -422,8 +422,8 @@ func TestConfig_DatabasePoolFromEnv(t *testing.T) {
 		t.Fatalf("Load() failed: %v", err)
 	}
 
-	if cfg.Database.MaxConns != 10 {
-		t.Errorf("Expected MaxConns=10, got %d", cfg.Database.MaxConns)
+	if cfg.Database.MaxConns != 20 {
+		t.Errorf("Expected MaxConns=20, got %d", cfg.Database.MaxConns)
 	}
 	if cfg.Database.MinConns != 3 {
 		t.Errorf("Expected MinConns=3, got %d", cfg.Database.MinConns)
@@ -458,6 +458,9 @@ func TestConfig_River_FromEnv(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
 	WithEnv(t, "RIVER_WORKER_CONCURRENCY", "25")
+	// Must raise DB_MAX_CONNS in lockstep or cross-field validation
+	// (see TestConfig_Validate_RiverConcurrencyExceedsPool) will reject.
+	WithEnv(t, "DB_MAX_CONNS", "30")
 
 	cfg, err := Load()
 	if err != nil {
@@ -486,6 +489,10 @@ func TestConfig_Validate_RiverConcurrency(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := TestConfig()
+			// Give the pool enough headroom that the cross-field check
+			// (Validate_RiverConcurrencyExceedsPool) never fires here;
+			// we're testing only the range bounds in this table.
+			cfg.Database.MaxConns = 2000
 			cfg.River.WorkerConcurrency = tt.concurrency
 
 			err := cfg.Validate()
@@ -511,6 +518,39 @@ func TestConfig_Validate_RiverConcurrency(t *testing.T) {
 				if err != nil {
 					t.Errorf("Expected no error for concurrency=%d, got: %v", tt.concurrency, err)
 				}
+			}
+		})
+	}
+}
+
+// TestConfig_Validate_RiverConcurrencyExceedsPool asserts the cross-field
+// sanity check: river concurrency must be strictly less than DB_MAX_CONNS.
+func TestConfig_Validate_RiverConcurrencyExceedsPool(t *testing.T) {
+	tests := []struct {
+		name        string
+		maxConns    int32
+		concurrency int
+		wantErr     bool
+	}{
+		{"concurrency_equals_pool", 10, 10, true},
+		{"concurrency_exceeds_pool", 5, 10, true},
+		{"concurrency_below_pool", 11, 10, false},
+		{"default_pool_default_concurrency", DefaultDBMaxConns, DefaultRiverWorkerConcurrency, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TestConfig()
+			cfg.Database.MaxConns = tt.maxConns
+			cfg.River.WorkerConcurrency = tt.concurrency
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Expected validation error for MaxConns=%d, concurrency=%d",
+						tt.maxConns, tt.concurrency)
+				}
+			} else if err != nil {
+				t.Errorf("Expected no error for MaxConns=%d, concurrency=%d; got: %v",
+					tt.maxConns, tt.concurrency, err)
 			}
 		})
 	}
