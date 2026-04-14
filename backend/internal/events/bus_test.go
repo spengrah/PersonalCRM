@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/riverqueue/river"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,7 +36,7 @@ func TestConsumerJobsForKind_FiveAsyncKindsEnqueueInteractionRecorder(t *testing
 			require.Equal(t, 5, jobs[0].Opts.MaxAttempts)
 			// Sanity: confirm the opts value survives a round-trip through
 			// river.InsertOpts (not accidentally a different struct).
-			var _ *river.InsertOpts = jobs[0].Opts
+			_ = jobs[0].Opts
 		})
 	}
 }

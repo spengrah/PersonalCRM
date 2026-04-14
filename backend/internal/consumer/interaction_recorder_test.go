@@ -538,7 +538,8 @@ func TestHandleEvent_NilTx_Errors(t *testing.T) {
 	cid := uuid.New()
 	rec, _, _, _, _ := newRecorderWithStubs(InteractionModeShadow)
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
-		Version: 1, ContactID: cid, EventID: "x", OccurredAt: time.Now(),
+		Version: 1, ContactID: cid, EventID: "x",
+		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
 	require.Error(t, rec.HandleEvent(context.Background(), nil, env))
 }
@@ -549,7 +550,7 @@ func TestHandleEvent_UnknownKind_Errors(t *testing.T) {
 		Kind:       events.Kind("made.up"),
 		Source:     "telegram",
 		Payload:    json.RawMessage(`{"version":1}`),
-		ObservedAt: time.Now(),
+		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	}
 	err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
@@ -579,7 +580,7 @@ func TestHandleEvent_PayloadUnmarshalFailure_Errors(t *testing.T) {
 		Kind:       events.KindMessageReceived,
 		Source:     "telegram",
 		Payload:    json.RawMessage(`{not valid json`),
-		ObservedAt: time.Now(),
+		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	}
 	err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)

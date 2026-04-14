@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
@@ -427,7 +428,7 @@ func TestIntegration_ShadowDivergenceQuery_HappyCase(t *testing.T) {
 	env := newConsumerTestEnv(t, ctx, consumer.InteractionModeShadow)
 
 	contactID := env.newContact(t, "divergence-happy")
-	windowStart := time.Now().UTC().Add(-1 * time.Minute)
+	windowStart := accelerated.GetCurrentTime().Add(-1 * time.Minute)
 
 	for i := 0; i < 5; i++ {
 		eventID := "gcal-div-" + uuid.NewString()[:8]
@@ -459,7 +460,7 @@ func TestIntegration_ShadowDivergenceQuery_HappyCase(t *testing.T) {
 		require.NoError(t, env.runHandleEvent(t, envelope))
 	}
 
-	windowEnd := time.Now().UTC().Add(1 * time.Minute)
+	windowEnd := accelerated.GetCurrentTime().Add(1 * time.Minute)
 	divs, err := env.shadowRepo.FindDivergences(ctx, windowStart, windowEnd)
 	require.NoError(t, err)
 	// Filter to only rows from this test run (the shared DB accumulates
