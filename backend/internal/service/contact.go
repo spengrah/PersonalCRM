@@ -37,6 +37,15 @@ type followUpManager interface {
 	CompleteFollowUp(ctx context.Context, contactID uuid.UUID) error
 }
 
+// shadowObserver is the subset of *repository.ShadowObservationRepository
+// the service depends on. Defined as an interface so the service doesn't
+// require the repository package for callers that don't enable shadow mode.
+// tx=nil indicates the caller does not hold an explicit tx (today's direct
+// path) — the observer opens a short-lived tx on its own pool.
+type shadowObserver interface {
+	RecordDirectWrite(ctx context.Context, tx pgx.Tx, obs repository.ShadowObservation) (*repository.ShadowObservation, error)
+}
+
 type ContactService struct {
 	database          *db.Database
 	contactRepo       *repository.ContactRepository
@@ -45,6 +54,7 @@ type ContactService struct {
 	contactTaskRepo   *repository.ContactTaskRepository
 	followUpMgr       followUpManager
 	rematchSvc        *RematchService
+	shadowObs         shadowObserver
 }
 
 func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository, interactionRepo *repository.InteractionRepository, contactTaskRepo *repository.ContactTaskRepository) *ContactService {
@@ -66,6 +76,34 @@ func (s *ContactService) SetFollowUpManager(fm followUpManager) {
 // and UpdateContact return uuid.Nil as the jobID when nil.
 func (s *ContactService) SetRematchService(r *RematchService) {
 	s.rematchSvc = r
+}
+
+// SetShadowObserver injects the shadow-mode observer. Only called from
+// main.go when EVENT_BUS_INTERACTION_MODE != off. When unset (the default,
+// "off" mode), every shadow-observation call site short-circuits via a
+// nil check — zero overhead compared to today's direct path (plan Decision
+// 7 / 11).
+func (s *ContactService) SetShadowObserver(obs shadowObserver) {
+	s.shadowObs = obs
+}
+
+// recordDirectShadowObs writes a shadow observation row for a direct-path
+// interaction write. No-op when the observer isn't injected (mode=off).
+// Failures are logged and swallowed so the direct-path write is never
+// blocked by observation bookkeeping.
+//
+// Calling convention: callers pass a ShadowObservation with Writer unset;
+// the repository stamps Writer="direct" inside RecordDirectWrite.
+func (s *ContactService) recordDirectShadowObs(ctx context.Context, obs repository.ShadowObservation) {
+	if s.shadowObs == nil {
+		return
+	}
+	if _, err := s.shadowObs.RecordDirectWrite(ctx, nil, obs); err != nil {
+		logger.Warn().Err(err).
+			Str("contactId", obs.ContactID.String()).
+			Str("kind", obs.Kind).
+			Msg("shadow: record direct observation failed")
+	}
 }
 
 // HasPendingFollowUp checks if a contact has a pending follow-up task
@@ -357,6 +395,19 @@ func (s *ContactService) RecordInteraction(ctx context.Context, req repository.R
 				Str("source", req.Source).
 				Str("sourceRef", *req.SourceRef).
 				Msg("skipping duplicate interaction (same source_ref)")
+			// Shadow-mode bookkeeping: the direct path dedupe-hit is a
+			// replay row — pairs with the consumer-path replay when both
+			// wrote. Best-effort; never blocks the direct path.
+			s.recordDirectShadowObs(ctx, repository.ShadowObservation{
+				Kind:          repository.ShadowKindDirectRecord,
+				Source:        req.Source,
+				SourceRef:     req.SourceRef,
+				ContactID:     req.ContactID,
+				Direction:     existing.Direction,
+				OccurredAt:    existing.OccurredAt,
+				InteractionID: &existing.ID,
+				Replay:        true,
+			})
 			return existing, nil
 		}
 	} else {
@@ -371,6 +422,16 @@ func (s *ContactService) RecordInteraction(ctx context.Context, req repository.R
 				Str("existingSource", existing.Source).
 				Str("newSource", req.Source).
 				Msg("skipping duplicate interaction within 30-min window")
+			s.recordDirectShadowObs(ctx, repository.ShadowObservation{
+				Kind:          repository.ShadowKindDirectRecord,
+				Source:        req.Source,
+				SourceRef:     nil,
+				ContactID:     req.ContactID,
+				Direction:     existing.Direction,
+				OccurredAt:    existing.OccurredAt,
+				InteractionID: &existing.ID,
+				Replay:        true,
+			})
 			return existing, nil
 		}
 	}
@@ -386,6 +447,20 @@ func (s *ContactService) RecordInteraction(ctx context.Context, req repository.R
 	if err != nil {
 		return nil, fmt.Errorf("create interaction: %w", err)
 	}
+
+	// Shadow-mode bookkeeping: fresh-write observation. Fires only when a
+	// shadowObs is injected (mode != off in main.go). Best-effort; the
+	// direct write is authoritative and already committed by CreateInteraction.
+	s.recordDirectShadowObs(ctx, repository.ShadowObservation{
+		Kind:          repository.ShadowKindDirectRecord,
+		Source:        req.Source,
+		SourceRef:     req.SourceRef,
+		ContactID:     req.ContactID,
+		Direction:     req.Direction,
+		OccurredAt:    req.OccurredAt,
+		InteractionID: &interaction.ID,
+		Replay:        false,
+	})
 
 	// 5+6. Direction-conditional contact field updates + follow-up management
 	s.applyInteractionEffects(ctx, contact, req.Direction, req.OccurredAt, req.Source == repository.InteractionSourceManual)
@@ -405,6 +480,17 @@ func (s *ContactService) PromoteInteractionToMutual(ctx context.Context, interac
 		return fmt.Errorf("get contact for promotion: %w", err)
 	}
 	s.applyInteractionEffects(ctx, contact, repository.InteractionDirectionMutual, replyAt, false)
+	// Shadow-mode bookkeeping: promote has no event-kind peer in PR 5. The
+	// divergence query filters direct_promote rows out via kind='direct_record'
+	// (plan Decision 14). Writing the row keeps the observation log complete.
+	s.recordDirectShadowObs(ctx, repository.ShadowObservation{
+		Kind:          repository.ShadowKindDirectPromote,
+		Source:        repository.InteractionSourceTelegram,
+		ContactID:     contactID,
+		Direction:     repository.InteractionDirectionMutual,
+		OccurredAt:    replyAt,
+		InteractionID: &interactionID,
+	})
 	return nil
 }
 
@@ -420,6 +506,16 @@ func (s *ContactService) ExtendInteraction(ctx context.Context, interactionID, c
 		return fmt.Errorf("get contact for extension: %w", err)
 	}
 	s.applyInteractionEffects(ctx, contact, direction, occurredAt, false)
+	// Shadow-mode bookkeeping: extend has no event-kind peer in PR 5.
+	// Filtered out of the divergence query via kind='direct_record'.
+	s.recordDirectShadowObs(ctx, repository.ShadowObservation{
+		Kind:          repository.ShadowKindDirectExtend,
+		Source:        repository.InteractionSourceTelegram,
+		ContactID:     contactID,
+		Direction:     direction,
+		OccurredAt:    occurredAt,
+		InteractionID: &interactionID,
+	})
 	return nil
 }
 
