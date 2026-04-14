@@ -60,6 +60,9 @@ Create your `.env` file from the appropriate template (`.env.example` for develo
 - `ENABLE_TELEGRAM_SYNC`: Enable Telegram sync (default: false)
 - `ENABLE_CALENDAR_SYNC`: Enable calendar sync (default: false)
 
+### Worker Queue (River)
+- `RIVER_WORKER_CONCURRENCY`: Maximum concurrent job workers (default: 10). `DB_MAX_CONNS` must exceed this by at least 3 (river internals + HTTP headroom).
+
 **Frontend** (create `frontend/.env.local` - see `frontend/.env.example`):
 - `NEXT_PUBLIC_API_URL`: Backend API URL (required for local dev: `http://localhost:8080`, leave empty for production with reverse proxy)
 - `NEXT_PUBLIC_API_KEY`: Must match backend `API_KEY` for authentication

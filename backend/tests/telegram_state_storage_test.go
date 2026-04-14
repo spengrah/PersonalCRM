@@ -36,7 +36,7 @@ func TestStateStorage_GetSetState(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -82,7 +82,7 @@ func TestStateStorage_IndividualSetters(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -128,7 +128,7 @@ func TestChannelHasher_GetSetAccessHash(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -171,7 +171,7 @@ func TestChannelHasher_SetAccessHash_PreservesPts(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -228,7 +228,7 @@ func TestStateStorage_ChannelPts(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()

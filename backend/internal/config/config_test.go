@@ -411,7 +411,7 @@ func TestConfig_DatabasePoolDefaults(t *testing.T) {
 func TestConfig_DatabasePoolFromEnv(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
-	WithEnv(t, "DB_MAX_CONNS", "10")
+	WithEnv(t, "DB_MAX_CONNS", "20")
 	WithEnv(t, "DB_MIN_CONNS", "3")
 	WithEnv(t, "DB_MAX_CONN_IDLE_TIME", "10m")
 	WithEnv(t, "DB_MAX_CONN_LIFETIME", "1h")
@@ -422,8 +422,8 @@ func TestConfig_DatabasePoolFromEnv(t *testing.T) {
 		t.Fatalf("Load() failed: %v", err)
 	}
 
-	if cfg.Database.MaxConns != 10 {
-		t.Errorf("Expected MaxConns=10, got %d", cfg.Database.MaxConns)
+	if cfg.Database.MaxConns != 20 {
+		t.Errorf("Expected MaxConns=20, got %d", cfg.Database.MaxConns)
 	}
 	if cfg.Database.MinConns != 3 {
 		t.Errorf("Expected MinConns=3, got %d", cfg.Database.MinConns)
@@ -436,6 +436,134 @@ func TestConfig_DatabasePoolFromEnv(t *testing.T) {
 	}
 	if cfg.Database.HealthCheckPeriod != 1*time.Minute {
 		t.Errorf("Expected HealthCheckPeriod=1m, got %v", cfg.Database.HealthCheckPeriod)
+	}
+}
+
+func TestConfig_River_Default(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.River.WorkerConcurrency != DefaultRiverWorkerConcurrency {
+		t.Errorf("Expected default RiverWorkerConcurrency=%d, got %d",
+			DefaultRiverWorkerConcurrency, cfg.River.WorkerConcurrency)
+	}
+}
+
+func TestConfig_River_FromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "RIVER_WORKER_CONCURRENCY", "25")
+	// Must raise DB_MAX_CONNS in lockstep or cross-field validation
+	// (see TestConfig_Validate_RiverConcurrencyExceedsPool) will reject.
+	WithEnv(t, "DB_MAX_CONNS", "30")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.River.WorkerConcurrency != 25 {
+		t.Errorf("Expected RiverWorkerConcurrency=25, got %d", cfg.River.WorkerConcurrency)
+	}
+}
+
+func TestConfig_Validate_RiverConcurrency(t *testing.T) {
+	tests := []struct {
+		name         string
+		concurrency  int
+		wantErrField bool
+	}{
+		{"zero", 0, true},
+		{"negative", -1, true},
+		{"one", 1, false},
+		{"default", DefaultRiverWorkerConcurrency, false},
+		{"max", 1000, false},
+		{"over_max", 1001, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TestConfig()
+			// Give the pool enough headroom that the cross-field check
+			// (Validate_RiverConcurrencyExceedsPool) never fires here;
+			// we're testing only the range bounds in this table.
+			cfg.Database.MaxConns = 2000
+			cfg.River.WorkerConcurrency = tt.concurrency
+
+			err := cfg.Validate()
+			if tt.wantErrField {
+				if err == nil {
+					t.Fatalf("Expected validation error for concurrency=%d", tt.concurrency)
+				}
+				verr, ok := err.(ValidationErrors)
+				if !ok {
+					t.Fatalf("Expected ValidationErrors, got %T", err)
+				}
+				found := false
+				for _, e := range verr {
+					if e.Field == "RIVER_WORKER_CONCURRENCY" {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected RIVER_WORKER_CONCURRENCY validation error, got: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error for concurrency=%d, got: %v", tt.concurrency, err)
+				}
+			}
+		})
+	}
+}
+
+// TestConfig_Validate_RiverConcurrencyExceedsPool asserts the cross-field
+// sanity check: DB_MAX_CONNS must exceed RIVER_WORKER_CONCURRENCY by at
+// least 3 (river's internal leader/notifier/completer overhead + HTTP).
+func TestConfig_Validate_RiverConcurrencyExceedsPool(t *testing.T) {
+	tests := []struct {
+		name        string
+		maxConns    int32
+		concurrency int
+		wantErr     bool
+	}{
+		{"concurrency_equals_pool", 10, 10, true},
+		{"concurrency_exceeds_pool", 5, 10, true},
+		{"headroom_of_one", 11, 10, true},    // 10+3 > 11 → fail
+		{"headroom_of_two", 12, 10, true},    // 10+3 > 12 → fail
+		{"headroom_of_three", 13, 10, false}, // 10+3 == 13 → ok
+		{"headroom_of_five", 15, 10, false},  // default
+		{"default_pool_default_concurrency", DefaultDBMaxConns, DefaultRiverWorkerConcurrency, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TestConfig()
+			cfg.Database.MaxConns = tt.maxConns
+			cfg.River.WorkerConcurrency = tt.concurrency
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Expected validation error for MaxConns=%d, concurrency=%d",
+						tt.maxConns, tt.concurrency)
+				}
+			} else if err != nil {
+				t.Errorf("Expected no error for MaxConns=%d, concurrency=%d; got: %v",
+					tt.maxConns, tt.concurrency, err)
+			}
+		})
+	}
+}
+
+func TestConfig_TestConfig_ValidatesCleanly(t *testing.T) {
+	cfg := TestConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("TestConfig() should Validate cleanly, got: %v", err)
 	}
 }
 

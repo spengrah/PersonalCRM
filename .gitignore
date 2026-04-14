@@ -348,6 +348,7 @@ Personal CRM.app/
 
 # Claude cache (local)
 .claude/cache/
+.claude/scheduled_tasks.lock
 
 # Learnings log (allow learnings directory only)
 .ai/log/*

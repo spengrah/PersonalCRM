@@ -32,7 +32,7 @@ func TestTelegramMessage_UpsertAndGet(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -93,7 +93,7 @@ func TestTelegramMessage_UpsertIdempotent(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -149,7 +149,7 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -207,7 +207,7 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -256,7 +256,7 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -304,7 +304,7 @@ func TestTelegramMessage_ListUnprocessed(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(databaseURL, getMigrationsPath())
+	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
 	require.NoError(t, err)
 
 	ctx := context.Background()

@@ -46,7 +46,7 @@ func setupContactValidationTestRouter() (*gin.Engine, func()) {
 
 	// Run migrations before connecting to database
 	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
 		panic("Failed to run migrations: " + err.Error())
 	}
 

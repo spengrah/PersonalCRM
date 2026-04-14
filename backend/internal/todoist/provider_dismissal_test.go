@@ -86,7 +86,7 @@ func newProviderTestEnv(t *testing.T, recorder interactionRecorder) (*CadenceSyn
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	if err := db.RunMigrations(databaseURL, migrationsPathForTest()); err != nil {
+	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPathForTest()); err != nil {
 		t.Fatalf("run migrations: %v", err)
 	}
 

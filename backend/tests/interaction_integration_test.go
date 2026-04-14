@@ -26,7 +26,7 @@ func setupInteractionTestDeps(t *testing.T) (*service.ContactService, *repositor
 	}
 
 	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
 		t.Fatalf("Failed to run migrations: %v", err)
 	}
 

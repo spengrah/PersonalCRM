@@ -30,7 +30,7 @@ func setupInteractionTestRouter() (*gin.Engine, func()) {
 	databaseURL := os.Getenv("DATABASE_URL")
 
 	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
 		panic("Failed to run migrations: " + err.Error())
 	}
 

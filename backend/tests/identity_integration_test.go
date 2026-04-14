@@ -31,7 +31,7 @@ func TestIdentityRepository_Integration(t *testing.T) {
 
 	// Run migrations first
 	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
 		t.Fatalf("Failed to run migrations: %v", err)
 	}
 
@@ -301,7 +301,7 @@ func TestIdentityService_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(databaseURL, migrationsPath); err != nil {
+	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
 		t.Fatalf("Failed to run migrations: %v", err)
 	}
 

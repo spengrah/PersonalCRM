@@ -48,13 +48,49 @@ import (
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/gin-gonic/gin"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
 	_ "personal-crm/backend/docs" // Import generated docs
 )
 
+// noopJobArgs is a throwaway job type used only to prove that River's
+// AddWorker / client registration wiring works end-to-end in PR 1 of #180.
+// No jobs of this kind are ever enqueued at runtime. It will be removed in
+// PR 2 once a real consumer worker (the InteractionRecorder wrapper per
+// .ai/spec/event-bus-foundation.md §3.4) is registered.
+//
+// Kept inline in main.go (rather than a sibling file) because the repo's
+// build convention is `go build cmd/crm-api/main.go` (single-file), used
+// by the Makefile, CI cross-compile, and the Playwright webServer command.
+type noopJobArgs struct{}
+
+// Kind returns the River job kind identifier for noopJobArgs.
+func (noopJobArgs) Kind() string { return "noop" }
+
+// noopWorker is a no-op River worker paired with noopJobArgs.
+type noopWorker struct {
+	river.WorkerDefaults[noopJobArgs]
+}
+
+// Work implements river.Worker. Since no jobs of this kind are enqueued,
+// this method is never called at runtime.
+func (*noopWorker) Work(_ context.Context, _ *river.Job[noopJobArgs]) error {
+	return nil
+}
+
 func main() {
+	// Run the server body in a helper so its defers (database.Close,
+	// telegramManager.Stop, cronScheduler.Stop, shutdown-ctx cancel) all
+	// execute on a normal return — os.Exit would bypass them. The only
+	// non-zero exit path is a failed graceful HTTP shutdown, signalled
+	// via the return value.
+	os.Exit(run())
+}
+
+func run() int {
 	// Load and validate configuration first (before logger)
 	cfg, err := config.Load()
 	if err != nil {
@@ -69,14 +105,15 @@ func main() {
 		Str("log_level", cfg.Logger.Level).
 		Msg("configuration loaded successfully")
 
-	// Run migrations before connecting to database
+	// Run migrations before connecting to database (applies both our
+	// golang-migrate migrations and River's queue schema).
+	ctx := context.Background()
 	logger.Info().Msg("running database migrations")
-	if err := db.RunMigrations(cfg.Database.URL, cfg.Database.MigrationsPath); err != nil {
+	if err := db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath); err != nil {
 		logger.Fatal().Err(err).Msg("failed to run migrations")
 	}
 
 	// Initialize database
-	ctx := context.Background()
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to connect to database")
@@ -84,6 +121,30 @@ func main() {
 	defer database.Close()
 
 	logger.Info().Msg("database connected successfully")
+
+	// Build the River worker set and start the client. In PR 1 only a no-op
+	// worker is registered — this proves the River wiring works end-to-end.
+	// Real consumer workers arrive in later PRs per
+	// .ai/spec/event-bus-foundation.md §3.4.
+	riverWorkers := river.NewWorkers()
+	river.AddWorker(riverWorkers, &noopWorker{})
+
+	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
+		},
+		Workers: riverWorkers,
+	})
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to build river client")
+	}
+
+	if err := riverClient.Start(ctx); err != nil {
+		logger.Fatal().Err(err).Msg("failed to start river client")
+	}
+	logger.Info().
+		Int("worker_concurrency", cfg.River.WorkerConcurrency).
+		Msg("river client started")
 
 	// Initialize repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -601,16 +662,43 @@ func main() {
 	<-quit
 	logger.Info().Msg("shutting down server")
 
-	// Give outstanding requests a configured timeout to complete
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
-	defer cancel()
+	// Give outstanding HTTP requests a configured timeout to complete.
+	// Use logger.Error (not Fatal) for HTTP shutdown failure so that the
+	// River drain below still runs. logger.Fatal calls os.Exit and would
+	// skip Stop, leaving jobs holding leases until re-lease on next boot.
+	// We remember the error and exit non-zero at the end so supervisors
+	// (systemd, etc.) still see the failure.
+	httpCtx, httpCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+	defer httpCancel()
+	var shutdownErr error
+	if err := srv.Shutdown(httpCtx); err != nil {
+		logger.Error().Err(err).Msg("server forced to shutdown")
+		shutdownErr = err
+	}
 
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Fatal().Err(err).Msg("server forced to shutdown")
+	// Drain in-flight River jobs with a FRESH budget so a slow HTTP drain
+	// doesn't steal River's deadline. Sharing one ctx between srv.Shutdown
+	// and riverClient.Stop means that if a long-polling HTTP request burns
+	// the full ShutdownTimeout, River gets an already-expired ctx and cannot
+	// drain — jobs stay leased until next boot. A separate ctx preserves the
+	// drain window. If River's own ctx does expire, its crash-resume
+	// semantics handle the re-lease on next boot.
+	riverCtx, riverCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+	defer riverCancel()
+	if err := riverClient.Stop(riverCtx); err != nil {
+		logger.Warn().Err(err).Msg("river client stop returned error")
 	}
 
 	logger.Info().Msg("server exited")
 
 	// Print the selected port on graceful exit for supervising processes
 	fmt.Printf("PORT=%d\n", selectedPort) //nolint:forbidigo // Intentional stdout output for supervisor
+
+	if shutdownErr != nil {
+		// Surface the shutdown failure to supervisors via exit code
+		// once run() returns and its defers fire (database.Close,
+		// telegramManager.Stop, cronScheduler.Stop, cancel).
+		return 1
+	}
+	return 0
 }
