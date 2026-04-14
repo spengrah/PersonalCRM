@@ -107,6 +107,17 @@ type ContactTask struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Event struct {
+	ID         pgtype.UUID        `json:"id"`
+	Source     string             `json:"source"`
+	SourceID   pgtype.Text        `json:"source_id"`
+	Kind       string             `json:"kind"`
+	Payload    []byte             `json:"payload"`
+	ObservedAt pgtype.Timestamptz `json:"observed_at"`
+	ReceivedAt pgtype.Timestamptz `json:"received_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type ExternalContact struct {
 	ID            pgtype.UUID        `json:"id"`
 	Source        string             `json:"source"`

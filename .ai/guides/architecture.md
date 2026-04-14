@@ -174,6 +174,8 @@ sequenceDiagram
 | `calendar_event_attendee` | Event attendees | → calendar_event, contact |
 | **Tasks** | | |
 | `contact_task` | Todoist tasks linked to contacts | → contact |
+| **Event Bus** | | |
+| `event` | Append-only raw event log feeding the worker queue (spec §3.1) | (append-only; no FKs) |
 | **Future/Unused** | | |
 | `interaction` | Interaction logging (not yet used) | → contact |
 | `connection` | Contact-to-contact relationships | → contact × 2 |
