@@ -57,6 +57,31 @@ import (
 	_ "personal-crm/backend/docs" // Import generated docs
 )
 
+// noopJobArgs is the args type for the placeholder worker below. It is
+// never enqueued in production; its sole purpose is to satisfy river's
+// "must have at least one registered worker" invariant when external
+// sync is disabled.
+type noopJobArgs struct{}
+
+func (noopJobArgs) Kind() string { return "noop" }
+
+// noopWorker exists so the river client always has at least one
+// registered worker, even when cfg.Features.EnableExternalSync is false
+// and the scheduler workers are not registered. river.NewClient rejects
+// an empty Workers bundle (the constructor returns an error), so the
+// API fails to boot in the default non-sync configuration without this
+// placeholder. See PR 1 (#279) where the noop worker was introduced for
+// exactly this reason; PR 3 briefly removed it and #281 restores it.
+type noopWorker struct {
+	river.WorkerDefaults[noopJobArgs]
+}
+
+// Work implements river.Worker. Since no 'noop' jobs are enqueued
+// anywhere in the codebase, this method is never called at runtime.
+func (*noopWorker) Work(_ context.Context, _ *river.Job[noopJobArgs]) error {
+	return nil
+}
+
 func main() {
 	// Run the server body in a helper so its defers (database.Close,
 	// telegramManager.Stop, riverClient.Stop, shutdown-ctx cancel) all
@@ -354,7 +379,13 @@ func run() int {
 	// otherwise there is nothing for them to do. See DD 6 in
 	// .ai/log/plan/event-bus-foundation-pr3-scheduler-river.md for the
 	// construction-order rationale.
+	//
+	// noopWorker is ALWAYS registered so the river client can start in
+	// any configuration (river.NewClient rejects an empty Workers
+	// bundle — see backend/tests/event_bus_integration_test.go for the
+	// canonical assertion of that invariant).
 	riverWorkers := river.NewWorkers()
+	river.AddWorker(riverWorkers, &noopWorker{})
 	var periodicJobs []*river.PeriodicJob
 	if cfg.Features.EnableExternalSync && syncService != nil {
 		river.AddWorker(riverWorkers, scheduler.NewSchedulerTickWorker(syncService))

@@ -812,7 +812,7 @@ PR 9a / PR 9b can run in parallel with PR 10 (independent consumers).
 - Sync cadence observed unchanged in prod.
 - Stuck `status='syncing'` rows no longer produced.
 - Integration + load tests pass.
-- **72h staging soak gate:** §6.5 soak (4 provider accounts ticking every 5 min on staging Pi) completed before merge, with evidence attached to the PR: zero stuck `'syncing'` rows, zero duplicate runs for the same `(source, account_id, window)`, sync result counts within ±5% of the pre-migration baseline.
+- **72h prod-Pi soak gate (single-user adaptation):** this is a single-user, Pi-deployed system with no separate staging tier. Soak runs directly on the prod Pi for ≥72h *before merging the PR* — deploy the feature branch via `git fetch && git checkout feat/event-bus-pr3-scheduler-river && systemctl restart personalcrm-backend`. Evidence attached to the PR body: zero stuck `'syncing'` rows, zero duplicate runs for the same `(source, account_id, window)`, sync result counts within ±5% of the pre-migration baseline (snapshot baseline before deploy via the same SQL queries against current `main`). **Rollback plan documented in the PR body:** `ssh raspberet "cd ~/PersonalCRM && git checkout main && systemctl restart personalcrm-backend"` if any anomaly appears during the window. Acceptable because (a) single-user system, (b) sync is read-mostly into the DB so no data loss risk, (c) River's `JobRescuer` + the automated test suite (50-goroutine race, retry-budget load, leased-retry integration) already cover the #208 bug class — the soak is belt-and-suspenders confidence, not primary verification.
 
 **Est size:** Medium. 3-5 days (careful testing required; this is load-bearing) + 72h soak wall-clock.
 
