@@ -7,7 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
@@ -290,6 +292,63 @@ func firstErr(errs []error) error {
 		return nil
 	}
 	return errs[0]
+}
+
+// TestRecoverStuckSyncingStates_ResetsSyncingRows covers the one-shot
+// boot recovery path documented in DD 7. Seeds a sync_state row with
+// status='syncing' and a future next_sync_at (the pre-upgrade crash
+// scenario), runs the recovery helper, and asserts the row is back
+// to 'idle' with next_sync_at=NOW(). Guards the main.go boot hook
+// that clears leftover 'syncing' rows from pre-PR-3 crashes.
+func TestRecoverStuckSyncingStates_ResetsSyncingRows(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	repo, database := newEnqueueTestEnv(t)
+	ctx := context.Background()
+
+	source := "recover_test_stuck_syncing"
+	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source = $1`, source)
+	t.Cleanup(func() {
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+	})
+
+	// Seed a state in status='syncing' with a future next_sync_at (the
+	// pre-upgrade crash scenario — a manual TriggerSync just after a
+	// fresh tick would leave next_sync_at in the future).
+	state, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+		Source:   source,
+		Enabled:  true,
+		Strategy: repository.SyncStrategyFetchAll,
+	})
+	require.NoError(t, err)
+	_, err = repo.UpdateSyncStateStatus(ctx, state.ID, repository.SyncStatusSyncing, nil)
+	require.NoError(t, err)
+	_, err = database.Pool.Exec(ctx,
+		`UPDATE external_sync_state SET next_sync_at = NOW() + interval '1 hour' WHERE id = $1`,
+		state.ID)
+	require.NoError(t, err)
+
+	// Run the recovery helper.
+	affected, err := repo.RecoverStuckSyncingStates(ctx)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, affected, int64(1), "at least the seeded row should be reset")
+
+	// Assertion: the state is now 'idle' AND next_sync_at is roughly NOW
+	// (the recovery SQL sets it to NOW() so the next tick picks it up).
+	updated, err := repo.GetSyncState(ctx, state.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.SyncStatusIdle, updated.Status,
+		"status must be reset from 'syncing' to 'idle'")
+	require.NotNil(t, updated.NextSyncAt)
+	// Allow a 10s window for clock drift / slow DB writes.
+	assert.WithinDuration(t, accelerated.GetCurrentTime(), *updated.NextSyncAt, 10*time.Second,
+		"next_sync_at should be reset to approximately NOW")
+
+	// Second invocation: no-op (no 'syncing' rows left).
+	affected2, err := repo.RecoverStuckSyncingStates(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), affected2, "second recovery call should affect 0 rows")
 }
 
 // TestEnqueueAccountSyncIfNotInFlight_NilAccountID covers the nil-account

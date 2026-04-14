@@ -16,6 +16,7 @@ import (
 	"personal-crm/backend/internal/service"
 	syncpkg "personal-crm/backend/internal/sync"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
@@ -165,9 +166,11 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 		}
 	}
 
-	// One more beat so CompleteSyncLog on the second attempt has time
-	// to commit before we assert on the rows.
-	time.Sleep(300 * time.Millisecond)
+	// Poll the DB until CompleteSyncLog on the second attempt has landed.
+	// This replaces a fixed time.Sleep that used to race the commit.
+	logWaitCtx, logWaitCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer logWaitCancel()
+	waitForSyncLogStatus(t, logWaitCtx, database.Pool, source, "success")
 
 	// Assertion 1: provider called exactly twice.
 	assert.Equal(t, int32(2), provider.calls.Load(), "provider.Sync should have run twice (first error, second success)")
@@ -290,16 +293,44 @@ func TestSyncWorker_AbandonedLogOnStartupRecovery(t *testing.T) {
 }
 
 // fastRetryPolicy is a test-only retry policy that puts every retry 200ms
-// in the future, regardless of attempt count. Uses time.Now() here
-// because it's test infrastructure, not production business logic — the
-// .ai/rules/core.md prohibition on time.Now() applies to production
-// code; using accelerated.GetCurrentTime here would pull in test-time
-// machinery that conflicts with river's job-row timestamps (which are
-// NOW() from the DB side).
+// in the future, regardless of attempt count. Uses
+// accelerated.GetCurrentTime() per .ai/rules/core.md — NextRetry is
+// called from river's worker-retry machinery as part of the sync
+// pipeline, so the accelerated clock must apply here.
 type fastRetryPolicy struct{}
 
 func (fastRetryPolicy) NextRetry(_ *rivertype.JobRow) time.Time {
 	return accelerated.GetCurrentTime().Add(200 * time.Millisecond)
+}
+
+// waitForSyncLogStatus polls external_sync_log for the given source
+// until at least one row with the target status exists, or the ctx
+// deadline fires. Replaces fixed time.Sleep for "wait until the DB
+// commit lands" waits — the sleep was flaky under CI load.
+func waitForSyncLogStatus(t *testing.T, ctx context.Context, pool syncLogPool, source string, status string) {
+	t.Helper()
+	deadline := time.NewTicker(50 * time.Millisecond)
+	defer deadline.Stop()
+	for {
+		var cnt int
+		err := pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM external_sync_log WHERE source = $1 AND status = $2`,
+			source, status).Scan(&cnt)
+		if err == nil && cnt >= 1 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for external_sync_log status=%s for source=%s (err=%v)", status, source, err)
+		case <-deadline.C:
+		}
+	}
+}
+
+// syncLogPool is the minimal interface the wait helper needs. Matches
+// *pgxpool.Pool.QueryRow.
+type syncLogPool interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // TestSyncWorker_RescueOnCrash simulates the #208 scenario: a worker
@@ -442,8 +473,11 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 		}
 	}
 
-	// One more beat so CompleteSyncLog has time to commit.
-	time.Sleep(500 * time.Millisecond)
+	// Poll the DB until CompleteSyncLog has landed (replaces a fixed
+	// sleep that raced the commit under CI load).
+	logWaitCtx, logWaitCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer logWaitCancel()
+	waitForSyncLogStatus(t, logWaitCtx, database.Pool, source, "success")
 
 	// Assertion 1: the orphan log was marked 'abandoned'.
 	var status string

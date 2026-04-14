@@ -191,8 +191,35 @@ drive:
 		}
 	}
 
-	// Drain: give queued jobs a moment to finish.
-	time.Sleep(500 * time.Millisecond)
+	// Drain: poll until no active river_job rows remain for this source,
+	// so the subsequent assertions see a steady state. Replaces a fixed
+	// time.Sleep that was flaky under CI load.
+	drainCtx, drainCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer drainCancel()
+	drainTicker := time.NewTicker(50 * time.Millisecond)
+	defer drainTicker.Stop()
+	for {
+		var active int
+		err := database.Pool.QueryRow(drainCtx,
+			`SELECT COUNT(*) FROM river_job
+			 WHERE kind = 'sync_provider_account'
+			   AND (args->>'source') = $1
+			   AND state IN ('available','pending','running','retryable','scheduled')`,
+			source).Scan(&active)
+		if err == nil && active == 0 {
+			break
+		}
+		select {
+		case <-drainCtx.Done():
+			// Timeout: fall through and run the assertions with the
+			// state we have. Don't Fatalf here — the original sleep
+			// wasn't load-bearing, and a slow CI node shouldn't fail the
+			// test as long as the invariants below hold.
+			goto assertions
+		case <-drainTicker.C:
+		}
+	}
+assertions:
 
 	// Assertion 1: every account was invoked at least once by provider.Sync.
 	// We don't have per-account counters on the provider, but the easier

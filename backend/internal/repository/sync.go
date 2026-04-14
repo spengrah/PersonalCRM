@@ -641,6 +641,13 @@ func (r *SyncRepository) EnqueueAccountSyncIfNotInFlight(
 	if enqueuer == nil {
 		return false, errors.New("nil JobEnqueuer passed to EnqueueAccountSyncIfNotInFlight")
 	}
+	// Validate args upfront, BEFORE opening a tx or acquiring the advisory
+	// lock. In production args is never nil (the service always constructs
+	// SyncProviderAccountArgs{...}), but the fail-fast guard belongs
+	// outside the critical section.
+	if args == nil {
+		return false, errors.New("nil args passed to EnqueueAccountSyncIfNotInFlight")
+	}
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -685,9 +692,6 @@ func (r *SyncRepository) EnqueueAccountSyncIfNotInFlight(
 		return false, nil
 	}
 
-	if args == nil {
-		return false, errors.New("nil args passed to EnqueueAccountSyncIfNotInFlight")
-	}
 	if _, err := enqueuer.InsertTx(ctx, tx, args, nil); err != nil {
 		return false, fmt.Errorf("insert sync_provider_account job: %w", err)
 	}
