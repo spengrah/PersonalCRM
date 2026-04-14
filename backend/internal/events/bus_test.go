@@ -44,6 +44,22 @@ func (s *stubEventRepo) FindEventBySource(_ context.Context, _, _ string) (*Enve
 	return nil, db.ErrNotFound
 }
 
+// nonNilStubTx returns a non-nil pgx.Tx for tests that only exercise
+// validation paths (the stub repo never touches the tx). Implementing the
+// full pgx.Tx interface for a mock is overkill — a typed-nil interface
+// value is non-nil to the Bus's nil check while never being dereferenced
+// because validation errors fire before InsertEvent runs.
+func nonNilStubTx() pgx.Tx {
+	var t *stubTxImpl
+	return t
+}
+
+// stubTxImpl is a compile-time marker: it satisfies pgx.Tx by embedding a
+// valid interface satisfier. The typed-nil receiver never has a method
+// called on it in these tests (validation short-circuits before
+// InsertEvent runs).
+type stubTxImpl struct{ pgx.Tx }
+
 // TestPublishTx_ValidatesEnvelope asserts that PublishTx rejects malformed
 // envelopes BEFORE calling InsertEvent. Because validation fails first, the
 // stub's InsertEvent is never called and riverClient stays nil-safe.
@@ -54,16 +70,25 @@ func TestPublishTx_ValidatesEnvelope(t *testing.T) {
 
 	cases := []struct {
 		name     string
+		tx       pgx.Tx
 		env      *Envelope
 		wantSubs string
 	}{
 		{
+			name:     "nil tx",
+			tx:       nil,
+			env:      nil, // irrelevant; tx check fires first
+			wantSubs: "nil tx",
+		},
+		{
 			name:     "nil envelope",
+			tx:       nonNilStubTx(),
 			env:      nil,
 			wantSubs: "nil envelope",
 		},
 		{
 			name: "empty kind",
+			tx:   nonNilStubTx(),
 			env: &Envelope{
 				Source:     "telegram",
 				Payload:    validPayload,
@@ -72,7 +97,19 @@ func TestPublishTx_ValidatesEnvelope(t *testing.T) {
 			wantSubs: "empty kind",
 		},
 		{
+			name: "unknown kind",
+			tx:   nonNilStubTx(),
+			env: &Envelope{
+				Kind:       Kind("made.up"),
+				Source:     "telegram",
+				Payload:    validPayload,
+				ObservedAt: validObservedAt,
+			},
+			wantSubs: "unknown kind",
+		},
+		{
 			name: "empty source",
+			tx:   nonNilStubTx(),
 			env: &Envelope{
 				Kind:       KindMessageReceived,
 				Payload:    validPayload,
@@ -82,6 +119,7 @@ func TestPublishTx_ValidatesEnvelope(t *testing.T) {
 		},
 		{
 			name: "empty payload",
+			tx:   nonNilStubTx(),
 			env: &Envelope{
 				Kind:       KindMessageReceived,
 				Source:     "telegram",
@@ -91,6 +129,7 @@ func TestPublishTx_ValidatesEnvelope(t *testing.T) {
 		},
 		{
 			name: "zero observed_at",
+			tx:   nonNilStubTx(),
 			env: &Envelope{
 				Kind:    KindMessageReceived,
 				Source:  "telegram",
@@ -106,7 +145,7 @@ func TestPublishTx_ValidatesEnvelope(t *testing.T) {
 			// Bus with nil pool + nil riverClient is safe as long as
 			// validation fails before we reach InsertEvent.
 			bus := &Bus{eventRepo: stub}
-			err := bus.PublishTx(ctx, nil, tc.env)
+			err := bus.PublishTx(ctx, tc.tx, tc.env)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.wantSubs)
 			require.Zero(t, stub.insertCalls, "InsertEvent must not be called on validation failure")
@@ -130,7 +169,7 @@ func TestPublishTx_DuplicateIsNoOp(t *testing.T) {
 		Payload:    json.RawMessage(`{"version":1}`),
 		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	}
-	err := bus.PublishTx(ctx, nil, env)
+	err := bus.PublishTx(ctx, nonNilStubTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 1, stub.insertCalls)
 }
@@ -150,7 +189,7 @@ func TestPublishTx_RepoErrorPropagates(t *testing.T) {
 		Payload:    json.RawMessage(`{"version":1}`),
 		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	}
-	err := bus.PublishTx(ctx, nil, env)
+	err := bus.PublishTx(ctx, nonNilStubTx(), env)
 	require.Error(t, err)
 	require.ErrorIs(t, err, sentinel)
 	require.Contains(t, err.Error(), "insert event")

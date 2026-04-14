@@ -91,11 +91,21 @@ func (b *Bus) Publish(ctx context.Context, env *Envelope) (err error) {
 // On successful insert, env.ID is populated with the DB-generated (or
 // caller-provided) row id.
 func (b *Bus) PublishTx(ctx context.Context, tx pgx.Tx, env *Envelope) error {
+	if tx == nil {
+		return fmt.Errorf("publish: nil tx")
+	}
 	if env == nil {
 		return fmt.Errorf("publish: nil envelope")
 	}
 	if env.Kind == "" {
 		return fmt.Errorf("publish: empty kind")
+	}
+	if _, ok := kindPayloadTypes[env.Kind]; !ok {
+		// Spec §6 "events/bus_test.go" list: unknown-kind rejection is
+		// required. Prevents publishers from persisting arbitrary strings
+		// into the event log (which would later surface as undecodable
+		// payloads in consumers).
+		return fmt.Errorf("publish: unknown kind %q", env.Kind)
 	}
 	if env.Source == "" {
 		return fmt.Errorf("publish: empty source")
