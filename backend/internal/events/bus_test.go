@@ -7,20 +7,61 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/riverqueue/river"
 	"github.com/stretchr/testify/require"
 )
 
-// TestConsumerJobsForKind_EmptyForAllKinds is the guardrail: PR 2 registers
-// no consumer jobs for any kind. A future PR that wires a consumer into
-// the registry must update this test, preventing silent partial wiring.
-func TestConsumerJobsForKind_EmptyForAllKinds(t *testing.T) {
-	for _, k := range AllKinds {
-		jobs := consumerJobsForKind(k, uuid.New())
-		require.Empty(t, jobs, "kind %s: expected empty consumer-job slice", k)
+// TestConsumerJobsForKind_FiveAsyncKindsEnqueueInteractionRecorder asserts
+// the PR 5 routing: async-publisher kinds enqueue exactly one
+// InteractionRecorder river job each with MaxAttempts=5 (plan Decision 8).
+func TestConsumerJobsForKind_FiveAsyncKindsEnqueueInteractionRecorder(t *testing.T) {
+	asyncKinds := []Kind{
+		KindMessageReceived, KindMessageSent, KindCalendarAttended,
+		KindTaskCompleted, KindTaskOutreachDetected,
+	}
+	for _, k := range asyncKinds {
+		t.Run(string(k), func(t *testing.T) {
+			eventID := uuid.New()
+			jobs := consumerJobsForKind(k, eventID)
+			require.Len(t, jobs, 1, "kind %s should enqueue exactly one consumer job", k)
+			args, ok := jobs[0].Args.(consumerjobs.InteractionRecorderJobArgs)
+			require.True(t, ok, "job args type must be InteractionRecorderJobArgs, got %T", jobs[0].Args)
+			require.Equal(t, eventID, args.EventID)
+			require.Equal(t, "interaction_recorder", args.Kind())
+			require.NotNil(t, jobs[0].Opts, "InsertOpts must be set to pin MaxAttempts")
+			require.Equal(t, 5, jobs[0].Opts.MaxAttempts)
+			// Sanity: confirm the opts value survives a round-trip through
+			// river.InsertOpts (not accidentally a different struct).
+			var _ *river.InsertOpts = jobs[0].Opts
+		})
+	}
+}
+
+// TestConsumerJobsForKind_EmptyForPR5DeferredKinds asserts the kinds that
+// have no active consumer in PR 5 return nil:
+//   - interaction.manual: inline-invoked by the manual UI handler
+//     (spec §3.4 "other consumers only" — plan Decision 7).
+//   - interaction.recorded: no consumer yet (CadenceUpdater = PR 7).
+//   - calendar.declined, task.skipped, contact_methods.added: consumers
+//     land in later PRs.
+func TestConsumerJobsForKind_EmptyForPR5DeferredKinds(t *testing.T) {
+	deferred := []Kind{
+		KindInteractionManual,
+		KindInteractionRecorded,
+		KindCalendarDeclined,
+		KindTaskSkipped,
+		KindContactMethodsAdded,
+	}
+	for _, k := range deferred {
+		t.Run(string(k), func(t *testing.T) {
+			jobs := consumerJobsForKind(k, uuid.New())
+			require.Empty(t, jobs, "kind %s: expected empty consumer-job slice in PR 5", k)
+		})
 	}
 }
 
