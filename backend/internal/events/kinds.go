@@ -66,6 +66,12 @@ type Envelope struct {
 // consumer.
 
 // MessageReceivedPayload is the payload for KindMessageReceived.
+//
+// Direction is an optional publisher-set override. When non-empty the
+// consumer uses it verbatim (e.g., telegram "fresh-mutual" sessions
+// classified at publish time emit a KindMessageReceived with
+// Direction="mutual"). When empty the consumer applies the kind default
+// ("inbound" for received). See plan Decision 6.
 type MessageReceivedPayload struct {
 	Version           int        `json:"version"`              // start at 1
 	ContactID         *uuid.UUID `json:"contact_id,omitempty"` // nil if unmatched peer
@@ -73,9 +79,14 @@ type MessageReceivedPayload struct {
 	MessageAt         time.Time  `json:"message_at"`
 	Description       *string    `json:"description,omitempty"`
 	ExternalMessageID string     `json:"external_message_id,omitempty"`
+	Direction         string     `json:"direction,omitempty"` // optional override; empty = kind default "inbound"
 }
 
 // MessageSentPayload is the payload for KindMessageSent.
+//
+// Direction is an optional publisher-set override. Empty = kind default
+// "outbound". Non-empty value wins (e.g., fresh-mutual → "mutual").
+// See plan Decision 6.
 type MessageSentPayload struct {
 	Version           int        `json:"version"`
 	ContactID         *uuid.UUID `json:"contact_id,omitempty"`
@@ -83,6 +94,7 @@ type MessageSentPayload struct {
 	MessageAt         time.Time  `json:"message_at"`
 	Description       *string    `json:"description,omitempty"`
 	ExternalMessageID string     `json:"external_message_id,omitempty"`
+	Direction         string     `json:"direction,omitempty"` // optional override; empty = kind default "outbound"
 }
 
 // CalendarAttendedPayload is the payload for KindCalendarAttended.

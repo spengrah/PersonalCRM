@@ -54,6 +54,64 @@ func TestMarshalUnmarshal_MessageReceived_NilOptionals(t *testing.T) {
 	require.Nil(t, decoded.Description)
 }
 
+// TestMarshalUnmarshal_MessageReceived_WithDirectionOverride verifies the
+// optional Direction field round-trips. Fresh-mutual telegram sessions rely
+// on this field to carry "mutual" through the shadow-mode bake (plan
+// Decision 6).
+func TestMarshalUnmarshal_MessageReceived_WithDirectionOverride(t *testing.T) {
+	cid := uuid.New()
+	original := MessageReceivedPayload{
+		Version:   1,
+		ContactID: &cid,
+		PeerRef:   "tg:123:456",
+		MessageAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		Direction: "mutual",
+	}
+	raw, err := Marshal(KindMessageReceived, original)
+	require.NoError(t, err)
+	env := &Envelope{Kind: KindMessageReceived, Payload: raw}
+	var decoded MessageReceivedPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.Equal(t, "mutual", decoded.Direction)
+	require.Equal(t, original, decoded)
+}
+
+// TestMarshalUnmarshal_MessageReceived_EmptyDirectionOmitted verifies that
+// an absent Direction field decodes to "" (the kind-default sentinel the
+// consumer uses to fall back to "inbound"/"outbound").
+func TestMarshalUnmarshal_MessageReceived_EmptyDirectionOmitted(t *testing.T) {
+	original := MessageReceivedPayload{
+		Version:   1,
+		PeerRef:   "tg:1:2",
+		MessageAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	}
+	raw, err := Marshal(KindMessageReceived, original)
+	require.NoError(t, err)
+	// `omitempty` means Direction is absent from the JSON when empty.
+	require.NotContains(t, string(raw), "direction")
+	env := &Envelope{Kind: KindMessageReceived, Payload: raw}
+	var decoded MessageReceivedPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.Equal(t, "", decoded.Direction)
+}
+
+func TestMarshalUnmarshal_MessageSent_WithDirectionOverride(t *testing.T) {
+	cid := uuid.New()
+	original := MessageSentPayload{
+		Version:   1,
+		ContactID: &cid,
+		PeerRef:   "tg:123:456",
+		MessageAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		Direction: "mutual",
+	}
+	raw, err := Marshal(KindMessageSent, original)
+	require.NoError(t, err)
+	env := &Envelope{Kind: KindMessageSent, Payload: raw}
+	var decoded MessageSentPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.Equal(t, "mutual", decoded.Direction)
+}
+
 func TestMarshalUnmarshal_MessageSent(t *testing.T) {
 	cid := uuid.New()
 	desc := "hi"
