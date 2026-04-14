@@ -40,30 +40,45 @@ func buildAttendeeList(...) {
 
 ## Sync Pipeline Architecture
 
-The sync pipeline embeds matching and enrichment as synchronous steps within the provider:
+The sync pipeline embeds matching and enrichment as synchronous steps within the provider. After #180 PR 3 the tick is a river periodic job and each account sync is a separate river job:
 
 ```
-RunDueSyncs() / TriggerSync()
-  └─ performSync()
-       └─ provider.Sync() (e.g., Google Contacts)
-            ├─ Fetch from external API
-            ├─ ImportMatchService.FindBestMatch()  ← synchronous
-            └─ EnrichmentService.EnrichContact()   ← synchronous
+river periodic (scheduler_tick, every 5m)
+  └─ SchedulerTickWorker.Work
+       └─ service.ListDueAccounts
+       └─ service.EnqueueAccountSyncIfNotInFlight → river_job (sync_provider_account)
+
+river worker picks up sync_provider_account:
+  └─ SyncProviderAccountWorker.Work
+       └─ service.RunAccountSync
+            └─ service.runSyncForState
+                 ├─ AbandonRunningLogsForState  ← clears orphan 'running' logs
+                 ├─ CreateSyncLog
+                 └─ provider.Sync (e.g., Google Contacts)
+                      ├─ Fetch from external API
+                      ├─ ImportMatchService.FindBestMatch()  ← synchronous
+                      └─ EnrichmentService.EnrichContact()   ← synchronous
+
+TriggerSync() (HTTP handler)
+  └─ If enqueuer wired: EnqueueAccountSyncIfNotInFlight (dedup-safe)
+     Else: falls back to synchronous runSyncForState (tests / pre-wire boot)
 ```
 
-**Key insight:** Matching and enrichment are NOT separate background jobs. They run inline during the sync. The entire pipeline is tracked as a single `syncing` state in `external_sync_state`.
+**Key insight:** Matching and enrichment are NOT separate background jobs. They run inline inside `provider.Sync`. The outer dispatch (tick → worker → runSyncForState) is river-backed so a crashed worker is re-leased by river's `JobRescuer`.
+
+The old `external_sync_state.status = 'syncing'` mutex is retired; river_job's own state (available/running/completed/retryable) is the source of truth for "in-flight". `SyncStatusSyncing` remains as a deprecated constant for legacy-row recovery (`RecoverStuckSyncingStates` at boot).
 
 ### Sync Data Flow Diagram
 
 ```mermaid
 flowchart TB
     subgraph Triggers
-        SCHED[Scheduler<br/>every 5 min]
+        SCHED[river PeriodicJob<br/>every 5 min]
         API_CALL["/api/v1/sync/:source/trigger"]
     end
 
     subgraph SyncService
-        DUE[SyncService.RunDueSyncs]
+        DUE[SchedulerTickWorker<br/>&rarr; EnqueueAccountSyncIfNotInFlight]
         TRIG[SyncService.TriggerSync]
     end
 

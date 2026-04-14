@@ -22,7 +22,7 @@ graph TB
         HANDLERS[Handlers]
         SERVICES[Services]
         REPOS[Repositories]
-        SCHEDULER[Scheduler<br/>robfig/cron]
+        SCHEDULER[Scheduler<br/>river PeriodicJob]
 
         subgraph Sync["Sync Providers"]
             GCONTACTS[Google Contacts]
@@ -230,25 +230,39 @@ Schema in `backend/migrations/`. Run `make sqlc` after SQL changes.
 - Can export static site (~5MB) with nginx
 - Decision deferred until Pi deployment
 
-### Scheduler: robfig/cron
+### Scheduler: river PeriodicJob
 
-**Location:** `backend/internal/scheduler/scheduler.go`
+**Location:** `backend/internal/scheduler/` (tick_worker.go, sync_worker.go, args.go)
+
+Historically the scheduler used `robfig/cron` to trigger
+`syncService.RunDueSyncs()` every 5 minutes. As of #180 PR 3 the
+scheduler runs on top of `github.com/riverqueue/river` periodic jobs.
 
 **Current Jobs:**
 | Job | Schedule | Description |
 |-----|----------|-------------|
-| External sync check | Every 5 min | Runs `syncService.RunDueSyncs()` to check for due provider syncs |
+| `scheduler_tick` | Every 5 min (`RunOnStart: true`) | SchedulerTickWorker enumerates due `external_sync_state` rows and enqueues one `sync_provider_account` river job per account. |
+| `sync_provider_account` | Dispatched on-demand | SyncProviderAccountWorker calls `syncService.RunAccountSync(source, accountID)` for a single account. River's lease + rescuer provides durable crash-recovery. |
 
-**Why cron in-process?**
-- Simple: no external scheduler needed
-- Reliable: proven library
-- Efficient: runs in same process as API
-- Easy time acceleration for testing
+Dedup is done in a repository helper
+(`EnqueueAccountSyncIfNotInFlight`) that wraps
+`pg_advisory_xact_lock(hashtextextended(source||'|'||account_id, 0))` +
+`CountInFlightSyncJobs` + `InsertTx` in a single transaction. Two
+concurrent callers for the same account serialize on the advisory
+lock, so the pre-check cannot race with a concurrent insert.
+
+**Why river in-process?**
+- Durable queue persisted in Postgres (survives crashes).
+- Built-in `JobRescuer` rescues stuck `running` jobs after
+  `RescueStuckJobsAfter` (default 1h), eliminating the old
+  `status='syncing'` mutex + watchdog story (closes #208).
+- Periodic jobs via `river.NewPeriodicJob` replace cron scheduling.
+- Runs in same process as API — no external scheduler.
 
 **Why NOT separate cron + systemd?**
-- More moving parts
-- Harder to test
-- Time acceleration feature requires control
+- More moving parts.
+- Harder to test.
+- Time acceleration feature requires control.
 
 ---
 

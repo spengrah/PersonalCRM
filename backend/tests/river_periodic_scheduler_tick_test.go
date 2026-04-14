@@ -1,0 +1,136 @@
+package tests
+
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+
+	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/scheduler"
+	"personal-crm/backend/internal/service"
+	syncpkg "personal-crm/backend/internal/sync"
+
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// TestPeriodicTick_EndToEndEnqueueWithAtomicClaim asserts that the
+// SchedulerTickWorker, driven by a real SyncService + SyncRepository
+// stack, reads due sync states and enqueues exactly one
+// SyncProviderAccountJob per due account. This is the production-path
+// integration check: plan + repo + worker + river client together.
+//
+// The rescue / crash-recovery behavior lives in
+// sync_worker_leased_retry_test.go; dedup (in-flight skip, completed
+// doesn't block, cross-window) lives in sync_repo_enqueue_test.go. This
+// file only proves the tick-to-insert plumbing.
+func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	cfg.Database.MigrationsPath = getMigrationsPath()
+
+	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
+
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	t.Cleanup(func() { database.Close() })
+
+	// Clean-up pre-existing state that could collide with this test's
+	// account IDs. The source strings embed the test name so future
+	// tests with different strings don't collide.
+	src1 := "tick_test_gmail"
+	src2 := "tick_test_todoist"
+
+	_, err = database.Pool.Exec(ctx,
+		`DELETE FROM river_job WHERE kind = 'sync_provider_account'
+		 AND (args->>'source') IN ($1, $2)`, src1, src2)
+	require.NoError(t, err)
+
+	_, err = database.Pool.Exec(ctx,
+		`DELETE FROM external_sync_state WHERE source IN ($1, $2)`, src1, src2)
+	require.NoError(t, err)
+
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+	contactRepo := repository.NewContactRepository(database.Queries)
+	registry := syncpkg.NewProviderRegistry()
+
+	// Seed two sync_state rows whose next_sync_at is already in the past,
+	// so they're eligible for the tick.
+	past := accelerated.GetCurrentTime().Add(-1 * time.Minute)
+	acct := "user@example.com"
+	_, err = syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+		Source:     src1,
+		AccountID:  &acct,
+		Enabled:    true,
+		Strategy:   repository.SyncStrategyFetchAll,
+		NextSyncAt: &past,
+	})
+	require.NoError(t, err)
+	_, err = syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+		Source:     src2,
+		Enabled:    true,
+		Strategy:   repository.SyncStrategyFetchAll,
+		NextSyncAt: &past,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = database.Pool.Exec(context.Background(),
+			`DELETE FROM external_sync_state WHERE source IN ($1, $2)`, src1, src2)
+		_, _ = database.Pool.Exec(context.Background(),
+			`DELETE FROM river_job WHERE kind = 'sync_provider_account'
+			 AND (args->>'source') IN ($1, $2)`, src1, src2)
+	})
+
+	svc := service.NewSyncService(syncRepo, contactRepo, registry)
+
+	// Build a test-only river client. TestOnly prevents leader/periodic
+	// loops from racing with our manual Work() invocation below, and we
+	// never call client.Start — the tick worker's Work is invoked
+	// directly so the pending-available rows aren't drained by the
+	// worker pool.
+	workers := river.NewWorkers()
+	river.AddWorker(workers, scheduler.NewSchedulerTickWorker(svc))
+	river.AddWorker(workers, scheduler.NewSyncProviderAccountWorker(svc))
+	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: 10},
+		},
+		Workers:  workers,
+		TestOnly: true,
+	})
+	require.NoError(t, err)
+
+	svc.SetRiverEnqueuer(client)
+
+	// Invoke the tick worker's Work directly — the periodic scheduling
+	// mechanism is river's own and tested separately; here we verify the
+	// worker's contract against a live service + repository.
+	tickWorker := scheduler.NewSchedulerTickWorker(svc)
+	err = tickWorker.Work(ctx, &river.Job[scheduler.SchedulerTickArgs]{Args: scheduler.SchedulerTickArgs{}})
+	require.NoError(t, err)
+
+	// Both due accounts should have exactly one river_job row each.
+	for _, src := range []string{src1, src2} {
+		var cnt int
+		require.NoError(t, database.Pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM river_job WHERE kind = 'sync_provider_account'
+			 AND (args->>'source') = $1`, src,
+		).Scan(&cnt))
+		assert.Equal(t, 1, cnt, "expected exactly one enqueued job for source=%s", src)
+	}
+}
