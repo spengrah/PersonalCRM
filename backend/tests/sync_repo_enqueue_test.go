@@ -31,6 +31,13 @@ func (*syncWorkerForEnqueueTests) Work(_ context.Context, _ *river.Job[scheduler
 	return nil
 }
 
+// enqueueArgs is a tiny helper that builds the args value the repo
+// helper now requires as an explicit argument. Matches what
+// service.EnqueueAccountSyncIfNotInFlight constructs in production.
+func enqueueArgs(source string, accountID *string) scheduler.SyncProviderAccountArgs {
+	return scheduler.SyncProviderAccountArgs{Source: source, AccountID: accountID}
+}
+
 // newEnqueueTestEnv stands up the shared DB and a pool-aware sync repo.
 // Each test also builds its own river client via newJobEnqueuer so the
 // tests stay isolated.
@@ -126,7 +133,7 @@ func TestEnqueueAccountSyncIfNotInFlight_SkipsWhenInFlight(t *testing.T) {
 	// Seed a live 'running' row for the same (source, account_id).
 	seedRiverJob(t, ctx, database, "running", source, &acct)
 
-	enqueued, err := repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, &acct)
+	enqueued, err := repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, &acct, enqueueArgs(source, &acct))
 	require.NoError(t, err)
 	assert.False(t, enqueued, "helper must skip when an in-flight row already exists")
 
@@ -152,7 +159,7 @@ func TestEnqueueAccountSyncIfNotInFlight_InsertsWhenClear(t *testing.T) {
 	source := "gmail"
 	acct := "u2@example.com"
 
-	enqueued, err := repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, &acct)
+	enqueued, err := repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, &acct, enqueueArgs(source, &acct))
 	require.NoError(t, err)
 	assert.True(t, enqueued, "helper must insert when no in-flight row exists")
 
@@ -181,7 +188,7 @@ func TestEnqueueAccountSyncIfNotInFlight_CompletedDoesNotBlock(t *testing.T) {
 	// property that rules out river's default ByState dedup.
 	seedRiverJob(t, ctx, database, "completed", source, &acct)
 
-	enqueued, err := repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, &acct)
+	enqueued, err := repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, &acct, enqueueArgs(source, &acct))
 	require.NoError(t, err)
 	assert.True(t, enqueued, "a completed row must not block a new enqueue")
 }
@@ -207,7 +214,7 @@ func TestEnqueueAccountSyncIfNotInFlight_CrossWindowOverlapPrevented(t *testing.
 		 AND (args->>'source') = $1`, source)
 	require.NoError(t, err)
 
-	enqueued, err := repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, &acct)
+	enqueued, err := repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, &acct, enqueueArgs(source, &acct))
 	require.NoError(t, err)
 	assert.False(t, enqueued,
 		"cross-window overlap must be prevented (this is what ByPeriod would miss)")
@@ -243,7 +250,7 @@ func TestEnqueueAccountSyncIfNotInFlight_AtomicUnderConcurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start // all goroutines race from the same starting gate
-			enqueued, err := repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, &acct)
+			enqueued, err := repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, &acct, enqueueArgs(source, &acct))
 			if err != nil {
 				errsMu.Lock()
 				errs = append(errs, err)
@@ -300,12 +307,12 @@ func TestEnqueueAccountSyncIfNotInFlight_NilAccountID(t *testing.T) {
 	source := "imessage"
 
 	// First call: inserts.
-	enqueued, err := repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, nil)
+	enqueued, err := repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, nil, enqueueArgs(source, nil))
 	require.NoError(t, err)
 	assert.True(t, enqueued)
 
 	// Second call: sees the in-flight row and skips.
-	enqueued, err = repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, nil)
+	enqueued, err = repo.EnqueueAccountSyncIfNotInFlight(ctx, enqueuer, source, nil, enqueueArgs(source, nil))
 	require.NoError(t, err)
 	assert.False(t, enqueued)
 }

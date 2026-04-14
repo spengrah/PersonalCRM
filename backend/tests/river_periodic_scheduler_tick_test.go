@@ -69,6 +69,22 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 	contactRepo := repository.NewContactRepository(database.Queries)
 	registry := syncpkg.NewProviderRegistry()
 
+	// Register stub providers for both sources so service.ListDueAccounts
+	// does not filter them out as "unregistered" (that filter exists to
+	// skip poison jobs for stale sync_state rows; see service/sync.go).
+	registry.Register(&tickStubProvider{cfg: syncpkg.SourceConfig{
+		Name:            src1,
+		DisplayName:     src1,
+		Strategy:        repository.SyncStrategyFetchAll,
+		DefaultInterval: 15 * time.Minute,
+	}})
+	registry.Register(&tickStubProvider{cfg: syncpkg.SourceConfig{
+		Name:            src2,
+		DisplayName:     src2,
+		Strategy:        repository.SyncStrategyFetchAll,
+		DefaultInterval: 15 * time.Minute,
+	}})
+
 	// Seed two sync_state rows whose next_sync_at is already in the past,
 	// so they're eligible for the tick.
 	past := accelerated.GetCurrentTime().Add(-1 * time.Minute)
@@ -133,4 +149,20 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 		).Scan(&cnt))
 		assert.Equal(t, 1, cnt, "expected exactly one enqueued job for source=%s", src)
 	}
+}
+
+// tickStubProvider satisfies sync.SyncProvider so a registry can be
+// populated without wiring real providers. The tick test never actually
+// calls Sync — it only invokes the tick worker, which reads due states
+// and enqueues jobs — so this stub's Sync is a no-op.
+type tickStubProvider struct {
+	cfg syncpkg.SourceConfig
+}
+
+func (p *tickStubProvider) Config() syncpkg.SourceConfig { return p.cfg }
+func (p *tickStubProvider) ValidateCredentials(_ context.Context, _ *string) error {
+	return nil
+}
+func (p *tickStubProvider) Sync(_ context.Context, _ *repository.SyncState, _ []repository.Contact) (*syncpkg.SyncResult, error) {
+	return &syncpkg.SyncResult{}, nil
 }

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/db"
-	"personal-crm/backend/internal/scheduler"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -38,9 +37,25 @@ const (
 	SyncStatusDisabled SyncStatus = "disabled"
 )
 
-// JobEnqueuer is the minimal *river.Client surface the repository needs to
-// enqueue a job within a caller-supplied pgx.Tx. *river.Client[pgx.Tx]
+// DueAccount identifies a (source, account_id) pair whose sync is due.
+// Returned by ListDueAccounts; consumed by the scheduler tick worker.
+// Lives in the repository package so the worker package can depend on
+// it without the repository depending on the worker (which would cause
+// an import cycle).
+type DueAccount struct {
+	Source    string
+	AccountID *string
+}
+
+// JobEnqueuer is the minimal *river.Client surface the repository needs
+// to enqueue a job within a caller-supplied pgx.Tx. *river.Client[pgx.Tx]
 // satisfies this via its InsertTx method. Tests can substitute a fake.
+//
+// Note: the repository does NOT construct concrete job-arg types. It
+// accepts an opaque river.JobArgs value from the caller (see
+// EnqueueAccountSyncIfNotInFlight's signature). That keeps the
+// worker/args package a top-level dependency — the repository doesn't
+// import scheduler.
 type JobEnqueuer interface {
 	InsertTx(ctx context.Context, tx pgx.Tx, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error)
 }
@@ -553,6 +568,24 @@ func (r *SyncRepository) DeleteOldSyncLogs(ctx context.Context, before time.Time
 	return r.queries.DeleteOldSyncLogs(ctx, pgtype.Timestamptz{Time: before, Valid: true})
 }
 
+// ListDueAccounts returns the (source, account_id) pairs of sync states
+// whose next_sync_at has come due. Thin wrapper over ListDueSyncStates
+// for callers (the tick worker) that only need the dispatch keys.
+// Filtering for registered providers is done at the service layer (see
+// service.SyncService.ListDueAccounts) so this repo method stays pure
+// DB access.
+func (r *SyncRepository) ListDueAccounts(ctx context.Context, now time.Time) ([]DueAccount, error) {
+	states, err := r.ListDueSyncStates(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	accounts := make([]DueAccount, len(states))
+	for i, st := range states {
+		accounts[i] = DueAccount{Source: st.Source, AccountID: st.AccountID}
+	}
+	return accounts, nil
+}
+
 // RecoverStuckSyncingStates is a one-shot boot helper that resets any rows
 // left in status='syncing' from a pre-PR-3 crash. Returns the number of
 // rows reset. Idempotent — after PR 3 no code writes 'syncing' so this
@@ -569,11 +602,18 @@ func (r *SyncRepository) AbandonRunningLogsForState(ctx context.Context, stateID
 	return r.queries.AbandonRunningLogsForState(ctx, uuidToPgUUID(stateID))
 }
 
-// EnqueueAccountSyncIfNotInFlight atomically claims-and-enqueues a
-// SyncProviderAccountJob for (source, accountID) iff no in-flight job for
-// the same pair exists. Returns (enqueued=true, nil) when a job was
+// EnqueueAccountSyncIfNotInFlight atomically claims-and-enqueues the
+// caller-supplied job args for (source, accountID) iff no in-flight job
+// for the same pair exists. Returns (enqueued=true, nil) when a job was
 // inserted, (enqueued=false, nil) when a duplicate was skipped, and
 // (false, err) on infrastructure errors.
+//
+// The `args` parameter is opaque river.JobArgs — typically a
+// scheduler.SyncProviderAccountArgs, but the repository does not import
+// scheduler (to keep Handler → Service → Repository layering clean).
+// Callers (service.SyncService) are responsible for constructing a
+// JobArgs whose JSON shape matches the CountInFlightSyncJobs dedup
+// query's expectations (keys `source` and `account_id`).
 //
 // Atomicity story (see .ai/log/plan/event-bus-foundation-pr3-scheduler-river.md DD 1):
 //  1. Begin a pgx.Tx on the shared pool.
@@ -593,6 +633,7 @@ func (r *SyncRepository) EnqueueAccountSyncIfNotInFlight(
 	enqueuer JobEnqueuer,
 	source string,
 	accountID *string,
+	args river.JobArgs,
 ) (bool, error) {
 	if r.pool == nil {
 		return false, errors.New("sync repository was not constructed with a pool; use NewSyncRepositoryWithPool")
@@ -644,7 +685,9 @@ func (r *SyncRepository) EnqueueAccountSyncIfNotInFlight(
 		return false, nil
 	}
 
-	args := scheduler.SyncProviderAccountArgs{Source: source, AccountID: accountID}
+	if args == nil {
+		return false, errors.New("nil args passed to EnqueueAccountSyncIfNotInFlight")
+	}
 	if _, err := enqueuer.InsertTx(ctx, tx, args, nil); err != nil {
 		return false, fmt.Errorf("insert sync_provider_account job: %w", err)
 	}

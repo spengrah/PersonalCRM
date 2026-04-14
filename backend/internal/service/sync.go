@@ -60,29 +60,48 @@ func (s *SyncService) SetRiverEnqueuer(e repository.JobEnqueuer) {
 
 // EnqueueAccountSyncIfNotInFlight delegates to the repository's
 // atomic-claim transaction. See repository.EnqueueAccountSyncIfNotInFlight
-// for the correctness argument.
+// for the correctness argument. The service is the only layer that
+// imports scheduler — it constructs SyncProviderAccountArgs here and
+// passes it to the repo as opaque river.JobArgs so the repo stays free
+// of the scheduler package.
 func (s *SyncService) EnqueueAccountSyncIfNotInFlight(
 	ctx context.Context, source string, accountID *string,
 ) (bool, error) {
 	if s.enqueuer == nil {
 		return false, errors.New("sync service has no river enqueuer; wiring incomplete")
 	}
-	return s.syncRepo.EnqueueAccountSyncIfNotInFlight(ctx, s.enqueuer, source, accountID)
+	args := scheduler.SyncProviderAccountArgs{Source: source, AccountID: accountID}
+	return s.syncRepo.EnqueueAccountSyncIfNotInFlight(ctx, s.enqueuer, source, accountID, args)
 }
 
 // ListDueAccounts returns the (source, account_id) pairs of due sync
 // states. Called by the SchedulerTickWorker to enumerate enqueue targets.
-// Returns scheduler.DueAccount so the service directly satisfies
-// scheduler.SyncServiceForTick.
-func (s *SyncService) ListDueAccounts(ctx context.Context) ([]scheduler.DueAccount, error) {
+// Returns []repository.DueAccount so the service directly satisfies
+// scheduler.SyncServiceForTick without requiring an adapter (and the
+// scheduler package imports repository, not the reverse).
+//
+// Rows whose `source` is not in the provider registry are filtered out
+// here so the tick does not enqueue poison jobs: without this filter, a
+// stale external_sync_state row for an unconfigured provider (e.g.
+// OAuth was removed) would cycle enqueue → worker-fail-unknown-source
+// → river discard → next tick, burning retry budgets forever.
+// Operators can disable or delete those rows explicitly; the scheduler
+// does not touch them.
+func (s *SyncService) ListDueAccounts(ctx context.Context) ([]repository.DueAccount, error) {
 	now := accelerated.GetCurrentTime()
-	states, err := s.syncRepo.ListDueSyncStates(ctx, now)
+	all, err := s.syncRepo.ListDueAccounts(ctx, now)
 	if err != nil {
 		return nil, err
 	}
-	accounts := make([]scheduler.DueAccount, len(states))
-	for i, st := range states {
-		accounts[i] = scheduler.DueAccount{Source: st.Source, AccountID: st.AccountID}
+	accounts := make([]repository.DueAccount, 0, len(all))
+	for _, acct := range all {
+		if _, ok := s.registry.Get(acct.Source); !ok {
+			logger.Debug().
+				Str("source", acct.Source).
+				Msg("scheduler tick: no provider registered; skipping due account")
+			continue
+		}
+		accounts = append(accounts, acct)
 	}
 	return accounts, nil
 }
@@ -186,7 +205,15 @@ func (s *SyncService) RunDueSyncs(ctx context.Context) error {
 func (s *SyncService) RunAccountSync(ctx context.Context, source string, accountID *string) error {
 	provider, ok := s.registry.Get(source)
 	if !ok {
-		return fmt.Errorf("unknown sync source: %s", source)
+		// Terminal: a job was enqueued for a source that has since been
+		// unregistered (e.g., operator revoked OAuth between the tick
+		// enqueue and the worker fetch). Returning nil prevents river
+		// from retrying — next tick will skip this account via
+		// ListDueAccounts' provider filter.
+		logger.Warn().
+			Str("source", source).
+			Msg("sync_provider_account: no provider registered; treating as terminal")
+		return nil
 	}
 
 	state, err := s.syncRepo.GetSyncStateBySource(ctx, source, accountID)

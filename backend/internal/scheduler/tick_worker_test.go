@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"personal-crm/backend/internal/repository"
+
 	"github.com/riverqueue/river"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,7 +18,7 @@ import (
 // returns scripted (enqueued, err) pairs keyed by source.
 type fakeSyncServiceForTick struct {
 	mu              sync.Mutex
-	listAccounts    []DueAccount
+	listAccounts    []repository.DueAccount
 	listErr         error
 	enqueueCalls    []enqueueCall
 	enqueueResults  map[string]enqueueResult // by Source
@@ -33,7 +35,7 @@ type enqueueResult struct {
 	err      error
 }
 
-func (f *fakeSyncServiceForTick) ListDueAccounts(_ context.Context) ([]DueAccount, error) {
+func (f *fakeSyncServiceForTick) ListDueAccounts(_ context.Context) ([]repository.DueAccount, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.listAccounts, f.listErr
@@ -54,7 +56,7 @@ func (f *fakeSyncServiceForTick) EnqueueAccountSyncIfNotInFlight(
 func TestSchedulerTickWorker_Work_EnqueuesPerDueAccount(t *testing.T) {
 	acct1 := "acct-1"
 	svc := &fakeSyncServiceForTick{
-		listAccounts: []DueAccount{
+		listAccounts: []repository.DueAccount{
 			{Source: "gmail", AccountID: &acct1},
 			{Source: "todoist", AccountID: nil},
 			{Source: "calendar", AccountID: &acct1},
@@ -87,7 +89,7 @@ func TestSchedulerTickWorker_Work_EmptyDueSetIsNoop(t *testing.T) {
 func TestSchedulerTickWorker_Work_SkipsWhenEnqueuerReturnsFalse(t *testing.T) {
 	acct1 := "acct-1"
 	svc := &fakeSyncServiceForTick{
-		listAccounts: []DueAccount{
+		listAccounts: []repository.DueAccount{
 			{Source: "gmail", AccountID: &acct1},
 			{Source: "todoist", AccountID: nil},
 		},
@@ -105,7 +107,7 @@ func TestSchedulerTickWorker_Work_SkipsWhenEnqueuerReturnsFalse(t *testing.T) {
 
 func TestSchedulerTickWorker_Work_ContinuesAfterPerAccountError(t *testing.T) {
 	svc := &fakeSyncServiceForTick{
-		listAccounts: []DueAccount{
+		listAccounts: []repository.DueAccount{
 			{Source: "gmail", AccountID: nil},
 			{Source: "todoist", AccountID: nil},
 			{Source: "calendar", AccountID: nil},

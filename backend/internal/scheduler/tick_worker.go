@@ -4,26 +4,19 @@ import (
 	"context"
 
 	"personal-crm/backend/internal/logger"
+	"personal-crm/backend/internal/repository"
 
 	"github.com/riverqueue/river"
 )
 
-// DueAccount identifies a (source, account_id) pair whose sync is due.
-// Mirrors repository.DueAccount; duplicated here so the scheduler package
-// does not have to import repository (which would create a cycle since
-// repository imports scheduler for SyncProviderAccountArgs).
-// service.SyncService returns []repository.DueAccount; callers adapt by
-// constructing a thin translator (see main.go wiring).
-type DueAccount struct {
-	Source    string
-	AccountID *string
-}
-
 // SyncServiceForTick is the narrow interface SchedulerTickWorker needs.
 // Keeping it narrow makes the worker trivial to unit-test without
-// standing up a real service + repository stack.
+// standing up a real service + repository stack. The worker consumes
+// []repository.DueAccount directly so service.SyncService can satisfy
+// this interface without an adapter, and the service does not need to
+// import scheduler.
 type SyncServiceForTick interface {
-	ListDueAccounts(ctx context.Context) ([]DueAccount, error)
+	ListDueAccounts(ctx context.Context) ([]repository.DueAccount, error)
 	EnqueueAccountSyncIfNotInFlight(ctx context.Context, source string, accountID *string) (bool, error)
 }
 
