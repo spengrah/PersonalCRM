@@ -254,6 +254,65 @@ func (r *InteractionRepository) UpdateInteractionTimestamp(ctx context.Context, 
 	return &interaction, nil
 }
 
+// CreateInteractionTx creates a new interaction inside the caller's tx.
+// Used by the InteractionRecorder consumer so the insert commits atomically
+// with the interaction.recorded event row (spec §3.4.1).
+func (r *InteractionRepository) CreateInteractionTx(ctx context.Context, tx pgx.Tx, req CreateInteractionRequest) (*Interaction, error) {
+	dbInteraction, err := db.New(tx).CreateInteraction(ctx, db.CreateInteractionParams{
+		ContactID:   uuidToPgUUID(req.ContactID),
+		Source:      req.Source,
+		SourceRef:   stringToPgText(req.SourceRef),
+		OccurredAt:  pgtype.Timestamptz{Time: req.OccurredAt, Valid: true},
+		Description: stringToPgText(req.Description),
+		Direction:   stringToPgText(&req.Direction),
+	})
+	if err != nil {
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
+// FindBySourceRefTx is the tx-threaded variant of FindBySourceRef. Used by
+// the consumer's HandleEvent to dedup inside the caller's tx.
+func (r *InteractionRepository) FindBySourceRefTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, source string, sourceRef string) (*Interaction, error) {
+	dbInteraction, err := db.New(tx).FindInteractionBySourceRef(ctx, db.FindInteractionBySourceRefParams{
+		ContactID: uuidToPgUUID(contactID),
+		Source:    source,
+		SourceRef: pgtype.Text{String: sourceRef, Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
+// FindInWindowTx is the tx-threaded variant of FindInWindow. Used by the
+// consumer for manual-kind dedup.
+func (r *InteractionRepository) FindInWindowTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, source string, occurredAt time.Time, window time.Duration) (*Interaction, error) {
+	windowStart := occurredAt.Add(-window)
+	windowEnd := occurredAt.Add(window)
+
+	dbInteraction, err := db.New(tx).FindInteractionInWindow(ctx, db.FindInteractionInWindowParams{
+		ContactID:    uuidToPgUUID(contactID),
+		OccurredAt:   pgtype.Timestamptz{Time: windowStart, Valid: true},
+		OccurredAt_2: pgtype.Timestamptz{Time: windowEnd, Valid: true},
+		Source:       source,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
 // UpdateInteractionDirection updates the direction and occurred_at of an interaction (for reply bridging)
 func (r *InteractionRepository) UpdateInteractionDirection(ctx context.Context, id uuid.UUID, direction string, occurredAt time.Time) (*Interaction, error) {
 	dbInteraction, err := r.queries.UpdateInteractionDirection(ctx, db.UpdateInteractionDirectionParams{

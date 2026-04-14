@@ -161,6 +161,23 @@ func (r *ContactRepository) GetContact(ctx context.Context, id uuid.UUID) (*Cont
 	return &contact, nil
 }
 
+// GetContactTx is the tx-threaded variant of GetContact. Used by the
+// InteractionRecorder consumer to verify the contact exists inside the
+// caller's tx before the interaction insert runs. Returns db.ErrNotFound
+// for a missing row so the consumer can propagate it as a clean 404-style
+// error rather than an opaque FK violation.
+func (r *ContactRepository) GetContactTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*Contact, error) {
+	dbContact, err := db.New(tx).GetContact(ctx, uuidToPgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	contact := convertDbContact(dbContact)
+	return &contact, nil
+}
+
 // ListContacts retrieves a paginated list of contacts
 func (r *ContactRepository) ListContacts(ctx context.Context, params ListContactsParams) ([]Contact, error) {
 	var (
