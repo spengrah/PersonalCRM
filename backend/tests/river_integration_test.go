@@ -91,7 +91,7 @@ func TestRiverClient_StartStop_Integration(t *testing.T) {
 	cfg.Database.MigrationsPath = getMigrationsPath()
 
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
+	// Migrations are applied once by TestMain.
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
@@ -136,7 +136,7 @@ func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 	cfg.Database.MigrationsPath = getMigrationsPath()
 
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
+	// Migrations are applied once by TestMain.
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
@@ -218,7 +218,7 @@ func TestRiverClient_BootsWithNoopWorkerOnly(t *testing.T) {
 	cfg.Database.MigrationsPath = getMigrationsPath()
 
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
+	// Migrations are applied once by TestMain.
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)

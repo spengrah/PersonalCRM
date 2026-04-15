@@ -72,7 +72,7 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = getMigrationsPath()
 
-	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
+	// Migrations are applied once by TestMain.
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
@@ -226,7 +226,7 @@ func TestSyncWorker_AbandonedLogOnStartupRecovery(t *testing.T) {
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = getMigrationsPath()
 
-	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
+	// Migrations are applied once by TestMain.
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
@@ -368,7 +368,7 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = getMigrationsPath()
-	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
+	// Migrations are applied once by TestMain.
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)

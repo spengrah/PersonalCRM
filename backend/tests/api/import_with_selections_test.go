@@ -29,12 +29,7 @@ func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository
 	ctx := context.Background()
 	databaseURL := os.Getenv("DATABASE_URL")
 
-	// Run migrations before connecting to database
-	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
-		panic("Failed to run migrations: " + err.Error())
-	}
-
+	// Migrations are applied once by TestMain.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
 		MaxConns:          config.DefaultDBMaxConns,

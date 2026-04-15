@@ -61,7 +61,7 @@ func setupSparseEnrichTest(t *testing.T) *sparseEnrichEnv {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	require.NoError(t, db.RunMigrations(context.Background(), databaseURL, getMigrationsPath()))
+	// Migrations are applied once by TestMain.
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

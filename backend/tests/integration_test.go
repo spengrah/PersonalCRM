@@ -3,6 +3,7 @@ package tests
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -32,6 +33,24 @@ func getMigrationsPath() string {
 	_, filename, _, _ := runtime.Caller(0)
 	testDir := filepath.Dir(filename)
 	return filepath.Join(testDir, "..", "migrations")
+}
+
+// TestMain applies database migrations once per `go test` invocation before
+// running any tests in this package. Individual test helpers used to each call
+// db.RunMigrations, which paid the River migrator pgxpool + advisory-lock cost
+// on every call. Running it once here is behavior-preserving (migrations are
+// idempotent) and cuts CI integration-test time substantially.
+//
+// If DATABASE_URL is unset, migrations are skipped here; individual tests will
+// then skip themselves via their existing DATABASE_URL guards.
+func TestMain(m *testing.M) {
+	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
+		if err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath()); err != nil {
+			fmt.Fprintf(os.Stderr, "TestMain: failed to run migrations: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	os.Exit(m.Run())
 }
 
 // TestRunMigrations_Integration tests the migration runner
@@ -379,12 +398,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Run migrations first
-	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
-		t.Fatalf("Failed to run migrations: %v", err)
-	}
-
+	// Migrations are applied once by TestMain.
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -741,12 +755,7 @@ func TestOAuthRepository_Integration(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Run migrations first
-	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
-		t.Fatalf("Failed to run migrations: %v", err)
-	}
-
+	// Migrations are applied once by TestMain.
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -1088,11 +1097,7 @@ func TestFindSimilarContactsBatch_Integration(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Run migrations first
-	migrationsPath := getMigrationsPath()
-	err := db.RunMigrations(context.Background(), databaseURL, migrationsPath)
-	require.NoError(t, err)
-
+	// Migrations are applied once by TestMain.
 	// Create database connection
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,

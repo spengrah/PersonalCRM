@@ -34,7 +34,7 @@ func setupDiscoveryUpsertTest(t *testing.T) (
 		t.Skip("DATABASE_URL not set")
 	}
 
-	require.NoError(t, db.RunMigrations(context.Background(), databaseURL, getMigrationsPath()))
+	// Migrations are applied once by TestMain.
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -338,7 +338,7 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
-	require.NoError(t, db.RunMigrations(context.Background(), databaseURL, getMigrationsPath()))
+	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
 	cfg := config.TestConfig()

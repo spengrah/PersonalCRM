@@ -49,7 +49,7 @@ func newEventBusTestDB(t *testing.T, ctx context.Context) (*db.Database, *config
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = getMigrationsPath()
 
-	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
+	// Migrations are applied once by TestMain.
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)

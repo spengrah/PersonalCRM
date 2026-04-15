@@ -74,12 +74,11 @@ func setupIngestTestRouter(t *testing.T, enableIngest bool) *ingestTestSetup {
 	}
 
 	ctx := context.Background()
-	migrationsPath := getMigrationsPath()
-	require.NoError(t, db.RunMigrations(ctx, databaseURL, migrationsPath))
+	// Migrations are applied once by TestMain.
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = migrationsPath
+	cfg.Database.MigrationsPath = getMigrationsPath()
 	cfg.External.APIKey = ingestTestAPIKey
 	cfg.Features.EnableEventBusIngest = enableIngest
 
