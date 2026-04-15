@@ -219,7 +219,11 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 	// may return an older row with a different Direction / OccurredAt —
 	// don't manufacture false direct-vs-consumer mismatches in the
 	// divergence query.
-	if h.shadow != nil {
+	//
+	// Double nil-guard (shadow + interaction) matches the PATCH handler's
+	// convention in contact.go and avoids a panic if RecordInteraction
+	// ever violates its (value, nil) contract.
+	if h.shadow != nil && interaction != nil {
 		desc := ""
 		if interaction.Description != nil {
 			desc = *interaction.Description
