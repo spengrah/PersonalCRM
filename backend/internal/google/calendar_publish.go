@@ -17,11 +17,14 @@ import (
 // path (CalendarRematchHandler.Rematch) so both produce matching shadow
 // observations (plan Decisions 6 / 7.1).
 //
-// SourceID = eventIDStr (the calendar_event.ID as a string) — the same
-// string the direct path uses for FindBySourceRef dedup. Consumer
-// FindBySourceRefTx on (contact_id, "gcal", eventIDStr) finds the direct-
-// path row written by the same call chain → replay early-return →
-// writer='consumer' replay=true observation.
+// SourceID is per-(event, contact): "<eventIDStr>:<contactID>". The event
+// table has a partial unique index on (source, source_id) WHERE source_id
+// IS NOT NULL (migration 036), so a calendar event with N CRM-tracked
+// attendees would collide on contacts 2..N if SourceID were just the
+// event UUID. Per-entity SourceID lets each contact's row survive ingest;
+// see .ai/rules/core.md "Multi-entity events" gotcha. Consumer dedup on
+// (contact_id, "gcal", eventIDStr) uses the payload's EventID field, not
+// the envelope's SourceID, so this format change is consumer-transparent.
 func publishCalendarAttended(
 	ctx context.Context,
 	bus *events.Bus,
@@ -41,7 +44,7 @@ func publishCalendarAttended(
 	}
 	env := &events.Envelope{
 		Source:     repository.InteractionSourceGCal,
-		SourceID:   eventIDStr,
+		SourceID:   eventIDStr + ":" + contactID.String(),
 		Kind:       events.KindCalendarAttended,
 		Payload:    raw,
 		ObservedAt: occurredAt,
