@@ -151,6 +151,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Mutating state before publishing a tx-bound event | Publish-before-mutate order within a `pgx.Tx`: `bus.PublishTx` → mutate state → commit. Reverse order strands interactions on publish failure — retries see the mutation already committed and skip the publish |
 | Holding `pgx.Tx` open across external HTTP calls in consumers | Commit DB writes first, then call external APIs (Todoist, etc.) in a post-commit closure. Blocking the tx on network I/O stalls the connection pool and risks deadlocks |
 | `river.Client.Start(ctx)` with a timeout-derived context | River silently stops fetching jobs when its fetch-loop ctx cancels. Pass the outer root context (never `context.WithTimeout(...)`). Applies to test harnesses too — use the test's base ctx, not a per-test timeout ctx |
+| Echoing API keys or other secrets in bash commands or tool descriptions | Session transcripts persist across conversations. Read secrets inline from `.env` on the target host without emitting them: `ssh host "API_KEY=\$(grep -oP '^API_KEY=\\K.*' /path/.env) curl ..."`. Never include the literal value in a command visible to the transcript. If a secret already leaked into a transcript, rotate it |
 
 ### Never Do These
 

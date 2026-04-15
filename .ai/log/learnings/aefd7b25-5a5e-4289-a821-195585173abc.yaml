@@ -102,3 +102,67 @@ detail: |
   During PR 6, the implementer crashed twice (stream timeout + API 500) while attempting mechanical signature updates across 28 integration test files. The orchestrator took over and manually applied the signature fixes (adding nil eventBus parameters), then resumed the implementer for the semantic work (test harness wiring). This reveals a threshold: implementers handle ~10-15 similar edits reliably, but 25+ mechanical changes across many files increases crash probability. **When to apply:** If a plan includes >20 similar mechanical edits (signature updates, import additions, nil-checks), consider splitting: implementer does the first 5-10 as examples, orchestrator batches the rest with parallel Edit calls, then implementer resumes for semantic logic. Or brief the implementer explicitly: 'If you crash mid-refactor, the orchestrator will resume you—checkpoint progress by committing logical groups (e.g., all signature updates in one commit) before moving to the next phase.'
 actionable: true
 
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: gotcha
+summary: River JobRescuer default 1h delay requires active SIGKILL testing for validation
+detail: |
+  PR 3 soak testing revealed that River's default `RescueStuckJobsAfter=1h` means orphaned jobs won't be rescued for ~60 minutes. Passive observation (e.g., waiting 72h for natural crashes) provides minimal validation. Deliberate mid-sync SIGKILL testing (trigger sync → poll for running state → kill → verify rescue) is far more effective. The immediate signal to validate is `external_sync_state.status='syncing'` count = 0 (proves the #208 bug class doesn't reproduce). The 1h rescue cycle is secondary validation of the orphan-cleanup path. Session demonstrated: 2 deliberate kills + 66-min wait for rescue provides stronger confidence than 72h passive soak.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: gotcha
+summary: Test cleanup for event-keyed tables must hard-delete, not rely on soft-delete or simple WHERE filters
+detail: |
+  PR 6 uncovered test-isolation bugs in aggregation + rematch-telegram tests. Event rows with fixed chat IDs accumulated across test runs in the `event` table, causing subsequent publishes to silently no-op due to `(source, source_ref)` uniqueness constraints. Soft-delete (UPDATE deleted_at) or simple cleanup (DELETE WHERE created_at > test_start) failed because event tables use natural keys from external systems. Fix: test cleanup now hard-deletes keyed event rows (`DELETE FROM event WHERE source_ref LIKE 'test-prefix-%'`) to ensure idempotent test execution. Also applies to other upsert-heavy tables like `external_contact` in Telegram integration tests.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: architecture
+summary: Per-(event, contact) source_ref pattern required for multi-entity events to avoid silent data loss
+detail: |
+  PR 6 fixed a silent data loss bug: calendar events with N attendees were using shared `source_ref` (e.g., `gcal:event-123`) for all N interaction rows. The `(source, source_ref)` unique constraint on the event table caused rows 2-N to silently dedup against row 1. Fix: use per-entity source_ref like `gcal:event-123:contact-uuid-1`. The `(source, source_id)` dedup on the `event` table (for the calendar event itself) is separate and does NOT prevent this multi-contact issue. Rule: when one external event affects N CRM entities, each entity's derived row must have a unique source_ref that combines event ID + entity ID.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: gotcha
+summary: Telegram dialog discovery on service restart surfaces previously-missed import candidates (expected behavior, not a bug)
+detail: |
+  Session investigation: post-SIGKILL restart at 12:08:53 triggered Telegram dialog discovery sweep, which upserted 29 new `external_contact` candidates at 17:09:25. User was alarmed (no recent Telegram activity explained them). Root cause: service has 7 group chats with `backfill_complete=false` (stuck due to FLOOD_WAIT pacing). Every restart triggers `maybeStartBackfill` → dialog discovery → `UpdateDiscoveryCandidates`, which scans all `telegram_message` rows and upserts external_contact for any peer with ≥ TELEGRAM_DISCOVERY_MIN_MESSAGES (env override = 1) that lacks a candidate row. These 29 peers had messages ingested during prior partial backfill runs but had never been surfaced as candidates until this sweep. Not a regression; expected incremental discovery behavior. Implication: until stuck chats complete backfill, every restart will surface more candidates (diminishing over time).
+actionable: false
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: rule
+summary: Never echo API keys in bash commands or tool descriptions — read inline from .env without output
+detail: |
+  Session initially passed API key as literal string in ssh command (`-H 'X-API-Key: c2c...'`), exposing it in transcript. Corrected approach for kill #2: `API_KEY=$(sudo grep -oP '^API_KEY=\K.*' /srv/personalcrm/.env)` on the Pi side, then use `$API_KEY` in curl without echoing. The key in the transcript should be rotated. Rule applies to all secrets: database passwords, OAuth tokens, etc. Always read from env/file on the remote side, never pass as CLI args or echo to logs.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: distinction
+summary: Test failures in full suite vs isolation indicate DB pollution, not implementation bugs
+detail: |
+  PR 6 completion: `TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction` flaked in full `make test` (shared DB, test-ordering pollution) but passed cleanly when run in isolation with correct DATABASE_URL. Session verified on PR 5 branch that same failures existed pre-PR-6, confirming not a regression. Distinction: isolation pass + full-suite flake = DB pollution issue (fix test cleanup or add test-level DB isolation). Isolation fail = real implementation bug. Several cadence/followup filter tests exhibit same pattern. When triaging test failures, always re-run suspect test in isolation before treating as implementation bug.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: gotcha
+summary: "Claude remote scheduling fallback: use systemd-run or cron when claude.ai /schedule fails"
+detail: |
+  Session attempted `/schedule` skill for 65-min delayed rescue verification but got 'trouble connecting with your remote claude.ai account'. User wanted agent to self-schedule (not a Pi-side log dump). Fallback pattern demonstrated: `ssh raspberet 'sudo systemd-run --on-active=65min --unit=pr3-rescue-check /bin/bash -c "..."'` schedules a one-shot timer that writes verification results to `/tmp/pr3-rescue-check.log`. Limitation: Pi-side timer has no way to resume Claude session — file is ready but requires user ping ('check rescue') or manual review. If remote scheduling recovers, can still use CronCreate for proper agent callback. User was dissatisfied with Pi-only approach; expected self-resuming agent.
+actionable: false
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: documentation_gap
+summary: Soak testing guidance should emphasize active fault injection over passive time windows
+detail: |
+  PR 3 plan specified 72h soak with passive observation metrics. Session reframed this: 72h is a proxy for 'enough events to be confident,' but for crash-recovery validation (River JobRescuer, #208 stuck-syncing bug), active SIGKILL testing provides far stronger signal than waiting for natural failures. Deliberate kill mid-sync + verified recovery (2 kills minimum for independent validation) exercises the rescue path directly. 72h of clean runs proves nothing about rescue correctness. Session demonstrated pragmatic minimum: ~24h wall-clock + 2 deliberate mid-sync restarts + sample-size check (50-100 runs per provider for result parity). Documentation gap: soak evidence checklist should lead with 'deliberate fault injection' as primary validation, time-based observation as secondary (for time-correlated bugs like DST, midnight rollovers). Current plan DD framing was correct but buried the lede.
+actionable: true
+
