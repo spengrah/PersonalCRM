@@ -18,8 +18,7 @@ import (
 func cleanupTelegramMessages(t *testing.T, queries db.Querier) {
 	t.Helper()
 	ctx := context.Background()
-	// Clean up messages by soft-deleting them, or use direct SQL
-	_ = queries.SoftDeleteTelegramMessages(ctx, []int32{90001, 90002, 90003, 90004, 90005})
+	_, _ = queries.DeleteTelegramMessagesByMessageIDs(ctx, []int32{90001, 90002, 90003, 90004, 90005})
 }
 
 func TestTelegramMessage_UpsertAndGet(t *testing.T) {

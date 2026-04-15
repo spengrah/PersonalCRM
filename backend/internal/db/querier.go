@@ -132,6 +132,7 @@ type Querier interface {
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
 	DeleteTelegramChannelState(ctx context.Context, channelID int64) error
 	DeleteTelegramChatConfig(ctx context.Context, telegramChatID int64) error
+	DeleteTelegramMessagesByMessageIDs(ctx context.Context, dollar_1 []int32) (int64, error)
 	DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
 	DeleteTelegramSession(ctx context.Context) error
 	DeleteTelegramUpdateState(ctx context.Context, userID int64) error
