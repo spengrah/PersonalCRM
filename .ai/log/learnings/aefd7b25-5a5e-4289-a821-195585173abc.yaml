@@ -310,3 +310,27 @@ detail: |
   When facing a deterministic test failure with clear before/after state (passed on PR 3 CI, fails on current branch), delegate to Codex with full context: test file path, failure mode (response.json error), timing observations (7.6s latency vs 3.6s baseline), and hypotheses. User instructed 'dispatch to codex to investigate and fix' and Codex diagnosed + fixed in one pass by tightening the Playwright matcher. Effective delegation requires: test name, CI run comparison, error symptoms, and performance delta.
 actionable: true
 
+---
+timestamp: "2026-04-15T17:30:22.038804"
+type: documentation_gap
+summary: Multi-entity source_ref dedup pattern documented but not consulted during implementation
+detail: |
+  The gotcha 'Multi-entity events using shared source_ref on child rows' exists in core.md and explicitly warns about per-entity source_ref requirements (gcal:event-123:contact-uuid-1 format). However, publishCalendarAttended was implemented using shared SourceID: eventIDStr across all attendees, violating this rule. CI review caught it, but the pattern should have been consulted before implementation. The gotcha is buried in a 50+ row table. For critical patterns like this (silent data loss), strengthen guidance in feature-development.md with explicit checklist: 'Before implementing event publishing, grep core.md for source_ref, multi-entity, and dedup patterns.'
+actionable: true
+
+---
+timestamp: "2026-04-15T17:30:22.038804"
+type: architecture
+summary: Event publishing requires understanding TWO separate deduplication layers
+detail: |
+  Multi-entity events (like calendar events with multiple attendees) require coordinating two distinct unique constraints: (1) event table uses (source, source_id) for event-level dedup - one row per external event regardless of attendees, (2) interaction/child tables use (source, source_ref) for per-entity dedup - one row per (event, contact) pair. The calendar bug happened because the implementer focused on matching the event table's source_id instead of understanding that interactions need their own per-entity source_ref. The gotcha mentions this ('The (source, source_id) dedup on the event table is separate') but could be clearer that shadow-mode publishing must match the direct path's eventual source_ref format, not the event table's format.
+actionable: true
+
+---
+timestamp: "2026-04-15T17:30:22.038804"
+type: gotcha
+summary: Pre-push learnings hook can block multiple times in succession
+detail: |
+  The learnings extraction hook blocks push when new patterns are detected. After committing the extracted learnings YAML, pushing again can still block if the extraction process finds additional patterns. The hook only considers a push 'clean' if changes are exclusively learnings YAML files (matching should_skip_learnings criteria). In this session, the first push blocked with 'NEW learnings extracted', requiring commit+re-push. Agents should expect iterative learnings commits, not assume one commit clears the hook.
+actionable: true
+
