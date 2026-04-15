@@ -58,10 +58,11 @@ type CORSConfig struct {
 
 // FeatureFlags holds experimental feature toggles
 type FeatureFlags struct {
-	EnableVectorSearch bool // Default: false
-	EnableTelegramSync bool // Default: false
-	EnableCalendarSync bool // Default: false
-	EnableExternalSync bool // Default: false
+	EnableVectorSearch   bool // Default: false
+	EnableTelegramSync   bool // Default: false
+	EnableCalendarSync   bool // Default: false
+	EnableExternalSync   bool // Default: false
+	EnableEventBusIngest bool // Default: false (gates POST /api/v1/ingest/events — spec §3.9)
 }
 
 // RuntimeConfig holds runtime-only settings (not validated at startup)
@@ -209,10 +210,11 @@ func Load() (*Config, error) {
 			FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
 		},
 		Features: FeatureFlags{
-			EnableVectorSearch: getEnvAsBool("ENABLE_VECTOR_SEARCH", false),
-			EnableTelegramSync: getEnvAsBool("ENABLE_TELEGRAM_SYNC", false),
-			EnableCalendarSync: getEnvAsBool("ENABLE_CALENDAR_SYNC", false),
-			EnableExternalSync: getEnvAsBool("ENABLE_EXTERNAL_SYNC", false),
+			EnableVectorSearch:   getEnvAsBool("ENABLE_VECTOR_SEARCH", false),
+			EnableTelegramSync:   getEnvAsBool("ENABLE_TELEGRAM_SYNC", false),
+			EnableCalendarSync:   getEnvAsBool("ENABLE_CALENDAR_SYNC", false),
+			EnableExternalSync:   getEnvAsBool("ENABLE_EXTERNAL_SYNC", false),
+			EnableEventBusIngest: getEnvAsBool("EVENT_BUS_INGEST_ENABLED", false),
 		},
 		Runtime: RuntimeConfig{
 			CRMEnvironment:   getEnv("CRM_ENV", DefaultCRMEnvironment),
@@ -496,10 +498,11 @@ func TestConfig() *Config {
 			FrontendURL: "http://localhost:3000",
 		},
 		Features: FeatureFlags{
-			EnableVectorSearch: false,
-			EnableTelegramSync: false,
-			EnableCalendarSync: false,
-			EnableExternalSync: false,
+			EnableVectorSearch:   false,
+			EnableTelegramSync:   false,
+			EnableCalendarSync:   false,
+			EnableExternalSync:   false,
+			EnableEventBusIngest: false,
 		},
 		Runtime: RuntimeConfig{
 			CRMEnvironment:   "test",

@@ -32,6 +32,10 @@ type Querier interface {
 	CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error)
 	CountContacts(ctx context.Context, arg CountContactsParams) (int64, error)
 	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	// Used by integration tests (and potentially ops dashboards) to assert
+	// ingest outcomes per source. The event log is append-only, so no
+	// deleted_at filter is needed.
+	CountEventsBySource(ctx context.Context, source string) (int64, error)
 	// Count events for a specific contact
 	CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)

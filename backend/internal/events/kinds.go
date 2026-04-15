@@ -185,6 +185,73 @@ var kindPayloadTypes = map[Kind]reflect.Type{
 	KindInteractionRecorded:  reflect.TypeOf(InteractionRecordedPayload{}),
 }
 
+// IsKnownKind reports whether kind has a registered payload type. Used by
+// ingestion validation (spec §3.5) to reject unknown kinds pre-tx without
+// exposing the private kindPayloadTypes registry.
+func IsKnownKind(kind Kind) bool {
+	_, ok := kindPayloadTypes[kind]
+	return ok
+}
+
+// ValidatePayload decodes env.Payload into a zero-value of env.Kind's
+// canonical payload type (via reflect.New) and returns a descriptive error
+// on kind-mismatch / unknown kind / decode failure. The decoded value is
+// discarded — this is a validation-only helper for call sites that don't
+// know the payload type P at compile time (e.g., the HTTP ingestion
+// handler, which dispatches on a string-valued kind from the wire).
+//
+// Uses json.Unmarshal with default (lenient) settings: unknown fields are
+// silently dropped. This matches spec §3.2's Version-int evolution model —
+// forward-compat additions must not be rejected at the ingest boundary.
+// Required-field presence is NOT checked (absent non-pointer fields decode
+// to zero values); consumers enforce their own required-field contracts.
+func ValidatePayload(env *Envelope) error {
+	if env == nil {
+		return fmt.Errorf("validate: nil envelope")
+	}
+	expected, ok := kindPayloadTypes[env.Kind]
+	if !ok {
+		return fmt.Errorf("validate: unknown kind %q", env.Kind)
+	}
+	if len(env.Payload) == 0 {
+		return fmt.Errorf("validate %s: empty payload", env.Kind)
+	}
+	// Reject literal `null`: json.Unmarshal of `null` into a struct
+	// pointer succeeds and leaves the struct zero-valued, which would
+	// silently pass a garbage event through to the event table. Rejecting
+	// here matches the ingest boundary's "payload is the kind's typed
+	// struct" contract.
+	if isJSONNull(env.Payload) {
+		return fmt.Errorf("validate %s: payload must be an object, got null", env.Kind)
+	}
+	dst := reflect.New(expected).Interface() // *P
+	if err := json.Unmarshal(env.Payload, dst); err != nil {
+		return fmt.Errorf("validate %s: %w", env.Kind, err)
+	}
+	return nil
+}
+
+// isJSONNull reports whether b is the literal JSON token `null`, ignoring
+// surrounding whitespace. Used to distinguish an absent/null payload from
+// a real object payload at the ingestion boundary.
+func isJSONNull(b []byte) bool {
+	lo, hi := 0, len(b)
+	for lo < hi && isJSONSpace(b[lo]) {
+		lo++
+	}
+	for hi > lo && isJSONSpace(b[hi-1]) {
+		hi--
+	}
+	trimmed := b[lo:hi]
+	return len(trimmed) == 4 &&
+		trimmed[0] == 'n' && trimmed[1] == 'u' &&
+		trimmed[2] == 'l' && trimmed[3] == 'l'
+}
+
+func isJSONSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
 // Marshal serializes a typed payload for an Envelope's Payload field and
 // asserts the payload's type matches the canonical type for kind. Callers
 // should populate payload.Version before calling.

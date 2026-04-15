@@ -11,6 +11,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const CountEventsBySource = `-- name: CountEventsBySource :one
+SELECT COUNT(*) FROM event WHERE source = $1
+`
+
+// Used by integration tests (and potentially ops dashboards) to assert
+// ingest outcomes per source. The event log is append-only, so no
+// deleted_at filter is needed.
+func (q *Queries) CountEventsBySource(ctx context.Context, source string) (int64, error) {
+	row := q.db.QueryRow(ctx, CountEventsBySource, source)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const FindEventBySource = `-- name: FindEventBySource :one
 SELECT id, source, source_id, kind, payload, observed_at, received_at, created_at FROM event
 WHERE source = $1 AND source_id = $2
