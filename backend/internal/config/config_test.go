@@ -692,10 +692,11 @@ func TestConfig_DatabasePoolInvalidDuration(t *testing.T) {
 	}
 }
 
-// TestConfig_EventBus_DefaultOff asserts EVENT_BUS_INTERACTION_MODE
-// defaults to "off" — zero-overhead for every deployment that hasn't
-// explicitly opted into shadow bake.
-func TestConfig_EventBus_DefaultOff(t *testing.T) {
+// TestConfig_EventBus_DefaultCutover asserts EVENT_BUS_INTERACTION_MODE
+// defaults to "cutover" after PR 6. The PR 5 default ("off") is retained
+// as a valid config value for rollback flexibility, but it is effectively
+// a no-op post-cutover (the direct path is gone).
+func TestConfig_EventBus_DefaultCutover(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
 
@@ -703,9 +704,9 @@ func TestConfig_EventBus_DefaultOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() failed: %v", err)
 	}
-	if cfg.EventBus.InteractionMode != EventBusInteractionModeOff {
+	if cfg.EventBus.InteractionMode != EventBusInteractionModeCutover {
 		t.Errorf("Expected default EventBus.InteractionMode=%q, got %q",
-			EventBusInteractionModeOff, cfg.EventBus.InteractionMode)
+			EventBusInteractionModeCutover, cfg.EventBus.InteractionMode)
 	}
 }
 
@@ -720,6 +721,23 @@ func TestConfig_EventBus_ShadowFromEnv(t *testing.T) {
 	}
 	if cfg.EventBus.InteractionMode != EventBusInteractionModeShadow {
 		t.Errorf("Expected EventBus.InteractionMode=shadow, got %q", cfg.EventBus.InteractionMode)
+	}
+}
+
+// TestConfig_EventBus_OffFromEnv asserts "off" still parses — rollback
+// flexibility per plan Decision 6. Post-cutover "off" disables publisher-
+// driven writes entirely (see EventBusConfig doc comment).
+func TestConfig_EventBus_OffFromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "EVENT_BUS_INTERACTION_MODE", "off")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.EventBus.InteractionMode != EventBusInteractionModeOff {
+		t.Errorf("Expected EventBus.InteractionMode=off, got %q", cfg.EventBus.InteractionMode)
 	}
 }
 
