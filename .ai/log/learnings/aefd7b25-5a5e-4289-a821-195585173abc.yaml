@@ -1,0 +1,168 @@
+---
+timestamp: "2026-04-15T14:38:39.583091"
+type: gotcha
+summary: CI uses `go build cmd/crm-api/main.go` single-file pattern that breaks with companion files
+detail: |
+  The repo's CI (.github/workflows/ci.yml), Makefile, and other build points use `go build cmd/crm-api/main.go` (single-file form, not `./cmd/crm-api`). This means any types referenced in main.go must be defined in main.go itself — companion files like `river.go` won't be picked up by the build. During PR #279, the implementer created `cmd/crm-api/river.go` with `noopWorker`, causing CI failures with 'undefined: noopWorker'. The fix was inlining the types into main.go. **Why:** This isn't obvious from the code — most Go projects build packages, not single files. **How to apply:** When adding worker types, config helpers, or other types to cmd/crm-api, check if they're referenced in main.go. If yes, inline them into main.go itself, or change ALL build commands to use `./cmd/crm-api`.
+actionable: true
+
+---
+timestamp: "2026-04-15T14:38:39.583091"
+type: gotcha
+summary: logger.Info() output from main.go missing from logs/backend-dev.log
+detail: |
+  `make dev` runs the backend via `nohup ... go run cmd/crm-api/main.go > logs/backend-dev.log 2>&1 &`. The log file captures gin's stdout (`[GIN-debug]`) and global zerolog output (from telegram package), but NOT the `backend/internal/logger` wrapper used in main.go. Lines like 'running database migrations', 'river client started', etc. never reach the file. **Suspected cause:** interaction between zerolog ConsoleWriter (dev mode) and nohup stdout redirection. **Why this matters:** Smoke tests relying on log verification will fail to find expected lines even when the code works correctly. **How to apply:** Don't treat 'logger.Info lines missing from logs/backend-dev.log' as broken code. Verify behaviors via DB state, /health endpoint, or run `go run cmd/crm-api/main.go` in foreground to see terminal output. If the observability gap becomes a pain point, fix at scripts/start-backend.sh or backend/internal/logger/logger.go.
+actionable: true
+
+---
+timestamp: "2026-04-15T14:38:39.583091"
+type: gotcha
+summary: river_client table empty on running dev instance (River v0.34.0)
+detail: |
+  During PR #279 smoke test, a healthy running backend (verified via /health and active PID) showed `SELECT COUNT(*) FROM river_client` = 0. Expected ≥1 row based on typical River behavior. **Possible causes:** River may only populate river_client via heartbeat once jobs are active or leader election fires, or may require running longer than a few-minute smoke window, or may be version-specific behavior (v0.34.0 in backend/go.mod). **Why this matters:** PR 2+ in event-bus-foundation adds consumer services that may rely on river_client/river_leader for leader election. **How to apply:** Don't treat empty river_client as proof of broken wiring. The integration test TestRiverClient_StartStopInsert_Integration proves Start/Stop/Insert/Worker all function end-to-end. Before relying on river_client rows for observability/health checks, confirm table populates under realistic conditions (enqueue a job or run >5min).
+actionable: true
+
+---
+timestamp: "2026-04-15T14:38:39.583091"
+type: documentation_gap
+summary: Plan specified 'inline worker in package main' but implementer created separate file
+detail: |
+  The plan for PR #279 explicitly stated 'inline no-op worker in package main' but the implementer initially created `cmd/crm-api/river.go` as a companion file, violating the single-file build convention. This suggests the single-file build pattern isn't clearly documented or emphasized. **What guidance existed:** The plan mentioned 'inline' but didn't explain WHY (CI constraint). **Why it was missed:** The constraint isn't in CLAUDE.md/AGENTS.md, and the phrase 'inline worker in package main' could be interpreted as 'define in package main' rather than 'define in main.go file'. **How to strengthen:** Add to Common Gotchas: 'Adding types to cmd/crm-api/ — CI builds with `go build cmd/crm-api/main.go` (single file). Types must be in main.go itself or ALL build commands changed to `./cmd/crm-api`.' Also add to 'When You Change X, Check Y': 'Adding worker types to cmd/crm-api → inline into main.go or verify ALL build points (Makefile, CI, playwright config) use package form'.
+actionable: true
+
+---
+timestamp: "2026-04-15T14:38:39.583091"
+type: distinction
+summary: Stale LSP diagnostics vs actual build errors — verify with `go build`
+detail: |
+  During PR #279 implementation, the orchestrator detected 'working-tree code changes with compile errors across ~25 test files' from LSP diagnostics. However, `go build ./...` and `go vet ./...` both passed cleanly (exit 0). The diagnostics were stale LSP state from refactored RunMigrations signature, not current errors. **Why this matters:** Agents can get stuck or make wrong decisions based on stale diagnostics that don't reflect actual compiler state. **How to apply:** When diagnostics show compile errors, always verify with `go build ./...` before treating them as real. LSP state can lag behind actual code, especially after signature changes. If build passes, the errors are stale — proceed.
+actionable: true
+
+---
+timestamp: "2026-04-15T15:21:52.536889"
+type: gotcha
+summary: River client.Start(ctx) must receive outer context, not timeout-derived context
+detail: |
+  When starting a River client via `client.Start(ctx)`, the context must be the outer non-timeout-derived context. River silently stops fetching jobs when its internal fetch-loop context is cancelled. Passing a context.WithTimeout-derived context will cause the client to stop processing after the timeout expires, with no error logged. This was discovered during PR 6 integration test debugging when tests were timing out despite the river client appearing to start successfully. **Pattern:** Use the test's root context for `client.Start(ctx)`, not a per-test timeout context.
+actionable: true
+
+---
+timestamp: "2026-04-15T15:21:52.536889"
+type: gotcha
+summary: Integration test harnesses need full event-bus wiring for cutover PRs
+detail: |
+  When cutover PRs remove direct-path function calls and replace them with async event publishing, integration tests cannot just update function signatures with nil event bus parameters. They need complete event-bus test harnesses: `*events.Bus`, registered consumers (e.g., `InteractionRecorder`), and a running River client with `client.Start()`. Attempting to pass nil for the event bus compiles but silently breaks the tests because the async path is never exercised. PR 6 hit unexpected scope expansion when 28 integration tests across rematch/aggregation/telegram files needed new `setupTestEventBus` harness wiring, causing two implementer crashes. **Pattern:** When planning cutover PRs, audit all integration test files that exercise the paths being cut over and budget time for test harness infrastructure, not just signature updates.
+actionable: true
+
+---
+timestamp: "2026-04-15T15:21:52.536889"
+type: architecture
+summary: Shadow-to-cutover transitions can lose data carried only in direct-path function signatures
+detail: |
+  When migrating from shadow mode (dual write: direct function call + async event publish) to cutover (async-only), data that was passed as function parameters in the direct path must be explicitly added to event payloads, or it will be lost. PR 6 hit a P2 Codex finding: calendar event titles were populated in the direct `RecordInteraction(title, ...)` call but not included in the `calendar.attended` event payload, so after cutover, `interaction.description` became empty for all calendar interactions—a user-visible regression. The shadow mode tests passed because they only verified the interaction row was created, not that it had complete data. **Pattern:** During shadow-mode planning (e.g., PR 5), explicitly map every parameter of the direct-path function to a corresponding event payload field. During cutover review, grep for every field populated in the direct path and verify it's sourced from the event payload in the consumer.
+actionable: true
+
+---
+timestamp: "2026-04-15T15:21:52.536889"
+type: architecture
+summary: Multi-entity events need per-entity SourceID to prevent silent deduplication data loss
+detail: |
+  When a single event affects multiple entities (e.g., calendar event with N attendees creating N interactions, one per contact), the event's `source_id` cannot be used directly as the `interaction.source_ref` for all N interactions. Doing so causes the 2nd-Nth interactions to silently deduplicate against the 1st because `(source='gcal', source_ref='event-123')` is unique. This was caught during PR 6 Codex review. **Solution:** Use per-entity `source_ref` like `gcal:event-123:contact-uuid-1`, `gcal:event-123:contact-uuid-2`. The `(source, source_id)` dedup on the `event` table still prevents duplicate event ingestion, but the per-contact `source_ref` on `interaction` allows all N interactions to be created. This pattern applies to any multi-entity event (calendar attendees, group chats, etc.).
+actionable: true
+
+---
+timestamp: "2026-04-15T15:21:52.536889"
+type: rule
+summary: Publish-before-append pattern prevents interaction stranding on event publish failures
+detail: |
+  When a handler both modifies entity state (e.g., appends contact ID to calendar event's `matched_contact_ids` JSONB array) AND publishes an event derived from that state, publish BEFORE the state mutation in the same transaction. If the mutation happens first and the publish fails (e.g., event table constraint violation), the transaction rolls back, but retrying the handler sees the mutation already committed from a prior attempt and skips the publish, stranding the interaction. This was identified during PR 6 planning for calendar rematch flows. **Pattern:** `tx.Begin() → bus.PublishTx(ctx, tx, event) → mutate state → tx.Commit()`. The publish-first order ensures that if the publish fails, the state mutation also rolls back, preserving idempotency on retry.
+actionable: true
+
+---
+timestamp: "2026-04-15T15:21:52.536889"
+type: rule
+summary: Consumer transactions with external side effects need post-commit closures
+detail: |
+  When a river worker consumer needs to call external APIs (e.g., Todoist HTTP client) as a side effect of processing an event, do NOT hold the `pgx.Tx` open during the HTTP call—this blocks the connection pool and risks deadlocks. Instead, complete all DB writes in the transaction, then use a defer/post-commit closure to call the external API after `tx.Commit()`. This was implemented in PR 6's `InteractionRecorder` for the `FollowUpManager.OnInteractionRecorded(contactID)` call. **Pattern:** `tx.Begin() → write DB → tx.Commit() → if commitErr == nil { externalAPI.Call(...) }`.
+actionable: true
+
+---
+timestamp: "2026-04-15T15:21:52.536889"
+type: documentation_gap
+summary: Test isolation with shared DB requires hard DELETE for upsert-ed tables, not soft-delete
+detail: |
+  Integration tests running against a shared PostgreSQL instance discovered phantom data corruption when using soft-delete cleanup on tables with UPSERT semantics. Example: `external_contact` rows soft-deleted (`deleted_at = NOW()`) in prior test runs were resurrected by subsequent tests' UPSERT queries (which usually don't clear `deleted_at`), appearing as active rows and polluting candidate pools for matching/filtering. The `.ai/rules/core.md` "Common Gotchas" table warns about soft-delete not cascading FK constraints but does NOT mention the upsert resurrection issue. **How to strengthen:** Add explicit guidance: 'Integration test cleanup: use hard DELETE (or targeted `DeleteExternalContactsBySourceIDPrefix`-style queries) for tables with upsert semantics. Soft-delete leaves `deleted_at` set, which upserts usually ignore, resurrecting phantom rows from prior runs.'
+actionable: true
+
+---
+timestamp: "2026-04-15T15:21:52.536889"
+type: distinction
+summary: Implementer crashes on large mechanical refactors → orchestrator manual fallback
+detail: |
+  During PR 6, the implementer crashed twice (stream timeout + API 500) while attempting mechanical signature updates across 28 integration test files. The orchestrator took over and manually applied the signature fixes (adding nil eventBus parameters), then resumed the implementer for the semantic work (test harness wiring). This reveals a threshold: implementers handle ~10-15 similar edits reliably, but 25+ mechanical changes across many files increases crash probability. **When to apply:** If a plan includes >20 similar mechanical edits (signature updates, import additions, nil-checks), consider splitting: implementer does the first 5-10 as examples, orchestrator batches the rest with parallel Edit calls, then implementer resumes for semantic logic. Or brief the implementer explicitly: 'If you crash mid-refactor, the orchestrator will resume you—checkpoint progress by committing logical groups (e.g., all signature updates in one commit) before moving to the next phase.'
+actionable: true
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: gotcha
+summary: River JobRescuer default 1h delay requires active SIGKILL testing for validation
+detail: |
+  PR 3 soak testing revealed that River's default `RescueStuckJobsAfter=1h` means orphaned jobs won't be rescued for ~60 minutes. Passive observation (e.g., waiting 72h for natural crashes) provides minimal validation. Deliberate mid-sync SIGKILL testing (trigger sync → poll for running state → kill → verify rescue) is far more effective. The immediate signal to validate is `external_sync_state.status='syncing'` count = 0 (proves the #208 bug class doesn't reproduce). The 1h rescue cycle is secondary validation of the orphan-cleanup path. Session demonstrated: 2 deliberate kills + 66-min wait for rescue provides stronger confidence than 72h passive soak.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: gotcha
+summary: Test cleanup for event-keyed tables must hard-delete, not rely on soft-delete or simple WHERE filters
+detail: |
+  PR 6 uncovered test-isolation bugs in aggregation + rematch-telegram tests. Event rows with fixed chat IDs accumulated across test runs in the `event` table, causing subsequent publishes to silently no-op due to `(source, source_ref)` uniqueness constraints. Soft-delete (UPDATE deleted_at) or simple cleanup (DELETE WHERE created_at > test_start) failed because event tables use natural keys from external systems. Fix: test cleanup now hard-deletes keyed event rows (`DELETE FROM event WHERE source_ref LIKE 'test-prefix-%'`) to ensure idempotent test execution. Also applies to other upsert-heavy tables like `external_contact` in Telegram integration tests.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: architecture
+summary: Per-(event, contact) source_ref pattern required for multi-entity events to avoid silent data loss
+detail: |
+  PR 6 fixed a silent data loss bug: calendar events with N attendees were using shared `source_ref` (e.g., `gcal:event-123`) for all N interaction rows. The `(source, source_ref)` unique constraint on the event table caused rows 2-N to silently dedup against row 1. Fix: use per-entity source_ref like `gcal:event-123:contact-uuid-1`. The `(source, source_id)` dedup on the `event` table (for the calendar event itself) is separate and does NOT prevent this multi-contact issue. Rule: when one external event affects N CRM entities, each entity's derived row must have a unique source_ref that combines event ID + entity ID.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: gotcha
+summary: Telegram dialog discovery on service restart surfaces previously-missed import candidates (expected behavior, not a bug)
+detail: |
+  Session investigation: post-SIGKILL restart at 12:08:53 triggered Telegram dialog discovery sweep, which upserted 29 new `external_contact` candidates at 17:09:25. User was alarmed (no recent Telegram activity explained them). Root cause: service has 7 group chats with `backfill_complete=false` (stuck due to FLOOD_WAIT pacing). Every restart triggers `maybeStartBackfill` → dialog discovery → `UpdateDiscoveryCandidates`, which scans all `telegram_message` rows and upserts external_contact for any peer with ≥ TELEGRAM_DISCOVERY_MIN_MESSAGES (env override = 1) that lacks a candidate row. These 29 peers had messages ingested during prior partial backfill runs but had never been surfaced as candidates until this sweep. Not a regression; expected incremental discovery behavior. Implication: until stuck chats complete backfill, every restart will surface more candidates (diminishing over time).
+actionable: false
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: rule
+summary: Never echo API keys in bash commands or tool descriptions — read inline from .env without output
+detail: |
+  Session initially passed API key as literal string in ssh command (`-H 'X-API-Key: c2c...'`), exposing it in transcript. Corrected approach for kill #2: `API_KEY=$(sudo grep -oP '^API_KEY=\K.*' /srv/personalcrm/.env)` on the Pi side, then use `$API_KEY` in curl without echoing. The key in the transcript should be rotated. Rule applies to all secrets: database passwords, OAuth tokens, etc. Always read from env/file on the remote side, never pass as CLI args or echo to logs.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: distinction
+summary: Test failures in full suite vs isolation indicate DB pollution, not implementation bugs
+detail: |
+  PR 6 completion: `TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction` flaked in full `make test` (shared DB, test-ordering pollution) but passed cleanly when run in isolation with correct DATABASE_URL. Session verified on PR 5 branch that same failures existed pre-PR-6, confirming not a regression. Distinction: isolation pass + full-suite flake = DB pollution issue (fix test cleanup or add test-level DB isolation). Isolation fail = real implementation bug. Several cadence/followup filter tests exhibit same pattern. When triaging test failures, always re-run suspect test in isolation before treating as implementation bug.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: gotcha
+summary: "Claude remote scheduling fallback: use systemd-run or cron when claude.ai /schedule fails"
+detail: |
+  Session attempted `/schedule` skill for 65-min delayed rescue verification but got 'trouble connecting with your remote claude.ai account'. User wanted agent to self-schedule (not a Pi-side log dump). Fallback pattern demonstrated: `ssh raspberet 'sudo systemd-run --on-active=65min --unit=pr3-rescue-check /bin/bash -c "..."'` schedules a one-shot timer that writes verification results to `/tmp/pr3-rescue-check.log`. Limitation: Pi-side timer has no way to resume Claude session — file is ready but requires user ping ('check rescue') or manual review. If remote scheduling recovers, can still use CronCreate for proper agent callback. User was dissatisfied with Pi-only approach; expected self-resuming agent.
+actionable: false
+
+---
+timestamp: "2026-04-15T16:22:36.349301"
+type: documentation_gap
+summary: Soak testing guidance should emphasize active fault injection over passive time windows
+detail: |
+  PR 3 plan specified 72h soak with passive observation metrics. Session reframed this: 72h is a proxy for 'enough events to be confident,' but for crash-recovery validation (River JobRescuer, #208 stuck-syncing bug), active SIGKILL testing provides far stronger signal than waiting for natural failures. Deliberate kill mid-sync + verified recovery (2 kills minimum for independent validation) exercises the rescue path directly. 72h of clean runs proves nothing about rescue correctness. Session demonstrated pragmatic minimum: ~24h wall-clock + 2 deliberate mid-sync restarts + sample-size check (50-100 runs per provider for result parity). Documentation gap: soak evidence checklist should lead with 'deliberate fault injection' as primary validation, time-based observation as secondary (for time-correlated bugs like DST, midnight rollovers). Current plan DD framing was correct but buried the lede.
+actionable: true
+

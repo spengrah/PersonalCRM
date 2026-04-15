@@ -46,8 +46,7 @@ func setupAggregationTest(t *testing.T) (
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
-	require.NoError(t, err)
+	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
 	cfg := config.TestConfig()

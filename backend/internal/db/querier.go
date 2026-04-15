@@ -11,6 +11,11 @@ import (
 )
 
 type Querier interface {
+	// Called at the start of a retry attempt: marks any pre-existing 'running'
+	// log row for this sync_state as 'abandoned' so that the new retry attempt
+	// can insert a fresh log row without leaving orphan 'running' rows behind.
+	// Requires migration 037 (widens the status CHECK).
+	AbandonRunningLogsForState(ctx context.Context, syncStateID pgtype.UUID) error
 	AddContactTag(ctx context.Context, arg AddContactTagParams) error
 	// Atomically appends a contact to an event's matched_contact_ids iff it isn't
 	// already present. Does NOT reset last_contacted_updated — the rematch handler
@@ -35,6 +40,13 @@ type Querier interface {
 	CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	CountIdentitiesBySource(ctx context.Context, source string) (int64, error)
+	// Counts river_job rows that represent an in-flight SyncProviderAccountJob
+	// for the given (source, account_id). Used by
+	// EnqueueAccountSyncIfNotInFlight as a pre-insert dedup check inside the
+	// advisory-lock transaction. The args->>'source' and args->>'account_id'
+	// JSONB paths match the struct tags on scheduler.SyncProviderAccountArgs;
+	// TestSyncProviderAccountArgs_JSONContract guards the key names.
+	CountInFlightSyncJobs(ctx context.Context, arg CountInFlightSyncJobsParams) (int64, error)
 	// Count calendar events involving a contact (for merge preview)
 	CountMergeCalendarEvents(ctx context.Context, dollar_1 pgtype.UUID) (int64, error)
 	// Count contact methods for a contact (for merge preview)
@@ -329,6 +341,11 @@ type Querier interface {
 	// NULL for entity fields on outbound private chats, and those rows must not
 	// outrank a row with a real name.
 	ListDistinctUnmatchedPeers(ctx context.Context) ([]*ListDistinctUnmatchedPeersRow, error)
+	// The 'syncing' status is no longer written by the river-based scheduler
+	// (#180 PR 3). Rows with the legacy 'syncing' status are still returned here
+	// so the one-time RecoverStuckSyncingStates boot helper can pick them up;
+	// after PR 3 ships, no live code path writes 'syncing' so this is a harmless
+	// inclusion in practice.
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListEnrichmentsBySource(ctx context.Context, arg ListEnrichmentsBySourceParams) ([]*ContactEnrichment, error)
@@ -373,6 +390,10 @@ type Querier interface {
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
 	MarkTelegramMessagesProcessed(ctx context.Context, arg MarkTelegramMessagesProcessedParams) error
+	// One-shot boot-time recovery. Resets any rows left in status='syncing' from
+	// a pre-upgrade crash so the next scheduler tick picks them up. Mirrors the
+	// canonical #208 remediation: sets both status and next_sync_at.
+	RecoverStuckSyncingStates(ctx context.Context) (int64, error)
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement

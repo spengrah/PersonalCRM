@@ -2,12 +2,15 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/sync"
 
 	"github.com/google/uuid"
@@ -26,6 +29,11 @@ type SyncService struct {
 	syncRepo    *repository.SyncRepository
 	contactRepo *repository.ContactRepository
 	registry    *sync.ProviderRegistry
+	// enqueuer is set at boot by SetRiverEnqueuer. When non-nil, TriggerSync
+	// dispatches via a river job instead of running the sync inline. When
+	// nil (e.g., early-boot or tests that don't construct a river client)
+	// TriggerSync falls back to the synchronous runSyncForState path.
+	enqueuer repository.JobEnqueuer
 }
 
 // NewSyncService creates a new sync service
@@ -41,7 +49,69 @@ func NewSyncService(
 	}
 }
 
-// TriggerSync initiates a sync for a specific source/account
+// SetRiverEnqueuer stores the river client (as a JobEnqueuer interface
+// value) that TriggerSync and EnqueueAccountSyncIfNotInFlight will use to
+// dispatch jobs. *river.Client[pgx.Tx] satisfies JobEnqueuer via its
+// InsertTx method. Safe to call once at boot; not safe to call
+// concurrently with in-flight TriggerSync requests.
+func (s *SyncService) SetRiverEnqueuer(e repository.JobEnqueuer) {
+	s.enqueuer = e
+}
+
+// EnqueueAccountSyncIfNotInFlight delegates to the repository's
+// atomic-claim transaction. See repository.EnqueueAccountSyncIfNotInFlight
+// for the correctness argument. The service is the only layer that
+// imports scheduler — it constructs SyncProviderAccountArgs here and
+// passes it to the repo as opaque river.JobArgs so the repo stays free
+// of the scheduler package.
+func (s *SyncService) EnqueueAccountSyncIfNotInFlight(
+	ctx context.Context, source string, accountID *string,
+) (bool, error) {
+	if s.enqueuer == nil {
+		return false, errors.New("sync service has no river enqueuer; wiring incomplete")
+	}
+	args := scheduler.SyncProviderAccountArgs{Source: source, AccountID: accountID}
+	return s.syncRepo.EnqueueAccountSyncIfNotInFlight(ctx, s.enqueuer, source, accountID, args)
+}
+
+// ListDueAccounts returns the (source, account_id) pairs of due sync
+// states. Called by the SchedulerTickWorker to enumerate enqueue targets.
+// Returns []repository.DueAccount so the service directly satisfies
+// scheduler.SyncServiceForTick without requiring an adapter (and the
+// scheduler package imports repository, not the reverse).
+//
+// Rows whose `source` is not in the provider registry are filtered out
+// here so the tick does not enqueue poison jobs: without this filter, a
+// stale external_sync_state row for an unconfigured provider (e.g.
+// OAuth was removed) would cycle enqueue → worker-fail-unknown-source
+// → river discard → next tick, burning retry budgets forever.
+// Operators can disable or delete those rows explicitly; the scheduler
+// does not touch them.
+func (s *SyncService) ListDueAccounts(ctx context.Context) ([]repository.DueAccount, error) {
+	now := accelerated.GetCurrentTime()
+	all, err := s.syncRepo.ListDueAccounts(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	accounts := make([]repository.DueAccount, 0, len(all))
+	for _, acct := range all {
+		if _, ok := s.registry.Get(acct.Source); !ok {
+			logger.Debug().
+				Str("source", acct.Source).
+				Msg("scheduler tick: no provider registered; skipping due account")
+			continue
+		}
+		accounts = append(accounts, acct)
+	}
+	return accounts, nil
+}
+
+// TriggerSync initiates a sync for a specific source/account. When the
+// river enqueuer is wired (production path), TriggerSync enqueues a
+// SyncProviderAccountJob and returns. If a job for the same
+// (source, account_id) is already in-flight, TriggerSync is an idempotent
+// no-op and returns nil. When the enqueuer is nil (tests / early boot),
+// TriggerSync falls back to the synchronous runSyncForState path.
 func (s *SyncService) TriggerSync(ctx context.Context, source string, accountID *string) error {
 	// Get provider
 	provider, ok := s.registry.Get(source)
@@ -49,10 +119,22 @@ func (s *SyncService) TriggerSync(ctx context.Context, source string, accountID 
 		return fmt.Errorf("unknown sync source: %s", source)
 	}
 
-	// Get or create sync state
+	// Get or create sync state. The state itself is not needed on the
+	// enqueue path (the worker will re-fetch fresh state), but we preserve
+	// the "create on first trigger" behavior from the pre-PR-3 flow so
+	// that callers who rely on TriggerSync to bootstrap a new sync_state
+	// keep working unchanged.
+	//
+	// Distinguish "state not found" (benign — create a fresh row) from a
+	// transient DB error (surface so the caller can retry) per .ai/rules/
+	// core.md. Pre-PR-3 this check was a blanket `err != nil`, which could
+	// mask a transient failure as a create attempt (and then fail with a
+	// unique-constraint error from the unique index on (source, account_id)).
 	state, err := s.syncRepo.GetSyncStateBySource(ctx, source, accountID)
-	if err != nil {
-		// Create new state if not found
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		return fmt.Errorf("get sync state: %w", err)
+	}
+	if errors.Is(err, db.ErrNotFound) {
 		config := provider.Config()
 		state, err = s.syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
 			Source:    source,
@@ -68,67 +150,119 @@ func (s *SyncService) TriggerSync(ctx context.Context, source string, accountID 
 			Msg("created new sync state")
 	}
 
-	// Check if already syncing
-	if state.Status == repository.SyncStatusSyncing {
-		return fmt.Errorf("sync already in progress for source: %s", source)
+	// Enqueue-first path. If the enqueuer is wired, dispatch via river;
+	// otherwise fall back to synchronous sync.
+	if s.enqueuer != nil {
+		enqueued, err := s.EnqueueAccountSyncIfNotInFlight(ctx, source, accountID)
+		if err != nil {
+			return fmt.Errorf("enqueue sync job: %w", err)
+		}
+		if !enqueued {
+			logger.Info().
+				Str("source", source).
+				Msg("sync already in-flight; enqueue skipped")
+		}
+		return nil
 	}
 
-	// Perform sync
-	return s.performSync(ctx, state, provider)
+	// Fallback: synchronous execution (tests / pre-wiring boot). This
+	// path also used to return an error when state.Status == syncing; that
+	// early-return is gone — river_job state is now the source of truth
+	// for in-flight.
+	return s.runSyncForState(ctx, state, provider)
 }
 
-// RunDueSyncs checks for and runs all due syncs
+// RunDueSyncs checks for and runs all due syncs inline.
+//
+// Deprecated: production now uses the river SchedulerTickWorker +
+// RunAccountSync path. RunDueSyncs is retained for direct-invocation
+// callers (e.g., admin tooling, older integration tests) and for the
+// sentinel-nil-enqueuer fallback. Scheduled for removal in #180 PR 12.
 func (s *SyncService) RunDueSyncs(ctx context.Context) error {
-	now := accelerated.GetCurrentTime()
-
-	states, err := s.syncRepo.ListDueSyncStates(ctx, now)
+	accounts, err := s.ListDueAccounts(ctx)
 	if err != nil {
-		return fmt.Errorf("list due sync states: %w", err)
+		return fmt.Errorf("list due accounts: %w", err)
 	}
-
-	if len(states) == 0 {
+	if len(accounts) == 0 {
 		logger.Debug().Msg("no due syncs found")
 		return nil
 	}
 
 	logger.Info().
-		Int("count", len(states)).
+		Int("count", len(accounts)).
 		Msg("found due syncs")
 
 	var lastErr error
-	for _, state := range states {
-		provider, ok := s.registry.Get(state.Source)
-		if !ok {
-			logger.Warn().
-				Str("source", state.Source).
-				Msg("no provider registered for sync source")
-			continue
-		}
-
-		stateCopy := state // Avoid loop variable capture
-		if err := s.performSync(ctx, &stateCopy, provider); err != nil {
+	for _, acct := range accounts {
+		if err := s.RunAccountSync(ctx, acct.Source, acct.AccountID); err != nil {
 			logger.Error().
 				Err(err).
-				Str("source", state.Source).
+				Str("source", acct.Source).
 				Msg("sync failed")
 			lastErr = err
-			// Continue with other syncs
 		}
 	}
-
 	return lastErr
 }
 
-// performSync executes a sync operation for a given state and provider
-func (s *SyncService) performSync(ctx context.Context, state *repository.SyncState, provider sync.SyncProvider) error {
+// RunAccountSync fetches fresh sync state for (source, accountID) and
+// runs the sync pipeline. Called by the SyncProviderAccountWorker.
+//
+// db.ErrNotFound is returned as a terminal nil-err (the worker treats it
+// as a non-retryable outcome — a deleted sync_state should not keep
+// retrying).
+func (s *SyncService) RunAccountSync(ctx context.Context, source string, accountID *string) error {
+	provider, ok := s.registry.Get(source)
+	if !ok {
+		// Terminal: a job was enqueued for a source that has since been
+		// unregistered (e.g., operator revoked OAuth between the tick
+		// enqueue and the worker fetch). Returning nil prevents river
+		// from retrying — next tick will skip this account via
+		// ListDueAccounts' provider filter.
+		logger.Warn().
+			Str("source", source).
+			Msg("sync_provider_account: no provider registered; treating as terminal")
+		return nil
+	}
+
+	state, err := s.syncRepo.GetSyncStateBySource(ctx, source, accountID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			logger.Warn().
+				Str("source", source).
+				Msg("sync state not found; skipping (terminal)")
+			return nil
+		}
+		return fmt.Errorf("get sync state: %w", err)
+	}
+
+	return s.runSyncForState(ctx, state, provider)
+}
+
+// runSyncForState executes a sync operation for a given state and
+// provider. Extracted from the legacy performSync. Differences from the
+// legacy path:
+//   - No UpdateSyncStateStatus(..., SyncStatusSyncing, ...) mutex write.
+//     River's job state (available/running/completed/retryable) is the
+//     source of truth for "in-flight".
+//   - Prefixes a call to AbandonRunningLogsForState so that if a prior
+//     attempt crashed mid-sync, its orphan 'running' log row is marked
+//     'abandoned' before the new attempt inserts a fresh log.
+func (s *SyncService) runSyncForState(ctx context.Context, state *repository.SyncState, provider sync.SyncProvider) error {
 	logger.Info().
 		Str("source", state.Source).
 		Str("status", string(state.Status)).
 		Msg("starting sync")
 
-	// Mark as syncing
-	if _, err := s.syncRepo.UpdateSyncStateStatus(ctx, state.ID, repository.SyncStatusSyncing, nil); err != nil {
-		return fmt.Errorf("update sync status to syncing: %w", err)
+	// Mark any pre-existing 'running' log rows for this sync_state as
+	// 'abandoned'. A crashed prior attempt would have left one behind.
+	// Non-fatal: log and proceed if the update fails — inserting a new
+	// log row is still correct behavior.
+	if err := s.syncRepo.AbandonRunningLogsForState(ctx, state.ID); err != nil {
+		logger.Warn().
+			Err(err).
+			Str("sync_state_id", state.ID.String()).
+			Msg("failed to abandon prior running log rows (non-fatal)")
 	}
 
 	// Create sync log

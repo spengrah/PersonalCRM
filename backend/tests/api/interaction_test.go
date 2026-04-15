@@ -29,11 +29,7 @@ func setupInteractionTestRouter() (*gin.Engine, func()) {
 	ctx := context.Background()
 	databaseURL := os.Getenv("DATABASE_URL")
 
-	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
-		panic("Failed to run migrations: " + err.Error())
-	}
-
+	// Migrations are applied once by TestMain.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
 		MaxConns:          config.DefaultDBMaxConns,

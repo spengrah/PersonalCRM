@@ -36,9 +36,7 @@ func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramCha
 
 	gin.SetMode(gin.TestMode)
 
-	if err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath()); err != nil {
-		t.Fatalf("Failed to run migrations: %v", err)
-	}
+	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
 	dbConfig := config.DatabaseConfig{

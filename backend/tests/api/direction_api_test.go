@@ -33,10 +33,7 @@ func setupDirectionAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactTask
 
 	gin.SetMode(gin.TestMode)
 
-	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
-		t.Fatalf("Failed to run migrations: %v", err)
-	}
+	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
 	dbConfig := config.DatabaseConfig{

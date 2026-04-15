@@ -35,8 +35,7 @@ func TestChatConfig_UpsertAndList(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
-	require.NoError(t, err)
+	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -77,8 +76,7 @@ func TestChatConfig_UpdateStatus(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
-	require.NoError(t, err)
+	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -117,8 +115,7 @@ func TestChatConfig_BackfillCursorAndComplete(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
-	require.NoError(t, err)
+	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -170,8 +167,7 @@ func TestChatConfig_ResetBackfill(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
-	require.NoError(t, err)
+	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -217,8 +213,7 @@ func TestChatConfig_ListForBackfill(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
-	require.NoError(t, err)
+	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -274,8 +269,7 @@ func TestChatConfig_UpdateMemberCount(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
-	require.NoError(t, err)
+	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -318,8 +312,7 @@ func TestChatConfig_BackfillResume(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
-	err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath())
-	require.NoError(t, err)
+	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
 	cfg := config.TestConfig()

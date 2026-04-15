@@ -23,11 +23,7 @@ func setupDirectionTestDeps(t *testing.T) (*service.ContactService, *repository.
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
-		t.Fatalf("Failed to run migrations: %v", err)
-	}
-
+	// Migrations are applied once by TestMain.
 	ctx := context.Background()
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
