@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -38,18 +39,31 @@ func getMigrationsPath() string {
 	return filepath.Join(testDir, "..", "..", "migrations")
 }
 
+// TestMain applies database migrations once per `go test` invocation before
+// running any tests in this package. Individual setup helpers used to each
+// call db.RunMigrations, which paid the River migrator pgxpool + advisory-lock
+// cost on every call. Running it once here is behavior-preserving (migrations
+// are idempotent) and cuts CI integration-test time substantially.
+//
+// If DATABASE_URL is unset, migrations are skipped here; individual tests will
+// then skip themselves via their existing DATABASE_URL guards.
+func TestMain(m *testing.M) {
+	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
+		if err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath()); err != nil {
+			fmt.Fprintf(os.Stderr, "TestMain: failed to run migrations: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	os.Exit(m.Run())
+}
+
 func setupContactValidationTestRouter() (*gin.Engine, func()) {
 	gin.SetMode(gin.TestMode)
 
 	ctx := context.Background()
 	databaseURL := os.Getenv("DATABASE_URL")
 
-	// Run migrations before connecting to database
-	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
-		panic("Failed to run migrations: " + err.Error())
-	}
-
+	// Migrations are applied once by TestMain.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
 		MaxConns:          config.DefaultDBMaxConns,

@@ -91,7 +91,7 @@ func TestRiverClient_StartStop_Integration(t *testing.T) {
 	cfg.Database.MigrationsPath = getMigrationsPath()
 
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
+	// Migrations are applied once by TestMain.
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
@@ -136,7 +136,7 @@ func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 	cfg.Database.MigrationsPath = getMigrationsPath()
 
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
+	// Migrations are applied once by TestMain.
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
@@ -190,4 +190,60 @@ func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 		case <-tick.C:
 		}
 	}
+}
+
+// TestRiverClient_BootsWithNoopWorkerOnly mirrors the production boot
+// path when `cfg.Features.EnableExternalSync == false` (the default):
+// main.go registers ONLY the placeholder noop worker, no scheduler_tick
+// or sync_provider_account workers, and NO periodic jobs. The test
+// asserts that river.NewClient accepts this bundle and that Start /
+// Stop complete cleanly.
+//
+// Regression guard for the PR 3 bug where the scheduler workers were
+// registered inside `if cfg.Features.EnableExternalSync` but the noop
+// was removed, producing an empty Workers bundle and a boot failure
+// ("at least one Worker must be added to the Workers bundle") in the
+// default configuration. #281 restored the noop.
+func TestRiverClient_BootsWithNoopWorkerOnly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	cfg.Database.MigrationsPath = getMigrationsPath()
+
+	ctx := context.Background()
+	// Migrations are applied once by TestMain.
+
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	t.Cleanup(func() { database.Close() })
+
+	// Simulate the main.go boot path with EnableExternalSync=false: only
+	// the noop worker is registered, no periodic jobs.
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &localNoopWorker{})
+
+	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		JobTimeout: cfg.River.JobTimeout,
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
+		},
+		Workers: workers,
+		// No PeriodicJobs — mirrors the disabled-sync main.go branch.
+	})
+	require.NoError(t, err, "river.NewClient must accept a Workers bundle with just the noop worker")
+
+	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer startCancel()
+	require.NoError(t, client.Start(startCtx), "client.Start must succeed when only the noop worker is registered")
+
+	stopCtx, stopCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer stopCancel()
+	require.NoError(t, client.Stop(stopCtx))
 }

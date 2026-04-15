@@ -11,6 +11,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const AbandonRunningLogsForState = `-- name: AbandonRunningLogsForState :exec
+UPDATE external_sync_log
+SET completed_at = NOW(),
+    status = 'abandoned',
+    error_message = 'abandoned by retry; worker did not finish'
+WHERE sync_state_id = $1 AND status = 'running'
+`
+
+// Called at the start of a retry attempt: marks any pre-existing 'running'
+// log row for this sync_state as 'abandoned' so that the new retry attempt
+// can insert a fresh log row without leaving orphan 'running' rows behind.
+// Requires migration 037 (widens the status CHECK).
+func (q *Queries) AbandonRunningLogsForState(ctx context.Context, syncStateID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, AbandonRunningLogsForState, syncStateID)
+	return err
+}
+
 const CompleteSyncLog = `-- name: CompleteSyncLog :one
 UPDATE external_sync_log
 SET completed_at = NOW(),
@@ -58,6 +75,32 @@ func (q *Queries) CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams
 		&i.CreatedAt,
 	)
 	return &i, err
+}
+
+const CountInFlightSyncJobs = `-- name: CountInFlightSyncJobs :one
+SELECT COUNT(*) FROM river_job
+WHERE kind = 'sync_provider_account'
+  AND state IN ('available', 'pending', 'running', 'retryable', 'scheduled')
+  AND (args->>'source') = $1::text
+  AND COALESCE(args->>'account_id', '') = COALESCE($2::text, '')
+`
+
+type CountInFlightSyncJobsParams struct {
+	Source    string      `json:"source"`
+	AccountID pgtype.Text `json:"account_id"`
+}
+
+// Counts river_job rows that represent an in-flight SyncProviderAccountJob
+// for the given (source, account_id). Used by
+// EnqueueAccountSyncIfNotInFlight as a pre-insert dedup check inside the
+// advisory-lock transaction. The args->>'source' and args->>'account_id'
+// JSONB paths match the struct tags on scheduler.SyncProviderAccountArgs;
+// TestSyncProviderAccountArgs_JSONContract guards the key names.
+func (q *Queries) CountInFlightSyncJobs(ctx context.Context, arg CountInFlightSyncJobsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, CountInFlightSyncJobs, arg.Source, arg.AccountID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const CountSyncLogsByState = `-- name: CountSyncLogsByState :one
@@ -306,11 +349,16 @@ func (q *Queries) GetSyncStateBySource(ctx context.Context, arg GetSyncStateBySo
 const ListDueSyncStates = `-- name: ListDueSyncStates :many
 SELECT id, source, account_id, enabled, status, strategy, last_sync_at, last_successful_sync_at, next_sync_at, sync_cursor, error_message, error_count, metadata, created_at, updated_at FROM external_sync_state
 WHERE enabled = TRUE
-  AND status NOT IN ('syncing', 'disabled')
+  AND status != 'disabled'
   AND (next_sync_at IS NULL OR next_sync_at <= $1)
 ORDER BY next_sync_at ASC NULLS FIRST
 `
 
+// The 'syncing' status is no longer written by the river-based scheduler
+// (#180 PR 3). Rows with the legacy 'syncing' status are still returned here
+// so the one-time RecoverStuckSyncingStates boot helper can pick them up;
+// after PR 3 ships, no live code path writes 'syncing' so this is a harmless
+// inclusion in practice.
 func (q *Queries) ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error) {
 	rows, err := q.db.Query(ctx, ListDueSyncStates, nextSyncAt)
 	if err != nil {
@@ -515,6 +563,25 @@ func (q *Queries) ListSyncStates(ctx context.Context) ([]*ExternalSyncState, err
 		return nil, err
 	}
 	return items, nil
+}
+
+const RecoverStuckSyncingStates = `-- name: RecoverStuckSyncingStates :execrows
+UPDATE external_sync_state
+SET status = 'idle',
+    next_sync_at = NOW(),
+    updated_at = NOW()
+WHERE status = 'syncing'
+`
+
+// One-shot boot-time recovery. Resets any rows left in status='syncing' from
+// a pre-upgrade crash so the next scheduler tick picks them up. Mirrors the
+// canonical #208 remediation: sets both status and next_sync_at.
+func (q *Queries) RecoverStuckSyncingStates(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, RecoverStuckSyncingStates)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const UpdateSyncStateCursor = `-- name: UpdateSyncStateCursor :exec

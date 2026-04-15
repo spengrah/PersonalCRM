@@ -600,25 +600,33 @@ periodicJobs := []*river.PeriodicJob{
 }
 ```
 
-`SchedulerTickWorker` enumerates due `external_sync_state` rows (via the existing `ListDueSyncStates`) and for each one inserts a `SyncProviderAccountJob{Source, AccountID}` with:
+`SchedulerTickWorker` enumerates due `external_sync_state` rows (via the existing `ListDueSyncStates`) and for each row enqueues a `SyncProviderAccountJob{Source, AccountID}` via a repository helper that performs an atomic per-account claim inside a single transaction:
 
 ```go
-river.InsertOpts{
-    UniqueOpts: river.UniqueOpts{
-        ByArgs: true,  // {Source, AccountID} — one in-flight per account
-    },
-}
+// Pseudocode for EnqueueAccountSyncIfNotInFlight(ctx, source, accountID):
+//   BEGIN
+//   SELECT pg_advisory_xact_lock(hashtextextended($1 || '|' || $2, 0));  -- per-account lock
+//   SELECT 1 FROM river_job WHERE kind='sync_provider_account' AND state IN ('available','running','retryable','scheduled') AND args @> ...;
+//   IF in-flight: return deduped-noop.
+//   ELSE: riverClient.InsertTx(ctx, tx, SyncProviderAccountJobArgs{Source, AccountID}, nil);
+//   COMMIT
 ```
 
-`SyncProviderAccountWorker` calls `provider.Sync(ctx, state)` — the existing provider interface unchanged. River's job lease + heartbeat auto-resumes on crash.
+The advisory lock + in-flight check + `InsertTx` run in one `pgx.Tx`; concurrent callers for the same `(source, account_id)` serialize on the advisory lock and see the prior insert when they look, so the dedup is race-free across concurrent tick workers or a tick colliding with `TriggerSync`.
+
+**Why not `river.UniqueOpts{ByArgs: true}`?** River's `UniqueOpts` dedup window is intentionally short and limited to `available`/`running`/`retryable` states; it does not guarantee "no two in-flight for the same args" across all race windows we care about (crash-recovery + manual `TriggerSync` + 5-minute tick). Advisory-lock + explicit in-flight check is the simpler correctness story and keeps the invariant readable in one SQL transaction.
+
+`SyncProviderAccountWorker` calls `provider.Sync(ctx, state)` — the existing provider interface unchanged. River's job lease + heartbeat + `JobRescuer` auto-resumes on crash.
+
+**Orphan `external_sync_log` handling on crash/retry:** when a worker crashes mid-sync, its `external_sync_log` row is left `status='running'`. When river re-leases and the retry attempt begins, the worker marks any pre-existing `running` row for this `(source, account_id)` as `status='abandoned'` with `error_message='abandoned by retry; worker did not finish'` before inserting the new run's log row. This requires extending the `external_sync_log.status` CHECK constraint (migration 037) to allow `'abandoned'`.
 
 **Retired:**
 - `external_sync_state.status = 'syncing'` writes. Column kept for migration safety (reverting is easier than a down migration); scheduler no longer reads or writes it.
-- `SyncStatusSyncing` constant usage. (Constant stays defined; no caller remains.)
+- `SyncStatusSyncing` constant usage. (Constant stays defined with a deprecation comment; no caller remains.)
 - `UpdateSyncStateStatus(..., SyncStatusSyncing, ...)` call sites in `performSync`.
-- `TriggerSync`'s "already syncing" hard-block — replaced with `UniqueOpts`-aware insert.
+- `TriggerSync`'s "already syncing" hard-block — replaced with the advisory-lock-aware enqueue helper, which returns a deduped-noop when a job is already in-flight.
 
-**Watchdog from #208:** not needed. Removing the mutex + adopting river's heartbeat eliminates the bug class.
+**Watchdog from #208:** not needed. Removing the mutex + adopting river's heartbeat/`JobRescuer` eliminates the bug class.
 
 ### 3.7 Main.go Wiring Changes
 
@@ -658,7 +666,8 @@ go riverClient.Start(ctx)
 Migration numbering continues from 035.
 
 - **036** — `event` table (schema in §3.1).
-- **037** — river's own migrations. Applied via `river migrate-up` in `RunMigrations` after golang-migrate runs our migrations. (River manages its own `river_migration` tracking table.)
+- **River's own migrations** — applied via `river migrate-up` in `RunMigrations` after golang-migrate runs our migrations (not allocated a number in our sequence; River manages its own `river_migration` tracking table).
+- **037** — extends `external_sync_log.status` CHECK to allow `'abandoned'` (used by the river-based scheduler to mark pre-crash `'running'` rows as abandoned when a retry attempt begins; see §3.6).
 - **038** — `event_shadow_observation` table. Used only during shadow-mode PRs; dropped in a later PR once all consumers are in cutover.
   ```sql
   CREATE TABLE event_shadow_observation (
@@ -787,19 +796,27 @@ PR 9a / PR 9b can run in parallel with PR 10 (independent consumers).
 **Scope:**
 - `SchedulerTickJob` + `SyncProviderAccountJob` workers.
 - Replace `robfig/cron` in `scheduler/scheduler.go` with river `PeriodicJob`.
+- `EnqueueAccountSyncIfNotInFlight(ctx, source, accountID)` repository helper that does the atomic per-account claim (advisory lock + in-flight check + `InsertTx`) described in §3.6.
+- Migration 037: extend `external_sync_log.status` CHECK to allow `'abandoned'`. Worker marks pre-crash `'running'` rows as `'abandoned'` on retry before inserting the new run's log row.
 - Remove `UpdateSyncStateStatus(..., SyncStatusSyncing, ...)` calls; stop reading `status='syncing'` in `ListDueSyncStates`.
 - Update `sync.go:performSync` to drop the mutex block.
-- Add integration test `sync_worker_leased_retry_test.go`: cancel worker context mid-job, advance river's lease clock (or use a short-lease test harness), assert job is re-dispatched by river and completes cleanly on second attempt. No `status='syncing'` lingers.
+- Replace `TriggerSync`'s "already syncing" hard-block with the enqueue helper's dedup-return.
+- Deprecation comments on `SyncStatusSyncing` and `RunDueSyncs`.
+- Tests:
+    - `sync_worker_leased_retry_test.go` — cancel worker ctx mid-job, advance river's lease clock (short-lease test harness), assert job is re-dispatched and completes cleanly; no `status='syncing'` lingers; prior `'running'` log marked `'abandoned'`.
+    - Load-style integration test — 50 goroutines calling the enqueue helper for the same `(source, account_id)` must see exactly one `river_job` inserted.
+    - Realistic retry-budget load test — 10 simulated provider accounts, random failures injected, verify no double-runs or missed ticks.
 - Closes #208.
 
 **Acceptance:**
 - Sync cadence observed unchanged in prod.
 - Stuck `status='syncing'` rows no longer produced.
-- Integration test passes.
+- Integration + load tests pass.
+- **72h prod-Pi soak gate (single-user adaptation):** this is a single-user, Pi-deployed system with no separate staging tier. Soak runs directly on the prod Pi for ≥72h *before merging the PR* — deploy the feature branch via `git fetch && git checkout feat/event-bus-pr3-scheduler-river && systemctl restart personalcrm-backend`. Evidence attached to the PR body: zero stuck `'syncing'` rows, zero duplicate runs for the same `(source, account_id, window)`, sync result counts within ±5% of the pre-migration baseline (snapshot baseline before deploy via the same SQL queries against current `main`). **Rollback plan documented in the PR body:** `ssh raspberet "cd ~/PersonalCRM && git checkout main && systemctl restart personalcrm-backend"` if any anomaly appears during the window. Acceptable because (a) single-user system, (b) sync is read-mostly into the DB so no data loss risk, (c) River's `JobRescuer` + the automated test suite (50-goroutine race, retry-budget load, leased-retry integration) already cover the #208 bug class — the soak is belt-and-suspenders confidence, not primary verification.
 
-**Est size:** Medium. 3-5 days (careful testing required; this is load-bearing).
+**Est size:** Medium. 3-5 days (careful testing required; this is load-bearing) + 72h soak wall-clock.
 
-**Risk area:** sync timing changes. Explicit load test: 10 simulated provider accounts, random failures injected, verify no double-runs or missed ticks.
+**Risk area:** sync timing changes. Mitigated by the 50-goroutine race test, the retry-budget load test, and the 72h staging soak gate above.
 
 ### PR 4 — HTTP ingestion endpoint
 

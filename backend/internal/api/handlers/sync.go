@@ -144,20 +144,20 @@ func (h *SyncHandler) TriggerSync(c *gin.Context) {
 		return
 	}
 
-	// Run sync in background goroutine with detached context
-	// This prevents the HTTP request timeout from cancelling the sync
+	// Enqueue the sync in a background goroutine with a detached context.
+	// After #180 PR 3 this is just a river Insert (fast), but we keep the
+	// goroutine so the HTTP client gets a 202 immediately even if the DB
+	// briefly stalls. 30s timeout is plenty for an Insert under realistic
+	// load; the old 5m was sized for full sync work, which is now off-handler.
 	accountID := req.AccountID
 	srcName := source // explicit capture for goroutine
 	go func() {
-		// Use background context with 5-minute timeout for the sync operation.
-		// 5 minutes is sufficient for ~500 contacts with Todoist API rate limits (~100 req/min).
-		// For larger datasets, consider making this configurable via environment variable.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		if err := h.syncService.TriggerSync(ctx, srcName, accountID); err != nil {
 			// Log error - can't return to client since request already responded
-			log.Error().Err(err).Str("source", srcName).Msg("background sync failed")
+			log.Error().Err(err).Str("source", srcName).Msg("background enqueue failed")
 		}
 	}()
 

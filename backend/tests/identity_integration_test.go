@@ -29,12 +29,7 @@ func TestIdentityRepository_Integration(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Run migrations first
-	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
-		t.Fatalf("Failed to run migrations: %v", err)
-	}
-
+	// Migrations are applied once by TestMain.
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -300,11 +295,7 @@ func TestIdentityService_Integration(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
-		t.Fatalf("Failed to run migrations: %v", err)
-	}
-
+	// Migrations are applied once by TestMain.
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

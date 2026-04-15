@@ -28,10 +28,7 @@ func TestCalendarEventUpsertResetsLastContactedUpdated(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrationsPath := getMigrationsPath()
-	err := db.RunMigrations(context.Background(), databaseURL, migrationsPath)
-	require.NoError(t, err)
-
+	// Migrations are applied once by TestMain.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
 		MaxConns:          config.DefaultDBMaxConns,
@@ -187,10 +184,7 @@ func TestUpdateContactLastContactedIfLater_OnlyUpdatesWhenLater(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrationsPath := getMigrationsPath()
-	err := db.RunMigrations(context.Background(), databaseURL, migrationsPath)
-	require.NoError(t, err)
-
+	// Migrations are applied once by TestMain.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
 		MaxConns:          config.DefaultDBMaxConns,

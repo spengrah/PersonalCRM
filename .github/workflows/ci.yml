@@ -88,13 +88,12 @@ jobs:
           timeout 30 bash -c 'until pg_isready -h localhost -p 5432; do sleep 1; done'
 
       - name: Run integration tests
-        working-directory: backend
         env:
-          DATABASE_URL: postgres://crm_user_test:test_password@localhost:5432/personal_crm_test?sslmode=disable
+          TEST_DATABASE_URL: postgres://crm_user_test:test_password@localhost:5432/personal_crm_test?sslmode=disable
           NODE_ENV: test
           SESSION_SECRET: test-session-secret-for-ci
           API_KEY: test-api-key-for-ci
-        run: go test -v ./tests/...
+        run: make test-integration-fast
 
   frontend-tests:
     name: Frontend Tests

@@ -24,12 +24,7 @@ func TestCadenceFilter_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	// Run migrations first
-	migrationsPath := getMigrationsPath()
-	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPath); err != nil {
-		t.Fatalf("Failed to run migrations: %v", err)
-	}
-
+	// Migrations are applied once by TestMain.
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

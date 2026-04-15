@@ -12,7 +12,7 @@ require (
 	github.com/pgvector/pgvector-go v0.3.0
 	github.com/riverqueue/river v0.34.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.34.0
-	github.com/robfig/cron/v3 v3.0.1
+	github.com/riverqueue/river/rivertype v0.34.0
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.11.1
 	github.com/swaggo/files v1.0.1
@@ -83,7 +83,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/riverqueue/river/riverdriver v0.34.0 // indirect
 	github.com/riverqueue/river/rivershared v0.34.0 // indirect
-	github.com/riverqueue/river/rivertype v0.34.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
