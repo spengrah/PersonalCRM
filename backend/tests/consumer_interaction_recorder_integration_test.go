@@ -776,9 +776,12 @@ func TestIntegration_CalendarRematchPublisher_EmitsAndConsumerObserves(t *testin
 	require.True(t, hasDirectObservation(t, env, contactID, &eventIDStr, false),
 		"expected writer=direct observation from rematch path")
 
-	// calendar.attended event was published.
+	// calendar.attended event was published. Per .ai/rules/core.md
+	// "Multi-entity events" gotcha, SourceID is per-(event, contact)
+	// to avoid silent dedup when one calendar event has N attendees.
 	eventRepo := repository.NewEventRepository(env.database.Queries)
-	published, err := eventRepo.FindEventBySource(ctx, repository.InteractionSourceGCal, eventIDStr)
+	publishedSourceID := eventIDStr + ":" + contactID.String()
+	published, err := eventRepo.FindEventBySource(ctx, repository.InteractionSourceGCal, publishedSourceID)
 	require.NoError(t, err, "calendar.attended event should be present post-rematch")
 	require.Equal(t, events.KindCalendarAttended, published.Kind)
 }
