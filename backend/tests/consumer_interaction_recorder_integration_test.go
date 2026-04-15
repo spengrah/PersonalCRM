@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -11,8 +12,10 @@ import (
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	tgpkg "personal-crm/backend/internal/telegram"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -722,6 +725,138 @@ func TestIntegration_ModeOff_NoDirectObservationsWritten(t *testing.T) {
 	).Scan(&count)
 	require.NoError(t, err)
 	require.Zero(t, count, "mode=off must not write any shadow observations")
+}
+
+// -----------------------------------------------------------------------------
+// Publisher-hook integration tests. Exercise the telegram aggregation and
+// calendar-rematch publishers end-to-end with a real non-nil eventBus so
+// the branch-specific publish sites (plan Step 5) are exercised.
+// -----------------------------------------------------------------------------
+
+// TestIntegration_CalendarRematchPublisher_EmitsAndConsumerObserves
+// exercises CalendarRematchHandler with a real bus. The rematch path calls
+// RecordInteraction (direct write) AND publishes calendar.attended. The
+// test asserts both the direct-path observation AND the event-row publish
+// fire, confirming the plan's Decision 7.1 hook is wired.
+func TestIntegration_CalendarRematchPublisher_EmitsAndConsumerObserves(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	env := newConsumerTestEnv(t, ctx, consumer.InteractionModeShadow)
+
+	contactID := env.newContact(t, "calendar-rematch-publisher")
+	calendarRepo := repository.NewCalendarEventRepository(env.database.Queries)
+	externalRepo := repository.NewExternalContactRepository(env.database.Queries)
+	email := "test-rematch-" + uuid.NewString()[:8] + "@example.com"
+	pastEnd := accelerated.GetCurrentTime().Add(-2 * time.Hour)
+	title := "Rematch meeting"
+	gcalEvtID := "cal-rm-" + uuid.NewString()[:8]
+
+	calEvent, err := calendarRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
+		GcalEventID:       gcalEvtID,
+		GcalCalendarID:    "primary",
+		GoogleAccountID:   "test-account@example.com",
+		Title:             &title,
+		StartTime:         pastEnd.Add(-1 * time.Hour),
+		EndTime:           pastEnd,
+		Status:            "confirmed",
+		Attendees:         []repository.Attendee{{Email: email}},
+		MatchedContactIDs: nil, // unmatched — rematch will add the contact
+		SyncedAt:          accelerated.GetCurrentTime(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = env.database.Pool.Exec(ctx, "DELETE FROM calendar_event WHERE id = $1", calEvent.ID)
+	})
+
+	// Rematch handler wired with a real bus so the publish path fires.
+	rematchHandler := google.NewCalendarRematchHandler(calendarRepo, externalRepo, env.contactService, env.bus)
+	matched, err := rematchHandler.Rematch(ctx, contactID, email)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, matched, 1, "rematch should have matched at least one event")
+
+	eventIDStr := calEvent.ID.String()
+
+	// Direct-path observation recorded by ContactService.RecordInteraction.
+	require.True(t, hasDirectObservation(t, env, contactID, &eventIDStr, false),
+		"expected writer=direct observation from rematch path")
+
+	// calendar.attended event was published.
+	eventRepo := repository.NewEventRepository(env.database.Queries)
+	published, err := eventRepo.FindEventBySource(ctx, repository.InteractionSourceGCal, eventIDStr)
+	require.NoError(t, err, "calendar.attended event should be present post-rematch")
+	require.Equal(t, events.KindCalendarAttended, published.Kind)
+}
+
+// TestIntegration_TelegramAggregationPublisher_EmitsEvent exercises the
+// aggregation engine with a non-nil eventBus. The direct path writes via
+// createInteractionForSession; the publisher hook emits a message.received
+// event. We assert the event row exists after aggregation completes.
+func TestIntegration_TelegramAggregationPublisher_EmitsEvent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	env := newConsumerTestEnv(t, ctx, consumer.InteractionModeShadow)
+
+	contactID := env.newContact(t, "tg-aggregation-publisher")
+	messageRepo := repository.NewTelegramMessageRepository(env.database.Queries)
+
+	// Seed a processed-pending inbound telegram message for this contact.
+	// Use large random IDs so we don't collide with other tests. Use
+	// uuid entropy (not time) to stay within lint constraints.
+	rand := uuid.New()
+	chatID := int64(80000000) + (int64(rand[0])<<16 | int64(rand[1])<<8 | int64(rand[2]))
+	msgID := int32(99900) + int32(rand[3])%100
+	sentAt := accelerated.GetCurrentTime().Add(-1 * time.Hour)
+	text := "hi there"
+	peerUserID := chatID
+	_, err := messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: msgID,
+		TelegramChatID:    chatID,
+		ChatType:          "private",
+		MessageText:       &text,
+		MessageType:       "text",
+		SentAt:            sentAt,
+		IsOutgoing:        false,
+		PeerUserID:        &peerUserID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, messageRepo.UpdateMessageContact(ctx, peerUserID, contactID))
+	t.Cleanup(func() {
+		_, _ = env.database.Pool.Exec(ctx,
+			"DELETE FROM telegram_message WHERE telegram_chat_id = $1 AND telegram_message_id = $2",
+			chatID, msgID)
+	})
+
+	// Build the aggregation engine with a real bus.
+	engine := tgpkg.NewAggregationEngine(
+		2, 48,
+		messageRepo, env.interactionRepo,
+		env.contactService, env.contactService, env.contactService,
+		env.bus,
+	)
+
+	require.NoError(t, engine.AggregateForContactBatch(ctx, contactID))
+
+	// Expected source_ref from aggregation.go:sourceRef() = "tg:<chat>:<firstMsg>"
+	expectedSourceRef := fmt.Sprintf("tg:%d:%d", chatID, msgID)
+
+	// Direct-path interaction row exists.
+	interaction, err := env.interactionRepo.FindBySourceRef(ctx, contactID, repository.InteractionSourceTelegram, expectedSourceRef)
+	require.NoError(t, err, "direct-path interaction should exist after aggregation")
+	require.Equal(t, repository.InteractionDirectionInbound, interaction.Direction)
+
+	// Direct-path observation row exists.
+	require.True(t, hasDirectObservation(t, env, contactID, &expectedSourceRef, false),
+		"expected writer=direct observation from telegram aggregation")
+
+	// message.received event row exists.
+	eventRepo := repository.NewEventRepository(env.database.Queries)
+	published, err := eventRepo.FindEventBySource(ctx, repository.InteractionSourceTelegram, expectedSourceRef)
+	require.NoError(t, err, "message.received event should be published by aggregation")
+	require.Equal(t, events.KindMessageReceived, published.Kind)
 }
 
 // -----------------------------------------------------------------------------
