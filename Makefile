@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -8,6 +8,9 @@ REPO_ROOT := $(shell git rev-parse --show-toplevel)
 # Go build cache (workspace-local by default; override via env).
 GOCACHE ?= $(REPO_ROOT)/.gocache
 export GOCACHE
+
+TEST_DATABASE_URL ?= postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable
+BACKEND_SLOW_TESTS_REGEX := TestSyncWorker_LoadNoDuplicateConcurrentSyncs|TestPeriodicTick_FiresOnStart|TestSyncWorker_RescueOnCrash
 
 # Default target
 # NOTE: When adding or removing make targets, update this help section to match
@@ -39,15 +42,17 @@ help:
 	@echo "  clean       - Clean build artifacts"
 	@echo ""
 	@echo "Testing:"
-	@echo "  test            - Run all backend tests (unit + integration)"
-	@echo "  test-unit       - Run backend unit tests only"
-	@echo "  test-integration- Run backend integration tests only"
-	@echo "  test-frontend   - Run frontend unit tests"
-	@echo "  test-e2e        - Run Playwright E2E tests"
-	@echo "  test-e2e-local  - Run Playwright E2E tests (honors PLAYWRIGHT_GREP)"
-	@echo "  test-e2e-diff   - Run diff-selected E2E tests (core + impacted)"
-	@echo "  test-api        - Run API endpoint tests"
-	@echo "  smoke-test      - Full system verification (restart + test)"
+	@echo "  test                  - Run all backend tests (unit + integration, includes slow opt-in tests)"
+	@echo "  test-unit             - Run backend unit tests only"
+	@echo "  test-integration      - Run all backend integration tests"
+	@echo "  test-integration-fast - Run backend integration tests without LONG_TESTS"
+	@echo "  test-integration-slow - Run only LONG_TESTS-gated backend integration tests"
+	@echo "  test-frontend         - Run frontend unit tests"
+	@echo "  test-e2e              - Run Playwright E2E tests"
+	@echo "  test-e2e-local        - Run Playwright E2E tests (honors PLAYWRIGHT_GREP)"
+	@echo "  test-e2e-diff         - Run diff-selected E2E tests (core + impacted)"
+	@echo "  test-api              - Run API endpoint tests"
+	@echo "  smoke-test            - Full system verification (restart + test)"
 	@echo ""
 	@echo "Docker:"
 	@echo "  docker-up   - Start Docker Compose services"
@@ -249,9 +254,17 @@ test-unit:
 	@echo "Running backend unit tests..."
 	@cd backend && go test ./tests/... -v -short
 
+test-integration-fast:
+	@echo "Running backend integration tests (default set)..."
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test ./tests/... -v
+
 test-integration:
 	@echo "Running backend integration tests..."
-	@cd backend && DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable" go test ./tests/... -v
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test ./tests/... -v
+
+test-integration-slow:
+	@echo "Running backend slow integration tests..."
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test ./tests/... -v -run '$(BACKEND_SLOW_TESTS_REGEX)'
 
 test-frontend:
 	@echo "Running frontend tests..."
@@ -287,7 +300,7 @@ lint-fix:
 	@echo "Running golangci-lint with auto-fix..."
 	@cd backend && $(GOLANGCI_LINT) run --fix ./...
 
-ci-test: lint test-unit test-integration test-frontend
+ci-test: lint test-unit test-integration-fast test-frontend
 	@echo "✅ All CI tests passed"
 
 # Code generation

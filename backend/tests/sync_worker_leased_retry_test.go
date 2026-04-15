@@ -350,15 +350,10 @@ type syncLogPool interface {
 //   - Default rescuer interval of 30s — total wall-clock ~45s.
 //
 // Gated behind testing.Short() and the LONG_TESTS env var so developers
-// can opt in locally without always paying the 45s cost. CI runs the
-// full suite and gets the coverage.
+// can opt in locally without always paying the 45s cost. CI coverage
+// for this test lives in the dedicated Backend Slow Tests workflow.
 func TestSyncWorker_RescueOnCrash(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping long integration test in short mode")
-	}
-	if os.Getenv("LONG_TESTS") == "" && os.Getenv("CI") == "" {
-		t.Skip("skipping long integration test; set LONG_TESTS=1 or run in CI to enable")
-	}
+	requireLongTests(t)
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")

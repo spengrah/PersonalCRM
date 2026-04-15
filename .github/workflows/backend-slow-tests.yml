@@ -1,0 +1,50 @@
+name: Backend Slow Tests
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * *'
+
+jobs:
+  slow-backend-tests:
+    name: Slow Backend Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: personal_crm_test
+          POSTGRES_USER: crm_user_test
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: backend/go.sum
+
+      - name: Download Go modules
+        working-directory: backend
+        run: go mod download
+
+      - name: Wait for PostgreSQL
+        run: |
+          timeout 30 bash -c 'until pg_isready -h localhost -p 5432; do sleep 1; done'
+
+      - name: Run slow backend integration tests
+        env:
+          TEST_DATABASE_URL: postgres://crm_user_test:test_password@localhost:5432/personal_crm_test?sslmode=disable
+        run: make test-integration-slow

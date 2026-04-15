@@ -85,9 +85,7 @@ func (p *loadTestProvider) Sync(ctx context.Context, state *repository.SyncState
 //
 // The test's budget is bounded: windowBudget caps total runtime.
 func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping load integration test in short mode")
-	}
+	requireLongTests(t)
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")

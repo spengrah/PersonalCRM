@@ -173,9 +173,7 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 // downstream sync_provider_account jobs (registry empty → service
 // returns empty due list → tick Work returns nil fast).
 func TestPeriodicTick_FiresOnStart(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
+	requireLongTests(t)
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
