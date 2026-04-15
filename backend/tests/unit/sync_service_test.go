@@ -47,11 +47,8 @@ func newServiceSuiteDB(t *testing.T) (*db.Database, context.Context) {
 	}
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	// tests/unit is a sibling of tests/integration; migrations live two
-	// levels up at backend/migrations. Use config's default relative
-	// path resolution here; tests that run `make test` set MIGRATIONS_PATH.
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, migrationsPathForUnit()))
+	// Migrations are applied once by TestMain.
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
