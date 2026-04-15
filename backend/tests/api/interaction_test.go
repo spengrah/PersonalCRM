@@ -22,7 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupInteractionTestRouter() (*gin.Engine, func()) {
+func setupInteractionTestRouter(t *testing.T) (*gin.Engine, func()) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	ctx := context.Background()
@@ -43,7 +44,7 @@ func setupInteractionTestRouter() (*gin.Engine, func()) {
 	}
 
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
-	manualHandler, contactService, riverCleanup := buildManualHandlerForTest(nil, ctx, database, cfg)
+	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
 	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
@@ -71,9 +72,6 @@ func setupInteractionTestRouter() (*gin.Engine, func()) {
 	}
 
 	cleanup := func() {
-		if riverCleanup != nil {
-			riverCleanup()
-		}
 		database.Close()
 	}
 
@@ -116,7 +114,7 @@ func TestInteraction_CreateAndList(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	router, cleanup := setupInteractionTestRouter()
+	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
 	contactID := createInteractionTestContact(t, router, "Interaction Test User")
@@ -196,7 +194,7 @@ func TestInteraction_ManualDeduplication(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	router, cleanup := setupInteractionTestRouter()
+	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
 	contactID := createInteractionTestContact(t, router, "Dedup Test User")
@@ -247,7 +245,7 @@ func TestInteraction_SoftDelete(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	router, cleanup := setupInteractionTestRouter()
+	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
 	contactID := createInteractionTestContact(t, router, "Delete Interaction Test User")
@@ -314,7 +312,7 @@ func TestInteraction_UpdatesLastContacted(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	router, cleanup := setupInteractionTestRouter()
+	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
 	contactID := createInteractionTestContact(t, router, "Last Contacted Update Test")
@@ -356,12 +354,18 @@ func TestInteraction_NonExistentContact(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	router, cleanup := setupInteractionTestRouter()
+	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
+
+	// Use a non-nil UUID that definitely won't exist. The zero UUID
+	// (00000000...) would trip the consumer's "contact_id unresolved"
+	// publisher-bug guard (plan Decision 4) before reaching the DB check;
+	// we specifically want the DB-level "not found" path here.
+	nonExistentID := "550e8400-e29b-41d4-a716-446655440099"
 
 	t.Run("CreateInteractionForNonExistentContact", func(t *testing.T) {
 		body, _ := json.Marshal(map[string]string{})
-		req, _ := http.NewRequest("POST", "/api/v1/contacts/00000000-0000-0000-0000-000000000000/interactions", bytes.NewBuffer(body))
+		req, _ := http.NewRequest("POST", "/api/v1/contacts/"+nonExistentID+"/interactions", bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
 
 		w := httptest.NewRecorder()
@@ -371,7 +375,7 @@ func TestInteraction_NonExistentContact(t *testing.T) {
 	})
 
 	t.Run("ListInteractionsForNonExistentContact", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/api/v1/contacts/00000000-0000-0000-0000-000000000000/interactions", nil)
+		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+nonExistentID+"/interactions", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -397,7 +401,7 @@ func TestInteraction_FutureDateRejected(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	router, cleanup := setupInteractionTestRouter()
+	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
 	contactID := createInteractionTestContact(t, router, "Future Date Test User")

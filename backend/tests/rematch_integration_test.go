@@ -10,6 +10,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -21,6 +22,13 @@ import (
 )
 
 // rematchTestEnv bundles the dependencies a typical rematch test needs.
+//
+// Post-PR-6 cutover: `bus` is a live events.Bus with the
+// InteractionRecorderWorker running in the background. Rematch/aggregation
+// publishers are constructed against this bus so publish → enqueue →
+// consumer write happens asynchronously (just like production). Tests
+// that assert "interaction exists after rematch" call
+// waitForInteractionBySourceRef to poll until the async write commits.
 type rematchTestEnv struct {
 	ctx               context.Context
 	database          *db.Database
@@ -32,6 +40,7 @@ type rematchTestEnv struct {
 	contactSvc        *service.ContactService
 	enrichmentSvc     *service.EnrichmentService
 	rematchSvc        *service.RematchService
+	bus               *events.Bus
 }
 
 func setupRematchEnv(t *testing.T) *rematchTestEnv {
@@ -65,8 +74,13 @@ func setupRematchEnv(t *testing.T) *rematchTestEnv {
 	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
 	enrichmentSvc := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
 
+	// Cutover wiring: a live bus + InteractionRecorderWorker so rematch
+	// publishes → async consumer writes the interaction. Tests wait for
+	// the row via waitForInteractionBySourceRef.
+	bus := setupTestEventBus(t, ctx, database, contactSvc)
+
 	rematchSvc := service.NewRematchService()
-	rematchSvc.Register(google.NewCalendarRematchHandler(calendarRepo, externalRepo, nil))
+	rematchSvc.Register(google.NewCalendarRematchHandler(calendarRepo, externalRepo, bus))
 	contactSvc.SetRematchService(rematchSvc)
 	enrichmentSvc.SetRematchService(rematchSvc)
 
@@ -81,6 +95,7 @@ func setupRematchEnv(t *testing.T) *rematchTestEnv {
 		contactSvc:        contactSvc,
 		enrichmentSvc:     enrichmentSvc,
 		rematchSvc:        rematchSvc,
+		bus:               bus,
 	}
 }
 
@@ -155,10 +170,10 @@ func TestRematch_CalendarPastEvent_RecordsInteraction(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, updatedEvent.MatchedContactIDs, contact.ID)
 
-	// An interaction should exist for (contact, gcal, event.ID).
+	// An interaction should exist for (contact, gcal, event.ID). Post-PR-6
+	// the write is async via the event bus consumer — poll until it lands.
 	eventIDStr := event.ID.String()
-	interaction, err := env.interactionRepo.FindBySourceRef(env.ctx, contact.ID, repository.InteractionSourceGCal, eventIDStr)
-	require.NoError(t, err)
+	interaction := waitForInteractionBySourceRef(t, env.ctx, env.interactionRepo, contact.ID, repository.InteractionSourceGCal, eventIDStr, defaultInteractionWaitTimeout)
 	require.NotNil(t, interaction)
 	assert.WithinDuration(t, pastEnd, interaction.OccurredAt, time.Second)
 
@@ -277,7 +292,10 @@ func TestRematch_CalendarIdempotent(t *testing.T) {
 	}
 	assert.Equal(t, 1, count, "matched_contact_ids should contain the contact exactly once")
 
-	// Exactly one interaction should exist (RecordInteraction dedupes).
+	// Exactly one interaction should exist (consumer dedupes on (source, source_ref)).
+	// Poll first to let the async consumer commit the first run's write.
+	eventIDStr := event.ID.String()
+	_ = waitForInteractionBySourceRef(t, env.ctx, env.interactionRepo, contact.ID, repository.InteractionSourceGCal, eventIDStr, defaultInteractionWaitTimeout)
 	interactions, err := env.interactionRepo.ListContactInteractions(env.ctx, contact.ID, 100, 0)
 	require.NoError(t, err)
 	count = 0
@@ -352,7 +370,7 @@ func TestRematch_TelegramUsernameMatch(t *testing.T) {
 		cfg.Telegram.BurstWindowHours, cfg.Telegram.ReplyBridgeHours,
 		messageRepo, env.interactionRepo,
 		env.contactSvc, env.contactSvc,
-		nil,
+		env.bus,
 	)
 	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))
 
@@ -438,7 +456,7 @@ func registerTelegramHandlers(t *testing.T, env *rematchTestEnv) *repository.Tel
 		cfg.Telegram.BurstWindowHours, cfg.Telegram.ReplyBridgeHours,
 		messageRepo, env.interactionRepo,
 		env.contactSvc, env.contactSvc,
-		nil,
+		env.bus,
 	)
 	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))
 	env.rematchSvc.Register(tgpkg.NewPhoneRematchHandler(messageRepo, peerMatcher, aggregationEngine))
@@ -606,7 +624,7 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 		cfg.Telegram.BurstWindowHours, cfg.Telegram.ReplyBridgeHours,
 		messageRepo, env.interactionRepo,
 		env.contactSvc, env.contactSvc,
-		nil,
+		env.bus,
 	)
 	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))
 
@@ -664,7 +682,9 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 	require.NoError(t, peerMatcher.OnPeerLinked(env.ctx, peerUserID, username, contact.ID))
 	require.NoError(t, aggregationEngine.AggregateForContactBatch(env.ctx, contact.ID))
 
-	// Invariant: exactly one telegram interaction for this contact.
+	// Invariant: exactly one telegram interaction for this contact. Post-PR-6
+	// the write is async — poll for it to appear, then assert uniqueness.
+	_ = waitForTelegramInteractionCount(t, env.ctx, env.database.Pool, contact.ID, 1, defaultInteractionWaitTimeout)
 	var total int
 	require.NoError(t, env.database.Pool.QueryRow(env.ctx,
 		"SELECT COUNT(*) FROM interaction WHERE contact_id = $1 AND source = 'telegram' AND deleted_at IS NULL",
@@ -672,13 +692,10 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 	).Scan(&total))
 	assert.Equal(t, 1, total, "rematch + PostImportHook together must not produce duplicate interactions")
 
-	// All seeded messages should be linked and processed.
-	var processed int
-	require.NoError(t, env.database.Pool.QueryRow(env.ctx,
-		"SELECT COUNT(*) FROM telegram_message WHERE peer_user_id = $1 AND matched_contact_id = $2 AND processed_at IS NOT NULL",
-		peerUserID, contact.ID,
-	).Scan(&processed))
-	assert.Equal(t, 3, processed)
+	// All seeded messages should be linked and processed. The consumer marks
+	// messages processed inside the interaction-insert tx (plan Decision 10);
+	// wait for all 3 before asserting.
+	waitForTelegramMessagesProcessed(t, env.ctx, env.database.Pool, peerUserID, contact.ID, 3, defaultInteractionWaitTimeout)
 }
 
 func TestRematch_ContactServiceUpdateContact_FiresForNewMethodOnly(t *testing.T) {

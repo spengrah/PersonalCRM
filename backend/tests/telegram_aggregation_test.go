@@ -63,11 +63,17 @@ func setupAggregationTest(t *testing.T) (
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
 
+	// Cutover wiring: a live events.Bus with the InteractionRecorder worker
+	// running so aggregation publishes → async consumer writes interaction
+	// rows. Tests poll via waitForTelegramInteractionCount /
+	// waitForTelegramMessagesProcessed to wait for the async write.
+	bus := setupTestEventBus(t, ctx, database, contactService)
+
 	engine := tgpkg.NewAggregationEngine(
 		2, 48, // burst window 2h, reply bridge 48h
 		messageRepo, interactionRepo,
 		contactService, contactService,
-		nil,
+		bus,
 	)
 
 	// Clean up test messages from previous runs
@@ -128,9 +134,8 @@ func TestAggregation_BatchOutboundBurst(t *testing.T) {
 	err := engine.AggregateAll(ctx)
 	require.NoError(t, err)
 
-	interactions, err := interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
-	require.NoError(t, err)
-	require.Len(t, interactions, 1)
+	// Post-PR-6: aggregation publishes, consumer writes async.
+	interactions := waitForInteractionCountExact(t, ctx, interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout)
 	assert.Equal(t, "outbound", interactions[0].Direction)
 	assert.Equal(t, "telegram", interactions[0].Source)
 	assert.Contains(t, *interactions[0].SourceRef, "tg:100:")
@@ -155,9 +160,7 @@ func TestAggregation_BatchMutualBridge(t *testing.T) {
 	err := engine.AggregateAll(ctx)
 	require.NoError(t, err)
 
-	interactions, err := interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
-	require.NoError(t, err)
-	require.Len(t, interactions, 1)
+	interactions := waitForInteractionCountExact(t, ctx, interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout)
 	assert.Equal(t, "mutual", interactions[0].Direction)
 }
 
@@ -180,14 +183,12 @@ func TestAggregation_BatchNoChurnFollowUp(t *testing.T) {
 	err := engine.AggregateAll(ctx)
 	require.NoError(t, err)
 
-	interactions, err := interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
-	require.NoError(t, err)
-	require.Len(t, interactions, 1)
+	interactions := waitForInteractionCountExact(t, ctx, interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout)
 	assert.Equal(t, "mutual", interactions[0].Direction)
 }
 
 func TestAggregation_ChatScoped(t *testing.T) {
-	messageRepo, interactionRepo, contactRepo, _, engine, _ := setupAggregationTest(t)
+	messageRepo, interactionRepo, contactRepo, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 
 	contact := createTestContact(t, contactRepo, "Aggregation Chat Scoped")
@@ -204,6 +205,8 @@ func TestAggregation_ChatScoped(t *testing.T) {
 	err := engine.AggregateAll(ctx)
 	require.NoError(t, err)
 
+	// Wait for both chats' interactions to land (one per chat).
+	_ = waitForTelegramInteractionCount(t, ctx, database.Pool, contact.ID, 2, defaultInteractionWaitTimeout)
 	interactions, err := interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(interactions), 2) // at least 2 (one per chat)
@@ -220,17 +223,17 @@ func TestAggregation_IncrementalCoalescing(t *testing.T) {
 
 	base := accelerated.GetCurrentTime().Add(-30 * time.Minute).Truncate(time.Microsecond)
 
-	// First outbound message → creates interaction
+	// First outbound message → aggregation publishes, consumer writes.
 	insertTestMessage(t, messageRepo, 80041, 301, true, base, &contact.ID, 70005)
 	err := engine.AggregateForContact(ctx, contact.ID, 301)
 	require.NoError(t, err)
 
-	interactions, err := interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
-	require.NoError(t, err)
-	require.Len(t, interactions, 1)
+	interactions := waitForInteractionCountExact(t, ctx, interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout)
 	assert.Equal(t, "outbound", interactions[0].Direction)
 
-	// Second outbound message within burst window → should coalesce (extend), not create new
+	// Second outbound message within burst window → aggregation's incremental
+	// path calls ExtendInteraction (sync, not via event bus — plan Decision 3).
+	// Still just one interaction row.
 	insertTestMessage(t, messageRepo, 80042, 301, true, base.Add(10*time.Minute), &contact.ID, 70005)
 	err = engine.AggregateForContact(ctx, contact.ID, 301)
 	require.NoError(t, err)
@@ -251,23 +254,22 @@ func TestAggregation_IncrementalReplyBridge(t *testing.T) {
 
 	base := accelerated.GetCurrentTime().Add(-2 * time.Hour).Truncate(time.Microsecond)
 
-	// Create outbound interaction first
+	// Create outbound interaction first (async via event bus).
 	insertTestMessage(t, messageRepo, 80051, 302, true, base, &contact.ID, 70006)
 	err := engine.AggregateForContact(ctx, contact.ID, 302)
 	require.NoError(t, err)
 
-	interactions, err := interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
-	require.NoError(t, err)
-	require.Len(t, interactions, 1)
+	interactions := waitForInteractionCountExact(t, ctx, interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout)
 	assert.Equal(t, "outbound", interactions[0].Direction)
 
-	// Inbound reply within 48h → should promote to mutual
+	// Inbound reply within 48h → aggregation's reply-bridge path calls
+	// PromoteInteractionToMutual (sync, plan Decision 3 — extend/promote
+	// stay direct-path through PR 6).
 	insertTestMessage(t, messageRepo, 80052, 302, false, base.Add(30*time.Minute), &contact.ID, 70006)
 	err = engine.AggregateForContact(ctx, contact.ID, 302)
 	require.NoError(t, err)
 
-	interactions, err = interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
-	require.NoError(t, err)
+	interactions = waitForInteractionDirection(t, ctx, interactionRepo, contact.ID, "mutual", defaultInteractionWaitTimeout)
 	require.Len(t, interactions, 1) // still 1, promoted
 	assert.Equal(t, "mutual", interactions[0].Direction)
 }
@@ -285,14 +287,12 @@ func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {
 	outboundTime := accelerated.GetCurrentTime().Add(-72 * time.Hour).Truncate(time.Microsecond)
 	inboundTime := accelerated.GetCurrentTime().Add(-1 * time.Hour).Truncate(time.Microsecond)
 
-	// Step 1: outbound message → aggregate → creates outbound interaction
+	// Step 1: outbound message → aggregate → consumer async-writes the interaction.
 	insertTestMessage(t, messageRepo, 80061, 303, true, outboundTime, &contact.ID, 70007)
 	err := engine.AggregateForContact(ctx, contact.ID, 303)
 	require.NoError(t, err)
 
-	interactions, err := interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
-	require.NoError(t, err)
-	require.Len(t, interactions, 1)
+	interactions := waitForInteractionCountExact(t, ctx, interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout)
 	assert.Equal(t, "outbound", interactions[0].Direction)
 
 	// Step 2: inbound message with reply_to_msg_id pointing to the outbound message
@@ -320,13 +320,17 @@ func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {
 	err = messageRepo.MarkMessagesProcessed(ctx, []uuid.UUID{outboundMsg.ID}, interactions[0].ID)
 	require.NoError(t, err)
 
-	// Step 3: aggregate incrementally
+	// Step 3: aggregate incrementally — PromoteInteractionToMutual is the
+	// sync service path for reply-bridging (plan Decision 3 — extend/promote
+	// stay direct-path through PR 6). No event-bus wait needed for the
+	// promotion itself, but the prior async outbound write must have landed
+	// before the promotion can find the interaction row to update — and it
+	// did above via waitForInteractionCountExact. Re-list to capture the
+	// now-promoted row.
 	err = engine.AggregateForContact(ctx, contact.ID, 303)
 	require.NoError(t, err)
 
-	// Assert: 1 mutual interaction (bridged via explicit reply despite >48h gap)
-	interactions, err = interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
-	require.NoError(t, err)
+	interactions = waitForInteractionDirection(t, ctx, interactionRepo, contact.ID, "mutual", defaultInteractionWaitTimeout)
 	require.Len(t, interactions, 1)
 	assert.Equal(t, "mutual", interactions[0].Direction)
 
