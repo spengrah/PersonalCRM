@@ -18,46 +18,41 @@ import (
 
 // -----------------------------------------------------------------------------
 // Stubs. Unit tests exercise HandleEvent without a DB — the tx param is a
-// typed nil (shadow observations and publishes go through stubs).
+// typed nil (the writer stub never dereferences it).
 // -----------------------------------------------------------------------------
 
-type stubContactRepo struct {
-	getCalls   int
-	notFound   bool
-	lastID     uuid.UUID
-	returnErr  error
-	lastGetCtx context.Context
+// stubWriter is the cutover-era replacement for the PR 5 stubContactRepo /
+// stubInteractionRepo split. It emulates ContactService.RecordInteractionTx:
+// dedup, contact-existence check, and interaction insert collapse into one
+// entry point (plan Decision 4a).
+type stubWriter struct {
+	calls   int
+	lastReq repository.RecordInteractionRequest
+	// Existing row forces isReplay=true; otherwise a fresh row is fabricated.
+	existing *repository.Interaction
+	// notFound simulates GetContactTx returning db.ErrNotFound.
+	notFound bool
+	// returnErr forces a non-dedup error from the writer.
+	returnErr error
+	// lastCreated records the fabricated row on fresh writes (nil on replay).
+	lastCreated *repository.Interaction
+	// postCommit is returned on fresh writes; caller may invoke it.
+	postCommit func(context.Context)
 }
 
-func (s *stubContactRepo) GetContactTx(ctx context.Context, _ pgx.Tx, id uuid.UUID) (*repository.Contact, error) {
-	s.getCalls++
-	s.lastID = id
-	s.lastGetCtx = ctx
-	if s.notFound {
-		return nil, db.ErrNotFound
-	}
+func (s *stubWriter) RecordInteractionTx(
+	_ context.Context, _ pgx.Tx, req repository.RecordInteractionRequest,
+) (*repository.Interaction, bool, func(context.Context), error) {
+	s.calls++
+	s.lastReq = req
 	if s.returnErr != nil {
-		return nil, s.returnErr
+		return nil, false, nil, s.returnErr
 	}
-	return &repository.Contact{ID: id, FullName: "Test"}, nil
-}
-
-type stubInteractionRepo struct {
-	createCalls    int
-	createErr      error
-	lastCreated    *repository.Interaction
-	existingByRef  *repository.Interaction
-	existingWindow *repository.Interaction
-	findRefErr     error
-	findWindowErr  error
-	lastCreateReq  repository.CreateInteractionRequest
-}
-
-func (s *stubInteractionRepo) CreateInteractionTx(_ context.Context, _ pgx.Tx, req repository.CreateInteractionRequest) (*repository.Interaction, error) {
-	s.createCalls++
-	s.lastCreateReq = req
-	if s.createErr != nil {
-		return nil, s.createErr
+	if s.notFound {
+		return nil, false, nil, db.ErrNotFound
+	}
+	if s.existing != nil {
+		return s.existing, true, nil, nil
 	}
 	inter := &repository.Interaction{
 		ID:         uuid.New(),
@@ -68,27 +63,21 @@ func (s *stubInteractionRepo) CreateInteractionTx(_ context.Context, _ pgx.Tx, r
 		Direction:  req.Direction,
 	}
 	s.lastCreated = inter
-	return inter, nil
+	return inter, false, s.postCommit, nil
 }
 
-func (s *stubInteractionRepo) FindBySourceRefTx(_ context.Context, _ pgx.Tx, _ uuid.UUID, _ string, _ string) (*repository.Interaction, error) {
-	if s.findRefErr != nil {
-		return nil, s.findRefErr
-	}
-	if s.existingByRef != nil {
-		return s.existingByRef, nil
-	}
-	return nil, db.ErrNotFound
+type stubTGRepo struct {
+	calls           int
+	markErr         error
+	lastInteraction uuid.UUID
+	lastMessageIDs  []uuid.UUID
 }
 
-func (s *stubInteractionRepo) FindInWindowTx(_ context.Context, _ pgx.Tx, _ uuid.UUID, _ string, _ time.Time, _ time.Duration) (*repository.Interaction, error) {
-	if s.findWindowErr != nil {
-		return nil, s.findWindowErr
-	}
-	if s.existingWindow != nil {
-		return s.existingWindow, nil
-	}
-	return nil, db.ErrNotFound
+func (s *stubTGRepo) MarkMessagesProcessedTx(_ context.Context, _ pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID) error {
+	s.calls++
+	s.lastMessageIDs = messageIDs
+	s.lastInteraction = interactionID
+	return s.markErr
 }
 
 type stubBus struct {
@@ -109,39 +98,6 @@ func (s *stubBus) PublishTx(_ context.Context, _ pgx.Tx, env *events.Envelope) e
 
 func (s *stubBus) GetEvent(_ context.Context, _ uuid.UUID) (*events.Envelope, error) {
 	return nil, db.ErrNotFound
-}
-
-type stubShadowRepo struct {
-	writes       []repository.ShadowObservation
-	replays      []repository.ShadowObservation
-	writeErr     error
-	replayErr    error
-	peerForMatch *repository.ShadowObservation
-}
-
-func (s *stubShadowRepo) RecordConsumerWrite(_ context.Context, _ pgx.Tx, obs repository.ShadowObservation) (*repository.ShadowObservation, error) {
-	if s.writeErr != nil {
-		return nil, s.writeErr
-	}
-	obs.ID = uuid.New()
-	s.writes = append(s.writes, obs)
-	out := obs
-	return &out, nil
-}
-
-func (s *stubShadowRepo) RecordConsumerReplay(_ context.Context, _ pgx.Tx, obs repository.ShadowObservation) (*repository.ShadowObservation, error) {
-	if s.replayErr != nil {
-		return nil, s.replayErr
-	}
-	obs.ID = uuid.New()
-	obs.Replay = true
-	s.replays = append(s.replays, obs)
-	out := obs
-	return &out, nil
-}
-
-func (s *stubShadowRepo) FindMatchingDirectWrite(_ context.Context, _ pgx.Tx, _ repository.ShadowObservation) (*repository.ShadowObservation, error) {
-	return s.peerForMatch, nil
 }
 
 // nonNilTx returns a typed-nil pgx.Tx. Stubs never deref the value.
@@ -182,52 +138,61 @@ func kindDefaultSource(kind events.Kind) string {
 	return "telegram"
 }
 
-func newRecorderWithStubs(mode string) (*InteractionRecorder, *stubContactRepo, *stubInteractionRepo, *stubBus, *stubShadowRepo) {
-	cr := &stubContactRepo{}
-	ir := &stubInteractionRepo{}
+// newRecorderWithStubs constructs the consumer with fresh stubs. In
+// cutover there is no mode parameter — the consumer runs unconditionally
+// wherever it's wired (mode gating lives at the publisher + manual-
+// handler wiring level per plan Decision 6).
+func newRecorderWithStubs() (*InteractionRecorder, *stubWriter, *stubTGRepo, *stubBus) {
+	w := &stubWriter{}
+	tg := &stubTGRepo{}
 	b := &stubBus{}
-	sr := &stubShadowRepo{}
-	rec := NewInteractionRecorder(mode, cr, ir, b, sr)
-	return rec, cr, ir, b, sr
+	rec := NewInteractionRecorder(w, tg, b)
+	return rec, w, tg, b
 }
 
 // -----------------------------------------------------------------------------
-// Per-kind new-write cases. Each asserts: interaction insert runs with the
+// Per-kind new-write cases. Each asserts: RecordInteractionTx runs with the
 // expected (source, source_ref, direction), interaction.recorded is published
-// with SourceID = interaction.ID, and a writer='consumer' replay=false
-// observation is written in shadow mode.
+// with SourceID = interaction.ID, and MarkMessagesProcessedTx fires only on
+// message.* kinds (plan Decisions 4a + 10).
 // -----------------------------------------------------------------------------
 
-func TestHandleEvent_MessageReceived_NewWrite(t *testing.T) {
+func TestHandleEvent_MessageReceived_CutoverFreshWrite(t *testing.T) {
 	cid := uuid.New()
-	rec, _, ir, b, sr := newRecorderWithStubs(InteractionModeShadow)
+	msgID := uuid.New()
+	rec, w, tg, b := newRecorderWithStubs()
 	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
 		Version:           1,
 		ContactID:         &cid,
 		PeerRef:           "tg:1:2",
 		MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		ExternalMessageID: "tg:1:2:10",
+		MessageIDs:        []uuid.UUID{msgID},
 	})
 
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Equal(t, 1, ir.createCalls)
-	require.Equal(t, repository.InteractionSourceTelegram, ir.lastCreateReq.Source)
-	require.NotNil(t, ir.lastCreateReq.SourceRef)
-	require.Equal(t, "tg:1:2:10", *ir.lastCreateReq.SourceRef)
-	require.Equal(t, repository.InteractionDirectionInbound, ir.lastCreateReq.Direction)
+	interaction, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.NotNil(t, interaction)
+
+	require.Equal(t, 1, w.calls)
+	require.Equal(t, repository.InteractionSourceTelegram, w.lastReq.Source)
+	require.NotNil(t, w.lastReq.SourceRef)
+	require.Equal(t, "tg:1:2:10", *w.lastReq.SourceRef)
+	require.Equal(t, repository.InteractionDirectionInbound, w.lastReq.Direction)
 
 	require.Equal(t, 1, b.publishCalls)
 	require.Equal(t, events.KindInteractionRecorded, b.lastEnv.Kind)
-	require.Equal(t, ir.lastCreated.ID.String(), b.lastEnv.SourceID)
+	require.Equal(t, w.lastCreated.ID.String(), b.lastEnv.SourceID)
 
-	require.Len(t, sr.writes, 1)
-	require.Equal(t, repository.InteractionDirectionInbound, sr.writes[0].Direction)
-	require.False(t, sr.writes[0].Replay)
+	// MarkMessagesProcessedTx fires inside the same tx (plan Decision 10).
+	require.Equal(t, 1, tg.calls, "message.* kinds mark telegram messages processed in-tx")
+	require.Equal(t, []uuid.UUID{msgID}, tg.lastMessageIDs)
+	require.Equal(t, w.lastCreated.ID, tg.lastInteraction)
 }
 
-func TestHandleEvent_MessageSent_NewWrite_DefaultOutbound(t *testing.T) {
+func TestHandleEvent_MessageSent_CutoverFreshWrite_DefaultOutbound(t *testing.T) {
 	cid := uuid.New()
-	rec, _, ir, _, _ := newRecorderWithStubs(InteractionModeShadow)
+	rec, w, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindMessageSent, events.MessageSentPayload{
 		Version:           1,
 		ContactID:         &cid,
@@ -235,15 +200,14 @@ func TestHandleEvent_MessageSent_NewWrite_DefaultOutbound(t *testing.T) {
 		MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		ExternalMessageID: "tg:1:2:11",
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Equal(t, repository.InteractionDirectionOutbound, ir.lastCreateReq.Direction)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, repository.InteractionDirectionOutbound, w.lastReq.Direction)
 }
 
 func TestHandleEvent_MessageReceived_PayloadDirectionMutual(t *testing.T) {
-	// Fresh-mutual telegram session: publisher sets Direction="mutual" in
-	// the payload (plan Decision 6). Consumer must honor it.
 	cid := uuid.New()
-	rec, _, ir, _, sr := newRecorderWithStubs(InteractionModeShadow)
+	rec, w, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
 		Version:           1,
 		ContactID:         &cid,
@@ -252,15 +216,14 @@ func TestHandleEvent_MessageReceived_PayloadDirectionMutual(t *testing.T) {
 		ExternalMessageID: "tg:1:2:20",
 		Direction:         "mutual",
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Equal(t, repository.InteractionDirectionMutual, ir.lastCreateReq.Direction)
-	require.Len(t, sr.writes, 1)
-	require.Equal(t, repository.InteractionDirectionMutual, sr.writes[0].Direction)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, repository.InteractionDirectionMutual, w.lastReq.Direction)
 }
 
 func TestHandleEvent_MessageSent_PayloadDirectionMutual(t *testing.T) {
 	cid := uuid.New()
-	rec, _, ir, _, _ := newRecorderWithStubs(InteractionModeShadow)
+	rec, w, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindMessageSent, events.MessageSentPayload{
 		Version:           1,
 		ContactID:         &cid,
@@ -269,31 +232,33 @@ func TestHandleEvent_MessageSent_PayloadDirectionMutual(t *testing.T) {
 		ExternalMessageID: "tg:1:2:21",
 		Direction:         "mutual",
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Equal(t, repository.InteractionDirectionMutual, ir.lastCreateReq.Direction)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, repository.InteractionDirectionMutual, w.lastReq.Direction)
 }
 
-func TestHandleEvent_CalendarAttended_NewWrite(t *testing.T) {
+func TestHandleEvent_CalendarAttended_CutoverFreshWrite_NoMarkProcessed(t *testing.T) {
 	cid := uuid.New()
-	rec, _, ir, b, sr := newRecorderWithStubs(InteractionModeShadow)
+	rec, w, tg, b := newRecorderWithStubs()
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
 		Version:    1,
 		ContactID:  cid,
 		EventID:    "gcal-evt-1",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Equal(t, repository.InteractionSourceGCal, ir.lastCreateReq.Source)
-	require.NotNil(t, ir.lastCreateReq.SourceRef)
-	require.Equal(t, "gcal-evt-1", *ir.lastCreateReq.SourceRef)
-	require.Equal(t, repository.InteractionDirectionMutual, ir.lastCreateReq.Direction)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, repository.InteractionSourceGCal, w.lastReq.Source)
+	require.NotNil(t, w.lastReq.SourceRef)
+	require.Equal(t, "gcal-evt-1", *w.lastReq.SourceRef)
+	require.Equal(t, repository.InteractionDirectionMutual, w.lastReq.Direction)
 	require.Equal(t, 1, b.publishCalls)
-	require.Len(t, sr.writes, 1)
+	require.Zero(t, tg.calls, "calendar kind does not mark telegram messages processed")
 }
 
-func TestHandleEvent_TaskCompleted_NewWrite(t *testing.T) {
+func TestHandleEvent_TaskCompleted_CutoverFreshWrite(t *testing.T) {
 	cid := uuid.New()
-	rec, _, ir, _, _ := newRecorderWithStubs(InteractionModeShadow)
+	rec, w, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindTaskCompleted, events.TaskCompletedPayload{
 		Version:     1,
 		ContactID:   cid,
@@ -302,88 +267,93 @@ func TestHandleEvent_TaskCompleted_NewWrite(t *testing.T) {
 		CompletedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		Direction:   "mutual",
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Equal(t, repository.InteractionSourceTodoist, ir.lastCreateReq.Source)
-	require.NotNil(t, ir.lastCreateReq.SourceRef)
-	require.Equal(t, "6fw9cQQ5JppCp7qX", *ir.lastCreateReq.SourceRef)
-	require.Equal(t, repository.InteractionDirectionMutual, ir.lastCreateReq.Direction)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, repository.InteractionSourceTodoist, w.lastReq.Source)
+	require.NotNil(t, w.lastReq.SourceRef)
+	require.Equal(t, "6fw9cQQ5JppCp7qX", *w.lastReq.SourceRef)
+	require.Equal(t, repository.InteractionDirectionMutual, w.lastReq.Direction)
 }
 
 func TestHandleEvent_TaskCompleted_EmptyDirectionDefaultsMutual(t *testing.T) {
 	cid := uuid.New()
-	rec, _, ir, _, _ := newRecorderWithStubs(InteractionModeShadow)
+	rec, w, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindTaskCompleted, events.TaskCompletedPayload{
 		Version:     1,
 		ContactID:   cid,
 		TaskID:      "tk1",
 		TaskKind:    "cadence",
 		CompletedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
-		// Direction empty — plan Decision 3 default.
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Equal(t, repository.InteractionDirectionMutual, ir.lastCreateReq.Direction)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, repository.InteractionDirectionMutual, w.lastReq.Direction)
 }
 
-func TestHandleEvent_TaskOutreachDetected_NewWrite(t *testing.T) {
+func TestHandleEvent_TaskOutreachDetected_CutoverFreshWrite(t *testing.T) {
 	cid := uuid.New()
-	rec, _, ir, _, _ := newRecorderWithStubs(InteractionModeShadow)
+	rec, w, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindTaskOutreachDetected, events.TaskOutreachDetectedPayload{
 		Version:    1,
 		ContactID:  cid,
 		TaskID:     "tk-outreach",
 		DetectedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Equal(t, repository.InteractionSourceTodoist, ir.lastCreateReq.Source)
-	require.Equal(t, repository.InteractionDirectionOutbound, ir.lastCreateReq.Direction)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, repository.InteractionSourceTodoist, w.lastReq.Source)
+	require.Equal(t, repository.InteractionDirectionOutbound, w.lastReq.Direction)
 }
 
-func TestHandleEvent_InteractionManual_NewWrite(t *testing.T) {
+func TestHandleEvent_InteractionManual_CutoverReturnsInteraction(t *testing.T) {
 	cid := uuid.New()
-	rec, _, ir, b, sr := newRecorderWithStubs(InteractionModeShadow)
+	rec, w, _, b := newRecorderWithStubs()
 	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
 		Version:    1,
 		ContactID:  cid,
 		Direction:  "mutual",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Equal(t, repository.InteractionSourceManual, ir.lastCreateReq.Source)
-	require.Nil(t, ir.lastCreateReq.SourceRef)
-	require.Equal(t, repository.InteractionDirectionMutual, ir.lastCreateReq.Direction)
+	interaction, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.NotNil(t, interaction, "manual kind must return the interaction for the HTTP response")
+	require.Equal(t, repository.InteractionSourceManual, w.lastReq.Source)
+	require.Nil(t, w.lastReq.SourceRef)
+	require.Equal(t, repository.InteractionDirectionMutual, w.lastReq.Direction)
 	require.Equal(t, 1, b.publishCalls)
-	require.Len(t, sr.writes, 1)
-	require.Nil(t, sr.writes[0].SourceRef)
 }
 
 func TestHandleEvent_InteractionManual_EmptyDirectionDefaultsMutual(t *testing.T) {
 	cid := uuid.New()
-	rec, _, ir, _, _ := newRecorderWithStubs(InteractionModeShadow)
+	rec, w, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
 		Version:    1,
 		ContactID:  cid,
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Equal(t, repository.InteractionDirectionMutual, ir.lastCreateReq.Direction)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, repository.InteractionDirectionMutual, w.lastReq.Direction)
 }
 
 // -----------------------------------------------------------------------------
-// Replay cases. FindBySourceRef / FindInWindow return an existing row →
-// consumer writes a replay=true observation, does NOT emit interaction.recorded,
-// does NOT insert a new interaction row.
+// Replay cases. Writer returns isReplay=true → consumer skips interaction.recorded
+// emit, returns nil postCommit, but mark-processed still fires for telegram
+// kinds (plan Decision 10 — matches today's publisher's unconditional
+// MarkMessagesProcessed call).
 // -----------------------------------------------------------------------------
 
-func TestHandleEvent_MessageReceived_Replay(t *testing.T) {
+func TestHandleEvent_MessageReceived_CutoverReplay(t *testing.T) {
 	cid := uuid.New()
+	msgID := uuid.New()
 	existing := &repository.Interaction{
 		ID:        uuid.New(),
 		ContactID: cid,
 		Source:    repository.InteractionSourceTelegram,
 		Direction: repository.InteractionDirectionInbound,
 	}
-	rec, _, ir, b, sr := newRecorderWithStubs(InteractionModeShadow)
-	ir.existingByRef = existing
+	rec, w, tg, b := newRecorderWithStubs()
+	w.existing = existing
 
 	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
 		Version:           1,
@@ -391,13 +361,15 @@ func TestHandleEvent_MessageReceived_Replay(t *testing.T) {
 		PeerRef:           "tg:1:2",
 		MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		ExternalMessageID: "tg:1:2:10",
+		MessageIDs:        []uuid.UUID{msgID},
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Zero(t, ir.createCalls, "replay must not create a new interaction row")
-	require.Zero(t, b.publishCalls, "replay must not emit interaction.recorded")
-	require.Len(t, sr.replays, 1)
-	require.True(t, sr.replays[0].Replay)
-	require.Empty(t, sr.writes)
+	interaction, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, existing.ID, interaction.ID, "replay returns the existing row")
+	require.Nil(t, postCommit, "replay returns nil postCommit (plan Decision 8)")
+	require.Zero(t, b.publishCalls, "replay must not emit interaction.recorded (spec §3.4.1)")
+	require.Equal(t, 1, tg.calls, "mark-processed runs on replay per plan Decision 10")
+	require.Equal(t, existing.ID, tg.lastInteraction)
 }
 
 func TestHandleEvent_InteractionManual_Replay(t *testing.T) {
@@ -408,8 +380,8 @@ func TestHandleEvent_InteractionManual_Replay(t *testing.T) {
 		Source:    repository.InteractionSourceManual,
 		Direction: repository.InteractionDirectionMutual,
 	}
-	rec, _, ir, b, sr := newRecorderWithStubs(InteractionModeShadow)
-	ir.existingWindow = existing
+	rec, w, _, b := newRecorderWithStubs()
+	w.existing = existing
 
 	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
 		Version:    1,
@@ -417,21 +389,21 @@ func TestHandleEvent_InteractionManual_Replay(t *testing.T) {
 		Direction:  "mutual",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Zero(t, ir.createCalls)
+	interaction, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, existing.ID, interaction.ID)
+	require.Nil(t, postCommit)
 	require.Zero(t, b.publishCalls)
-	require.Len(t, sr.replays, 1)
 }
 
 // -----------------------------------------------------------------------------
-// Missing-contact cases. GetContactTx returns db.ErrNotFound → propagated
-// wrapped; no interaction insert, no publish, no shadow obs.
+// Missing-contact cases. Writer propagates db.ErrNotFound; no publish fires.
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_MessageReceived_MissingContact(t *testing.T) {
 	cid := uuid.New()
-	rec, cr, ir, b, sr := newRecorderWithStubs(InteractionModeShadow)
-	cr.notFound = true
+	rec, w, tg, b := newRecorderWithStubs()
+	w.notFound = true
 
 	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
 		Version:           1,
@@ -440,19 +412,17 @@ func TestHandleEvent_MessageReceived_MissingContact(t *testing.T) {
 		MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		ExternalMessageID: "tg:1:2:10",
 	})
-	err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 	require.ErrorIs(t, err, db.ErrNotFound)
-	require.Zero(t, ir.createCalls)
+	require.Zero(t, tg.calls)
 	require.Zero(t, b.publishCalls)
-	require.Empty(t, sr.writes)
-	require.Empty(t, sr.replays)
 }
 
 func TestHandleEvent_CalendarAttended_MissingContact(t *testing.T) {
 	cid := uuid.New()
-	rec, cr, ir, b, _ := newRecorderWithStubs(InteractionModeShadow)
-	cr.notFound = true
+	rec, w, _, b := newRecorderWithStubs()
+	w.notFound = true
 
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
 		Version:    1,
@@ -460,21 +430,20 @@ func TestHandleEvent_CalendarAttended_MissingContact(t *testing.T) {
 		EventID:    "gcal-evt-miss",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.ErrorIs(t, err, db.ErrNotFound)
-	require.Zero(t, ir.createCalls)
 	require.Zero(t, b.publishCalls)
 }
 
 // -----------------------------------------------------------------------------
-// Atomicity. If interaction insert fails, the publish must not fire; if
-// publish fails after insert, the caller sees the error and the tx rolls back.
+// Atomicity. Writer errors, mark-processed errors, and publish errors all
+// propagate so the caller's BeginTxFunc rolls the tx back.
 // -----------------------------------------------------------------------------
 
-func TestHandleEvent_InsertFailure_SkipsPublishAndObservation(t *testing.T) {
+func TestHandleEvent_WriterFailure_SkipsPublishAndMarkProcessed(t *testing.T) {
 	cid := uuid.New()
-	rec, _, ir, b, sr := newRecorderWithStubs(InteractionModeShadow)
-	ir.createErr = errors.New("simulated insert failure")
+	rec, w, tg, b := newRecorderWithStubs()
+	w.returnErr = errors.New("simulated writer failure")
 
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
 		Version:    1,
@@ -482,16 +451,36 @@ func TestHandleEvent_InsertFailure_SkipsPublishAndObservation(t *testing.T) {
 		EventID:    "gcal-evt-fail",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "create interaction")
+	require.Contains(t, err.Error(), "record interaction tx")
 	require.Zero(t, b.publishCalls)
-	require.Empty(t, sr.writes)
+	require.Zero(t, tg.calls)
+}
+
+func TestHandleEvent_MarkProcessedFailure_RollsBack(t *testing.T) {
+	cid := uuid.New()
+	msgID := uuid.New()
+	rec, _, tg, b := newRecorderWithStubs()
+	tg.markErr = errors.New("simulated mark-processed failure")
+
+	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
+		Version:           1,
+		ContactID:         &cid,
+		PeerRef:           "tg:1:2",
+		MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		ExternalMessageID: "tg:1:2:mp-fail",
+		MessageIDs:        []uuid.UUID{msgID},
+	})
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "mark telegram messages processed")
+	require.Zero(t, b.publishCalls, "publish must not run after mark-processed fails")
 }
 
 func TestHandleEvent_PublishFailure_ReturnsError(t *testing.T) {
 	cid := uuid.New()
-	rec, _, _, b, sr := newRecorderWithStubs(InteractionModeShadow)
+	rec, _, _, b := newRecorderWithStubs()
 	b.publishErr = errors.New("simulated publish failure")
 
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
@@ -500,29 +489,33 @@ func TestHandleEvent_PublishFailure_ReturnsError(t *testing.T) {
 		EventID:    "gcal-evt-pub-fail",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "publish interaction.recorded")
-	// Shadow observation for fresh-write never fires because publish errored first.
-	require.Empty(t, sr.writes)
 }
 
 // -----------------------------------------------------------------------------
-// Mode gate. InteractionModeOff skips shadow observations entirely.
+// postCommit propagation.
 // -----------------------------------------------------------------------------
 
-func TestHandleEvent_OffMode_SkipsShadowObservations(t *testing.T) {
+func TestHandleEvent_PostCommitBubblesUp(t *testing.T) {
 	cid := uuid.New()
-	rec, _, _, _, sr := newRecorderWithStubs(InteractionModeOff)
-	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
+	rec, w, _, _ := newRecorderWithStubs()
+	invoked := false
+	w.postCommit = func(context.Context) { invoked = true }
+
+	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
 		Version:    1,
 		ContactID:  cid,
-		EventID:    "gcal-evt-off",
+		Direction:  "outbound",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Empty(t, sr.writes)
-	require.Empty(t, sr.replays)
+	_, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.NotNil(t, postCommit, "fresh write must return non-nil postCommit when writer supplied one")
+	require.False(t, invoked, "HandleEvent must not invoke postCommit itself (caller runs it after tx commit)")
+	postCommit(context.Background())
+	require.True(t, invoked)
 }
 
 // -----------------------------------------------------------------------------
@@ -530,35 +523,37 @@ func TestHandleEvent_OffMode_SkipsShadowObservations(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_NilEnvelope_Errors(t *testing.T) {
-	rec, _, _, _, _ := newRecorderWithStubs(InteractionModeShadow)
-	require.Error(t, rec.HandleEvent(context.Background(), nonNilTx(), nil))
+	rec, _, _, _ := newRecorderWithStubs()
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), nil)
+	require.Error(t, err)
 }
 
 func TestHandleEvent_NilTx_Errors(t *testing.T) {
 	cid := uuid.New()
-	rec, _, _, _, _ := newRecorderWithStubs(InteractionModeShadow)
+	rec, _, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
 		Version: 1, ContactID: cid, EventID: "x",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	require.Error(t, rec.HandleEvent(context.Background(), nil, env))
+	_, _, err := rec.HandleEvent(context.Background(), nil, env)
+	require.Error(t, err)
 }
 
 func TestHandleEvent_UnknownKind_Errors(t *testing.T) {
-	rec, _, _, _, _ := newRecorderWithStubs(InteractionModeShadow)
+	rec, _, _, _ := newRecorderWithStubs()
 	env := &events.Envelope{
 		Kind:       events.Kind("made.up"),
 		Source:     "telegram",
 		Payload:    json.RawMessage(`{"version":1}`),
 		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	}
-	err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "extract made.up")
 }
 
 func TestHandleEvent_UnresolvedContactID_Errors(t *testing.T) {
-	rec, _, ir, b, _ := newRecorderWithStubs(InteractionModeShadow)
+	rec, w, _, b := newRecorderWithStubs()
 	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
 		Version:           1,
 		ContactID:         nil, // publisher bug per plan Decision 4.
@@ -566,18 +561,15 @@ func TestHandleEvent_UnresolvedContactID_Errors(t *testing.T) {
 		MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		ExternalMessageID: "tg:1:2:unresolved",
 	})
-	err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "contact_id unresolved")
-	require.Zero(t, ir.createCalls)
+	require.Zero(t, w.calls)
 	require.Zero(t, b.publishCalls)
 }
 
 // TestHandleEvent_RefBearingKind_EmptySourceRef_Errors verifies that
-// ref-bearing kinds fail fast when their source_ref field is empty. The
-// consumer previously silently fell through to manual dedup (FindInWindow)
-// when the SourceRef was empty — a malformed calendar.attended could attach
-// to the wrong existing interaction. Codex round 2 finding #2.
+// ref-bearing kinds fail fast when their source_ref field is empty.
 func TestHandleEvent_RefBearingKind_EmptySourceRef_Errors(t *testing.T) {
 	cid := uuid.New()
 	ctx := context.Background()
@@ -643,18 +635,18 @@ func TestHandleEvent_RefBearingKind_EmptySourceRef_Errors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec, _, ir, b, _ := newRecorderWithStubs(InteractionModeShadow)
-			err := rec.HandleEvent(ctx, nonNilTx(), tt.env())
+			rec, w, _, b := newRecorderWithStubs()
+			_, _, err := rec.HandleEvent(ctx, nonNilTx(), tt.env())
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.wantSub)
-			require.Zero(t, ir.createCalls)
+			require.Zero(t, w.calls)
 			require.Zero(t, b.publishCalls)
 		})
 	}
 }
 
 func TestHandleEvent_PayloadUnmarshalFailure_Errors(t *testing.T) {
-	rec, _, _, _, _ := newRecorderWithStubs(InteractionModeShadow)
+	rec, _, _, _ := newRecorderWithStubs()
 	env := &events.Envelope{
 		ID:         uuid.New(),
 		Kind:       events.KindMessageReceived,
@@ -662,47 +654,8 @@ func TestHandleEvent_PayloadUnmarshalFailure_Errors(t *testing.T) {
 		Payload:    json.RawMessage(`{not valid json`),
 		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	}
-	err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
-}
-
-// TestHandleEvent_Replay_InvokesInlineDivergenceLookup verifies the fix for
-// Codex round 2 finding #3. In shadow mode the replay path is the expected
-// normal case (direct always commits first), so the inline divergence
-// lookup must fire on the replay branch — not just on the fresh-write
-// branch.
-func TestHandleEvent_Replay_InvokesInlineDivergenceLookup(t *testing.T) {
-	cid := uuid.New()
-	existing := &repository.Interaction{
-		ID:        uuid.New(),
-		ContactID: cid,
-		Source:    repository.InteractionSourceGCal,
-		Direction: repository.InteractionDirectionMutual,
-	}
-
-	rec, _, ir, _, sr := newRecorderWithStubs(InteractionModeShadow)
-	ir.existingByRef = existing
-	// Peer row present → divergence compare runs; matching direction +
-	// occurred_at → no divergence log (but the FindMatchingDirectWrite
-	// call itself is the observable side-effect we care about).
-	sr.peerForMatch = &repository.ShadowObservation{
-		Writer:     repository.ShadowWriterDirect,
-		Kind:       repository.ShadowKindDirectRecord,
-		Source:     repository.InteractionSourceGCal,
-		ContactID:  cid,
-		Direction:  repository.InteractionDirectionMutual,
-		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
-	}
-
-	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
-		Version:    1,
-		ContactID:  cid,
-		EventID:    "gcal-evt-replay-div",
-		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
-	})
-
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Len(t, sr.replays, 1, "replay path writes one consumer replay observation")
 }
 
 // -----------------------------------------------------------------------------
@@ -711,16 +664,17 @@ func TestHandleEvent_Replay_InvokesInlineDivergenceLookup(t *testing.T) {
 
 func TestHandleEvent_RecordedEventSourceIDIsInteractionID(t *testing.T) {
 	cid := uuid.New()
-	rec, _, ir, b, _ := newRecorderWithStubs(InteractionModeShadow)
+	rec, w, _, b := newRecorderWithStubs()
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
 		Version:    1,
 		ContactID:  cid,
 		EventID:    "gcal-evt-sid",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(t, rec.HandleEvent(context.Background(), nonNilTx(), env))
-	require.NotNil(t, ir.lastCreated)
-	require.Equal(t, ir.lastCreated.ID.String(), b.lastEnv.SourceID,
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.NotNil(t, w.lastCreated)
+	require.Equal(t, w.lastCreated.ID.String(), b.lastEnv.SourceID,
 		"interaction.recorded SourceID must equal interaction.ID (plan Decision 9)")
 	require.Equal(t, env.Source, b.lastEnv.Source)
 
@@ -728,7 +682,7 @@ func TestHandleEvent_RecordedEventSourceIDIsInteractionID(t *testing.T) {
 	var decoded events.InteractionRecordedPayload
 	require.NoError(t, events.Unmarshal(b.lastEnv, &decoded))
 	require.Equal(t, cid, decoded.ContactID)
-	require.Equal(t, ir.lastCreated.ID, decoded.InteractionID)
+	require.Equal(t, w.lastCreated.ID, decoded.InteractionID)
 	require.Equal(t, repository.InteractionDirectionMutual, decoded.Direction)
 	require.Equal(t, repository.InteractionSourceGCal, decoded.Source)
 	require.NotNil(t, decoded.SourceRef)

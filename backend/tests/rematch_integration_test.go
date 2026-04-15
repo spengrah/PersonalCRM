@@ -66,7 +66,7 @@ func setupRematchEnv(t *testing.T) *rematchTestEnv {
 	enrichmentSvc := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
 
 	rematchSvc := service.NewRematchService()
-	rematchSvc.Register(google.NewCalendarRematchHandler(calendarRepo, externalRepo, contactSvc, nil))
+	rematchSvc.Register(google.NewCalendarRematchHandler(calendarRepo, externalRepo, nil))
 	contactSvc.SetRematchService(rematchSvc)
 	enrichmentSvc.SetRematchService(rematchSvc)
 
@@ -351,7 +351,7 @@ func TestRematch_TelegramUsernameMatch(t *testing.T) {
 	aggregationEngine := tgpkg.NewAggregationEngine(
 		cfg.Telegram.BurstWindowHours, cfg.Telegram.ReplyBridgeHours,
 		messageRepo, env.interactionRepo,
-		env.contactSvc, env.contactSvc, env.contactSvc,
+		env.contactSvc, env.contactSvc,
 		nil,
 	)
 	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))
@@ -437,7 +437,7 @@ func registerTelegramHandlers(t *testing.T, env *rematchTestEnv) *repository.Tel
 	aggregationEngine := tgpkg.NewAggregationEngine(
 		cfg.Telegram.BurstWindowHours, cfg.Telegram.ReplyBridgeHours,
 		messageRepo, env.interactionRepo,
-		env.contactSvc, env.contactSvc, env.contactSvc,
+		env.contactSvc, env.contactSvc,
 		nil,
 	)
 	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))
@@ -605,7 +605,7 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 	aggregationEngine := tgpkg.NewAggregationEngine(
 		cfg.Telegram.BurstWindowHours, cfg.Telegram.ReplyBridgeHours,
 		messageRepo, env.interactionRepo,
-		env.contactSvc, env.contactSvc, env.contactSvc,
+		env.contactSvc, env.contactSvc,
 		nil,
 	)
 	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))

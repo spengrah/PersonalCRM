@@ -16,7 +16,6 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
-	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -43,12 +42,11 @@ func setupInteractionTestRouter() (*gin.Engine, func()) {
 		panic("Failed to connect to test database: " + err.Error())
 	}
 
-	contactRepo := repository.NewContactRepository(database.Queries)
-	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
+	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
+	manualHandler, contactService, riverCleanup := buildManualHandlerForTest(nil, ctx, database, cfg)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries))
-	contactHandler := handlers.NewContactHandler(contactService, nil)
-	interactionHandler := handlers.NewInteractionHandler(contactService, interactionRepo, nil)
+	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
+	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
@@ -73,6 +71,9 @@ func setupInteractionTestRouter() (*gin.Engine, func()) {
 	}
 
 	cleanup := func() {
+		if riverCleanup != nil {
+			riverCleanup()
+		}
 		database.Close()
 	}
 
