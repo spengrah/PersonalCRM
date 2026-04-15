@@ -481,8 +481,10 @@ func TestIntegration_ShadowDivergenceQuery_HappyCase(t *testing.T) {
 }
 
 // TestIntegration_PublishTxEnqueuesInteractionRecorderJob confirms the
-// consumerJobsForKind routing: a calendar.attended publish enqueues exactly
-// one interaction_recorder job with MaxAttempts=5.
+// consumerJobsForKind routing: publishing an async-kind event enqueues
+// exactly one interaction_recorder job. Uses before/after counts so the
+// assertion targets THIS test's publish rather than a global count that
+// can pass from leftover rows.
 func TestIntegration_PublishTxEnqueuesInteractionRecorderJob(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -504,31 +506,23 @@ func TestIntegration_PublishTxEnqueuesInteractionRecorderJob(t *testing.T) {
 		Payload:    payload,
 		ObservedAt: occurredAt,
 	}
+
+	// Baseline count BEFORE publish. The shared test DB accumulates rows
+	// across tests, so a global ">=1" assertion wouldn't actually verify
+	// THIS publish enqueued a job.
+	var beforeCount int
+	require.NoError(t, env.database.Pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM river_job WHERE kind = 'interaction_recorder'",
+	).Scan(&beforeCount))
+
 	env.mustPublish(t, envelope)
 
-	// Count river_job rows enqueued by this envelope. The river test
-	// client has TestOnly=true so the dispatcher doesn't pick them up,
-	// but the INSERT-INTO-river_job on commit still ran.
-	var count int
-	err = env.database.Pool.QueryRow(ctx,
-		"SELECT COUNT(*) FROM river_job WHERE kind = 'interaction_recorder' AND metadata::text LIKE $1",
-		"%"+envelope.ID.String()+"%",
-	).Scan(&count)
-	require.NoError(t, err)
-	// NOTE: river stores args in encoded_args, not metadata. We can't
-	// trivially inspect by eventID from here — just verify the pattern
-	// that exactly one new interaction_recorder job row shows up on
-	// publish of an async-kind event.
-	//
-	// Actually, a more reliable assertion is: an interaction_recorder
-	// job was enqueued during this test. Use a baseline count.
-	// Simpler alternative: assert >=1 job exists globally for the kind.
-	var totalCount int
-	err = env.database.Pool.QueryRow(ctx,
+	var afterCount int
+	require.NoError(t, env.database.Pool.QueryRow(ctx,
 		"SELECT COUNT(*) FROM river_job WHERE kind = 'interaction_recorder'",
-	).Scan(&totalCount)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, totalCount, 1, "expected at least one interaction_recorder river job")
+	).Scan(&afterCount))
+	require.Equal(t, beforeCount+1, afterCount,
+		"publish of an async-kind event must enqueue exactly one interaction_recorder job")
 }
 
 // TestIntegration_InteractionManual_NoAsyncJobEnqueued confirms plan

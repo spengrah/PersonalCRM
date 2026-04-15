@@ -306,32 +306,3 @@ func convertDbShadowObservation(row *db.EventShadowObservation) *ShadowObservati
 	}
 	return obs
 }
-
-// uuidPtrToPgUUID converts a *uuid.UUID to pgtype.UUID, treating nil as
-// invalid (NULL). Used for nullable FK / ref columns
-// (event_id, interaction_id).
-func uuidPtrToPgUUID(id *uuid.UUID) pgtype.UUID {
-	if id == nil {
-		return pgtype.UUID{Valid: false}
-	}
-	return pgtype.UUID{Bytes: *id, Valid: true}
-}
-
-// pgTextToStrPtr converts a pgtype.Text to *string; invalid/NULL → nil.
-func pgTextToStrPtr(t pgtype.Text) *string {
-	if !t.Valid {
-		return nil
-	}
-	s := t.String
-	return &s
-}
-
-// pgTimestamptzToTimePtr converts a pgtype.Timestamptz to *time.Time;
-// invalid/NULL → nil.
-func pgTimestamptzToTimePtr(t pgtype.Timestamptz) *time.Time {
-	if !t.Valid {
-		return nil
-	}
-	u := t.Time.UTC()
-	return &u
-}

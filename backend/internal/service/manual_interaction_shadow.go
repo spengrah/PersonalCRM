@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -146,14 +145,6 @@ func buildManualEnvelope(
 	if err != nil {
 		return nil, err
 	}
-	// Non-nil marshal result as an extra assertion (shouldn't happen; events.Marshal
-	// never returns a nil RawMessage on success).
-	if raw == nil {
-		return nil, fmt.Errorf("marshal returned nil payload")
-	}
-	// Belt-and-suspenders: make sure the payload is valid JSON by running
-	// it through json.RawMessage consumers can't tolerate nil payloads.
-	_ = json.RawMessage(raw)
 
 	return &events.Envelope{
 		Source:     repository.InteractionSourceManual,
