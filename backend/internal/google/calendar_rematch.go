@@ -86,7 +86,7 @@ func (h *CalendarRematchHandler) Rematch(ctx context.Context, contactID uuid.UUI
 				continue
 			}
 			eventIDStr := e.ID.String()
-			if pubErr := publishCalendarAttended(ctx, h.eventBus, contactID, eventIDStr, e.EndTime); pubErr != nil {
+			if pubErr := publishCalendarAttended(ctx, h.eventBus, contactID, eventIDStr, e.EndTime, e.Title); pubErr != nil {
 				logger.Warn().Err(pubErr).
 					Str("event_id", e.ID.String()).
 					Str("contact_id", contactID.String()).

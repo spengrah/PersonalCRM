@@ -238,6 +238,46 @@ func TestIntegration_CalendarAttended_CutoverWritesInteraction(t *testing.T) {
 	require.Equal(t, events.KindInteractionRecorded, recorded.Kind)
 }
 
+// TestIntegration_CalendarAttended_TitlePreservedInInteraction regression-
+// tests the Codex P2 fix: calendar.attended events carry the calendar
+// event's title in the payload so the consumer populates
+// interaction.description. Pre-cutover this came from the direct-path
+// RecordInteraction arg; post-cutover it must flow through the payload.
+func TestIntegration_CalendarAttended_TitlePreservedInInteraction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	env := newConsumerTestEnv(t, ctx)
+
+	contactID := env.newContact(t, "calendar-attended-title")
+	eventIDStr := uuid.NewString()
+	sourceID := eventIDStr + ":" + contactID.String()
+	occurredAt := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+	title := "Quarterly sync with Alice"
+
+	payload, err := events.Marshal(events.KindCalendarAttended, events.CalendarAttendedPayload{
+		Version:    1,
+		ContactID:  contactID,
+		EventID:    eventIDStr,
+		OccurredAt: occurredAt,
+		Title:      &title,
+	})
+	require.NoError(t, err)
+
+	envelope := &events.Envelope{
+		Source: repository.InteractionSourceGCal, SourceID: sourceID,
+		Kind: events.KindCalendarAttended, Payload: payload, ObservedAt: occurredAt,
+	}
+	env.mustPublish(t, envelope)
+	require.NoError(t, env.runHandleEvent(t, envelope))
+
+	got, err := env.interactionRepo.FindBySourceRef(ctx, contactID, repository.InteractionSourceGCal, eventIDStr)
+	require.NoError(t, err)
+	require.NotNil(t, got.Description, "calendar interaction must carry the event title as description")
+	require.Equal(t, title, *got.Description)
+}
+
 // TestIntegration_CalendarAttended_Replay exercises dedup: second HandleEvent
 // finds the existing row and early-returns without emitting a second
 // interaction.recorded.

@@ -108,11 +108,18 @@ type MessageSentPayload struct {
 }
 
 // CalendarAttendedPayload is the payload for KindCalendarAttended.
+//
+// Title carries the calendar event's summary/title so the consumer can
+// populate interaction.description. Pre-cutover (PR 5) the direct-path
+// RecordInteraction call passed the title inline; post-cutover the
+// consumer is the sole writer and needs the title via the payload.
+// Optional (nil when the calendar event has no title).
 type CalendarAttendedPayload struct {
 	Version    int       `json:"version"`
 	ContactID  uuid.UUID `json:"contact_id"`
 	EventID    string    `json:"event_id"` // GCal event id
 	OccurredAt time.Time `json:"occurred_at"`
+	Title      *string   `json:"title,omitempty"`
 }
 
 // CalendarDeclinedPayload is the payload for KindCalendarDeclined.

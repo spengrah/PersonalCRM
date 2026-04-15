@@ -217,11 +217,12 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 		}
 		ref := p.EventID
 		return repository.RecordInteractionRequest{
-			ContactID:  p.ContactID,
-			Source:     repository.InteractionSourceGCal,
-			SourceRef:  &ref,
-			OccurredAt: p.OccurredAt,
-			Direction:  repository.InteractionDirectionMutual,
+			ContactID:   p.ContactID,
+			Source:      repository.InteractionSourceGCal,
+			SourceRef:   &ref,
+			OccurredAt:  p.OccurredAt,
+			Description: p.Title,
+			Direction:   repository.InteractionDirectionMutual,
 		}, repository.InteractionDirectionMutual, nil
 
 	case events.KindTaskCompleted:

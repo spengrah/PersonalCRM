@@ -741,7 +741,7 @@ func (p *CalendarSyncProvider) updateLastContactedForPastEvents(ctx context.Cont
 		eventIDStr := event.ID.String()
 		allPublished := true
 		for _, contactID := range event.MatchedContactIDs {
-			if pubErr := publishCalendarAttended(ctx, p.eventBus, contactID, eventIDStr, event.EndTime); pubErr != nil {
+			if pubErr := publishCalendarAttended(ctx, p.eventBus, contactID, eventIDStr, event.EndTime, event.Title); pubErr != nil {
 				logger.Warn().Err(pubErr).
 					Str("contactId", contactID.String()).
 					Str("eventId", eventIDStr).

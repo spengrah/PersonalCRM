@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -387,6 +388,9 @@ func TestRematch_TelegramUsernameMatch(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = env.database.Pool.Exec(env.ctx,
 			"DELETE FROM telegram_message WHERE peer_user_id = $1", peerUserID)
+		_, _ = env.database.Pool.Exec(env.ctx,
+			"DELETE FROM event WHERE source = 'telegram' AND source_id LIKE $1",
+			fmt.Sprintf("tg:%d:%%", chatID))
 	})
 
 	now := accelerated.GetCurrentTime()
@@ -482,6 +486,9 @@ func TestRematch_TelegramPhoneMatch(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = env.database.Pool.Exec(env.ctx,
 			"DELETE FROM telegram_message WHERE peer_user_id = $1", peerUserID)
+		_, _ = env.database.Pool.Exec(env.ctx,
+			"DELETE FROM event WHERE source = 'telegram' AND source_id LIKE $1",
+			fmt.Sprintf("tg:%d:%%", chatID))
 	})
 
 	now := accelerated.GetCurrentTime()
@@ -643,6 +650,12 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 			"DELETE FROM telegram_message WHERE peer_user_id = $1", peerUserID)
 		_, _ = env.database.Pool.Exec(env.ctx,
 			"DELETE FROM interaction WHERE contact_id = $1 AND source = 'telegram'", contact.ID)
+		// Also clean up published events — chatID is fixed so a re-run
+		// collides on (source, source_id) dedup and the consumer never
+		// fires.
+		_, _ = env.database.Pool.Exec(env.ctx,
+			"DELETE FROM event WHERE source = 'telegram' AND source_id LIKE $1",
+			fmt.Sprintf("tg:%d:%%", chatID))
 	})
 
 	// Seed three outbound messages so the aggregation engine produces a single

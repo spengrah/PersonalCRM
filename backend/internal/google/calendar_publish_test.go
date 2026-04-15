@@ -35,8 +35,8 @@ func TestPublishCalendarAttended_SourceIDPerContact(t *testing.T) {
 	contactB := uuid.New()
 	occurredAt := time.Date(2026, 4, 10, 14, 0, 0, 0, time.UTC)
 
-	require.NoError(t, publishCalendarAttended(context.Background(), bus, contactA, eventID, occurredAt))
-	require.NoError(t, publishCalendarAttended(context.Background(), bus, contactB, eventID, occurredAt))
+	require.NoError(t, publishCalendarAttended(context.Background(), bus, contactA, eventID, occurredAt, nil))
+	require.NoError(t, publishCalendarAttended(context.Background(), bus, contactB, eventID, occurredAt, nil))
 	require.Len(t, bus.calls, 2)
 
 	idA := bus.calls[0].SourceID
@@ -59,8 +59,8 @@ func TestPublishCalendarAttended_RetriesSamePair_SameSourceID(t *testing.T) {
 	contact := uuid.New()
 	occurredAt := time.Date(2026, 4, 10, 14, 0, 0, 0, time.UTC)
 
-	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt))
-	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt))
+	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt, nil))
+	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt, nil))
 	require.Len(t, bus.calls, 2)
 	require.Equal(t, bus.calls[0].SourceID, bus.calls[1].SourceID)
 }
@@ -74,7 +74,7 @@ func TestPublishCalendarAttended_EnvelopeFields(t *testing.T) {
 	contact := uuid.New()
 	occurredAt := time.Date(2026, 4, 10, 14, 30, 0, 0, time.UTC)
 
-	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt))
+	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt, nil))
 	require.Len(t, bus.calls, 1)
 
 	env := bus.calls[0]
@@ -83,4 +83,42 @@ func TestPublishCalendarAttended_EnvelopeFields(t *testing.T) {
 	require.True(t, occurredAt.Equal(env.ObservedAt))
 	require.Contains(t, string(env.Payload), eventID)
 	require.Contains(t, string(env.Payload), contact.String())
+}
+
+// TestPublishCalendarAttended_CarriesTitleInPayload asserts that the
+// calendar event's title flows through the payload so the consumer can
+// populate interaction.description. Fixes Codex PR 6 P2 regression where
+// the pre-cutover description-from-title was silently dropped.
+func TestPublishCalendarAttended_CarriesTitleInPayload(t *testing.T) {
+	bus := &capturingBus{}
+	eventID := uuid.NewString()
+	contact := uuid.New()
+	occurredAt := time.Date(2026, 4, 10, 14, 0, 0, 0, time.UTC)
+	title := "Quarterly sync with Alice"
+
+	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt, &title))
+	require.Len(t, bus.calls, 1)
+
+	env := bus.calls[0]
+	var payload events.CalendarAttendedPayload
+	require.NoError(t, events.Unmarshal(env, &payload))
+	require.NotNil(t, payload.Title)
+	require.Equal(t, title, *payload.Title)
+}
+
+// TestPublishCalendarAttended_NilTitleOmittedFromJSON asserts that
+// nil title (calendar event without a summary) produces a payload whose
+// JSON elides the `title` field so the consumer sees a nil Title pointer.
+func TestPublishCalendarAttended_NilTitleOmittedFromJSON(t *testing.T) {
+	bus := &capturingBus{}
+	eventID := uuid.NewString()
+	contact := uuid.New()
+	occurredAt := time.Date(2026, 4, 10, 14, 0, 0, 0, time.UTC)
+
+	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt, nil))
+	require.Len(t, bus.calls, 1)
+
+	env := bus.calls[0]
+	require.NotContains(t, string(env.Payload), `"title"`,
+		"omitempty should elide nil title from payload JSON")
 }

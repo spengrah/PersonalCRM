@@ -19,7 +19,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// cleanupAggregationMessages hard-deletes test messages and interactions.
+// cleanupAggregationMessages hard-deletes test messages, interactions,
+// AND the published event rows from prior runs. Post-PR-6 the aggregation
+// engine publishes events via bus.PublishTx which dedupes on (source,
+// source_id); leftover event rows from a previous run would cause the
+// next publish to no-op and the consumer to never fire. Hard-delete the
+// event rows keyed on the test's chat IDs too.
 func cleanupAggregationMessages(t *testing.T, database *db.Database) {
 	t.Helper()
 	ctx := context.Background()
@@ -27,6 +32,9 @@ func cleanupAggregationMessages(t *testing.T, database *db.Database) {
 	_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE telegram_message_id IN (80001, 80002, 80003, 80011, 80012, 80013, 80021, 80022, 80031, 80032, 80041, 80042, 80051, 80052, 80061, 80062)")
 	// Hard delete interactions with source_ref matching test chat IDs
 	_, _ = database.Pool.Exec(ctx, "DELETE FROM interaction WHERE source_ref LIKE 'tg:100:%' OR source_ref LIKE 'tg:101:%' OR source_ref LIKE 'tg:102:%' OR source_ref LIKE 'tg:201:%' OR source_ref LIKE 'tg:202:%' OR source_ref LIKE 'tg:301:%' OR source_ref LIKE 'tg:302:%' OR source_ref LIKE 'tg:303:%'")
+	// Hard delete event rows keyed on the same test chat IDs so a re-run
+	// doesn't collide with the previous run's published events.
+	_, _ = database.Pool.Exec(ctx, "DELETE FROM event WHERE source = 'telegram' AND (source_id LIKE 'tg:100:%' OR source_id LIKE 'tg:101:%' OR source_id LIKE 'tg:102:%' OR source_id LIKE 'tg:201:%' OR source_id LIKE 'tg:202:%' OR source_id LIKE 'tg:301:%' OR source_id LIKE 'tg:302:%' OR source_id LIKE 'tg:303:%')")
 }
 
 func setupAggregationTest(t *testing.T) (

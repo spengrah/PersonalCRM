@@ -37,12 +37,14 @@ func publishCalendarAttended(
 	contactID uuid.UUID,
 	eventIDStr string,
 	occurredAt time.Time,
+	title *string,
 ) error {
 	payload := events.CalendarAttendedPayload{
 		Version:    1,
 		ContactID:  contactID,
 		EventID:    eventIDStr,
 		OccurredAt: occurredAt,
+		Title:      title,
 	}
 	raw, err := events.Marshal(events.KindCalendarAttended, payload)
 	if err != nil {

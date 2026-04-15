@@ -252,8 +252,30 @@ func TestHandleEvent_CalendarAttended_CutoverFreshWrite_NoMarkProcessed(t *testi
 	require.NotNil(t, w.lastReq.SourceRef)
 	require.Equal(t, "gcal-evt-1", *w.lastReq.SourceRef)
 	require.Equal(t, repository.InteractionDirectionMutual, w.lastReq.Direction)
+	require.Nil(t, w.lastReq.Description, "calendar payload without Title leaves description nil")
 	require.Equal(t, 1, b.publishCalls)
 	require.Zero(t, tg.calls, "calendar kind does not mark telegram messages processed")
+}
+
+// TestHandleEvent_CalendarAttended_CopiesTitleToDescription asserts that
+// the payload's Title flows through to interaction.description so
+// calendar interactions preserve their user-visible context post-cutover
+// (Codex PR 6 P2 regression fix).
+func TestHandleEvent_CalendarAttended_CopiesTitleToDescription(t *testing.T) {
+	cid := uuid.New()
+	rec, w, _, _ := newRecorderWithStubs()
+	title := "Quarterly sync with Alice"
+	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
+		Version:    1,
+		ContactID:  cid,
+		EventID:    "gcal-evt-titled",
+		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		Title:      &title,
+	})
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.NotNil(t, w.lastReq.Description)
+	require.Equal(t, title, *w.lastReq.Description)
 }
 
 func TestHandleEvent_TaskCompleted_CutoverFreshWrite(t *testing.T) {
