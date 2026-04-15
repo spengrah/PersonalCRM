@@ -318,6 +318,24 @@ func (r *TelegramMessageRepository) MarkMessagesProcessed(ctx context.Context, m
 	})
 }
 
+// MarkMessagesProcessedTx is the tx-threaded variant of MarkMessagesProcessed.
+// Used by InteractionRecorder.HandleEvent so the telegram_message.interaction_id
+// FK write shares the same tx as the interaction insert (spec §3.4.1
+// atomicity contract; plan Decision 10).
+func (r *TelegramMessageRepository) MarkMessagesProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	pgIDs := make([]pgtype.UUID, len(messageIDs))
+	for i, id := range messageIDs {
+		pgIDs[i] = uuidToPgUUID(id)
+	}
+	return db.New(tx).MarkTelegramMessagesProcessed(ctx, db.MarkTelegramMessagesProcessedParams{
+		InteractionID: uuidToPgUUID(interactionID),
+		MessageIds:    pgIDs,
+	})
+}
+
 // ListUnprocessedContactIDs returns distinct contact IDs with unprocessed messages.
 func (r *TelegramMessageRepository) ListUnprocessedContactIDs(ctx context.Context) ([]uuid.UUID, error) {
 	pgIDs, err := r.queries.ListUnprocessedContactIDs(ctx)

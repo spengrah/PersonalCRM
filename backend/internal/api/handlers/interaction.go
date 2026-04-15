@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -17,33 +16,26 @@ import (
 	"github.com/google/uuid"
 )
 
-// interactionRecorder defines the method for recording interactions
-type interactionRecorder interface {
-	RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error)
-}
-
-// InteractionHandler handles interaction-related HTTP requests
+// InteractionHandler handles interaction-related HTTP requests.
+//
+// Post-PR-6 (cutover): all writes go through manualHandler.Run, which
+// opens a tx, publishes interaction.manual, invokes the consumer inline,
+// and commits. When manualHandler is nil (mode=off/shadow post-cutover),
+// POST returns 503 Service Unavailable.
 type InteractionHandler struct {
-	recorder        interactionRecorder
 	interactionRepo *repository.InteractionRepository
-	// shadow runs the PR 5 shadow-mode publish + inline-consumer flow
-	// after the direct-path RecordInteraction commits. Nil in
-	// EVENT_BUS_INTERACTION_MODE=off (default) — zero overhead.
-	shadow *service.ManualInteractionShadow
+	manualHandler   *service.ManualInteractionHandler
 }
 
-// NewInteractionHandler creates a new interaction handler. shadow may be
-// nil; non-nil enables the shadow-mode publish + inline invocation on
-// successful POST /contacts/:id/interactions.
+// NewInteractionHandler creates a new interaction handler. manualHandler
+// may be nil; POST /contacts/:id/interactions returns 503 in that case.
 func NewInteractionHandler(
-	recorder interactionRecorder,
 	interactionRepo *repository.InteractionRepository,
-	shadow *service.ManualInteractionShadow,
+	manualHandler *service.ManualInteractionHandler,
 ) *InteractionHandler {
 	return &InteractionHandler{
-		recorder:        recorder,
 		interactionRepo: interactionRepo,
-		shadow:          shadow,
+		manualHandler:   manualHandler,
 	}
 }
 
@@ -157,6 +149,13 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 		return
 	}
 
+	if h.manualHandler == nil {
+		api.SendError(c, http.StatusServiceUnavailable, "interactions.disabled",
+			"Interaction recording is disabled",
+			"Set EVENT_BUS_INTERACTION_MODE=cutover to enable.")
+		return
+	}
+
 	var req CreateInteractionRequest
 	if c.Request.ContentLength > 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -196,13 +195,12 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 		}
 	}
 
-	interaction, err := h.recorder.RecordInteraction(c.Request.Context(), repository.RecordInteractionRequest{
-		ContactID:   contactID,
-		Source:      repository.InteractionSourceManual,
-		OccurredAt:  occurredAt,
-		Description: req.Description,
-		Direction:   direction,
-	})
+	description := ""
+	if req.Description != nil {
+		description = *req.Description
+	}
+
+	interaction, err := h.manualHandler.Run(c.Request.Context(), contactID, direction, occurredAt, description)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			api.SendNotFound(c, "Contact")
@@ -210,25 +208,6 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 		}
 		api.SendInternalError(c, "Failed to create interaction")
 		return
-	}
-
-	// Shadow-mode publish + inline consumer (plan Decision 7). Runs AFTER
-	// the direct path committed so any failure here does not affect the
-	// persisted interaction row. Use the VALUES FROM THE RETURNED ROW
-	// (not the request params) so dedup-hits from RecordInteraction — which
-	// may return an older row with a different Direction / OccurredAt —
-	// don't manufacture false direct-vs-consumer mismatches in the
-	// divergence query.
-	//
-	// Double nil-guard (shadow + interaction) matches the PATCH handler's
-	// convention in contact.go and avoids a panic if RecordInteraction
-	// ever violates its (value, nil) contract.
-	if h.shadow != nil && interaction != nil {
-		desc := ""
-		if interaction.Description != nil {
-			desc = *interaction.Description
-		}
-		h.shadow.Run(c.Request.Context(), interaction.ContactID, interaction.Direction, interaction.OccurredAt, desc)
 	}
 
 	api.SendSuccess(c, http.StatusCreated, interactionToResponse(interaction), nil)

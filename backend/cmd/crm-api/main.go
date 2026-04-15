@@ -166,46 +166,70 @@ func run() int {
 	ingestService := service.NewIngestService(database, eventBus)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
-	// PR 5: compute effective InteractionMode. cutover is forward-compat
-	// config and falls back to shadow in this release so an early-set
-	// cutover still produces useful bake evidence (plan Decision 12).
-	effectiveMode := cfg.EventBus.InteractionMode
-	if effectiveMode == consumer.InteractionModeCutover {
-		logger.Warn().
-			Msg("EVENT_BUS_INTERACTION_MODE=cutover requested but PR 5 only implements shadow; treating as shadow")
-		effectiveMode = consumer.InteractionModeShadow
-	}
+	// Telegram message repo construction (hoisted above the InteractionRecorder
+	// wiring so the consumer can mark messages processed in the same tx as
+	// the interaction insert — plan Decision 10).
+	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
 
+	// PR 6 InteractionRecorder consumer + manual handler (spec §3.4.1, plan
+	// Decisions 4a/10). The consumer delegates the write to
+	// ContactService.RecordInteractionTx, then marks telegram_messages
+	// processed (for message.* kinds) and emits interaction.recorded — all
+	// inside the caller's tx.
 	interactionRecorder := consumer.NewInteractionRecorder(
-		effectiveMode,
-		contactRepo,
-		interactionRepo,
+		contactService,
+		telegramMessageRepo,
 		eventBus,
-		shadowObsRepo,
-	)
-	manualShadow := service.NewManualInteractionShadow(
-		effectiveMode,
-		database.Pool,
-		eventBus,
-		interactionRecorder,
 	)
 
-	// Register the consumer worker. Safe between NewClient and Start —
-	// river.AddWorker mutates the Workers pointer. Registered UNCONDITIONALLY:
-	// with mode=off no events route to this worker at runtime.
+	// Register the consumer worker. The worker is registered UNCONDITIONALLY —
+	// river rejects unknown job kinds at dequeue time, so having the worker
+	// present with mode=off/shadow costs nothing (no events route to it
+	// when pubBus is nil). Mode gating happens at the publisher sites via
+	// pubBus and at the manual-handler level via manualHandler.
 	river.AddWorker(riverWorkers, consumer.NewInteractionRecorderWorker(eventBus, database.Pool, interactionRecorder))
 
-	// pubBus is threaded into publisher constructors (Calendar, Telegram, ...).
-	// Nil when InteractionMode=off so publishers silently skip their shadow
-	// emits — zero observable behavior change vs. today's code.
+	// Cutover wiring gate. PR 6 flips the default to "cutover"; off/shadow
+	// become effective no-ops for publisher-driven paths (spec §3.9;
+	// plan Decision 6). Rollback to off/shadow does NOT restore the
+	// direct path — rollback is git-revert.
+	effectiveMode := cfg.EventBus.InteractionMode
 	var pubBus *events.Bus
-	if effectiveMode != consumer.InteractionModeOff {
+	var manualHandler *service.ManualInteractionHandler
+	switch effectiveMode {
+	case config.EventBusInteractionModeCutover:
 		pubBus = eventBus
-		contactService.SetShadowObserver(shadowObsRepo)
+		manualHandler = service.NewManualInteractionHandler(database.Pool, eventBus, interactionRecorder)
 		logger.Info().
+			Str("mode", "cutover").
+			Msg("event-bus interaction consumer: cutover active")
+	default: // off, shadow
+		pubBus = nil
+		manualHandler = nil
+		logger.Warn().
 			Str("mode", effectiveMode).
-			Msg("event-bus shadow mode enabled")
+			Msg("event-bus interaction consumer: mode is effectively a no-op post-cutover; " +
+				"publisher-driven (telegram/calendar/manual) interactions will NOT be recorded. " +
+				"HTTP ingest path is unaffected. Use EVENT_BUS_INTERACTION_MODE=cutover (default) to restore publisher paths.")
 	}
+
+	// Informational warning when ingest is enabled but cutover isn't —
+	// ingested events still write interactions (plan Decision 12 ingest
+	// carve-out); this log line makes the seam visible in operator logs.
+	if cfg.Features.EnableEventBusIngest && effectiveMode != config.EventBusInteractionModeCutover {
+		logger.Warn().
+			Str("interaction_mode", effectiveMode).
+			Bool("ingest_enabled", cfg.Features.EnableEventBusIngest).
+			Msg("event-bus ingest enabled but InteractionRecorder is not in cutover mode; " +
+				"ingested events WILL still be written by the consumer — the mode=off/shadow warning " +
+				"above does NOT apply to ingested-event-driven writes.")
+	}
+
+	// shadowObsRepo is retained (not passed anywhere in PR 6) because
+	// PR 7 reuses the event_shadow_observation table for CadenceUpdater
+	// shadow observations. Removing the repo construction here and
+	// re-adding it in PR 7 would double-churn (spec line 847).
+	_ = shadowObsRepo
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 	importMatchService := service.NewImportMatchService(contactRepo)
 	// EnrichmentService is shared by the import handler (link/import flows) and
@@ -302,7 +326,7 @@ func run() int {
 		// that don't have Google OAuth set up.
 		calendarRepo := repository.NewCalendarEventRepository(database.Queries)
 		calendarHandler = handlers.NewCalendarHandler(calendarRepo)
-		rematchService.Register(google.NewCalendarRematchHandler(calendarRepo, externalContactRepo, contactService, pubBus))
+		rematchService.Register(google.NewCalendarRematchHandler(calendarRepo, externalContactRepo, pubBus))
 		logger.Info().Msg("Calendar rematch handler registered")
 
 		// Register Google Contacts provider if OAuth is configured
@@ -323,7 +347,6 @@ func run() int {
 				contactRepo,
 				identityService,
 				externalContactRepo,
-				contactService,
 				pubBus,
 			)
 			providerRegistry.Register(gcalProvider)
@@ -386,7 +409,8 @@ func run() int {
 		telegramSessionRepo := repository.NewTelegramSessionRepository(database.Queries)
 		telegramUpdateStateRepo := repository.NewTelegramUpdateStateRepository(database.Queries)
 		telegramChatConfigRepo := repository.NewTelegramChatConfigRepository(database.Queries)
-		telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
+		// telegramMessageRepo is hoisted above (needed by the consumer
+		// wiring); no re-construction here.
 		telegramSyncRepo := repository.NewSyncRepository(database.Queries)
 
 		// Phase 4: identity + aggregation dependencies
@@ -415,7 +439,6 @@ func run() int {
 			interactionRepo,
 			contactService,
 			contactService,
-			contactService,
 			pubBus,
 		)
 
@@ -442,9 +465,9 @@ func run() int {
 	}
 
 	// Initialize handlers
-	contactHandler := handlers.NewContactHandler(contactService, manualShadow)
+	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
 	noteHandler := handlers.NewNoteHandler(noteService)
-	interactionHandler := handlers.NewInteractionHandler(contactService, interactionRepo, manualShadow)
+	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
 	rematchHandler := handlers.NewRematchHandler(rematchService, contactService)
 

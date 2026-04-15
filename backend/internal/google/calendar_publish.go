@@ -11,11 +11,17 @@ import (
 	"github.com/google/uuid"
 )
 
-// publishCalendarAttended emits a calendar.attended event for a
-// newly-recorded calendar interaction. Shared by the scheduler path
-// (CalendarSyncProvider.updateLastContactedForPastEvents) and the rematch
-// path (CalendarRematchHandler.Rematch) so both produce matching shadow
-// observations (plan Decisions 6 / 7.1).
+// calendarEventPublisher is the subset of *events.Bus used by
+// publishCalendarAttended. Interface lets tests stub Publish without a
+// real bus or river client.
+type calendarEventPublisher interface {
+	Publish(ctx context.Context, env *events.Envelope) error
+}
+
+// publishCalendarAttended emits a calendar.attended event for a past
+// calendar event attended by a specific contact. Shared by the scheduler
+// path (CalendarSyncProvider.updateLastContactedForPastEvents) and the
+// rematch path (CalendarRematchHandler.Rematch).
 //
 // SourceID is per-(event, contact): "<eventIDStr>:<contactID>". The event
 // table has a partial unique index on (source, source_id) WHERE source_id
@@ -27,7 +33,7 @@ import (
 // the envelope's SourceID, so this format change is consumer-transparent.
 func publishCalendarAttended(
 	ctx context.Context,
-	bus *events.Bus,
+	bus calendarEventPublisher,
 	contactID uuid.UUID,
 	eventIDStr string,
 	occurredAt time.Time,

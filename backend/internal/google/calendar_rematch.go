@@ -13,47 +13,36 @@ import (
 	"personal-crm/backend/internal/repository"
 )
 
-// calendarRematchInteractionRecorder is the subset of ContactService the
-// calendar rematch handler depends on. Mirrors CalendarSyncProvider's recorder
-// dependency — pass the same *service.ContactService instance.
-type calendarRematchInteractionRecorder interface {
-	RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error)
-}
-
 // CalendarRematchHandler implements service.RematchHandler for the "email"
 // identifier type. When an email is added to a CRM contact, this handler
 // retroactively links any historical calendar events whose attendees include
 // that email but where the contact wasn't matched at sync time. For events
-// whose end_time has already passed, it records the interaction directly so
-// the contact's last_contacted reflects the event without depending on the
-// scheduler reading a now-stale matched_contact_ids snapshot (rematch plan
-// Design Decision 6).
+// whose end_time has already passed, it publishes calendar.attended so the
+// async consumer writes the interaction.
+//
+// Post-PR-6 (cutover): the direct-path recorder has been removed.
+// Past-confirmed events publish to the event bus BEFORE appending to
+// matched_contact_ids — a publish failure leaves matched_contact_ids
+// unchanged so the next rematch re-selects the pair. Append-then-publish
+// would strand the interaction if publish failed (plan Decision 11a).
 type CalendarRematchHandler struct {
 	calendarRepo *repository.CalendarEventRepository
 	externalRepo *repository.ExternalContactRepository
-	recorder     calendarRematchInteractionRecorder
-	// eventBus is the shadow-mode event bus. Nil when
-	// EVENT_BUS_INTERACTION_MODE=off; non-nil triggers calendar.attended
-	// publishes alongside the rematch-path RecordInteraction (plan
-	// Decision 7.1 — the rematch path is a second calendar write site
-	// that MUST publish to keep shadow parity).
+	// eventBus is required in cutover mode. Nil disables past-event
+	// rematch writes entirely (spec §3.9).
 	eventBus *events.Bus
 }
 
-// NewCalendarRematchHandler constructs a CalendarRematchHandler. The recorder
-// must be the same *service.ContactService instance used by CalendarSyncProvider
-// so per-source dedup behavior is identical between sync and rematch paths.
-// eventBus may be nil; non-nil enables shadow-mode sibling publishes.
+// NewCalendarRematchHandler constructs a CalendarRematchHandler. eventBus
+// is required in cutover (default post-PR-6).
 func NewCalendarRematchHandler(
 	cr *repository.CalendarEventRepository,
 	er *repository.ExternalContactRepository,
-	rec calendarRematchInteractionRecorder,
 	eventBus *events.Bus,
 ) *CalendarRematchHandler {
 	return &CalendarRematchHandler{
 		calendarRepo: cr,
 		externalRepo: er,
-		recorder:     rec,
 		eventBus:     eventBus,
 	}
 }
@@ -62,8 +51,9 @@ func NewCalendarRematchHandler(
 func (h *CalendarRematchHandler) IdentifierType() string { return "email" }
 
 // Rematch finds calendar events whose attendees include the email, appends
-// the contact to each event's matched_contact_ids, and records past-event
-// interactions directly.
+// the contact to each event's matched_contact_ids, and publishes
+// calendar.attended for past-confirmed events so the async consumer writes
+// the interaction.
 func (h *CalendarRematchHandler) Rematch(ctx context.Context, contactID uuid.UUID, emailNormalized string) (int, error) {
 	// Defensive normalization: contact_method.value_normalized should already
 	// match matching.NormalizeEmail, but run through it again so the SQL's
@@ -73,59 +63,49 @@ func (h *CalendarRematchHandler) Rematch(ctx context.Context, contactID uuid.UUI
 		return 0, nil
 	}
 
-	events, err := h.calendarRepo.FindEventsByAttendeeEmailUnmatchedForContact(ctx, email, contactID)
+	foundEvents, err := h.calendarRepo.FindEventsByAttendeeEmailUnmatchedForContact(ctx, email, contactID)
 	if err != nil {
 		return 0, fmt.Errorf("find events: %w", err)
 	}
 
 	now := accelerated.GetCurrentTime()
 	matched := 0
-	for _, e := range events {
+	for _, e := range foundEvents {
+		isPastConfirmed := e.EndTime.Before(now) && e.Status == "confirmed"
+
+		// Past confirmed events: publish FIRST, then append. If publish
+		// fails we skip append so the event stays in
+		// FindEventsByAttendeeEmailUnmatchedForContact's result set on
+		// the next rematch call (plan Decision 11a).
+		if isPastConfirmed {
+			if h.eventBus == nil {
+				logger.Warn().
+					Str("event_id", e.ID.String()).
+					Str("contact_id", contactID.String()).
+					Msg("calendar rematch: eventBus not configured; skipping past-confirmed event")
+				continue
+			}
+			eventIDStr := e.ID.String()
+			if pubErr := publishCalendarAttended(ctx, h.eventBus, contactID, eventIDStr, e.EndTime); pubErr != nil {
+				logger.Warn().Err(pubErr).
+					Str("event_id", e.ID.String()).
+					Str("contact_id", contactID.String()).
+					Msg("calendar rematch: publish failed; leaving matched_contact_ids unchanged to allow retry")
+				continue
+			}
+		}
+
 		if err := h.calendarRepo.AppendMatchedContact(ctx, e.ID, contactID); err != nil {
 			logger.Warn().Err(err).
 				Str("event_id", e.ID.String()).
 				Str("contact_id", contactID.String()).
 				Msg("calendar rematch: append failed")
+			// For past-confirmed events we already published; the consumer
+			// will write the interaction via the durable river queue.
+			// matched_contact_ids is unchanged — the next rematch re-selects
+			// this event and hits the (source, source_id) unique index →
+			// publish no-ops; append retries.
 			continue
-		}
-		// Past confirmed events: record the interaction now so last_contacted
-		// reflects the event without a scheduler race. Match
-		// ListPastEventsNeedingUpdate's filter (status = 'confirmed') so
-		// rematch doesn't record interactions the scheduler would have
-		// skipped for tentative events. RecordInteraction dedupes on
-		// (contact_id, source, source_ref) — both at the service layer
-		// (ContactService.RecordInteraction → FindBySourceRef) and at the DB
-		// layer (idx_interaction_source_ref UNIQUE). Safe to call repeatedly.
-		if e.EndTime.Before(now) && e.Status == "confirmed" {
-			eventIDStr := e.ID.String()
-			title := ""
-			if e.Title != nil {
-				title = *e.Title
-			}
-			if _, err := h.recorder.RecordInteraction(ctx, repository.RecordInteractionRequest{
-				ContactID:   contactID,
-				Source:      repository.InteractionSourceGCal,
-				SourceRef:   &eventIDStr,
-				OccurredAt:  e.EndTime,
-				Description: &title,
-			}); err != nil {
-				logger.Warn().Err(err).
-					Str("event_id", e.ID.String()).
-					Str("contact_id", contactID.String()).
-					Msg("calendar rematch: record interaction failed")
-				// Continue — append already succeeded. If the scheduler picks
-				// this event up later it will redo the work safely (idempotent).
-			} else if h.eventBus != nil {
-				// Shadow-mode sibling publish. Same kind + payload shape as
-				// the scheduler-path publish in calendar.go so both code
-				// paths emit a calendar.attended the consumer can observe.
-				if pubErr := publishCalendarAttended(ctx, h.eventBus, contactID, eventIDStr, e.EndTime); pubErr != nil {
-					logger.Warn().Err(pubErr).
-						Str("event_id", e.ID.String()).
-						Str("contact_id", contactID.String()).
-						Msg("calendar rematch: shadow publish failed")
-				}
-			}
 		}
 		matched++
 	}

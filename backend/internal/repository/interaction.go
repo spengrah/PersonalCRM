@@ -330,3 +330,38 @@ func (r *InteractionRepository) UpdateInteractionDirection(ctx context.Context, 
 	interaction := convertDbInteraction(dbInteraction)
 	return &interaction, nil
 }
+
+// UpdateInteractionDirectionTx is the tx-threaded variant.
+func (r *InteractionRepository) UpdateInteractionDirectionTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, direction string, occurredAt time.Time) (*Interaction, error) {
+	dbInteraction, err := db.New(tx).UpdateInteractionDirection(ctx, db.UpdateInteractionDirectionParams{
+		ID:         uuidToPgUUID(id),
+		Direction:  direction,
+		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
+// UpdateInteractionTimestampTx is the tx-threaded variant of
+// UpdateInteractionTimestamp (same-direction coalescing).
+func (r *InteractionRepository) UpdateInteractionTimestampTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, occurredAt time.Time, description *string) (*Interaction, error) {
+	dbInteraction, err := db.New(tx).UpdateInteractionTimestamp(ctx, db.UpdateInteractionTimestampParams{
+		ID:          uuidToPgUUID(id),
+		OccurredAt:  pgtype.Timestamptz{Time: occurredAt, Valid: true},
+		Description: stringToPgText(description),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}

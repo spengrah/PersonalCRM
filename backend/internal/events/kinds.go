@@ -80,6 +80,13 @@ type MessageReceivedPayload struct {
 	Description       *string    `json:"description,omitempty"`
 	ExternalMessageID string     `json:"external_message_id,omitempty"`
 	Direction         string     `json:"direction,omitempty"` // optional override; empty = kind default "inbound"
+	// MessageIDs carries the underlying telegram_message UUIDs that make up
+	// this aggregated session. Populated by the Telegram aggregation
+	// publisher in cutover mode so the consumer can mark the rows
+	// processed (telegram_message.interaction_id FK) inside the same tx
+	// that inserts the interaction row (spec §3.4.1; plan Decision 10).
+	// Non-telegram publishers leave this empty.
+	MessageIDs []uuid.UUID `json:"message_ids,omitempty"`
 }
 
 // MessageSentPayload is the payload for KindMessageSent.
@@ -95,6 +102,9 @@ type MessageSentPayload struct {
 	Description       *string    `json:"description,omitempty"`
 	ExternalMessageID string     `json:"external_message_id,omitempty"`
 	Direction         string     `json:"direction,omitempty"` // optional override; empty = kind default "outbound"
+	// MessageIDs carries the underlying telegram_message UUIDs — see
+	// MessageReceivedPayload.MessageIDs for full docs.
+	MessageIDs []uuid.UUID `json:"message_ids,omitempty"`
 }
 
 // CalendarAttendedPayload is the payload for KindCalendarAttended.
