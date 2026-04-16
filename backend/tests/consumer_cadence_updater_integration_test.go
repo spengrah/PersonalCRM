@@ -478,7 +478,11 @@ func TestIntegration_CadenceUpdater_FindDivergences_ZeroForHappyPath(t *testing.
 // direct observation never written (simulating post-commit closure that
 // failed or hasn't landed yet) but the consumer row was observed
 // within the 5-second grace window → FindDivergences must NOT surface
-// the row. After enough wall-clock time elapses, the row DOES surface.
+// the row. The positive case (observed_at past the grace window → row
+// DOES surface) is covered by pushing `windowEnd` far enough into the
+// future that the grace-subtracted effective edge sits past observed_at.
+// Together the two assertions protect against BOTH under-filtering
+// (grace absent) and over-filtering (grace permanently hides the row).
 func TestIntegration_CadenceUpdater_FindDivergences_FiltersGraceWindow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -486,15 +490,12 @@ func TestIntegration_CadenceUpdater_FindDivergences_FiltersGraceWindow(t *testin
 	ctx := context.Background()
 	e := newCadenceIntegrationEnv(t, ctx)
 
-	// Unhook the direct-path observer so only the consumer row lands.
-	// Writing the consumer row fresh and then immediately querying
-	// should return empty (grace window not elapsed). After sleeping 6
-	// seconds, the row appears as a real divergence ("direct missing").
+	// Consumer-only row: skip the direct-path observer wiring the env
+	// already did by publishing a synthetic V2 interaction.recorded.
 	contactID := e.seedContactWithCadence(t, "cad-grace", "weekly")
 	occurredAt := accelerated.GetCurrentTime()
 	cadenceStr := "weekly"
 
-	// Simulate a V2 ingested event that only the consumer processes.
 	payload, err := events.Marshal(events.KindInteractionRecorded, events.InteractionRecordedPayload{
 		Version:             2,
 		ContactID:           contactID,
@@ -516,15 +517,39 @@ func TestIntegration_CadenceUpdater_FindDivergences_FiltersGraceWindow(t *testin
 	require.NoError(t, e.base.bus.Publish(ctx, envelope))
 	require.NoError(t, e.runCadenceHandleEvent(t, envelope))
 
-	// Window includes the consumer row; within-grace query hides it.
+	observedAtNow := accelerated.GetCurrentTime()
+
+	// CASE A (negative): windowEnd immediately after observation → the
+	// grace-subtracted effective edge is BEFORE observed_at, so the row
+	// is still inside the grace window and must NOT surface.
 	windowStart := occurredAt.Add(-1 * time.Minute)
-	windowEnd := accelerated.GetCurrentTime().Add(1 * time.Second) // effective right-edge ~ now-5s
-	divergences, err := e.cadenceShadowRep.FindDivergences(ctx, windowStart, windowEnd)
+	windowEndWithinGrace := observedAtNow.Add(1 * time.Second)
+	divergences, err := e.cadenceShadowRep.FindDivergences(ctx, windowStart, windowEndWithinGrace)
 	require.NoError(t, err)
 	for _, d := range divergences {
 		require.NotEqual(t, envelope.ID, d.EventID,
 			"within grace window: row must not appear as divergence")
 	}
+
+	// CASE B (positive): windowEnd far enough in the future that the
+	// grace-subtracted effective edge (windowEnd - 5s) is AFTER
+	// observed_at. The row must now surface — guards against an over-
+	// filtering implementation (e.g. a query that filters by observed_at
+	// > now() - 5s instead of @observed_at_to - 5s).
+	windowEndPastGrace := observedAtNow.Add(1 * time.Minute)
+	divergences, err = e.cadenceShadowRep.FindDivergences(ctx, windowStart, windowEndPastGrace)
+	require.NoError(t, err)
+	var found bool
+	for _, d := range divergences {
+		if d.EventID == envelope.ID {
+			found = true
+			// One-sided row: direct is missing, consumer is present.
+			require.Nil(t, d.DirectBranch, "direct side should be absent")
+			require.NotNil(t, d.ConsumerBranch, "consumer side must be present")
+			break
+		}
+	}
+	require.True(t, found, "past-grace window: consumer-only row must surface as divergence")
 }
 
 // TestIntegration_CadenceUpdater_FindDivergences_FiltersSoftDeletedContact
