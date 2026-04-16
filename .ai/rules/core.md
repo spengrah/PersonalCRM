@@ -152,6 +152,9 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Holding `pgx.Tx` open across external HTTP calls in consumers | Commit DB writes first, then call external APIs (Todoist, etc.) in a post-commit closure. Blocking the tx on network I/O stalls the connection pool and risks deadlocks |
 | `river.Client.Start(ctx)` with a timeout-derived context | River silently stops fetching jobs when its fetch-loop ctx cancels. Pass the outer root context (never `context.WithTimeout(...)`). Applies to test harnesses too — use the test's base ctx, not a per-test timeout ctx |
 | Echoing API keys or other secrets in bash commands or tool descriptions | Session transcripts persist across conversations. Read secrets inline from `.env` on the target host without emitting them: `ssh host "API_KEY=\$(grep -oP '^API_KEY=\\K.*' /path/.env) curl ..."`. Never include the literal value in a command visible to the transcript. If a secret already leaked into a transcript, rotate it |
+| Integration tests fail with "Contact X should be in list" or limit-based assertions | Test DB (`personal_crm_test`) accumulates state across runs (e.g. 255 contacts). `make e2e-db` is wired into `test-e2e` but NOT into `test-integration` — run `make e2e-db` manually before `make test-integration` if list-bounded tests fail. Symptom: tests pass on a fresh DB and on `main`, but fail mid-session after many runs |
+| Running `go test` directly without DATABASE_URL set | Falls back to `personal_crm` (production DB) instead of `personal_crm_test`. Always use `make test-unit`/`test-integration-fast`/`test-integration` — they inject `TEST_DATABASE_URL` automatically (Makefile line 12) |
+| Test failures during PR rebase work | Verify against `main` first (`git checkout main && make test-integration`) — pre-existing failures (e.g. flaky LONG_TESTS-gated scheduler rescuer tests) are not regressions from your rebase. Distinguish before debugging |
 
 ### Never Do These
 

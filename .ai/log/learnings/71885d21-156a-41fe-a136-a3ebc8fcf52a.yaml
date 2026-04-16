@@ -1,0 +1,80 @@
+---
+timestamp: "2026-04-16T10:19:14.200977"
+type: gotcha
+summary: Shadow mode correctly emits zero interaction.recorded events during replay
+detail: |
+  In PR 5's shadow mode, interaction.recorded emission count of 0 is CORRECT behavior, not a bug. When all consumer observations have replay=true, it means the consumer correctly detected pre-existing direct-path writes and skipped re-emission per the idempotency contract. Only in PR 6 cutover mode (where consumer is sole writer, no replay) should interaction.recorded emissions be non-zero. The PR 5 status doc incorrectly claimed non-zero was expected, causing confusion during bake evidence collection.
+actionable: true
+
+---
+timestamp: "2026-04-16T10:19:14.200977"
+type: gotcha
+summary: Event-bus PR rebases produce substantial main.go conflicts due to mode transitions
+detail: |
+  Rebasing PR 6 (cutover) onto merged PR 5 (shadow) creates large conflicts in cmd/crm-api/main.go because PR 5 adds shadow-mode scaffolding (effectiveMode downgrade, pubBus gating, shadow observer wiring) that PR 6 removes. Pattern: keep PR 6's incoming side (removes shadow code), dedupe any AddWorker calls that appear in both HEAD and incoming, and verify riverClient.Start appears only once. Use --onto to skip already-merged commits when rebasing dependent PRs.
+actionable: true
+
+---
+timestamp: "2026-04-16T10:19:14.200977"
+type: gotcha
+summary: LSP diagnostics lag behind code state after signature changes
+detail: |
+  After resolving rebase conflicts in main.go and calendar_publish.go, LSP reported 'undefined: publishCalendarAttended' errors despite the function existing. Running `go build ./...` from backend/ succeeded with zero errors, proving LSP state was stale. Per core.md gotcha: 'LSP state lags behind code after signature changes. Always verify with go build ./... before treating a diagnostic as real.'
+actionable: true
+
+---
+timestamp: "2026-04-16T10:19:14.200977"
+type: gotcha
+summary: Integration tests with wrong DATABASE_URL fail due to shared-DB pollution
+detail: |
+  TestContactRepository_Integration/ListContacts and TestFollowupFilter failed when run with DATABASE_URL=postgres://...personal_crm (production DB with 1531 contacts) instead of TEST_DATABASE_URL=postgres://...personal_crm_test. The test creates 2 contacts then lists with limit=100, expecting to find them, but production DB overflow masked the new rows. Even the test DB (255 contacts) caused failures until `make e2e-db` reset it. Always use TEST_DATABASE_URL for backend tests; check Makefile default (line 12) if unsure.
+actionable: true
+
+---
+timestamp: "2026-04-16T10:19:14.200977"
+type: gotcha
+summary: Pre-existing test failures should not block dependent PR progress
+detail: |
+  TestSyncWorker_RescueOnCrash and TestSyncWorker_AbandonedLogOnStartupRecovery failed on both PR 6 branch AND main (verified via git checkout main && rerun). These are LONG_TESTS-gated timing-dependent tests from PR 3 (scheduler rescuer), not regressions from PR 6. CI runs test-integration-fast which skips LONG_TESTS. Workflow: when tests fail, verify against main first. If main also fails, document as pre-existing and proceed with PR if CI-equivalent suite passes.
+actionable: true
+
+---
+timestamp: "2026-04-16T10:19:14.200977"
+type: architecture
+summary: Shadow mode replay detection prevents duplicate event emissions
+detail: |
+  Shadow mode (PR 5) has both direct path (ContactService.RecordInteraction writes interaction + event_shadow_observation with writer='direct') and consumer path (InteractionRecorder reads event, writes interaction + observation with writer='consumer'). When consumer finds an existing interaction row (by source, source_ref, contact_id), it marks replay=true and early-returns WITHOUT emitting interaction.recorded. This prevents duplicate downstream processing. All 7 consumer observations during PR 5 bake were replay=true, proving the direct path had already written the interactions before consumer processed the event.
+actionable: false
+
+---
+timestamp: "2026-04-16T10:19:14.200977"
+type: architecture
+summary: Calendar event publishing requires event end + next sync cycle
+detail: |
+  publishCalendarAttended only fires for past events (end_time < now) during CalendarSyncProvider.updateLastContactedForPastEvents. Flow: (1) event synced to calendar_event table with last_contacted_updated=false, (2) event ends (real-time), (3) next gcal sync (15-min cadence) sees end_time < now, (4) publisher emits calendar.attended + marks last_contacted_updated=true. Manual sync before event end is a no-op. For testing: create event, wait for end, trigger manual sync OR wait ~15min for auto-sync.
+actionable: false
+
+---
+timestamp: "2026-04-16T10:19:14.200977"
+type: rule
+summary: Use TEST_DATABASE_URL and reset test DB before integration test runs
+detail: |
+  Integration tests share personal_crm_test DB across runs, accumulating state (255 contacts observed during session). Tests expecting small result sets (ListContacts with limit=100) break when DB is polluted. Run `make e2e-db` before test sessions to drop/recreate personal_crm_test. Makefile already wires e2e-db as dependency for test-e2e and test-e2e-local, but NOT for test-integration. If integration tests fail with 'Should be true / Contact X should be in list', try `make e2e-db && make test-integration`.
+actionable: true
+
+---
+timestamp: "2026-04-16T10:19:14.200977"
+type: documentation_gap
+summary: Plan-specified sqlc query names may not exist in actual implementation
+detail: |
+  PR 5 plan (.ai/log/plan/event-bus-foundation-pr5-interaction-recorder-shadow.md line 411) references 'FindShadowDivergences sqlc template' and session tried to call FindDivergences(). Grep found zero matches; the canonical SQL exists inline in the plan but was never generated as a named query. Agent initially tried `SELECT * FROM FindDivergences(...)` which failed; had to fall back to inline CTEs from plan. Strengthen plan template: if a query is acceptance-critical, verify `make sqlc && grep QueryName backend/internal/db/` before claiming it exists, or mark as 'planned for X, use inline SQL until then'.
+actionable: true
+
+---
+timestamp: "2026-04-16T10:19:14.200977"
+type: distinction
+summary: interaction.recorded emissions differ between shadow and cutover modes
+detail: |
+  In shadow mode (PR 5): direct path is authoritative, consumer runs in parallel and marks observations as replay=true when interaction already exists, emits zero interaction.recorded events (correct). In cutover mode (PR 6): consumer is sole writer, no direct path, all observations are replay=false, consumer emits interaction.recorded for each new interaction (non-zero expected). The emission count is a mode indicator, not a bug signal. Status docs should clarify this distinction to avoid confusion during bake evidence review.
+actionable: true
+
