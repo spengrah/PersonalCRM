@@ -57,18 +57,18 @@ type stubWriter struct {
 
 func (s *stubWriter) RecordInteractionTx(
 	_ context.Context, _ pgx.Tx, withShadow bool, req repository.RecordInteractionRequest,
-) (*repository.Interaction, bool, *repository.ContactCadenceFields, *string, func(context.Context), repository.CadenceShadowDrainFn, error) {
+) (*repository.RecordInteractionResult, error) {
 	s.calls++
 	s.lastReq = req
 	s.lastWithShadow = withShadow
 	if s.returnErr != nil {
-		return nil, false, nil, nil, nil, nil, s.returnErr
+		return nil, s.returnErr
 	}
 	if s.notFound {
-		return nil, false, nil, nil, nil, nil, db.ErrNotFound
+		return nil, db.ErrNotFound
 	}
 	if s.existing != nil {
-		return s.existing, true, nil, nil, nil, nil, nil
+		return &repository.RecordInteractionResult{Interaction: s.existing, IsReplay: true}, nil
 	}
 	inter := &repository.Interaction{
 		ID:         uuid.New(),
@@ -88,7 +88,14 @@ func (s *stubWriter) RecordInteractionTx(
 			base(ctx, eventID)
 		}
 	}
-	return inter, false, s.prev, s.cadenceAtEmit, s.postCommit, drain, nil
+	return &repository.RecordInteractionResult{
+		Interaction:   inter,
+		IsReplay:      false,
+		PrevCadence:   s.prev,
+		CadenceAtEmit: s.cadenceAtEmit,
+		FollowUpFn:    s.postCommit,
+		ShadowDrainFn: drain,
+	}, nil
 }
 
 type stubTGRepo struct {

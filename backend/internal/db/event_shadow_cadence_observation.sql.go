@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const CountCadenceShadowObservationsByContact = `-- name: CountCadenceShadowObservationsByContact :one
+SELECT COUNT(*) FROM event_shadow_cadence_observation
+WHERE contact_id = $1
+`
+
+// Per-contact shadow observation count. Narrower than CountByWriter so
+// integration tests can assert invariants scoped to the contacts they
+// own, without racing against rows written by concurrently-running
+// tests on the shared test DB.
+func (q *Queries) CountCadenceShadowObservationsByContact(ctx context.Context, contactID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, CountCadenceShadowObservationsByContact, contactID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const CountCadenceShadowObservationsByWriter = `-- name: CountCadenceShadowObservationsByWriter :one
 SELECT COUNT(*) FROM event_shadow_cadence_observation
 WHERE writer = $1
@@ -293,6 +309,92 @@ func (q *Queries) InsertCadenceShadowObservation(ctx context.Context, arg Insert
 		arg.ApplyLastOutreachAt,
 		arg.ApplyLastResponseAt,
 		arg.ApplyContactBy,
+	)
+	var i EventShadowCadenceObservation
+	err := row.Scan(
+		&i.ID,
+		&i.EventID,
+		&i.Writer,
+		&i.ContactID,
+		&i.Source,
+		&i.Direction,
+		&i.Branch,
+		&i.OccurredAt,
+		&i.PrevLastContacted,
+		&i.PrevLastOutreachAt,
+		&i.PrevLastResponseAt,
+		&i.PrevContactBy,
+		&i.NextLastContacted,
+		&i.NextLastOutreachAt,
+		&i.NextLastResponseAt,
+		&i.NextContactBy,
+		&i.ApplyLastContacted,
+		&i.ApplyLastOutreachAt,
+		&i.ApplyLastResponseAt,
+		&i.ApplyContactBy,
+		&i.ObservedAt,
+	)
+	return &i, err
+}
+
+const InsertCadenceShadowObservationAtTime = `-- name: InsertCadenceShadowObservationAtTime :one
+INSERT INTO event_shadow_cadence_observation (
+    event_id, writer, contact_id, source, direction, branch, occurred_at,
+    apply_last_contacted, apply_last_outreach_at, apply_last_response_at, apply_contact_by,
+    observed_at
+) VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    $11,
+    $12::timestamptz
+)
+ON CONFLICT (event_id, writer) DO NOTHING
+RETURNING id, event_id, writer, contact_id, source, direction, branch, occurred_at, prev_last_contacted, prev_last_outreach_at, prev_last_response_at, prev_contact_by, next_last_contacted, next_last_outreach_at, next_last_response_at, next_contact_by, apply_last_contacted, apply_last_outreach_at, apply_last_response_at, apply_contact_by, observed_at
+`
+
+type InsertCadenceShadowObservationAtTimeParams struct {
+	EventID             pgtype.UUID        `json:"event_id"`
+	Writer              string             `json:"writer"`
+	ContactID           pgtype.UUID        `json:"contact_id"`
+	Source              string             `json:"source"`
+	Direction           string             `json:"direction"`
+	Branch              string             `json:"branch"`
+	OccurredAt          pgtype.Timestamptz `json:"occurred_at"`
+	ApplyLastContacted  bool               `json:"apply_last_contacted"`
+	ApplyLastOutreachAt bool               `json:"apply_last_outreach_at"`
+	ApplyLastResponseAt bool               `json:"apply_last_response_at"`
+	ApplyContactBy      bool               `json:"apply_contact_by"`
+	ObservedAt          pgtype.Timestamptz `json:"observed_at"`
+}
+
+// Test-only variant of InsertCadenceShadowObservation that accepts an
+// explicit observed_at instead of defaulting to NOW(). The production
+// writers (direct-path post-commit closure + consumer worker) always
+// use the DEFAULT; this query exists so integration tests can pin
+// observed_at deterministically when exercising the grace-window
+// filter in FindCadenceShadowDivergences.
+func (q *Queries) InsertCadenceShadowObservationAtTime(ctx context.Context, arg InsertCadenceShadowObservationAtTimeParams) (*EventShadowCadenceObservation, error) {
+	row := q.db.QueryRow(ctx, InsertCadenceShadowObservationAtTime,
+		arg.EventID,
+		arg.Writer,
+		arg.ContactID,
+		arg.Source,
+		arg.Direction,
+		arg.Branch,
+		arg.OccurredAt,
+		arg.ApplyLastContacted,
+		arg.ApplyLastOutreachAt,
+		arg.ApplyLastResponseAt,
+		arg.ApplyContactBy,
+		arg.ObservedAt,
 	)
 	var i EventShadowCadenceObservation
 	err := row.Scan(

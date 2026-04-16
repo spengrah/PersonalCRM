@@ -244,6 +244,42 @@ func (r *CadenceShadowObservationRepository) CountByWriter(ctx context.Context, 
 	return r.queries.CountCadenceShadowObservationsByWriter(ctx, writer)
 }
 
+// CountByContact returns the total number of rows scoped to the given
+// contact. Integration tests on the shared test DB use this instead of
+// CountByWriter so the assertion doesn't race against rows written by
+// concurrently-running tests on other contacts.
+func (r *CadenceShadowObservationRepository) CountByContact(ctx context.Context, contactID uuid.UUID) (int64, error) {
+	return r.queries.CountCadenceShadowObservationsByContact(ctx, uuidToPgUUID(contactID))
+}
+
+// RecordAtTime is a test-only variant of RecordDirect / RecordConsumer
+// that lets the caller pin observed_at explicitly. Production code must
+// continue to use RecordDirect / RecordConsumer (which let the DB
+// default observed_at to NOW()) — the DEFAULT timestamp is load-bearing
+// for the grace-window filter in FindDivergences. This wrapper exists
+// so integration tests can simulate "direct landed 4s ago / consumer
+// landed 6s ago" without actually waiting wall-clock seconds.
+func (r *CadenceShadowObservationRepository) RecordAtTime(ctx context.Context, obs CadenceShadowObservation, observedAt time.Time) error {
+	params := db.InsertCadenceShadowObservationAtTimeParams{
+		EventID:             uuidToPgUUID(obs.EventID),
+		Writer:              obs.Writer,
+		ContactID:           uuidToPgUUID(obs.ContactID),
+		Source:              obs.Source,
+		Direction:           obs.Direction,
+		Branch:              obs.Branch,
+		OccurredAt:          pgtype.Timestamptz{Time: obs.OccurredAt, Valid: true},
+		ApplyLastContacted:  obs.ApplyLastContacted,
+		ApplyLastOutreachAt: obs.ApplyLastOutreachAt,
+		ApplyLastResponseAt: obs.ApplyLastResponseAt,
+		ApplyContactBy:      obs.ApplyContactBy,
+		ObservedAt:          pgtype.Timestamptz{Time: observedAt, Valid: true},
+	}
+	if _, err := r.queries.InsertCadenceShadowObservationAtTime(ctx, params); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("insert cadence shadow observation at time: %w", err)
+	}
+	return nil
+}
+
 // FindDivergences returns rows from the FULL OUTER JOIN of direct vs
 // consumer observations over [from, to). A non-empty result indicates
 // drift (direct-missing, consumer-missing, or next_* disagreement) —

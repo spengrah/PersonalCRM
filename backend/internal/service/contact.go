@@ -342,26 +342,29 @@ func (s *ContactService) DeleteContact(ctx context.Context, id uuid.UUID) error 
 // RecordInteractionTx directly so they can share the outer tx (spec §3.4.1
 // atomicity contract; plan Decision 4a).
 func (s *ContactService) RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error) {
-	var (
-		interaction *repository.Interaction
-		postCommit  func(context.Context)
-	)
+	var res *RecordInteractionResult
 	err := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		var txErr error
 		// Non-event-bus wrapper: no paired interaction.recorded event
 		// will be published, so withShadow=false — shadow drain is
 		// skipped entirely.
-		interaction, _, _, _, postCommit, _, txErr = s.RecordInteractionTx(ctx, tx, false, req)
+		res, txErr = s.RecordInteractionTx(ctx, tx, false, req)
 		return txErr
 	})
 	if err != nil {
 		return nil, err
 	}
-	if postCommit != nil {
-		postCommit(ctx)
+	if res.FollowUpFn != nil {
+		res.FollowUpFn(ctx)
 	}
-	return interaction, nil
+	return res.Interaction, nil
 }
+
+// RecordInteractionResult is an alias for repository.RecordInteractionResult.
+// The canonical definition lives in repository so the consumer's
+// interactionWriter interface can reference it without importing the
+// service package. See RecordInteractionTx for the construction contract.
+type RecordInteractionResult = repository.RecordInteractionResult
 
 // RecordInteractionTx is the tx-threaded variant of RecordInteraction. The
 // caller owns the tx (river worker's BeginTxFunc, manual handler's
@@ -374,31 +377,13 @@ func (s *ContactService) RecordInteraction(ctx context.Context, req repository.R
 // callers pass true; the non-tx RecordInteraction wrapper passes false.
 // Plan Decisions 4 + 6.
 //
-// Returns:
-//   - interaction:    the persisted row (either freshly-inserted OR the
-//     existing dedup-hit row).
-//   - isReplay:       true if FindBySourceRefTx / FindInWindowTx returned
-//     an existing row; false on fresh insert. Consumers branch on this
-//     to skip interaction.recorded emit on replay (spec §3.4.1).
-//   - prevCadence:    pre-cadence snapshot captured in-memory from the
-//     contact row BEFORE the authoritative UPDATE. Non-nil on fresh
-//     writes when `withShadow` is true (so InteractionRecorder can
-//     populate V2 InteractionRecordedPayload.PrevCadenceSnapshot per
-//     plan Decision 2a). Nil on replay and when withShadow=false.
-//   - cadenceAtEmit:  value of contact.cadence at capture time (may be
-//     nil if the contact has no cadence). Non-nil only when
-//     withShadow=true and cadence is set. Populates PrevCadenceValue.
-//   - followUpFn:     follow-up-manager closure on fresh writes with a
-//     configured manager. Nil otherwise. Caller invokes AFTER tx commit.
-//   - shadowDrainFn:  PR 7 cadence shadow observation drain. Non-nil on
-//     fresh writes when the shadow observer is wired. Caller invokes
-//     AFTER the interaction.recorded event is published, passing the
-//     recordedEnv.ID so direct and consumer observations share a
-//     matching event_id (plan Decision 6, fix for the JOIN key).
-//   - err:            wrapped error. Caller should rollback tx.
+// Returns a *RecordInteractionResult with named fields (prior shape had 7
+// positional returns). See the field doc comments for per-field
+// nilability contracts. On error the result is nil and the caller
+// should roll back the tx.
 func (s *ContactService) RecordInteractionTx(
 	ctx context.Context, tx pgx.Tx, withShadow bool, req repository.RecordInteractionRequest,
-) (*repository.Interaction, bool, *repository.ContactCadenceFields, *string, func(context.Context), repository.CadenceShadowDrainFn, error) {
+) (*RecordInteractionResult, error) {
 	// 1. Default direction to "mutual" if empty (backward compat).
 	if req.Direction == "" {
 		req.Direction = repository.InteractionDirectionMutual
@@ -408,7 +393,7 @@ func (s *ContactService) RecordInteractionTx(
 	if req.SourceRef != nil {
 		existing, err := s.interactionRepo.FindBySourceRefTx(ctx, tx, req.ContactID, req.Source, *req.SourceRef)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
-			return nil, false, nil, nil, nil, nil, fmt.Errorf("check existing interaction by source_ref: %w", err)
+			return nil, fmt.Errorf("check existing interaction by source_ref: %w", err)
 		}
 		if existing != nil {
 			logger.Debug().
@@ -416,12 +401,12 @@ func (s *ContactService) RecordInteractionTx(
 				Str("source", req.Source).
 				Str("sourceRef", *req.SourceRef).
 				Msg("skipping duplicate interaction (same source_ref)")
-			return existing, true, nil, nil, nil, nil, nil
+			return &RecordInteractionResult{Interaction: existing, IsReplay: true}, nil
 		}
 	} else {
 		existing, err := s.interactionRepo.FindInWindowTx(ctx, tx, req.ContactID, req.Source, req.OccurredAt, 30*time.Minute)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
-			return nil, false, nil, nil, nil, nil, fmt.Errorf("check existing interaction in window: %w", err)
+			return nil, fmt.Errorf("check existing interaction in window: %w", err)
 		}
 		if existing != nil {
 			logger.Debug().
@@ -429,14 +414,14 @@ func (s *ContactService) RecordInteractionTx(
 				Str("existingSource", existing.Source).
 				Str("newSource", req.Source).
 				Msg("skipping duplicate interaction within 30-min window")
-			return existing, true, nil, nil, nil, nil, nil
+			return &RecordInteractionResult{Interaction: existing, IsReplay: true}, nil
 		}
 	}
 
 	// 3. Verify contact exists (avoids FK violation returning unhelpful error).
 	contact, err := s.contactRepo.GetContactTx(ctx, tx, req.ContactID)
 	if err != nil {
-		return nil, false, nil, nil, nil, nil, err // propagates db.ErrNotFound
+		return nil, err // propagates db.ErrNotFound
 	}
 
 	// 4. Capture pre-cadence snapshot + cadence-at-emit from the in-memory
@@ -452,7 +437,7 @@ func (s *ContactService) RecordInteractionTx(
 	// 5. Create interaction record in the caller's tx.
 	interaction, err := s.interactionRepo.CreateInteractionTx(ctx, tx, repository.CreateInteractionRequest(req))
 	if err != nil {
-		return nil, false, nil, nil, nil, nil, fmt.Errorf("create interaction: %w", err)
+		return nil, fmt.Errorf("create interaction: %w", err)
 	}
 
 	// 6. Direction-conditional cadence writes + shadow observation drain
@@ -475,10 +460,17 @@ func (s *ContactService) RecordInteractionTx(
 	// once and every observation in the queue inherits it.
 	shadowDrainFn := combineShadowDrain(shadowQueue)
 
-	if !withShadow {
-		return interaction, false, nil, nil, followUpFn, nil, nil
+	res := &RecordInteractionResult{
+		Interaction: interaction,
+		IsReplay:    false,
+		FollowUpFn:  followUpFn,
 	}
-	return interaction, false, &prevSnap, cadenceAtEmit, followUpFn, shadowDrainFn, nil
+	if withShadow {
+		res.PrevCadence = &prevSnap
+		res.CadenceAtEmit = cadenceAtEmit
+		res.ShadowDrainFn = shadowDrainFn
+	}
+	return res, nil
 }
 
 // combineShadowDrain collapses a slice of repository.CadenceShadowDrainFn closures

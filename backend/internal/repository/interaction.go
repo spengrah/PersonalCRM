@@ -37,6 +37,40 @@ type RecordInteractionRequest struct {
 	Direction   string // "outbound", "inbound", "mutual" — defaults to "mutual" if empty
 }
 
+// RecordInteractionResult bundles the non-error returns of
+// ContactService.RecordInteractionTx. Lives in repository (next to
+// RecordInteractionRequest) so consumer.interactionWriter can reference
+// it without depending on the service package. Fields carry the prior
+// positional-return shape as named fields; see
+// ContactService.RecordInteractionTx for per-field nilability contracts.
+type RecordInteractionResult struct {
+	// Interaction is the persisted row — either freshly-inserted OR the
+	// existing dedup-hit row.
+	Interaction *Interaction
+	// IsReplay is true if FindBySourceRefTx / FindInWindowTx returned an
+	// existing row; false on fresh insert. Consumers branch on this to
+	// skip interaction.recorded emit on replay (spec §3.4.1).
+	IsReplay bool
+	// PrevCadence is the pre-cadence snapshot captured in-memory from
+	// the contact row BEFORE the authoritative UPDATE. Non-nil on fresh
+	// writes when the caller passes withShadow=true; nil on replay and
+	// when withShadow=false.
+	PrevCadence *ContactCadenceFields
+	// CadenceAtEmit is the value of contact.cadence at capture time
+	// (may be nil if the contact has no cadence). Non-nil only when
+	// withShadow=true and cadence is set.
+	CadenceAtEmit *string
+	// FollowUpFn is the follow-up-manager closure on fresh writes with
+	// a configured manager. Nil otherwise. Caller invokes AFTER tx commit.
+	FollowUpFn func(context.Context)
+	// ShadowDrainFn is the PR 7 cadence shadow observation drain.
+	// Non-nil on fresh writes when the shadow observer is wired AND
+	// withShadow is true. Caller invokes AFTER the interaction.recorded
+	// event is published, passing recordedEnv.ID so direct and consumer
+	// observations share a matching event_id (plan Decision 6).
+	ShadowDrainFn CadenceShadowDrainFn
+}
+
 // InteractionRepository handles interaction persistence
 type InteractionRepository struct {
 	queries db.Querier

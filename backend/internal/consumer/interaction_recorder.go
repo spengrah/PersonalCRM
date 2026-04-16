@@ -49,15 +49,16 @@ const (
 // the concrete *service.ContactService.
 //
 // PR 7 signature: `withShadow` is true for event-bus consumer callers
-// (so the service queues the direct-path cadence shadow drain); the
-// pre-cadence snapshot + cadence-at-emit returns populate the V2
-// InteractionRecordedPayload (plan Decision 2a); the shadowDrain
-// closure must be invoked AFTER bus.PublishTx so it can be bound to
-// the interaction.recorded event's id (plan Decision 6).
+// (so the service queues the direct-path cadence shadow drain). The
+// returned *repository.RecordInteractionResult carries the pre-cadence
+// snapshot + cadence-at-emit that populate the V2 InteractionRecordedPayload
+// (plan Decision 2a) and the shadowDrain closure, which must be invoked
+// AFTER bus.PublishTx so it can be bound to the interaction.recorded
+// event's id (plan Decision 6).
 type interactionWriter interface {
 	RecordInteractionTx(
 		ctx context.Context, tx pgx.Tx, withShadow bool, req repository.RecordInteractionRequest,
-	) (*repository.Interaction, bool, *repository.ContactCadenceFields, *string, func(context.Context), repository.CadenceShadowDrainFn, error)
+	) (*repository.RecordInteractionResult, error)
 }
 
 // eventBusTx is the subset of *events.Bus the consumer depends on. Allows
@@ -136,11 +137,11 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	// Delegate to ContactService.RecordInteractionTx — single source of
 	// truth for dedup + insert + cadence updates. withShadow=true asks
 	// the service to queue the PR 7 direct-path cadence shadow drain
-	// (plan Decisions 4a, 6, and 2a). The shadowDrain closure is
-	// invoked AFTER bus.PublishTx so the direct observation can be
-	// tagged with the interaction.recorded event's id — matching the
-	// event_id the consumer will use on its own observation.
-	interaction, isReplay, prev, cadenceAtEmit, postCommit, shadowDrain, err := r.writer.RecordInteractionTx(ctx, tx, true, req)
+	// (plan Decisions 4a, 6, and 2a). The ShadowDrainFn is invoked
+	// AFTER bus.PublishTx so the direct observation can be tagged with
+	// the interaction.recorded event's id — matching the event_id the
+	// consumer will use on its own observation.
+	res, err := r.writer.RecordInteractionTx(ctx, tx, true, req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("record interaction tx: %w", err)
 	}
@@ -151,8 +152,8 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	// replay paths — today's telegram publisher code always called
 	// MarkMessagesProcessed after RecordInteraction, regardless of dedup-hit.
 	if env.Kind == events.KindMessageReceived || env.Kind == events.KindMessageSent {
-		if msgIDs, extractErr := extractTelegramMessageIDs(env); extractErr == nil && len(msgIDs) > 0 && r.telegramMessageRepo != nil && interaction != nil {
-			if markErr := r.telegramMessageRepo.MarkMessagesProcessedTx(ctx, tx, msgIDs, interaction.ID); markErr != nil {
+		if msgIDs, extractErr := extractTelegramMessageIDs(env); extractErr == nil && len(msgIDs) > 0 && r.telegramMessageRepo != nil && res.Interaction != nil {
+			if markErr := r.telegramMessageRepo.MarkMessagesProcessedTx(ctx, tx, msgIDs, res.Interaction.ID); markErr != nil {
 				return nil, nil, fmt.Errorf("mark telegram messages processed: %w", markErr)
 			}
 		}
@@ -160,8 +161,8 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 
 	// Replay: skip interaction.recorded emit (spec §3.4.1) and return nil
 	// postCommit (today's no-re-apply-on-replay semantics; plan Decision 4).
-	if isReplay {
-		return interaction, nil, nil
+	if res.IsReplay {
+		return res.Interaction, nil, nil
 	}
 
 	// Fresh-write: emit interaction.recorded atomically in the same tx.
@@ -170,13 +171,13 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	// PR 7: payload is V2 — includes PrevCadenceSnapshot + PrevCadenceValue
 	// so CadenceUpdater can replay the direct-path's pre-cadence state
 	// deterministically (plan Decision 2a).
-	recordedPayload, err := marshalRecordedPayload(interaction, direction, req, prev, cadenceAtEmit)
+	recordedPayload, err := marshalRecordedPayload(res.Interaction, direction, req, res.PrevCadence, res.CadenceAtEmit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal interaction.recorded: %w", err)
 	}
 	recordedEnv := &events.Envelope{
 		Source:     env.Source,
-		SourceID:   interaction.ID.String(),
+		SourceID:   res.Interaction.ID.String(),
 		Kind:       events.KindInteractionRecorded,
 		Payload:    recordedPayload,
 		ObservedAt: req.OccurredAt,
@@ -191,8 +192,8 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	// recordedEnv and uses its ID on its own observation). Combine
 	// the follow-up postCommit with the shadow drain into a single
 	// caller-facing closure.
-	combined := combinePostCommit(postCommit, shadowDrain, recordedEnv.ID)
-	return interaction, combined, nil
+	combined := combinePostCommit(res.FollowUpFn, res.ShadowDrainFn, recordedEnv.ID)
+	return res.Interaction, combined, nil
 }
 
 // combinePostCommit merges the follow-up-manager post-commit closure

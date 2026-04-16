@@ -52,6 +52,42 @@ LIMIT 1;
 SELECT COUNT(*) FROM event_shadow_cadence_observation
 WHERE writer = @writer;
 
+-- name: CountCadenceShadowObservationsByContact :one
+-- Per-contact shadow observation count. Narrower than CountByWriter so
+-- integration tests can assert invariants scoped to the contacts they
+-- own, without racing against rows written by concurrently-running
+-- tests on the shared test DB.
+SELECT COUNT(*) FROM event_shadow_cadence_observation
+WHERE contact_id = @contact_id;
+
+-- name: InsertCadenceShadowObservationAtTime :one
+-- Test-only variant of InsertCadenceShadowObservation that accepts an
+-- explicit observed_at instead of defaulting to NOW(). The production
+-- writers (direct-path post-commit closure + consumer worker) always
+-- use the DEFAULT; this query exists so integration tests can pin
+-- observed_at deterministically when exercising the grace-window
+-- filter in FindCadenceShadowDivergences.
+INSERT INTO event_shadow_cadence_observation (
+    event_id, writer, contact_id, source, direction, branch, occurred_at,
+    apply_last_contacted, apply_last_outreach_at, apply_last_response_at, apply_contact_by,
+    observed_at
+) VALUES (
+    @event_id,
+    @writer,
+    @contact_id,
+    @source,
+    @direction,
+    @branch,
+    @occurred_at,
+    @apply_last_contacted,
+    @apply_last_outreach_at,
+    @apply_last_response_at,
+    @apply_contact_by,
+    sqlc.arg(observed_at)::timestamptz
+)
+ON CONFLICT (event_id, writer) DO NOTHING
+RETURNING *;
+
 -- name: FindCadenceShadowDivergences :many
 -- Post-bake divergence query. FULL OUTER JOIN of direct vs consumer rows
 -- on event_id — per plan Decision 1 each (event_id, writer) pair is unique,

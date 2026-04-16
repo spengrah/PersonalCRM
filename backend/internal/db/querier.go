@@ -27,6 +27,11 @@ type Querier interface {
 	CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
 	CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error)
+	// Per-contact shadow observation count. Narrower than CountByWriter so
+	// integration tests can assert invariants scoped to the contacts they
+	// own, without racing against rows written by concurrently-running
+	// tests on the shared test DB.
+	CountCadenceShadowObservationsByContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	// Used by integration tests and bake-window evidence collection.
 	CountCadenceShadowObservationsByWriter(ctx context.Context, writer string) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
@@ -339,6 +344,13 @@ type Querier interface {
 	// retries. ON CONFLICT DO NOTHING returns no rows on duplicate; callers
 	// treat "no rows" as idempotent success rather than an error.
 	InsertCadenceShadowObservation(ctx context.Context, arg InsertCadenceShadowObservationParams) (*EventShadowCadenceObservation, error)
+	// Test-only variant of InsertCadenceShadowObservation that accepts an
+	// explicit observed_at instead of defaulting to NOW(). The production
+	// writers (direct-path post-commit closure + consumer worker) always
+	// use the DEFAULT; this query exists so integration tests can pin
+	// observed_at deterministically when exercising the grace-window
+	// filter in FindCadenceShadowDivergences.
+	InsertCadenceShadowObservationAtTime(ctx context.Context, arg InsertCadenceShadowObservationAtTimeParams) (*EventShadowCadenceObservation, error)
 	// Event queries (spec §3.1, §3.3). Raw append-only event log.
 	// Insert an event; conflicts on (source, source_id) (when source_id is not
 	// NULL) return zero rows so the caller can treat as idempotent no-op. When
