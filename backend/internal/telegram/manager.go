@@ -91,7 +91,6 @@ func NewTelegramManager(
 	externalContactRepo externalContactUpserter,
 	enricher contactEnricher,
 	interactionRepo *repository.InteractionRepository,
-	recorder interactionRecorder,
 	promoter interactionPromoter,
 	extender interactionExtender,
 	eventBus *events.Bus,
@@ -100,7 +99,7 @@ func NewTelegramManager(
 	aggregationEngine := NewAggregationEngine(
 		cfg.BurstWindowHours, cfg.ReplyBridgeHours,
 		messageRepo, interactionRepo,
-		recorder, promoter, extender,
+		promoter, extender,
 		eventBus,
 	)
 

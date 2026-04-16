@@ -135,18 +135,21 @@ type RiverConfig struct {
 //
 // InteractionMode gates the PR 5-8 phase lifecycle for the
 // InteractionRecorder consumer:
-//   - "off":     default. No shadow writes, no sibling publishes. The
-//     InteractionRecorder river worker is still registered (so
-//     river rejects no kinds at startup) but receives zero
-//     events — pubBus is nil at publish sites.
-//   - "shadow":  both paths run. Direct path is authoritative; consumer
-//     observes and writes to event_shadow_observation. Post-
-//     bake divergence query verifies 1:1 parity (PR 5).
-//   - "cutover": consumer is sole writer. Only valid from PR 6
-//     onwards — PR 5 rejects it as misconfiguration per
-//     Decision 12 ("undefined behavior in PR 5").
+//   - "off":     post-cutover effective no-op. The direct
+//     RecordInteraction call sites have been removed in PR 6;
+//     flag-flipping back to "off" DISABLES publisher-driven
+//     interaction recording entirely (telegram / calendar /
+//     manual UI will NOT write interactions). The HTTP ingest
+//     path remains functional. Kept as a valid value until
+//     the PR 12 cleanup drops the flag entirely. Rollback is
+//     `git revert`, not flag flip.
+//   - "shadow":  same as "off" post-cutover — the direct path is gone, so
+//     shadow mode has nothing to observe. Retained for
+//     config-parse compatibility with the PR 5 bake window.
+//   - "cutover": default. Consumer is the sole writer; publishers only
+//     Publish events. This is the intended production mode.
 type EventBusConfig struct {
-	InteractionMode string // off | shadow | cutover. Default: off.
+	InteractionMode string // off | shadow | cutover. Default: cutover (post-PR-6).
 }
 
 // EventBus interaction-mode constants. Mirrors (and must stay in sync
@@ -291,7 +294,7 @@ func Load() (*Config, error) {
 			JobTimeout:        getEnvAsDuration("RIVER_JOB_TIMEOUT", DefaultRiverJobTimeout),
 		},
 		EventBus: EventBusConfig{
-			InteractionMode: getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeOff),
+			InteractionMode: getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),
 		},
 	}
 
@@ -589,7 +592,7 @@ func TestConfig() *Config {
 			JobTimeout:        DefaultRiverJobTimeout,
 		},
 		EventBus: EventBusConfig{
-			InteractionMode: EventBusInteractionModeOff,
+			InteractionMode: EventBusInteractionModeCutover,
 		},
 	}
 }

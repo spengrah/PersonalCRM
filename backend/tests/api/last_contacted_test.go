@@ -15,15 +15,16 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
-	"personal-crm/backend/internal/repository"
-	"personal-crm/backend/internal/service"
+	_ "personal-crm/backend/internal/repository"
+	_ "personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func setupLastContactedTestRouter() (*gin.Engine, func()) {
+func setupLastContactedTestRouter(t *testing.T) (*gin.Engine, func()) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	ctx := context.Background()
@@ -43,11 +44,9 @@ func setupLastContactedTestRouter() (*gin.Engine, func()) {
 		panic("Failed to connect to test database: " + err.Error())
 	}
 
-	contactRepo := repository.NewContactRepository(database.Queries)
-	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
-	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries))
-	contactHandler := handlers.NewContactHandler(contactService, nil)
+	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
+	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
+	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
@@ -80,7 +79,7 @@ func TestUpdateLastContacted_WithPastDate(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	router, cleanup := setupLastContactedTestRouter()
+	router, cleanup := setupLastContactedTestRouter(t)
 	defer cleanup()
 
 	// Create a test contact
@@ -177,7 +176,7 @@ func TestUpdateLastContacted_WithFutureDate(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	router, cleanup := setupLastContactedTestRouter()
+	router, cleanup := setupLastContactedTestRouter(t)
 	defer cleanup()
 
 	// Create a test contact
@@ -246,7 +245,7 @@ func TestUpdateLastContacted_WithoutDate(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	router, cleanup := setupLastContactedTestRouter()
+	router, cleanup := setupLastContactedTestRouter(t)
 	defer cleanup()
 
 	// Create a test contact
@@ -331,11 +330,14 @@ func TestUpdateLastContacted_NonExistentContact(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	router, cleanup := setupLastContactedTestRouter()
+	router, cleanup := setupLastContactedTestRouter(t)
 	defer cleanup()
 
 	t.Run("UpdateLastContacted_NonExistentContact_Returns404", func(t *testing.T) {
-		nonExistentID := "00000000-0000-0000-0000-000000000000"
+		// Use a non-nil UUID. The zero UUID trips the consumer's
+		// "contact_id unresolved" guard (plan Decision 4) before reaching
+		// the DB check; we want the DB-level not-found path here.
+		nonExistentID := "550e8400-e29b-41d4-a716-446655440098"
 		pastDate := "2024-01-15"
 		updateReq := handlers.UpdateLastContactedRequest{
 			LastContacted: &handlers.DateOnly{},
@@ -386,7 +388,7 @@ func TestUpdateLastContacted_PreservesOtherContactData(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	router, cleanup := setupLastContactedTestRouter()
+	router, cleanup := setupLastContactedTestRouter(t)
 	defer cleanup()
 
 	// Create a test contact with various fields

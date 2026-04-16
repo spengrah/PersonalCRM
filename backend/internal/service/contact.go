@@ -37,15 +37,6 @@ type followUpManager interface {
 	CompleteFollowUp(ctx context.Context, contactID uuid.UUID) error
 }
 
-// shadowObserver is the subset of *repository.ShadowObservationRepository
-// the service depends on. Defined as an interface so the service doesn't
-// require the repository package for callers that don't enable shadow mode.
-// tx=nil indicates the caller does not hold an explicit tx (today's direct
-// path) — the observer opens a short-lived tx on its own pool.
-type shadowObserver interface {
-	RecordDirectWrite(ctx context.Context, tx pgx.Tx, obs repository.ShadowObservation) (*repository.ShadowObservation, error)
-}
-
 type ContactService struct {
 	database          *db.Database
 	contactRepo       *repository.ContactRepository
@@ -54,7 +45,6 @@ type ContactService struct {
 	contactTaskRepo   *repository.ContactTaskRepository
 	followUpMgr       followUpManager
 	rematchSvc        *RematchService
-	shadowObs         shadowObserver
 }
 
 func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository, interactionRepo *repository.InteractionRepository, contactTaskRepo *repository.ContactTaskRepository) *ContactService {
@@ -76,34 +66,6 @@ func (s *ContactService) SetFollowUpManager(fm followUpManager) {
 // and UpdateContact return uuid.Nil as the jobID when nil.
 func (s *ContactService) SetRematchService(r *RematchService) {
 	s.rematchSvc = r
-}
-
-// SetShadowObserver injects the shadow-mode observer. Only called from
-// main.go when EVENT_BUS_INTERACTION_MODE != off. When unset (the default,
-// "off" mode), every shadow-observation call site short-circuits via a
-// nil check — zero overhead compared to today's direct path (plan Decision
-// 7 / 11).
-func (s *ContactService) SetShadowObserver(obs shadowObserver) {
-	s.shadowObs = obs
-}
-
-// recordDirectShadowObs writes a shadow observation row for a direct-path
-// interaction write. No-op when the observer isn't injected (mode=off).
-// Failures are logged and swallowed so the direct-path write is never
-// blocked by observation bookkeeping.
-//
-// Calling convention: callers pass a ShadowObservation with Writer unset;
-// the repository stamps Writer="direct" inside RecordDirectWrite.
-func (s *ContactService) recordDirectShadowObs(ctx context.Context, obs repository.ShadowObservation) {
-	if s.shadowObs == nil {
-		return
-	}
-	if _, err := s.shadowObs.RecordDirectWrite(ctx, nil, obs); err != nil {
-		logger.Warn().Err(err).
-			Str("contactId", obs.ContactID.String()).
-			Str("kind", obs.Kind).
-			Msg("shadow: record direct observation failed")
-	}
 }
 
 // HasPendingFollowUp checks if a contact has a pending follow-up task
@@ -332,44 +294,6 @@ func (s *ContactService) DeleteContact(ctx context.Context, id uuid.UUID) error 
 	return s.contactRepo.SoftDeleteContact(ctx, id)
 }
 
-// UpdateContactLastContacted updates the last contacted date for a contact.
-// If lastContacted is nil, the current time is used.
-// Also records an interaction and updates contact_by based on the new last_contacted date and cadence.
-//
-// Returns both the refreshed contact and the interaction row
-// RecordInteraction produced. The interaction is needed by the PR 5
-// shadow-mode handler flow so the derived envelope carries the values
-// that were actually committed (vs. a dedup-hit returning an older row
-// with a different Direction / OccurredAt — see plan Decision 7).
-func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted *time.Time) (*repository.Contact, *repository.Interaction, error) {
-	// Use provided date or default to current time
-	dateToSet := accelerated.GetCurrentTime()
-	if lastContacted != nil {
-		dateToSet = *lastContacted
-	}
-
-	// Record interaction (handles dedup, last_contacted update, and contact_by recalculation)
-	interaction, err := s.RecordInteraction(ctx, repository.RecordInteractionRequest{
-		ContactID:  id,
-		Source:     repository.InteractionSourceManual,
-		OccurredAt: dateToSet,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("record interaction: %w", err)
-	}
-
-	contact, err := s.contactRepo.GetContact(ctx, id)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if err := s.attachMethods(ctx, contact); err != nil {
-		return nil, nil, err
-	}
-
-	return contact, interaction, nil
-}
-
 // RecordInteraction creates an interaction record and updates contact fields based on direction.
 // Handles source-aware deduplication:
 //   - For sources with source_ref (gcal, todoist): dedup by source_ref
@@ -383,17 +307,62 @@ func (s *ContactService) UpdateContactLastContacted(ctx context.Context, id uuid
 // Follow-up management (best-effort, non-blocking):
 //   - outbound: creates or refreshes a follow-up Todoist task
 //   - inbound/mutual: completes any pending follow-up task
+//
+// Non-tx wrapper. Opens a short-lived tx via BeginTxFunc and delegates to
+// RecordInteractionTx. Used by Todoist (PR 11) and internal service callers
+// that don't own a tx. The event-bus consumer and manual-UI handler use
+// RecordInteractionTx directly so they can share the outer tx (spec §3.4.1
+// atomicity contract; plan Decision 4a).
 func (s *ContactService) RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error) {
-	// 1. Default direction to "mutual" if empty (backward compat)
+	var (
+		interaction *repository.Interaction
+		postCommit  func(context.Context)
+	)
+	err := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		var txErr error
+		interaction, _, postCommit, txErr = s.RecordInteractionTx(ctx, tx, req)
+		return txErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	if postCommit != nil {
+		postCommit(ctx)
+	}
+	return interaction, nil
+}
+
+// RecordInteractionTx is the tx-threaded variant of RecordInteraction. The
+// caller owns the tx (river worker's BeginTxFunc, manual handler's
+// BeginTxFunc). Dedup, contact existence check, interaction insert, and
+// cadence UPDATEs all run inside the caller's tx (spec §3.4.1).
+//
+// Returns:
+//   - interaction: the persisted row (either freshly-inserted OR the existing
+//     dedup-hit row).
+//   - isReplay:    true if FindBySourceRefTx / FindInWindowTx returned an
+//     existing row; false on fresh insert. Consumers branch on this to skip
+//     interaction.recorded emit on replay (spec §3.4.1).
+//   - postCommit:  non-nil on fresh writes that warrant a follow-up-manager
+//     call (outbound → CreateOrRefreshFollowUp; inbound/mutual →
+//     CompleteFollowUp). Nil on replay. Caller invokes AFTER tx commit;
+//     best-effort (errors logged). Running follow-up inline would hold a
+//     pgx.Tx while making a Todoist HTTP call — a pool-saturation hazard
+//     (plan Decision 8).
+//   - err:         wrapped error. Caller should rollback tx.
+func (s *ContactService) RecordInteractionTx(
+	ctx context.Context, tx pgx.Tx, req repository.RecordInteractionRequest,
+) (*repository.Interaction, bool, func(context.Context), error) {
+	// 1. Default direction to "mutual" if empty (backward compat).
 	if req.Direction == "" {
 		req.Direction = repository.InteractionDirectionMutual
 	}
 
-	// 2. Source-aware deduplication
+	// 2. Source-aware deduplication (tx-aware variants).
 	if req.SourceRef != nil {
-		existing, err := s.interactionRepo.FindBySourceRef(ctx, req.ContactID, req.Source, *req.SourceRef)
+		existing, err := s.interactionRepo.FindBySourceRefTx(ctx, tx, req.ContactID, req.Source, *req.SourceRef)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
-			return nil, fmt.Errorf("check existing interaction by source_ref: %w", err)
+			return nil, false, nil, fmt.Errorf("check existing interaction by source_ref: %w", err)
 		}
 		if existing != nil {
 			logger.Debug().
@@ -401,26 +370,12 @@ func (s *ContactService) RecordInteraction(ctx context.Context, req repository.R
 				Str("source", req.Source).
 				Str("sourceRef", *req.SourceRef).
 				Msg("skipping duplicate interaction (same source_ref)")
-			// Shadow-mode bookkeeping: the direct path dedupe-hit is a
-			// replay row — pairs with the consumer-path replay when both
-			// wrote. Best-effort; never blocks the direct path.
-			s.recordDirectShadowObs(ctx, repository.ShadowObservation{
-				Kind:          repository.ShadowKindDirectRecord,
-				Source:        req.Source,
-				SourceRef:     req.SourceRef,
-				ContactID:     req.ContactID,
-				Direction:     existing.Direction,
-				OccurredAt:    existing.OccurredAt,
-				InteractionID: &existing.ID,
-				Replay:        true,
-			})
-			return existing, nil
+			return existing, true, nil, nil
 		}
 	} else {
-		// Manual source: use 30-minute time window
-		existing, err := s.interactionRepo.FindInWindow(ctx, req.ContactID, req.Source, req.OccurredAt, 30*time.Minute)
+		existing, err := s.interactionRepo.FindInWindowTx(ctx, tx, req.ContactID, req.Source, req.OccurredAt, 30*time.Minute)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
-			return nil, fmt.Errorf("check existing interaction in window: %w", err)
+			return nil, false, nil, fmt.Errorf("check existing interaction in window: %w", err)
 		}
 		if existing != nil {
 			logger.Debug().
@@ -428,112 +383,155 @@ func (s *ContactService) RecordInteraction(ctx context.Context, req repository.R
 				Str("existingSource", existing.Source).
 				Str("newSource", req.Source).
 				Msg("skipping duplicate interaction within 30-min window")
-			s.recordDirectShadowObs(ctx, repository.ShadowObservation{
-				Kind:          repository.ShadowKindDirectRecord,
-				Source:        req.Source,
-				SourceRef:     nil,
-				ContactID:     req.ContactID,
-				Direction:     existing.Direction,
-				OccurredAt:    existing.OccurredAt,
-				InteractionID: &existing.ID,
-				Replay:        true,
-			})
-			return existing, nil
+			return existing, true, nil, nil
 		}
 	}
 
-	// 3. Verify contact exists (avoids FK violation returning unhelpful error)
-	contact, err := s.contactRepo.GetContact(ctx, req.ContactID)
+	// 3. Verify contact exists (avoids FK violation returning unhelpful error).
+	contact, err := s.contactRepo.GetContactTx(ctx, tx, req.ContactID)
 	if err != nil {
-		return nil, err // propagates ErrNotFound
+		return nil, false, nil, err // propagates db.ErrNotFound
 	}
 
-	// 4. Create interaction record
-	interaction, err := s.interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest(req))
+	// 4. Create interaction record in the caller's tx.
+	interaction, err := s.interactionRepo.CreateInteractionTx(ctx, tx, repository.CreateInteractionRequest(req))
 	if err != nil {
-		return nil, fmt.Errorf("create interaction: %w", err)
+		return nil, false, nil, fmt.Errorf("create interaction: %w", err)
 	}
 
-	// Shadow-mode bookkeeping: fresh-write observation. Fires only when a
-	// shadowObs is injected (mode != off in main.go). Best-effort; the
-	// direct write is authoritative and already committed by CreateInteraction.
-	s.recordDirectShadowObs(ctx, repository.ShadowObservation{
-		Kind:          repository.ShadowKindDirectRecord,
-		Source:        req.Source,
-		SourceRef:     req.SourceRef,
-		ContactID:     req.ContactID,
-		Direction:     req.Direction,
-		OccurredAt:    req.OccurredAt,
-		InteractionID: &interaction.ID,
-		Replay:        false,
-	})
+	// 5. Direction-conditional cadence writes (in-tx) + captured follow-up
+	// closure for the caller to fire post-commit.
+	postCommit := s.applyInteractionEffectsFromRow(ctx, tx, contact, interaction)
 
-	// 5+6. Direction-conditional contact field updates + follow-up management
-	s.applyInteractionEffects(ctx, contact, req.Direction, req.OccurredAt, req.Source == repository.InteractionSourceManual)
-
-	return interaction, nil
+	return interaction, false, postCommit, nil
 }
 
 // PromoteInteractionToMutual updates an outbound interaction to mutual (reply bridging)
 // and applies the resulting contact field updates and follow-up completion.
+//
+// Non-tx wrapper. See PromoteInteractionToMutualTx for the tx-threaded variant.
 func (s *ContactService) PromoteInteractionToMutual(ctx context.Context, interactionID, contactID uuid.UUID, replyAt time.Time) error {
-	_, err := s.interactionRepo.UpdateInteractionDirection(ctx, interactionID, repository.InteractionDirectionMutual, replyAt)
-	if err != nil {
-		return fmt.Errorf("update interaction direction: %w", err)
-	}
-	contact, err := s.contactRepo.GetContact(ctx, contactID)
-	if err != nil {
-		return fmt.Errorf("get contact for promotion: %w", err)
-	}
-	s.applyInteractionEffects(ctx, contact, repository.InteractionDirectionMutual, replyAt, false)
-	// Shadow-mode bookkeeping: promote has no event-kind peer in PR 5. The
-	// divergence query filters direct_promote rows out via kind='direct_record'
-	// (plan Decision 14). Writing the row keeps the observation log complete.
-	s.recordDirectShadowObs(ctx, repository.ShadowObservation{
-		Kind:          repository.ShadowKindDirectPromote,
-		Source:        repository.InteractionSourceTelegram,
-		ContactID:     contactID,
-		Direction:     repository.InteractionDirectionMutual,
-		OccurredAt:    replyAt,
-		InteractionID: &interactionID,
+	var postCommit func(context.Context)
+	err := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		var txErr error
+		postCommit, txErr = s.PromoteInteractionToMutualTx(ctx, tx, interactionID, contactID, replyAt)
+		return txErr
 	})
+	if err != nil {
+		return err
+	}
+	if postCommit != nil {
+		postCommit(ctx)
+	}
 	return nil
+}
+
+// PromoteInteractionToMutualTx is the tx-threaded variant. Caller owns the tx.
+// The returned postCommit closure (nil-safe) captures follow-up-manager work
+// that should fire AFTER the tx commits (plan Decision 4 + 8).
+func (s *ContactService) PromoteInteractionToMutualTx(
+	ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, replyAt time.Time,
+) (func(context.Context), error) {
+	updated, err := s.updateInteractionDirectionTx(ctx, tx, interactionID, repository.InteractionDirectionMutual, replyAt)
+	if err != nil {
+		return nil, fmt.Errorf("update interaction direction: %w", err)
+	}
+	contact, err := s.contactRepo.GetContactTx(ctx, tx, contactID)
+	if err != nil {
+		return nil, fmt.Errorf("get contact for promotion: %w", err)
+	}
+	return s.applyInteractionEffectsFromRow(ctx, tx, contact, updated), nil
 }
 
 // ExtendInteraction extends an existing interaction's timestamp/description (incremental
 // coalescing) and re-applies contact field effects for the updated timestamp.
+//
+// Non-tx wrapper. See ExtendInteractionTx for the tx-threaded variant.
 func (s *ContactService) ExtendInteraction(ctx context.Context, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) error {
-	_, err := s.interactionRepo.UpdateInteractionTimestamp(ctx, interactionID, occurredAt, description)
-	if err != nil {
-		return fmt.Errorf("update interaction timestamp: %w", err)
-	}
-	contact, err := s.contactRepo.GetContact(ctx, contactID)
-	if err != nil {
-		return fmt.Errorf("get contact for extension: %w", err)
-	}
-	s.applyInteractionEffects(ctx, contact, direction, occurredAt, false)
-	// Shadow-mode bookkeeping: extend has no event-kind peer in PR 5.
-	// Filtered out of the divergence query via kind='direct_record'.
-	s.recordDirectShadowObs(ctx, repository.ShadowObservation{
-		Kind:          repository.ShadowKindDirectExtend,
-		Source:        repository.InteractionSourceTelegram,
-		ContactID:     contactID,
-		Direction:     direction,
-		OccurredAt:    occurredAt,
-		InteractionID: &interactionID,
+	var postCommit func(context.Context)
+	err := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		var txErr error
+		postCommit, txErr = s.ExtendInteractionTx(ctx, tx, interactionID, contactID, direction, occurredAt, description)
+		return txErr
 	})
+	if err != nil {
+		return err
+	}
+	if postCommit != nil {
+		postCommit(ctx)
+	}
 	return nil
 }
 
-// applyInteractionEffects handles direction-conditional contact field updates
-// and follow-up task management. Shared by RecordInteraction, PromoteInteractionToMutual,
-// and ExtendInteraction.
-func (s *ContactService) applyInteractionEffects(ctx context.Context, contact *repository.Contact, direction string, occurredAt time.Time, isManual bool) {
+// ExtendInteractionTx is the tx-threaded variant. Caller owns the tx. Note
+// that direction is a caller-supplied argument because UpdateInteractionTimestamp
+// does not change direction on the row — the caller knows which direction
+// applies to the session being extended.
+func (s *ContactService) ExtendInteractionTx(
+	ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string,
+) (func(context.Context), error) {
+	updated, err := s.updateInteractionTimestampTx(ctx, tx, interactionID, occurredAt, description)
+	if err != nil {
+		return nil, fmt.Errorf("update interaction timestamp: %w", err)
+	}
+	contact, err := s.contactRepo.GetContactTx(ctx, tx, contactID)
+	if err != nil {
+		return nil, fmt.Errorf("get contact for extension: %w", err)
+	}
+	// UpdateInteractionTimestamp did not change the row's Direction column —
+	// the persisted Direction may be outbound/inbound/mutual from a prior
+	// write. applyInteractionEffectsFromRow reads the persisted row's
+	// Direction, which for same-direction coalescing equals the caller-
+	// supplied direction. Guard against surprises by overriding the row's
+	// Direction in-memory with the caller's intent before applying effects.
+	updated.Direction = direction
+	return s.applyInteractionEffectsFromRow(ctx, tx, contact, updated), nil
+}
+
+// updateInteractionDirectionTx / updateInteractionTimestampTx are thin
+// tx-threaded wrappers around the InteractionRepository methods used by
+// the promote/extend tx paths above. They live here because the repo
+// already has tx-aware variants for the primary create/find operations;
+// adding their peers is a mechanical mirror and avoids introducing a
+// separate helper file.
+func (s *ContactService) updateInteractionDirectionTx(
+	ctx context.Context, tx pgx.Tx, id uuid.UUID, direction string, occurredAt time.Time,
+) (*repository.Interaction, error) {
+	return s.interactionRepo.UpdateInteractionDirectionTx(ctx, tx, id, direction, occurredAt)
+}
+
+func (s *ContactService) updateInteractionTimestampTx(
+	ctx context.Context, tx pgx.Tx, id uuid.UUID, occurredAt time.Time, description *string,
+) (*repository.Interaction, error) {
+	return s.interactionRepo.UpdateInteractionTimestampTx(ctx, tx, id, occurredAt, description)
+}
+
+// applyInteractionEffectsFromRow handles direction-conditional contact field
+// updates (in-tx) and captures follow-up-manager work in a returned closure
+// for the caller to fire AFTER the tx commits (plan Decisions 4 + 8).
+//
+// The helper reads `Direction`, `OccurredAt`, and `Source` from the persisted
+// `interaction` row — not from in-flight request args — per spec §5 PR 6
+// line 845. This eliminates drift between request-time values and persisted-
+// row values on dedup-hit replays and out-of-order updates.
+//
+// Returns a nil-safe post-commit closure. Nil means no follow-up work is
+// warranted (e.g., no follow-up manager injected). Non-nil closures capture
+// the contact, direction, and occurredAt so they're stable across tx commit.
+func (s *ContactService) applyInteractionEffectsFromRow(
+	ctx context.Context, tx pgx.Tx, contact *repository.Contact, interaction *repository.Interaction,
+) func(context.Context) {
+	if contact == nil || interaction == nil {
+		return nil
+	}
 	contactID := contact.ID
+	direction := interaction.Direction
+	occurredAt := interaction.OccurredAt
+	isManual := interaction.Source == repository.InteractionSourceManual
 
 	switch direction {
 	case repository.InteractionDirectionOutbound:
-		if err := s.contactRepo.UpdateContactOutreachAt(ctx, contactID, occurredAt, isManual); err != nil {
+		if err := s.contactRepo.UpdateContactOutreachAtTx(ctx, tx, contactID, occurredAt, isManual); err != nil {
 			logger.Warn().Err(err).
 				Str("contactId", contactID.String()).
 				Msg("failed to update last_outreach_at from outbound interaction")
@@ -548,7 +546,7 @@ func (s *ContactService) applyInteractionEffects(ctx context.Context, contact *r
 				contactBy = &contactByTime
 			}
 		}
-		if err := s.contactRepo.UpdateContactResponseFields(ctx, contactID, occurredAt, contactBy, isManual); err != nil {
+		if err := s.contactRepo.UpdateContactResponseFieldsTx(ctx, tx, contactID, occurredAt, contactBy, isManual); err != nil {
 			logger.Warn().Err(err).
 				Str("contactId", contactID.String()).
 				Msg("failed to update contact fields from inbound interaction")
@@ -563,32 +561,45 @@ func (s *ContactService) applyInteractionEffects(ctx context.Context, contact *r
 				contactBy = &contactByTime
 			}
 		}
-		if err := s.contactRepo.UpdateContactMutualFields(ctx, contactID, occurredAt, contactBy, isManual); err != nil {
+		if err := s.contactRepo.UpdateContactMutualFieldsTx(ctx, tx, contactID, occurredAt, contactBy, isManual); err != nil {
 			logger.Warn().Err(err).
 				Str("contactId", contactID.String()).
 				Msg("failed to update contact fields from mutual interaction")
 		}
 	}
 
-	// Follow-up management (best-effort, non-blocking)
-	if s.followUpMgr != nil {
-		switch direction {
-		case repository.InteractionDirectionOutbound:
-			if err := s.followUpMgr.CreateOrRefreshFollowUp(ctx, *contact, occurredAt); err != nil {
-				logger.Warn().Err(err).
-					Str("contactId", contactID.String()).
-					Str("direction", direction).
-					Msg("failed to create/refresh follow-up task")
-			}
-		case repository.InteractionDirectionInbound, repository.InteractionDirectionMutual:
-			if err := s.followUpMgr.CompleteFollowUp(ctx, contactID); err != nil {
-				logger.Warn().Err(err).
-					Str("contactId", contactID.String()).
-					Str("direction", direction).
-					Msg("failed to complete follow-up task")
+	// Capture follow-up work for post-commit invocation. The closure
+	// snapshots contact-by-value so it's stable if the caller mutates the
+	// contact pointer later.
+	if s.followUpMgr == nil {
+		return nil
+	}
+	switch direction {
+	case repository.InteractionDirectionOutbound, repository.InteractionDirectionInbound, repository.InteractionDirectionMutual:
+		contactSnapshot := *contact
+		fm := s.followUpMgr
+		dir := direction
+		occ := occurredAt
+		return func(postCtx context.Context) {
+			switch dir {
+			case repository.InteractionDirectionOutbound:
+				if err := fm.CreateOrRefreshFollowUp(postCtx, contactSnapshot, occ); err != nil {
+					logger.Warn().Err(err).
+						Str("contactId", contactID.String()).
+						Str("direction", dir).
+						Msg("failed to create/refresh follow-up task")
+				}
+			case repository.InteractionDirectionInbound, repository.InteractionDirectionMutual:
+				if err := fm.CompleteFollowUp(postCtx, contactID); err != nil {
+					logger.Warn().Err(err).
+						Str("contactId", contactID.String()).
+						Str("direction", dir).
+						Msg("failed to complete follow-up task")
+				}
 			}
 		}
 	}
+	return nil
 }
 
 // ListOverdueContacts retrieves contacts whose contact_by date is in the past.

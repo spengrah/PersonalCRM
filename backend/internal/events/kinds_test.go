@@ -131,6 +131,65 @@ func TestMarshalUnmarshal_MessageSent(t *testing.T) {
 	require.Equal(t, original, decoded)
 }
 
+// TestMarshalUnmarshal_MessagePayloads_WithMessageIDs asserts the
+// cutover-era MessageIDs field (plan Decision 10) round-trips cleanly on
+// both MessageReceivedPayload and MessageSentPayload.
+func TestMarshalUnmarshal_MessagePayloads_WithMessageIDs(t *testing.T) {
+	msgID1 := uuid.New()
+	msgID2 := uuid.New()
+	cid := uuid.New()
+
+	t.Run("received_with_message_ids", func(t *testing.T) {
+		original := MessageReceivedPayload{
+			Version:           1,
+			ContactID:         &cid,
+			PeerRef:           "tg:1:2",
+			MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+			ExternalMessageID: "tg:1:42",
+			MessageIDs:        []uuid.UUID{msgID1, msgID2},
+		}
+		raw, err := Marshal(KindMessageReceived, original)
+		require.NoError(t, err)
+		require.Contains(t, string(raw), "message_ids")
+
+		env := &Envelope{Kind: KindMessageReceived, Payload: raw}
+		var decoded MessageReceivedPayload
+		require.NoError(t, Unmarshal(env, &decoded))
+		require.Equal(t, original, decoded)
+		require.Len(t, decoded.MessageIDs, 2)
+	})
+
+	t.Run("received_empty_message_ids_omitted", func(t *testing.T) {
+		original := MessageReceivedPayload{
+			Version:           1,
+			PeerRef:           "tg:1:2",
+			MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+			ExternalMessageID: "tg:1:42",
+		}
+		raw, err := Marshal(KindMessageReceived, original)
+		require.NoError(t, err)
+		require.NotContains(t, string(raw), "message_ids",
+			"omitempty should elide empty slice from JSON")
+	})
+
+	t.Run("sent_with_message_ids", func(t *testing.T) {
+		original := MessageSentPayload{
+			Version:           1,
+			ContactID:         &cid,
+			PeerRef:           "tg:1:2",
+			MessageAt:         time.Date(2026, 4, 10, 13, 0, 0, 0, time.UTC),
+			ExternalMessageID: "tg:1:43",
+			MessageIDs:        []uuid.UUID{msgID1},
+		}
+		raw, err := Marshal(KindMessageSent, original)
+		require.NoError(t, err)
+		env := &Envelope{Kind: KindMessageSent, Payload: raw}
+		var decoded MessageSentPayload
+		require.NoError(t, Unmarshal(env, &decoded))
+		require.Equal(t, original, decoded)
+	})
+}
+
 func TestMarshalUnmarshal_CalendarAttended(t *testing.T) {
 	original := CalendarAttendedPayload{
 		Version:    1,

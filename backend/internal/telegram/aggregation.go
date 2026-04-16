@@ -12,44 +12,47 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// interactionRecorder creates new interactions. Satisfied by *service.ContactService.
-type interactionRecorder interface {
-	RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error)
-}
-
 // interactionPromoter promotes outbound → mutual. Satisfied by *service.ContactService.
+// Used by the coalescing and reply-bridge paths — not migrated in PR 6
+// cutover because these operations MODIFY an existing interaction row
+// (no create) and have no event-kind peer in the spec's 10 kinds
+// (plan Decision 3).
 type interactionPromoter interface {
 	PromoteInteractionToMutual(ctx context.Context, interactionID, contactID uuid.UUID, replyAt time.Time) error
 }
 
 // interactionExtender extends an existing interaction. Satisfied by *service.ContactService.
+// Same rationale as interactionPromoter — out of PR 6 scope (plan Decision 3).
 type interactionExtender interface {
 	ExtendInteraction(ctx context.Context, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) error
 }
 
 // AggregationEngine processes raw telegram_message rows into interaction records.
+// Post-PR-6 (cutover): new interaction creation runs through the event
+// bus — createInteractionForSession only publishes message.received /
+// message.sent events; the async InteractionRecorder consumer writes the
+// interaction row and marks telegram_messages processed inside its tx.
 type AggregationEngine struct {
 	burstWindowHours int
 	replyBridgeHours int
 	messageRepo      *repository.TelegramMessageRepository
 	interactionRepo  *repository.InteractionRepository
-	recorder         interactionRecorder
 	promoter         interactionPromoter
 	extender         interactionExtender
-	// eventBus is the shadow-mode event bus. Nil when
-	// EVENT_BUS_INTERACTION_MODE=off; a non-nil bus indicates publish-on-
-	// success of createInteractionForSession (plan Decision 6).
+	// eventBus is required in cutover mode. When nil, createInteractionForSession
+	// returns an error — off/shadow modes are effective no-ops post-cutover
+	// (spec §3.9; plan Decision 6).
 	eventBus *events.Bus
 }
 
-// NewAggregationEngine creates a new aggregation engine. eventBus may be
-// nil; non-nil enables shadow-mode sibling publishes of message.received /
-// message.sent alongside the direct-path RecordInteraction.
+// NewAggregationEngine creates a new aggregation engine. eventBus is
+// required in cutover (default post-PR-6). Passing nil makes
+// createInteractionForSession a no-op error path (equivalent to the
+// off/shadow modes documented in EventBusConfig).
 func NewAggregationEngine(
 	burstWindowHours, replyBridgeHours int,
 	messageRepo *repository.TelegramMessageRepository,
 	interactionRepo *repository.InteractionRepository,
-	recorder interactionRecorder,
 	promoter interactionPromoter,
 	extender interactionExtender,
 	eventBus *events.Bus,
@@ -59,7 +62,6 @@ func NewAggregationEngine(
 		replyBridgeHours: replyBridgeHours,
 		messageRepo:      messageRepo,
 		interactionRepo:  interactionRepo,
-		recorder:         recorder,
 		promoter:         promoter,
 		extender:         extender,
 		eventBus:         eventBus,
@@ -304,41 +306,27 @@ func (e *AggregationEngine) tryExplicitReplyBridge(ctx context.Context, contactI
 	return false
 }
 
-// createInteractionForSession creates a new interaction for a session and marks messages processed.
+// createInteractionForSession publishes a message.received / message.sent
+// event for a session. In cutover (post-PR-6) the async
+// InteractionRecorder consumer handles the write inside a single tx that
+// also marks the telegram_message rows processed (plan Decisions 7 + 10).
+//
+// Returns an error when eventBus is nil — mode=off/shadow is effectively
+// broken post-cutover (spec §3.9; the direct path has been removed).
 func (e *AggregationEngine) createInteractionForSession(ctx context.Context, contactID uuid.UUID, sess msgSession) error {
+	if e.eventBus == nil {
+		return fmt.Errorf("telegram: cutover wiring requires eventBus; publisher refusing to drop interaction (mode=off/shadow is post-cutover broken per spec §3.9)")
+	}
 	sourceRef := sess.sourceRef()
 	desc := sess.description()
-
-	interaction, err := e.recorder.RecordInteraction(ctx, repository.RecordInteractionRequest{
-		ContactID:   contactID,
-		Source:      repository.InteractionSourceTelegram,
-		SourceRef:   &sourceRef,
-		OccurredAt:  sess.lastSentAt(),
-		Description: &desc,
-		Direction:   sess.direction,
-	})
-	if err != nil {
-		return fmt.Errorf("record interaction: %w", err)
+	if pubErr := e.publishForSession(ctx, contactID, sess, sourceRef, &desc); pubErr != nil {
+		return fmt.Errorf("publish telegram interaction event: %w", pubErr)
 	}
-
-	// Shadow-mode sibling publish (plan Decision 6). Failures are logged
-	// and discarded — the direct-path write is authoritative. Runs before
-	// MarkMessagesProcessed so the event table reflects what produced the
-	// interaction row.
-	if e.eventBus != nil {
-		if pubErr := e.publishForSession(ctx, contactID, sess, sourceRef, &desc); pubErr != nil {
-			log.Warn().Err(pubErr).
-				Str("contact_id", contactID.String()).
-				Str("source_ref", sourceRef).
-				Str("direction", sess.direction).
-				Msg("telegram: shadow publish failed")
-		}
-	}
-
-	if err := e.messageRepo.MarkMessagesProcessed(ctx, sess.messageIDs(), interaction.ID); err != nil {
-		return fmt.Errorf("mark messages processed: %w", err)
-	}
-
+	// Note: MarkMessagesProcessed is NOT called here. The consumer's
+	// InteractionRecorder.HandleEvent marks the messages processed inside
+	// the same tx as the interaction insert — gives us atomicity between
+	// the interaction row and the telegram_message.interaction_id FK
+	// (plan Decision 10).
 	return nil
 }
 
@@ -381,7 +369,10 @@ func (e *AggregationEngine) publishForSession(
 	}
 
 	// Build payload. Kind-specific type so events.Marshal validates the
-	// kind↔payload pairing.
+	// kind↔payload pairing. MessageIDs carries the telegram_message UUIDs
+	// so the consumer can mark them processed inside the interaction-insert
+	// tx (plan Decision 10).
+	msgIDs := sess.messageIDs()
 	var raw []byte
 	var marshalErr error
 	switch kind {
@@ -394,6 +385,7 @@ func (e *AggregationEngine) publishForSession(
 			Description:       description,
 			ExternalMessageID: sourceRef,
 			Direction:         payloadDirection,
+			MessageIDs:        msgIDs,
 		})
 		raw, marshalErr = msg, err
 	case events.KindMessageSent:
@@ -405,6 +397,7 @@ func (e *AggregationEngine) publishForSession(
 			Description:       description,
 			ExternalMessageID: sourceRef,
 			Direction:         payloadDirection,
+			MessageIDs:        msgIDs,
 		})
 		raw, marshalErr = msg, err
 	}

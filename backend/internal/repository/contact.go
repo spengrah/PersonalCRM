@@ -347,6 +347,17 @@ func (r *ContactRepository) UpdateContactOutreachAt(ctx context.Context, id uuid
 	})
 }
 
+// UpdateContactOutreachAtTx is the tx-threaded variant of UpdateContactOutreachAt.
+// Used by InteractionRecorder / ContactService.RecordInteractionTx so the
+// cadence UPDATE shares the caller's tx — spec §3.4.1 atomicity contract.
+func (r *ContactRepository) UpdateContactOutreachAtTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, outreachAt time.Time, isManual bool) error {
+	return db.New(tx).UpdateContactOutreachAt(ctx, db.UpdateContactOutreachAtParams{
+		ID:         uuidToPgUUID(id),
+		OutreachAt: pgtype.Timestamptz{Time: outreachAt, Valid: true},
+		IsManual:   isManual,
+	})
+}
+
 // UpdateContactResponseFields updates last_contacted, last_interaction_at, last_response_at, contact_by (for inbound interactions)
 func (r *ContactRepository) UpdateContactResponseFields(ctx context.Context, id uuid.UUID, occurredAt time.Time, contactBy *time.Time, isManual bool) error {
 	return r.queries.UpdateContactResponseFields(ctx, db.UpdateContactResponseFieldsParams{
@@ -357,9 +368,29 @@ func (r *ContactRepository) UpdateContactResponseFields(ctx context.Context, id 
 	})
 }
 
+// UpdateContactResponseFieldsTx is the tx-threaded variant of UpdateContactResponseFields.
+func (r *ContactRepository) UpdateContactResponseFieldsTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, occurredAt time.Time, contactBy *time.Time, isManual bool) error {
+	return db.New(tx).UpdateContactResponseFields(ctx, db.UpdateContactResponseFieldsParams{
+		ID:         uuidToPgUUID(id),
+		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
+		ContactBy:  timeToPgDate(contactBy),
+		IsManual:   isManual,
+	})
+}
+
 // UpdateContactMutualFields updates all direction fields + last_contacted + contact_by (for mutual interactions)
 func (r *ContactRepository) UpdateContactMutualFields(ctx context.Context, id uuid.UUID, occurredAt time.Time, contactBy *time.Time, isManual bool) error {
 	return r.queries.UpdateContactMutualFields(ctx, db.UpdateContactMutualFieldsParams{
+		ID:         uuidToPgUUID(id),
+		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
+		ContactBy:  timeToPgDate(contactBy),
+		IsManual:   isManual,
+	})
+}
+
+// UpdateContactMutualFieldsTx is the tx-threaded variant of UpdateContactMutualFields.
+func (r *ContactRepository) UpdateContactMutualFieldsTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, occurredAt time.Time, contactBy *time.Time, isManual bool) error {
+	return db.New(tx).UpdateContactMutualFields(ctx, db.UpdateContactMutualFieldsParams{
 		ID:         uuidToPgUUID(id),
 		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
 		ContactBy:  timeToPgDate(contactBy),

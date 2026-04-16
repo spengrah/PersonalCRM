@@ -15,7 +15,7 @@ import (
 )
 
 func TestCalendarSyncProvider_Config(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	config := provider.Config()
 
 	assert.Equal(t, CalendarSourceName, config.Name)
@@ -132,7 +132,7 @@ func TestStrPtrIfNotEmpty(t *testing.T) {
 }
 
 func TestCalendarSyncProvider_GetUserResponse(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	tests := []struct {
@@ -202,7 +202,7 @@ func TestCalendarSyncProvider_GetUserResponse(t *testing.T) {
 }
 
 func TestCalendarSyncProvider_BuildAttendeeList(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -277,7 +277,7 @@ func TestProcessEvent_SkipsAllDayEvents(t *testing.T) {
 
 // TestProcessEvent_SkipsDeclinedEvents verifies that declined events are skipped
 func TestProcessEvent_SkipsDeclinedEvents(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -346,7 +346,7 @@ func TestMatchAttendees_SkipsEmptyEmails(t *testing.T) {
 
 // TestBuildAttendeeList_EmptyAttendees verifies behavior with no attendees but an organizer
 func TestBuildAttendeeList_EmptyAttendees(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -388,7 +388,7 @@ func TestEventStatusMapping(t *testing.T) {
 
 // TestUserResponse_MultipleAttendees verifies correct user identification among many attendees
 func TestUserResponse_MultipleAttendees(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 
 	tests := []struct {
 		name      string
@@ -442,7 +442,7 @@ func TestUserResponse_MultipleAttendees(t *testing.T) {
 
 // TestBuildAttendeeList_OrganizerIdentification verifies organizer is correctly flagged
 func TestBuildAttendeeList_OrganizerIdentification(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -483,7 +483,7 @@ func TestBuildAttendeeList_OrganizerIdentification(t *testing.T) {
 // TestBuildAttendeeList_OrganizerNotInAttendees verifies organizer is added when not in attendees list
 // This is the fix for issue #183 - organizers who aren't also attendees should still be matched
 func TestBuildAttendeeList_OrganizerNotInAttendees(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	// Event where organizer (Eugene) is NOT in the attendees list
@@ -525,7 +525,7 @@ func TestBuildAttendeeList_OrganizerNotInAttendees(t *testing.T) {
 
 // TestBuildAttendeeList_OrganizerAlreadyInAttendees verifies organizer is not duplicated
 func TestBuildAttendeeList_OrganizerAlreadyInAttendees(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	// Event where organizer IS in the attendees list
@@ -565,7 +565,7 @@ func TestBuildAttendeeList_OrganizerAlreadyInAttendees(t *testing.T) {
 
 // TestBuildAttendeeList_OrganizerIsSelf verifies organizer is not added when they are self
 func TestBuildAttendeeList_OrganizerIsSelf(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	// User is the organizer but not in attendees list
@@ -592,7 +592,7 @@ func TestBuildAttendeeList_OrganizerIsSelf(t *testing.T) {
 
 // TestBuildAttendeeList_OrganizerEmailCaseInsensitive verifies case-insensitive duplicate detection
 func TestBuildAttendeeList_OrganizerEmailCaseInsensitive(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	// Organizer email has different case than in attendees list
@@ -618,7 +618,7 @@ func TestBuildAttendeeList_OrganizerEmailCaseInsensitive(t *testing.T) {
 
 // TestBuildAttendeeList_NoOrganizer verifies behavior when organizer is nil
 func TestBuildAttendeeList_NoOrganizer(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -641,7 +641,7 @@ func TestBuildAttendeeList_NoOrganizer(t *testing.T) {
 
 // TestBuildAttendeeList_OrganizerEmptyEmail verifies behavior when organizer has empty email
 func TestBuildAttendeeList_OrganizerEmptyEmail(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -668,7 +668,7 @@ func TestBuildAttendeeList_OrganizerEmptyEmail(t *testing.T) {
 // TestBuildAttendeeList_OrganizerSelfFlag verifies organizer is not added when Organizer.Self is true
 // even if organizer email differs from accountID (handles aliases and delegated calendars)
 func TestBuildAttendeeList_OrganizerSelfFlag(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	// Organizer uses an alias email but Self flag is true
@@ -837,9 +837,12 @@ func TestMatchAttendees_HandlesIdentityServiceError(t *testing.T) {
 	assert.Equal(t, contactID, matchedIDs[0])
 }
 
-// TestUpdateLastContactedForPastEvents_UpdatesContactsAndMarksEvents tests the full update flow
-// This tests the ACTUAL CalendarSyncProvider.updateLastContactedForPastEvents() method
-func TestUpdateLastContactedForPastEvents_UpdatesContactsAndMarksEvents(t *testing.T) {
+// TestUpdateLastContactedForPastEvents_NilBus_SkipsEventsWithoutMarking asserts
+// the post-cutover behavior: when eventBus is nil (mode=off/shadow), the
+// loop lists past events but skips the publish/mark block per event. This
+// exercises the real plan Decision 6 wiring — rolling back to off/shadow
+// does NOT restore the direct path (spec §3.9).
+func TestUpdateLastContactedForPastEvents_NilBus_SkipsEventsWithoutMarking(t *testing.T) {
 	ctx := context.Background()
 
 	eventID := uuid.New()
@@ -858,74 +861,19 @@ func TestUpdateLastContactedForPastEvents_UpdatesContactsAndMarksEvents(t *testi
 	}
 
 	mockContactRepo := &mockContactRepo{}
-	mockRecorder := &mockInteractionRecorder{}
 
-	// Use newTestProvider to create the REAL CalendarSyncProvider with mocked deps
+	// newTestProvider leaves eventBus nil — matches mode=off/shadow wiring.
 	provider := newTestProvider(mockCalRepo, mockContactRepo, nil)
-	provider.interactionRecorder = mockRecorder
 
-	// Call the REAL updateLastContactedForPastEvents method
 	err := provider.updateLastContactedForPastEvents(ctx)
-
 	assert.NoError(t, err)
 
-	// Verify calendar repo was called to list past events
+	// Listed past events but skipped the publish + mark block (no bus).
 	assert.True(t, mockCalRepo.listPastCalled)
-
-	// Verify interactions were recorded for each contact
-	assert.True(t, mockRecorder.recordCalled)
-	assert.Len(t, mockRecorder.recordRequests, 2)
-
-	recordedContactIDs := make([]uuid.UUID, len(mockRecorder.recordRequests))
-	for i, req := range mockRecorder.recordRequests {
-		recordedContactIDs[i] = req.ContactID
-		assert.Equal(t, repository.InteractionSourceGCal, req.Source)
-		assert.Equal(t, eventEndTime, req.OccurredAt)
-	}
-	assert.Contains(t, recordedContactIDs, contactID1)
-	assert.Contains(t, recordedContactIDs, contactID2)
-
-	// Verify event was marked as updated
-	assert.True(t, mockCalRepo.markUpdatedCalled)
-	assert.Len(t, mockCalRepo.markUpdatedIDs, 1)
-	assert.Equal(t, eventID, mockCalRepo.markUpdatedIDs[0])
-}
-
-// TestUpdateLastContactedForPastEvents_HandlesMultipleEvents tests processing multiple events
-func TestUpdateLastContactedForPastEvents_HandlesMultipleEvents(t *testing.T) {
-	ctx := context.Background()
-
-	event1ID := uuid.New()
-	event2ID := uuid.New()
-	contact1 := uuid.New()
-	contact2 := uuid.New()
-
-	mockCalRepo := &mockCalendarRepo{
-		listPastResult: []repository.CalendarEvent{
-			{
-				ID:                event1ID,
-				EndTime:           accelerated.GetCurrentTime().Add(-2 * time.Hour),
-				MatchedContactIDs: []uuid.UUID{contact1},
-			},
-			{
-				ID:                event2ID,
-				EndTime:           accelerated.GetCurrentTime().Add(-1 * time.Hour),
-				MatchedContactIDs: []uuid.UUID{contact2},
-			},
-		},
-	}
-
-	mockContactRepo := &mockContactRepo{}
-	mockRecorder := &mockInteractionRecorder{}
-
-	provider := newTestProvider(mockCalRepo, mockContactRepo, nil)
-	provider.interactionRecorder = mockRecorder
-
-	err := provider.updateLastContactedForPastEvents(ctx)
-
-	assert.NoError(t, err)
-	assert.Len(t, mockCalRepo.markUpdatedIDs, 2)
-	assert.Len(t, mockRecorder.recordRequests, 2)
+	assert.False(t, mockCalRepo.markUpdatedCalled,
+		"nil eventBus must NOT mark events processed — next tick with a real bus retries them")
+	_ = contactID1
+	_ = contactID2
 }
 
 // TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate tests the empty case
@@ -937,16 +885,13 @@ func TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate(t *testing.T) {
 	}
 
 	mockContactRepo := &mockContactRepo{}
-	mockRecorder := &mockInteractionRecorder{}
 
 	provider := newTestProvider(mockCalRepo, mockContactRepo, nil)
-	provider.interactionRecorder = mockRecorder
 
 	err := provider.updateLastContactedForPastEvents(ctx)
 
 	assert.NoError(t, err)
 	assert.True(t, mockCalRepo.listPastCalled)
-	assert.False(t, mockRecorder.recordCalled)     // No contacts to update
 	assert.False(t, mockCalRepo.markUpdatedCalled) // No events to mark
 }
 
@@ -1903,7 +1848,7 @@ func TestStoreUnmatchedAttendee_PreservesExistingDisplayName(t *testing.T) {
 
 // TestProcessEvent_OnlyAcceptsAcceptedEvents verifies that only accepted events are processed
 func TestProcessEvent_OnlyAcceptsAcceptedEvents(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	tests := []struct {
@@ -1949,7 +1894,7 @@ func TestProcessEvent_OnlyAcceptsAcceptedEvents(t *testing.T) {
 
 // TestProcessEvent_SkipsEventsWhereUserNotAttendee verifies events without user are skipped
 func TestProcessEvent_SkipsEventsWhereUserNotAttendee(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{

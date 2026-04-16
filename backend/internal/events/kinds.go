@@ -80,6 +80,13 @@ type MessageReceivedPayload struct {
 	Description       *string    `json:"description,omitempty"`
 	ExternalMessageID string     `json:"external_message_id,omitempty"`
 	Direction         string     `json:"direction,omitempty"` // optional override; empty = kind default "inbound"
+	// MessageIDs carries the underlying telegram_message UUIDs that make up
+	// this aggregated session. Populated by the Telegram aggregation
+	// publisher in cutover mode so the consumer can mark the rows
+	// processed (telegram_message.interaction_id FK) inside the same tx
+	// that inserts the interaction row (spec §3.4.1; plan Decision 10).
+	// Non-telegram publishers leave this empty.
+	MessageIDs []uuid.UUID `json:"message_ids,omitempty"`
 }
 
 // MessageSentPayload is the payload for KindMessageSent.
@@ -95,14 +102,24 @@ type MessageSentPayload struct {
 	Description       *string    `json:"description,omitempty"`
 	ExternalMessageID string     `json:"external_message_id,omitempty"`
 	Direction         string     `json:"direction,omitempty"` // optional override; empty = kind default "outbound"
+	// MessageIDs carries the underlying telegram_message UUIDs — see
+	// MessageReceivedPayload.MessageIDs for full docs.
+	MessageIDs []uuid.UUID `json:"message_ids,omitempty"`
 }
 
 // CalendarAttendedPayload is the payload for KindCalendarAttended.
+//
+// Title carries the calendar event's summary/title so the consumer can
+// populate interaction.description. Pre-cutover (PR 5) the direct-path
+// RecordInteraction call passed the title inline; post-cutover the
+// consumer is the sole writer and needs the title via the payload.
+// Optional (nil when the calendar event has no title).
 type CalendarAttendedPayload struct {
 	Version    int       `json:"version"`
 	ContactID  uuid.UUID `json:"contact_id"`
 	EventID    string    `json:"event_id"` // GCal event id
 	OccurredAt time.Time `json:"occurred_at"`
+	Title      *string   `json:"title,omitempty"`
 }
 
 // CalendarDeclinedPayload is the payload for KindCalendarDeclined.

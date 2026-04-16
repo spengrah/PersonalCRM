@@ -76,11 +76,6 @@ type contactRepoInterface interface {
 	FindSimilarContacts(ctx context.Context, name string, threshold float64, limit int32) ([]repository.ContactMatch, error)
 }
 
-// interactionRecorder defines the method for recording interactions (satisfied by ContactService)
-type interactionRecorder interface {
-	RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error)
-}
-
 // identityServiceInterface defines the methods needed from identity service (for testability)
 type identityServiceInterface interface {
 	MatchOrCreate(ctx context.Context, req service.MatchRequest) (*service.MatchResult, error)
@@ -101,30 +96,33 @@ type EventContext struct {
 	HtmlLink  string    // URL to view the event in Google Calendar
 }
 
-// CalendarSyncProvider implements SyncProvider for Google Calendar
+// CalendarSyncProvider implements SyncProvider for Google Calendar.
+//
+// Post-PR-6 (cutover): past-event interaction writes happen via the
+// event bus — updateLastContactedForPastEvents publishes calendar.attended
+// per (event, contact) pair and the async consumer writes the
+// interaction rows.
 type CalendarSyncProvider struct {
 	oauthService        *OAuthService
 	calendarRepo        calendarRepoInterface
 	contactRepo         contactRepoInterface
 	identityService     identityServiceInterface
 	externalContactRepo externalContactRepoInterface
-	interactionRecorder interactionRecorder
-	// eventBus is the shadow-mode event bus. Nil when
-	// EVENT_BUS_INTERACTION_MODE=off; non-nil triggers sibling calendar.attended
-	// publishes after successful RecordInteraction (plan Step 5).
+	// eventBus is required in cutover mode. Nil when mode=off/shadow
+	// post-cutover — past-event publishes are skipped and
+	// last_contacted-from-calendar updates do NOT happen (spec §3.9).
 	eventBus *events.Bus
 }
 
 // NewCalendarSyncProvider creates a new Google Calendar sync provider.
-// eventBus may be nil; non-nil enables shadow-mode sibling publishes of
-// calendar.attended alongside the direct-path RecordInteraction.
+// eventBus is required in cutover (default post-PR-6). Nil disables
+// past-event interaction writes entirely.
 func NewCalendarSyncProvider(
 	oauthService *OAuthService,
 	calendarRepo *repository.CalendarEventRepository,
 	contactRepo *repository.ContactRepository,
 	identityService *service.IdentityService,
 	externalContactRepo *repository.ExternalContactRepository,
-	interactionRecorder interactionRecorder,
 	eventBus *events.Bus,
 ) *CalendarSyncProvider {
 	return &CalendarSyncProvider{
@@ -133,7 +131,6 @@ func NewCalendarSyncProvider(
 		contactRepo:         contactRepo,
 		identityService:     identityService,
 		externalContactRepo: externalContactRepo,
-		interactionRecorder: interactionRecorder,
 		eventBus:            eventBus,
 	}
 }
@@ -717,67 +714,66 @@ func (p *CalendarSyncProvider) storeUnmatchedAttendee(
 	return nil
 }
 
-// updateLastContactedForPastEvents updates last_contacted for contacts in past events
+// updateLastContactedForPastEvents publishes calendar.attended events for
+// past calendar events. In cutover mode the async InteractionRecorder
+// consumer writes the interaction rows from those events.
+//
+// Scheduler bookkeeping: MarkLastContactedUpdated fires ONLY when every
+// contact pair successfully published. If any Publish fails, the event
+// stays unprocessed and the next tick re-publishes the remaining pairs —
+// the per-(event, contact) SourceID ensures already-published pairs no-op
+// via the event table's unique index (plan Decision 11).
 func (p *CalendarSyncProvider) updateLastContactedForPastEvents(ctx context.Context) error {
 	now := accelerated.GetCurrentTime()
 
-	// Fetch past events that need updating (limit to 100 per run)
 	events, err := p.calendarRepo.ListPastEventsNeedingUpdate(ctx, now, 100)
 	if err != nil {
 		return fmt.Errorf("list past events: %w", err)
 	}
 
 	for _, event := range events {
-		// Record interaction for each matched contact
+		if p.eventBus == nil {
+			logger.Warn().
+				Str("eventId", event.ID.String()).
+				Msg("calendar: eventBus not configured; skipping past-event publish (mode=off/shadow post-cutover)")
+			continue
+		}
 		eventIDStr := event.ID.String()
+		allPublished := true
 		for _, contactID := range event.MatchedContactIDs {
-			_, err := p.interactionRecorder.RecordInteraction(ctx, repository.RecordInteractionRequest{
-				ContactID:   contactID,
-				Source:      repository.InteractionSourceGCal,
-				SourceRef:   &eventIDStr,
-				OccurredAt:  event.EndTime,
-				Description: event.Title,
-			})
-			if err != nil {
-				logger.Warn().
-					Err(err).
+			if pubErr := publishCalendarAttended(ctx, p.eventBus, contactID, eventIDStr, event.EndTime, event.Title); pubErr != nil {
+				logger.Warn().Err(pubErr).
 					Str("contactId", contactID.String()).
-					Str("eventId", event.ID.String()).
-					Msg("failed to record interaction from calendar event")
+					Str("eventId", eventIDStr).
+					Msg("calendar: publish calendar.attended failed")
+				allPublished = false
 				continue
 			}
-
-			// Shadow-mode sibling publish (plan Step 5). Failures are
-			// logged and discarded — direct-path write is authoritative.
-			if p.eventBus != nil {
-				if pubErr := publishCalendarAttended(ctx, p.eventBus, contactID, eventIDStr, event.EndTime); pubErr != nil {
-					logger.Warn().Err(pubErr).
-						Str("contactId", contactID.String()).
-						Str("eventId", eventIDStr).
-						Msg("calendar: shadow publish failed")
-				}
-			}
-
 			logger.Debug().
 				Str("contactId", contactID.String()).
 				Str("eventTitle", ptrToStr(event.Title)).
 				Time("endTime", event.EndTime).
-				Msg("recorded interaction from calendar event")
+				Msg("published calendar.attended for past event")
 		}
 
-		// Mark event as processed
-		if err := p.calendarRepo.MarkLastContactedUpdated(ctx, event.ID); err != nil {
-			logger.Warn().
-				Err(err).
-				Str("eventId", event.ID.String()).
-				Msg("failed to mark event as processed")
+		// Only mark the event processed when every contact pair published.
+		// On partial failure the next tick re-publishes — already-published
+		// pairs no-op via the (source, source_id) unique index (plan
+		// Decision 11).
+		if allPublished {
+			if err := p.calendarRepo.MarkLastContactedUpdated(ctx, event.ID); err != nil {
+				logger.Warn().
+					Err(err).
+					Str("eventId", event.ID.String()).
+					Msg("failed to mark event as processed")
+			}
 		}
 	}
 
 	if len(events) > 0 {
 		logger.Info().
 			Int("eventsProcessed", len(events)).
-			Msg("updated last_contacted from past calendar events")
+			Msg("published calendar.attended for past events")
 	}
 
 	return nil

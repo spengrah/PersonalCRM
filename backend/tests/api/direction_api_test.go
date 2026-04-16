@@ -48,12 +48,13 @@ func setupDirectionAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactTask
 	require.NoError(t, err)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
-	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
-	contactHandler := handlers.NewContactHandler(contactService, nil)
-	interactionHandler := handlers.NewInteractionHandler(contactService, interactionRepo, nil)
+
+	cfg2 := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
+	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg2)
+	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
+	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 
 	// Create a minimal contact task service for the handler (no real Todoist)
 	contactTaskService := service.NewContactTaskServiceForTest(contactTaskRepo, contactRepo, nil, "http://localhost:3000")
