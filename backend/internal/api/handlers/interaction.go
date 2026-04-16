@@ -11,6 +11,7 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -25,13 +26,24 @@ type interactionRecorder interface {
 type InteractionHandler struct {
 	recorder        interactionRecorder
 	interactionRepo *repository.InteractionRepository
+	// shadow runs the PR 5 shadow-mode publish + inline-consumer flow
+	// after the direct-path RecordInteraction commits. Nil in
+	// EVENT_BUS_INTERACTION_MODE=off (default) — zero overhead.
+	shadow *service.ManualInteractionShadow
 }
 
-// NewInteractionHandler creates a new interaction handler
-func NewInteractionHandler(recorder interactionRecorder, interactionRepo *repository.InteractionRepository) *InteractionHandler {
+// NewInteractionHandler creates a new interaction handler. shadow may be
+// nil; non-nil enables the shadow-mode publish + inline invocation on
+// successful POST /contacts/:id/interactions.
+func NewInteractionHandler(
+	recorder interactionRecorder,
+	interactionRepo *repository.InteractionRepository,
+	shadow *service.ManualInteractionShadow,
+) *InteractionHandler {
 	return &InteractionHandler{
 		recorder:        recorder,
 		interactionRepo: interactionRepo,
+		shadow:          shadow,
 	}
 }
 
@@ -198,6 +210,25 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 		}
 		api.SendInternalError(c, "Failed to create interaction")
 		return
+	}
+
+	// Shadow-mode publish + inline consumer (plan Decision 7). Runs AFTER
+	// the direct path committed so any failure here does not affect the
+	// persisted interaction row. Use the VALUES FROM THE RETURNED ROW
+	// (not the request params) so dedup-hits from RecordInteraction — which
+	// may return an older row with a different Direction / OccurredAt —
+	// don't manufacture false direct-vs-consumer mismatches in the
+	// divergence query.
+	//
+	// Double nil-guard (shadow + interaction) matches the PATCH handler's
+	// convention in contact.go and avoids a panic if RecordInteraction
+	// ever violates its (value, nil) contract.
+	if h.shadow != nil && interaction != nil {
+		desc := ""
+		if interaction.Description != nil {
+			desc = *interaction.Description
+		}
+		h.shadow.Run(c.Request.Context(), interaction.ContactID, interaction.Direction, interaction.OccurredAt, desc)
 	}
 
 	api.SendSuccess(c, http.StatusCreated, interactionToResponse(interaction), nil)

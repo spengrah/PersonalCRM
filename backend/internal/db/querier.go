@@ -58,6 +58,9 @@ type Querier interface {
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error)
+	// Used by integration tests to assert exact row counts per writer. No
+	// deleted_at filter — append-only table.
+	CountShadowObservationsByWriter(ctx context.Context, writer string) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountTelegramMessagesByChat(ctx context.Context) ([]*CountTelegramMessagesByChatRow, error)
 	CountTelegramMessagesByPeer(ctx context.Context) ([]*CountTelegramMessagesByPeerRow, error)
@@ -129,6 +132,7 @@ type Querier interface {
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
 	DeleteTelegramChannelState(ctx context.Context, channelID int64) error
 	DeleteTelegramChatConfig(ctx context.Context, telegramChatID int64) error
+	DeleteTelegramMessagesByMessageIDs(ctx context.Context, dollar_1 []int32) (int64, error)
 	DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
 	DeleteTelegramSession(ctx context.Context) error
 	DeleteTelegramUpdateState(ctx context.Context, userID int64) error
@@ -176,6 +180,16 @@ type Querier interface {
 	FindInteractionBySourceRef(ctx context.Context, arg FindInteractionBySourceRefParams) (*Interaction, error)
 	// Find an existing manual interaction within a time window (for manual deduplication)
 	FindInteractionInWindow(ctx context.Context, arg FindInteractionInWindowParams) (*Interaction, error)
+	// Manual (no source_ref) variant: matches on (source, contact_id) and the
+	// occurred_at truncated to the second. The 30-minute dedup window of the
+	// direct path guarantees a single row per contact per minute-level ts.
+	FindMatchingDirectWriteByManual(ctx context.Context, arg FindMatchingDirectWriteByManualParams) (*EventShadowObservation, error)
+	// Fetches the most recent direct-path row matching the given
+	// (source, source_ref, contact_id). Used by the inline divergence logger
+	// (Decision 14 Part A) when the consumer commits a writer='consumer' row
+	// and wants to compare against the peer direct-path row. Returns the most
+	// recent fresh-write (kind = 'direct_record') row when multiple exist.
+	FindMatchingDirectWriteBySourceRef(ctx context.Context, arg FindMatchingDirectWriteBySourceRefParams) (*EventShadowObservation, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	// Find a pending follow-up task for a contact (kind='follow_up', state='managed')
 	FindPendingFollowUp(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error)
@@ -185,6 +199,27 @@ type Querier interface {
 	// Find the most recent telegram interaction for a contact in a specific chat
 	// with a given direction. Used for incremental coalescing.
 	FindRecentTelegramInteraction(ctx context.Context, arg FindRecentTelegramInteractionParams) (*Interaction, error)
+	// Post-bake divergence query for manual (no-source_ref) kind. Joins on
+	// (source, contact_id, ts-second). Same semantics as the ref-bearing
+	// variant: consumer side includes replay=true (consumer "observed" the
+	// direct-path row via FindInWindow dedup).
+	FindShadowDivergencesManual(ctx context.Context, arg FindShadowDivergencesManualParams) ([]*FindShadowDivergencesManualRow, error)
+	// Post-bake divergence query for ref-bearing kinds. FULL OUTER JOIN of
+	// direct fresh-writes vs ALL consumer observations (including replay=true,
+	// which is the expected shadow-mode state: direct wrote first, consumer
+	// saw the existing row and early-returned). A non-empty result means one
+	// or more interactions disagreed between the two paths (direction
+	// mismatch, occurred_at mismatch, or one-side-only). Parameters bound the
+	// observation time range so the bake-window evidence is reproducible.
+	//
+	// Direct side: only replay=false (fresh writes). Direct-path dedupe hits
+	// (replay=true) are excluded because they're re-observations of rows the
+	// consumer already accounted for at their fresh-write time.
+	//
+	// Consumer side: BOTH replay=true and replay=false are included — the
+	// consumer "observed" the event either way; replay=true just means it
+	// found the direct-path row in the dedupe check.
+	FindShadowDivergencesRefBearing(ctx context.Context, arg FindShadowDivergencesRefBearingParams) ([]*FindShadowDivergencesRefBearingRow, error)
 	FindSimilarContacts(ctx context.Context, arg FindSimilarContactsParams) ([]*FindSimilarContactsRow, error)
 	// Finds similar contacts for multiple candidate names in a single batch query.
 	// Uses UNNEST to expand input arrays and LATERAL join to find matches per candidate.
@@ -263,6 +298,15 @@ type Querier interface {
 	// sqlc.narg('id') is NULL, the DB generates a fresh UUID via
 	// gen_random_uuid().
 	InsertEvent(ctx context.Context, arg InsertEventParams) (*Event, error)
+	// Event shadow observation queries (spec §3.8, PR 5). Append-only log of
+	// what each write path (direct vs consumer) produced during shadow-mode
+	// bake. The post-bake divergence query FULL OUTER JOINs direct+consumer
+	// rows on (source, source_ref) to surface drift.
+	// Inserts an observation row and returns it. No ON CONFLICT — each call
+	// produces a new row. The event_id FK may be NULL for direct-path rows
+	// that fired without a paired event envelope (e.g., ExtendInteraction,
+	// PromoteInteractionToMutual).
+	InsertEventShadowObservation(ctx context.Context, arg InsertEventShadowObservationParams) (*EventShadowObservation, error)
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)

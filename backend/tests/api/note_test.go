@@ -54,7 +54,7 @@ func setupNoteTestRouter() (*gin.Engine, func()) {
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 
 	// Set up handlers
-	contactHandler := handlers.NewContactHandler(contactService)
+	contactHandler := handlers.NewContactHandler(contactService, nil)
 	noteHandler := handlers.NewNoteHandler(noteService)
 
 	router := gin.New()

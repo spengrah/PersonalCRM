@@ -15,7 +15,7 @@ import (
 )
 
 func TestCalendarSyncProvider_Config(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	config := provider.Config()
 
 	assert.Equal(t, CalendarSourceName, config.Name)
@@ -132,7 +132,7 @@ func TestStrPtrIfNotEmpty(t *testing.T) {
 }
 
 func TestCalendarSyncProvider_GetUserResponse(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	tests := []struct {
@@ -202,7 +202,7 @@ func TestCalendarSyncProvider_GetUserResponse(t *testing.T) {
 }
 
 func TestCalendarSyncProvider_BuildAttendeeList(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -277,7 +277,7 @@ func TestProcessEvent_SkipsAllDayEvents(t *testing.T) {
 
 // TestProcessEvent_SkipsDeclinedEvents verifies that declined events are skipped
 func TestProcessEvent_SkipsDeclinedEvents(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -346,7 +346,7 @@ func TestMatchAttendees_SkipsEmptyEmails(t *testing.T) {
 
 // TestBuildAttendeeList_EmptyAttendees verifies behavior with no attendees but an organizer
 func TestBuildAttendeeList_EmptyAttendees(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -388,7 +388,7 @@ func TestEventStatusMapping(t *testing.T) {
 
 // TestUserResponse_MultipleAttendees verifies correct user identification among many attendees
 func TestUserResponse_MultipleAttendees(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 
 	tests := []struct {
 		name      string
@@ -442,7 +442,7 @@ func TestUserResponse_MultipleAttendees(t *testing.T) {
 
 // TestBuildAttendeeList_OrganizerIdentification verifies organizer is correctly flagged
 func TestBuildAttendeeList_OrganizerIdentification(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -483,7 +483,7 @@ func TestBuildAttendeeList_OrganizerIdentification(t *testing.T) {
 // TestBuildAttendeeList_OrganizerNotInAttendees verifies organizer is added when not in attendees list
 // This is the fix for issue #183 - organizers who aren't also attendees should still be matched
 func TestBuildAttendeeList_OrganizerNotInAttendees(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	// Event where organizer (Eugene) is NOT in the attendees list
@@ -525,7 +525,7 @@ func TestBuildAttendeeList_OrganizerNotInAttendees(t *testing.T) {
 
 // TestBuildAttendeeList_OrganizerAlreadyInAttendees verifies organizer is not duplicated
 func TestBuildAttendeeList_OrganizerAlreadyInAttendees(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	// Event where organizer IS in the attendees list
@@ -565,7 +565,7 @@ func TestBuildAttendeeList_OrganizerAlreadyInAttendees(t *testing.T) {
 
 // TestBuildAttendeeList_OrganizerIsSelf verifies organizer is not added when they are self
 func TestBuildAttendeeList_OrganizerIsSelf(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	// User is the organizer but not in attendees list
@@ -592,7 +592,7 @@ func TestBuildAttendeeList_OrganizerIsSelf(t *testing.T) {
 
 // TestBuildAttendeeList_OrganizerEmailCaseInsensitive verifies case-insensitive duplicate detection
 func TestBuildAttendeeList_OrganizerEmailCaseInsensitive(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	// Organizer email has different case than in attendees list
@@ -618,7 +618,7 @@ func TestBuildAttendeeList_OrganizerEmailCaseInsensitive(t *testing.T) {
 
 // TestBuildAttendeeList_NoOrganizer verifies behavior when organizer is nil
 func TestBuildAttendeeList_NoOrganizer(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -641,7 +641,7 @@ func TestBuildAttendeeList_NoOrganizer(t *testing.T) {
 
 // TestBuildAttendeeList_OrganizerEmptyEmail verifies behavior when organizer has empty email
 func TestBuildAttendeeList_OrganizerEmptyEmail(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{
@@ -668,7 +668,7 @@ func TestBuildAttendeeList_OrganizerEmptyEmail(t *testing.T) {
 // TestBuildAttendeeList_OrganizerSelfFlag verifies organizer is not added when Organizer.Self is true
 // even if organizer email differs from accountID (handles aliases and delegated calendars)
 func TestBuildAttendeeList_OrganizerSelfFlag(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	// Organizer uses an alias email but Self flag is true
@@ -1903,7 +1903,7 @@ func TestStoreUnmatchedAttendee_PreservesExistingDisplayName(t *testing.T) {
 
 // TestProcessEvent_OnlyAcceptsAcceptedEvents verifies that only accepted events are processed
 func TestProcessEvent_OnlyAcceptsAcceptedEvents(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	tests := []struct {
@@ -1949,7 +1949,7 @@ func TestProcessEvent_OnlyAcceptsAcceptedEvents(t *testing.T) {
 
 // TestProcessEvent_SkipsEventsWhereUserNotAttendee verifies events without user are skipped
 func TestProcessEvent_SkipsEventsWhereUserNotAttendee(t *testing.T) {
-	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
+	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
 	event := &calendar.Event{

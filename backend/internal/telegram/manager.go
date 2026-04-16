@@ -11,6 +11,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/crypto"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -93,12 +94,14 @@ func NewTelegramManager(
 	recorder interactionRecorder,
 	promoter interactionPromoter,
 	extender interactionExtender,
+	eventBus *events.Bus,
 ) *TelegramManager {
 	peerMatcher := NewPeerMatcher(identityService, messageRepo, externalContactRepo, enricher, cfg.DiscoveryMinMessages)
 	aggregationEngine := NewAggregationEngine(
 		cfg.BurstWindowHours, cfg.ReplyBridgeHours,
 		messageRepo, interactionRepo,
 		recorder, promoter, extender,
+		eventBus,
 	)
 
 	m := &TelegramManager{

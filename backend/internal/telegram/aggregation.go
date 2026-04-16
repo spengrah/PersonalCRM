@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -35,9 +36,15 @@ type AggregationEngine struct {
 	recorder         interactionRecorder
 	promoter         interactionPromoter
 	extender         interactionExtender
+	// eventBus is the shadow-mode event bus. Nil when
+	// EVENT_BUS_INTERACTION_MODE=off; a non-nil bus indicates publish-on-
+	// success of createInteractionForSession (plan Decision 6).
+	eventBus *events.Bus
 }
 
-// NewAggregationEngine creates a new aggregation engine.
+// NewAggregationEngine creates a new aggregation engine. eventBus may be
+// nil; non-nil enables shadow-mode sibling publishes of message.received /
+// message.sent alongside the direct-path RecordInteraction.
 func NewAggregationEngine(
 	burstWindowHours, replyBridgeHours int,
 	messageRepo *repository.TelegramMessageRepository,
@@ -45,6 +52,7 @@ func NewAggregationEngine(
 	recorder interactionRecorder,
 	promoter interactionPromoter,
 	extender interactionExtender,
+	eventBus *events.Bus,
 ) *AggregationEngine {
 	return &AggregationEngine{
 		burstWindowHours: burstWindowHours,
@@ -54,6 +62,7 @@ func NewAggregationEngine(
 		recorder:         recorder,
 		promoter:         promoter,
 		extender:         extender,
+		eventBus:         eventBus,
 	}
 }
 
@@ -312,11 +321,105 @@ func (e *AggregationEngine) createInteractionForSession(ctx context.Context, con
 		return fmt.Errorf("record interaction: %w", err)
 	}
 
+	// Shadow-mode sibling publish (plan Decision 6). Failures are logged
+	// and discarded — the direct-path write is authoritative. Runs before
+	// MarkMessagesProcessed so the event table reflects what produced the
+	// interaction row.
+	if e.eventBus != nil {
+		if pubErr := e.publishForSession(ctx, contactID, sess, sourceRef, &desc); pubErr != nil {
+			log.Warn().Err(pubErr).
+				Str("contact_id", contactID.String()).
+				Str("source_ref", sourceRef).
+				Str("direction", sess.direction).
+				Msg("telegram: shadow publish failed")
+		}
+	}
+
 	if err := e.messageRepo.MarkMessagesProcessed(ctx, sess.messageIDs(), interaction.ID); err != nil {
 		return fmt.Errorf("mark messages processed: %w", err)
 	}
 
 	return nil
+}
+
+// publishForSession emits the message.received / message.sent event
+// corresponding to a freshly-created telegram interaction. Fresh-mutual
+// sessions carry Direction="mutual" in the payload so the consumer can
+// write a matching mutual row (plan Decision 6).
+//
+// Kind selection:
+//   - inbound session  → KindMessageReceived
+//   - outbound session → KindMessageSent
+//   - mutual session   → KindMessageReceived (arbitrary; the payload's
+//     Direction field carries the authoritative direction)
+//
+// SourceID = sourceRef so publisher-idempotency dedupes retries.
+func (e *AggregationEngine) publishForSession(
+	ctx context.Context,
+	contactID uuid.UUID,
+	sess msgSession,
+	sourceRef string,
+	description *string,
+) error {
+	cid := contactID
+	messageAt := sess.lastSentAt()
+
+	var kind events.Kind
+	var payloadDirection string
+	switch sess.direction {
+	case repository.InteractionDirectionOutbound:
+		kind = events.KindMessageSent
+		payloadDirection = ""
+	case repository.InteractionDirectionInbound:
+		kind = events.KindMessageReceived
+		payloadDirection = ""
+	case repository.InteractionDirectionMutual:
+		kind = events.KindMessageReceived
+		payloadDirection = repository.InteractionDirectionMutual
+	default:
+		return fmt.Errorf("unexpected session direction %q", sess.direction)
+	}
+
+	// Build payload. Kind-specific type so events.Marshal validates the
+	// kind↔payload pairing.
+	var raw []byte
+	var marshalErr error
+	switch kind {
+	case events.KindMessageReceived:
+		msg, err := events.Marshal(kind, events.MessageReceivedPayload{
+			Version:           1,
+			ContactID:         &cid,
+			PeerRef:           fmt.Sprintf("tg:%d", sess.chatID),
+			MessageAt:         messageAt,
+			Description:       description,
+			ExternalMessageID: sourceRef,
+			Direction:         payloadDirection,
+		})
+		raw, marshalErr = msg, err
+	case events.KindMessageSent:
+		msg, err := events.Marshal(kind, events.MessageSentPayload{
+			Version:           1,
+			ContactID:         &cid,
+			PeerRef:           fmt.Sprintf("tg:%d", sess.chatID),
+			MessageAt:         messageAt,
+			Description:       description,
+			ExternalMessageID: sourceRef,
+			Direction:         payloadDirection,
+		})
+		raw, marshalErr = msg, err
+	}
+	if marshalErr != nil {
+		return fmt.Errorf("marshal %s: %w", kind, marshalErr)
+	}
+
+	env := &events.Envelope{
+		Source:     repository.InteractionSourceTelegram,
+		SourceID:   sourceRef,
+		Kind:       kind,
+		Payload:    raw,
+		ObservedAt: messageAt,
+	}
+	return e.eventBus.Publish(ctx, env)
 }
 
 // groupIntoBursts groups consecutive same-direction messages within the burst window.

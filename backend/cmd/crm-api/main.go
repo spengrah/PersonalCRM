@@ -36,6 +36,7 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/crypto"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -131,9 +132,80 @@ func run() int {
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+	// Shadow-observation repo is constructed unconditionally. When
+	// InteractionMode=off the direct path never calls RecordDirectWrite and
+	// no publisher emits events, so the repo's queries stay idle — zero
+	// runtime cost.
+	shadowObsRepo := repository.NewShadowObservationRepository(database.Queries, database.Pool)
 
 	// Initialize services
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
+
+	// River client + event bus + PR 5 consumer wiring. Built EARLY (before
+	// downstream services) so `pubBus` and `manualShadow` are in scope for
+	// constructors that need them (Calendar, Telegram, manual handlers).
+	// Sync workers + periodic job are registered LATER (once syncService
+	// exists) via river.AddWorker + riverClient.PeriodicJobs().Add(), both
+	// of which are safe between NewClient and Start.
+	riverWorkers := river.NewWorkers()
+	river.AddWorker(riverWorkers, &noopWorker{})
+
+	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		JobTimeout: cfg.River.JobTimeout,
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
+		},
+		Workers: riverWorkers,
+	})
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to build river client")
+	}
+
+	eventRepo := repository.NewEventRepository(database.Queries)
+	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
+	ingestService := service.NewIngestService(database, eventBus)
+	ingestHandler := handlers.NewIngestHandler(ingestService)
+
+	// PR 5: compute effective InteractionMode. cutover is forward-compat
+	// config and falls back to shadow in this release so an early-set
+	// cutover still produces useful bake evidence (plan Decision 12).
+	effectiveMode := cfg.EventBus.InteractionMode
+	if effectiveMode == consumer.InteractionModeCutover {
+		logger.Warn().
+			Msg("EVENT_BUS_INTERACTION_MODE=cutover requested but PR 5 only implements shadow; treating as shadow")
+		effectiveMode = consumer.InteractionModeShadow
+	}
+
+	interactionRecorder := consumer.NewInteractionRecorder(
+		effectiveMode,
+		contactRepo,
+		interactionRepo,
+		eventBus,
+		shadowObsRepo,
+	)
+	manualShadow := service.NewManualInteractionShadow(
+		effectiveMode,
+		database.Pool,
+		eventBus,
+		interactionRecorder,
+	)
+
+	// Register the consumer worker. Safe between NewClient and Start —
+	// river.AddWorker mutates the Workers pointer. Registered UNCONDITIONALLY:
+	// with mode=off no events route to this worker at runtime.
+	river.AddWorker(riverWorkers, consumer.NewInteractionRecorderWorker(eventBus, database.Pool, interactionRecorder))
+
+	// pubBus is threaded into publisher constructors (Calendar, Telegram, ...).
+	// Nil when InteractionMode=off so publishers silently skip their shadow
+	// emits — zero observable behavior change vs. today's code.
+	var pubBus *events.Bus
+	if effectiveMode != consumer.InteractionModeOff {
+		pubBus = eventBus
+		contactService.SetShadowObserver(shadowObsRepo)
+		logger.Info().
+			Str("mode", effectiveMode).
+			Msg("event-bus shadow mode enabled")
+	}
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 	importMatchService := service.NewImportMatchService(contactRepo)
 	// EnrichmentService is shared by the import handler (link/import flows) and
@@ -230,7 +302,7 @@ func run() int {
 		// that don't have Google OAuth set up.
 		calendarRepo := repository.NewCalendarEventRepository(database.Queries)
 		calendarHandler = handlers.NewCalendarHandler(calendarRepo)
-		rematchService.Register(google.NewCalendarRematchHandler(calendarRepo, externalContactRepo, contactService))
+		rematchService.Register(google.NewCalendarRematchHandler(calendarRepo, externalContactRepo, contactService, pubBus))
 		logger.Info().Msg("Calendar rematch handler registered")
 
 		// Register Google Contacts provider if OAuth is configured
@@ -252,6 +324,7 @@ func run() int {
 				identityService,
 				externalContactRepo,
 				contactService,
+				pubBus,
 			)
 			providerRegistry.Register(gcalProvider)
 			logger.Info().Msg("Google Calendar sync provider registered")
@@ -343,6 +416,7 @@ func run() int {
 			contactService,
 			contactService,
 			contactService,
+			pubBus,
 		)
 
 		if err := telegramManager.Start(ctx); err != nil {
@@ -368,9 +442,9 @@ func run() int {
 	}
 
 	// Initialize handlers
-	contactHandler := handlers.NewContactHandler(contactService)
+	contactHandler := handlers.NewContactHandler(contactService, manualShadow)
 	noteHandler := handlers.NewNoteHandler(noteService)
-	interactionHandler := handlers.NewInteractionHandler(contactService, interactionRepo)
+	interactionHandler := handlers.NewInteractionHandler(contactService, interactionRepo, manualShadow)
 	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
 	rematchHandler := handlers.NewRematchHandler(rematchService, contactService)
 
@@ -381,35 +455,20 @@ func run() int {
 	// .ai/log/plan/event-bus-foundation-pr3-scheduler-river.md for the
 	// construction-order rationale.
 	//
-	// noopWorker is ALWAYS registered so the river client can start in
-	// any configuration (river.NewClient rejects an empty Workers
-	// bundle — see backend/tests/event_bus_integration_test.go for the
-	// canonical assertion of that invariant).
-	riverWorkers := river.NewWorkers()
-	river.AddWorker(riverWorkers, &noopWorker{})
-	var periodicJobs []*river.PeriodicJob
+	// Sync workers + periodic job are registered AFTER syncService is
+	// constructed. Safe between NewClient (done earlier) and Start —
+	// river.AddWorker and PeriodicJobs().Add both mutate the client
+	// in-place.
 	if cfg.Features.EnableExternalSync && syncService != nil {
 		river.AddWorker(riverWorkers, scheduler.NewSchedulerTickWorker(syncService))
 		river.AddWorker(riverWorkers, scheduler.NewSyncProviderAccountWorker(syncService))
-		periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+		riverClient.PeriodicJobs().Add(river.NewPeriodicJob(
 			river.PeriodicInterval(5*time.Minute),
 			func() (river.JobArgs, *river.InsertOpts) {
 				return scheduler.SchedulerTickArgs{}, nil
 			},
 			&river.PeriodicJobOpts{RunOnStart: true},
 		))
-	}
-
-	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
-		JobTimeout: cfg.River.JobTimeout,
-		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
-		},
-		Workers:      riverWorkers,
-		PeriodicJobs: periodicJobs,
-	})
-	if err != nil {
-		logger.Fatal().Err(err).Msg("failed to build river client")
 	}
 
 	// Wire the enqueuer onto the service BEFORE starting the client so
@@ -426,16 +485,6 @@ func run() int {
 		Int("worker_concurrency", cfg.River.WorkerConcurrency).
 		Dur("job_timeout", cfg.River.JobTimeout).
 		Msg("river client started")
-
-	// Event bus — first in-process publisher arrived in PR 4 of #180 (HTTP
-	// ingestion). Constructed unconditionally: the Bus is three pointers
-	// (pool, river client, event repo) and zero runtime cost when nothing
-	// publishes. The ingest handler/service/route are gated below by
-	// cfg.Features.EnableEventBusIngest.
-	eventRepo := repository.NewEventRepository(database.Queries)
-	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
-	ingestService := service.NewIngestService(database, eventBus)
-	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	// Set up Gin router
 	if cfg.IsProduction() {

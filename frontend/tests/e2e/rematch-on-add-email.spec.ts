@@ -61,10 +61,15 @@ test.describe('Rematch on add email @area:contacts', () => {
     await firstRow.getByRole('combobox').selectOption('email')
     await firstRow.locator('input[type="email"]').fill(attendeeEmail)
 
-    // Capture the PUT response so we can read back the rematch_job_id.
-    const updateResponsePromise = page.waitForResponse(
-      res => res.url().includes(`/api/v1/contacts/${contactId}`) && res.request().method() === 'PUT'
-    )
+    // The edit form also saves notes via PUT /contacts/:id/notes in parallel,
+    // so match the exact contact update route before reading rematch_job_id.
+    const contactUpdatePath = `/api/v1/contacts/${contactId}`
+    const updateResponsePromise = page.waitForResponse(res => {
+      const { pathname } = new URL(res.url())
+      return (
+        pathname === contactUpdatePath && res.request().method() === 'PUT' && res.status() === 200
+      )
+    })
     await page.getByRole('button', { name: 'Update Contact' }).click()
     const updateResponse = await updateResponsePromise
     expect(updateResponse.ok()).toBe(true)

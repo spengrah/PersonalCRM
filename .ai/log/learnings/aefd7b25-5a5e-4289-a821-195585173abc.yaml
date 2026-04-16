@@ -166,3 +166,171 @@ detail: |
   PR 3 plan specified 72h soak with passive observation metrics. Session reframed this: 72h is a proxy for 'enough events to be confident,' but for crash-recovery validation (River JobRescuer, #208 stuck-syncing bug), active SIGKILL testing provides far stronger signal than waiting for natural failures. Deliberate kill mid-sync + verified recovery (2 kills minimum for independent validation) exercises the rescue path directly. 72h of clean runs proves nothing about rescue correctness. Session demonstrated pragmatic minimum: ~24h wall-clock + 2 deliberate mid-sync restarts + sample-size check (50-100 runs per provider for result parity). Documentation gap: soak evidence checklist should lead with 'deliberate fault injection' as primary validation, time-based observation as secondary (for time-correlated bugs like DST, midnight rollovers). Current plan DD framing was correct but buried the lede.
 actionable: true
 
+---
+timestamp: "2026-04-15T16:49:11.511438"
+type: gotcha
+summary: Go integration tests with per-test RunMigrations calls create massive CI overhead despite passing quickly
+detail: |
+  PR 1 (event-bus foundation) added River's migrator to db.RunMigrations(), making each call ~5-6s on CI (pgxpool setup + advisory lock + river migrations + teardown). With 23 test setup helpers each calling RunMigrations and ~70 test functions, this compounded to ~435s of pure migration overhead on top of ~85s of actual test execution. Local runs were fast because warm DB made migrations near-instant. The fix was adding TestMain(m *testing.M) to run migrations once per package before all tests, updating setup helpers to only open DB connections. This pattern caught THREE test packages (tests/, tests/api/, tests/unit/) — the third was initially missed and caught by Codex review. Expected savings: ~350-400s CI time reduction.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:49:11.511438"
+type: rule
+summary: Long-running integration tests (>15s) must be gated behind testing.Short() or env var flags
+detail: |
+  PR 3 added TestSyncWorker_LoadNoDuplicateConcurrentSyncs (50s) and TestPeriodicTick_FiresOnStart (18s) to integration suite. These made local pre-push hooks painful (every git push waited 68s) and dominated CI time. The fix was gating heavy tests: `if testing.Short() { t.Skip(...) }` so make test-unit skips them but make test-integration runs them. Alternative: RUN_LONG_TESTS=1 env var for tests with real-time async behavior (e.g., River's 1h JobRescuer validation). This lets most dev workflows stay fast while CI still validates the full suite.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:49:11.511438"
+type: distinction
+summary: Soak testing should prioritize active fault injection over passive calendar-time windows
+detail: |
+  Original PR 3 plan specified 72h prod soak as merge gate. Session reframed: for crash-recovery validation (River JobRescuer, stuck-sync bugs), deliberate SIGKILL testing mid-sync provides far stronger signal than 72h of passive observation. Two independent kills + verified recovery exercises the rescue path directly; 72h of clean runs proves nothing about rescue correctness. Validated minimum: ~24h wall-clock + 2 deliberate mid-sync restarts + sample-size check. For time-correlated bugs (DST, midnight rollovers), passive soak remains valuable, but it's secondary validation. Lead with fault injection, use calendar time to catch timing-edge cases.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:49:11.511438"
+type: architecture
+summary: Shadow-to-cutover transitions require explicit payload mapping to prevent silent data loss
+detail: |
+  When migrating from shadow mode (direct function call + async event publish) to cutover (async-only), every parameter passed in the direct path must have a corresponding event payload field or data will be lost. PR 6 caught this during Codex review: calendar event titles were passed as RecordInteraction(title, ...) parameters but not included in the calendar.attended event payload, so post-cutover all interaction.description fields became empty—a user-visible regression. Shadow-mode tests passed because they only verified row creation, not data completeness. Pattern: during shadow planning, explicitly map every direct-path parameter to an event field. During cutover review, grep every field populated in direct path and verify it's sourced from event payload in consumer.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:49:11.511438"
+type: gotcha
+summary: Multi-entity events need per-entity source_ref to prevent silent deduplication data loss
+detail: |
+  When a single event affects N entities (calendar event with N attendees → N interactions), using the same source_ref for all N rows causes silent deduplication. The (source, source_ref) unique constraint on interaction means rows 2-N fail to insert because row 1 already exists with that key. Fix: use per-entity source_ref like gcal:event-123:contact-uuid-1, gcal:event-123:contact-uuid-2. The (source, source_id) dedup on the event table (for the calendar event itself) is separate and does NOT prevent this. Applies to any multi-entity event: calendar attendees, group chats, etc. This was caught during PR 6 Codex review and would have caused silent data loss in production.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:49:11.511438"
+type: rule
+summary: River client.Start(ctx) must receive outer context, never timeout-derived context
+detail: |
+  Passing a context.WithTimeout-derived context to river client.Start(ctx) causes the client to silently stop fetching jobs when the timeout expires, with no error logged. River's internal fetch-loop context cancels when its parent cancels. Discovered during PR 6 integration test debugging when tests timed out despite client appearing to start successfully. Pattern: use test's root context (or app's root context in production), never a per-operation timeout context. Applies to test harnesses and production code. The silence is the dangerous part—no panic, no error log, just a client that stops working.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:49:11.511438"
+type: rule
+summary: Publish-before-mutate pattern prevents interaction stranding on event publish failures
+detail: |
+  When a handler both publishes an event AND mutates state in the same transaction (e.g., appending contact ID to calendar event's matched_contact_ids JSONB), publish BEFORE the mutation. If mutation happens first and publish fails (event table constraint violation), transaction rolls back, but retrying sees the mutation already committed from a prior attempt and skips the publish, stranding the interaction. Order: tx.Begin() → bus.PublishTx(ctx, tx, event) → mutate state → tx.Commit(). Publish-first ensures publish failure also rolls back state mutation, preserving idempotency on retry.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:49:11.511438"
+type: rule
+summary: Consumer transactions with external HTTP calls need post-commit closures to avoid connection pool starvation
+detail: |
+  When river worker consumers call external APIs (Todoist, GCal, etc.) as side effects, do NOT hold pgx.Tx open during the HTTP call—this blocks connection pool and risks deadlocks. Complete all DB writes in transaction first, then use defer/post-commit closure to call external API after tx.Commit(). Pattern: tx.Begin() → write DB → tx.Commit() → if commitErr == nil { externalAPI.Call(...) }. Implemented in PR 6's InteractionRecorder for FollowUpManager.OnInteractionRecorded(contactID) call. Holding tx across network I/O is one of the most common ways to stall River workers.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:49:11.511438"
+type: documentation_gap
+summary: AGENTS.md should warn about tests/unit/ as third integration test package requiring TestMain
+detail: |
+  When implementing TestMain migration optimization, initial scan found tests/ and tests/api/ packages but MISSED tests/unit/. This package had 6 RunMigrations calls in sync_service_test.go (PR-3-added) causing ~360s of the CI regression. Only caught when Codex review examined full CI logs. Gap: no clear map of integration test package structure. Should add to .ai/guides or AGENTS.md: 'Integration test packages: backend/tests/ (main), backend/tests/api/ (handler tests), backend/tests/unit/ (unit tests with DB integration). When adding shared test infrastructure like TestMain, check ALL THREE.' Also add to 'When You Change X, Check Y' table.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:49:11.511438"
+type: gotcha
+summary: Integration test cleanup for upsert-heavy tables must use hard DELETE, not soft-delete
+detail: |
+  Integration tests running against shared PostgreSQL discovered phantom data corruption when using soft-delete cleanup on tables with UPSERT semantics. Example: external_contact rows soft-deleted (deleted_at = NOW()) in prior runs were resurrected by subsequent tests' UPSERT queries (which don't clear deleted_at), appearing as active rows and polluting candidate pools. The .ai/rules/core.md soft-delete guidance warns about FK cascade issues but not upsert resurrection. Fix: integration test cleanup must use hard DELETE (or targeted DeleteExternalContactsBySourceIDPrefix-style queries) for tables with upsert semantics. Soft-delete leaves deleted_at set, which upserts ignore, resurrecting phantom rows.
+actionable: true
+
+---
+timestamp: "2026-04-15T16:49:11.511438"
+type: gotcha
+summary: Learnings extraction hook can add 5-15+ minutes to every git push, causing perceived 'hang'
+detail: |
+  The pre-push hook runs learnings extraction via headless Claude session analyzing session transcripts. This spawns a Claude process that can take 5-15+ minutes. User asked 'what's going on with the learnings hook?' after implementer appeared to hang. Investigation revealed hook was running extraction in foreground, blocking push. Last successful extraction was April 12 (3 days ago), suggesting hook may be silently failing on recent pushes or being bypassed with --no-verify. Pattern: when push appears to hang, check for claude process in ps aux. If extraction becomes a friction point, consider making it async (notify when done) or skippable for certain commit types.
+actionable: false
+
+---
+timestamp: "2026-04-15T17:02:17.628618"
+type: architecture
+summary: River client can be constructed early for dependency injection, separate from worker registration
+detail: |
+  When using River with event bus or other services that need the client as a dependency, construct river.NewClient() early in main.go (before downstream services that depend on eventBus/riverClient), then register workers later via river.AddWorker() and periodic jobs via client.PeriodicJobs().Add() before calling Start(). This resolves circular dependency issues where handlers/services need pubBus (which needs riverClient) but riverClient Config originally required all workers upfront. Runtime worker registration is safe between NewClient and Start.
+actionable: true
+
+---
+timestamp: "2026-04-15T17:02:17.628618"
+type: rule
+summary: For PR updates with 14+ commits and spreading conflicts, prefer merge over rebase
+detail: |
+  When rebasing a long-running feature branch (14+ commits) onto updated main, if conflicts appear in early commits and spread across multiple files, abort the rebase and use merge instead. Rationale: GitHub squash-merges PRs anyway, so the merge commit won't pollute main's history, and merge requires only one conflict resolution pass versus potentially 14 separate resolution rounds during rebase. Saves significant time on multi-stage conflict resolution.
+actionable: true
+
+---
+timestamp: "2026-04-15T17:02:17.628618"
+type: gotcha
+summary: Telegram message test cleanup must use hard DELETE, not soft-delete
+detail: |
+  The UpsertTelegramMessage query's ON CONFLICT path updates fields but does not clear deleted_at. In integration tests using a shared database, soft-deleted rows from previous runs resurrect on upsert but remain invisible to queries filtering deleted_at IS NULL, causing 'record not found' errors. Solution: test cleanup helpers must use hard DELETE via sqlc (e.g., DeleteTelegramMessagesByIDs) instead of soft-delete. This pattern applies to any upserted table with soft-delete - was already documented in core.md gotchas but encountered organically during this session.
+actionable: true
+
+---
+timestamp: "2026-04-15T17:02:17.628618"
+type: distinction
+summary: River supports both compile-time and runtime periodic job registration
+detail: |
+  River periodic jobs can be registered two ways: (1) compile-time via Config.PeriodicJobs slice passed to NewClient(), or (2) runtime via riverClient.PeriodicJobs().Add() after client construction. Runtime registration enables flexible construction order when periodic jobs depend on services that themselves depend on the river client, avoiding initialization deadlocks. Both registrations must happen before client.Start().
+actionable: true
+
+---
+timestamp: "2026-04-15T17:15:38.654554"
+type: gotcha
+summary: Playwright waitForResponse with parallel API calls requires exact URL + status matching
+detail: |
+  When forms save multiple resources in parallel (e.g., Promise.all saving contact + notes), broad URL matchers like .includes('/api/v1/contacts/:id') create ambiguous matches. PUT /contacts/:id/notes returns 204 (no body), PUT /contacts/:id returns 200 JSON. If relative latency shifts, waitForResponse can capture the wrong response, causing .json() to fail on 204 responses. Always match exact pathname (e.g., new URL(res.url()).pathname === '/api/v1/contacts/:id'), method, AND status code when parallel requests share URL prefixes.
+actionable: true
+
+---
+timestamp: "2026-04-15T17:15:38.654554"
+type: distinction
+summary: E2E test regressions after merges can indicate performance changes, not logic bugs
+detail: |
+  A test passing on branch A but failing after merging branch B suggests relative timing changes. In this session, PR 5 slowed PUT /contacts/:id enough to flip the order of parallel requests, exposing a latent race in an overly-broad response matcher. The functional behavior was correct (page showed 'Past (1)' meetings), but timing-dependent test code broke. When investigating post-merge E2E failures: (1) check if the test passed on prior CI runs, (2) measure request latencies before/after, (3) look for timing assumptions in waitForResponse matchers or visibility assertions.
+actionable: true
+
+---
+timestamp: "2026-04-15T17:15:38.654554"
+type: rule
+summary: Codex delegation pattern for deterministic regressions with known context
+detail: |
+  When facing a deterministic test failure with clear before/after state (passed on PR 3 CI, fails on current branch), delegate to Codex with full context: test file path, failure mode (response.json error), timing observations (7.6s latency vs 3.6s baseline), and hypotheses. User instructed 'dispatch to codex to investigate and fix' and Codex diagnosed + fixed in one pass by tightening the Playwright matcher. Effective delegation requires: test name, CI run comparison, error symptoms, and performance delta.
+actionable: true
+
+---
+timestamp: "2026-04-15T17:30:22.038804"
+type: documentation_gap
+summary: Multi-entity source_ref dedup pattern documented but not consulted during implementation
+detail: |
+  The gotcha 'Multi-entity events using shared source_ref on child rows' exists in core.md and explicitly warns about per-entity source_ref requirements (gcal:event-123:contact-uuid-1 format). However, publishCalendarAttended was implemented using shared SourceID: eventIDStr across all attendees, violating this rule. CI review caught it, but the pattern should have been consulted before implementation. The gotcha is buried in a 50+ row table. For critical patterns like this (silent data loss), strengthen guidance in feature-development.md with explicit checklist: 'Before implementing event publishing, grep core.md for source_ref, multi-entity, and dedup patterns.'
+actionable: true
+
+---
+timestamp: "2026-04-15T17:30:22.038804"
+type: architecture
+summary: Event publishing requires understanding TWO separate deduplication layers
+detail: |
+  Multi-entity events (like calendar events with multiple attendees) require coordinating two distinct unique constraints: (1) event table uses (source, source_id) for event-level dedup - one row per external event regardless of attendees, (2) interaction/child tables use (source, source_ref) for per-entity dedup - one row per (event, contact) pair. The calendar bug happened because the implementer focused on matching the event table's source_id instead of understanding that interactions need their own per-entity source_ref. The gotcha mentions this ('The (source, source_id) dedup on the event table is separate') but could be clearer that shadow-mode publishing must match the direct path's eventual source_ref format, not the event table's format.
+actionable: true
+
+---
+timestamp: "2026-04-15T17:30:22.038804"
+type: gotcha
+summary: Pre-push learnings hook can block multiple times in succession
+detail: |
+  The learnings extraction hook blocks push when new patterns are detected. After committing the extracted learnings YAML, pushing again can still block if the extraction process finds additional patterns. The hook only considers a push 'clean' if changes are exclusively learnings YAML files (matching should_skip_learnings criteria). In this session, the first push blocked with 'NEW learnings extracted', requiring commit+re-push. Agents should expect iterative learnings commits, not assume one commit clears the hook.
+actionable: true
+

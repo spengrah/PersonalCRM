@@ -62,13 +62,20 @@ func (d DateOnly) MarshalJSON() ([]byte, error) {
 type ContactHandler struct {
 	contactService *service.ContactService
 	validator      *validator.Validate
+	// shadow runs the PR 5 shadow-mode publish + inline-consumer flow
+	// after PATCH /contacts/:id/last-contacted commits. Nil in
+	// EVENT_BUS_INTERACTION_MODE=off — zero overhead.
+	shadow *service.ManualInteractionShadow
 }
 
-// NewContactHandler creates a new contact handler
-func NewContactHandler(contactService *service.ContactService) *ContactHandler {
+// NewContactHandler creates a new contact handler. shadow may be nil;
+// non-nil enables shadow-mode observation on PATCH last-contacted (plan
+// Decision 7.1).
+func NewContactHandler(contactService *service.ContactService, shadow *service.ManualInteractionShadow) *ContactHandler {
 	return &ContactHandler{
 		contactService: contactService,
 		validator:      validator.New(),
+		shadow:         shadow,
 	}
 }
 
@@ -619,7 +626,7 @@ func (h *ContactHandler) UpdateContactLastContacted(c *gin.Context) {
 		lastContacted = req.LastContacted.Time
 	}
 
-	updatedContact, err := h.contactService.UpdateContactLastContacted(c.Request.Context(), id, lastContacted)
+	updatedContact, interaction, err := h.contactService.UpdateContactLastContacted(c.Request.Context(), id, lastContacted)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			api.SendNotFound(c, "Contact")
@@ -627,6 +634,19 @@ func (h *ContactHandler) UpdateContactLastContacted(c *gin.Context) {
 		}
 		api.SendInternalError(c, "Failed to update last contacted date")
 		return
+	}
+
+	// Shadow-mode publish + inline consumer for the PATCH path (plan
+	// Decision 7.1). Use the RETURNED interaction's Direction / OccurredAt
+	// so the shadow envelope matches what the direct path committed —
+	// critical for dedup-hits where the service returned an older row with
+	// different values than the caller's request would have implied.
+	if h.shadow != nil && interaction != nil {
+		desc := ""
+		if interaction.Description != nil {
+			desc = *interaction.Description
+		}
+		h.shadow.Run(c.Request.Context(), interaction.ContactID, interaction.Direction, interaction.OccurredAt, desc)
 	}
 
 	response := contactToResponse(updatedContact)

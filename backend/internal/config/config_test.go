@@ -691,3 +691,99 @@ func TestConfig_DatabasePoolInvalidDuration(t *testing.T) {
 		t.Errorf("Expected fallback to default MaxConnIdleTime=%v, got %v", DefaultDBMaxConnIdleTime, cfg.Database.MaxConnIdleTime)
 	}
 }
+
+// TestConfig_EventBus_DefaultOff asserts EVENT_BUS_INTERACTION_MODE
+// defaults to "off" — zero-overhead for every deployment that hasn't
+// explicitly opted into shadow bake.
+func TestConfig_EventBus_DefaultOff(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.EventBus.InteractionMode != EventBusInteractionModeOff {
+		t.Errorf("Expected default EventBus.InteractionMode=%q, got %q",
+			EventBusInteractionModeOff, cfg.EventBus.InteractionMode)
+	}
+}
+
+func TestConfig_EventBus_ShadowFromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "EVENT_BUS_INTERACTION_MODE", "shadow")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.EventBus.InteractionMode != EventBusInteractionModeShadow {
+		t.Errorf("Expected EventBus.InteractionMode=shadow, got %q", cfg.EventBus.InteractionMode)
+	}
+}
+
+func TestConfig_EventBus_CutoverFromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "EVENT_BUS_INTERACTION_MODE", "cutover")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.EventBus.InteractionMode != EventBusInteractionModeCutover {
+		t.Errorf("Expected EventBus.InteractionMode=cutover, got %q", cfg.EventBus.InteractionMode)
+	}
+}
+
+func TestConfig_Validate_EventBusInteractionMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		wantErr  bool
+		wantHint string
+	}{
+		{"off_ok", EventBusInteractionModeOff, false, ""},
+		{"shadow_ok", EventBusInteractionModeShadow, false, ""},
+		{"cutover_ok", EventBusInteractionModeCutover, false, ""},
+		{"empty_rejected", "", true, "invalid mode"},
+		{"gibberish_rejected", "garbage", true, "invalid mode"},
+		{"uppercase_rejected", "OFF", true, "invalid mode"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TestConfig()
+			cfg.EventBus.InteractionMode = tt.mode
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Expected validation error for mode=%q", tt.mode)
+				}
+				verr, ok := err.(ValidationErrors)
+				if !ok {
+					t.Fatalf("Expected ValidationErrors, got %T", err)
+				}
+				found := false
+				for _, e := range verr {
+					if e.Field == "EVENT_BUS_INTERACTION_MODE" {
+						found = true
+						if tt.wantHint != "" && !strings.Contains(e.Message, tt.wantHint) {
+							t.Errorf("Expected message to contain %q, got %q", tt.wantHint, e.Message)
+						}
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected EVENT_BUS_INTERACTION_MODE validation error, got: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error for mode=%q, got: %v", tt.mode, err)
+				}
+			}
+		})
+	}
+}

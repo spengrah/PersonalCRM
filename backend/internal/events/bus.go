@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 
 	"github.com/google/uuid"
@@ -31,16 +32,38 @@ type consumerJob struct {
 }
 
 // consumerJobsForKind is the static registry mapping a Kind to the set of
-// river jobs to enqueue atomically alongside its event row. In PR 2 the
-// registry is a stub: it returns an empty slice for every kind (spec §5
-// PR 2 scope: "returns empty slice for all kinds"). PR 5+ extends this
-// function as consumer workers come online.
+// river jobs to enqueue atomically alongside its event row. PR 5 wires the
+// first consumer (InteractionRecorder); later PRs extend the switch as
+// CadenceUpdater, FollowUpManager, and RematchDispatcher come online.
 //
 // The eventID argument is the event row's primary key; job arg structs
-// should embed it so the worker can fetch the full payload by ID (spec
-// §3.3 — "keeps job-arg payload small").
-func consumerJobsForKind(_ Kind, _ uuid.UUID) []consumerJob {
-	return []consumerJob{}
+// embed it so the worker can fetch the full payload by ID (spec §3.3 —
+// "keeps job-arg payload small").
+//
+// PR 5 routing rules:
+//
+//   - 5 async-publisher kinds (message.received/sent, calendar.attended,
+//     task.completed, task.outreach_detected) → InteractionRecorder worker
+//     with MaxAttempts=5 (plan Decision 8).
+//   - interaction.manual → returns nil. The manual UI handler inline-
+//     invokes HandleEvent in its shadow tx so the consumer isn't double-
+//     invoked. Spec §3.4 says PublishTx should enqueue jobs "for other
+//     consumers"; InteractionRecorder is not "other" in the manual flow
+//     (plan Decision 7).
+//   - interaction.recorded → returns nil. No consumer in PR 5 (CadenceUpdater
+//     lands in PR 7, FollowUpManager in PR 9a).
+//   - calendar.declined, task.skipped, contact_methods.added → returns nil.
+//     Consumers land in later PRs.
+func consumerJobsForKind(kind Kind, eventID uuid.UUID) []consumerJob {
+	switch kind {
+	case KindMessageReceived, KindMessageSent, KindCalendarAttended,
+		KindTaskCompleted, KindTaskOutreachDetected:
+		return []consumerJob{{
+			Args: consumerjobs.InteractionRecorderJobArgs{EventID: eventID},
+			Opts: &river.InsertOpts{MaxAttempts: 5},
+		}}
+	}
+	return nil
 }
 
 // Bus publishes typed events to the append-only event log and enqueues

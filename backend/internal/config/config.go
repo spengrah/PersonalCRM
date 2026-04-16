@@ -22,6 +22,7 @@ type Config struct {
 	Watchdog WatchdogConfig
 	Telegram TelegramConfig
 	River    RiverConfig
+	EventBus EventBusConfig
 }
 
 // DatabaseConfig holds database connection settings
@@ -128,6 +129,34 @@ type RiverConfig struct {
 	// higher indicates a misbehaving provider that should be investigated.
 	JobTimeout time.Duration
 }
+
+// EventBusConfig holds event-bus rollout phase flags. See
+// .ai/spec/event-bus-foundation.md §3.9.
+//
+// InteractionMode gates the PR 5-8 phase lifecycle for the
+// InteractionRecorder consumer:
+//   - "off":     default. No shadow writes, no sibling publishes. The
+//     InteractionRecorder river worker is still registered (so
+//     river rejects no kinds at startup) but receives zero
+//     events — pubBus is nil at publish sites.
+//   - "shadow":  both paths run. Direct path is authoritative; consumer
+//     observes and writes to event_shadow_observation. Post-
+//     bake divergence query verifies 1:1 parity (PR 5).
+//   - "cutover": consumer is sole writer. Only valid from PR 6
+//     onwards — PR 5 rejects it as misconfiguration per
+//     Decision 12 ("undefined behavior in PR 5").
+type EventBusConfig struct {
+	InteractionMode string // off | shadow | cutover. Default: off.
+}
+
+// EventBus interaction-mode constants. Mirrors (and must stay in sync
+// with) consumer.InteractionMode*. Duplicated here to avoid a
+// config-package import from the consumer package in validation / defaults.
+const (
+	EventBusInteractionModeOff     = "off"
+	EventBusInteractionModeShadow  = "shadow"
+	EventBusInteractionModeCutover = "cutover"
+)
 
 // ValidationError represents a configuration validation error
 type ValidationError struct {
@@ -261,6 +290,9 @@ func Load() (*Config, error) {
 			WorkerConcurrency: getEnvAsInt("RIVER_WORKER_CONCURRENCY", DefaultRiverWorkerConcurrency),
 			JobTimeout:        getEnvAsDuration("RIVER_JOB_TIMEOUT", DefaultRiverJobTimeout),
 		},
+		EventBus: EventBusConfig{
+			InteractionMode: getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeOff),
+		},
 	}
 
 	// Validate configuration
@@ -373,6 +405,20 @@ func (c *Config) Validate() error {
 		errors = append(errors, ValidationError{
 			Field:   "RIVER_JOB_TIMEOUT",
 			Message: fmt.Sprintf("must be between 1s and 1h, got %s", c.River.JobTimeout),
+		})
+	}
+
+	// EventBus interaction-mode validation. Must be one of the three phase
+	// values (spec §3.9). Default "off" is applied in Load, so the empty
+	// string should never reach Validate — but guard regardless for
+	// test-constructed configs.
+	switch c.EventBus.InteractionMode {
+	case EventBusInteractionModeOff, EventBusInteractionModeShadow, EventBusInteractionModeCutover:
+		// ok
+	default:
+		errors = append(errors, ValidationError{
+			Field:   "EVENT_BUS_INTERACTION_MODE",
+			Message: fmt.Sprintf("invalid mode %q; must be one of: off, shadow, cutover", c.EventBus.InteractionMode),
 		})
 	}
 
@@ -541,6 +587,9 @@ func TestConfig() *Config {
 		River: RiverConfig{
 			WorkerConcurrency: DefaultRiverWorkerConcurrency,
 			JobTimeout:        DefaultRiverJobTimeout,
+		},
+		EventBus: EventBusConfig{
+			InteractionMode: EventBusInteractionModeOff,
 		},
 	}
 }

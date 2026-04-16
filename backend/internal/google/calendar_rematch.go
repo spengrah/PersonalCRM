@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
@@ -31,20 +32,29 @@ type CalendarRematchHandler struct {
 	calendarRepo *repository.CalendarEventRepository
 	externalRepo *repository.ExternalContactRepository
 	recorder     calendarRematchInteractionRecorder
+	// eventBus is the shadow-mode event bus. Nil when
+	// EVENT_BUS_INTERACTION_MODE=off; non-nil triggers calendar.attended
+	// publishes alongside the rematch-path RecordInteraction (plan
+	// Decision 7.1 — the rematch path is a second calendar write site
+	// that MUST publish to keep shadow parity).
+	eventBus *events.Bus
 }
 
 // NewCalendarRematchHandler constructs a CalendarRematchHandler. The recorder
 // must be the same *service.ContactService instance used by CalendarSyncProvider
 // so per-source dedup behavior is identical between sync and rematch paths.
+// eventBus may be nil; non-nil enables shadow-mode sibling publishes.
 func NewCalendarRematchHandler(
 	cr *repository.CalendarEventRepository,
 	er *repository.ExternalContactRepository,
 	rec calendarRematchInteractionRecorder,
+	eventBus *events.Bus,
 ) *CalendarRematchHandler {
 	return &CalendarRematchHandler{
 		calendarRepo: cr,
 		externalRepo: er,
 		recorder:     rec,
+		eventBus:     eventBus,
 	}
 }
 
@@ -105,6 +115,16 @@ func (h *CalendarRematchHandler) Rematch(ctx context.Context, contactID uuid.UUI
 					Msg("calendar rematch: record interaction failed")
 				// Continue — append already succeeded. If the scheduler picks
 				// this event up later it will redo the work safely (idempotent).
+			} else if h.eventBus != nil {
+				// Shadow-mode sibling publish. Same kind + payload shape as
+				// the scheduler-path publish in calendar.go so both code
+				// paths emit a calendar.attended the consumer can observe.
+				if pubErr := publishCalendarAttended(ctx, h.eventBus, contactID, eventIDStr, e.EndTime); pubErr != nil {
+					logger.Warn().Err(pubErr).
+						Str("event_id", e.ID.String()).
+						Str("contact_id", contactID.String()).
+						Msg("calendar rematch: shadow publish failed")
+				}
 			}
 		}
 		matched++

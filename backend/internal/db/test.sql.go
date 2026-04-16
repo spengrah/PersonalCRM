@@ -108,6 +108,18 @@ func (q *Queries) DeleteExternalIdentitiesBySourceID(ctx context.Context, source
 	return result.RowsAffected(), nil
 }
 
+const DeleteTelegramMessagesByMessageIDs = `-- name: DeleteTelegramMessagesByMessageIDs :execrows
+DELETE FROM telegram_message WHERE telegram_message_id = ANY($1::int[])
+`
+
+func (q *Queries) DeleteTelegramMessagesByMessageIDs(ctx context.Context, dollar_1 []int32) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteTelegramMessagesByMessageIDs, dollar_1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const DeleteTelegramMessagesByPeerUserID = `-- name: DeleteTelegramMessagesByPeerUserID :execrows
 DELETE FROM telegram_message WHERE peer_user_id = $1
 `
