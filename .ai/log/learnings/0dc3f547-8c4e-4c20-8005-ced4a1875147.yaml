@@ -1,0 +1,56 @@
+---
+timestamp: "2026-04-16T16:35:40.674362"
+type: architecture
+summary: Post-commit closure pattern for shadow-mode observations
+detail: |
+  Shadow observations must use post-commit closures with their own tx (via pool.Begin), NOT the authoritative tx. Holding the authoritative tx open for shadow work risks stalling the connection pool and extends the critical path. Pattern: (1) commit authoritative tx, (2) run post-commit closure that opens own short-lived tx for shadow observation, (3) failure of shadow write only affects monitoring, not data integrity. Applied in PR 5 (InteractionRecorder) and PR 7 (CadenceUpdater) shadow modes. Codex Finding 1 caught the plan initially using the wrong tx boundary.
+actionable: true
+
+---
+timestamp: "2026-04-16T16:35:40.674362"
+type: architecture
+summary: "Async consumer race prevention: embed pre-state in event payload"
+detail: |
+  When async consumers need 'before' state to compute deltas, embed it in the event payload at publish time (inside the same tx as the mutation). Do NOT query for previous state at consume time - the row may have changed or been deleted between publish and consume. Example: InteractionRecordedPayload V2 added PrevCadenceSnapshot so CadenceUpdater can compute cadence diffs without racing against the contact row. Codex Findings 3 & 5 caught the original plan's race condition where consumer would snapshot post-commit.
+actionable: true
+
+---
+timestamp: "2026-04-16T16:35:40.674362"
+type: gotcha
+summary: Plan-code sync discipline for multi-PR epics
+detail: |
+  Plans must be reconciled against merged code from prior PRs before implementation starts. This session's plan went through 5 Codex rounds, with rounds 2-4 primarily catching stale references to patterns abandoned in earlier PRs: (1) RecordInteractionTx signature changes from PR 6, (2) publish ownership staying in InteractionRecorder vs moving to post-commit, (3) snapshot-based consumer approach replaced by payload-based, (4) helper function renames (UnmarshalPayload→ValidatePayload). Each stale reference would have caused implementation confusion. Pattern: after Codex finding triggers a design change, grep the entire plan for related terms to catch duplicated/inconsistent sections.
+actionable: true
+
+---
+timestamp: "2026-04-16T16:35:40.674362"
+type: rule
+summary: Event-based shadow tables need UNIQUE constraint + ON CONFLICT DO NOTHING
+detail: |
+  Shadow observation tables for event consumers must have UNIQUE(event_id, writer) + ON CONFLICT DO NOTHING to handle River job retries. Without the constraint, consumer retries create duplicate observation rows, breaking divergence queries. Pattern: every shadow table needs retry idempotency at the DB layer, not just application-layer checks. Codex Finding 4 caught the missing UNIQUE constraint in event_shadow_cadence_observation schema.
+actionable: true
+
+---
+timestamp: "2026-04-16T16:35:40.674362"
+type: architecture
+summary: Version enforcement split for graceful degradation
+detail: |
+  HTTP ingestion boundaries should remain version-permissive (accept both V1 and V2 payloads) while individual consumers enforce their version requirements (skip/log V1 if they need V2 fields). This allows external producers to stay on V1 while internal producers upgrade to V2, avoiding a flag-day cutover. Pattern emerged from PR 7 CadenceUpdater requiring V2 (with PrevCadenceSnapshot) while HTTP ingest endpoint continues accepting V1 interaction.recorded events from external daemons.
+actionable: true
+
+---
+timestamp: "2026-04-16T16:35:40.674362"
+type: gotcha
+summary: Codex iterative review catches progressively subtle issues
+detail: |
+  Complex plans benefit from multiple Codex review rounds with explicit re-review after each fix batch. This session: Round 1 = substantive design issues (tx boundaries, race conditions, schema constraints). Round 2 = inconsistencies introduced by Round 1 fixes (publish ownership clarifications, test naming). Round 3-5 = stale section cleanup (finding sections that weren't updated during earlier fixes). Pattern: after applying Codex findings, always run 'codex exec resume --last' with a summary of fixes applied, don't assume PASS on first attempt.
+actionable: true
+
+---
+timestamp: "2026-04-16T16:35:40.674362"
+type: distinction
+summary: Mode=off consumers still enqueue jobs but short-circuit in HandleEvent
+detail: |
+  For event consumers with runtime mode flags (EVENT_BUS_*_MODE=off/shadow/sole), the mode check should happen inside the worker's HandleEvent, NOT at job insertion time. Jobs still enqueue and complete, but HandleEvent returns nil after a DEBUG log when mode=off. This keeps the pipeline exercised and avoids mode-flag-related routing complexity in publishers. Different from PR 5 InteractionRecorder which had mode=off skip both enqueue AND handle. Codex Finding 2 caught this inconsistency.
+actionable: true
+

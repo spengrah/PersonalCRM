@@ -1,0 +1,48 @@
+---
+timestamp: "2026-04-16T18:27:26.649918"
+type: rule
+summary: "Multi-agent orchestration: reviewer must run AFTER implementer completes, not in parallel"
+detail: |
+  When using id-agents team (architect/backend/reviewer), dispatch reviewer only after implementer returns with results. Running in parallel causes reviewer to review pre-change state, making findings either stale or missing new issues. Correct sequence: architect analyzes → implementer implements → reviewer reviews NEW code → implementer fixes findings → loop. Only parallelize truly independent work (e.g., backend API + frontend UI for different features). User explicitly corrected this mistake when Claude dispatched backend+reviewer simultaneously.
+actionable: true
+
+---
+timestamp: "2026-04-16T18:27:26.649918"
+type: architecture
+summary: Event-driven coordination for multi-agent async work using Monitor on log completion markers
+detail: |
+  When waiting for id-agents workers to complete tasks, use Monitor with tail -F on agent log files, filtering for completion markers (✅ Query) instead of ScheduleWakeup polling. This provides push notifications on actual completion rather than guessing wait times. Pattern: `tail -F /tmp/{agent}.log | grep '✅ Query'` as persistent monitor. Avoids burning prompt cache on repeated polling and responds immediately when work completes.
+actionable: true
+
+---
+timestamp: "2026-04-16T18:27:26.649918"
+type: gotcha
+summary: id-agents external repo installation triggers multiple security permission prompts by design
+detail: |
+  Installing id-agents from GitHub triggers three sequential permission prompts: (1) npm install in external repo (lifecycle scripts from untrusted code), (2) copying skills into .claude/skills/ (self-modification of agent config), (3) running background processes from external repo. This is security-by-design, not a bug. Each requires explicit user approval. When reinstalling or setting up id-agents, expect and plan for these prompts rather than treating them as blockers.
+actionable: true
+
+---
+timestamp: "2026-04-16T18:27:26.649918"
+type: architecture
+summary: id-agents manager provides /remote endpoint for programmatic command dispatch from orchestrator
+detail: |
+  The id-agents manager (http://localhost:4100) exposes POST /remote endpoint accepting {command, from} to execute CLI commands like /deploy or /ask programmatically. Team context is passed via X-Team-Name header or ?team= query param. This allows orchestrator agents to dispatch work to specialist agents and poll for results via GET /agents/{name}/news. News feed contains query.received, query.progress, query.completed, and outbound.reply events with full message content.
+actionable: true
+
+---
+timestamp: "2026-04-16T18:27:26.649918"
+type: distinction
+summary: "ScheduleWakeup cache-aware delay selection: stay under 5 min or commit to 20+ min"
+detail: |
+  Anthropic prompt cache has 5-minute TTL. Delays under 300s keep cache warm; crossing 300s pays cache miss. Avoid 300s exactly (worst of both worlds). For active work expecting imminent completion: 60-270s. For truly idle waiting or long-running work: 1200-1800s (one cache miss buys long wait). Example: backend running 'make test' (5-10 min typical) → 420s (7 min) is better than 90s repeated polls or 300s boundary crossing. Think in cache windows, not round-number minutes.
+actionable: true
+
+---
+timestamp: "2026-04-16T18:50:10.363506"
+type: documentation_gap
+summary: Core rule "Never write raw SQL" doesn't explicitly state it applies to integration tests
+detail: |
+  CI review (PR #285) caught raw SQL INSERT statements in integration tests at `backend/tests/consumer_cadence_updater_integration_test.go:4583-4594`. The core rule exists in `.ai/rules/core.md` ("Never write raw SQL in Go → Use sqlc-generated queries") but doesn't explicitly include test code in its scope. This ambiguity allowed the violation to pass through implementation and manual review before automated CI caught it. The rule should state explicitly: "This applies to ALL Go code: production code, integration tests, test fixtures, and helper scripts. Use `make sqlc` to generate queries even for test setup code that populates shadow tables or creates fixtures." Add to Common Gotchas: "Raw SQL in integration test setup → Use sqlc-generated queries for ALL inserts/updates, including test fixtures"
+actionable: true
+

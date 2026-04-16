@@ -5,7 +5,7 @@ These rules apply to all AI agents working on this project.
 ## Absolute Rules (Never Violate)
 
 1. **Never use `time.Now()`** → Use `accelerated.GetCurrentTime()`
-2. **Never write raw SQL in Go** → Use sqlc-generated queries (`make sqlc`)
+2. **Never write raw SQL in Go** → Use sqlc-generated queries (`make sqlc`). Applies to ALL Go code: production code, integration tests, test fixtures, and helper scripts — add a test-only sqlc query + repository wrapper rather than inlining `pool.Exec(ctx, "INSERT ...", ...)` in a test file.
 3. **Never skip layers** → Handler → Service → Repository → DB
 4. **Never use npm/npx** → Use bun/bunx
 5. **Never call queries from handlers** → Go through repository
@@ -78,6 +78,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | `go test ./backend/...` | Use `make test-unit` or `cd backend && go test` |
 | `npm install` | Use `bun install` |
 | `sqlc generate` | Use `make sqlc` (sqlc is in ~/go/bin) |
+| Raw SQL in integration test setup (`pool.Exec(ctx, "INSERT ...")`) | Add a test-only sqlc query (e.g., `InsertFooAtTime`) + repository wrapper; this rule applies to ALL Go code including fixtures, not just production |
 | Calling `queries.X()` from handler | Call `repo.X()` instead |
 | Using `time.Now()` | Use `accelerated.GetCurrentTime()` |
 | Missing `deleted_at IS NULL` in queries | All queries must filter soft deletes |
