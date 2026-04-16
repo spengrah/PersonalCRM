@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 
@@ -21,23 +20,6 @@ import (
 // (no stub dereferences it). The shadow-repo stub captures the last insert
 // for assertions.
 // -----------------------------------------------------------------------------
-
-type stubCadenceContactRepo struct {
-	// lookup keyed by contact id; nil contact + nil err lets tests exercise
-	// the fallback path. Missing contacts return db.ErrNotFound.
-	contacts  map[uuid.UUID]*repository.Contact
-	returnErr error
-}
-
-func (s *stubCadenceContactRepo) GetContactTx(_ context.Context, _ pgx.Tx, id uuid.UUID) (*repository.Contact, error) {
-	if s.returnErr != nil {
-		return nil, s.returnErr
-	}
-	if c, ok := s.contacts[id]; ok {
-		return c, nil
-	}
-	return nil, db.ErrNotFound
-}
 
 type stubCadenceShadowRepo struct {
 	recordConsumerCalls int
@@ -67,12 +49,11 @@ func (s *stubCadenceShadowRepo) FindMatchingDirect(_ context.Context, _ pgx.Tx, 
 	return s.directObs, nil
 }
 
-func newCadenceUpdaterWithStubs(mode string) (*CadenceUpdater, *stubCadenceContactRepo, *stubCadenceShadowRepo, *stubBus) {
-	contactRepo := &stubCadenceContactRepo{contacts: map[uuid.UUID]*repository.Contact{}}
+func newCadenceUpdaterWithStubs(mode string) (*CadenceUpdater, *stubCadenceShadowRepo, *stubBus) {
 	shadowRepo := &stubCadenceShadowRepo{}
 	bus := &stubBus{}
-	h := NewCadenceUpdater(contactRepo, shadowRepo, bus, mode)
-	return h, contactRepo, shadowRepo, bus
+	h := NewCadenceUpdater(shadowRepo, bus, mode)
+	return h, shadowRepo, bus
 }
 
 // mustInteractionRecordedEnv builds an interaction.recorded envelope with
@@ -167,7 +148,7 @@ func TestForwardMax_StrictGreaterThan(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_ModeOff_ShortCircuits(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeOff)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeOff)
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
 		Version:             2,
 		ContactID:           uuid.New(),
@@ -185,7 +166,7 @@ func TestHandleEvent_ModeOff_ShortCircuits(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_PayloadVersion1_LogsErrorReturnsNil(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
 		Version:   1,
 		ContactID: uuid.New(),
@@ -197,7 +178,7 @@ func TestHandleEvent_PayloadVersion1_LogsErrorReturnsNil(t *testing.T) {
 }
 
 func TestHandleEvent_PayloadV2NilSnapshot_LogsErrorReturnsNil(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
 		Version:             2,
 		ContactID:           uuid.New(),
@@ -209,7 +190,7 @@ func TestHandleEvent_PayloadV2NilSnapshot_LogsErrorReturnsNil(t *testing.T) {
 }
 
 func TestHandleEvent_PayloadUnmarshalError_ReturnsError(t *testing.T) {
-	h, _, _, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, _, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	env := &events.Envelope{
 		ID:         uuid.New(),
 		Source:     "telegram",
@@ -229,7 +210,7 @@ func TestHandleEvent_PayloadUnmarshalError_ReturnsError(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_Outbound_OnlyOutreachApplied(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	prevOutreach := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	occurred := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
@@ -257,7 +238,7 @@ func TestHandleEvent_Outbound_OnlyOutreachApplied(t *testing.T) {
 }
 
 func TestHandleEvent_Inbound_NoLastOutreachBumpMirrorsDirect(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	prevContacted := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	occurred := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
@@ -282,7 +263,7 @@ func TestHandleEvent_Inbound_NoLastOutreachBumpMirrorsDirect(t *testing.T) {
 }
 
 func TestHandleEvent_Mutual_AllFourApplied(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
 		Version:             2,
 		ContactID:           uuid.New(),
@@ -305,7 +286,7 @@ func TestHandleEvent_Mutual_AllFourApplied(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_ForwardOnly_IncomingOlder_NextEqualsPrev(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	prev := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 	incoming := prev.Add(-7 * 24 * time.Hour) // older
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
@@ -335,7 +316,7 @@ func TestHandleEvent_ForwardOnly_IncomingOlder_NextEqualsPrev(t *testing.T) {
 }
 
 func TestHandleEvent_ForwardOnly_IncomingNewer_NextEqualsIncoming(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	prev := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	incoming := prev.Add(7 * 24 * time.Hour)
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
@@ -360,7 +341,7 @@ func TestHandleEvent_ForwardOnly_IncomingNewer_NextEqualsIncoming(t *testing.T) 
 }
 
 func TestHandleEvent_NullPrev_IncomingWins(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	occurred := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
 		Version:             2,
@@ -384,7 +365,7 @@ func TestHandleEvent_NullPrev_IncomingWins(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_ManualSource_UnconditionalBranch(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	prev := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 	// Older incoming — manual should still replace unconditionally.
 	incoming := prev.Add(-7 * 24 * time.Hour)
@@ -413,75 +394,31 @@ func TestHandleEvent_ManualSource_UnconditionalBranch(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// HandleEvent — no cadence.
+// HandleEvent — no cadence. PR 7 treats PrevCadenceValue=nil as "no cadence
+// at emit time" and records the observation WITHOUT attempting to derive
+// contact_by. Round-1 Codex fix: no live re-read fallback, which removes
+// the cadence_edited_midstream race class at its source.
 // -----------------------------------------------------------------------------
 
-func TestHandleEvent_NoCadence_ContactByApplyFalse(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+func TestHandleEvent_NoCadenceAtEmit_ContactByApplyFalse(t *testing.T) {
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
 		Version:             2,
 		ContactID:           uuid.New(),
 		Direction:           "inbound",
 		Source:              "telegram",
 		PrevCadenceSnapshot: &events.CadenceFieldsSnapshot{},
-		PrevCadenceValue:    nil, // simulates no fallback needed AND no cadence set
-	})
-	// Stub returns ErrNotFound on GetContactTx (contacts map empty). Consumer
-	// fallback logs WARN and returns nil — no observation written.
-	require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Zero(t, shadow.recordConsumerCalls, "contact not found in fallback: skipped")
-}
-
-func TestHandleEvent_FallbackGetContact_NoCadence_ProceedsWithoutContactBy(t *testing.T) {
-	h, repo, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
-	cid := uuid.New()
-	// Contact exists but has no cadence set.
-	repo.contacts[cid] = &repository.Contact{ID: cid}
-	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
-		Version:             2,
-		ContactID:           cid,
-		Direction:           "inbound",
-		Source:              "telegram",
-		PrevCadenceSnapshot: &events.CadenceFieldsSnapshot{},
-		PrevCadenceValue:    nil, // forces fallback
+		PrevCadenceValue:    nil, // no cadence at emit time
 	})
 	require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Equal(t, 1, shadow.recordConsumerCalls)
+	require.Equal(t, 1, shadow.recordConsumerCalls, "observation written even with no cadence")
 	obs := shadow.lastConsumerObs
 	require.False(t, obs.ApplyContactBy, "no cadence → apply_contact_by false")
 	require.Nil(t, obs.NextContactBy)
-}
-
-func TestHandleEvent_FallbackGetContactFails_LogsAndSkips(t *testing.T) {
-	h, repo, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
-	// GetContactTx returns ErrNotFound (contact soft-deleted midstream).
-	repo.returnErr = db.ErrNotFound
-	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
-		Version:             2,
-		ContactID:           uuid.New(),
-		Direction:           "mutual",
-		Source:              "telegram",
-		PrevCadenceSnapshot: &events.CadenceFieldsSnapshot{},
-		PrevCadenceValue:    nil, // forces fallback
-	})
-	require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env))
-	require.Zero(t, shadow.recordConsumerCalls, "not-found on fallback: skipped observation")
-}
-
-func TestHandleEvent_FallbackGetContactFails_OtherError_ReturnsError(t *testing.T) {
-	h, repo, _, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
-	repo.returnErr = errors.New("pool exhausted")
-	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
-		Version:             2,
-		ContactID:           uuid.New(),
-		Direction:           "mutual",
-		Source:              "telegram",
-		PrevCadenceSnapshot: &events.CadenceFieldsSnapshot{},
-		PrevCadenceValue:    nil,
-	})
-	err := h.HandleEvent(context.Background(), nonNilTx(), env)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "fallback get contact")
+	// Other columns still populated per direction rules.
+	require.True(t, obs.ApplyLastContacted)
+	require.True(t, obs.ApplyLastResponseAt)
+	require.False(t, obs.ApplyLastOutreachAt)
 }
 
 // -----------------------------------------------------------------------------
@@ -489,7 +426,7 @@ func TestHandleEvent_FallbackGetContactFails_OtherError_ReturnsError(t *testing.
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_UnknownDirection_ApplyFlagsAllFalse(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
 		Version:             2,
 		ContactID:           uuid.New(),
@@ -522,7 +459,7 @@ func TestHandleEvent_UnknownDirection_ApplyFlagsAllFalse(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_InlineDivergenceLogger_NoFireWhenMatch(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	prev := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	incoming := prev.Add(7 * 24 * time.Hour)
 	// Pre-seed a matching direct observation.
@@ -552,7 +489,7 @@ func TestHandleEvent_InlineDivergenceLogger_NoFireWhenMatch(t *testing.T) {
 }
 
 func TestHandleEvent_InlineDivergenceLogger_NoFireWhenDirectMissing(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	// directObs == nil → normal condition (direct post-commit closure
 	// hasn't fired yet). Consumer logs DEBUG and returns nil.
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
@@ -569,7 +506,7 @@ func TestHandleEvent_InlineDivergenceLogger_NoFireWhenDirectMissing(t *testing.T
 }
 
 func TestHandleEvent_InlineDivergenceLookupError_LoggedNotReturned(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	shadow.findDirectErr = errors.New("lookup failed")
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
 		Version:             2,
@@ -589,7 +526,7 @@ func TestHandleEvent_InlineDivergenceLookupError_LoggedNotReturned(t *testing.T)
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_RecordConsumerError_ReturnsError(t *testing.T) {
-	h, _, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, shadow, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	shadow.recordConsumerErr = errors.New("insert failed")
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
 		Version:             2,
@@ -609,13 +546,13 @@ func TestHandleEvent_RecordConsumerError_ReturnsError(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_NilEnvelope_Error(t *testing.T) {
-	h, _, _, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, _, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	err := h.HandleEvent(context.Background(), nonNilTx(), nil)
 	require.Error(t, err)
 }
 
 func TestHandleEvent_NilTx_Error(t *testing.T) {
-	h, _, _, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
+	h, _, _ := newCadenceUpdaterWithStubs(CadenceModeShadow)
 	env := mustInteractionRecordedEnv(t, events.InteractionRecordedPayload{
 		Version:             2,
 		ContactID:           uuid.New(),

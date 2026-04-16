@@ -200,16 +200,25 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 // (worker.Work, runHandleEvent) invokes after the outer tx commits.
 // Passing recordedEventID lets the shadow drain bind both direct and
 // consumer observations to the same event_id.
+//
+// Ordering: shadow drain runs FIRST, follow-up runs SECOND. Rationale
+// (Codex round-1 finding 3): the follow-up closure performs post-commit
+// external work (Todoist HTTP calls) that can take seconds. Running it
+// before the shadow drain widens the interval between the authoritative
+// UPDATE and the direct-path post-image re-read, letting intermediate
+// state mutations corrupt the observation. Running the shadow drain
+// first pins the post-image as close as possible to the UPDATE, which
+// is what the post-bake divergence query expects.
 func combinePostCommit(followUp func(context.Context), shadow repository.CadenceShadowDrainFn, recordedEventID uuid.UUID) func(context.Context) {
 	if followUp == nil && shadow == nil {
 		return nil
 	}
 	return func(ctx context.Context) {
-		if followUp != nil {
-			followUp(ctx)
-		}
 		if shadow != nil {
 			shadow(ctx, recordedEventID)
+		}
+		if followUp != nil {
+			followUp(ctx)
 		}
 	}
 }

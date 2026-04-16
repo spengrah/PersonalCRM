@@ -9,7 +9,6 @@ import (
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer/consumerjobs"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
@@ -30,20 +29,6 @@ const (
 	CadenceModeCutover = "cutover"
 )
 
-// cadenceContactReader is the subset of *repository.ContactRepository the
-// cadence updater depends on. Interface defined here (consumer-side)
-// mirrors the PR 5/6 telegramMessageMarker pattern — tests stub it
-// without constructing a full repo. Production wiring passes the
-// concrete *repository.ContactRepository.
-//
-// PR 7 uses GetContactTx ONLY as a fallback when the event payload's
-// PrevCadenceValue is nil (plan Decision 4 race-class
-// "cadence_edited_midstream"). In practice PR 7 always populates
-// PrevCadenceValue, so this fallback should almost never fire.
-type cadenceContactReader interface {
-	GetContactTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.Contact, error)
-}
-
 // cadenceShadowRecorder is the subset of *repository.CadenceShadowObservationRepository
 // the cadence updater depends on. Single-file unit tests stub it without
 // touching the DB. The tx is the worker's own tx — the observation
@@ -63,7 +48,6 @@ type cadenceShadowRecorder interface {
 // PR 8 cutover will remove the direct-path writes and have this consumer
 // mutate contact cadence directly.
 type CadenceUpdater struct {
-	contactRepo       cadenceContactReader
 	cadenceShadowRepo cadenceShadowRecorder
 	bus               eventBusTx
 	mode              string // config.EventBusCadenceMode*
@@ -73,13 +57,11 @@ type CadenceUpdater struct {
 // EVENT_BUS_CADENCE_MODE value; HandleEvent short-circuits with a DEBUG
 // log when mode == "off" (plan Decision 9 always-register model).
 func NewCadenceUpdater(
-	contactRepo cadenceContactReader,
 	cadenceShadowRepo cadenceShadowRecorder,
 	bus eventBusTx,
 	mode string,
 ) *CadenceUpdater {
 	return &CadenceUpdater{
-		contactRepo:       contactRepo,
 		cadenceShadowRepo: cadenceShadowRepo,
 		bus:               bus,
 		mode:              mode,
@@ -153,29 +135,20 @@ func (h *CadenceUpdater) HandleEvent(ctx context.Context, tx pgx.Tx, env *events
 		ContactBy:      p.PrevCadenceSnapshot.ContactBy,
 	}
 
-	// Resolve cadence string: prefer payload, fall back to live GetContactTx.
-	// The fallback is documented as a known-divergence source (plan
-	// Decision 4 race-class "cadence_edited_midstream") and should rarely
-	// fire in PR 7 because emit always populates PrevCadenceValue when
-	// contact.cadence was set.
+	// Cadence value at emit time. Our own emit code (contact.go
+	// RecordInteractionTx) sets PrevCadenceValue only when the contact
+	// had a non-empty cadence at emit time. A nil value therefore
+	// unambiguously means "no cadence at emit" — the consumer treats
+	// it as "no cadence" without a live re-read. This eliminates the
+	// Codex-flagged race where a contact gaining cadence between emit
+	// and consume would cause the consumer to compute contact_by from
+	// the live cadence and manufacture a false divergence against
+	// direct's pre-image. External V2 producers must also populate
+	// PrevCadenceValue when cadence is set, else they accept the same
+	// "treated as no cadence" semantic.
 	var cadenceStr string
 	if p.PrevCadenceValue != nil {
 		cadenceStr = *p.PrevCadenceValue
-	} else {
-		c, err := h.contactRepo.GetContactTx(ctx, tx, p.ContactID)
-		if err != nil {
-			if errors.Is(err, db.ErrNotFound) {
-				logger.Warn().
-					Str("event_id", env.ID.String()).
-					Str("contact_id", p.ContactID.String()).
-					Msg("cadence_updater: contact soft-deleted before consumer run; skipping observation")
-				return nil
-			}
-			return fmt.Errorf("fallback get contact: %w", err)
-		}
-		if c.Cadence != nil {
-			cadenceStr = *c.Cadence
-		}
 	}
 	hasCadence := cadenceStr != ""
 

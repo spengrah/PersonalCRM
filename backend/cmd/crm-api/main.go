@@ -246,7 +246,7 @@ func run() int {
 
 	cadenceShadowRepo := repository.NewCadenceShadowObservationRepository(database.Queries, database.Pool)
 	cadenceUpdater := consumer.NewCadenceUpdater(
-		contactRepo, cadenceShadowRepo, eventBus,
+		cadenceShadowRepo, eventBus,
 		consumer.CadenceModeFromConfig(cfg.EventBus.CadenceMode),
 	)
 	river.AddWorker(riverWorkers, consumer.NewCadenceUpdaterWorker(eventBus, database.Pool, cadenceUpdater))

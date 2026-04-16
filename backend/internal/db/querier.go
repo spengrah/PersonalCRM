@@ -144,9 +144,27 @@ type Querier interface {
 	// Post-bake divergence query. FULL OUTER JOIN of direct vs consumer rows
 	// on event_id — per plan Decision 1 each (event_id, writer) pair is unique,
 	// so the join resolves at most one direct + one consumer row per event.
-	// A non-empty result (after caller-side race-class filters — plan Decision
-	// 4 taxonomy) indicates real drift: direct missing, consumer missing, or
-	// next_* values disagreeing.
+	// A non-empty result indicates real drift: direct missing, consumer
+	// missing, or next_* values disagreeing.
+	//
+	// Race-class filters baked in (plan Decision 4 taxonomy):
+	//
+	//   1. `observed_at < @observed_at_to - 5s` — skip rows observed within
+	//      the grace window. The direct-path observer fires from an async
+	//      post-commit closure that may land after the consumer; a rigid
+	//      boundary would flag rows as "direct missing" that will land
+	//      moments later.
+	//   2. Exclude events where the paired contact is soft-deleted
+	//      (contact.deleted_at IS NOT NULL). The direct-path closure skips
+	//      snapshot writes when the contact is gone (plan Decision 4
+	//      contact_soft_deleted_midstream race class); the consumer may
+	//      still have written because its check runs at event-time, not
+	//      query-time. These rows are expected-one-sided.
+	// @observed_at_to::timestamptz - INTERVAL '5 seconds' is the effective
+	// upper bound; the grace window lets the direct-path post-commit
+	// closure land before we treat "direct missing" as a real divergence.
+	// Keep @observed_at_to as the "hard" right edge so callers can reason
+	// about the bake window; pre-subtract the grace inline.
 	FindCadenceShadowDivergences(ctx context.Context, arg FindCadenceShadowDivergencesParams) ([]*FindCadenceShadowDivergencesRow, error)
 	// Inline divergence logger uses this: given a consumer row just inserted,
 	// look up the paired 'direct' row to compare next_* values. Returns

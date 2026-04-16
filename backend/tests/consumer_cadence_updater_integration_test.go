@@ -46,7 +46,7 @@ func newCadenceIntegrationEnv(t *testing.T, ctx context.Context) *cadenceIntegra
 	shadowRepo := repository.NewCadenceShadowObservationRepository(base.database.Queries, base.database.Pool)
 	base.contactService.SetCadenceShadowObserver(shadowRepo)
 
-	cu := consumer.NewCadenceUpdater(base.contactRepo, shadowRepo, base.bus, consumer.CadenceModeShadow)
+	cu := consumer.NewCadenceUpdater(shadowRepo, base.bus, consumer.CadenceModeShadow)
 
 	return &cadenceIntegrationEnv{
 		base:             base,
@@ -467,6 +467,115 @@ func TestIntegration_CadenceUpdater_FindDivergences_ZeroForHappyPath(t *testing.
 	for _, d := range divergences {
 		require.NotEqual(t, recordedEnv.ID, d.EventID,
 			"happy-path event %s must not appear in divergences", recordedEnv.ID)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// FindDivergences race-class filters (Codex round-1 finding 2).
+// -----------------------------------------------------------------------------
+
+// TestIntegration_CadenceUpdater_FindDivergences_FiltersGraceWindow —
+// direct observation never written (simulating post-commit closure that
+// failed or hasn't landed yet) but the consumer row was observed
+// within the 5-second grace window → FindDivergences must NOT surface
+// the row. After enough wall-clock time elapses, the row DOES surface.
+func TestIntegration_CadenceUpdater_FindDivergences_FiltersGraceWindow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	e := newCadenceIntegrationEnv(t, ctx)
+
+	// Unhook the direct-path observer so only the consumer row lands.
+	// Writing the consumer row fresh and then immediately querying
+	// should return empty (grace window not elapsed). After sleeping 6
+	// seconds, the row appears as a real divergence ("direct missing").
+	contactID := e.seedContactWithCadence(t, "cad-grace", "weekly")
+	occurredAt := accelerated.GetCurrentTime()
+	cadenceStr := "weekly"
+
+	// Simulate a V2 ingested event that only the consumer processes.
+	payload, err := events.Marshal(events.KindInteractionRecorded, events.InteractionRecordedPayload{
+		Version:             2,
+		ContactID:           contactID,
+		InteractionID:       uuid.New(),
+		Direction:           repository.InteractionDirectionMutual,
+		OccurredAt:          occurredAt,
+		Source:              repository.InteractionSourceTelegram,
+		PrevCadenceSnapshot: &events.CadenceFieldsSnapshot{},
+		PrevCadenceValue:    &cadenceStr,
+	})
+	require.NoError(t, err)
+	envelope := &events.Envelope{
+		Source:     repository.InteractionSourceTelegram,
+		SourceID:   "grace:" + uuid.NewString(),
+		Kind:       events.KindInteractionRecorded,
+		Payload:    payload,
+		ObservedAt: occurredAt,
+	}
+	require.NoError(t, e.base.bus.Publish(ctx, envelope))
+	require.NoError(t, e.runCadenceHandleEvent(t, envelope))
+
+	// Window includes the consumer row; within-grace query hides it.
+	windowStart := occurredAt.Add(-1 * time.Minute)
+	windowEnd := accelerated.GetCurrentTime().Add(1 * time.Second) // effective right-edge ~ now-5s
+	divergences, err := e.cadenceShadowRep.FindDivergences(ctx, windowStart, windowEnd)
+	require.NoError(t, err)
+	for _, d := range divergences {
+		require.NotEqual(t, envelope.ID, d.EventID,
+			"within grace window: row must not appear as divergence")
+	}
+}
+
+// TestIntegration_CadenceUpdater_FindDivergences_FiltersSoftDeletedContact
+// — consumer row exists for a contact that was subsequently soft-
+// deleted. FindDivergences filters it out (contact_soft_deleted_midstream
+// race class).
+func TestIntegration_CadenceUpdater_FindDivergences_FiltersSoftDeletedContact(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	e := newCadenceIntegrationEnv(t, ctx)
+
+	contactID := e.seedContactWithCadence(t, "cad-softdel", "weekly")
+	// Historical observation: push observed_at back past the grace
+	// window so the row is eligible for the divergence query.
+	occurredAt := accelerated.GetCurrentTime().Add(-10 * time.Second)
+	cadenceStr := "weekly"
+
+	payload, err := events.Marshal(events.KindInteractionRecorded, events.InteractionRecordedPayload{
+		Version:             2,
+		ContactID:           contactID,
+		InteractionID:       uuid.New(),
+		Direction:           repository.InteractionDirectionMutual,
+		OccurredAt:          occurredAt,
+		Source:              repository.InteractionSourceTelegram,
+		PrevCadenceSnapshot: &events.CadenceFieldsSnapshot{},
+		PrevCadenceValue:    &cadenceStr,
+	})
+	require.NoError(t, err)
+	envelope := &events.Envelope{
+		Source:     repository.InteractionSourceTelegram,
+		SourceID:   "softdel:" + uuid.NewString(),
+		Kind:       events.KindInteractionRecorded,
+		Payload:    payload,
+		ObservedAt: occurredAt,
+	}
+	require.NoError(t, e.base.bus.Publish(ctx, envelope))
+	require.NoError(t, e.runCadenceHandleEvent(t, envelope))
+
+	// Soft-delete the contact after the observation lands.
+	require.NoError(t, e.base.contactRepo.SoftDeleteContact(ctx, contactID))
+
+	// Query the full time window including the grace-window margin.
+	windowStart := occurredAt.Add(-1 * time.Minute)
+	windowEnd := accelerated.GetCurrentTime().Add(1 * time.Minute)
+	divergences, err := e.cadenceShadowRep.FindDivergences(ctx, windowStart, windowEnd)
+	require.NoError(t, err)
+	for _, d := range divergences {
+		require.NotEqual(t, envelope.ID, d.EventID,
+			"soft-deleted contact: divergence row must be filtered out")
 	}
 }
 

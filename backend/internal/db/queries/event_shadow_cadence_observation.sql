@@ -56,40 +56,64 @@ WHERE writer = @writer;
 -- Post-bake divergence query. FULL OUTER JOIN of direct vs consumer rows
 -- on event_id — per plan Decision 1 each (event_id, writer) pair is unique,
 -- so the join resolves at most one direct + one consumer row per event.
--- A non-empty result (after caller-side race-class filters — plan Decision
--- 4 taxonomy) indicates real drift: direct missing, consumer missing, or
--- next_* values disagreeing.
+-- A non-empty result indicates real drift: direct missing, consumer
+-- missing, or next_* values disagreeing.
+--
+-- Race-class filters baked in (plan Decision 4 taxonomy):
+--
+--   1. `observed_at < @observed_at_to - 5s` — skip rows observed within
+--      the grace window. The direct-path observer fires from an async
+--      post-commit closure that may land after the consumer; a rigid
+--      boundary would flag rows as "direct missing" that will land
+--      moments later.
+--   2. Exclude events where the paired contact is soft-deleted
+--      (contact.deleted_at IS NOT NULL). The direct-path closure skips
+--      snapshot writes when the contact is gone (plan Decision 4
+--      contact_soft_deleted_midstream race class); the consumer may
+--      still have written because its check runs at event-time, not
+--      query-time. These rows are expected-one-sided.
+-- @observed_at_to::timestamptz - INTERVAL '5 seconds' is the effective
+-- upper bound; the grace window lets the direct-path post-commit
+-- closure land before we treat "direct missing" as a real divergence.
+-- Keep @observed_at_to as the "hard" right edge so callers can reason
+-- about the bake window; pre-subtract the grace inline.
 WITH direct_obs AS (
     SELECT * FROM event_shadow_cadence_observation
     WHERE writer = 'direct'
-      AND observed_at >= @observed_at_from::timestamptz
-      AND observed_at <  @observed_at_to::timestamptz
+      AND observed_at >= sqlc.arg(observed_at_from)::timestamptz
+      AND observed_at <  sqlc.arg(observed_at_to)::timestamptz - INTERVAL '5 seconds'
 ),
 consumer_obs AS (
     SELECT * FROM event_shadow_cadence_observation
     WHERE writer = 'consumer'
-      AND observed_at >= @observed_at_from::timestamptz
-      AND observed_at <  @observed_at_to::timestamptz
+      AND observed_at >= sqlc.arg(observed_at_from)::timestamptz
+      AND observed_at <  sqlc.arg(observed_at_to)::timestamptz - INTERVAL '5 seconds'
+),
+joined AS (
+    SELECT
+        COALESCE(d.event_id, c.event_id)       AS event_id,
+        COALESCE(d.contact_id, c.contact_id)   AS contact_id,
+        d.branch                               AS direct_branch,
+        c.branch                               AS consumer_branch,
+        d.next_last_contacted                  AS direct_next_last_contacted,
+        c.next_last_contacted                  AS consumer_next_last_contacted,
+        d.next_last_outreach_at                AS direct_next_last_outreach_at,
+        c.next_last_outreach_at                AS consumer_next_last_outreach_at,
+        d.next_last_response_at                AS direct_next_last_response_at,
+        c.next_last_response_at                AS consumer_next_last_response_at,
+        d.next_contact_by                      AS direct_next_contact_by,
+        c.next_contact_by                      AS consumer_next_contact_by
+    FROM direct_obs d
+    FULL OUTER JOIN consumer_obs c USING (event_id)
+    WHERE d.event_id IS NULL
+       OR c.event_id IS NULL
+       OR d.branch                IS DISTINCT FROM c.branch
+       OR d.next_last_contacted   IS DISTINCT FROM c.next_last_contacted
+       OR d.next_last_outreach_at IS DISTINCT FROM c.next_last_outreach_at
+       OR d.next_last_response_at IS DISTINCT FROM c.next_last_response_at
+       OR d.next_contact_by       IS DISTINCT FROM c.next_contact_by
 )
-SELECT
-    COALESCE(d.event_id, c.event_id)       AS event_id,
-    COALESCE(d.contact_id, c.contact_id)   AS contact_id,
-    d.branch                               AS direct_branch,
-    c.branch                               AS consumer_branch,
-    d.next_last_contacted                  AS direct_next_last_contacted,
-    c.next_last_contacted                  AS consumer_next_last_contacted,
-    d.next_last_outreach_at                AS direct_next_last_outreach_at,
-    c.next_last_outreach_at                AS consumer_next_last_outreach_at,
-    d.next_last_response_at                AS direct_next_last_response_at,
-    c.next_last_response_at                AS consumer_next_last_response_at,
-    d.next_contact_by                      AS direct_next_contact_by,
-    c.next_contact_by                      AS consumer_next_contact_by
-FROM direct_obs d
-FULL OUTER JOIN consumer_obs c USING (event_id)
-WHERE d.event_id IS NULL
-   OR c.event_id IS NULL
-   OR d.branch                IS DISTINCT FROM c.branch
-   OR d.next_last_contacted   IS DISTINCT FROM c.next_last_contacted
-   OR d.next_last_outreach_at IS DISTINCT FROM c.next_last_outreach_at
-   OR d.next_last_response_at IS DISTINCT FROM c.next_last_response_at
-   OR d.next_contact_by       IS DISTINCT FROM c.next_contact_by;
+SELECT j.*
+FROM joined j
+LEFT JOIN contact ct ON ct.id = j.contact_id
+WHERE ct.deleted_at IS NULL;
