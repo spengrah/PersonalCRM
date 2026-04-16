@@ -149,22 +149,27 @@ type Querier interface {
 	//
 	// Race-class filters baked in (plan Decision 4 taxonomy):
 	//
-	//   1. `observed_at < @observed_at_to - 5s` — skip rows observed within
-	//      the grace window. The direct-path observer fires from an async
-	//      post-commit closure that may land after the consumer; a rigid
-	//      boundary would flag rows as "direct missing" that will land
-	//      moments later.
+	//   1. Grace window (`GREATEST(direct.observed_at, consumer.observed_at)
+	//      < @observed_at_to - 5s`) — applied on the JOINED pair, NOT on each
+	//      side independently. The direct-path observer fires from an async
+	//      post-commit closure that may land after the consumer. Filtering
+	//      each CTE independently causes a false consumer-only divergence
+	//      when consumer lands past the grace edge (e.g. T-6s) and direct
+	//      lands inside the grace edge (e.g. T-4s): the pre-filter removes
+	//      direct, consumer survives, and the FULL OUTER JOIN flags the
+	//      surviving consumer row as "direct missing". Moving the filter to
+	//      the joined CTE keeps both sides visible and only excludes the
+	//      pair when the later of the two is still within grace.
 	//   2. Exclude events where the paired contact is soft-deleted
 	//      (contact.deleted_at IS NOT NULL). The direct-path closure skips
 	//      snapshot writes when the contact is gone (plan Decision 4
 	//      contact_soft_deleted_midstream race class); the consumer may
 	//      still have written because its check runs at event-time, not
 	//      query-time. These rows are expected-one-sided.
-	// @observed_at_to::timestamptz - INTERVAL '5 seconds' is the effective
-	// upper bound; the grace window lets the direct-path post-commit
-	// closure land before we treat "direct missing" as a real divergence.
-	// Keep @observed_at_to as the "hard" right edge so callers can reason
-	// about the bake window; pre-subtract the grace inline.
+	// @observed_at_to is the "hard" right edge of the query window; the
+	// 5-second grace is subtracted on the joined pair's latest observed_at
+	// so the direct-path post-commit closure gets ample time to land before
+	// we treat "direct missing" (or "consumer missing") as real drift.
 	FindCadenceShadowDivergences(ctx context.Context, arg FindCadenceShadowDivergencesParams) ([]*FindCadenceShadowDivergencesRow, error)
 	// Inline divergence logger uses this: given a consumer row just inserted,
 	// look up the paired 'direct' row to compare next_* values. Returns

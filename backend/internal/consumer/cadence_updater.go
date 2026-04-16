@@ -112,13 +112,15 @@ func (h *CadenceUpdater) HandleEvent(ctx context.Context, tx pgx.Tx, env *events
 	// Version + PrevCadenceSnapshot presence is a hard prerequisite for
 	// the shadow computation. V1 payloads (PR 5/6 emit before cutover
 	// to V2) or V2 payloads with a nil snapshot cannot be matched bit-
-	// for-bit against the direct path. Log ERROR and succeed the job —
-	// retries won't change the payload shape.
-	if p.Version < 2 {
+	// for-bit against the direct path. V3+ payloads may carry new fields
+	// whose semantics this consumer doesn't understand and must also be
+	// rejected until a future PR adopts them. Log ERROR and succeed the
+	// job — retries won't change the payload shape.
+	if p.Version != 2 {
 		logger.Error().
 			Str("event_id", env.ID.String()).
 			Int("version", p.Version).
-			Msg("cadence_updater: rejecting interaction.recorded payload with Version<2; external producers must emit V2")
+			Msg("cadence_updater: rejecting interaction.recorded payload with Version != 2; external producers must emit V2")
 		return nil
 	}
 	if p.PrevCadenceSnapshot == nil {

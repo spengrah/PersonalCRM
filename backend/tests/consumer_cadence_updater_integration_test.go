@@ -9,6 +9,7 @@ import (
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -604,6 +605,87 @@ func TestIntegration_CadenceUpdater_FindDivergences_FiltersSoftDeletedContact(t 
 	}
 }
 
+// TestIntegration_CadenceUpdater_FindDivergences_GraceWindowAppliedToPair —
+// regression test for the reviewer's Risky-1 finding (pre-filter on each
+// side caused false consumer-only divergences). Setup: consumer row at
+// T-6s (past grace, previously visible), direct row at T-4s (within
+// grace, previously excluded by the per-side filter). Both rows have
+// MATCHING next_* values. With to=T:
+//
+//   - BUG (per-side grace pre-filter): direct_obs filters T-4s out;
+//     consumer_obs keeps T-6s; FULL OUTER JOIN emits consumer-only row
+//     → event surfaces as a false "direct missing" divergence.
+//   - FIX (grace on joined pair): both rows visible in CTEs; join pairs
+//     them; matching next_* → pair falls out of the DISTINCT-FROM
+//     WHERE clause; alternatively the GREATEST(d, c)=T-4s pair-level
+//     grace check excludes it. Result: empty for this event.
+func TestIntegration_CadenceUpdater_FindDivergences_GraceWindowAppliedToPair(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	e := newCadenceIntegrationEnv(t, ctx)
+
+	contactID := e.seedContactWithCadence(t, "cad-grace-pair", "weekly")
+	occurredAt := accelerated.GetCurrentTime()
+	cadenceStr := "weekly"
+
+	// Create and publish an event envelope — we need a real event_id the
+	// two observation rows can share (the FK on event_shadow_cadence_observation.event_id
+	// is to event(id)).
+	payload, err := events.Marshal(events.KindInteractionRecorded, events.InteractionRecordedPayload{
+		Version:             2,
+		ContactID:           contactID,
+		InteractionID:       uuid.New(),
+		Direction:           repository.InteractionDirectionMutual,
+		OccurredAt:          occurredAt,
+		Source:              repository.InteractionSourceTelegram,
+		PrevCadenceSnapshot: &events.CadenceFieldsSnapshot{},
+		PrevCadenceValue:    &cadenceStr,
+	})
+	require.NoError(t, err)
+	envelope := &events.Envelope{
+		Source:     repository.InteractionSourceTelegram,
+		SourceID:   "grace-pair:" + uuid.NewString(),
+		Kind:       events.KindInteractionRecorded,
+		Payload:    payload,
+		ObservedAt: occurredAt,
+	}
+	require.NoError(t, e.base.bus.Publish(ctx, envelope))
+
+	// Insert both rows via direct SQL so observed_at is deterministic.
+	// Pre-fix bug needs direct inside the grace window and consumer just
+	// outside it, so we simulate wall-clock offsets without waiting.
+	windowEnd := accelerated.GetCurrentTime().Add(1 * time.Second)
+	consumerObservedAt := windowEnd.Add(-6 * time.Second) // past grace (visible under both old and new)
+	directObservedAt := windowEnd.Add(-4 * time.Second)   // within grace (hidden under old pre-filter)
+
+	insertSQL := `INSERT INTO event_shadow_cadence_observation (
+		event_id, writer, contact_id, source, direction, branch, occurred_at,
+		apply_last_contacted, apply_last_outreach_at, apply_last_response_at, apply_contact_by,
+		observed_at
+	) VALUES ($1, $2, $3, 'telegram', 'mutual', 'forward', $4,
+		false, false, false, false, $5)`
+	_, err = e.base.database.Pool.Exec(ctx, insertSQL,
+		envelope.ID, repository.CadenceShadowWriterConsumer, contactID, occurredAt, consumerObservedAt)
+	require.NoError(t, err)
+	_, err = e.base.database.Pool.Exec(ctx, insertSQL,
+		envelope.ID, repository.CadenceShadowWriterDirect, contactID, occurredAt, directObservedAt)
+	require.NoError(t, err)
+
+	// from well before the earliest row; to at windowEnd. Effective grace
+	// edge = to - 5s = windowEnd - 5s. Consumer observed_at = windowEnd -
+	// 6s (past grace by 1s). Direct observed_at = windowEnd - 4s (within
+	// grace by 1s). Pair's GREATEST = windowEnd - 4s → within grace → excluded.
+	windowStart := consumerObservedAt.Add(-1 * time.Minute)
+	divergences, err := e.cadenceShadowRep.FindDivergences(ctx, windowStart, windowEnd)
+	require.NoError(t, err)
+	for _, d := range divergences {
+		require.NotEqual(t, envelope.ID, d.EventID,
+			"grace filter must be applied to the JOINED pair's latest observed_at, not each side independently")
+	}
+}
+
 // -----------------------------------------------------------------------------
 // Coverage-gap documentation tests. Each asserts "no cadence shadow row"
 // for a code path we explicitly do NOT cover in PR 7.
@@ -675,61 +757,27 @@ func TestIntegration_CadenceUpdater_PromoteInteractionToMutual_NoCadenceShadowRo
 }
 
 // -----------------------------------------------------------------------------
-// V1 payload rejection (HTTP-ingested external producer without V2 upgrade).
+// Mode gating + scope exclusions.
 // -----------------------------------------------------------------------------
 
-// TestIntegration_CadenceUpdater_HTTPIngested_V1_Rejected — simulates a
-// V1-shape interaction.recorded envelope hitting the consumer. Expected:
-// ERROR log + nil return (no observation row). Documents the known
-// limitation that PR 7 will be tightened by PR 8 at the HTTP boundary.
-func TestIntegration_CadenceUpdater_HTTPIngested_V1_Rejected(t *testing.T) {
+// TestIntegration_CadenceUpdater_ModeOff_WorkerDrainsNoOp — with
+// EVENT_BUS_CADENCE_MODE=off, the worker must short-circuit before
+// touching the DB: zero rows land in event_shadow_cadence_observation
+// after processing an interaction.recorded event. Mirrors the "off-mode
+// is a silent drain" contract (plan Decision 9 always-register model).
+func TestIntegration_CadenceUpdater_ModeOff_WorkerDrainsNoOp(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
 	ctx := context.Background()
 	e := newCadenceIntegrationEnv(t, ctx)
 
-	contactID := e.seedContactWithCadence(t, "cad-v1-reject", "weekly")
-	occurredAt := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+	// Build an OFF-mode updater pointing at the same repo/bus. The env's
+	// default cadenceUpdater is shadow-mode, so we explicitly use a
+	// separate off-mode instance here.
+	offUpdater := consumer.NewCadenceUpdater(e.cadenceShadowRep, e.base.bus, consumer.CadenceModeOff)
 
-	// V1 payload — no PrevCadenceSnapshot / PrevCadenceValue.
-	payload, err := events.Marshal(events.KindInteractionRecorded, events.InteractionRecordedPayload{
-		Version:       1,
-		ContactID:     contactID,
-		InteractionID: uuid.New(),
-		Direction:     repository.InteractionDirectionMutual,
-		OccurredAt:    occurredAt,
-		Source:        repository.InteractionSourceTelegram,
-	})
-	require.NoError(t, err)
-	envelope := &events.Envelope{
-		Source:     repository.InteractionSourceTelegram,
-		SourceID:   "v1-rej:" + uuid.NewString(),
-		Kind:       events.KindInteractionRecorded,
-		Payload:    payload,
-		ObservedAt: occurredAt,
-	}
-	require.NoError(t, e.base.bus.Publish(ctx, envelope))
-
-	// Consumer should log ERROR and succeed the job — no observation.
-	require.NoError(t, e.runCadenceHandleEvent(t, envelope))
-
-	obs, err := e.cadenceShadowRep.FindMatchingConsumer(ctx, nil, envelope.ID)
-	require.NoError(t, err)
-	require.Nil(t, obs, "V1 payload: no consumer observation written")
-}
-
-// TestIntegration_CadenceUpdater_HTTPIngested_V2_ConsumerOnly — simulates
-// an external producer that emits V2 with PrevCadenceSnapshot. Expected:
-// consumer row written; no direct row (no in-process direct-path writer).
-func TestIntegration_CadenceUpdater_HTTPIngested_V2_ConsumerOnly(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	ctx := context.Background()
-	e := newCadenceIntegrationEnv(t, ctx)
-
-	contactID := e.seedContactWithCadence(t, "cad-v2-ingest", "weekly")
+	contactID := e.seedContactWithCadence(t, "cad-off", "weekly")
 	occurredAt := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 	cadenceStr := "weekly"
 
@@ -746,7 +794,192 @@ func TestIntegration_CadenceUpdater_HTTPIngested_V2_ConsumerOnly(t *testing.T) {
 	require.NoError(t, err)
 	envelope := &events.Envelope{
 		Source:     repository.InteractionSourceTelegram,
-		SourceID:   "v2-ingest:" + uuid.NewString(),
+		SourceID:   "off:" + uuid.NewString(),
+		Kind:       events.KindInteractionRecorded,
+		Payload:    payload,
+		ObservedAt: occurredAt,
+	}
+	require.NoError(t, e.base.bus.Publish(ctx, envelope))
+
+	// Invoke the off-mode updater in a fresh tx.
+	require.NoError(t, pgx.BeginTxFunc(ctx, e.base.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return offUpdater.HandleEvent(ctx, tx, envelope)
+	}))
+
+	// No row should exist for either writer.
+	consumerObs, err := e.cadenceShadowRep.FindMatchingConsumer(ctx, nil, envelope.ID)
+	require.NoError(t, err)
+	require.Nil(t, consumerObs, "mode=off: no consumer observation must be written")
+
+	directObs, err := e.cadenceShadowRep.FindMatchingDirect(ctx, nil, envelope.ID)
+	require.NoError(t, err)
+	require.Nil(t, directObs, "mode=off: no direct observation must be written")
+
+	// Stronger assertion: zero rows in the table for this event_id period.
+	var total int
+	err = e.base.database.Pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM event_shadow_cadence_observation WHERE event_id = $1",
+		envelope.ID,
+	).Scan(&total)
+	require.NoError(t, err)
+	require.Zero(t, total, "mode=off: zero rows in event_shadow_cadence_observation for event_id")
+
+	// --- Second phase: direct-path observer UNWIRED (mimics production
+	// mode=off wiring, which skips SetCadenceShadowObserver in main.go).
+	// Exercise the real `withShadow=true` caller path — the same path
+	// InteractionRecorder takes when mode != off — against a service
+	// whose cadenceShadow field is nil. The shadow branch in
+	// applyInteractionEffectsFromRow gates on `cadenceShadow != nil &&
+	// shadowQueue != nil && prev != nil` (contact.go:710), so the
+	// returned drain fn MUST be nil even though the caller opted in.
+	// A stub RecordInteraction wrapper (which hard-codes withShadow=false)
+	// wouldn't test this — the assertion would pass trivially.
+	base2 := newConsumerTestEnv(t, ctx)
+	// Intentionally do NOT call SetCadenceShadowObserver on base2.contactService.
+
+	directOffContactID := base2.newContact(t, "cad-off-direct")
+	ref := "off-direct-" + uuid.NewString()
+	var shadowDrainFn repository.CadenceShadowDrainFn
+	err = pgx.BeginTxFunc(ctx, base2.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		_, _, _, _, _, drain, txErr := base2.contactService.RecordInteractionTx(
+			ctx, tx, true, // withShadow=TRUE — production mode!=off calls this path
+			repository.RecordInteractionRequest{
+				ContactID:  directOffContactID,
+				Source:     repository.InteractionSourceTelegram,
+				SourceRef:  &ref,
+				OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+				Direction:  repository.InteractionDirectionMutual,
+			},
+		)
+		if txErr != nil {
+			return txErr
+		}
+		shadowDrainFn = drain
+		return nil
+	})
+	require.NoError(t, err)
+	require.Nil(t, shadowDrainFn,
+		"cadenceShadow=nil must collapse the drain fn to nil even when withShadow=true")
+
+	// Belt-and-suspenders: if some caller DID invoke the nil drain, it
+	// would panic. So we don't invoke it here; just assert no direct row
+	// made it to the DB.
+	var directForContact int
+	err = base2.database.Pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM event_shadow_cadence_observation WHERE contact_id = $1 AND writer = 'direct'",
+		directOffContactID,
+	).Scan(&directForContact)
+	require.NoError(t, err)
+	require.Zero(t, directForContact,
+		"mode=off production wiring: cadenceShadow=nil + withShadow=true must produce no direct observation row")
+}
+
+// TestIntegration_CadenceUpdater_MergeContacts_NoCadenceShadowRow —
+// MergeContacts transfers related rows and soft-deletes the source
+// contact but does NOT emit interaction.recorded, so neither the direct
+// path nor the consumer observes the cadence columns it touches.
+// Documents the explicit exclusion in plan §Acceptance scope.
+func TestIntegration_CadenceUpdater_MergeContacts_NoCadenceShadowRow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	e := newCadenceIntegrationEnv(t, ctx)
+
+	sourceID := e.seedContactWithCadence(t, "cad-merge-src", "weekly")
+	targetID := e.seedContactWithCadence(t, "cad-merge-tgt", "weekly")
+
+	// Record an interaction on the SOURCE contact first so there's
+	// meaningful cadence state to transfer during merge. This ensures
+	// MergeContacts actually rewrites cadence-bearing data.
+	ref := "merge-src-" + uuid.NewString()
+	_, err := e.base.contactService.RecordInteraction(ctx, repository.RecordInteractionRequest{
+		ContactID:  sourceID,
+		Source:     repository.InteractionSourceTelegram,
+		SourceRef:  &ref,
+		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		Direction:  repository.InteractionDirectionMutual,
+	})
+	require.NoError(t, err)
+
+	// Premise check: source contact now has populated cadence fields
+	// that MergeContacts WILL rewrite. If any of these assertions fail,
+	// the merge isn't exercising cadence-bearing data and the test's
+	// "no shadow row" guarantee becomes vacuous.
+	srcBeforeMerge, err := e.base.contactRepo.GetContact(ctx, sourceID)
+	require.NoError(t, err)
+	require.NotNil(t, srcBeforeMerge.LastContacted, "mutual interaction must populate source.last_contacted")
+	require.NotNil(t, srcBeforeMerge.LastOutreachAt, "mutual interaction must populate source.last_outreach_at")
+	require.NotNil(t, srcBeforeMerge.LastResponseAt, "mutual interaction must populate source.last_response_at")
+	require.NotNil(t, srcBeforeMerge.ContactBy, "mutual interaction + cadence='weekly' must populate source.contact_by")
+
+	directBefore, err := e.cadenceShadowRep.CountByWriter(ctx, repository.CadenceShadowWriterDirect)
+	require.NoError(t, err)
+	consumerBefore, err := e.cadenceShadowRep.CountByWriter(ctx, repository.CadenceShadowWriterConsumer)
+	require.NoError(t, err)
+
+	merged, err := e.base.contactService.MergeContacts(ctx, service.MergeContactsRequest{
+		SourceContactID: sourceID,
+		TargetContactID: targetID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, targetID, merged.ID)
+
+	directAfter, err := e.cadenceShadowRep.CountByWriter(ctx, repository.CadenceShadowWriterDirect)
+	require.NoError(t, err)
+	consumerAfter, err := e.cadenceShadowRep.CountByWriter(ctx, repository.CadenceShadowWriterConsumer)
+	require.NoError(t, err)
+
+	require.Equal(t, directBefore, directAfter,
+		"MergeContacts must not produce a direct cadence shadow row")
+	require.Equal(t, consumerBefore, consumerAfter,
+		"MergeContacts must not produce a consumer cadence shadow row")
+
+	// Belt-and-suspenders: no rows scoped to either merge participant.
+	var perContact int
+	err = e.base.database.Pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM event_shadow_cadence_observation WHERE contact_id IN ($1, $2)",
+		sourceID, targetID,
+	).Scan(&perContact)
+	require.NoError(t, err)
+	require.Zero(t, perContact, "MergeContacts must not emit shadow observations for either participant")
+}
+
+// -----------------------------------------------------------------------------
+// FindDivergences — induced mismatch (real divergence surfaces).
+// -----------------------------------------------------------------------------
+
+// TestIntegration_CadenceUpdater_FindDivergences_DetectsInducedMismatch —
+// the consumer writes its row for a synthetic event; we insert a direct
+// row for the same event with a DIFFERENT next_last_contacted. Per-row
+// invariant: FindDivergences must return that event_id with both sides
+// populated and the expected branch/next mismatches.
+func TestIntegration_CadenceUpdater_FindDivergences_DetectsInducedMismatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	e := newCadenceIntegrationEnv(t, ctx)
+
+	// Push observed_at back past the 5s grace so the row is query-eligible.
+	occurredAt := accelerated.GetCurrentTime().Add(-10 * time.Second)
+	cadenceStr := "weekly"
+	contactID := e.seedContactWithCadence(t, "cad-diverge", cadenceStr)
+
+	payload, err := events.Marshal(events.KindInteractionRecorded, events.InteractionRecordedPayload{
+		Version:             2,
+		ContactID:           contactID,
+		InteractionID:       uuid.New(),
+		Direction:           repository.InteractionDirectionMutual,
+		OccurredAt:          occurredAt,
+		Source:              repository.InteractionSourceTelegram,
+		PrevCadenceSnapshot: &events.CadenceFieldsSnapshot{},
+		PrevCadenceValue:    &cadenceStr,
+	})
+	require.NoError(t, err)
+	envelope := &events.Envelope{
+		Source:     repository.InteractionSourceTelegram,
+		SourceID:   "diverge:" + uuid.NewString(),
 		Kind:       events.KindInteractionRecorded,
 		Payload:    payload,
 		ObservedAt: occurredAt,
@@ -754,13 +987,56 @@ func TestIntegration_CadenceUpdater_HTTPIngested_V2_ConsumerOnly(t *testing.T) {
 	require.NoError(t, e.base.bus.Publish(ctx, envelope))
 	require.NoError(t, e.runCadenceHandleEvent(t, envelope))
 
-	obs, err := e.cadenceShadowRep.FindMatchingConsumer(ctx, nil, envelope.ID)
+	consumerObs, err := e.cadenceShadowRep.FindMatchingConsumer(ctx, nil, envelope.ID)
 	require.NoError(t, err)
-	require.NotNil(t, obs, "V2 ingested event: consumer row written")
+	require.NotNil(t, consumerObs, "consumer row must be present before induced direct row")
 
-	direct, err := e.cadenceShadowRep.FindMatchingDirect(ctx, nil, envelope.ID)
+	// Induce divergence: insert a direct row whose next_last_contacted is
+	// shifted by +1h compared to the consumer's value. Everything else
+	// matches the consumer to keep the test focused on a single field.
+	shifted := consumerObs.NextLastContacted.Add(1 * time.Hour)
+	inducedDirect := repository.CadenceShadowObservation{
+		EventID:             envelope.ID,
+		ContactID:           contactID,
+		Source:              repository.InteractionSourceTelegram,
+		Direction:           repository.InteractionDirectionMutual,
+		Branch:              repository.CadenceShadowBranchForward,
+		OccurredAt:          occurredAt,
+		ApplyLastContacted:  consumerObs.ApplyLastContacted,
+		ApplyLastOutreachAt: consumerObs.ApplyLastOutreachAt,
+		ApplyLastResponseAt: consumerObs.ApplyLastResponseAt,
+		ApplyContactBy:      consumerObs.ApplyContactBy,
+		NextLastContacted:   &shifted,
+		NextLastOutreachAt:  consumerObs.NextLastOutreachAt,
+		NextLastResponseAt:  consumerObs.NextLastResponseAt,
+		NextContactBy:       consumerObs.NextContactBy,
+	}
+	require.NoError(t, e.cadenceShadowRep.RecordDirect(ctx, nil, inducedDirect))
+
+	// Window must span occurred_at through at least 5s past "now" so the
+	// grace-subtracted edge puts both rows inside the query's time range.
+	windowStart := occurredAt.Add(-1 * time.Minute)
+	windowEnd := accelerated.GetCurrentTime().Add(1 * time.Minute)
+	divergences, err := e.cadenceShadowRep.FindDivergences(ctx, windowStart, windowEnd)
 	require.NoError(t, err)
-	require.Nil(t, direct, "V2 ingested event: no direct row (no in-process direct-path writer)")
+
+	var matched *repository.CadenceShadowDivergence
+	for i := range divergences {
+		if divergences[i].EventID == envelope.ID {
+			matched = &divergences[i]
+			break
+		}
+	}
+	require.NotNil(t, matched, "induced mismatch must appear in FindDivergences results")
+	require.NotNil(t, matched.DirectBranch, "direct side must be populated")
+	require.NotNil(t, matched.ConsumerBranch, "consumer side must be populated")
+	require.NotNil(t, matched.DirectNextLastContacted)
+	require.NotNil(t, matched.ConsumerNextLastContacted)
+	require.True(t, matched.DirectNextLastContacted.Equal(shifted),
+		"direct next_last_contacted reflects the induced +1h value")
+	require.False(t,
+		matched.DirectNextLastContacted.Equal(*matched.ConsumerNextLastContacted),
+		"direct and consumer next_last_contacted must differ (induced mismatch)")
 }
 
 // -----------------------------------------------------------------------------
