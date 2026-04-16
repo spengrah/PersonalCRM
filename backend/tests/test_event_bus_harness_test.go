@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/consumer/consumerjobs"
@@ -137,9 +138,9 @@ func waitForInteractionBySourceRef(
 	timeout time.Duration,
 ) *repository.Interaction {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := accelerated.GetCurrentTime().Add(timeout)
 	var lastErr error
-	for time.Now().Before(deadline) {
+	for accelerated.GetCurrentTime().Before(deadline) {
 		got, err := repo.FindBySourceRef(ctx, contactID, source, sourceRef)
 		if err == nil {
 			return got
@@ -164,9 +165,9 @@ func waitForTelegramInteractionCount(
 	timeout time.Duration,
 ) int {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := accelerated.GetCurrentTime().Add(timeout)
 	var last int
-	for time.Now().Before(deadline) {
+	for accelerated.GetCurrentTime().Before(deadline) {
 		err := pool.QueryRow(ctx,
 			`SELECT COUNT(*) FROM interaction
 			 WHERE contact_id = $1 AND source = 'telegram' AND deleted_at IS NULL`,
@@ -195,9 +196,9 @@ func waitForInteractionCountExact(
 	timeout time.Duration,
 ) []repository.Interaction {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := accelerated.GetCurrentTime().Add(timeout)
 	var last []repository.Interaction
-	for time.Now().Before(deadline) {
+	for accelerated.GetCurrentTime().Before(deadline) {
 		rows, err := repo.ListContactInteractions(ctx, contactID, 100, 0)
 		require.NoError(t, err)
 		last = rows
@@ -223,9 +224,9 @@ func waitForInteractionDirection(
 	timeout time.Duration,
 ) []repository.Interaction {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := accelerated.GetCurrentTime().Add(timeout)
 	var last []repository.Interaction
-	for time.Now().Before(deadline) {
+	for accelerated.GetCurrentTime().Before(deadline) {
 		rows, err := repo.ListContactInteractions(ctx, contactID, 100, 0)
 		require.NoError(t, err)
 		last = rows
@@ -254,9 +255,9 @@ func waitForTelegramMessagesProcessed(
 	timeout time.Duration,
 ) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := accelerated.GetCurrentTime().Add(timeout)
 	var last int
-	for time.Now().Before(deadline) {
+	for accelerated.GetCurrentTime().Before(deadline) {
 		err := pool.QueryRow(ctx,
 			`SELECT COUNT(*) FROM telegram_message
 			 WHERE peer_user_id = $1 AND matched_contact_id = $2
