@@ -235,6 +235,77 @@ UPDATE contact SET
   updated_at = NOW()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 
+-- name: UpdateContactCadenceForward :exec
+-- Forward-only cadence write (spec §3.4.2). Each of the four cadence
+-- columns is updated only when its apply-flag is true AND the new value
+-- strictly exceeds the existing one (or the existing is NULL). Unused
+-- by the PR 7 runtime path (consumer computes in memory per plan
+-- Decision 4); shipped so sqlc validates the SQL against the schema and
+-- PR 8 cutover can wire it without a second schema-validation step.
+UPDATE contact SET
+    last_contacted = CASE
+        WHEN sqlc.arg(apply_last_contacted)::boolean
+          AND (last_contacted IS NULL OR sqlc.arg(last_contacted)::timestamptz > last_contacted)
+        THEN sqlc.arg(last_contacted)::timestamptz
+        ELSE last_contacted
+    END,
+    last_outreach_at = CASE
+        WHEN sqlc.arg(apply_last_outreach_at)::boolean
+          AND (last_outreach_at IS NULL OR sqlc.arg(last_outreach_at)::timestamptz > last_outreach_at)
+        THEN sqlc.arg(last_outreach_at)::timestamptz
+        ELSE last_outreach_at
+    END,
+    last_response_at = CASE
+        WHEN sqlc.arg(apply_last_response_at)::boolean
+          AND (last_response_at IS NULL OR sqlc.arg(last_response_at)::timestamptz > last_response_at)
+        THEN sqlc.arg(last_response_at)::timestamptz
+        ELSE last_response_at
+    END,
+    contact_by = CASE
+        WHEN sqlc.arg(apply_contact_by)::boolean
+          AND sqlc.narg('contact_by')::date IS NOT NULL
+          AND (contact_by IS NULL OR sqlc.narg('contact_by')::date > contact_by)
+        THEN sqlc.narg('contact_by')::date
+        ELSE contact_by
+    END,
+    updated_at = NOW()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
+-- name: UpdateContactCadenceUnconditional :exec
+-- Manual-source branch (spec §3.4.2 "manual-source exception"): user
+-- correction — any passed-in value replaces the existing one
+-- unconditionally. Apply-flags still gate which columns are touched
+-- (e.g., a manual outbound still shouldn't bump last_contacted per
+-- direction rules). Unused by the PR 7 runtime path; shipped for PR 8.
+UPDATE contact SET
+    last_contacted = CASE
+        WHEN sqlc.arg(apply_last_contacted)::boolean THEN sqlc.arg(last_contacted)::timestamptz
+        ELSE last_contacted
+    END,
+    last_outreach_at = CASE
+        WHEN sqlc.arg(apply_last_outreach_at)::boolean THEN sqlc.arg(last_outreach_at)::timestamptz
+        ELSE last_outreach_at
+    END,
+    last_response_at = CASE
+        WHEN sqlc.arg(apply_last_response_at)::boolean THEN sqlc.arg(last_response_at)::timestamptz
+        ELSE last_response_at
+    END,
+    contact_by = CASE
+        WHEN sqlc.arg(apply_contact_by)::boolean THEN sqlc.narg('contact_by')::date
+        ELSE contact_by
+    END,
+    updated_at = NOW()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
+-- name: SnapshotContactCadenceFields :one
+-- Returns only the four spec-listed cadence columns. Used by PR 7's
+-- direct-path post-commit closure to capture the post-image inside its
+-- own short-lived tx (plan Decision 5). Consumer does NOT call this —
+-- consumer reads prev from the event payload (plan Decision 2a).
+SELECT last_contacted, last_outreach_at, last_response_at, contact_by
+FROM contact
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
 -- name: SoftDeleteContact :exec
 UPDATE contact SET
   deleted_at = NOW(),

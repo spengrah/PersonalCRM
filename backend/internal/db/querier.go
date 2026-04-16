@@ -27,6 +27,8 @@ type Querier interface {
 	CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
 	CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error)
+	// Used by integration tests and bake-window evidence collection.
+	CountCadenceShadowObservationsByWriter(ctx context.Context, writer string) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error)
@@ -139,6 +141,18 @@ type Querier interface {
 	// Demote source's primary contact methods when target already has a primary for that type
 	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
 	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
+	// Post-bake divergence query. FULL OUTER JOIN of direct vs consumer rows
+	// on event_id — per plan Decision 1 each (event_id, writer) pair is unique,
+	// so the join resolves at most one direct + one consumer row per event.
+	// A non-empty result (after caller-side race-class filters — plan Decision
+	// 4 taxonomy) indicates real drift: direct missing, consumer missing, or
+	// next_* values disagreeing.
+	FindCadenceShadowDivergences(ctx context.Context, arg FindCadenceShadowDivergencesParams) ([]*FindCadenceShadowDivergencesRow, error)
+	// Inline divergence logger uses this: given a consumer row just inserted,
+	// look up the paired 'direct' row to compare next_* values. Returns
+	// sql.ErrNoRows when the direct path hasn't observed yet (expected when
+	// the consumer fires before the direct-path post-commit closure lands).
+	FindCadenceShadowObservationByEventAndWriter(ctx context.Context, arg FindCadenceShadowObservationByEventAndWriterParams) (*EventShadowCadenceObservation, error)
 	// peer_phone is stored raw from MTProto (typically digits only); contact_method
 	// value_normalized is E.164 with leading '+'. Compare on digits-only.
 	// Same DISTINCT ON ordering as the username variant — prefer rows with a
@@ -292,6 +306,16 @@ type Querier interface {
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	HasEnrichmentForField(ctx context.Context, arg HasEnrichmentForFieldParams) (bool, error)
 	IgnoreExternalContact(ctx context.Context, id pgtype.UUID) error
+	// Event shadow cadence-observation queries (spec §3.4.2, PR 7). Sibling
+	// table to event_shadow_observation (migration 038); captures cadence-
+	// column pre/post image per event so the post-bake divergence query can
+	// FULL OUTER JOIN on event_id. See
+	// .ai/log/plan/event-bus-foundation-pr7-cadence-updater-shadow.md.
+	// Inserts an observation row. The UNIQUE (event_id, writer) constraint
+	// (migration 039) gives at-most-one-row-per-writer semantics under river
+	// retries. ON CONFLICT DO NOTHING returns no rows on duplicate; callers
+	// treat "no rows" as idempotent success rather than an error.
+	InsertCadenceShadowObservation(ctx context.Context, arg InsertCadenceShadowObservationParams) (*EventShadowCadenceObservation, error)
 	// Event queries (spec §3.1, §3.3). Raw append-only event log.
 	// Insert an event; conflicts on (source, source_id) (when source_id is not
 	// NULL) return zero rows so the caller can treat as idempotent no-op. When
@@ -413,6 +437,11 @@ type Querier interface {
 	SetTelegramPts(ctx context.Context, arg SetTelegramPtsParams) error
 	SetTelegramQts(ctx context.Context, arg SetTelegramQtsParams) error
 	SetTelegramSeq(ctx context.Context, arg SetTelegramSeqParams) error
+	// Returns only the four spec-listed cadence columns. Used by PR 7's
+	// direct-path post-commit closure to capture the post-image inside its
+	// own short-lived tx (plan Decision 5). Consumer does NOT call this —
+	// consumer reads prev from the event payload (plan Decision 2a).
+	SnapshotContactCadenceFields(ctx context.Context, id pgtype.UUID) (*SnapshotContactCadenceFieldsRow, error)
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteInteraction(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteTelegramChannelMessages(ctx context.Context, arg SoftDeleteTelegramChannelMessagesParams) error
@@ -434,6 +463,19 @@ type Querier interface {
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	// Updates just the contact_by field (for Todoist deadline sync).
 	UpdateContactBy(ctx context.Context, arg UpdateContactByParams) error
+	// Forward-only cadence write (spec §3.4.2). Each of the four cadence
+	// columns is updated only when its apply-flag is true AND the new value
+	// strictly exceeds the existing one (or the existing is NULL). Unused
+	// by the PR 7 runtime path (consumer computes in memory per plan
+	// Decision 4); shipped so sqlc validates the SQL against the schema and
+	// PR 8 cutover can wire it without a second schema-validation step.
+	UpdateContactCadenceForward(ctx context.Context, arg UpdateContactCadenceForwardParams) error
+	// Manual-source branch (spec §3.4.2 "manual-source exception"): user
+	// correction — any passed-in value replaces the existing one
+	// unconditionally. Apply-flags still gate which columns are touched
+	// (e.g., a manual outbound still shouldn't bump last_contacted per
+	// direction rules). Unused by the PR 7 runtime path; shipped for PR 8.
+	UpdateContactCadenceUnconditional(ctx context.Context, arg UpdateContactCadenceUnconditionalParams) error
 	// Updates last_contacted, contact_by, and all direction timestamp fields (for mutual interactions)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
 	// Updates last_contacted and contact_by only if the new date is later.

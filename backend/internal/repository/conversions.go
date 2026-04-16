@@ -59,3 +59,13 @@ func pgTimestamptzToTimePtr(t pgtype.Timestamptz) *time.Time {
 	u := t.Time.UTC()
 	return &u
 }
+
+// pgDateToTimePtr converts a pgtype.Date to *time.Time; invalid/NULL → nil.
+// Returned time is normalized to UTC with day precision preserved.
+func pgDateToTimePtr(d pgtype.Date) *time.Time {
+	if !d.Valid {
+		return nil
+	}
+	u := d.Time.UTC()
+	return &u
+}

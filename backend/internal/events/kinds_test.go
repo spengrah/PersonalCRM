@@ -320,6 +320,69 @@ func TestMarshalUnmarshal_InteractionRecorded(t *testing.T) {
 	require.Equal(t, original, decoded)
 }
 
+// TestMarshalUnmarshal_InteractionRecorded_V2 asserts the V2 payload shape
+// added in PR 7 (plan Decision 2a): PrevCadenceSnapshot and
+// PrevCadenceValue round-trip through JSON and reach the consumer intact.
+func TestMarshalUnmarshal_InteractionRecorded_V2(t *testing.T) {
+	ref := "tg:123:456"
+	cadenceStr := "weekly"
+	lastContacted := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	lastOutreach := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
+	lastResponse := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	contactBy := time.Date(2026, 4, 8, 0, 0, 0, 0, time.UTC)
+	original := InteractionRecordedPayload{
+		Version:       2,
+		ContactID:     uuid.New(),
+		InteractionID: uuid.New(),
+		Direction:     "mutual",
+		OccurredAt:    time.Date(2026, 4, 10, 20, 0, 0, 0, time.UTC),
+		Source:        "telegram",
+		SourceRef:     &ref,
+		PrevCadenceSnapshot: &CadenceFieldsSnapshot{
+			LastContacted:  &lastContacted,
+			LastOutreachAt: &lastOutreach,
+			LastResponseAt: &lastResponse,
+			ContactBy:      &contactBy,
+		},
+		PrevCadenceValue: &cadenceStr,
+	}
+	raw, err := Marshal(KindInteractionRecorded, original)
+	require.NoError(t, err)
+	env := &Envelope{Kind: KindInteractionRecorded, Payload: raw}
+	var decoded InteractionRecordedPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.Equal(t, 2, decoded.Version)
+	require.NotNil(t, decoded.PrevCadenceSnapshot)
+	require.Equal(t, original.PrevCadenceSnapshot.LastContacted.Unix(), decoded.PrevCadenceSnapshot.LastContacted.Unix())
+	require.Equal(t, original.PrevCadenceSnapshot.LastOutreachAt.Unix(), decoded.PrevCadenceSnapshot.LastOutreachAt.Unix())
+	require.Equal(t, original.PrevCadenceSnapshot.LastResponseAt.Unix(), decoded.PrevCadenceSnapshot.LastResponseAt.Unix())
+	require.NotNil(t, decoded.PrevCadenceSnapshot.ContactBy)
+	require.NotNil(t, decoded.PrevCadenceValue)
+	require.Equal(t, "weekly", *decoded.PrevCadenceValue)
+}
+
+// TestMarshalUnmarshal_InteractionRecorded_V1BackCompat asserts that a
+// PR 5/6-era Version=1 payload (no PrevCadenceSnapshot / PrevCadenceValue)
+// still unmarshals cleanly — the new fields are nil. The PR 7 consumer
+// logs ERROR and skips when it sees V1, but the unmarshal itself must
+// succeed so the ERROR path can fire with the envelope context.
+func TestMarshalUnmarshal_InteractionRecorded_V1BackCompat(t *testing.T) {
+	v1Payload := `{
+		"version": 1,
+		"contact_id": "00000000-0000-0000-0000-000000000001",
+		"interaction_id": "00000000-0000-0000-0000-000000000002",
+		"direction": "mutual",
+		"occurred_at": "2026-04-10T20:00:00Z",
+		"source": "telegram"
+	}`
+	env := &Envelope{Kind: KindInteractionRecorded, Payload: json.RawMessage(v1Payload)}
+	var decoded InteractionRecordedPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.Equal(t, 1, decoded.Version)
+	require.Nil(t, decoded.PrevCadenceSnapshot)
+	require.Nil(t, decoded.PrevCadenceValue)
+}
+
 // TestMarshal_KindPayloadMismatch_ReturnsError is the primary guardrail:
 // MessageReceivedPayload and MessageSentPayload are structurally identical,
 // so JSON decode alone can't tell them apart. The registry check catches

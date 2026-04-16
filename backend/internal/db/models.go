@@ -169,6 +169,30 @@ type Event struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type EventShadowCadenceObservation struct {
+	ID                  pgtype.UUID        `json:"id"`
+	EventID             pgtype.UUID        `json:"event_id"`
+	Writer              string             `json:"writer"`
+	ContactID           pgtype.UUID        `json:"contact_id"`
+	Source              string             `json:"source"`
+	Direction           string             `json:"direction"`
+	Branch              string             `json:"branch"`
+	OccurredAt          pgtype.Timestamptz `json:"occurred_at"`
+	PrevLastContacted   pgtype.Timestamptz `json:"prev_last_contacted"`
+	PrevLastOutreachAt  pgtype.Timestamptz `json:"prev_last_outreach_at"`
+	PrevLastResponseAt  pgtype.Timestamptz `json:"prev_last_response_at"`
+	PrevContactBy       pgtype.Date        `json:"prev_contact_by"`
+	NextLastContacted   pgtype.Timestamptz `json:"next_last_contacted"`
+	NextLastOutreachAt  pgtype.Timestamptz `json:"next_last_outreach_at"`
+	NextLastResponseAt  pgtype.Timestamptz `json:"next_last_response_at"`
+	NextContactBy       pgtype.Date        `json:"next_contact_by"`
+	ApplyLastContacted  bool               `json:"apply_last_contacted"`
+	ApplyLastOutreachAt bool               `json:"apply_last_outreach_at"`
+	ApplyLastResponseAt bool               `json:"apply_last_response_at"`
+	ApplyContactBy      bool               `json:"apply_contact_by"`
+	ObservedAt          pgtype.Timestamptz `json:"observed_at"`
+}
+
 type EventShadowObservation struct {
 	ID            pgtype.UUID        `json:"id"`
 	EventID       pgtype.UUID        `json:"event_id"`

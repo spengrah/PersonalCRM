@@ -41,17 +41,34 @@ func TestConsumerJobsForKind_FiveAsyncKindsEnqueueInteractionRecorder(t *testing
 	}
 }
 
-// TestConsumerJobsForKind_EmptyForPR5DeferredKinds asserts the kinds that
-// have no active consumer in PR 5 return nil:
+// TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceUpdater asserts
+// the PR 7 routing: interaction.recorded enqueues exactly one
+// CadenceUpdaterJobArgs job with MaxAttempts=5. This replaces the PR 5
+// assertion that the kind returned an empty slice.
+func TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceUpdater(t *testing.T) {
+	eventID := uuid.New()
+	jobs := consumerJobsForKind(KindInteractionRecorded, eventID)
+	require.Len(t, jobs, 1, "interaction.recorded should enqueue exactly one consumer job")
+	args, ok := jobs[0].Args.(consumerjobs.CadenceUpdaterJobArgs)
+	require.True(t, ok, "job args type must be CadenceUpdaterJobArgs, got %T", jobs[0].Args)
+	require.Equal(t, eventID, args.EventID)
+	require.Equal(t, "cadence_updater", args.Kind())
+	require.NotNil(t, jobs[0].Opts, "InsertOpts must be set to pin MaxAttempts")
+	require.Equal(t, 5, jobs[0].Opts.MaxAttempts)
+}
+
+// TestConsumerJobsForKind_EmptyForPR7DeferredKinds asserts the kinds that
+// still have no active consumer after PR 7 return nil:
 //   - interaction.manual: inline-invoked by the manual UI handler
 //     (spec §3.4 "other consumers only" — plan Decision 7).
-//   - interaction.recorded: no consumer yet (CadenceUpdater = PR 7).
 //   - calendar.declined, task.skipped, contact_methods.added: consumers
 //     land in later PRs.
-func TestConsumerJobsForKind_EmptyForPR5DeferredKinds(t *testing.T) {
+//
+// PR 7 REMOVED KindInteractionRecorded from this set — see
+// TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceUpdater.
+func TestConsumerJobsForKind_EmptyForPR7DeferredKinds(t *testing.T) {
 	deferred := []Kind{
 		KindInteractionManual,
-		KindInteractionRecorded,
 		KindCalendarDeclined,
 		KindTaskSkipped,
 		KindContactMethodsAdded,
@@ -59,7 +76,7 @@ func TestConsumerJobsForKind_EmptyForPR5DeferredKinds(t *testing.T) {
 	for _, k := range deferred {
 		t.Run(string(k), func(t *testing.T) {
 			jobs := consumerJobsForKind(k, uuid.New())
-			require.Empty(t, jobs, "kind %s: expected empty consumer-job slice in PR 5", k)
+			require.Empty(t, jobs, "kind %s: expected empty consumer-job slice post-PR 7", k)
 		})
 	}
 }

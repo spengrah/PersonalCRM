@@ -185,7 +185,13 @@ type ContactMethodsAddedPayload struct {
 }
 
 // InteractionRecordedPayload is the payload for KindInteractionRecorded,
-// emitted by the InteractionRecorder consumer in PR 5+.
+// emitted by the InteractionRecorder consumer in PR 5+. PR 7 bumps
+// Version to 2 and adds the PrevCadenceSnapshot + PrevCadenceValue
+// fields so CadenceUpdater can replay the direct-path's pre-cadence
+// state deterministically (plan Decision 2a). V1 payloads continue to
+// unmarshal — the new fields default to nil and InteractionRecorder
+// (the only PR 6 consumer of this event) ignores them. PR 7's
+// CadenceUpdater rejects V1 payloads at ERROR level.
 type InteractionRecordedPayload struct {
 	Version       int       `json:"version"`
 	ContactID     uuid.UUID `json:"contact_id"`
@@ -194,6 +200,29 @@ type InteractionRecordedPayload struct {
 	OccurredAt    time.Time `json:"occurred_at"`
 	Source        string    `json:"source"`
 	SourceRef     *string   `json:"source_ref,omitempty"`
+
+	// PrevCadenceSnapshot carries the four cadence-column values at the
+	// moment the direct-path UPDATE ran. CadenceUpdater uses this as
+	// prev_consumer so its math is deterministic vs. the direct path
+	// even if contact state mutates between emit and async consume
+	// (plan Decision 2a). Nil on V1 payloads; required on V2.
+	PrevCadenceSnapshot *CadenceFieldsSnapshot `json:"prev_cadence_snapshot,omitempty"`
+
+	// PrevCadenceValue is contact.cadence at emit time — the cadence
+	// string (e.g., "weekly") that the direct path used to compute
+	// contact_by. Consumer prefers this over a live re-read so a
+	// cadence edit between emit and consume doesn't cause divergence.
+	// Nil on V1 payloads and when the contact has no cadence set.
+	PrevCadenceValue *string `json:"prev_cadence_value,omitempty"`
+}
+
+// CadenceFieldsSnapshot is the four-cadence-column snapshot embedded in
+// InteractionRecordedPayload (V2+). See plan Decision 2a.
+type CadenceFieldsSnapshot struct {
+	LastContacted  *time.Time `json:"last_contacted,omitempty"`
+	LastOutreachAt *time.Time `json:"last_outreach_at,omitempty"`
+	LastResponseAt *time.Time `json:"last_response_at,omitempty"`
+	ContactBy      *time.Time `json:"contact_by,omitempty"` // date-precision
 }
 
 // kindPayloadTypes is the canonical Kind → payload-type registry used by

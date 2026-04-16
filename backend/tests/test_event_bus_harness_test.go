@@ -64,6 +64,13 @@ func setupTestEventBus(
 	workers := river.NewWorkers()
 	shim := &deferredRecorderWorker{}
 	river.AddWorker(workers, shim)
+	// PR 7: InteractionRecorder publishes interaction.recorded which
+	// enqueues a cadence_updater job. Tests that don't exercise the
+	// CadenceUpdater path must still register a worker for the kind;
+	// otherwise river logs "Unhandled job kind" at dequeue time and
+	// fails the enclosing insert tx. Placeholder no-op worker drains
+	// the queue without doing any work.
+	river.AddWorker(workers, &cadenceUpdaterNoopWorker{})
 
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -123,6 +130,23 @@ func (w *deferredRecorderWorker) Timeout(j *river.Job[consumerjobs.InteractionRe
 		return 30 * time.Second
 	}
 	return w.real.Timeout(j)
+}
+
+// cadenceUpdaterNoopWorker satisfies the cadence_updater kind for test
+// harnesses that don't exercise the real CadenceUpdater. Runs as a no-
+// op so the job completes without DB side-effects. Tests that do want
+// real cadence processing construct their own setup around the
+// concrete CadenceUpdaterWorker.
+type cadenceUpdaterNoopWorker struct {
+	river.WorkerDefaults[consumerjobs.CadenceUpdaterJobArgs]
+}
+
+func (*cadenceUpdaterNoopWorker) Work(_ context.Context, _ *river.Job[consumerjobs.CadenceUpdaterJobArgs]) error {
+	return nil
+}
+
+func (*cadenceUpdaterNoopWorker) Timeout(_ *river.Job[consumerjobs.CadenceUpdaterJobArgs]) time.Duration {
+	return 30 * time.Second
 }
 
 // waitForInteractionBySourceRef polls InteractionRepository.FindBySourceRef

@@ -980,6 +980,35 @@ func (q *Queries) SearchContactsSorted(ctx context.Context, arg SearchContactsSo
 	return items, nil
 }
 
+const SnapshotContactCadenceFields = `-- name: SnapshotContactCadenceFields :one
+SELECT last_contacted, last_outreach_at, last_response_at, contact_by
+FROM contact
+WHERE id = $1 AND deleted_at IS NULL
+`
+
+type SnapshotContactCadenceFieldsRow struct {
+	LastContacted  pgtype.Timestamptz `json:"last_contacted"`
+	LastOutreachAt pgtype.Timestamptz `json:"last_outreach_at"`
+	LastResponseAt pgtype.Timestamptz `json:"last_response_at"`
+	ContactBy      pgtype.Date        `json:"contact_by"`
+}
+
+// Returns only the four spec-listed cadence columns. Used by PR 7's
+// direct-path post-commit closure to capture the post-image inside its
+// own short-lived tx (plan Decision 5). Consumer does NOT call this —
+// consumer reads prev from the event payload (plan Decision 2a).
+func (q *Queries) SnapshotContactCadenceFields(ctx context.Context, id pgtype.UUID) (*SnapshotContactCadenceFieldsRow, error) {
+	row := q.db.QueryRow(ctx, SnapshotContactCadenceFields, id)
+	var i SnapshotContactCadenceFieldsRow
+	err := row.Scan(
+		&i.LastContacted,
+		&i.LastOutreachAt,
+		&i.LastResponseAt,
+		&i.ContactBy,
+	)
+	return &i, err
+}
+
 const SoftDeleteContact = `-- name: SoftDeleteContact :exec
 UPDATE contact SET
   deleted_at = NOW(),
@@ -1064,6 +1093,124 @@ type UpdateContactByParams struct {
 // Updates just the contact_by field (for Todoist deadline sync).
 func (q *Queries) UpdateContactBy(ctx context.Context, arg UpdateContactByParams) error {
 	_, err := q.db.Exec(ctx, UpdateContactBy, arg.ID, arg.ContactBy)
+	return err
+}
+
+const UpdateContactCadenceForward = `-- name: UpdateContactCadenceForward :exec
+UPDATE contact SET
+    last_contacted = CASE
+        WHEN $1::boolean
+          AND (last_contacted IS NULL OR $2::timestamptz > last_contacted)
+        THEN $2::timestamptz
+        ELSE last_contacted
+    END,
+    last_outreach_at = CASE
+        WHEN $3::boolean
+          AND (last_outreach_at IS NULL OR $4::timestamptz > last_outreach_at)
+        THEN $4::timestamptz
+        ELSE last_outreach_at
+    END,
+    last_response_at = CASE
+        WHEN $5::boolean
+          AND (last_response_at IS NULL OR $6::timestamptz > last_response_at)
+        THEN $6::timestamptz
+        ELSE last_response_at
+    END,
+    contact_by = CASE
+        WHEN $7::boolean
+          AND $8::date IS NOT NULL
+          AND (contact_by IS NULL OR $8::date > contact_by)
+        THEN $8::date
+        ELSE contact_by
+    END,
+    updated_at = NOW()
+WHERE id = $9 AND deleted_at IS NULL
+`
+
+type UpdateContactCadenceForwardParams struct {
+	ApplyLastContacted  bool               `json:"apply_last_contacted"`
+	LastContacted       pgtype.Timestamptz `json:"last_contacted"`
+	ApplyLastOutreachAt bool               `json:"apply_last_outreach_at"`
+	LastOutreachAt      pgtype.Timestamptz `json:"last_outreach_at"`
+	ApplyLastResponseAt bool               `json:"apply_last_response_at"`
+	LastResponseAt      pgtype.Timestamptz `json:"last_response_at"`
+	ApplyContactBy      bool               `json:"apply_contact_by"`
+	ContactBy           pgtype.Date        `json:"contact_by"`
+	ID                  pgtype.UUID        `json:"id"`
+}
+
+// Forward-only cadence write (spec §3.4.2). Each of the four cadence
+// columns is updated only when its apply-flag is true AND the new value
+// strictly exceeds the existing one (or the existing is NULL). Unused
+// by the PR 7 runtime path (consumer computes in memory per plan
+// Decision 4); shipped so sqlc validates the SQL against the schema and
+// PR 8 cutover can wire it without a second schema-validation step.
+func (q *Queries) UpdateContactCadenceForward(ctx context.Context, arg UpdateContactCadenceForwardParams) error {
+	_, err := q.db.Exec(ctx, UpdateContactCadenceForward,
+		arg.ApplyLastContacted,
+		arg.LastContacted,
+		arg.ApplyLastOutreachAt,
+		arg.LastOutreachAt,
+		arg.ApplyLastResponseAt,
+		arg.LastResponseAt,
+		arg.ApplyContactBy,
+		arg.ContactBy,
+		arg.ID,
+	)
+	return err
+}
+
+const UpdateContactCadenceUnconditional = `-- name: UpdateContactCadenceUnconditional :exec
+UPDATE contact SET
+    last_contacted = CASE
+        WHEN $1::boolean THEN $2::timestamptz
+        ELSE last_contacted
+    END,
+    last_outreach_at = CASE
+        WHEN $3::boolean THEN $4::timestamptz
+        ELSE last_outreach_at
+    END,
+    last_response_at = CASE
+        WHEN $5::boolean THEN $6::timestamptz
+        ELSE last_response_at
+    END,
+    contact_by = CASE
+        WHEN $7::boolean THEN $8::date
+        ELSE contact_by
+    END,
+    updated_at = NOW()
+WHERE id = $9 AND deleted_at IS NULL
+`
+
+type UpdateContactCadenceUnconditionalParams struct {
+	ApplyLastContacted  bool               `json:"apply_last_contacted"`
+	LastContacted       pgtype.Timestamptz `json:"last_contacted"`
+	ApplyLastOutreachAt bool               `json:"apply_last_outreach_at"`
+	LastOutreachAt      pgtype.Timestamptz `json:"last_outreach_at"`
+	ApplyLastResponseAt bool               `json:"apply_last_response_at"`
+	LastResponseAt      pgtype.Timestamptz `json:"last_response_at"`
+	ApplyContactBy      bool               `json:"apply_contact_by"`
+	ContactBy           pgtype.Date        `json:"contact_by"`
+	ID                  pgtype.UUID        `json:"id"`
+}
+
+// Manual-source branch (spec §3.4.2 "manual-source exception"): user
+// correction — any passed-in value replaces the existing one
+// unconditionally. Apply-flags still gate which columns are touched
+// (e.g., a manual outbound still shouldn't bump last_contacted per
+// direction rules). Unused by the PR 7 runtime path; shipped for PR 8.
+func (q *Queries) UpdateContactCadenceUnconditional(ctx context.Context, arg UpdateContactCadenceUnconditionalParams) error {
+	_, err := q.db.Exec(ctx, UpdateContactCadenceUnconditional,
+		arg.ApplyLastContacted,
+		arg.LastContacted,
+		arg.ApplyLastOutreachAt,
+		arg.LastOutreachAt,
+		arg.ApplyLastResponseAt,
+		arg.LastResponseAt,
+		arg.ApplyContactBy,
+		arg.ContactBy,
+		arg.ID,
+	)
 	return err
 }
 

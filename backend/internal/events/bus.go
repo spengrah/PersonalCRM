@@ -33,25 +33,27 @@ type consumerJob struct {
 
 // consumerJobsForKind is the static registry mapping a Kind to the set of
 // river jobs to enqueue atomically alongside its event row. PR 5 wires the
-// first consumer (InteractionRecorder); later PRs extend the switch as
-// CadenceUpdater, FollowUpManager, and RematchDispatcher come online.
+// first consumer (InteractionRecorder); PR 7 adds CadenceUpdater; later
+// PRs will add FollowUpManager (PR 9a) and RematchDispatcher (PR 10).
 //
 // The eventID argument is the event row's primary key; job arg structs
 // embed it so the worker can fetch the full payload by ID (spec §3.3 —
 // "keeps job-arg payload small").
 //
-// PR 5 routing rules:
+// Routing rules (PR 7):
 //
 //   - 5 async-publisher kinds (message.received/sent, calendar.attended,
 //     task.completed, task.outreach_detected) → InteractionRecorder worker
 //     with MaxAttempts=5 (plan Decision 8).
+//   - interaction.recorded → CadenceUpdater worker (PR 7) with
+//     MaxAttempts=5. Emitted by InteractionRecorder after a successful
+//     interaction insert (spec §3.4.1); the derived event fans out to
+//     cadence-column processing via the worker.
 //   - interaction.manual → returns nil. The manual UI handler inline-
-//     invokes HandleEvent in its shadow tx so the consumer isn't double-
+//     invokes HandleEvent in its tx so the consumer isn't double-
 //     invoked. Spec §3.4 says PublishTx should enqueue jobs "for other
 //     consumers"; InteractionRecorder is not "other" in the manual flow
 //     (plan Decision 7).
-//   - interaction.recorded → returns nil. No consumer in PR 5 (CadenceUpdater
-//     lands in PR 7, FollowUpManager in PR 9a).
 //   - calendar.declined, task.skipped, contact_methods.added → returns nil.
 //     Consumers land in later PRs.
 func consumerJobsForKind(kind Kind, eventID uuid.UUID) []consumerJob {
@@ -60,6 +62,11 @@ func consumerJobsForKind(kind Kind, eventID uuid.UUID) []consumerJob {
 		KindTaskCompleted, KindTaskOutreachDetected:
 		return []consumerJob{{
 			Args: consumerjobs.InteractionRecorderJobArgs{EventID: eventID},
+			Opts: &river.InsertOpts{MaxAttempts: 5},
+		}}
+	case KindInteractionRecorded:
+		return []consumerJob{{
+			Args: consumerjobs.CadenceUpdaterJobArgs{EventID: eventID},
 			Opts: &river.InsertOpts{MaxAttempts: 5},
 		}}
 	}

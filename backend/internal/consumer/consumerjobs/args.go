@@ -24,3 +24,13 @@ type InteractionRecorderJobArgs struct {
 // Kind returns the river job-kind identifier used for registration and
 // dequeue routing.
 func (InteractionRecorderJobArgs) Kind() string { return "interaction_recorder" }
+
+// CadenceUpdaterJobArgs carries the event id that the CadenceUpdater
+// worker should fetch and process. Enqueued for every interaction.recorded
+// event by events.consumerJobsForKind (PR 7).
+type CadenceUpdaterJobArgs struct {
+	EventID uuid.UUID `json:"event_id"`
+}
+
+// Kind returns the river job-kind identifier for CadenceUpdater jobs.
+func (CadenceUpdaterJobArgs) Kind() string { return "cadence_updater" }
