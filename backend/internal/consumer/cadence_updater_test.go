@@ -88,6 +88,7 @@ func TestBuildInteractionWrite_Outbound_WritesOnlyLastOutreachAt(t *testing.T) {
 
 	require.Equal(t, repository.CadenceShadowBranchForward, req.Branch)
 	require.False(t, req.ApplyLastContacted)
+	require.False(t, req.ApplyLastInteractionAt, "outbound never touches last_interaction_at")
 	require.True(t, req.ApplyLastOutreachAt)
 	require.False(t, req.ApplyLastResponseAt)
 	require.False(t, req.ApplyContactBy, "outbound never touches contact_by")
@@ -110,10 +111,13 @@ func TestBuildInteractionWrite_Inbound_WritesThreeFields(t *testing.T) {
 
 	require.Equal(t, repository.CadenceShadowBranchForward, req.Branch)
 	require.True(t, req.ApplyLastContacted)
+	require.True(t, req.ApplyLastInteractionAt, "inbound bumps last_interaction_at alongside last_contacted")
 	require.False(t, req.ApplyLastOutreachAt, "inbound does NOT bump last_outreach_at")
 	require.True(t, req.ApplyLastResponseAt)
 	require.True(t, req.ApplyContactBy)
 	require.NotNil(t, req.ContactBy)
+	require.NotNil(t, req.LastInteractionAt)
+	require.True(t, req.LastInteractionAt.Equal(occ))
 }
 
 func TestBuildInteractionWrite_Mutual_WritesAllFour(t *testing.T) {
@@ -131,6 +135,7 @@ func TestBuildInteractionWrite_Mutual_WritesAllFour(t *testing.T) {
 
 	require.Equal(t, repository.CadenceShadowBranchForward, req.Branch)
 	require.True(t, req.ApplyLastContacted)
+	require.True(t, req.ApplyLastInteractionAt, "mutual bumps last_interaction_at alongside last_contacted")
 	require.True(t, req.ApplyLastOutreachAt)
 	require.True(t, req.ApplyLastResponseAt)
 	require.True(t, req.ApplyContactBy)

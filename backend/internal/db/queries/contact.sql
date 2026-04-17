@@ -243,19 +243,19 @@ UPDATE contact SET
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 
 -- name: UpdateContactCadenceForward :exec
--- Forward-only cadence write (spec §3.4.2). Each of the four cadence
--- columns is updated only when its apply-flag is true AND the new value
--- strictly exceeds the existing one (or the existing is NULL). Unused
--- by the PR 7 runtime path (consumer computes in memory per plan
--- Decision 4); shipped so sqlc validates the SQL against the schema and
--- PR 8 cutover can wire it without a second schema-validation step.
+-- Forward-only cadence write (spec §3.4.2). Each of the cadence columns
+-- is updated only when its apply-flag is true AND the new value strictly
+-- exceeds the existing one (or the existing is NULL).
 --
--- last_interaction_at piggybacks on apply_last_contacted: the direct-path
--- queries UpdateContactResponseFields/UpdateContactMutualFields historically
--- bumped last_interaction_at together with last_contacted for inbound +
--- mutual, and never for outbound-only. Replicating that here keeps the
--- inbound/mutual → "last non-outbound interaction" invariant intact
--- post-cutover without adding a 5th apply flag.
+-- last_interaction_at is gated by its OWN apply flag
+-- (apply_last_interaction_at), independent of apply_last_contacted.
+-- Interaction-driven paths (HandleEvent, ApplyInteraction) set both
+-- flags together so inbound/mutual still bump last_interaction_at
+-- alongside last_contacted, matching the pre-cutover
+-- UpdateContactResponseFields/UpdateContactMutualFields write surface.
+-- Merge (BulkApply) sets apply_last_interaction_at=false because a
+-- merge is not an interaction and must not mutate the "last
+-- non-outbound interaction" timestamp of the surviving contact.
 UPDATE contact SET
     last_contacted = CASE
         WHEN sqlc.arg(apply_last_contacted)::boolean
@@ -264,9 +264,9 @@ UPDATE contact SET
         ELSE last_contacted
     END,
     last_interaction_at = CASE
-        WHEN sqlc.arg(apply_last_contacted)::boolean
-          AND (last_interaction_at IS NULL OR sqlc.arg(last_contacted)::timestamptz > last_interaction_at)
-        THEN sqlc.arg(last_contacted)::timestamptz
+        WHEN sqlc.arg(apply_last_interaction_at)::boolean
+          AND (last_interaction_at IS NULL OR sqlc.arg(last_interaction_at)::timestamptz > last_interaction_at)
+        THEN sqlc.arg(last_interaction_at)::timestamptz
         ELSE last_interaction_at
     END,
     last_outreach_at = CASE
@@ -296,18 +296,18 @@ WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 -- correction — any passed-in value replaces the existing one
 -- unconditionally. Apply-flags still gate which columns are touched
 -- (e.g., a manual outbound still shouldn't bump last_contacted per
--- direction rules). Unused by the PR 7 runtime path; shipped for PR 8.
+-- direction rules).
 --
--- last_interaction_at piggybacks on apply_last_contacted — see the
--- UpdateContactCadenceForward comment above. Unconditional semantics so
--- manual-source corrections overwrite regardless of existing value.
+-- last_interaction_at is gated by its OWN apply flag
+-- (apply_last_interaction_at); see UpdateContactCadenceForward above
+-- for the rationale.
 UPDATE contact SET
     last_contacted = CASE
         WHEN sqlc.arg(apply_last_contacted)::boolean THEN sqlc.arg(last_contacted)::timestamptz
         ELSE last_contacted
     END,
     last_interaction_at = CASE
-        WHEN sqlc.arg(apply_last_contacted)::boolean THEN sqlc.arg(last_contacted)::timestamptz
+        WHEN sqlc.arg(apply_last_interaction_at)::boolean THEN sqlc.arg(last_interaction_at)::timestamptz
         ELSE last_interaction_at
     END,
     last_outreach_at = CASE

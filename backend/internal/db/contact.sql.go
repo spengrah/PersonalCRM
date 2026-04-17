@@ -1110,63 +1110,67 @@ UPDATE contact SET
         ELSE last_contacted
     END,
     last_interaction_at = CASE
-        WHEN $1::boolean
-          AND (last_interaction_at IS NULL OR $2::timestamptz > last_interaction_at)
-        THEN $2::timestamptz
+        WHEN $3::boolean
+          AND (last_interaction_at IS NULL OR $4::timestamptz > last_interaction_at)
+        THEN $4::timestamptz
         ELSE last_interaction_at
     END,
     last_outreach_at = CASE
-        WHEN $3::boolean
-          AND (last_outreach_at IS NULL OR $4::timestamptz > last_outreach_at)
-        THEN $4::timestamptz
+        WHEN $5::boolean
+          AND (last_outreach_at IS NULL OR $6::timestamptz > last_outreach_at)
+        THEN $6::timestamptz
         ELSE last_outreach_at
     END,
     last_response_at = CASE
-        WHEN $5::boolean
-          AND (last_response_at IS NULL OR $6::timestamptz > last_response_at)
-        THEN $6::timestamptz
+        WHEN $7::boolean
+          AND (last_response_at IS NULL OR $8::timestamptz > last_response_at)
+        THEN $8::timestamptz
         ELSE last_response_at
     END,
     contact_by = CASE
-        WHEN $7::boolean
-          AND $8::date IS NOT NULL
-          AND (contact_by IS NULL OR $8::date > contact_by)
-        THEN $8::date
+        WHEN $9::boolean
+          AND $10::date IS NOT NULL
+          AND (contact_by IS NULL OR $10::date > contact_by)
+        THEN $10::date
         ELSE contact_by
     END,
     updated_at = NOW()
-WHERE id = $9 AND deleted_at IS NULL
+WHERE id = $11 AND deleted_at IS NULL
 `
 
 type UpdateContactCadenceForwardParams struct {
-	ApplyLastContacted  bool               `json:"apply_last_contacted"`
-	LastContacted       pgtype.Timestamptz `json:"last_contacted"`
-	ApplyLastOutreachAt bool               `json:"apply_last_outreach_at"`
-	LastOutreachAt      pgtype.Timestamptz `json:"last_outreach_at"`
-	ApplyLastResponseAt bool               `json:"apply_last_response_at"`
-	LastResponseAt      pgtype.Timestamptz `json:"last_response_at"`
-	ApplyContactBy      bool               `json:"apply_contact_by"`
-	ContactBy           pgtype.Date        `json:"contact_by"`
-	ID                  pgtype.UUID        `json:"id"`
+	ApplyLastContacted     bool               `json:"apply_last_contacted"`
+	LastContacted          pgtype.Timestamptz `json:"last_contacted"`
+	ApplyLastInteractionAt bool               `json:"apply_last_interaction_at"`
+	LastInteractionAt      pgtype.Timestamptz `json:"last_interaction_at"`
+	ApplyLastOutreachAt    bool               `json:"apply_last_outreach_at"`
+	LastOutreachAt         pgtype.Timestamptz `json:"last_outreach_at"`
+	ApplyLastResponseAt    bool               `json:"apply_last_response_at"`
+	LastResponseAt         pgtype.Timestamptz `json:"last_response_at"`
+	ApplyContactBy         bool               `json:"apply_contact_by"`
+	ContactBy              pgtype.Date        `json:"contact_by"`
+	ID                     pgtype.UUID        `json:"id"`
 }
 
-// Forward-only cadence write (spec §3.4.2). Each of the four cadence
-// columns is updated only when its apply-flag is true AND the new value
-// strictly exceeds the existing one (or the existing is NULL). Unused
-// by the PR 7 runtime path (consumer computes in memory per plan
-// Decision 4); shipped so sqlc validates the SQL against the schema and
-// PR 8 cutover can wire it without a second schema-validation step.
+// Forward-only cadence write (spec §3.4.2). Each of the cadence columns
+// is updated only when its apply-flag is true AND the new value strictly
+// exceeds the existing one (or the existing is NULL).
 //
-// last_interaction_at piggybacks on apply_last_contacted: the direct-path
-// queries UpdateContactResponseFields/UpdateContactMutualFields historically
-// bumped last_interaction_at together with last_contacted for inbound +
-// mutual, and never for outbound-only. Replicating that here keeps the
-// inbound/mutual → "last non-outbound interaction" invariant intact
-// post-cutover without adding a 5th apply flag.
+// last_interaction_at is gated by its OWN apply flag
+// (apply_last_interaction_at), independent of apply_last_contacted.
+// Interaction-driven paths (HandleEvent, ApplyInteraction) set both
+// flags together so inbound/mutual still bump last_interaction_at
+// alongside last_contacted, matching the pre-cutover
+// UpdateContactResponseFields/UpdateContactMutualFields write surface.
+// Merge (BulkApply) sets apply_last_interaction_at=false because a
+// merge is not an interaction and must not mutate the "last
+// non-outbound interaction" timestamp of the surviving contact.
 func (q *Queries) UpdateContactCadenceForward(ctx context.Context, arg UpdateContactCadenceForwardParams) error {
 	_, err := q.db.Exec(ctx, UpdateContactCadenceForward,
 		arg.ApplyLastContacted,
 		arg.LastContacted,
+		arg.ApplyLastInteractionAt,
+		arg.LastInteractionAt,
 		arg.ApplyLastOutreachAt,
 		arg.LastOutreachAt,
 		arg.ApplyLastResponseAt,
@@ -1185,50 +1189,54 @@ UPDATE contact SET
         ELSE last_contacted
     END,
     last_interaction_at = CASE
-        WHEN $1::boolean THEN $2::timestamptz
+        WHEN $3::boolean THEN $4::timestamptz
         ELSE last_interaction_at
     END,
     last_outreach_at = CASE
-        WHEN $3::boolean THEN $4::timestamptz
+        WHEN $5::boolean THEN $6::timestamptz
         ELSE last_outreach_at
     END,
     last_response_at = CASE
-        WHEN $5::boolean THEN $6::timestamptz
+        WHEN $7::boolean THEN $8::timestamptz
         ELSE last_response_at
     END,
     contact_by = CASE
-        WHEN $7::boolean THEN $8::date
+        WHEN $9::boolean THEN $10::date
         ELSE contact_by
     END,
     updated_at = NOW()
-WHERE id = $9 AND deleted_at IS NULL
+WHERE id = $11 AND deleted_at IS NULL
 `
 
 type UpdateContactCadenceUnconditionalParams struct {
-	ApplyLastContacted  bool               `json:"apply_last_contacted"`
-	LastContacted       pgtype.Timestamptz `json:"last_contacted"`
-	ApplyLastOutreachAt bool               `json:"apply_last_outreach_at"`
-	LastOutreachAt      pgtype.Timestamptz `json:"last_outreach_at"`
-	ApplyLastResponseAt bool               `json:"apply_last_response_at"`
-	LastResponseAt      pgtype.Timestamptz `json:"last_response_at"`
-	ApplyContactBy      bool               `json:"apply_contact_by"`
-	ContactBy           pgtype.Date        `json:"contact_by"`
-	ID                  pgtype.UUID        `json:"id"`
+	ApplyLastContacted     bool               `json:"apply_last_contacted"`
+	LastContacted          pgtype.Timestamptz `json:"last_contacted"`
+	ApplyLastInteractionAt bool               `json:"apply_last_interaction_at"`
+	LastInteractionAt      pgtype.Timestamptz `json:"last_interaction_at"`
+	ApplyLastOutreachAt    bool               `json:"apply_last_outreach_at"`
+	LastOutreachAt         pgtype.Timestamptz `json:"last_outreach_at"`
+	ApplyLastResponseAt    bool               `json:"apply_last_response_at"`
+	LastResponseAt         pgtype.Timestamptz `json:"last_response_at"`
+	ApplyContactBy         bool               `json:"apply_contact_by"`
+	ContactBy              pgtype.Date        `json:"contact_by"`
+	ID                     pgtype.UUID        `json:"id"`
 }
 
 // Manual-source branch (spec §3.4.2 "manual-source exception"): user
 // correction — any passed-in value replaces the existing one
 // unconditionally. Apply-flags still gate which columns are touched
 // (e.g., a manual outbound still shouldn't bump last_contacted per
-// direction rules). Unused by the PR 7 runtime path; shipped for PR 8.
+// direction rules).
 //
-// last_interaction_at piggybacks on apply_last_contacted — see the
-// UpdateContactCadenceForward comment above. Unconditional semantics so
-// manual-source corrections overwrite regardless of existing value.
+// last_interaction_at is gated by its OWN apply flag
+// (apply_last_interaction_at); see UpdateContactCadenceForward above
+// for the rationale.
 func (q *Queries) UpdateContactCadenceUnconditional(ctx context.Context, arg UpdateContactCadenceUnconditionalParams) error {
 	_, err := q.db.Exec(ctx, UpdateContactCadenceUnconditional,
 		arg.ApplyLastContacted,
 		arg.LastContacted,
+		arg.ApplyLastInteractionAt,
+		arg.LastInteractionAt,
 		arg.ApplyLastOutreachAt,
 		arg.LastOutreachAt,
 		arg.ApplyLastResponseAt,

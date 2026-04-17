@@ -521,29 +521,29 @@ type Querier interface {
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	// Updates just the contact_by field (for Todoist deadline sync).
 	UpdateContactBy(ctx context.Context, arg UpdateContactByParams) error
-	// Forward-only cadence write (spec §3.4.2). Each of the four cadence
-	// columns is updated only when its apply-flag is true AND the new value
-	// strictly exceeds the existing one (or the existing is NULL). Unused
-	// by the PR 7 runtime path (consumer computes in memory per plan
-	// Decision 4); shipped so sqlc validates the SQL against the schema and
-	// PR 8 cutover can wire it without a second schema-validation step.
+	// Forward-only cadence write (spec §3.4.2). Each of the cadence columns
+	// is updated only when its apply-flag is true AND the new value strictly
+	// exceeds the existing one (or the existing is NULL).
 	//
-	// last_interaction_at piggybacks on apply_last_contacted: the direct-path
-	// queries UpdateContactResponseFields/UpdateContactMutualFields historically
-	// bumped last_interaction_at together with last_contacted for inbound +
-	// mutual, and never for outbound-only. Replicating that here keeps the
-	// inbound/mutual → "last non-outbound interaction" invariant intact
-	// post-cutover without adding a 5th apply flag.
+	// last_interaction_at is gated by its OWN apply flag
+	// (apply_last_interaction_at), independent of apply_last_contacted.
+	// Interaction-driven paths (HandleEvent, ApplyInteraction) set both
+	// flags together so inbound/mutual still bump last_interaction_at
+	// alongside last_contacted, matching the pre-cutover
+	// UpdateContactResponseFields/UpdateContactMutualFields write surface.
+	// Merge (BulkApply) sets apply_last_interaction_at=false because a
+	// merge is not an interaction and must not mutate the "last
+	// non-outbound interaction" timestamp of the surviving contact.
 	UpdateContactCadenceForward(ctx context.Context, arg UpdateContactCadenceForwardParams) error
 	// Manual-source branch (spec §3.4.2 "manual-source exception"): user
 	// correction — any passed-in value replaces the existing one
 	// unconditionally. Apply-flags still gate which columns are touched
 	// (e.g., a manual outbound still shouldn't bump last_contacted per
-	// direction rules). Unused by the PR 7 runtime path; shipped for PR 8.
+	// direction rules).
 	//
-	// last_interaction_at piggybacks on apply_last_contacted — see the
-	// UpdateContactCadenceForward comment above. Unconditional semantics so
-	// manual-source corrections overwrite regardless of existing value.
+	// last_interaction_at is gated by its OWN apply flag
+	// (apply_last_interaction_at); see UpdateContactCadenceForward above
+	// for the rationale.
 	UpdateContactCadenceUnconditional(ctx context.Context, arg UpdateContactCadenceUnconditionalParams) error
 	// Updates last_contacted, contact_by, and all direction timestamp fields (for mutual interactions)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error

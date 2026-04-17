@@ -293,19 +293,22 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	// forward a stale value.
 	req.ContactBy = nil
 
-	contact, err = contactRepo.UpdateContact(ctx, id, req)
-	if err != nil {
+	if _, err = contactRepo.UpdateContact(ctx, id, req); err != nil {
 		return nil, uuid.Nil, err
 	}
 
 	if err := s.cadence.ApplyContactByOverride(ctx, tx, id, newContactBy); err != nil {
 		return nil, uuid.Nil, fmt.Errorf("apply cadence contact_by override: %w", err)
 	}
-	// The profile-only UpdateContact returned contact_by as it stood
-	// BEFORE ApplyContactByOverride ran; reflect the post-override value
-	// on the returned struct so callers (handlers, tests) observe the
-	// committed state without a second repo round-trip.
-	contact.ContactBy = newContactBy
+	// ApplyContactByOverride is a second UPDATE on the contact row, so
+	// the profile-only UpdateContact's RETURNING values (notably
+	// updated_at AND contact_by) are stale by the time we'd use them.
+	// Re-fetch inside the tx so the struct the caller receives matches
+	// the committed row bit-for-bit.
+	contact, err = contactRepo.GetContact(ctx, id)
+	if err != nil {
+		return nil, uuid.Nil, fmt.Errorf("refetch contact after cadence override: %w", err)
+	}
 
 	var (
 		updatedMethods []repository.ContactMethod

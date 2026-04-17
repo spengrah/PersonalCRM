@@ -176,6 +176,62 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Manual_UnconditionalBackdat
 	assert.Equal(t, older.UTC(), got.LastContacted.UTC(), "manual source must overwrite last_contacted unconditionally")
 }
 
+// TestIntegration_CadenceUpdater_BulkApply_DoesNotBumpLastInteractionAt
+// verifies the merge path leaves last_interaction_at untouched even when
+// it advances last_contacted — a merge is not an interaction, so the
+// "last non-outbound interaction" timestamp must survive unchanged.
+// Guards against a regression where the cutover queries piggybacked
+// last_interaction_at on apply_last_contacted.
+func TestIntegration_CadenceUpdater_BulkApply_DoesNotBumpLastInteractionAt(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	database, cleanup := newCadenceUpdaterTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	targetLast := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	// Seed a pre-merge last_interaction_at on the target so we can
+	// assert the merge leaves it alone. We seed via a mutual
+	// ApplyInteraction (the legitimate path for this column).
+	contactRepo := repository.NewContactRepository(database.Queries)
+	target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: "Merge LastInteractionAt Guard", LastContacted: &targetLast,
+	})
+	require.NoError(t, err)
+	defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
+
+	cu, _ := newCadenceUpdaterForTest(t, database, consumer.CadenceModeCutover)
+
+	// Seed last_interaction_at via a mutual interaction at targetLast.
+	applyInTx(t, database, func(tx pgx.Tx) error {
+		return cu.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
+			ContactID:  target.ID,
+			Direction:  repository.InteractionDirectionMutual,
+			Source:     repository.InteractionSourceGCal,
+			OccurredAt: targetLast,
+		})
+	})
+	seeded, err := contactRepo.GetContact(ctx, target.ID)
+	require.NoError(t, err)
+	require.NotNil(t, seeded.LastInteractionAt, "seeding should have set last_interaction_at")
+	seededLastInteraction := *seeded.LastInteractionAt
+
+	// Merge: source had an older last_contacted but the target has a
+	// newer last_interaction_at we don't want overwritten. Call BulkApply
+	// with a forward-max merge of last_contacted (newer source).
+	mergeNewer := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+	applyInTx(t, database, func(tx pgx.Tx) error {
+		return cu.BulkApply(ctx, tx, target.ID, repository.ContactCadenceFields{LastContacted: &mergeNewer})
+	})
+	after, err := contactRepo.GetContact(ctx, target.ID)
+	require.NoError(t, err)
+	assert.Equal(t, mergeNewer.UTC(), after.LastContacted.UTC(), "merge should advance last_contacted forward")
+	require.NotNil(t, after.LastInteractionAt)
+	assert.Equal(t, seededLastInteraction.UTC(), after.LastInteractionAt.UTC(),
+		"merge (BulkApply) MUST NOT bump last_interaction_at — merge is not an interaction")
+}
+
 // TestIntegration_CadenceUpdater_BulkApply_ForwardMaxOnMerge verifies
 // MergeContacts' BulkApply path never regresses an existing field.
 func TestIntegration_CadenceUpdater_BulkApply_ForwardMaxOnMerge(t *testing.T) {

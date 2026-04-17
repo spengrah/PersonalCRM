@@ -364,6 +364,12 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 		fetchedContact, err := contactRepo.GetContact(ctx, contact.ID)
 		require.NoError(t, err)
 		assert.Nil(t, fetchedContact.ContactBy, "contact_by should remain nil after fetch")
+		// Round-2 blocker guard: the service returned struct's updated_at
+		// must match the committed row's updated_at (both the profile
+		// UpdateContact and the ApplyContactByOverride bump updated_at;
+		// the service used to return the former's stale value).
+		assert.Equal(t, fetchedContact.UpdatedAt, updatedContact.UpdatedAt,
+			"returned updated_at should reflect post-override committed state")
 
 		// Step 3: Update contact to SET cadence again (different cadence)
 		updatedContact, _, err = contactService.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
