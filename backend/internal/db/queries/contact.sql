@@ -249,12 +249,25 @@ WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 -- by the PR 7 runtime path (consumer computes in memory per plan
 -- Decision 4); shipped so sqlc validates the SQL against the schema and
 -- PR 8 cutover can wire it without a second schema-validation step.
+--
+-- last_interaction_at piggybacks on apply_last_contacted: the direct-path
+-- queries UpdateContactResponseFields/UpdateContactMutualFields historically
+-- bumped last_interaction_at together with last_contacted for inbound +
+-- mutual, and never for outbound-only. Replicating that here keeps the
+-- inbound/mutual → "last non-outbound interaction" invariant intact
+-- post-cutover without adding a 5th apply flag.
 UPDATE contact SET
     last_contacted = CASE
         WHEN sqlc.arg(apply_last_contacted)::boolean
           AND (last_contacted IS NULL OR sqlc.arg(last_contacted)::timestamptz > last_contacted)
         THEN sqlc.arg(last_contacted)::timestamptz
         ELSE last_contacted
+    END,
+    last_interaction_at = CASE
+        WHEN sqlc.arg(apply_last_contacted)::boolean
+          AND (last_interaction_at IS NULL OR sqlc.arg(last_contacted)::timestamptz > last_interaction_at)
+        THEN sqlc.arg(last_contacted)::timestamptz
+        ELSE last_interaction_at
     END,
     last_outreach_at = CASE
         WHEN sqlc.arg(apply_last_outreach_at)::boolean
@@ -284,10 +297,18 @@ WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 -- unconditionally. Apply-flags still gate which columns are touched
 -- (e.g., a manual outbound still shouldn't bump last_contacted per
 -- direction rules). Unused by the PR 7 runtime path; shipped for PR 8.
+--
+-- last_interaction_at piggybacks on apply_last_contacted — see the
+-- UpdateContactCadenceForward comment above. Unconditional semantics so
+-- manual-source corrections overwrite regardless of existing value.
 UPDATE contact SET
     last_contacted = CASE
         WHEN sqlc.arg(apply_last_contacted)::boolean THEN sqlc.arg(last_contacted)::timestamptz
         ELSE last_contacted
+    END,
+    last_interaction_at = CASE
+        WHEN sqlc.arg(apply_last_contacted)::boolean THEN sqlc.arg(last_contacted)::timestamptz
+        ELSE last_interaction_at
     END,
     last_outreach_at = CASE
         WHEN sqlc.arg(apply_last_outreach_at)::boolean THEN sqlc.arg(last_outreach_at)::timestamptz

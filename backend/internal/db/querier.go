@@ -527,12 +527,23 @@ type Querier interface {
 	// by the PR 7 runtime path (consumer computes in memory per plan
 	// Decision 4); shipped so sqlc validates the SQL against the schema and
 	// PR 8 cutover can wire it without a second schema-validation step.
+	//
+	// last_interaction_at piggybacks on apply_last_contacted: the direct-path
+	// queries UpdateContactResponseFields/UpdateContactMutualFields historically
+	// bumped last_interaction_at together with last_contacted for inbound +
+	// mutual, and never for outbound-only. Replicating that here keeps the
+	// inbound/mutual → "last non-outbound interaction" invariant intact
+	// post-cutover without adding a 5th apply flag.
 	UpdateContactCadenceForward(ctx context.Context, arg UpdateContactCadenceForwardParams) error
 	// Manual-source branch (spec §3.4.2 "manual-source exception"): user
 	// correction — any passed-in value replaces the existing one
 	// unconditionally. Apply-flags still gate which columns are touched
 	// (e.g., a manual outbound still shouldn't bump last_contacted per
 	// direction rules). Unused by the PR 7 runtime path; shipped for PR 8.
+	//
+	// last_interaction_at piggybacks on apply_last_contacted — see the
+	// UpdateContactCadenceForward comment above. Unconditional semantics so
+	// manual-source corrections overwrite regardless of existing value.
 	UpdateContactCadenceUnconditional(ctx context.Context, arg UpdateContactCadenceUnconditionalParams) error
 	// Updates last_contacted, contact_by, and all direction timestamp fields (for mutual interactions)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error

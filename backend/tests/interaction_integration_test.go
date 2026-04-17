@@ -42,6 +42,7 @@ func setupInteractionTestDeps(t *testing.T) (*service.ContactService, *repositor
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries))
+	wireCadenceUpdaterForTest(t, database, contactService)
 
 	cleanup := func() {
 		database.Close()

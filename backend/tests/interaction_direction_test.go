@@ -41,6 +41,7 @@ func setupDirectionTestDeps(t *testing.T) (*service.ContactService, *repository.
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
+	wireCadenceUpdaterForTest(t, database, contactService)
 
 	cleanup := func() {
 		database.Close()

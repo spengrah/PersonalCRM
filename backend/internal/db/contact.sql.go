@@ -1109,6 +1109,12 @@ UPDATE contact SET
         THEN $2::timestamptz
         ELSE last_contacted
     END,
+    last_interaction_at = CASE
+        WHEN $1::boolean
+          AND (last_interaction_at IS NULL OR $2::timestamptz > last_interaction_at)
+        THEN $2::timestamptz
+        ELSE last_interaction_at
+    END,
     last_outreach_at = CASE
         WHEN $3::boolean
           AND (last_outreach_at IS NULL OR $4::timestamptz > last_outreach_at)
@@ -1150,6 +1156,13 @@ type UpdateContactCadenceForwardParams struct {
 // by the PR 7 runtime path (consumer computes in memory per plan
 // Decision 4); shipped so sqlc validates the SQL against the schema and
 // PR 8 cutover can wire it without a second schema-validation step.
+//
+// last_interaction_at piggybacks on apply_last_contacted: the direct-path
+// queries UpdateContactResponseFields/UpdateContactMutualFields historically
+// bumped last_interaction_at together with last_contacted for inbound +
+// mutual, and never for outbound-only. Replicating that here keeps the
+// inbound/mutual → "last non-outbound interaction" invariant intact
+// post-cutover without adding a 5th apply flag.
 func (q *Queries) UpdateContactCadenceForward(ctx context.Context, arg UpdateContactCadenceForwardParams) error {
 	_, err := q.db.Exec(ctx, UpdateContactCadenceForward,
 		arg.ApplyLastContacted,
@@ -1170,6 +1183,10 @@ UPDATE contact SET
     last_contacted = CASE
         WHEN $1::boolean THEN $2::timestamptz
         ELSE last_contacted
+    END,
+    last_interaction_at = CASE
+        WHEN $1::boolean THEN $2::timestamptz
+        ELSE last_interaction_at
     END,
     last_outreach_at = CASE
         WHEN $3::boolean THEN $4::timestamptz
@@ -1204,6 +1221,10 @@ type UpdateContactCadenceUnconditionalParams struct {
 // unconditionally. Apply-flags still gate which columns are touched
 // (e.g., a manual outbound still shouldn't bump last_contacted per
 // direction rules). Unused by the PR 7 runtime path; shipped for PR 8.
+//
+// last_interaction_at piggybacks on apply_last_contacted — see the
+// UpdateContactCadenceForward comment above. Unconditional semantics so
+// manual-source corrections overwrite regardless of existing value.
 func (q *Queries) UpdateContactCadenceUnconditional(ctx context.Context, arg UpdateContactCadenceUnconditionalParams) error {
 	_, err := q.db.Exec(ctx, UpdateContactCadenceUnconditional,
 		arg.ApplyLastContacted,

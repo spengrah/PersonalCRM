@@ -1128,40 +1128,36 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 				commands = append(commands, NewItemCloseCommand(task.ExternalTaskID))
 			}
 
-			// Calculate the next contact_by from the current last_contacted
-			if contact.Cadence != nil && *contact.Cadence != "" {
-				cadenceType, err := cadence.ParseCadence(*contact.Cadence)
-				if err == nil {
-					days := cadence.CadenceDays(cadenceType)
-					today := cadence.Today(*contact.LastContacted)
-					nextContactBy := today.AddDate(0, 0, days)
+			// PR 8 Step 11: this branch previously re-computed and wrote
+			// contact_by here. Post-cutover the upstream non-Todoist
+			// interaction (via InteractionRecorder → CadenceUpdater)
+			// already wrote contact_by; reconciliation reads the live
+			// contact.ContactBy for the new Todoist task's deadline
+			// instead of re-computing + re-writing. Removing the write
+			// keeps CadenceUpdater as the sole writer of contact_by.
+			if contact.Cadence != nil && *contact.Cadence != "" && contact.ContactBy != nil {
+				nextContactBy := *contact.ContactBy
 
-					// Update contact_by
-					if err := p.contactRepo.UpdateContactBy(ctx, contact.ID, nextContactBy); err != nil {
-						logger.Warn().Err(err).Msg("failed to update contact_by after non-Todoist contact")
-					}
+				// Create new task with updated deadline
+				deadlineStr := nextContactBy.Format(DateFormat)
+				cmd := p.createTaskCommand(contact, settings, &deadlineStr)
+				commands = append(commands, cmd)
 
-					// Create new task with updated deadline
-					deadlineStr := nextContactBy.Format(DateFormat)
-					cmd := p.createTaskCommand(contact, settings, &deadlineStr)
-					commands = append(commands, cmd)
-
-					// Update metadata
-					metadata := task.Metadata
-					if metadata == nil {
-						metadata = make(map[string]any)
-					}
-					metadata[MetadataKeyPendingTempID] = cmd.TempID
-					metadata[MetadataKeySyncedDeadline] = deadlineStr
-					if contact.LastContacted != nil {
-						metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
-					}
-					if contact.LastOutreachAt != nil {
-						metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
-					}
-					if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
-						logger.Warn().Err(err).Msg("failed to update metadata after non-Todoist contact")
-					}
+				// Update metadata
+				metadata := task.Metadata
+				if metadata == nil {
+					metadata = make(map[string]any)
+				}
+				metadata[MetadataKeyPendingTempID] = cmd.TempID
+				metadata[MetadataKeySyncedDeadline] = deadlineStr
+				if contact.LastContacted != nil {
+					metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+				}
+				if contact.LastOutreachAt != nil {
+					metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+				}
+				if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+					logger.Warn().Err(err).Msg("failed to update metadata after non-Todoist contact")
 				}
 			}
 

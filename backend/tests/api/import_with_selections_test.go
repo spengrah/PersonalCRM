@@ -52,8 +52,10 @@ func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository
 	// Create services
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries))
+	cadenceUpdater := wireCadenceUpdaterForAPITest(nil, database, contactService)
 	matchService := service.NewImportMatchService(contactRepo)
 	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo)
+	enrichmentService.SetCadenceUpdater(cadenceUpdater)
 
 	// Create handler
 	importHandler := handlers.NewImportHandler(externalRepo, contactService, matchService, enrichmentService)

@@ -301,6 +301,11 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	if err := s.cadence.ApplyContactByOverride(ctx, tx, id, newContactBy); err != nil {
 		return nil, uuid.Nil, fmt.Errorf("apply cadence contact_by override: %w", err)
 	}
+	// The profile-only UpdateContact returned contact_by as it stood
+	// BEFORE ApplyContactByOverride ran; reflect the post-override value
+	// on the returned struct so callers (handlers, tests) observe the
+	// committed state without a second repo round-trip.
+	contact.ContactBy = newContactBy
 
 	var (
 		updatedMethods []repository.ContactMethod
@@ -468,10 +473,35 @@ func (s *ContactService) RecordInteractionTx(
 		return nil, fmt.Errorf("create interaction: %w", err)
 	}
 
-	// 6. Derive the follow-up closure. PR 8: cadence writes no longer
-	// happen here — InteractionRecorder inline-invokes
-	// CadenceUpdater.HandleEvent after bus.PublishTx in its own path
-	// (spec §3.4.2 + plan Step 5/7). This helper is follow-up-only.
+	// 6. Direct-path cadence write. When withShadow=false the caller is
+	// NOT going through the event bus (non-bus wrappers: Todoist action /
+	// cadence task completion, and service-layer tests). No
+	// interaction.recorded will be emitted, so InteractionRecorder's
+	// inline CadenceUpdater.HandleEvent dispatch won't fire and cadence
+	// columns would otherwise silently stop updating. Route through
+	// CadenceUpdater.ApplyInteraction so this path stays under the
+	// sole-writer invariant (plan Decision 3). withShadow=true callers
+	// (the InteractionRecorder) still rely on the recorder's inline
+	// HandleEvent path + event-id claim for dedupe across inline + queued
+	// delivery.
+	if !withShadow {
+		if s.cadence == nil {
+			return nil, errors.New("record interaction: cadence updater not wired (call SetCadenceUpdater)")
+		}
+		if err := s.cadence.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
+			ContactID:  req.ContactID,
+			Direction:  req.Direction,
+			Source:     req.Source,
+			OccurredAt: req.OccurredAt,
+		}); err != nil {
+			return nil, fmt.Errorf("apply interaction cadence: %w", err)
+		}
+	}
+
+	// 7. Derive the follow-up closure. PR 8: cadence writes happen via
+	// either the recorder's inline CadenceUpdater.HandleEvent (withShadow
+	// true) or the direct ApplyInteraction call above (withShadow false).
+	// This helper is follow-up-only.
 	followUpFn := s.deriveFollowUpClosure(contact, interaction)
 
 	res := &RecordInteractionResult{

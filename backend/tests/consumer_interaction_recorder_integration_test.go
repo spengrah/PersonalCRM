@@ -158,6 +158,7 @@ func newConsumerTestEnv(t *testing.T, ctx context.Context) *consumerTestEnv {
 		consumer.CadenceModeCutover,
 		false,
 	)
+	contactService.SetCadenceUpdater(cadenceUpdater)
 	recorder = consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater)
 
 	manualHandler := service.NewManualInteractionHandler(database.Pool, bus, recorder)

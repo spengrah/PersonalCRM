@@ -92,6 +92,10 @@ func setupTestEventBus(
 		consumer.CadenceModeCutover,
 		false,
 	)
+	// PR 8: wire cadenceUpdater into the contact service so direct-invoke
+	// paths (Merge / Extend / Promote / RecordInteraction non-bus wrapper /
+	// UpdateContact cadence-edit) work in these async integration tests.
+	contactService.SetCadenceUpdater(cadenceUpdater)
 	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater)
 	// Fill the shim's real worker now that bus + recorder exist.
 	shim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder)
@@ -140,6 +144,26 @@ func (w *deferredRecorderWorker) Timeout(j *river.Job[consumerjobs.InteractionRe
 		return 30 * time.Second
 	}
 	return w.real.Timeout(j)
+}
+
+// wireCadenceUpdaterForTest constructs a real CadenceUpdater against the
+// given database and injects it into contactService so PR 8 cadence
+// entry points (RecordInteraction direct path, MergeContacts,
+// ExtendInteraction, PromoteInteractionToMutual, UpdateContact cadence
+// edits) work in tests without needing the full event-bus harness. Uses
+// cutover mode so cadence columns get written.
+func wireCadenceUpdaterForTest(t *testing.T, database *db.Database, contactService *service.ContactService) *consumer.CadenceUpdater {
+	t.Helper()
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactRepo.SetPool(database.Pool)
+	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
+	cadenceUpdater := consumer.NewCadenceUpdater(
+		claimRepo, contactRepo, database.Queries,
+		consumer.CadenceModeCutover,
+		false,
+	)
+	contactService.SetCadenceUpdater(cadenceUpdater)
+	return cadenceUpdater
 }
 
 // cadenceUpdaterNoopWorker satisfies the cadence_updater kind for test

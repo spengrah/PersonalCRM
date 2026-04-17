@@ -1,4 +1,4 @@
-package api_test
+package api
 
 import (
 	"context"
@@ -32,11 +32,6 @@ func setupTestDB(t *testing.T) (*db.Database, func()) {
 	return database, func() { database.Close() }
 }
 
-// Helper function to create string pointers
-func stringPtr(s string) *string {
-	return &s
-}
-
 func TestContactMerge_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -55,6 +50,7 @@ func TestContactMerge_Integration(t *testing.T) {
 	// Create service
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries))
+	wireCadenceUpdaterForAPITest(t, database, contactService)
 
 	t.Run("GetMergePreview_BasicCounts", func(t *testing.T) {
 		// Create target contact
