@@ -3,39 +3,49 @@
 #
 # Ships alongside the AST test at backend/tests/sole_writer_static_test.go.
 # Enforces plan Step 13 + Design Decision 9: post-cutover, cadence-writing
-# queries and repository wrappers are only reachable from
-# backend/internal/consumer/cadence_updater.go (the authoritative writer),
-# backend/internal/repository/contact.go (where the wrappers are defined),
-# and backend/internal/todoist/provider.go (the two explicit carve-outs).
+# queries are only reachable from backend/internal/consumer/cadence_updater.go
+# (the authoritative writer), the repository wrapper methods themselves,
+# and the two explicit Todoist carve-outs.
+#
+# Round-2 refinements:
+#   - Inventory includes CreateContact + UpdateContact, scoped to sqlc
+#     Querier receivers (`queries.X`, `db.New(tx).X`, `txQueries.X`) so
+#     wrapper-to-wrapper calls from the service layer are NOT flagged.
+#   - Allowlist is file-level here (the belt); function-level precision
+#     lives in the AST test (the suspenders). Any file that matches the
+#     grep pattern MUST also be covered by the AST allowlist.
 #
 # Exits 0 when the hit set matches the allowlist. Exits 1 (with a diff
-# against the allowlist) otherwise. Meant to be run from CI *in addition
-# to* the AST test — the AST walk is authoritative, but this script
-# produces reviewer-visible file/line evidence that a PR expanded or
-# contracted the allowlist.
+# against the allowlist) otherwise.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Files that are allowed to call cadence-writing symbols. Paths relative
-# to the repo root. Keep in sync with allowedFiles in
-# backend/tests/sole_writer_static_test.go and Design Decision 9.
+# Files that are allowed to contain cadence-writing call sites. Paths
+# relative to the repo root. The AST test enforces function-level
+# precision within each file; this script is the coarse first check.
 ALLOWLIST=(
   "backend/internal/consumer/cadence_updater.go"
   "backend/internal/repository/contact.go"
   "backend/internal/todoist/provider.go"
 )
 
-# Cadence-writing symbols. Any call reaching these outside the allowlist
-# violates the sole-writer invariant. The leading `\.` (dot) and trailing
-# `\(` (open-paren) together match method-call usage like
-# `r.queries.UpdateContactBy(` — and skip noise like handler method
-# definitions (`func (h *ContactHandler) UpdateContactLastContacted(...)`),
-# router registrations (`contactHandler.UpdateContactLastContacted)`), and
-# doc comments that merely mention the name. Keep symbol set in sync with
-# cadenceWritingSymbols in backend/tests/sole_writer_static_test.go.
-SYMBOLS_PATTERN='\.(UpdateContactLastContacted|UpdateContactLastContactedIfLater|UpdateContactOutreachAt|UpdateContactOutreachAtTx|UpdateContactResponseFields|UpdateContactResponseFieldsTx|UpdateContactMutualFields|UpdateContactMutualFieldsTx|UpdateContactCadenceForward|UpdateContactCadenceUnconditional|UpdateContactBy)\('
+# Cadence-writing symbols with their receiver-scope restrictions. Most
+# names are distinctive and can match on `\.SYMBOL\(` alone; the two
+# collision-prone names (CreateContact, UpdateContact) require an sqlc
+# Querier receiver to avoid flagging every service/handler caller.
+#
+# Keep in sync with cadenceWritingSymbols + querierScopedSymbols in
+# backend/tests/sole_writer_static_test.go.
+DISTINCTIVE_PATTERN='\.(UpdateContactLastContacted|UpdateContactLastContactedIfLater|UpdateContactOutreachAt|UpdateContactOutreachAtTx|UpdateContactResponseFields|UpdateContactResponseFieldsTx|UpdateContactMutualFields|UpdateContactMutualFieldsTx|UpdateContactCadenceForward|UpdateContactCadenceUnconditional|UpdateContactBy)\('
+
+# Querier-scoped CreateContact/UpdateContact. Match only when the
+# receiver chain looks like an sqlc Querier: `queries.X(`, `q.X(`,
+# `txQueries.X(`, or `db.New(tx).X(`.
+QUERIER_SCOPED_PATTERN='((\.queries|\.q|\.txQueries|queries|txQueries|db\.New\([^)]*\))\.(CreateContact|UpdateContact))\('
+
+SYMBOLS_PATTERN="${DISTINCTIVE_PATTERN}|${QUERIER_SCOPED_PATTERN}"
 
 # Prefer ripgrep when available (faster + respects .gitignore). Fall back
 # to grep -R so the script works on plain CI containers.
@@ -43,7 +53,7 @@ if command -v rg >/dev/null 2>&1; then
   HITS=$(rg -l "$SYMBOLS_PATTERN" \
     --glob '*.go' \
     --glob '!**/*_test.go' \
-    --glob '!**/contact.sql.go' \
+    --glob '!**/*.sql.go' \
     --glob '!**/querier.go' \
     --glob '!**/models.go' \
     --glob '!**/db.go' \
@@ -52,16 +62,14 @@ else
   HITS=$(grep -lE "$SYMBOLS_PATTERN" \
     -r --include='*.go' \
     --exclude='*_test.go' \
-    --exclude='contact.sql.go' \
+    --exclude='*.sql.go' \
     --exclude='querier.go' \
     --exclude='models.go' \
     --exclude='db.go' \
     backend/internal backend/cmd 2>/dev/null | sort -u || true)
 fi
 
-# Compare hit set to allowlist. A file that hits the pattern but isn't
-# allowlisted is a violation; an allowlisted file that doesn't hit the
-# pattern anymore is a cleanup signal (not a failure).
+# Compare hit set to allowlist.
 IFS=$'\n' read -r -d '' -a HIT_LINES < <(printf '%s' "$HITS" && printf '\0')
 VIOLATIONS=()
 for f in "${HIT_LINES[@]:-}"; do
@@ -91,7 +99,7 @@ if [[ ${#VIOLATIONS[@]} -gt 0 ]]; then
   echo >&2
   echo "Fix: route the write through CadenceUpdater, or justify + allowlist the file" >&2
   echo "in both this script's ALLOWLIST and backend/tests/sole_writer_static_test.go's" >&2
-  echo "allowedFiles map." >&2
+  echo "allowedCallSites map." >&2
   exit 1
 fi
 
