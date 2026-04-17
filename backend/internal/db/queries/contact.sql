@@ -116,6 +116,14 @@ INSERT INTO contact (
 ) RETURNING *;
 
 -- name: UpdateContact :one
+-- Profile-only update path (PR 8 cutover; plan Step 8). Writes name,
+-- location, birthday, how_met, cadence, profile_photo — NEVER writes
+-- last_contacted, last_outreach_at, last_response_at, or contact_by.
+-- ContactService.UpdateContact handles the cadence-change side-effect
+-- (recomputing contact_by) by calling CadenceUpdater.ApplyContactByOverride
+-- in the same tx; EnrichmentService uses this query for cadence-absent
+-- inferred fields and CadenceUpdater.ApplyContactByOverride when the
+-- input DTO carries an explicit cadence preference.
 UPDATE contact SET
   full_name = $2,
   location = $3,
@@ -123,7 +131,6 @@ UPDATE contact SET
   how_met = $5,
   cadence = $6,
   profile_photo = $7,
-  contact_by = $8,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;

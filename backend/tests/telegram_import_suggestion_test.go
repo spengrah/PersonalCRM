@@ -66,7 +66,7 @@ func setupTelegramImportSuggestionTest(t *testing.T) (
 
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries))
 	matchService := service.NewImportMatchService(contactRepo)
-	enrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
+	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo)
 
 	importHandler := handlers.NewImportHandler(externalRepo, contactService, matchService, enrichmentService)
 

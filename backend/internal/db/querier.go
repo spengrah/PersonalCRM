@@ -510,6 +510,14 @@ type Querier interface {
 	// Transfer notes from source to target contact
 	TransferNotes(ctx context.Context, arg TransferNotesParams) error
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
+	// Profile-only update path (PR 8 cutover; plan Step 8). Writes name,
+	// location, birthday, how_met, cadence, profile_photo — NEVER writes
+	// last_contacted, last_outreach_at, last_response_at, or contact_by.
+	// ContactService.UpdateContact handles the cadence-change side-effect
+	// (recomputing contact_by) by calling CadenceUpdater.ApplyContactByOverride
+	// in the same tx; EnrichmentService uses this query for cadence-absent
+	// inferred fields and CadenceUpdater.ApplyContactByOverride when the
+	// input DTO carries an explicit cadence preference.
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	// Updates just the contact_by field (for Todoist deadline sync).
 	UpdateContactBy(ctx context.Context, arg UpdateContactByParams) error

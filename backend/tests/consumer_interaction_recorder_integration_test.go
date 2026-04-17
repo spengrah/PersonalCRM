@@ -149,7 +149,16 @@ func newConsumerTestEnv(t *testing.T, ctx context.Context) *consumerTestEnv {
 	bus := newConsumerTestBus(t, ctx, database, cfg, &recorder)
 
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
-	recorder = consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus)
+	// PR 8: wire a real CadenceUpdater so the recorder's inline-apply seam
+	// writes cadence columns against a live DB in these integration tests.
+	contactRepo.SetPool(database.Pool)
+	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
+	cadenceUpdater := consumer.NewCadenceUpdater(
+		claimRepo, contactRepo, database.Queries,
+		consumer.CadenceModeCutover,
+		false,
+	)
+	recorder = consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater)
 
 	manualHandler := service.NewManualInteractionHandler(database.Pool, bus, recorder)
 

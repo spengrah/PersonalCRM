@@ -73,7 +73,7 @@ func setupRematchEnv(t *testing.T) *rematchTestEnv {
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 
 	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
-	enrichmentSvc := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
+	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo)
 
 	// Cutover wiring: a live bus + InteractionRecorderWorker so rematch
 	// publishes → async consumer writes the interaction. Tests wait for

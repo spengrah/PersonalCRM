@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"personal-crm/backend/internal/cadence"
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -21,25 +25,44 @@ type MethodSelection struct {
 	IsPrimary     bool
 }
 
-// EnrichmentService handles contact enrichment from external sources
+// EnrichmentService handles contact enrichment from external sources.
+// PR 8: when the link/import flow supplies an explicit cadence override,
+// the cadence mutation routes through CadenceUpdater.ApplyContactByOverride
+// so contact cadence writes stay under the sole-writer invariant (plan
+// Step 8). Inferred-enrichment paths (no cadence) continue to use the
+// profile-only UpdateContact query and never touch cadence columns.
 type EnrichmentService struct {
+	database       *db.Database
 	contactRepo    *repository.ContactRepository
 	methodRepo     *repository.ContactMethodRepository
 	enrichmentRepo *repository.EnrichmentRepository
 	rematchSvc     *RematchService
+	cadence        cadenceWriter
 }
 
-// NewEnrichmentService creates a new enrichment service
+// NewEnrichmentService creates a new enrichment service. database is
+// required post-PR-8 so the cadence-override path can open its own tx
+// for the profile-update + ApplyContactByOverride pair.
 func NewEnrichmentService(
+	database *db.Database,
 	contactRepo *repository.ContactRepository,
 	methodRepo *repository.ContactMethodRepository,
 	enrichmentRepo *repository.EnrichmentRepository,
 ) *EnrichmentService {
 	return &EnrichmentService{
+		database:       database,
 		contactRepo:    contactRepo,
 		methodRepo:     methodRepo,
 		enrichmentRepo: enrichmentRepo,
 	}
+}
+
+// SetCadenceUpdater injects the cadence writer. Required for the
+// cadence-present link/import override path (plan Step 8). When unset,
+// cadence-present enrichment calls return an error rather than silently
+// skipping the sole-writer invariant.
+func (s *EnrichmentService) SetCadenceUpdater(c cadenceWriter) {
+	s.cadence = c
 }
 
 // SetRematchService injects the rematch service. Safe to leave unset —
@@ -131,7 +154,7 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 	external *repository.ExternalContact,
 	selectedMethods []MethodSelection,
 	conflictResolutions map[string]string,
-	cadence *string,
+	cadenceArg *string,
 	name *string,
 ) (uuid.UUID, error) {
 	// Get current contact
@@ -173,9 +196,14 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 		s.recordEnrichment(ctx, crmContactID, external, "location", location)
 	}
 
-	// Update cadence if provided
-	if cadence != nil {
-		updateReq.Cadence = cadence
+	// Update cadence if provided. PR 8 Step 8: explicit cadence overrides
+	// from the link/import flow are treated as user-supplied manual
+	// cadence edits and must route through CadenceUpdater.ApplyContactByOverride
+	// so contact_by recomputation stays under the sole-writer invariant.
+	// cadencePresent gates the tx-wrapped path below.
+	cadencePresent := cadenceArg != nil
+	if cadencePresent {
+		updateReq.Cadence = cadenceArg
 		needsUpdate = true
 	}
 
@@ -186,10 +214,32 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 		needsUpdate = true
 	}
 
-	// Apply updates to contact if any enrichment occurred
+	// Apply updates to contact if any enrichment occurred.
 	if needsUpdate {
-		if _, err := s.contactRepo.UpdateContact(ctx, crmContactID, updateReq); err != nil {
-			logger.Warn().Err(err).Msg("failed to update contact with enrichments")
+		if cadencePresent {
+			if s.cadence == nil {
+				return uuid.Nil, errors.New("enrichment: cadence override requested but CadenceUpdater not wired")
+			}
+			newContactBy := deriveContactByFromCadence(contact, cadenceArg)
+			txErr := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+				// Profile-only write inside the tx so the cadence string
+				// is visible to ApplyContactByOverride's downstream reads.
+				txQueries := db.New(tx)
+				txContactRepo := repository.NewContactRepository(txQueries)
+				if _, txErr := txContactRepo.UpdateContact(ctx, crmContactID, updateReq); txErr != nil {
+					return fmt.Errorf("update contact profile: %w", txErr)
+				}
+				return s.cadence.ApplyContactByOverride(ctx, tx, crmContactID, newContactBy)
+			})
+			if txErr != nil {
+				logger.Warn().Err(txErr).Msg("failed to update contact with cadence override")
+			}
+		} else {
+			// No cadence change — profile-only path is safe to run on the
+			// repository's default pool connection.
+			if _, err := s.contactRepo.UpdateContact(ctx, crmContactID, updateReq); err != nil {
+				logger.Warn().Err(err).Msg("failed to update contact with enrichments")
+			}
 		}
 	}
 
@@ -491,6 +541,26 @@ func (s *EnrichmentService) HasEnrichment(ctx context.Context, contactID uuid.UU
 // ListEnrichments returns all enrichments for a contact
 func (s *EnrichmentService) ListEnrichments(ctx context.Context, contactID uuid.UUID) ([]repository.ContactEnrichment, error) {
 	return s.enrichmentRepo.ListForContact(ctx, contactID)
+}
+
+// deriveContactByFromCadence computes the next contact_by date from a
+// cadence string + the contact's existing last_contacted (fallback:
+// created_at). Returns nil when cadence is nil, empty, or unparseable —
+// those cases collapse to "clear contact_by" on the unconditional branch.
+func deriveContactByFromCadence(contact *repository.Contact, cadenceArg *string) *time.Time {
+	if contact == nil || cadenceArg == nil || *cadenceArg == "" {
+		return nil
+	}
+	cadenceType, err := cadence.ParseCadence(*cadenceArg)
+	if err != nil {
+		return nil
+	}
+	base := contact.CreatedAt
+	if contact.LastContacted != nil {
+		base = *contact.LastContacted
+	}
+	t := cadence.CalculateContactBy(base, cadenceType)
+	return &t
 }
 
 // mapMethodTypeToIdentifier maps contact method type to identity type for normalization

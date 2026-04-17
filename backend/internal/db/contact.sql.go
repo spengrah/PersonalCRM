@@ -1029,7 +1029,6 @@ UPDATE contact SET
   how_met = $5,
   cadence = $6,
   profile_photo = $7,
-  contact_by = $8,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at
@@ -1043,9 +1042,16 @@ type UpdateContactParams struct {
 	HowMet       pgtype.Text `json:"how_met"`
 	Cadence      pgtype.Text `json:"cadence"`
 	ProfilePhoto pgtype.Text `json:"profile_photo"`
-	ContactBy    pgtype.Date `json:"contact_by"`
 }
 
+// Profile-only update path (PR 8 cutover; plan Step 8). Writes name,
+// location, birthday, how_met, cadence, profile_photo — NEVER writes
+// last_contacted, last_outreach_at, last_response_at, or contact_by.
+// ContactService.UpdateContact handles the cadence-change side-effect
+// (recomputing contact_by) by calling CadenceUpdater.ApplyContactByOverride
+// in the same tx; EnrichmentService uses this query for cadence-absent
+// inferred fields and CadenceUpdater.ApplyContactByOverride when the
+// input DTO carries an explicit cadence preference.
 func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error) {
 	row := q.db.QueryRow(ctx, UpdateContact,
 		arg.ID,
@@ -1055,7 +1061,6 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 		arg.HowMet,
 		arg.Cadence,
 		arg.ProfilePhoto,
-		arg.ContactBy,
 	)
 	var i Contact
 	err := row.Scan(

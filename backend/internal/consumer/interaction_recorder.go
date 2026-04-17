@@ -75,27 +75,47 @@ type telegramMessageMarker interface {
 	MarkMessagesProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID) error
 }
 
+// cadenceDispatcher is the subset of *CadenceUpdater the recorder needs
+// for the PR 8 inline-apply path (plan Decision 4 + Step 5). Unit tests
+// stub this without building a real claim store / contact reader.
+type cadenceDispatcher interface {
+	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
+}
+
 // InteractionRecorder is the event-bus consumer that turns raw provider
 // events into interaction rows + emits interaction.recorded. See spec
 // §3.4.1 for the atomicity contract.
+//
+// PR 8 cutover: on fresh writes, InteractionRecorder synchronously
+// invokes CadenceUpdater.HandleEvent(ctx, tx, recordedEnv) after
+// bus.PublishTx succeeds. That call claims the event on the durable
+// event_consumer_claim table (migration 040) and, if it wins the
+// claim, performs the cadence write in the SAME tx. A later queued
+// delivery of the same event finds the claim row and returns nil
+// without mutating contact state.
 type InteractionRecorder struct {
 	writer              interactionWriter
 	telegramMessageRepo telegramMessageMarker
 	bus                 eventBusTx
+	cadence             cadenceDispatcher
 }
 
 // NewInteractionRecorder builds the consumer. telegramMessageRepo may be
-// nil for test environments that don't exercise message.* kinds; the
-// consumer nil-checks before invoking it.
+// nil for test environments that don't exercise message.* kinds. cadence
+// MUST be non-nil in PR 8 production wiring — the inline cadence apply
+// is the seam that closes the queued-worker replay hole (plan blocker
+// resolution). Tests that don't care about cadence pass a no-op stub.
 func NewInteractionRecorder(
 	writer interactionWriter,
 	telegramMessageRepo telegramMessageMarker,
 	bus eventBusTx,
+	cadence cadenceDispatcher,
 ) *InteractionRecorder {
 	return &InteractionRecorder{
 		writer:              writer,
 		telegramMessageRepo: telegramMessageRepo,
 		bus:                 bus,
+		cadence:             cadence,
 	}
 }
 
@@ -186,42 +206,19 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		return nil, nil, fmt.Errorf("publish interaction.recorded: %w", err)
 	}
 
-	// At this point the recordedEnv has its DB-generated id. Bind the
-	// shadow drain to recordedEnv.ID so the direct observation's
-	// event_id matches the consumer's (the consumer receives
-	// recordedEnv and uses its ID on its own observation). Combine
-	// the follow-up postCommit with the shadow drain into a single
-	// caller-facing closure.
-	combined := combinePostCommit(res.FollowUpFn, res.ShadowDrainFn, recordedEnv.ID)
-	return res.Interaction, combined, nil
-}
+	// PR 8 cutover blocker fix: inline-apply cadence synchronously in the
+	// SAME tx so the manual UI stays synchronous AND the queued worker
+	// for this event_id becomes a durable no-op on re-delivery (plan
+	// Decision 2 + 4 + Step 5). The claim row + cadence write commit
+	// atomically with the interaction insert; a tx rollback rolls back
+	// all three together so a queued re-delivery is safe.
+	if r.cadence != nil {
+		if cadenceErr := r.cadence.HandleEvent(ctx, tx, recordedEnv); cadenceErr != nil {
+			return nil, nil, fmt.Errorf("inline apply cadence: %w", cadenceErr)
+		}
+	}
 
-// combinePostCommit merges the follow-up-manager post-commit closure
-// and the cadence-shadow drain into a single function that the caller
-// (worker.Work, runHandleEvent) invokes after the outer tx commits.
-// Passing recordedEventID lets the shadow drain bind both direct and
-// consumer observations to the same event_id.
-//
-// Ordering: shadow drain runs FIRST, follow-up runs SECOND. Rationale
-// (Codex round-1 finding 3): the follow-up closure performs post-commit
-// external work (Todoist HTTP calls) that can take seconds. Running it
-// before the shadow drain widens the interval between the authoritative
-// UPDATE and the direct-path post-image re-read, letting intermediate
-// state mutations corrupt the observation. Running the shadow drain
-// first pins the post-image as close as possible to the UPDATE, which
-// is what the post-bake divergence query expects.
-func combinePostCommit(followUp func(context.Context), shadow repository.CadenceShadowDrainFn, recordedEventID uuid.UUID) func(context.Context) {
-	if followUp == nil && shadow == nil {
-		return nil
-	}
-	return func(ctx context.Context) {
-		if shadow != nil {
-			shadow(ctx, recordedEventID)
-		}
-		if followUp != nil {
-			followUp(ctx)
-		}
-	}
+	return res.Interaction, res.FollowUpFn, nil
 }
 
 // extractRequest dispatches on env.Kind to build a RecordInteractionRequest

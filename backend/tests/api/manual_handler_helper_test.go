@@ -63,7 +63,18 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 	}
 
 	bus := events.NewBus(database.Pool, client, eventRepo)
-	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus)
+	// PR 8: wire a real CadenceUpdater so API manual-handler tests exercise
+	// the inline apply-on-publish path against a live DB. contactRepo's
+	// pool is already set upstream by the router wiring; if not,
+	// cadence_updater direct-invoke APIs fall back to the caller's tx.
+	contactRepo.SetPool(database.Pool)
+	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
+	cadenceUpdater := consumer.NewCadenceUpdater(
+		claimRepo, contactRepo, database.Queries,
+		consumer.CadenceModeCutover, // API tests exercise the cutover writer
+		false,
+	)
+	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater)
 	shim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder)
 
 	manualHandler := service.NewManualInteractionHandler(database.Pool, bus, recorder)

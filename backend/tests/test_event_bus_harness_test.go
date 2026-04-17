@@ -82,7 +82,17 @@ func setupTestEventBus(
 	require.NoError(t, err)
 
 	bus := events.NewBus(database.Pool, client, eventRepo)
-	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus)
+	// PR 8: build a real CadenceUpdater so the recorder's inline apply
+	// fires in these end-to-end integration tests.
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactRepo.SetPool(database.Pool)
+	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
+	cadenceUpdater := consumer.NewCadenceUpdater(
+		claimRepo, contactRepo, database.Queries,
+		consumer.CadenceModeCutover,
+		false,
+	)
+	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater)
 	// Fill the shim's real worker now that bus + recorder exist.
 	shim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder)
 
