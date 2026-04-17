@@ -62,12 +62,11 @@ type contactCadenceReader interface {
 //   - ApplyContactByOverride: direct-invoke for user cadence edits
 //     (can clear or backdate contact_by unconditionally).
 type CadenceUpdater struct {
-	claims      eventClaimer
-	contacts    contactCadenceReader
-	queries     db.Querier
-	mode        string // config.EventBusCadenceMode*
-	unsafeOff   bool   // mirrors config.EventBus.UnsafeAllowOffMode for self-reported diagnostics
-	ownDBAccess *pgxpool.Pool
+	claims    eventClaimer
+	contacts  contactCadenceReader
+	queries   db.Querier
+	mode      string // config.EventBusCadenceMode*
+	unsafeOff bool   // mirrors config.EventBus.UnsafeAllowOffMode for self-reported diagnostics
 }
 
 // NewCadenceUpdater constructs the consumer. `queries` must be a
