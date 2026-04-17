@@ -24,10 +24,15 @@ import (
 // stubWriter is the cutover-era replacement for the PR 5 stubContactRepo /
 // stubInteractionRepo split. It emulates ContactService.RecordInteractionTx:
 // dedup, contact-existence check, and interaction insert collapse into one
-// entry point (plan Decision 4a).
+// entry point (plan Decision 4a). PR 7 extends the returns with the
+// pre-cadence snapshot + cadence-at-emit value (plan Decision 2a) plus a
+// shadow-drain closure (plan Decision 6).
 type stubWriter struct {
 	calls   int
 	lastReq repository.RecordInteractionRequest
+	// lastWithShadow captures the withShadow arg so tests can assert
+	// the consumer threads it as true.
+	lastWithShadow bool
 	// Existing row forces isReplay=true; otherwise a fresh row is fabricated.
 	existing *repository.Interaction
 	// notFound simulates GetContactTx returning db.ErrNotFound.
@@ -38,21 +43,32 @@ type stubWriter struct {
 	lastCreated *repository.Interaction
 	// postCommit is returned on fresh writes; caller may invoke it.
 	postCommit func(context.Context)
+	// prev + cadenceAtEmit are the PR 7 pre-cadence snapshot returns.
+	// Tests set these to exercise V2 payload construction in HandleEvent.
+	prev          *repository.ContactCadenceFields
+	cadenceAtEmit *string
+	// shadowDrain is the PR 7 cadence shadow drain closure. Tests set
+	// this to assert the consumer invokes it with recordedEnv.ID.
+	shadowDrain repository.CadenceShadowDrainFn
+	// lastShadowDrainEventID captures the eventID passed to shadowDrain
+	// (set by the closure when the consumer invokes it).
+	lastShadowDrainEventID *uuid.UUID
 }
 
 func (s *stubWriter) RecordInteractionTx(
-	_ context.Context, _ pgx.Tx, req repository.RecordInteractionRequest,
-) (*repository.Interaction, bool, func(context.Context), error) {
+	_ context.Context, _ pgx.Tx, withShadow bool, req repository.RecordInteractionRequest,
+) (*repository.RecordInteractionResult, error) {
 	s.calls++
 	s.lastReq = req
+	s.lastWithShadow = withShadow
 	if s.returnErr != nil {
-		return nil, false, nil, s.returnErr
+		return nil, s.returnErr
 	}
 	if s.notFound {
-		return nil, false, nil, db.ErrNotFound
+		return nil, db.ErrNotFound
 	}
 	if s.existing != nil {
-		return s.existing, true, nil, nil
+		return &repository.RecordInteractionResult{Interaction: s.existing, IsReplay: true}, nil
 	}
 	inter := &repository.Interaction{
 		ID:         uuid.New(),
@@ -63,7 +79,23 @@ func (s *stubWriter) RecordInteractionTx(
 		Direction:  req.Direction,
 	}
 	s.lastCreated = inter
-	return inter, false, s.postCommit, nil
+	// Wrap shadowDrain so we can observe the eventID passed at drain time.
+	var drain repository.CadenceShadowDrainFn
+	if s.shadowDrain != nil {
+		base := s.shadowDrain
+		drain = func(ctx context.Context, eventID uuid.UUID) {
+			s.lastShadowDrainEventID = &eventID
+			base(ctx, eventID)
+		}
+	}
+	return &repository.RecordInteractionResult{
+		Interaction:   inter,
+		IsReplay:      false,
+		PrevCadence:   s.prev,
+		CadenceAtEmit: s.cadenceAtEmit,
+		FollowUpFn:    s.postCommit,
+		ShadowDrainFn: drain,
+	}, nil
 }
 
 type stubTGRepo struct {

@@ -225,11 +225,53 @@ func run() int {
 				"above does NOT apply to ingested-event-driven writes.")
 	}
 
-	// shadowObsRepo is retained (not passed anywhere in PR 6) because
-	// PR 7 reuses the event_shadow_observation table for CadenceUpdater
-	// shadow observations. Removing the repo construction here and
-	// re-adding it in PR 7 would double-churn (spec line 847).
+	// shadowObsRepo is retained (not passed anywhere in PR 6+) because
+	// the event_shadow_observation table may still be referenced by
+	// integration tests / post-bake queries. PR 12 drops the table.
 	_ = shadowObsRepo
+
+	// PR 7 CadenceUpdater wiring (spec §3.4.2; plan Decisions 6 + 9).
+	//
+	// The worker is registered UNCONDITIONALLY regardless of the
+	// configured cadence mode — events.consumerJobsForKind always
+	// enqueues a cadence_updater job for interaction.recorded, so a
+	// registered worker must exist in every mode. HandleEvent branches
+	// internally on mode=off → short-circuits with a DEBUG log and
+	// returns nil, leaving no DB side-effects.
+	//
+	// The ContactRepository gets its pool wired here so
+	// SnapshotContactCadenceFields (used by the direct-path shadow
+	// observer's post-commit closure) can open its own short-lived tx.
+	contactRepo.SetPool(database.Pool)
+
+	cadenceShadowRepo := repository.NewCadenceShadowObservationRepository(database.Queries, database.Pool)
+	cadenceUpdater := consumer.NewCadenceUpdater(
+		cadenceShadowRepo, eventBus,
+		consumer.CadenceModeFromConfig(cfg.EventBus.CadenceMode),
+	)
+	river.AddWorker(riverWorkers, consumer.NewCadenceUpdaterWorker(eventBus, database.Pool, cadenceUpdater))
+
+	// Direct-path observer is wired only when mode != off. In off mode
+	// the observer stays nil and applyInteractionEffectsFromRow's
+	// shadow-capture branch is dormant.
+	switch cfg.EventBus.CadenceMode {
+	case config.EventBusCadenceModeShadow:
+		contactService.SetCadenceShadowObserver(cadenceShadowRepo)
+		logger.Info().
+			Str("mode", "shadow").
+			Msg("event-bus CadenceUpdater: shadow active (worker registered, direct-path observer wired)")
+	case config.EventBusCadenceModeCutover:
+		// PR 8 territory — PR 7 falls back to shadow with a loud log so
+		// an operator who flips the flag early doesn't get unexpectedly
+		// different runtime behavior.
+		contactService.SetCadenceShadowObserver(cadenceShadowRepo)
+		logger.Error().
+			Msg("event-bus CadenceUpdater: cutover mode requested but this build is PR 7 (shadow-only); behaving as shadow")
+	default: // off
+		logger.Info().
+			Str("mode", "off").
+			Msg("event-bus CadenceUpdater: worker registered, direct-path observer disabled")
+	}
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 	importMatchService := service.NewImportMatchService(contactRepo)
 	// EnrichmentService is shared by the import handler (link/import flows) and

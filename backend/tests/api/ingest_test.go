@@ -89,6 +89,12 @@ func setupIngestTestRouter(t *testing.T, enableIngest bool) *ingestTestSetup {
 	// River client (TestOnly skips leader election / periodic loops).
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &ingestTestNoopWorker{})
+	// PR 7: interaction.recorded events enqueue cadence_updater jobs via
+	// consumerJobsForKind. Register a no-op placeholder so river accepts
+	// the kind at InsertTx; TestOnly=true means it never runs. Ingest
+	// tests that DO exercise CadenceUpdater (see ingest_cadence_test.go)
+	// invoke it manually after the HTTP POST.
+	river.AddWorker(workers, &apiTestCadenceShim{})
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},

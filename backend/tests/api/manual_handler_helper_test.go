@@ -46,6 +46,10 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 	workers := river.NewWorkers()
 	shim := &apiTestRecorderShim{}
 	river.AddWorker(workers, shim)
+	// PR 7: interaction.recorded events enqueue cadence_updater jobs.
+	// Register a no-op placeholder so river accepts the kind; API tests
+	// don't exercise the real CadenceUpdater.
+	river.AddWorker(workers, &apiTestCadenceShim{})
 
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -111,4 +115,19 @@ func (w *apiTestRecorderShim) Timeout(j *river.Job[consumerjobs.InteractionRecor
 		return 30 * time.Second
 	}
 	return w.real.Timeout(j)
+}
+
+// apiTestCadenceShim is a no-op worker for cadence_updater jobs in API
+// tests. Consumes the job without side-effects so river doesn't fail
+// the enclosing InsertTx with "unhandled job kind".
+type apiTestCadenceShim struct {
+	river.WorkerDefaults[consumerjobs.CadenceUpdaterJobArgs]
+}
+
+func (*apiTestCadenceShim) Work(_ context.Context, _ *river.Job[consumerjobs.CadenceUpdaterJobArgs]) error {
+	return nil
+}
+
+func (*apiTestCadenceShim) Timeout(_ *river.Job[consumerjobs.CadenceUpdaterJobArgs]) time.Duration {
+	return 30 * time.Second
 }

@@ -47,10 +47,18 @@ const (
 // depends on. Interface defined here (not on the service) so tests can stub
 // it without instantiating the full service graph. Production wiring passes
 // the concrete *service.ContactService.
+//
+// PR 7 signature: `withShadow` is true for event-bus consumer callers
+// (so the service queues the direct-path cadence shadow drain). The
+// returned *repository.RecordInteractionResult carries the pre-cadence
+// snapshot + cadence-at-emit that populate the V2 InteractionRecordedPayload
+// (plan Decision 2a) and the shadowDrain closure, which must be invoked
+// AFTER bus.PublishTx so it can be bound to the interaction.recorded
+// event's id (plan Decision 6).
 type interactionWriter interface {
 	RecordInteractionTx(
-		ctx context.Context, tx pgx.Tx, req repository.RecordInteractionRequest,
-	) (*repository.Interaction, bool, func(context.Context), error)
+		ctx context.Context, tx pgx.Tx, withShadow bool, req repository.RecordInteractionRequest,
+	) (*repository.RecordInteractionResult, error)
 }
 
 // eventBusTx is the subset of *events.Bus the consumer depends on. Allows
@@ -127,9 +135,13 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	}
 
 	// Delegate to ContactService.RecordInteractionTx — single source of
-	// truth for dedup + insert + cadence updates. Returns (row, isReplay,
-	// postCommit, err) per plan Decision 4a.
-	interaction, isReplay, postCommit, err := r.writer.RecordInteractionTx(ctx, tx, req)
+	// truth for dedup + insert + cadence updates. withShadow=true asks
+	// the service to queue the PR 7 direct-path cadence shadow drain
+	// (plan Decisions 4a, 6, and 2a). The ShadowDrainFn is invoked
+	// AFTER bus.PublishTx so the direct observation can be tagged with
+	// the interaction.recorded event's id — matching the event_id the
+	// consumer will use on its own observation.
+	res, err := r.writer.RecordInteractionTx(ctx, tx, true, req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("record interaction tx: %w", err)
 	}
@@ -140,8 +152,8 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	// replay paths — today's telegram publisher code always called
 	// MarkMessagesProcessed after RecordInteraction, regardless of dedup-hit.
 	if env.Kind == events.KindMessageReceived || env.Kind == events.KindMessageSent {
-		if msgIDs, extractErr := extractTelegramMessageIDs(env); extractErr == nil && len(msgIDs) > 0 && r.telegramMessageRepo != nil && interaction != nil {
-			if markErr := r.telegramMessageRepo.MarkMessagesProcessedTx(ctx, tx, msgIDs, interaction.ID); markErr != nil {
+		if msgIDs, extractErr := extractTelegramMessageIDs(env); extractErr == nil && len(msgIDs) > 0 && r.telegramMessageRepo != nil && res.Interaction != nil {
+			if markErr := r.telegramMessageRepo.MarkMessagesProcessedTx(ctx, tx, msgIDs, res.Interaction.ID); markErr != nil {
 				return nil, nil, fmt.Errorf("mark telegram messages processed: %w", markErr)
 			}
 		}
@@ -149,20 +161,23 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 
 	// Replay: skip interaction.recorded emit (spec §3.4.1) and return nil
 	// postCommit (today's no-re-apply-on-replay semantics; plan Decision 4).
-	if isReplay {
-		return interaction, nil, nil
+	if res.IsReplay {
+		return res.Interaction, nil, nil
 	}
 
 	// Fresh-write: emit interaction.recorded atomically in the same tx.
 	// SourceID = interaction.ID so the event table's partial unique index
 	// (source, source_id) dedupes any retry that reaches this point.
-	recordedPayload, err := marshalRecordedPayload(interaction, direction, req)
+	// PR 7: payload is V2 — includes PrevCadenceSnapshot + PrevCadenceValue
+	// so CadenceUpdater can replay the direct-path's pre-cadence state
+	// deterministically (plan Decision 2a).
+	recordedPayload, err := marshalRecordedPayload(res.Interaction, direction, req, res.PrevCadence, res.CadenceAtEmit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal interaction.recorded: %w", err)
 	}
 	recordedEnv := &events.Envelope{
 		Source:     env.Source,
-		SourceID:   interaction.ID.String(),
+		SourceID:   res.Interaction.ID.String(),
 		Kind:       events.KindInteractionRecorded,
 		Payload:    recordedPayload,
 		ObservedAt: req.OccurredAt,
@@ -171,7 +186,42 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		return nil, nil, fmt.Errorf("publish interaction.recorded: %w", err)
 	}
 
-	return interaction, postCommit, nil
+	// At this point the recordedEnv has its DB-generated id. Bind the
+	// shadow drain to recordedEnv.ID so the direct observation's
+	// event_id matches the consumer's (the consumer receives
+	// recordedEnv and uses its ID on its own observation). Combine
+	// the follow-up postCommit with the shadow drain into a single
+	// caller-facing closure.
+	combined := combinePostCommit(res.FollowUpFn, res.ShadowDrainFn, recordedEnv.ID)
+	return res.Interaction, combined, nil
+}
+
+// combinePostCommit merges the follow-up-manager post-commit closure
+// and the cadence-shadow drain into a single function that the caller
+// (worker.Work, runHandleEvent) invokes after the outer tx commits.
+// Passing recordedEventID lets the shadow drain bind both direct and
+// consumer observations to the same event_id.
+//
+// Ordering: shadow drain runs FIRST, follow-up runs SECOND. Rationale
+// (Codex round-1 finding 3): the follow-up closure performs post-commit
+// external work (Todoist HTTP calls) that can take seconds. Running it
+// before the shadow drain widens the interval between the authoritative
+// UPDATE and the direct-path post-image re-read, letting intermediate
+// state mutations corrupt the observation. Running the shadow drain
+// first pins the post-image as close as possible to the UPDATE, which
+// is what the post-bake divergence query expects.
+func combinePostCommit(followUp func(context.Context), shadow repository.CadenceShadowDrainFn, recordedEventID uuid.UUID) func(context.Context) {
+	if followUp == nil && shadow == nil {
+		return nil
+	}
+	return func(ctx context.Context) {
+		if shadow != nil {
+			shadow(ctx, recordedEventID)
+		}
+		if followUp != nil {
+			followUp(ctx)
+		}
+	}
 }
 
 // extractRequest dispatches on env.Kind to build a RecordInteractionRequest
@@ -334,15 +384,33 @@ func makeTelegramRequest(contactID *uuid.UUID, externalMessageID string, message
 
 // marshalRecordedPayload builds the JSON payload for the
 // interaction.recorded derived event emitted after a successful insert.
-func marshalRecordedPayload(interaction *repository.Interaction, direction string, req repository.RecordInteractionRequest) (json.RawMessage, error) {
+// PR 7 bumps Version to 2 and adds PrevCadenceSnapshot + PrevCadenceValue
+// so CadenceUpdater can replay direct-path's pre-cadence state (plan
+// Decision 2a). prev may be nil when the service wrapper was called
+// without an eventID (non-event-bus callers); in that case the event
+// is emitted WITHOUT the snapshot and downstream consumers treat it as
+// a V1-shape payload.
+func marshalRecordedPayload(
+	interaction *repository.Interaction, direction string, req repository.RecordInteractionRequest,
+	prev *repository.ContactCadenceFields, cadenceAtEmit *string,
+) (json.RawMessage, error) {
 	payload := events.InteractionRecordedPayload{
-		Version:       1,
-		ContactID:     interaction.ContactID,
-		InteractionID: interaction.ID,
-		Direction:     direction,
-		OccurredAt:    interaction.OccurredAt,
-		Source:        interaction.Source,
-		SourceRef:     req.SourceRef,
+		Version:          2,
+		ContactID:        interaction.ContactID,
+		InteractionID:    interaction.ID,
+		Direction:        direction,
+		OccurredAt:       interaction.OccurredAt,
+		Source:           interaction.Source,
+		SourceRef:        req.SourceRef,
+		PrevCadenceValue: cadenceAtEmit,
+	}
+	if prev != nil {
+		payload.PrevCadenceSnapshot = &events.CadenceFieldsSnapshot{
+			LastContacted:  prev.LastContacted,
+			LastOutreachAt: prev.LastOutreachAt,
+			LastResponseAt: prev.LastResponseAt,
+			ContactBy:      prev.ContactBy,
+		}
 	}
 	return events.Marshal(events.KindInteractionRecorded, payload)
 }

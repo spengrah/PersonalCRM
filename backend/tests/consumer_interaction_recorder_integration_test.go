@@ -74,6 +74,10 @@ func newConsumerTestBus(
 		pool:        database.Pool,
 		recorderRef: recorderRef,
 	})
+	// PR 7: consumerJobsForKind now also enqueues cadence_updater jobs for
+	// interaction.recorded events. Register a placeholder worker so river
+	// accepts the job kind at Start; TestOnly=true means it never runs.
+	river.AddWorker(workers, &lateCadenceUpdaterWorker{})
 
 	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer startCancel()
@@ -107,6 +111,21 @@ func (interactionRecorderJobArgsPlaceholder) Kind() string { return "interaction
 
 func (w *lateRecorderWorker) Work(_ context.Context, _ *river.Job[interactionRecorderJobArgsPlaceholder]) error {
 	// TestOnly=true means this never runs. Kept as a no-op.
+	return nil
+}
+
+// lateCadenceUpdaterWorker is the cadence_updater placeholder. TestOnly
+// means it never runs; registering it just lets river accept the kind
+// when the test bus enqueues jobs via PublishTx.
+type lateCadenceUpdaterWorker struct {
+	river.WorkerDefaults[cadenceUpdaterJobArgsPlaceholder]
+}
+
+type cadenceUpdaterJobArgsPlaceholder struct{}
+
+func (cadenceUpdaterJobArgsPlaceholder) Kind() string { return "cadence_updater" }
+
+func (*lateCadenceUpdaterWorker) Work(_ context.Context, _ *river.Job[cadenceUpdaterJobArgsPlaceholder]) error {
 	return nil
 }
 

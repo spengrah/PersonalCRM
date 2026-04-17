@@ -148,8 +148,22 @@ type RiverConfig struct {
 //     config-parse compatibility with the PR 5 bake window.
 //   - "cutover": default. Consumer is the sole writer; publishers only
 //     Publish events. This is the intended production mode.
+//
+// CadenceMode gates the PR 7-8 phase lifecycle for the CadenceUpdater
+// consumer (spec §3.9; plan Decision 11). PR 7 default is "shadow" so
+// post-merge the bake runs immediately without operator intervention.
+//
+//   - "off":     worker registered but HandleEvent short-circuits with
+//     a DEBUG log. No shadow observations. Direct-path writes remain
+//     authoritative. Use for emergency flag-flip rollback.
+//   - "shadow":  default (PR 7). Worker runs; direct-path observer is
+//     wired; both paths write shadow-observation rows for post-bake
+//     divergence comparison. No authoritative-write change.
+//   - "cutover": PR 8 territory. PR 7 logs ERROR and falls back to
+//     shadow behavior.
 type EventBusConfig struct {
 	InteractionMode string // off | shadow | cutover. Default: cutover (post-PR-6).
+	CadenceMode     string // off | shadow | cutover. Default: shadow (PR 7).
 }
 
 // EventBus interaction-mode constants. Mirrors (and must stay in sync
@@ -159,6 +173,14 @@ const (
 	EventBusInteractionModeOff     = "off"
 	EventBusInteractionModeShadow  = "shadow"
 	EventBusInteractionModeCutover = "cutover"
+)
+
+// EventBus cadence-mode constants. Mirrors (and must stay in sync with)
+// consumer.CadenceMode*.
+const (
+	EventBusCadenceModeOff     = "off"
+	EventBusCadenceModeShadow  = "shadow"
+	EventBusCadenceModeCutover = "cutover"
 )
 
 // ValidationError represents a configuration validation error
@@ -295,6 +317,7 @@ func Load() (*Config, error) {
 		},
 		EventBus: EventBusConfig{
 			InteractionMode: getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),
+			CadenceMode:     getEnv("EVENT_BUS_CADENCE_MODE", EventBusCadenceModeShadow),
 		},
 	}
 
@@ -422,6 +445,19 @@ func (c *Config) Validate() error {
 		errors = append(errors, ValidationError{
 			Field:   "EVENT_BUS_INTERACTION_MODE",
 			Message: fmt.Sprintf("invalid mode %q; must be one of: off, shadow, cutover", c.EventBus.InteractionMode),
+		})
+	}
+
+	// EventBus cadence-mode validation (PR 7). Default "shadow" (Load)
+	// and TestConfig "off" guarantee a valid value reaches Validate in
+	// normal operation.
+	switch c.EventBus.CadenceMode {
+	case EventBusCadenceModeOff, EventBusCadenceModeShadow, EventBusCadenceModeCutover:
+		// ok
+	default:
+		errors = append(errors, ValidationError{
+			Field:   "EVENT_BUS_CADENCE_MODE",
+			Message: fmt.Sprintf("invalid mode %q; must be one of: off, shadow, cutover", c.EventBus.CadenceMode),
 		})
 	}
 
@@ -593,6 +629,10 @@ func TestConfig() *Config {
 		},
 		EventBus: EventBusConfig{
 			InteractionMode: EventBusInteractionModeCutover,
+			// CadenceMode defaults to "off" in TestConfig so unit tests
+			// don't inadvertently exercise the shadow path; tests that
+			// need shadow explicitly override this.
+			CadenceMode: EventBusCadenceModeOff,
 		},
 	}
 }

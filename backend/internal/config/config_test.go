@@ -805,3 +805,101 @@ func TestConfig_Validate_EventBusInteractionMode(t *testing.T) {
 		})
 	}
 }
+
+// TestConfig_CadenceMode_DefaultShadow asserts EVENT_BUS_CADENCE_MODE
+// defaults to "shadow" in PR 7 so post-merge the bake runs immediately
+// (plan Decision 11 + brief).
+func TestConfig_CadenceMode_DefaultShadow(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.EventBus.CadenceMode != EventBusCadenceModeShadow {
+		t.Errorf("Expected default EventBus.CadenceMode=%q, got %q",
+			EventBusCadenceModeShadow, cfg.EventBus.CadenceMode)
+	}
+}
+
+// TestConfig_CadenceMode_OffFromEnv asserts the operator rollback path.
+func TestConfig_CadenceMode_OffFromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "EVENT_BUS_CADENCE_MODE", "off")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.EventBus.CadenceMode != EventBusCadenceModeOff {
+		t.Errorf("Expected EventBus.CadenceMode=off, got %q", cfg.EventBus.CadenceMode)
+	}
+}
+
+// TestConfig_CadenceMode_CutoverFromEnv asserts "cutover" parses — PR 7
+// logs an ERROR and treats it as shadow, but the config value must flow
+// through for the startup log line to fire.
+func TestConfig_CadenceMode_CutoverFromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "EVENT_BUS_CADENCE_MODE", "cutover")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.EventBus.CadenceMode != EventBusCadenceModeCutover {
+		t.Errorf("Expected EventBus.CadenceMode=cutover, got %q", cfg.EventBus.CadenceMode)
+	}
+}
+
+func TestConfig_Validate_EventBusCadenceMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		wantErr  bool
+		wantHint string
+	}{
+		{"off_ok", EventBusCadenceModeOff, false, ""},
+		{"shadow_ok", EventBusCadenceModeShadow, false, ""},
+		{"cutover_ok", EventBusCadenceModeCutover, false, ""},
+		{"empty_rejected", "", true, "invalid mode"},
+		{"gibberish_rejected", "garbage", true, "invalid mode"},
+		{"uppercase_rejected", "SHADOW", true, "invalid mode"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TestConfig()
+			cfg.EventBus.CadenceMode = tt.mode
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Expected validation error for mode=%q", tt.mode)
+				}
+				verr, ok := err.(ValidationErrors)
+				if !ok {
+					t.Fatalf("Expected ValidationErrors, got %T", err)
+				}
+				found := false
+				for _, e := range verr {
+					if e.Field == "EVENT_BUS_CADENCE_MODE" {
+						found = true
+						if tt.wantHint != "" && !strings.Contains(e.Message, tt.wantHint) {
+							t.Errorf("Expected message to contain %q, got %q", tt.wantHint, e.Message)
+						}
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected EVENT_BUS_CADENCE_MODE validation error, got: %v", err)
+				}
+			} else if err != nil {
+				t.Errorf("Expected no error for mode=%q, got: %v", tt.mode, err)
+			}
+		})
+	}
+}
