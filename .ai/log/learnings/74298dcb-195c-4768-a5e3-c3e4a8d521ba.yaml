@@ -46,3 +46,75 @@ detail: |
   CI review (PR #285) caught raw SQL INSERT statements in integration tests at `backend/tests/consumer_cadence_updater_integration_test.go:4583-4594`. The core rule exists in `.ai/rules/core.md` ("Never write raw SQL in Go → Use sqlc-generated queries") but doesn't explicitly include test code in its scope. This ambiguity allowed the violation to pass through implementation and manual review before automated CI caught it. The rule should state explicitly: "This applies to ALL Go code: production code, integration tests, test fixtures, and helper scripts. Use `make sqlc` to generate queries even for test setup code that populates shadow tables or creates fixtures." Add to Common Gotchas: "Raw SQL in integration test setup → Use sqlc-generated queries for ALL inserts/updates, including test fixtures"
 actionable: true
 
+---
+timestamp: "2026-04-17T08:47:58.859139"
+type: gotcha
+summary: Long-running agent work can hit Anthropic auth 401 mid-task
+detail: |
+  Backend agent ran ~6 hours implementing PR 8 (Steps 1-10 of plan), hit Anthropic auth 401 error, left 2 commits but incomplete work. The agent had deleted PR 7 integration tests with a note 'Step 15 adds replacements' but failed before Step 15. When resuming, explicitly brief the agent on what's already committed vs what's incomplete, and list remaining steps by number. The gap between 'what I said I'd do' and 'what I actually committed' matters — trust git log, not agent summaries.
+actionable: true
+
+---
+timestamp: "2026-04-17T08:47:58.859139"
+type: gotcha
+summary: Specs can omit columns even after thorough review — trust the code
+detail: |
+  Event-bus spec §3.4.2 listed 4 cadence columns (last_contacted, last_outreach_at, last_response_at, contact_by) but implementation needed a 5th: last_interaction_at. This wasn't in the spec's enumerated list but was tracked by existing code paths. When implementing a cutover that claims 'sole writer' semantics, grep for ALL columns written by the legacy path, not just the spec's list. Reviewer caught this in round 1 as a 'piggyback' issue — the SQL was piggybacking last_interaction_at on apply_last_contacted without an independent flag, making it impossible to control separately (e.g., on merge).
+actionable: true
+
+---
+timestamp: "2026-04-17T08:47:58.859139"
+type: architecture
+summary: Inline-first dispatch + durable claims prevents event double-processing
+detail: |
+  When refactoring from async-only to inline-capable consumers: InteractionRecorder.HandleEvent synchronously calls CadenceUpdater.HandleEvent (inline-first), which claims (event_id, consumer='cadence_updater') in event_consumer_claim table before writing. River worker still fires after tx commit but sees the claim and no-ops. This avoids manual-path double-processing without special-casing manual events or removing bus publish (both rejected in plan review). The claim table needs (event_id uuid, consumer text, claimed_at timestamptz, PK (event_id, consumer)) with forward-pointer comment for future cleanup/TTL. Applies to any cutover where both inline and async paths must coexist.
+actionable: true
+
+---
+timestamp: "2026-04-17T08:47:58.859139"
+type: rule
+summary: Never delete test files with 'Step N adds replacements' if Step N might not run
+detail: |
+  Backend deleted backend/tests/consumer_cadence_updater_integration_test.go and backend/tests/api/ingest_cadence_test.go in commit 5fc4d34 with message 'Step 15 of the plan adds cutover-targeted replacements', then hit auth 401 before Step 15. This left the branch in failing-tests state. Either: (a) delete tests in the SAME commit as their replacements, or (b) keep old tests until new tests land, then delete in a separate commit. Never commit a test-deletion with a promissory note about future work.
+actionable: true
+
+---
+timestamp: "2026-04-17T08:47:58.859139"
+type: gotcha
+summary: Reviewer caught stale struct returns from two-phase updates
+detail: |
+  ContactService.UpdateContact did profile update → ApplyContactByOverride (second update) → return. The returned Contact had stale updated_at because the second update bumped the DB row's updated_at but the in-memory struct wasn't refreshed. Fix: refetch via contactRepo.GetContact(ctx, id) inside the same tx after the override, before returning. Also added test asserting returned.UpdatedAt == refetched.UpdatedAt. Pattern applies to any two-phase write where the second write touches columns included in the returned struct.
+actionable: true
+
+---
+timestamp: "2026-04-17T08:47:58.859139"
+type: gotcha
+summary: Sole-writer AST guards need function-level allowlist, not file-level
+detail: |
+  Plan's AST guard regex matched function names like UpdateContactCadence* but missed *Tx variants (UpdateContactOutreachAtTx, UpdateContactLastContactedIfLaterTx). File-level allowlist (backend/internal/consumer/cadence_updater.go, backend/internal/repository/contact.go for sqlc definitions, backend/internal/todoist/provider.go for explicit carve-outs) plus grep -F on query names wasn't enough — reviewers wanted explicit function+line tuples in the allowlist to prevent drift. Final guard: allowedFunctions map[string][]int with {filename: [line1, line2]} so adding a new cadence write outside the map fails CI. Includes negative test (inject a banned query call, assert guard fails).
+actionable: true
+
+---
+timestamp: "2026-04-17T08:47:58.859139"
+type: distinction
+summary: Manual-source forward-only vs unconditional semantics differ from provider sources
+detail: |
+  Provider sources (gcal, todoist) use forward-only (max(existing, new)) for last_contacted/last_outreach_at to handle out-of-order sync. Manual source must ALWAYS update (unconditional branch), even if the new timestamp is older, because it represents user correction intent. Plan initially said manual flows inline-call CadenceUpdater.HandleEvent with source=manual, which routes to unconditional. This is correct. But the reviewer found that EnrichmentService (used by import/link) accepts explicit user-selected cadence overrides (enrichment.go:128, import.go:530) and must ALSO go through the unconditional branch when DTO includes cadence field. The rule: if user explicitly provided the field (not just system-inferred), treat as manual-source semantics.
+actionable: true
+
+---
+timestamp: "2026-04-17T08:47:58.859139"
+type: documentation_gap
+summary: Core rule 'Never write raw SQL in Go' scope was unclear for tests
+detail: |
+  Backend initially wrote test setup fixtures using pool.Exec(ctx, 'INSERT ...') in integration tests. Code reviewer flagged this as violating '.ai/rules/core.md' rule 2: 'Never write raw SQL in Go → Use sqlc-generated queries'. Backend's commit message (c243bd2) clarified: 'Applies to ALL Go code: production code, integration tests, test fixtures, and helper scripts — add a test-only sqlc query (e.g., InsertFooAtTime) + repository wrapper rather than inlining pool.Exec in a test file.' The core rule was later amended (lines updated during session) to explicitly state this applies to tests. Gap: original rule text didn't spell out test applicability, so it was interpreted as 'production code only'. Fix: rules should explicitly enumerate test/fixture/helper contexts to prevent this interpretation gap.
+actionable: true
+
+---
+timestamp: "2026-04-17T09:50:36.147315"
+type: documentation_gap
+summary: Comment convention rule violated during plan-driven implementation — insufficient prominence and specificity
+detail: |
+  core.md § Code Quality prohibits inline comments referencing "the current task, fix, or callers", stating they "belong in the PR description and rot as the codebase evolves." PR 8 had pervasive violations across main.go, contact.go, cadence_updater.go, enrichment.go with comments like "PR 8 Step 10", "plan Decision 3". Root cause: (1) rule uses abstract terms, doesn't explicitly forbid "PR #N" or "Step N" patterns, (2) agents implementing detailed multi-step plans naturally reference step numbers for traceability, (3) rule buried in Code Quality section, not visible during active implementation. Strengthen by: adding to Common Gotchas table with concrete forbidden examples ("no 'PR #286'", "no 'Step 10'", "no 'Decision 3'"), or creating "Comment Hygiene During Implementation" subsection that explicitly addresses plan-reference tension.
+actionable: true
+
