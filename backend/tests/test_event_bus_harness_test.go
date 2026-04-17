@@ -82,8 +82,8 @@ func setupTestEventBus(
 	require.NoError(t, err)
 
 	bus := events.NewBus(database.Pool, client, eventRepo)
-	// PR 8: build a real CadenceUpdater so the recorder's inline apply
-	// fires in these end-to-end integration tests.
+	// Build a real CadenceUpdater so the recorder's inline apply fires
+	// in these end-to-end integration tests.
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
@@ -92,9 +92,10 @@ func setupTestEventBus(
 		consumer.CadenceModeCutover,
 		false,
 	)
-	// PR 8: wire cadenceUpdater into the contact service so direct-invoke
-	// paths (Merge / Extend / Promote / RecordInteraction non-bus wrapper /
-	// UpdateContact cadence-edit) work in these async integration tests.
+	// Wire cadenceUpdater into the contact service so direct-invoke
+	// paths (Merge / Extend / Promote / RecordInteraction non-bus
+	// wrapper / UpdateContact cadence-edit) work in these async
+	// integration tests.
 	contactService.SetCadenceUpdater(cadenceUpdater)
 	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater)
 	// Fill the shim's real worker now that bus + recorder exist.
@@ -146,12 +147,12 @@ func (w *deferredRecorderWorker) Timeout(j *river.Job[consumerjobs.InteractionRe
 	return w.real.Timeout(j)
 }
 
-// wireCadenceUpdaterForTest constructs a real CadenceUpdater against the
-// given database and injects it into contactService so PR 8 cadence
+// wireCadenceUpdaterForTest constructs a real CadenceUpdater against
+// the given database and injects it into contactService so cadence
 // entry points (RecordInteraction direct path, MergeContacts,
 // ExtendInteraction, PromoteInteractionToMutual, UpdateContact cadence
-// edits) work in tests without needing the full event-bus harness. Uses
-// cutover mode so cadence columns get written.
+// edits) work in tests without needing the full event-bus harness.
+// Uses cutover mode so cadence columns get written.
 func wireCadenceUpdaterForTest(t *testing.T, database *db.Database, contactService *service.ContactService) *consumer.CadenceUpdater {
 	t.Helper()
 	contactRepo := repository.NewContactRepository(database.Queries)

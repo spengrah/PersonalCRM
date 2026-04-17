@@ -76,8 +76,8 @@ type telegramMessageMarker interface {
 }
 
 // cadenceDispatcher is the subset of *CadenceUpdater the recorder needs
-// for the PR 8 inline-apply path (plan Decision 4 + Step 5). Unit tests
-// stub this without building a real claim store / contact reader.
+// for the inline-apply path. Unit tests stub this without building a
+// real claim store / contact reader.
 type cadenceDispatcher interface {
 	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
 }
@@ -86,13 +86,13 @@ type cadenceDispatcher interface {
 // events into interaction rows + emits interaction.recorded. See spec
 // §3.4.1 for the atomicity contract.
 //
-// PR 8 cutover: on fresh writes, InteractionRecorder synchronously
-// invokes CadenceUpdater.HandleEvent(ctx, tx, recordedEnv) after
-// bus.PublishTx succeeds. That call claims the event on the durable
-// event_consumer_claim table (migration 040) and, if it wins the
-// claim, performs the cadence write in the SAME tx. A later queued
-// delivery of the same event finds the claim row and returns nil
-// without mutating contact state.
+// On fresh writes, InteractionRecorder synchronously invokes
+// CadenceUpdater.HandleEvent(ctx, tx, recordedEnv) after bus.PublishTx
+// succeeds. That call claims the event on the durable
+// event_consumer_claim table and, if it wins the claim, performs the
+// cadence write in the SAME tx. A later queued delivery of the same
+// event finds the claim row and returns nil without mutating contact
+// state — closing the queued-worker replay hole for manual corrections.
 type InteractionRecorder struct {
 	writer              interactionWriter
 	telegramMessageRepo telegramMessageMarker
@@ -100,11 +100,12 @@ type InteractionRecorder struct {
 	cadence             cadenceDispatcher
 }
 
-// NewInteractionRecorder builds the consumer. telegramMessageRepo may be
-// nil for test environments that don't exercise message.* kinds. cadence
-// MUST be non-nil in PR 8 production wiring — the inline cadence apply
-// is the seam that closes the queued-worker replay hole (plan blocker
-// resolution). Tests that don't care about cadence pass a no-op stub.
+// NewInteractionRecorder builds the consumer. telegramMessageRepo may
+// be nil for test environments that don't exercise message.* kinds.
+// cadence MUST be non-nil in production wiring — the inline cadence
+// apply is the seam that closes the queued-worker replay hole for
+// manual corrections. Tests that don't care about cadence pass a
+// no-op stub.
 func NewInteractionRecorder(
 	writer interactionWriter,
 	telegramMessageRepo telegramMessageMarker,
@@ -206,12 +207,12 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		return nil, nil, fmt.Errorf("publish interaction.recorded: %w", err)
 	}
 
-	// PR 8 cutover blocker fix: inline-apply cadence synchronously in the
-	// SAME tx so the manual UI stays synchronous AND the queued worker
-	// for this event_id becomes a durable no-op on re-delivery (plan
-	// Decision 2 + 4 + Step 5). The claim row + cadence write commit
-	// atomically with the interaction insert; a tx rollback rolls back
-	// all three together so a queued re-delivery is safe.
+	// Inline-apply cadence synchronously in the SAME tx so the manual
+	// UI stays synchronous AND the queued worker for this event_id
+	// becomes a durable no-op on re-delivery. The claim row + cadence
+	// write commit atomically with the interaction insert; a tx
+	// rollback rolls back all three together so a queued re-delivery
+	// is safe.
 	if r.cadence != nil {
 		if cadenceErr := r.cadence.HandleEvent(ctx, tx, recordedEnv); cadenceErr != nil {
 			return nil, nil, fmt.Errorf("inline apply cadence: %w", cadenceErr)

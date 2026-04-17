@@ -362,11 +362,10 @@ type Querier interface {
 	// sqlc.narg('id') is NULL, the DB generates a fresh UUID via
 	// gen_random_uuid().
 	InsertEvent(ctx context.Context, arg InsertEventParams) (*Event, error)
-	// Event consumer claim queries (migration 040; PR 8 cutover; spec §3.4.2).
-	// The (event_id, consumer) primary key enforces at-most-once processing
-	// across the inline + queued delivery paths for the CadenceUpdater
-	// consumer. See .ai/log/plan/event-bus-foundation-pr8-cadence-updater-cutover.md
-	// Design Decision 2 + Step 3.
+	// Event consumer claim queries (migration 040; spec §3.4.2).
+	// The (event_id, consumer) primary key enforces at-most-once
+	// processing across the inline + queued delivery paths for the
+	// CadenceUpdater consumer.
 	// Attempts to claim (event_id, consumer). Returns the number of rows
 	// inserted: 1 if this caller claimed the event, 0 if another caller
 	// already holds the claim. Callers treat 0 as "someone else wrote this
@@ -510,14 +509,15 @@ type Querier interface {
 	// Transfer notes from source to target contact
 	TransferNotes(ctx context.Context, arg TransferNotesParams) error
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
-	// Profile-only update path (PR 8 cutover; plan Step 8). Writes name,
-	// location, birthday, how_met, cadence, profile_photo — NEVER writes
-	// last_contacted, last_outreach_at, last_response_at, or contact_by.
+	// Profile-only update path. Writes name, location, birthday, how_met,
+	// cadence, profile_photo — NEVER writes last_contacted,
+	// last_outreach_at, last_response_at, or contact_by.
 	// ContactService.UpdateContact handles the cadence-change side-effect
-	// (recomputing contact_by) by calling CadenceUpdater.ApplyContactByOverride
-	// in the same tx; EnrichmentService uses this query for cadence-absent
-	// inferred fields and CadenceUpdater.ApplyContactByOverride when the
-	// input DTO carries an explicit cadence preference.
+	// (recomputing contact_by) by calling
+	// CadenceUpdater.ApplyContactByOverride in the same tx;
+	// EnrichmentService uses this query for cadence-absent inferred fields
+	// and CadenceUpdater.ApplyContactByOverride when the input DTO carries
+	// an explicit cadence preference.
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	// Updates just the contact_by field (for Todoist deadline sync).
 	UpdateContactBy(ctx context.Context, arg UpdateContactByParams) error

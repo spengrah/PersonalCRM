@@ -1044,14 +1044,15 @@ type UpdateContactParams struct {
 	ProfilePhoto pgtype.Text `json:"profile_photo"`
 }
 
-// Profile-only update path (PR 8 cutover; plan Step 8). Writes name,
-// location, birthday, how_met, cadence, profile_photo — NEVER writes
-// last_contacted, last_outreach_at, last_response_at, or contact_by.
+// Profile-only update path. Writes name, location, birthday, how_met,
+// cadence, profile_photo — NEVER writes last_contacted,
+// last_outreach_at, last_response_at, or contact_by.
 // ContactService.UpdateContact handles the cadence-change side-effect
-// (recomputing contact_by) by calling CadenceUpdater.ApplyContactByOverride
-// in the same tx; EnrichmentService uses this query for cadence-absent
-// inferred fields and CadenceUpdater.ApplyContactByOverride when the
-// input DTO carries an explicit cadence preference.
+// (recomputing contact_by) by calling
+// CadenceUpdater.ApplyContactByOverride in the same tx;
+// EnrichmentService uses this query for cadence-absent inferred fields
+// and CadenceUpdater.ApplyContactByOverride when the input DTO carries
+// an explicit cadence preference.
 func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error) {
 	row := q.db.QueryRow(ctx, UpdateContact,
 		arg.ID,

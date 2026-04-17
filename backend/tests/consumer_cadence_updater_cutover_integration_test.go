@@ -1,7 +1,7 @@
-// PR 8 Step 15 replacement integration coverage for the deleted shadow-era
+// Integration coverage for the post-cutover sole-writer paths through
+// CadenceUpdater. Replaces the deleted shadow-era
 // consumer_cadence_updater_integration_test.go. These tests hit a real
-// database and exercise the post-cutover sole-writer paths through
-// CadenceUpdater.
+// database.
 //
 // Coverage matrix:
 //   - ApplyInteraction direction branches against a live DB (forward-only
@@ -273,7 +273,7 @@ func TestIntegration_CadenceUpdater_BulkApply_ForwardMaxOnMerge(t *testing.T) {
 
 // TestIntegration_CadenceUpdater_ApplyContactByOverride_ClearAndBackdate
 // verifies the user-cadence-preference direct API can both clear and
-// backdate contact_by (unconditional branch per Design Decision 9).
+// backdate contact_by via the unconditional branch.
 func TestIntegration_CadenceUpdater_ApplyContactByOverride_ClearAndBackdate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -313,10 +313,11 @@ func TestIntegration_CadenceUpdater_ApplyContactByOverride_ClearAndBackdate(t *t
 		"unconditional override should allow backdate")
 }
 
-// TestIntegration_CadenceUpdater_HandleEvent_DuplicateClaim_NoOp verifies
-// the durable dedupe — a second HandleEvent on the same event_id returns
-// nil without touching cadence (the blocker-fix invariant from plan
-// Decision 2).
+// TestIntegration_CadenceUpdater_HandleEvent_DuplicateClaim_NoOp
+// verifies the durable dedupe — a second HandleEvent on the same
+// event_id returns nil without touching cadence (the invariant that
+// lets the inline recorder call and the queued river delivery of the
+// same event coexist safely).
 func TestIntegration_CadenceUpdater_HandleEvent_DuplicateClaim_NoOp(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

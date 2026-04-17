@@ -10,10 +10,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Consumer names for the event_consumer_claim table. Each named consumer
-// represents an at-most-once processing boundary. PR 8 only introduces
-// the cadence_updater consumer; future PRs may add more (e.g. a
-// follow-up-manager consumer in PR 9).
+// Consumer names for the event_consumer_claim table. Each named
+// consumer represents an at-most-once processing boundary. Additional
+// consumer names may be added here as new consumers adopt this dedupe
+// mechanism.
 const (
 	EventConsumerCadenceUpdater = "cadence_updater"
 )

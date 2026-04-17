@@ -404,7 +404,7 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 }
 
 // UpdateContact updates an existing contact's profile fields (name,
-// location, birthday, how_met, cadence, profile_photo). PR 8 cutover:
+// location, birthday, how_met, cadence, profile_photo). Post-cutover
 // this path NEVER writes last_contacted, last_outreach_at,
 // last_response_at, or contact_by. Cadence-change side effects on
 // contact_by are the caller's responsibility (ContactService routes

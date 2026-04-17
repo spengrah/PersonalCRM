@@ -47,7 +47,7 @@ type contactCadenceReader interface {
 	GetContactTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.Contact, error)
 }
 
-// CadenceUpdater is the PR 8 cutover consumer — the sole writer of
+// CadenceUpdater is the cutover consumer — the sole writer of
 // contact.last_contacted, contact.last_outreach_at,
 // contact.last_response_at, and contact.contact_by.
 //
@@ -224,8 +224,10 @@ func (h *CadenceUpdater) ApplyInteraction(ctx context.Context, tx pgx.Tx, req re
 // MergeContacts NEVER moves cadence state backward.
 //
 // MergeContacts must update the target contact's chosen cadence string
-// BEFORE calling BulkApply (plan Decision 7) so contact_by recomputation
-// picks up the correct cadence value.
+// BEFORE calling BulkApply so contact_by recomputation picks up the
+// correct cadence value (a merge that elects the source's cadence
+// string must get a freshly-computed contact_by, not the target's
+// stale one).
 func (h *CadenceUpdater) BulkApply(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, fields repository.ContactCadenceFields) error {
 	if tx == nil {
 		return errors.New("cadence_updater: nil tx")
@@ -278,7 +280,7 @@ func (h *CadenceUpdater) ApplyContactByOverride(ctx context.Context, tx pgx.Tx, 
 // buildInteractionWrite builds the cadenceWriteRequest for an
 // interaction-driven path (HandleEvent + ApplyInteraction). Reproduces
 // the direction-rule apply flags and the contact_by derivation the
-// PR 6 direct path used (plan Decision 3 + §3.4.2), so the post-cutover
+// pre-cutover direct path used (spec §3.4.2), so the post-cutover
 // write matches the pre-cutover behavior bit-for-bit.
 func (h *CadenceUpdater) buildInteractionWrite(
 	contactID uuid.UUID, direction, source string, occurredAt time.Time,

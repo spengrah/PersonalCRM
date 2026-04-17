@@ -63,7 +63,7 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 	}
 
 	bus := events.NewBus(database.Pool, client, eventRepo)
-	// PR 8: wire a real CadenceUpdater so API manual-handler tests exercise
+	// Wire a real CadenceUpdater so API manual-handler tests exercise
 	// the inline apply-on-publish path against a live DB. contactRepo's
 	// pool is already set upstream by the router wiring; if not,
 	// cadence_updater direct-invoke APIs fall back to the caller's tx.
@@ -74,9 +74,10 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 		consumer.CadenceModeCutover, // API tests exercise the cutover writer
 		false,
 	)
-	// PR 8: wire cadenceUpdater into the contact service so direct-invoke
-	// paths (Merge / Extend / Promote / RecordInteraction non-bus wrapper /
-	// UpdateContact cadence-edit) reach the sole writer in these tests.
+	// Wire cadenceUpdater into the contact service so direct-invoke
+	// paths (Merge / Extend / Promote / RecordInteraction non-bus
+	// wrapper / UpdateContact cadence-edit) reach the sole writer in
+	// these tests.
 	contactService.SetCadenceUpdater(cadenceUpdater)
 	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater)
 	shim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder)
@@ -111,15 +112,16 @@ func mustBuildManualHandlerForTest(t *testing.T, ctx context.Context, database *
 	return mh, cs
 }
 
-// wireCadenceUpdaterForAPITest constructs a real CadenceUpdater against the
-// given database and injects it into contactService so PR 8 cadence
-// entry points (RecordInteraction direct path, MergeContacts, cadence
-// edits via UpdateContact, link/import cadence overrides) exercise the
-// sole writer in API-layer tests that don't need the full event-bus
-// wiring of buildManualHandlerForTest. Returns the constructed
-// CadenceUpdater so callers can also wire it into EnrichmentService.
-// Takes *testing.T so callers that have one can still use t.Helper; pass
-// nil from non-test helpers like setupImportTestRouter.
+// wireCadenceUpdaterForAPITest constructs a real CadenceUpdater
+// against the given database and injects it into contactService so
+// cadence entry points (RecordInteraction direct path, MergeContacts,
+// cadence edits via UpdateContact, link/import cadence overrides)
+// exercise the sole writer in API-layer tests that don't need the full
+// event-bus wiring of buildManualHandlerForTest. Returns the
+// constructed CadenceUpdater so callers can also wire it into
+// EnrichmentService. Takes *testing.T so callers that have one can
+// still use t.Helper; pass nil from non-test helpers like
+// setupImportTestRouter.
 func wireCadenceUpdaterForAPITest(t *testing.T, database *db.Database, contactService *service.ContactService) *consumer.CadenceUpdater {
 	if t != nil {
 		t.Helper()

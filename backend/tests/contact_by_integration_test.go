@@ -301,12 +301,12 @@ func TestContactBy_UpdateContactLastContactedIfLater(t *testing.T) {
 	// as no cadence if it somehow got into the database.
 }
 
-// TestContactBy_CadenceStateTransitions verifies contact_by behavior when
-// cadence changes. Post-PR-8 cutover the repository.UpdateContact query is
-// profile-only; contact_by mutations route through
-// ContactService.UpdateContact → CadenceUpdater.ApplyContactByOverride, so
-// this test exercises the service layer to cover the end-to-end cadence
-// edit path (plan Step 15 retargeting).
+// TestContactBy_CadenceStateTransitions verifies contact_by behavior
+// when cadence changes. Post-cutover the repository.UpdateContact
+// query is profile-only; contact_by mutations route through
+// ContactService.UpdateContact → CadenceUpdater.ApplyContactByOverride,
+// so this test exercises the service layer to cover the end-to-end
+// cadence edit path.
 func TestContactBy_CadenceStateTransitions(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -364,10 +364,11 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 		fetchedContact, err := contactRepo.GetContact(ctx, contact.ID)
 		require.NoError(t, err)
 		assert.Nil(t, fetchedContact.ContactBy, "contact_by should remain nil after fetch")
-		// Round-2 blocker guard: the service returned struct's updated_at
+		// Stale-struct guard: the service returned struct's updated_at
 		// must match the committed row's updated_at (both the profile
-		// UpdateContact and the ApplyContactByOverride bump updated_at;
-		// the service used to return the former's stale value).
+		// UpdateContact and the ApplyContactByOverride bump
+		// updated_at; the service used to return the former's stale
+		// value).
 		assert.Equal(t, fetchedContact.UpdatedAt, updatedContact.UpdatedAt,
 			"returned updated_at should reflect post-override committed state")
 

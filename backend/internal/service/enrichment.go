@@ -26,11 +26,11 @@ type MethodSelection struct {
 }
 
 // EnrichmentService handles contact enrichment from external sources.
-// PR 8: when the link/import flow supplies an explicit cadence override,
-// the cadence mutation routes through CadenceUpdater.ApplyContactByOverride
-// so contact cadence writes stay under the sole-writer invariant (plan
-// Step 8). Inferred-enrichment paths (no cadence) continue to use the
-// profile-only UpdateContact query and never touch cadence columns.
+// When the link/import flow supplies an explicit cadence override, the
+// cadence mutation routes through CadenceUpdater.ApplyContactByOverride
+// so contact cadence writes stay under the sole-writer invariant.
+// Inferred-enrichment paths (no cadence) continue to use the profile-
+// only UpdateContact query and never touch cadence columns.
 type EnrichmentService struct {
 	database       *db.Database
 	contactRepo    *repository.ContactRepository
@@ -41,8 +41,8 @@ type EnrichmentService struct {
 }
 
 // NewEnrichmentService creates a new enrichment service. database is
-// required post-PR-8 so the cadence-override path can open its own tx
-// for the profile-update + ApplyContactByOverride pair.
+// required post-cutover so the cadence-override path can open its own
+// tx for the profile-update + ApplyContactByOverride pair.
 func NewEnrichmentService(
 	database *db.Database,
 	contactRepo *repository.ContactRepository,
@@ -58,8 +58,8 @@ func NewEnrichmentService(
 }
 
 // SetCadenceUpdater injects the cadence writer. Required for the
-// cadence-present link/import override path (plan Step 8). When unset,
-// cadence-present enrichment calls return an error rather than silently
+// cadence-present link/import override path. When unset, cadence-
+// present enrichment calls return an error rather than silently
 // skipping the sole-writer invariant.
 func (s *EnrichmentService) SetCadenceUpdater(c cadenceWriter) {
 	s.cadence = c
@@ -196,9 +196,9 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 		s.recordEnrichment(ctx, crmContactID, external, "location", location)
 	}
 
-	// Update cadence if provided. PR 8 Step 8: explicit cadence overrides
-	// from the link/import flow are treated as user-supplied manual
-	// cadence edits and must route through CadenceUpdater.ApplyContactByOverride
+	// Update cadence if provided. Explicit cadence overrides from the
+	// link/import flow are treated as user-supplied manual cadence
+	// edits and must route through CadenceUpdater.ApplyContactByOverride
 	// so contact_by recomputation stays under the sole-writer invariant.
 	// cadencePresent gates the tx-wrapped path below.
 	cadencePresent := cadenceArg != nil

@@ -41,7 +41,7 @@ type followUpManager interface {
 // *consumer.CadenceUpdater that ContactService needs post-cutover.
 // Defined as a narrow interface so tests can stub it without importing
 // the consumer package graph, and so the service layer's dependency
-// stays unambiguous (plan Step 9 + 10).
+// stays unambiguous.
 type cadenceWriter interface {
 	// ApplyInteraction applies the cadence side-effects of
 	// ExtendInteraction + PromoteInteractionToMutual (direction-conditional,
@@ -62,12 +62,13 @@ type ContactService struct {
 	contactTaskRepo   *repository.ContactTaskRepository
 	followUpMgr       followUpManager
 	rematchSvc        *RematchService
-	// cadence is the PR 8 direct-invoke writer. Injected via
-	// SetCadenceUpdater after construction (avoids a circular dep with
-	// consumer wiring). When unset, MergeContacts / ExtendInteraction /
+	// cadence is the direct-invoke writer (the sole writer of the four
+	// cadence columns post-cutover). Injected via SetCadenceUpdater
+	// after construction to avoid a circular dep with consumer wiring.
+	// When unset, MergeContacts / ExtendInteraction /
 	// PromoteInteractionToMutual / cadence-edit UpdateContact paths
-	// return an error rather than silently no-op-ing — see plan
-	// acceptance criterion 5.
+	// return an error rather than silently no-op-ing on a code path
+	// that was supposed to mutate cadence state.
 	cadence cadenceWriter
 }
 
@@ -92,14 +93,14 @@ func (s *ContactService) SetRematchService(r *RematchService) {
 	s.rematchSvc = r
 }
 
-// SetCadenceUpdater injects the PR 8 cadence writer. Main.go wires this
+// SetCadenceUpdater injects the cadence writer. Main.go wires this
 // after constructing both the service and the consumer.CadenceUpdater;
 // the deferred wire-in avoids a circular construction dependency.
-// Post-PR-8, non-event-bus cadence entry points (MergeContacts,
-// ExtendInteraction, PromoteInteractionToMutual, user-driven cadence
-// edits in UpdateContact) require this dependency to be set — otherwise
-// they return an error rather than silently no-op-ing on a code path
-// that was supposed to mutate cadence state.
+// Non-event-bus cadence entry points (MergeContacts, ExtendInteraction,
+// PromoteInteractionToMutual, user-driven cadence edits in
+// UpdateContact) require this dependency to be set — otherwise they
+// return an error rather than silently no-op-ing on a code path that
+// was supposed to mutate cadence state.
 func (s *ContactService) SetCadenceUpdater(c cadenceWriter) {
 	s.cadence = c
 }
@@ -266,15 +267,15 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 		return nil, uuid.Nil, err
 	}
 
-	// PR 8 split: contact_by recomputation is a user-cadence-preference
-	// edit and must route through CadenceUpdater (plan Step 8). The
-	// profile-only UpdateContact query below writes the new cadence
-	// string; contact_by is then recomputed from (new cadence, existing
-	// last_contacted || created_at) and applied via
-	// ApplyContactByOverride in the same tx. The unconditional branch
-	// inside ApplyContactByOverride accepts backdate/clear semantics,
-	// which is required for "user switched from weekly to annual" or
-	// "user removed cadence entirely".
+	// Contact_by recomputation is a user-cadence-preference edit and
+	// must route through CadenceUpdater. The profile-only UpdateContact
+	// query below writes the new cadence string; contact_by is then
+	// recomputed from (new cadence, existing last_contacted ||
+	// created_at) and applied via ApplyContactByOverride in the same
+	// tx. The unconditional branch inside ApplyContactByOverride
+	// accepts backdate/clear semantics, which is required for "user
+	// switched from weekly to annual" or "user removed cadence
+	// entirely".
 	var newContactBy *time.Time
 	if req.Cadence != nil && *req.Cadence != "" {
 		if cadenceType, parseErr := cadence.ParseCadence(*req.Cadence); parseErr == nil {
@@ -408,10 +409,11 @@ type RecordInteractionResult = repository.RecordInteractionResult
 // cadence UPDATEs all run inside the caller's tx (spec §3.4.1).
 //
 // The `withShadow` flag tells the service whether the caller intends to
-// publish an interaction.recorded event after commit and therefore wants
-// the PR 7 direct-path cadence shadow drain queued. Event-bus consumer
-// callers pass true; the non-tx RecordInteraction wrapper passes false.
-// Plan Decisions 4 + 6.
+// publish an interaction.recorded event after commit and therefore
+// needs the pre-cadence snapshot populated on the result (for the V2
+// payload). Event-bus consumer callers pass true; the non-tx
+// RecordInteraction wrapper passes false and takes the direct-invoke
+// cadence path instead.
 //
 // Returns a *RecordInteractionResult with named fields (prior shape had 7
 // positional returns). See the field doc comments for per-field
@@ -483,10 +485,10 @@ func (s *ContactService) RecordInteractionTx(
 	// inline CadenceUpdater.HandleEvent dispatch won't fire and cadence
 	// columns would otherwise silently stop updating. Route through
 	// CadenceUpdater.ApplyInteraction so this path stays under the
-	// sole-writer invariant (plan Decision 3). withShadow=true callers
-	// (the InteractionRecorder) still rely on the recorder's inline
-	// HandleEvent path + event-id claim for dedupe across inline + queued
-	// delivery.
+	// sole-writer invariant. withShadow=true callers (the
+	// InteractionRecorder) still rely on the recorder's inline
+	// HandleEvent path + event-id claim for dedupe across inline +
+	// queued delivery.
 	if !withShadow {
 		if s.cadence == nil {
 			return nil, errors.New("record interaction: cadence updater not wired (call SetCadenceUpdater)")
@@ -501,9 +503,9 @@ func (s *ContactService) RecordInteractionTx(
 		}
 	}
 
-	// 7. Derive the follow-up closure. PR 8: cadence writes happen via
-	// either the recorder's inline CadenceUpdater.HandleEvent (withShadow
-	// true) or the direct ApplyInteraction call above (withShadow false).
+	// 7. Derive the follow-up closure. Cadence writes happen via either
+	// the recorder's inline CadenceUpdater.HandleEvent (withShadow true)
+	// or the direct ApplyInteraction call above (withShadow false).
 	// This helper is follow-up-only.
 	followUpFn := s.deriveFollowUpClosure(contact, interaction)
 
@@ -513,11 +515,11 @@ func (s *ContactService) RecordInteractionTx(
 		FollowUpFn:  followUpFn,
 	}
 	if withShadow {
-		// withShadow's name is a historical artifact — post-PR-8 it
+		// withShadow's name is a historical artifact — post-cutover it
 		// means "populate the V2 payload snapshot + cadence-at-emit
-		// fields". The shadow-drain return is preserved as nil for
-		// back-compat with the repository.RecordInteractionResult type;
-		// PR 12 cleanup can retire the field entirely.
+		// fields so the bus event carries the pre-image for downstream
+		// consumers". The shadow-drain return is preserved as nil for
+		// back-compat with the repository.RecordInteractionResult type.
 		res.PrevCadence = &prevSnap
 		res.CadenceAtEmit = cadenceAtEmit
 	}
@@ -561,11 +563,10 @@ func (s *ContactService) PromoteInteractionToMutualTx(
 	if err != nil {
 		return nil, fmt.Errorf("get contact for promotion: %w", err)
 	}
-	// PR 8 Step 9: route cadence writes through CadenceUpdater so the
-	// sole-writer invariant holds. Promote does NOT emit
-	// interaction.recorded and therefore does not claim an event —
-	// ApplyInteraction is a direct-invoke path that bypasses the claim
-	// store (plan Decision 3).
+	// Route cadence writes through CadenceUpdater so the sole-writer
+	// invariant holds. Promote does NOT emit interaction.recorded and
+	// therefore does not claim an event — ApplyInteraction is the
+	// direct-invoke path that bypasses the claim store.
 	if err := s.cadence.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
 		ContactID:  contactID,
 		Direction:  repository.InteractionDirectionMutual,
@@ -622,9 +623,8 @@ func (s *ContactService) ExtendInteractionTx(
 	// direction. Guard against surprises by overriding the row's
 	// Direction in-memory with the caller's intent before applying effects.
 	updated.Direction = direction
-	// PR 8 Step 9: route cadence writes through CadenceUpdater. Extend
-	// does NOT emit interaction.recorded; ApplyInteraction is a direct-
-	// invoke path (plan Decision 3).
+	// Route cadence writes through CadenceUpdater. Extend does NOT emit
+	// interaction.recorded; ApplyInteraction is the direct-invoke path.
 	if err := s.cadence.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
 		ContactID:  contactID,
 		Direction:  direction,
@@ -656,11 +656,11 @@ func (s *ContactService) updateInteractionTimestampTx(
 
 // deriveFollowUpClosure builds the nil-safe post-commit closure that
 // runs the follow-up-manager's CreateOrRefresh or Complete action based
-// on the persisted interaction's direction (plan Step 7 + 8). It is
-// the narrow post-PR-8 successor to applyInteractionEffectsFromRow,
-// which previously also handled cadence SQL. Cadence writes are now
-// owned exclusively by *consumer.CadenceUpdater — this helper touches
-// only the follow-up tasks.
+// on the persisted interaction's direction. It is the narrow post-
+// cutover successor to applyInteractionEffectsFromRow, which previously
+// also handled cadence SQL. Cadence writes are now owned exclusively
+// by *consumer.CadenceUpdater — this helper touches only the follow-up
+// tasks.
 //
 // Reads Direction + OccurredAt from the persisted `interaction` row
 // (not request args) to avoid drift on dedup replays. Captures contact
@@ -1185,9 +1185,9 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("deduplicate calendar event contacts: %w", err)
 	}
 
-	// 9. Update target contact with field selections and optional new name.
-	// PR 8 Step 10: this write is profile-only (name/location/birthday/
-	// cadence/photo/how_met) and NEVER touches the four cadence columns.
+	// 9. Update target contact with field selections and optional new
+	// name. This write is profile-only (name/location/birthday/cadence/
+	// photo/how_met) and NEVER touches the four cadence columns.
 	// Cadence columns are applied in the next step via
 	// cadenceUpdater.BulkApply so the sole-writer invariant holds.
 	txContactRepo := repository.NewContactRepository(txQueries)
@@ -1197,17 +1197,27 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("update target contact: %w", err)
 	}
 
-	// 9a. Forward-max merged cadence columns through CadenceUpdater.BulkApply
-	// (plan Decisions 6 + 7 + Step 10). The merged cadence string may come
-	// from the source (when FieldSelections.Cadence == "source"), so
-	// contact_by is derived from the CHOSEN cadence value — not from the
-	// pre-merge target.cadence, which might have been overwritten above.
+	// 9a. Forward-max merged cadence columns through
+	// CadenceUpdater.BulkApply. The merged cadence string may come from
+	// the source (when FieldSelections.Cadence == "source"), so
+	// contact_by is derived from the CHOSEN cadence value — not from
+	// the pre-merge target.cadence, which might have been overwritten
+	// above.
 	if s.cadence == nil {
 		return nil, errors.New("merge contacts: cadence updater not wired (call SetCadenceUpdater)")
 	}
 	mergedFields := buildMergeCadenceFields(targetContact, sourceContact, updateReq.Cadence)
 	if err := s.cadence.BulkApply(ctx, tx, req.TargetContactID, mergedFields); err != nil {
 		return nil, fmt.Errorf("bulk apply merged cadence: %w", err)
+	}
+
+	// BulkApply is a second UPDATE on the contact row, so the profile-
+	// only UpdateContact's RETURNING values (updated_at + the four
+	// cadence columns) are stale. Re-fetch inside the tx so the struct
+	// the caller receives matches the committed row bit-for-bit.
+	mergedContact, err = txContactRepo.GetContact(ctx, req.TargetContactID)
+	if err != nil {
+		return nil, fmt.Errorf("refetch merged contact after bulk apply: %w", err)
 	}
 
 	// 10. Soft delete source contact
@@ -1265,7 +1275,7 @@ func buildMergeUpdateRequest(targetContact, sourceContact *repository.Contact, r
 // contact_by is derived from the CHOSEN merged cadence string + the
 // merged max(last_contacted) — not from either pre-merge value, so a
 // merge that elects the source's cadence string gets a freshly-computed
-// contact_by rather than preserving target's stale one (plan Decision 7).
+// contact_by rather than preserving target's stale one.
 //
 // Returns the fields struct as-is; CadenceUpdater.BulkApply routes on
 // the forward-only branch so a source-preferring merge can never move

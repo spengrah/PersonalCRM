@@ -1,8 +1,7 @@
--- Event consumer claim queries (migration 040; PR 8 cutover; spec §3.4.2).
--- The (event_id, consumer) primary key enforces at-most-once processing
--- across the inline + queued delivery paths for the CadenceUpdater
--- consumer. See .ai/log/plan/event-bus-foundation-pr8-cadence-updater-cutover.md
--- Design Decision 2 + Step 3.
+-- Event consumer claim queries (migration 040; spec §3.4.2).
+-- The (event_id, consumer) primary key enforces at-most-once
+-- processing across the inline + queued delivery paths for the
+-- CadenceUpdater consumer.
 
 -- name: InsertEventConsumerClaim :execrows
 -- Attempts to claim (event_id, consumer). Returns the number of rows

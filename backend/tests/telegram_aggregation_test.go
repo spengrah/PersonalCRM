@@ -271,7 +271,7 @@ func TestAggregation_IncrementalCoalescing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, interactions, 1) // still just 1 interaction (coalesced)
 
-	// Round-2 RISKY-3: assert ExtendInteraction's cadence side-effects.
+	// Assert ExtendInteraction's cadence side-effects.
 	// Outbound extends bump ONLY last_outreach_at; last_contacted,
 	// last_interaction_at, last_response_at and contact_by must stay put
 	// (spec §3.4.2 direction rules). ExtendInteraction routes through
@@ -332,8 +332,8 @@ func TestAggregation_IncrementalReplyBridge(t *testing.T) {
 	require.Len(t, interactions, 1) // still 1, promoted
 	assert.Equal(t, "mutual", interactions[0].Direction)
 
-	// Round-2 RISKY-3: assert PromoteInteractionToMutual's cadence side-
-	// effects. Mutual promotion via ApplyInteraction should advance ALL
+	// Assert PromoteInteractionToMutual's cadence side-effects.
+	// Mutual promotion via ApplyInteraction should advance ALL
 	// cadence columns (last_contacted, last_interaction_at,
 	// last_outreach_at, last_response_at) to the reply timestamp and
 	// recompute contact_by from the contact's cadence.

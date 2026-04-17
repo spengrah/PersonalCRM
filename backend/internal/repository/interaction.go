@@ -43,7 +43,7 @@ type RecordInteractionRequest struct {
 // consumer even though they don't emit interaction.recorded events
 // themselves. Lives here so ContactService can define its cadence
 // dependency as a narrow interface without importing the consumer
-// package (plan Decision 3 + Step 9).
+// package.
 type ApplyInteractionRequest struct {
 	ContactID  uuid.UUID
 	Direction  string // InteractionDirection*

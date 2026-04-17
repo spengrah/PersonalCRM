@@ -1,15 +1,15 @@
-// Package tests — PR 8 cutover sole-writer AST guard (plan Step 13 +
-// Round-2 tightening).
+// Package tests — cutover sole-writer AST guard.
 //
 // This test enforces the acceptance criterion that CadenceUpdater is the
-// sole post-create writer of contact.last_contacted, contact.last_interaction_at,
-// contact.last_outreach_at, contact.last_response_at, and contact.contact_by.
-// It walks every .go file under backend/internal and backend/cmd/crm-api,
-// flags any call to one of the cadence-writing sqlc-generated queries or
-// repository tx wrappers, and compares the hit set against a function-
-// level allowlist.
+// sole post-create writer of contact.last_contacted,
+// contact.last_interaction_at, contact.last_outreach_at,
+// contact.last_response_at, and contact.contact_by. It walks every .go
+// file under backend/internal and backend/cmd/crm-api, flags any call
+// to one of the cadence-writing sqlc-generated queries or repository
+// tx wrappers, and compares the hit set against a function-level
+// allowlist.
 //
-// Design (Round 2):
+// Design:
 //   - Inventory tracks the sqlc query names that mutate one or more
 //     cadence columns, INCLUDING CreateContact + UpdateContact (both
 //     write cadence-family columns in their full column lists, even
@@ -63,11 +63,11 @@ var cadenceWritingSymbols = map[string]struct{}{
 	"UpdateContactCadenceForward":       {},
 	"UpdateContactCadenceUnconditional": {},
 	"UpdateContactBy":                   {},
-	// Round-2 additions: include CreateContact + UpdateContact so a
-	// future regression that adds a cadence column to either query is
-	// caught. Selector matching alone would flag every service-layer
-	// wrapper caller; scopedToSqlcQuerier restricts these two names to
-	// direct sqlc-Querier call sites.
+	// Include CreateContact + UpdateContact so a future regression
+	// that adds a cadence column to either query is caught. Selector
+	// matching alone would flag every service-layer wrapper caller;
+	// querierScopedSymbols below restricts these two names to direct
+	// sqlc-Querier call sites.
 	"CreateContact": {},
 	"UpdateContact": {},
 }
@@ -89,19 +89,19 @@ var querierScopedSymbols = map[string]struct{}{
 // map. Keys use forward slashes relative to the backend module root.
 //
 // The sole writer lives in consumer/cadence_updater.go:applyTx. Other
-// entries are narrow carve-outs documented in plan Decision 9.
+// entries are narrow, documented carve-outs.
 var allowedCallSites = map[string]string{
 	// The authoritative consumer-owned cadence writer. applyTx dispatches
 	// to UpdateContactCadenceForward/Unconditional; this is the one
 	// place cadence SQL is allowed to live.
-	"internal/consumer/cadence_updater.go:applyTx": "sole writer (plan acceptance criterion 5)",
+	"internal/consumer/cadence_updater.go:applyTx": "sole writer",
 
 	// Repository wrappers. Each wrapper is a thin method that delegates
 	// to the corresponding sqlc query and is called from either
 	// CadenceUpdater (for the cutover queries) or Todoist/tests (for
 	// UpdateContactBy). Adding a NEW wrapper here requires a matching
 	// allowlist entry, so regressions surface at review time.
-	"internal/repository/contact.go:CreateContact":                     "initial row seed (plan Design Decision 9 carve-out)",
+	"internal/repository/contact.go:CreateContact":                     "initial row seed carve-out",
 	"internal/repository/contact.go:UpdateContact":                     "profile-only wrapper (post-cutover cadence columns not written)",
 	"internal/repository/contact.go:UpdateContactBy":                   "wrapper for Todoist carve-outs",
 	"internal/repository/contact.go:UpdateContactLastContacted":        "legacy wrapper (no production callers post-cutover)",
@@ -113,12 +113,11 @@ var allowedCallSites = map[string]string{
 	"internal/repository/contact.go:UpdateContactMutualFields":         "legacy wrapper (no production callers post-cutover)",
 	"internal/repository/contact.go:UpdateContactMutualFieldsTx":       "legacy wrapper (no production callers post-cutover)",
 
-	// Todoist carve-outs (plan Design Decision 9 + Step 11). These are
-	// the ONLY non-CadenceUpdater production callers of UpdateContactBy.
-	// Adding a cadence write to any other Todoist function will trip
-	// this guard.
-	"internal/todoist/provider.go:processItem":       "Todoist cadence-task deadline edit (plan Design Decision 9 carve-out)",
-	"internal/todoist/provider.go:handleSkipTrigger": "Todoist skip-trigger carve-out (plan Design Decision 9 carve-out)",
+	// Todoist carve-outs. These are the ONLY non-CadenceUpdater
+	// production callers of UpdateContactBy. Adding a cadence write to
+	// any other Todoist function will trip this guard.
+	"internal/todoist/provider.go:processItem":       "Todoist cadence-task deadline edit carve-out",
+	"internal/todoist/provider.go:handleSkipTrigger": "Todoist skip-trigger carve-out",
 }
 
 // TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL walks the Go AST
@@ -345,9 +344,8 @@ func TestUpdateContactSQL_DoesNotTouchCadenceColumns(t *testing.T) {
 // TestCadenceSoleWriter_NegativeGuardCatchesNewWrite synthesizes a tiny
 // Go file that calls r.queries.UpdateContactMutualFields from an
 // unallowlisted function, runs the same AST check against it, and
-// asserts a violation is reported. Round-2 risky-item 2 asks for this
-// kind of negative test so a future loosening of the check (e.g., all-
-// files-allowed) cannot silently pass.
+// asserts a violation is reported. Without this, a future loosening
+// of the check (e.g., all-files-allowed) could silently pass.
 func TestCadenceSoleWriter_NegativeGuardCatchesNewWrite(t *testing.T) {
 	src := `package poc
 

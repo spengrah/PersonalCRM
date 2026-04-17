@@ -171,14 +171,14 @@ func run() int {
 	// the interaction insert — plan Decision 10).
 	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
 
-	// PR 8 CadenceUpdater must be constructed BEFORE InteractionRecorder so
-	// the recorder can inline-invoke it after bus.PublishTx on fresh writes
-	// (plan Decision 4 + Step 5). Wired here even though its worker is
-	// registered further down, so the construction order matches the runtime
-	// dispatch order. contactRepo.SetPool is called at the first writer-path
+	// CadenceUpdater must be constructed BEFORE InteractionRecorder so
+	// the recorder can inline-invoke it after bus.PublishTx on fresh
+	// writes. Wired here even though its worker is registered further
+	// down, so the construction order matches the runtime dispatch
+	// order. contactRepo.SetPool is called at the first writer-path
 	// construction so the cadence updater can open its own tx if ever
-	// needed outside the caller's tx (defensive — the current path always
-	// runs in the caller's tx).
+	// needed outside the caller's tx (defensive — the current path
+	// always runs in the caller's tx).
 	contactRepo.SetPool(database.Pool)
 	eventClaimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 	cadenceUpdater := consumer.NewCadenceUpdater(
@@ -190,18 +190,18 @@ func run() int {
 	)
 
 	// Wire CadenceUpdater into ContactService so Merge / Extend / Promote
-	// / UpdateContact cadence-edit paths route cadence writes through the
-	// sole writer (plan Steps 8-10).
+	// / UpdateContact cadence-edit paths route cadence writes through
+	// the sole writer.
 	contactService.SetCadenceUpdater(cadenceUpdater)
 
-	// PR 6 InteractionRecorder consumer + manual handler (spec §3.4.1, plan
-	// Decisions 4a/10). The consumer delegates the write to
-	// ContactService.RecordInteractionTx, then marks telegram_messages
-	// processed (for message.* kinds) and emits interaction.recorded — all
-	// inside the caller's tx. PR 8: after emitting interaction.recorded,
-	// the recorder inline-invokes cadenceUpdater.HandleEvent on fresh
-	// writes so cadence columns apply synchronously and queued re-
-	// deliveries become durable no-ops.
+	// InteractionRecorder consumer + manual handler (spec §3.4.1).
+	// Delegates the write to ContactService.RecordInteractionTx, then
+	// marks telegram_messages processed (for message.* kinds) and emits
+	// interaction.recorded — all inside the caller's tx. After emitting
+	// interaction.recorded, the recorder inline-invokes
+	// cadenceUpdater.HandleEvent on fresh writes so cadence columns
+	// apply synchronously and queued re-deliveries become durable
+	// no-ops.
 	interactionRecorder := consumer.NewInteractionRecorder(
 		contactService,
 		telegramMessageRepo,
@@ -257,7 +257,7 @@ func run() int {
 	// integration tests / post-bake queries. PR 12 drops the table.
 	_ = shadowObsRepo
 
-	// PR 8 CadenceUpdater is constructed above (alongside InteractionRecorder).
+	// CadenceUpdater is constructed above (alongside InteractionRecorder).
 	// Register its river worker unconditionally — events.consumerJobsForKind
 	// always enqueues a cadence_updater job for interaction.recorded. In
 	// cutover mode the inline recorder path claims the event first, so
@@ -271,7 +271,12 @@ func run() int {
 			Str("mode", "cutover").
 			Msg("event-bus CadenceUpdater: cutover active (sole writer of cadence columns; inline recorder dispatch enabled)")
 	case config.EventBusCadenceModeShadow:
-		logger.Warn().
+		// ERROR severity: shadow mode post-cutover has no direct path to
+		// observe, so the consumer runs but produces no meaningful output
+		// while the sole-writer branch is still active. Unlike mode=off,
+		// there is no UnsafeAllowOffMode gate — this is the silently-
+		// broken case, so it earns an ERROR log.
+		logger.Error().
 			Str("mode", "shadow").
 			Msg("event-bus CadenceUpdater: shadow mode requested post-cutover; direct path is gone so shadow has nothing to observe — treat as misconfiguration")
 	default: // off

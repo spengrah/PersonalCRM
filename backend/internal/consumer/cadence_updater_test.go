@@ -14,10 +14,10 @@ import (
 )
 
 // -----------------------------------------------------------------------------
-// PR 8 retarget: cadence_updater unit tests. Exercises applyTx,
-// buildInteractionWrite, the branch matrix, mode gates, and claim
-// dedupe without a live DB. The writes-to-contact side effects are
-// covered by integration tests in backend/tests/.
+// Cadence_updater unit tests. Exercises applyTx, buildInteractionWrite,
+// the branch matrix, mode gates, and claim dedupe without a live DB.
+// The writes-to-contact side effects are covered by integration tests
+// in backend/tests/.
 // -----------------------------------------------------------------------------
 
 // stubClaimer is the in-memory eventClaimer used by unit tests. Records
@@ -68,9 +68,9 @@ func newUnitUpdater(mode string) (*CadenceUpdater, *stubClaimer, *stubContactRea
 
 // -----------------------------------------------------------------------------
 // buildInteractionWrite — direction + manual branch matrix.
-// Preserves the PR 7 shadow-parity coverage the plan mandates (Decision
-// 10 + Step 14 retargeting). Asserts apply flags, values, and branch
-// selection without touching the DB.
+// Asserts apply flags, values, and branch selection without touching
+// the DB. Exercises the full outbound/inbound/mutual × automated/manual
+// matrix so a regression to direction rules surfaces at unit-test time.
 // -----------------------------------------------------------------------------
 
 func TestBuildInteractionWrite_Outbound_WritesOnlyLastOutreachAt(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
@@ -427,5 +428,60 @@ func TestContactMerge_Integration(t *testing.T) {
 
 		// Cleanup
 		_ = contactRepo.HardDeleteContact(ctx, target.ID)
+	})
+
+	t.Run("MergeContacts_ReturnsFreshStructAfterBulkApply", func(t *testing.T) {
+		// Stale-struct guard: MergeContacts runs two UPDATEs on the
+		// target row (profile-only UpdateContact, then BulkApply for
+		// cadence columns). Both bump updated_at; both can move
+		// cadence timestamps. The returned struct must reflect the
+		// post-BulkApply committed state, not the stale post-profile
+		// value.
+		initialLastContacted := time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC)
+		target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName:      "Refetch Target",
+			Cadence:       stringPtr("weekly"),
+			LastContacted: &initialLastContacted,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
+
+		// Source has a NEWER last_contacted. BulkApply's forward-max
+		// should advance target.last_contacted — a value the profile-
+		// only UpdateContact cannot write — so the returned struct
+		// must show the new timestamp.
+		sourceLastContacted := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName:      "Refetch Source",
+			Cadence:       stringPtr("weekly"),
+			LastContacted: &sourceLastContacted,
+		})
+		require.NoError(t, err)
+
+		merged, err := contactService.MergeContacts(ctx, service.MergeContactsRequest{
+			TargetContactID: target.ID,
+			SourceContactID: source.ID,
+			FieldSelections: service.MergeFieldSelections{Cadence: "target"},
+		})
+		require.NoError(t, err)
+
+		// Refetch from the DB — the returned struct must match the
+		// committed row across updated_at AND cadence fields.
+		committed, err := contactRepo.GetContact(ctx, target.ID)
+		require.NoError(t, err)
+		assert.Equal(t, committed.UpdatedAt, merged.UpdatedAt,
+			"returned updated_at should reflect post-BulkApply committed state")
+		require.NotNil(t, committed.LastContacted)
+		require.NotNil(t, merged.LastContacted)
+		assert.Equal(t, committed.LastContacted.UTC(), merged.LastContacted.UTC(),
+			"returned last_contacted should reflect post-BulkApply committed state")
+		require.NotNil(t, merged.ContactBy)
+		require.NotNil(t, committed.ContactBy)
+		assert.Equal(t, committed.ContactBy.UTC(), merged.ContactBy.UTC(),
+			"returned contact_by should reflect post-BulkApply committed state")
+		// Sanity: last_contacted did actually advance to the source
+		// value, confirming BulkApply ran and the refetch picked it up.
+		assert.Equal(t, sourceLastContacted.UTC(), merged.LastContacted.UTC(),
+			"BulkApply should forward-max last_contacted to the source value")
 	})
 }

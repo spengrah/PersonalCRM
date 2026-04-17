@@ -834,7 +834,7 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, updatedContact.Cadence)
 		assert.Equal(t, "weekly", *updatedContact.Cadence)
-		// Round-2 RISKY-3: cadence-present link must recompute contact_by
+		// Cadence-present link must recompute contact_by
 		// via CadenceUpdater.ApplyContactByOverride. A weekly cadence on
 		// a fresh contact (no last_contacted) derives contact_by from
 		// created_at + 7 days, so the column must be non-nil.
@@ -893,7 +893,7 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, updatedContact.Cadence)
 		assert.Equal(t, "biweekly", *updatedContact.Cadence)
-		// Round-2 RISKY-3: the override path must re-derive contact_by
+		// The override path must re-derive contact_by
 		// from the NEW cadence (biweekly) rather than the starting
 		// quarterly. Both values are non-nil, so we verify the date
 		// difference is consistent with a ~14-day cadence relative to
@@ -958,10 +958,9 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, updatedContact.Cadence)
 		assert.Equal(t, "annual", *updatedContact.Cadence)
-		// Round-2 RISKY-3: cadence-absent enrichment must NOT mutate
-		// contact_by. The profile-only path runs — it's not permitted
-		// to touch cadence columns (plan Step 8 + sole-writer
-		// invariant).
+		// Cadence-absent enrichment must NOT mutate contact_by. The
+		// profile-only path runs — it's not permitted to touch
+		// cadence columns per the sole-writer invariant.
 		require.NotNil(t, updatedContact.ContactBy)
 		assert.Equal(t, initialContactBy.UTC(), updatedContact.ContactBy.UTC(),
 			"cadence-absent link must NOT mutate contact_by")

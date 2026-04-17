@@ -807,9 +807,9 @@ func TestConfig_Validate_EventBusInteractionMode(t *testing.T) {
 }
 
 // TestConfig_CadenceMode_DefaultCutover asserts EVENT_BUS_CADENCE_MODE
-// defaults to "cutover" in PR 8 — the direct path is gone, the consumer
-// is the sole writer, and shadow/off are no longer safe defaults (plan
-// Design Decision 1, Step 1).
+// defaults to "cutover" post-cutover — the direct path is gone, the
+// consumer is the sole writer, and shadow/off are no longer safe
+// defaults.
 func TestConfig_CadenceMode_DefaultCutover(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
@@ -824,7 +824,7 @@ func TestConfig_CadenceMode_DefaultCutover(t *testing.T) {
 	}
 }
 
-// TestConfig_CadenceMode_OffRejectedWithoutUnsafeOverride asserts PR 8's
+// TestConfig_CadenceMode_OffRejectedWithoutUnsafeOverride asserts the
 // startup gate: EVENT_BUS_CADENCE_MODE=off is a configuration error in
 // non-test load paths because post-cutover the direct path is gone and
 // "off" silently disables the sole writer of cadence columns.
@@ -879,9 +879,9 @@ func TestConfig_CadenceMode_OffAllowedWithUnsafeOverride(t *testing.T) {
 	}
 }
 
-// TestTestConfig_AllowsCadenceModeOff asserts TestConfig() keeps bypass
-// behavior for "off" — unit/integration harnesses can exercise off-mode
-// branches without tripping the PR 8 startup gate.
+// TestTestConfig_AllowsCadenceModeOff asserts TestConfig() keeps
+// bypass behavior for "off" — unit/integration harnesses can exercise
+// off-mode branches without tripping the startup gate.
 func TestTestConfig_AllowsCadenceModeOff(t *testing.T) {
 	cfg := TestConfig()
 	if cfg.EventBus.CadenceMode != EventBusCadenceModeOff {
