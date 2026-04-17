@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# check-cadence-sole-writer.sh — belt-and-suspenders grep guard for PR 8.
+# check-cadence-sole-writer.sh — belt-and-suspenders grep guard.
 #
 # Ships alongside the AST test at backend/tests/sole_writer_static_test.go.
-# Enforces plan Step 13 + Design Decision 9: post-cutover, cadence-writing
-# queries are only reachable from backend/internal/consumer/cadence_updater.go
-# (the authoritative writer), the repository wrapper methods themselves,
-# and the two explicit Todoist carve-outs.
+# Enforces that cadence-writing queries are only reachable from
+# backend/internal/consumer/cadence_updater.go (the authoritative
+# writer), the repository wrapper methods themselves, and the two
+# explicit Todoist carve-outs.
 #
-# Round-2 refinements:
+# Enforcement detail:
 #   - Inventory includes CreateContact + UpdateContact, scoped to sqlc
 #     Querier receivers (`queries.X`, `db.New(tx).X`, `txQueries.X`) so
 #     wrapper-to-wrapper calls from the service layer are NOT flagged.

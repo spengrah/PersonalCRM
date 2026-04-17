@@ -303,7 +303,7 @@ lint-fix:
 ci-test: lint check-cadence-sole-writer test-unit test-integration-fast test-frontend
 	@echo "✅ All CI tests passed"
 
-# PR 8 sole-writer grep guard (plan Step 13 + Design Decision 9).
+# Sole-writer guard: verifies only CadenceUpdater calls cadence-writing queries.
 # Runs alongside the Go AST test at backend/tests/sole_writer_static_test.go;
 # produces reviewer-visible file/line evidence whenever a cadence-writing
 # symbol escapes the allowlist. See scripts/check-cadence-sole-writer.sh.

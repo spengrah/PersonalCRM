@@ -243,7 +243,7 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 		// Sole-writer invariant: contact_by recomputation on cadence
 		// edits must route through CadenceUpdater. Refusing to operate
 		// without it prevents a silent rollback to the direct-path
-		// behavior (plan acceptance criterion 5).
+		// behavior.
 		return nil, uuid.Nil, errors.New("update contact: cadence updater not wired (call SetCadenceUpdater)")
 	}
 	tx, err := s.database.Pool.Begin(ctx)
