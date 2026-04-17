@@ -146,6 +146,11 @@ type Querier interface {
 	// Demote source's primary contact methods when target already has a primary for that type
 	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
 	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
+	// Non-mutating lookup. Returns true when a claim row exists for the
+	// given (event_id, consumer). Useful for assertions in tests and for
+	// read-only operator diagnostics; the production dedupe path uses
+	// InsertEventConsumerClaim's rows-inserted signal instead of polling.
+	ExistsEventConsumerClaim(ctx context.Context, arg ExistsEventConsumerClaimParams) (bool, error)
 	// Post-bake divergence query. FULL OUTER JOIN of direct vs consumer rows
 	// on event_id — per plan Decision 1 each (event_id, writer) pair is unique,
 	// so the join resolves at most one direct + one consumer row per event.
@@ -357,6 +362,16 @@ type Querier interface {
 	// sqlc.narg('id') is NULL, the DB generates a fresh UUID via
 	// gen_random_uuid().
 	InsertEvent(ctx context.Context, arg InsertEventParams) (*Event, error)
+	// Event consumer claim queries (migration 040; PR 8 cutover; spec §3.4.2).
+	// The (event_id, consumer) primary key enforces at-most-once processing
+	// across the inline + queued delivery paths for the CadenceUpdater
+	// consumer. See .ai/log/plan/event-bus-foundation-pr8-cadence-updater-cutover.md
+	// Design Decision 2 + Step 3.
+	// Attempts to claim (event_id, consumer). Returns the number of rows
+	// inserted: 1 if this caller claimed the event, 0 if another caller
+	// already holds the claim. Callers treat 0 as "someone else wrote this
+	// event; return nil without mutating state".
+	InsertEventConsumerClaim(ctx context.Context, arg InsertEventConsumerClaimParams) (int64, error)
 	// Event shadow observation queries (spec §3.8, PR 5). Append-only log of
 	// what each write path (direct vs consumer) produced during shadow-mode
 	// bake. The post-bake divergence query FULL OUTER JOINs direct+consumer

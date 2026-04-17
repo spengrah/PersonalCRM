@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Config holds all application configuration
@@ -150,20 +152,33 @@ type RiverConfig struct {
 //     Publish events. This is the intended production mode.
 //
 // CadenceMode gates the PR 7-8 phase lifecycle for the CadenceUpdater
-// consumer (spec §3.9; plan Decision 11). PR 7 default is "shadow" so
-// post-merge the bake runs immediately without operator intervention.
+// consumer (spec §3.9).
 //
-//   - "off":     worker registered but HandleEvent short-circuits with
-//     a DEBUG log. No shadow observations. Direct-path writes remain
-//     authoritative. Use for emergency flag-flip rollback.
-//   - "shadow":  default (PR 7). Worker runs; direct-path observer is
-//     wired; both paths write shadow-observation rows for post-bake
-//     divergence comparison. No authoritative-write change.
-//   - "cutover": PR 8 territory. PR 7 logs ERROR and falls back to
-//     shadow behavior.
+//   - "off":     post-cutover emergency override only. The direct path
+//     was removed in PR 8; flipping to "off" disables the sole writer
+//     of the four cadence columns entirely. Startup REFUSES to boot on
+//     "off" unless UnsafeAllowOffMode is explicitly set (via
+//     EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true). Real rollback is
+//     `git revert`, not a flag flip. See backend/internal/eventbus/README.md.
+//   - "shadow":  PR 7 bake mode. The PR 7 direct-path is gone in PR 8,
+//     so shadow mode no longer observes anything meaningful. Retained
+//     as a parseable value for migration compatibility.
+//   - "cutover": default (PR 8). CadenceUpdater is the sole writer of
+//     the four cadence columns; InteractionRecorder inline-applies on
+//     fresh writes; queued deliveries are durable no-ops via the
+//     event_consumer_claim table.
+//
+// UnsafeAllowOffMode is the explicit opt-in for running with
+// CadenceMode="off" in non-test code. It corresponds to the env var
+// EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF. config.TestConfig() sets it to
+// true so unit/integration harnesses can exercise the off-mode branch
+// without tripping the startup gate. When honored in a non-test config
+// load path the caller is expected to log a WARN — see
+// EventBusConfig.MaybeWarnUnsafeOff.
 type EventBusConfig struct {
-	InteractionMode string // off | shadow | cutover. Default: cutover (post-PR-6).
-	CadenceMode     string // off | shadow | cutover. Default: shadow (PR 7).
+	InteractionMode    string // off | shadow | cutover. Default: cutover (post-PR-6).
+	CadenceMode        string // off | shadow | cutover. Default: cutover (post-PR-8).
+	UnsafeAllowOffMode bool   // EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true opt-in. Never true in normal prod.
 }
 
 // EventBus interaction-mode constants. Mirrors (and must stay in sync
@@ -182,6 +197,25 @@ const (
 	EventBusCadenceModeShadow  = "shadow"
 	EventBusCadenceModeCutover = "cutover"
 )
+
+// MaybeWarnUnsafeOff emits the mandated WARN log when the unsafe
+// override is active AND cadence mode is actually "off". Safe to call
+// from non-test config load paths (Load, reload hooks). No-op when the
+// config is in a normal state. See acceptance criterion 4 in the PR 8
+// plan for the required field set. Uses the zerolog package-level
+// logger directly (not internal/logger) to avoid a circular
+// import — internal/logger already depends on internal/config.
+func (c *EventBusConfig) MaybeWarnUnsafeOff() {
+	if !c.UnsafeAllowOffMode || c.CadenceMode != EventBusCadenceModeOff {
+		return
+	}
+	log.Warn().
+		Str("event", "cadence_mode_off_unsafe_override_active").
+		Str("cadence_mode", EventBusCadenceModeOff).
+		Bool("unsafe_allow_off", true).
+		Str("recovery", "unset EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF to restart in safe mode; git revert PR 8 if you need the direct path back").
+		Msg("EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF is active; CadenceUpdater is disabled and cadence columns WILL NOT be written")
+}
 
 // ValidationError represents a configuration validation error
 type ValidationError struct {
@@ -316,8 +350,9 @@ func Load() (*Config, error) {
 			JobTimeout:        getEnvAsDuration("RIVER_JOB_TIMEOUT", DefaultRiverJobTimeout),
 		},
 		EventBus: EventBusConfig{
-			InteractionMode: getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),
-			CadenceMode:     getEnv("EVENT_BUS_CADENCE_MODE", EventBusCadenceModeShadow),
+			InteractionMode:    getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),
+			CadenceMode:        getEnv("EVENT_BUS_CADENCE_MODE", EventBusCadenceModeCutover),
+			UnsafeAllowOffMode: getEnvAsBool("EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF", false),
 		},
 	}
 
@@ -325,6 +360,14 @@ func Load() (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+
+	// Non-test config load path: if the operator set the unsafe override
+	// AND CadenceMode=off was honored, emit a loud WARN so repeated
+	// config reloads keep surfacing the degraded state. The startup gate
+	// in Validate already refuses boot without the override; this WARN
+	// covers the "override honored" case. Pre-cutover TestConfig callers
+	// don't land here because they don't call Load().
+	cfg.EventBus.MaybeWarnUnsafeOff()
 
 	return cfg, nil
 }
@@ -448,12 +491,27 @@ func (c *Config) Validate() error {
 		})
 	}
 
-	// EventBus cadence-mode validation (PR 7). Default "shadow" (Load)
-	// and TestConfig "off" guarantee a valid value reaches Validate in
-	// normal operation.
+	// EventBus cadence-mode validation. PR 8 default is "cutover". The
+	// "off" value remains parseable but is a startup-time kill switch
+	// post-cutover — the direct path is gone, so "off" disables the
+	// sole writer of cadence columns. Require explicit opt-in via
+	// UnsafeAllowOffMode (EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true)
+	// before accepting "off" in non-test config. TestConfig() sets
+	// UnsafeAllowOffMode=true so unit/integration harnesses can exercise
+	// the off branch without tripping this gate.
 	switch c.EventBus.CadenceMode {
-	case EventBusCadenceModeOff, EventBusCadenceModeShadow, EventBusCadenceModeCutover:
+	case EventBusCadenceModeShadow, EventBusCadenceModeCutover:
 		// ok
+	case EventBusCadenceModeOff:
+		if !c.EventBus.UnsafeAllowOffMode {
+			errors = append(errors, ValidationError{
+				Field: "EVENT_BUS_CADENCE_MODE",
+				Message: "cadence cutover has no runtime rollback: mode=off disables the " +
+					"sole writer of the four cadence columns. Use `git revert` to roll " +
+					"back PR 8, or set EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true ONLY for " +
+					"emergency ops. This override leaves the system with cadence writes disabled.",
+			})
+		}
 	default:
 		errors = append(errors, ValidationError{
 			Field:   "EVENT_BUS_CADENCE_MODE",
@@ -630,9 +688,13 @@ func TestConfig() *Config {
 		EventBus: EventBusConfig{
 			InteractionMode: EventBusInteractionModeCutover,
 			// CadenceMode defaults to "off" in TestConfig so unit tests
-			// don't inadvertently exercise the shadow path; tests that
-			// need shadow explicitly override this.
-			CadenceMode: EventBusCadenceModeOff,
+			// don't inadvertently exercise the cutover writer path; tests
+			// that need cutover explicitly override this. UnsafeAllowOffMode
+			// is set so Validate() doesn't reject "off" via the PR 8
+			// startup gate — the gate exists to catch prod misconfigs,
+			// not test harnesses that deliberately opt into "off".
+			CadenceMode:        EventBusCadenceModeOff,
+			UnsafeAllowOffMode: true,
 		},
 	}
 }
