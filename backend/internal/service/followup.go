@@ -66,18 +66,29 @@ func (s *FollowUpService) SetTodoistSettingsFunc(fn todoistSettingsFunc) {
 
 // CreateOrRefreshFollowUp creates or refreshes a follow-up task for a contact after an outbound interaction
 func (s *FollowUpService) CreateOrRefreshFollowUp(ctx context.Context, contact repository.Contact, outreachAt time.Time) error {
+	_, err := s.CreateOrRefreshFollowUpObserved(ctx, contact, outreachAt)
+	return err
+}
+
+// CreateOrRefreshFollowUpObserved is the result-returning variant of
+// CreateOrRefreshFollowUp. Returns the action taken, the touched
+// contact_task id, and the deadline used — the data the direct-path
+// shadow drain needs to build a writer='direct' observation row.
+// Existing callers that ignore the result continue to use
+// CreateOrRefreshFollowUp.
+func (s *FollowUpService) CreateOrRefreshFollowUpObserved(ctx context.Context, contact repository.Contact, outreachAt time.Time) (FollowUpActionResult, error) {
 	// No follow-up if contact has no cadence
 	if contact.Cadence == nil || *contact.Cadence == "" {
 		logger.Debug().
 			Str("contactId", contact.ID.String()).
 			Msg("skipping follow-up: no cadence")
-		return nil
+		return FollowUpActionResult{Action: repository.FollowUpActionSkip}, nil
 	}
 
 	// Calculate deadline using date arithmetic (not duration)
 	days := watchdogDaysForCadence(*contact.Cadence, s.cfg.Watchdog)
 	if days == 0 {
-		return nil
+		return FollowUpActionResult{Action: repository.FollowUpActionSkip}, nil
 	}
 	deadline := cadence.Today(outreachAt).AddDate(0, 0, days)
 	deadlineStr := deadline.Format(todoist.DateFormat)
@@ -85,27 +96,69 @@ func (s *FollowUpService) CreateOrRefreshFollowUp(ctx context.Context, contact r
 	// Check for existing pending follow-up
 	existing, err := s.contactTaskRepo.FindPendingFollowUp(ctx, contact.ID)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
-		return fmt.Errorf("find pending follow-up: %w", err)
+		return FollowUpActionResult{}, fmt.Errorf("find pending follow-up: %w", err)
 	}
 
 	if existing != nil {
 		// Refresh existing follow-up: update Todoist due date
-		return s.refreshFollowUp(ctx, existing, deadlineStr, contact)
+		if err := s.refreshFollowUp(ctx, existing, deadlineStr, contact); err != nil {
+			return FollowUpActionResult{}, err
+		}
+		id := existing.ID
+		d := deadline
+		return FollowUpActionResult{
+			Action:        repository.FollowUpActionRefresh,
+			ContactTaskID: &id,
+			Deadline:      &d,
+		}, nil
 	}
 
 	// Create new follow-up
-	return s.createFollowUp(ctx, contact, deadlineStr)
+	createdID, err := s.createFollowUp(ctx, contact, deadlineStr)
+	d := deadline
+	result := FollowUpActionResult{
+		Action:   repository.FollowUpActionCreate,
+		Deadline: &d,
+	}
+	if createdID != uuid.Nil {
+		id := createdID
+		result.ContactTaskID = &id
+	}
+	return result, err
 }
 
 // CompleteFollowUp completes any pending follow-up task for a contact (when a response arrives)
 func (s *FollowUpService) CompleteFollowUp(ctx context.Context, contactID uuid.UUID) error {
+	_, err := s.CompleteFollowUpObserved(ctx, contactID)
+	return err
+}
+
+// CompleteFollowUpObserved is the result-returning variant of
+// CompleteFollowUp. Returns action=complete with the touched task id
+// when a pending follow-up existed; action=skip with empty fields when
+// none was found. Used by the direct-path shadow drain.
+func (s *FollowUpService) CompleteFollowUpObserved(ctx context.Context, contactID uuid.UUID) (FollowUpActionResult, error) {
 	existing, err := s.contactTaskRepo.FindPendingFollowUp(ctx, contactID)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return nil // No pending follow-up, nothing to do
+			return FollowUpActionResult{Action: repository.FollowUpActionSkip}, nil
 		}
-		return fmt.Errorf("find pending follow-up: %w", err)
+		return FollowUpActionResult{}, fmt.Errorf("find pending follow-up: %w", err)
 	}
+	result := FollowUpActionResult{Action: repository.FollowUpActionComplete}
+	id := existing.ID
+	result.ContactTaskID = &id
+	if err := s.completeFollowUpInner(ctx, contactID, existing); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+// completeFollowUpInner factored from CompleteFollowUp — performs the
+// Todoist close + state transition for an already-located pending
+// task. Keeping it package-private avoids exposing the existing task
+// struct on the public surface.
+func (s *FollowUpService) completeFollowUpInner(ctx context.Context, contactID uuid.UUID, existing *repository.ContactTask) error {
 
 	// Close the Todoist task (best-effort — complete locally even if Todoist is unavailable)
 	settings, accessToken, err := s.todoistSettingsFunc(ctx)
@@ -257,10 +310,10 @@ func (s *FollowUpService) refreshFollowUp(ctx context.Context, task *repository.
 	return nil
 }
 
-func (s *FollowUpService) createFollowUp(ctx context.Context, contact repository.Contact, deadline string) error {
+func (s *FollowUpService) createFollowUp(ctx context.Context, contact repository.Contact, deadline string) (uuid.UUID, error) {
 	settings, accessToken, err := s.todoistSettingsFunc(ctx)
 	if err != nil {
-		return fmt.Errorf("get todoist settings: %w", err)
+		return uuid.Nil, fmt.Errorf("get todoist settings: %w", err)
 	}
 
 	// Build follow-up task content
@@ -276,7 +329,7 @@ func (s *FollowUpService) createFollowUp(ctx context.Context, contact repository
 	}
 	markerJSON, err := json.Marshal(marker)
 	if err != nil {
-		return fmt.Errorf("marshal marker: %w", err)
+		return uuid.Nil, fmt.Errorf("marshal marker: %w", err)
 	}
 
 	// Create task via Sync API
@@ -291,7 +344,7 @@ func (s *FollowUpService) createFollowUp(ctx context.Context, contact repository
 
 	resp, err := client.Sync(ctx, "*", []string{}, []todoist.SyncCommand{cmd})
 	if err != nil {
-		return fmt.Errorf("create todoist follow-up task: %w", err)
+		return uuid.Nil, fmt.Errorf("create todoist follow-up task: %w", err)
 	}
 
 	// Get real task ID from temp ID mapping
@@ -300,7 +353,7 @@ func (s *FollowUpService) createFollowUp(ctx context.Context, contact repository
 		// If TempIDMap doesn't contain the mapping, the command likely failed on Todoist's side.
 		// Don't store a temp ID as external_task_id — it would never be resolved since follow-up
 		// tasks aren't part of the cadence sync loop that resolves pending_temp_id metadata.
-		return fmt.Errorf("todoist did not return task ID for follow-up (temp_id: %s)", cmd.TempID)
+		return uuid.Nil, fmt.Errorf("todoist did not return task ID for follow-up (temp_id: %s)", cmd.TempID)
 	}
 
 	// Create local contact_task record
@@ -308,7 +361,7 @@ func (s *FollowUpService) createFollowUp(ctx context.Context, contact repository
 		"due_date": deadline,
 		"content":  content,
 	}
-	_, err = s.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+	created, err := s.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       todoist.SourceName,
 		Kind:           todoist.TaskKindFollowUp,
@@ -317,7 +370,7 @@ func (s *FollowUpService) createFollowUp(ctx context.Context, contact repository
 		Metadata:       metadata,
 	})
 	if err != nil {
-		return fmt.Errorf("create follow-up contact_task: %w", err)
+		return uuid.Nil, fmt.Errorf("create follow-up contact_task: %w", err)
 	}
 
 	logger.Info().
@@ -328,7 +381,7 @@ func (s *FollowUpService) createFollowUp(ctx context.Context, contact repository
 		Str("todoistTaskId", realID).
 		Msg("follow-up created")
 
-	return nil
+	return created.ID, nil
 }
 
 func (s *FollowUpService) getTodoistSettings(ctx context.Context) (*todoist.Settings, string, error) {
