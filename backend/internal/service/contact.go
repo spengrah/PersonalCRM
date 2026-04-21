@@ -31,10 +31,19 @@ type OverdueContact struct {
 	SuggestedAction string
 }
 
-// followUpManager manages follow-up Todoist tasks for outbound interactions
-type followUpManager interface {
-	CreateOrRefreshFollowUp(ctx context.Context, contact repository.Contact, outreachAt time.Time) error
-	CompleteFollowUp(ctx context.Context, contactID uuid.UUID) error
+// FollowUpConsumer is the subset of *consumer.FollowUpManager
+// ContactService depends on post-cutover. HandleEvent is exposed for
+// completeness (ContactService itself doesn't call it — the
+// InteractionRecorder does), and ApplyInteraction is the direct-invoke
+// path for non-bus callers (Todoist completion wrapper,
+// Promote/ExtendInteraction). Both methods return a post-commit
+// closure so the refresh path's Todoist item_update runs outside the
+// caller's tx per core.md rule 153.
+//
+// Interface lives here (not on the consumer) so tests can stub
+// follow-up behavior without building the full consumer graph.
+type FollowUpConsumer interface {
+	ApplyInteraction(ctx context.Context, tx pgx.Tx, req repository.ApplyInteractionRequest) (postCommit func(context.Context), err error)
 }
 
 // cadenceWriter abstracts the direct-invoke write surface of
@@ -60,10 +69,14 @@ type ContactService struct {
 	contactMethodRepo *repository.ContactMethodRepository
 	interactionRepo   *repository.InteractionRepository
 	contactTaskRepo   *repository.ContactTaskRepository
-	followUpMgr       followUpManager
-	followUpObserved  followUpObservedManager
-	followUpShadow    followUpShadowObserver
-	rematchSvc        *RematchService
+	// followUp is the FollowUpManager consumer — the sole writer of
+	// contact_task.kind='follow_up' lifecycle post-cutover. Injected via
+	// SetFollowUpConsumer after construction to avoid a circular dep
+	// with consumer wiring. Non-bus callers (Todoist completion path,
+	// Promote/Extend) route through followUp.ApplyInteraction inside
+	// deriveFollowUpClosure.
+	followUp   FollowUpConsumer
+	rematchSvc *RematchService
 	// cadence is the direct-invoke writer (the sole writer of the four
 	// cadence columns post-cutover). Injected via SetCadenceUpdater
 	// after construction to avoid a circular dep with consumer wiring.
@@ -72,33 +85,6 @@ type ContactService struct {
 	// return an error rather than silently no-op-ing on a code path
 	// that was supposed to mutate cadence state.
 	cadence cadenceWriter
-}
-
-// followUpShadowObserver is the subset of
-// FollowUpShadowObservationRepository the direct-path drain uses.
-// Kept as an interface so main.go can leave it unset in mode=off
-// (deriveFollowUpClosure then returns a nil drain fn).
-type followUpShadowObserver interface {
-	RecordDirect(ctx context.Context, tx pgx.Tx, obs repository.FollowUpShadowObservation) error
-}
-
-// followUpObservedManager is the optional richer-return counterpart of
-// followUpManager. When set (by main.go when the shadow observer is
-// wired), deriveFollowUpClosure uses it to learn the action the direct
-// path took and the resulting task id; when nil the closure falls back
-// to the plain followUpManager and records a less-detailed observation.
-type followUpObservedManager interface {
-	CreateOrRefreshFollowUpObserved(ctx context.Context, contact repository.Contact, outreachAt time.Time) (FollowUpActionResult, error)
-	CompleteFollowUpObserved(ctx context.Context, contactID uuid.UUID) (FollowUpActionResult, error)
-}
-
-// FollowUpActionResult describes the action the direct path's follow-up
-// service DID for a given interaction — the data the shadow drain needs
-// to build the writer="direct" observation row.
-type FollowUpActionResult struct {
-	Action        string
-	ContactTaskID *uuid.UUID
-	Deadline      *time.Time
 }
 
 func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository, interactionRepo *repository.InteractionRepository, contactTaskRepo *repository.ContactTaskRepository) *ContactService {
@@ -111,26 +97,14 @@ func NewContactService(database *db.Database, contactRepo *repository.ContactRep
 	}
 }
 
-// SetFollowUpManager injects the follow-up manager after construction (resolves circular dependency)
-func (s *ContactService) SetFollowUpManager(fm followUpManager) {
-	s.followUpMgr = fm
-}
-
-// SetFollowUpObservedManager injects the observed variant of the
-// follow-up manager. Optional — when nil, deriveFollowUpClosure falls
-// back to the plain followUpManager and records observations with
-// less detail (action is inferred from direction, contact_task_id /
-// deadline are omitted).
-func (s *ContactService) SetFollowUpObservedManager(fm followUpObservedManager) {
-	s.followUpObserved = fm
-}
-
-// SetFollowUpShadowObserver enables the direct-path follow-up shadow
-// drain. When unset, deriveFollowUpClosure returns a nil drain fn and
-// RecordInteractionResult.FollowUpShadowDrainFn is nil — the caller
-// (InteractionRecorder) skips the drain invocation.
-func (s *ContactService) SetFollowUpShadowObserver(obs followUpShadowObserver) {
-	s.followUpShadow = obs
+// SetFollowUpConsumer injects the FollowUpManager consumer. Matches
+// SetCadenceUpdater's setter-after-construction pattern so main.go
+// can build the service and consumer independently and wire them
+// together once both exist. Non-bus callers (Todoist completion,
+// Promote/Extend) require this dependency to be set — otherwise
+// deriveFollowUpClosure returns nil and no follow-up work fires.
+func (s *ContactService) SetFollowUpConsumer(fm FollowUpConsumer) {
+	s.followUp = fm
 }
 
 // SetRematchService injects the rematch service. Safe to leave unset — CreateContact
@@ -551,16 +525,16 @@ func (s *ContactService) RecordInteractionTx(
 
 	// 7. Derive the follow-up closure. Cadence writes happen via either
 	// the recorder's inline CadenceUpdater.HandleEvent (withShadow true)
-	// or the direct ApplyInteraction call above (withShadow false).
-	// This helper is follow-up-only. When the shadow observer is wired
-	// (withShadow=true path), share an actionSink between the follow-up
-	// closure and the drain fn so the direct observation records the
-	// action the direct path actually took.
-	var actionSink *FollowUpActionResult
-	if withShadow && s.followUpShadow != nil {
-		actionSink = &FollowUpActionResult{}
+	// or the direct ApplyInteraction call above (withShadow false). The
+	// FollowUpManager consumer runs inline in the recorder on the
+	// withShadow=true path (post-commit closure for refresh path only);
+	// the withShadow=false path (Todoist completion wrapper) still
+	// needs a post-commit closure that calls
+	// FollowUpManager.ApplyInteraction on a fresh tx.
+	var followUpFn func(context.Context)
+	if !withShadow {
+		followUpFn = s.deriveFollowUpClosure(contact, interaction)
 	}
-	followUpFn := s.deriveFollowUpClosureWithSink(contact, interaction, actionSink)
 
 	res := &RecordInteractionResult{
 		Interaction: interaction,
@@ -574,7 +548,6 @@ func (s *ContactService) RecordInteractionTx(
 		// consumers".
 		res.PrevCadence = &prevSnap
 		res.CadenceAtEmit = cadenceAtEmit
-		res.FollowUpShadowDrainFn = s.buildFollowUpShadowDrain(contact, interaction, actionSink)
 	}
 	return res, nil
 }
@@ -708,158 +681,63 @@ func (s *ContactService) updateInteractionTimestampTx(
 }
 
 // deriveFollowUpClosure builds the nil-safe post-commit closure that
-// runs the follow-up-manager's CreateOrRefresh or Complete action based
-// on the persisted interaction's direction. Reads Direction + OccurredAt
-// from the persisted interaction (not request args) to avoid drift on
-// dedup replays. Captures contact by value so mutation by later code
-// can't leak through.
-//
-// If a followUpObservedManager is wired, the closure records the
-// resulting FollowUpActionResult in *resultSink so a paired shadow
-// drain can read it. Callers that don't need the result pass nil.
+// routes follow-up work through FollowUpManager.ApplyInteraction. Used
+// by non-bus callers (non-tx RecordInteraction wrapper for Todoist
+// completion, Promote/Extend) where no interaction.recorded event is
+// published and therefore the recorder's inline dispatch never fires.
+// The closure opens a fresh tx on the pool, invokes ApplyInteraction
+// inside it, and runs the returned inner post-commit closure (refresh
+// path only) after the fresh tx commits.
 func (s *ContactService) deriveFollowUpClosure(contact *repository.Contact, interaction *repository.Interaction) func(context.Context) {
-	return s.deriveFollowUpClosureWithSink(contact, interaction, nil)
-}
-
-// deriveFollowUpClosureWithSink is the variant used by
-// RecordInteractionTx when a shadow drain is configured. resultSink
-// receives the action the direct path performed so the drain can build
-// a writer='direct' observation row.
-func (s *ContactService) deriveFollowUpClosureWithSink(
-	contact *repository.Contact, interaction *repository.Interaction,
-	resultSink *FollowUpActionResult,
-) func(context.Context) {
-	if contact == nil || interaction == nil {
-		return nil
-	}
-	if s.followUpMgr == nil {
+	if contact == nil || interaction == nil || s.followUp == nil {
 		return nil
 	}
 	direction := interaction.Direction
 	switch direction {
-	case repository.InteractionDirectionOutbound, repository.InteractionDirectionInbound, repository.InteractionDirectionMutual:
+	case repository.InteractionDirectionOutbound,
+		repository.InteractionDirectionInbound,
+		repository.InteractionDirectionMutual:
 		// ok
 	default:
 		return nil
 	}
 
 	contactID := contact.ID
-	contactSnapshot := *contact
-	fm := s.followUpMgr
-	observed := s.followUpObserved
-	dir := direction
+	contactSource := interaction.Source
 	occ := interaction.OccurredAt
+	dir := direction
+	fm := s.followUp
+	pool := s.database.Pool
 
 	return func(postCtx context.Context) {
-		switch dir {
-		case repository.InteractionDirectionOutbound:
-			if observed != nil && resultSink != nil {
-				result, err := observed.CreateOrRefreshFollowUpObserved(postCtx, contactSnapshot, occ)
-				*resultSink = result
-				if err != nil {
-					logger.Warn().Err(err).
-						Str("contactId", contactID.String()).
-						Str("direction", dir).
-						Msg("failed to create/refresh follow-up task")
-				}
-				return
-			}
-			if err := fm.CreateOrRefreshFollowUp(postCtx, contactSnapshot, occ); err != nil {
-				logger.Warn().Err(err).
-					Str("contactId", contactID.String()).
-					Str("direction", dir).
-					Msg("failed to create/refresh follow-up task")
-			}
-		case repository.InteractionDirectionInbound, repository.InteractionDirectionMutual:
-			if observed != nil && resultSink != nil {
-				result, err := observed.CompleteFollowUpObserved(postCtx, contactID)
-				*resultSink = result
-				if err != nil {
-					logger.Warn().Err(err).
-						Str("contactId", contactID.String()).
-						Str("direction", dir).
-						Msg("failed to complete follow-up task")
-				}
-				return
-			}
-			if err := fm.CompleteFollowUp(postCtx, contactID); err != nil {
-				logger.Warn().Err(err).
-					Str("contactId", contactID.String()).
-					Str("direction", dir).
-					Msg("failed to complete follow-up task")
-			}
+		req := repository.ApplyInteractionRequest{
+			ContactID:  contactID,
+			Direction:  dir,
+			Source:     contactSource,
+			OccurredAt: occ,
 		}
-	}
-}
-
-// buildFollowUpShadowDrain returns a FollowUpShadowDrainFn that records
-// the direct-path observation — bound at invocation time to the
-// recordedEnv.ID so direct and consumer rows share the join key.
-// Returns nil when the shadow observer is not wired or the interaction
-// has an unknown direction.
-//
-// actionSink is populated by the paired follow-up closure built via
-// deriveFollowUpClosureWithSink. Callers must sequence: run the
-// post-commit follow-up closure first so actionSink is populated, THEN
-// invoke the drain with recordedEnv.ID. A nil actionSink produces a
-// best-effort observation with action='skip' (the direct path didn't
-// report an action, so we can't fill it in).
-func (s *ContactService) buildFollowUpShadowDrain(contact *repository.Contact, interaction *repository.Interaction, actionSink *FollowUpActionResult) repository.FollowUpShadowDrainFn {
-	if s.followUpShadow == nil || contact == nil || interaction == nil {
-		return nil
-	}
-	// No direct follow-up manager wired → the closure returned by
-	// deriveFollowUpClosureWithSink is nil and actionSink will never be
-	// populated. Returning nil here avoids manufacturing phantom
-	// writer='direct' rows (with a default 'skip' action) in environments
-	// where no direct follow-up work actually ran.
-	if s.followUpMgr == nil || actionSink == nil {
-		return nil
-	}
-	direction := interaction.Direction
-	switch direction {
-	case repository.InteractionDirectionOutbound, repository.InteractionDirectionInbound, repository.InteractionDirectionMutual:
-		// ok
-	default:
-		return nil
-	}
-
-	contactID := contact.ID
-	source := interaction.Source
-	occ := interaction.OccurredAt
-	shadow := s.followUpShadow
-
-	return func(drainCtx context.Context, recordedEventID uuid.UUID) {
-		if recordedEventID == uuid.Nil {
-			logger.Error().
-				Str("contactId", contactID.String()).
-				Msg("followup shadow drain called with nil event id; skipping direct row")
-			return
-		}
-		// If the direct follow-up closure didn't populate actionSink
-		// (e.g., unwired CreateOrRefreshFollowUpObserved / early error
-		// before the action is chosen), skip the write rather than
-		// invent a default action.
-		if actionSink.Action == "" {
-			return
-		}
-		obs := repository.FollowUpShadowObservation{
-			EventID:             recordedEventID,
-			ContactID:           contactID,
-			Source:              source,
-			Direction:           direction,
-			OccurredAt:          occ,
-			Action:              actionSink.Action,
-			DirectContactTaskID: actionSink.ContactTaskID,
-			WouldDeadline:       actionSink.Deadline,
-		}
-		// Direct path does not compute an idempotency key — its
-		// uniqueness is enforced by contact_task indexes, not by a
-		// derived key. Leaving WouldIdempotencyKey nil signals that.
-		if err := shadow.RecordDirect(drainCtx, nil, obs); err != nil {
+		var innerPostCommit func(context.Context)
+		err := pgx.BeginTxFunc(postCtx, pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+			pc, applyErr := fm.ApplyInteraction(postCtx, tx, req)
+			if applyErr != nil {
+				return applyErr
+			}
+			innerPostCommit = pc
+			return nil
+		})
+		if err != nil {
 			logger.Warn().Err(err).
 				Str("contactId", contactID.String()).
-				Msg("failed to record direct follow-up shadow observation")
+				Str("direction", dir).
+				Msg("failed to apply follow-up via consumer")
+			return
+		}
+		// Run the nested post-commit closure OUTSIDE the fresh tx —
+		// this is where the Todoist item_update (refresh path) runs.
+		// On failure, the closure itself handles enqueueing a
+		// TodoistFollowUpRefreshJob for river-managed retry.
+		if innerPostCommit != nil {
+			innerPostCommit(postCtx)
 		}
 	}
 }

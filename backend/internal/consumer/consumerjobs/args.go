@@ -8,7 +8,11 @@
 // Each consumer worker's JobArgs type lives here.
 package consumerjobs
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // InteractionRecorderJobArgs carries the event id that the
 // InteractionRecorder worker should fetch and process. Keeping the arg
@@ -68,3 +72,17 @@ type TodoistFollowUpCloseJobArgs struct {
 // Kind returns the river job-kind identifier for Todoist follow-up
 // close jobs.
 func (TodoistFollowUpCloseJobArgs) Kind() string { return "todoist_followup_close" }
+
+// TodoistFollowUpRefreshJobArgs carries the contact_task id + new
+// deadline for a retryable Todoist item_update on a follow-up task.
+// The cutover FollowUpManager runs the refresh call once inline from
+// its post-commit closure; on failure the closure enqueues this job
+// for river-managed retry with MaxAttempts=10 exponential backoff.
+type TodoistFollowUpRefreshJobArgs struct {
+	ContactTaskID uuid.UUID `json:"contact_task_id"`
+	NewDeadline   time.Time `json:"new_deadline"`
+}
+
+// Kind returns the river job-kind identifier for Todoist follow-up
+// refresh retry jobs.
+func (TodoistFollowUpRefreshJobArgs) Kind() string { return "todoist_followup_refresh" }

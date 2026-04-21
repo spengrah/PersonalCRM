@@ -23,6 +23,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -82,6 +83,71 @@ type noopWorker struct {
 // anywhere in the codebase, this method is never called at runtime.
 func (*noopWorker) Work(_ context.Context, _ *river.Job[noopJobArgs]) error {
 	return nil
+}
+
+// followUpSettingsRef holds a deferred reference to the Todoist OAuth
+// service + sync repo so the FollowUpManager settings func can be
+// wired at construction time (before the external-sync branch decides
+// whether Todoist is configured). The external-sync branch populates
+// oauth+sync when Todoist is initialized; until then fn() returns
+// service.ErrNoTodoistAccount to keep the consumer's Todoist-dependent
+// post-commit paths a best-effort no-op.
+type followUpSettingsRef struct {
+	oauth       *todoist.OAuthService
+	sync        *repository.SyncRepository
+	frontendURL string
+}
+
+// fn returns a TodoistSettingsFunc closure that resolves settings
+// through the populated refs, or errors cleanly when Todoist isn't
+// wired (external sync disabled, or startup failure).
+func (r *followUpSettingsRef) fn() consumer.TodoistSettingsFunc {
+	return func(ctx context.Context) (*todoist.Settings, string, error) {
+		if r.oauth == nil || r.sync == nil {
+			return nil, "", service.ErrNoTodoistAccount
+		}
+		accounts, err := r.oauth.ListAccounts(ctx)
+		if err != nil {
+			return nil, "", fmt.Errorf("list todoist accounts: %w", err)
+		}
+		if len(accounts) == 0 {
+			return nil, "", service.ErrNoTodoistAccount
+		}
+		accountID := accounts[0].AccountID
+		accessToken, err := r.oauth.GetAccessToken(ctx, accountID)
+		if err != nil {
+			return nil, "", fmt.Errorf("get access token: %w", err)
+		}
+		state, err := r.sync.GetSyncStateBySource(ctx, todoist.SourceName, &accountID)
+		if err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				return nil, "", service.ErrTodoistNotConfigured
+			}
+			return nil, "", fmt.Errorf("get sync state: %w", err)
+		}
+		settings := &todoist.Settings{}
+		if state.Metadata != nil {
+			if v, ok := state.Metadata[todoist.MetadataKeyProjectID].(string); ok {
+				settings.ProjectID = v
+			}
+			if v, ok := state.Metadata[todoist.MetadataKeyProjectName].(string); ok {
+				settings.ProjectName = v
+			}
+			if v, ok := state.Metadata[todoist.MetadataKeyLabelID].(string); ok {
+				settings.LabelID = v
+			}
+			if v, ok := state.Metadata[todoist.MetadataKeyLabelName].(string); ok {
+				settings.LabelName = v
+			}
+			if v, ok := state.Metadata[todoist.MetadataKeyIntegrationInstance].(string); ok {
+				settings.IntegrationInstanceID = v
+			}
+		}
+		if settings.LabelID == "" {
+			return nil, "", service.ErrTodoistMissingLabel
+		}
+		return settings, accessToken, nil
+	}
 }
 
 func main() {
@@ -194,19 +260,53 @@ func run() int {
 	// the sole writer.
 	contactService.SetCadenceUpdater(cadenceUpdater)
 
+	// FollowUpManager consumer — the sole writer of
+	// contact_task.kind='follow_up' lifecycle post-cutover. Constructed
+	// BEFORE the InteractionRecorder because the recorder takes it as a
+	// constructor arg (inline-invoke on fresh writes). Todoist settings
+	// are looked up via a deferred holder populated later in the
+	// external-sync branch; until populated, Todoist-dependent post-
+	// commit paths (refresh item_update, close retries) degrade to
+	// local-only writes with a logged warning.
+	followUpShadowRepo := repository.NewFollowUpShadowObservationRepository(database.Queries, database.Pool)
+	followUpMode := consumer.FollowUpModeFromConfig(cfg.EventBus.FollowUpMode)
+	followUpSettingsHolder := &followUpSettingsRef{frontendURL: cfg.CORS.FrontendURL}
+	followUpSettings := followUpSettingsHolder.fn()
+	followUpManager := consumer.NewFollowUpManager(
+		followUpMode,
+		eventClaimRepo,
+		contactRepo,
+		contactTaskRepo,
+		contactTaskRepo,
+		interactionRepo,
+		followUpShadowRepo,
+		riverClient,
+		database.Pool,
+		followUpSettings,
+		todoist.DefaultClientFactory,
+		cfg.CORS.FrontendURL,
+		cfg.Watchdog,
+	)
+	// Wire the consumer as the sole follow-up writer on the direct path.
+	// Non-bus callers (Todoist completion, Promote/Extend) route through
+	// FollowUpManager.ApplyInteraction via ContactService.
+	contactService.SetFollowUpConsumer(followUpManager)
+
 	// InteractionRecorder consumer + manual handler (spec §3.4.1).
 	// Delegates the write to ContactService.RecordInteractionTx, then
 	// marks telegram_messages processed (for message.* kinds) and emits
 	// interaction.recorded — all inside the caller's tx. After emitting
 	// interaction.recorded, the recorder inline-invokes
-	// cadenceUpdater.HandleEvent on fresh writes so cadence columns
-	// apply synchronously and queued re-deliveries become durable
-	// no-ops.
+	// cadenceUpdater.HandleEvent + followUpManager.HandleEvent on
+	// fresh writes so cadence + follow-up state apply synchronously and
+	// queued re-deliveries become durable no-ops via
+	// event_consumer_claim.
 	interactionRecorder := consumer.NewInteractionRecorder(
 		contactService,
 		telegramMessageRepo,
 		eventBus,
 		cadenceUpdater,
+		followUpManager,
 	)
 
 	// Register the consumer worker. The worker is registered UNCONDITIONALLY —
@@ -265,45 +365,43 @@ func run() int {
 	// mode=off HandleEvent short-circuits before any DB write.
 	river.AddWorker(riverWorkers, consumer.NewCadenceUpdaterWorker(eventBus, database.Pool, cadenceUpdater))
 
-	// FollowUpManager consumer + river worker. The mode-gate runs inside
-	// HandleEvent so routing stays config-blind (events.consumerJobsForKind
-	// always enqueues both cadence + follow-up jobs). In mode=off the
-	// worker returns nil without touching the DB. The Todoist create/close
-	// workers are registered so river knows their kinds; in shadow their
-	// bodies return errors because no code path enqueues them.
-	followUpShadowRepo := repository.NewFollowUpShadowObservationRepository(database.Queries, database.Pool)
-	followUpMode := consumer.FollowUpModeFromConfig(cfg.EventBus.FollowUpMode)
-	followUpManager := consumer.NewFollowUpManager(
-		followUpMode,
-		contactTaskRepo,
-		interactionRepo,
-		followUpShadowRepo,
-		cfg.Watchdog,
-	)
+	// FollowUpManager + river workers. Routing is config-blind
+	// (events.consumerJobsForKind always enqueues cadence + follow-up
+	// jobs for interaction.recorded); HandleEvent short-circuits on
+	// mode=off without DB writes. The Todoist create / close / refresh
+	// workers are registered so river knows their kinds even when
+	// Todoist isn't wired — in that case the settings func returns an
+	// ErrNoTodoistAccount-equivalent error and the worker returns a
+	// retryable failure for river to back off.
 	river.AddWorker(riverWorkers, consumer.NewFollowUpManagerWorker(eventBus, database.Pool, followUpManager))
-	river.AddWorker(riverWorkers, consumer.NewTodoistFollowUpCreateJobWorker(followUpMode))
-	river.AddWorker(riverWorkers, consumer.NewTodoistFollowUpCloseJobWorker(followUpMode))
-
-	// Wire the direct-path shadow observer when the consumer is not off.
-	// With the observer unset, ContactService.deriveFollowUpClosure
-	// returns a nil drain fn and no direct shadow rows are written.
-	if followUpMode != consumer.FollowUpModeOff {
-		contactService.SetFollowUpShadowObserver(followUpShadowRepo)
-	}
+	river.AddWorker(riverWorkers, consumer.NewTodoistFollowUpCreateJobWorker(
+		followUpMode, contactTaskRepo, followUpSettings, todoist.DefaultClientFactory, riverClient, database.Pool,
+	))
+	river.AddWorker(riverWorkers, consumer.NewTodoistFollowUpCloseJobWorker(
+		followUpMode, contactTaskRepo, followUpSettings, todoist.DefaultClientFactory,
+	))
+	river.AddWorker(riverWorkers, consumer.NewTodoistFollowUpRefreshJobWorker(
+		followUpMode, contactTaskRepo, followUpSettings, todoist.DefaultClientFactory,
+	))
 
 	switch cfg.EventBus.FollowUpMode {
-	case config.EventBusFollowUpModeShadow:
-		logger.Info().
-			Str("mode", "shadow").
-			Msg("event-bus FollowUpManager: shadow active (direct path remains authoritative; consumer observes)")
 	case config.EventBusFollowUpModeCutover:
-		logger.Warn().
-			Str("mode", "cutover").
-			Msg("event-bus FollowUpManager: cutover requested but cutover implementation not yet landed; worker will return an error on invocation")
-	default: // off
 		logger.Info().
+			Str("mode", "cutover").
+			Msg("event-bus FollowUpManager: cutover active (sole writer of follow-up tasks; inline recorder dispatch enabled)")
+	case config.EventBusFollowUpModeShadow:
+		// ERROR: shadow mode post-cutover has no direct path to observe;
+		// config.Validate rejects shadow so this branch is only reachable
+		// via test-time overrides. Kept as a loud signal for anyone
+		// poking at a non-test config that slips past validation.
+		logger.Error().
+			Str("mode", "shadow").
+			Msg("event-bus FollowUpManager: shadow mode requested post-cutover; direct path is gone so shadow has nothing to observe — treat as misconfiguration")
+	default: // off
+		cfg.EventBus.MaybeWarnUnsafeOff()
+		logger.Warn().
 			Str("mode", "off").
-			Msg("event-bus FollowUpManager: mode=off — consumer disabled, direct path remains authoritative")
+			Msg("event-bus FollowUpManager: mode=off active — NO follow-up tasks will be created or completed until EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF is unset or a `git revert` ships")
 	}
 
 	switch cfg.EventBus.CadenceMode {
@@ -408,6 +506,13 @@ func run() int {
 				// Initialize Todoist settings handler
 				todoistHandler = handlers.NewTodoistHandler(todoistOAuthService, syncRepo)
 
+				// Populate the FollowUpManager's deferred Todoist settings
+				// ref so the cutover consumer can resolve settings via the
+				// real OAuth service for its post-commit refresh / close /
+				// retry workers.
+				followUpSettingsHolder.oauth = todoistOAuthService
+				followUpSettingsHolder.sync = syncRepo
+
 				logger.Info().Msg("Todoist OAuth service initialized")
 			}
 		} else {
@@ -467,24 +572,12 @@ func run() int {
 			providerRegistry.Register(todoistProvider)
 			logger.Info().Msg("Todoist Cadence sync provider registered")
 
-			// Initialize follow-up service and inject into contact service
-			followUpService := service.NewFollowUpService(
-				contactTaskRepo,
-				contactRepo,
-				syncRepo,
-				todoistOAuthService,
-				cfg,
-			)
-			contactService.SetFollowUpManager(followUpService)
-			// When the follow-up shadow observer is wired, ContactService
-			// also needs the observed-variant manager so the drain can
-			// record the action the direct path took. Unconditional wire
-			// is safe: SetFollowUpObservedManager is a no-op unless
-			// deriveFollowUpClosureWithSink's actionSink is non-nil, which
-			// is only set when SetFollowUpShadowObserver was called above.
-			contactService.SetFollowUpObservedManager(followUpService)
-			todoistProvider.SetFollowUpCloser(followUpService)
-			logger.Info().Msg("Follow-up service initialized")
+			// Follow-up lifecycle is handled by consumer.FollowUpManager
+			// (wired above via SetFollowUpConsumer). The Todoist
+			// dependency (settings + client factory) routes through
+			// followUpSettingsHolder which was populated when Todoist
+			// OAuth initialized. No follow-up service is constructed
+			// here — FollowUpManager is the sole writer.
 
 			// Initialize contact task service and handler for action tasks
 			contactTaskService := service.NewContactTaskService(

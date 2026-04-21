@@ -92,7 +92,11 @@ func newUnitFollowUp(mode string) (*FollowUpManager, *stubFollowUpTaskReader, *s
 	tasks := &stubFollowUpTaskReader{err: db.ErrNotFound}
 	inters := &stubInteractionResponseReader{}
 	shadow := &stubFollowUpShadowWriter{}
-	h := NewFollowUpManager(mode, tasks, inters, shadow, testWatchdog())
+	// Cutover-only deps (claims, contacts, taskWriter, riverInserter,
+	// pool, settings, clientFactory, frontendURL) are nil here — shadow-
+	// and off-mode tests don't reach code that dereferences them. The
+	// cutover tests opt in by constructing a manager with real stubs.
+	h := NewFollowUpManager(mode, nil, nil, tasks, nil, inters, shadow, nil, nil, nil, nil, "", testWatchdog())
 	return h, tasks, inters, shadow
 }
 
@@ -132,32 +136,35 @@ func TestFollowUpManager_ModeOff_NoWrites(t *testing.T) {
 	h, tasks, inters, shadow := newUnitFollowUp(FollowUpModeOff)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 0, tasks.calls, "mode=off must not query task repo")
 	require.Equal(t, 0, inters.calls, "mode=off must not query interaction repo")
 	require.Empty(t, shadow.records, "mode=off must not write shadow rows")
 }
 
-func TestFollowUpManager_ModeCutover_ReturnsError(t *testing.T) {
-	h, _, _, shadow := newUnitFollowUp(FollowUpModeCutover)
+func TestFollowUpManager_ModeCutover_RequiresClaimRepo(t *testing.T) {
+	// Cutover without a wired claim repository is a programming error —
+	// the manager errors out at the claim step so a misconfigured
+	// deployment doesn't silently skip dedupe.
+	h, _, _, _ := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
-	require.Error(t, err, "cutover mode must fail loudly while cutover code is absent")
-	require.Empty(t, shadow.records)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "claim")
 }
 
 func TestFollowUpManager_NilEnvelope(t *testing.T) {
 	h, _, _, _ := newUnitFollowUp(FollowUpModeShadow)
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), nil)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), nil)
 	require.Error(t, err)
 }
 
 func TestFollowUpManager_NilTx(t *testing.T) {
 	h, _, _, _ := newUnitFollowUp(FollowUpModeShadow)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
-	err := h.HandleEvent(context.Background(), nil, env)
+	_, err := h.HandleEvent(context.Background(), nil, env)
 	require.Error(t, err)
 }
 
@@ -181,7 +188,7 @@ func TestFollowUpManager_V1PayloadRejected(t *testing.T) {
 		ObservedAt: accelerated.GetCurrentTime(),
 	}
 
-	err = h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	_, err = h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err, "V1 payload is logged but not returned as error")
 	require.Empty(t, shadow.records)
 }
@@ -194,7 +201,7 @@ func TestFollowUpManager_UnknownDirection_Skips(t *testing.T) {
 	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
 	env := buildRecordedEnv(t, uuid.New(), "bogus", repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Empty(t, shadow.records)
 }
@@ -207,7 +214,7 @@ func TestFollowUpManager_Outbound_NoCadence_SkipsWithoutReason(t *testing.T) {
 	h, tasks, inters, shadow := newUnitFollowUp(FollowUpModeShadow)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 0, tasks.calls, "no-cadence skip must not run guard 3")
 	require.Equal(t, 0, inters.calls, "no-cadence skip must not run guard 2")
@@ -223,7 +230,7 @@ func TestFollowUpManager_Outbound_Backdated_NonManual_SkipsBackdated(t *testing.
 	occurred := accelerated.GetCurrentTime().Add(-90 * 24 * time.Hour)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, occurred, "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Len(t, shadow.records, 1)
 	require.Equal(t, repository.FollowUpActionSkip, shadow.records[0].Action)
@@ -235,7 +242,7 @@ func TestFollowUpManager_Outbound_Backdated_Manual_BypassesGuard1(t *testing.T) 
 	occurred := accelerated.GetCurrentTime().Add(-90 * 24 * time.Hour)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceManual, occurred, "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Len(t, shadow.records, 1)
 	require.Equal(t, repository.FollowUpActionCreate, shadow.records[0].Action,
@@ -247,7 +254,7 @@ func TestFollowUpManager_Outbound_OutOfOrder_Skips(t *testing.T) {
 	inters.hasResp = true
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 1, inters.calls)
 	require.Len(t, shadow.records, 1)
@@ -260,7 +267,7 @@ func TestFollowUpManager_Outbound_HasResponseErr_Propagates(t *testing.T) {
 	inters.err = errors.New("boom")
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.Error(t, err)
 }
 
@@ -271,7 +278,7 @@ func TestFollowUpManager_Outbound_DuplicatePending_RefreshNotSkip(t *testing.T) 
 	tasks.err = nil
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Len(t, shadow.records, 1)
 	require.Equal(t, repository.FollowUpActionRefresh, shadow.records[0].Action,
@@ -284,7 +291,7 @@ func TestFollowUpManager_Outbound_Fresh_RecordsCreate(t *testing.T) {
 	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Len(t, shadow.records, 1)
 	obs := shadow.records[0]
@@ -305,7 +312,7 @@ func TestFollowUpManager_Inbound_HasPending_RecordsComplete(t *testing.T) {
 	tasks.err = nil
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionInbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Len(t, shadow.records, 1)
 	require.Equal(t, repository.FollowUpActionComplete, shadow.records[0].Action)
@@ -315,7 +322,7 @@ func TestFollowUpManager_Mutual_NoPending_RecordsSkipNoReason(t *testing.T) {
 	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionMutual, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Len(t, shadow.records, 1)
 	require.Equal(t, repository.FollowUpActionSkip, shadow.records[0].Action)

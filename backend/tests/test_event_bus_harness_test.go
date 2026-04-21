@@ -97,7 +97,7 @@ func setupTestEventBus(
 	// wrapper / UpdateContact cadence-edit) work in these async
 	// integration tests.
 	contactService.SetCadenceUpdater(cadenceUpdater)
-	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater)
+	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater, nil)
 	// Fill the shim's real worker now that bus + recorder exist.
 	shim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder)
 

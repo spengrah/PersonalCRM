@@ -98,15 +98,6 @@ const (
 	FollowUpSkipReasonDuplicatePending = "duplicate_pending"
 )
 
-// FollowUpShadowDrainFn is the per-call shape of the direct-path
-// follow-up shadow observation drain. Mirrors CadenceShadowDrainFn:
-// ContactService.RecordInteractionTx queues the drain as a field on
-// RecordInteractionResult, and the event-bus caller
-// (InteractionRecorder) invokes it AFTER publishing the
-// interaction.recorded envelope, passing recordedEnv.ID so direct and
-// consumer rows share a matching event_id for the FULL OUTER JOIN.
-type FollowUpShadowDrainFn func(ctx context.Context, recordedEventID uuid.UUID)
-
 // FollowUpShadowObservationRepository persists follow-up shadow
 // observations. Parallel in shape to CadenceShadowObservationRepository.
 type FollowUpShadowObservationRepository struct {

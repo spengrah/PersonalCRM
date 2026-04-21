@@ -71,11 +71,6 @@ type interactionRecorder interface {
 	RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error)
 }
 
-// followUpCloser retries failed Todoist close calls for follow-up tasks (satisfied by FollowUpService)
-type followUpCloser interface {
-	RetryPendingCloses(ctx context.Context)
-}
-
 // CadenceSyncProvider implements SyncProvider for Todoist cadence tasks
 type CadenceSyncProvider struct {
 	oauthService        *OAuthService
@@ -83,7 +78,6 @@ type CadenceSyncProvider struct {
 	contactRepo         *repository.ContactRepository
 	syncRepo            *repository.SyncRepository
 	interactionRecorder interactionRecorder
-	followUpCloser      followUpCloser
 	frontendURL         string
 }
 
@@ -104,11 +98,6 @@ func NewCadenceSyncProvider(
 		interactionRecorder: interactionRecorder,
 		frontendURL:         cfg.CORS.FrontendURL,
 	}
-}
-
-// SetFollowUpCloser injects the follow-up closer after construction
-func (p *CadenceSyncProvider) SetFollowUpCloser(c followUpCloser) {
-	p.followUpCloser = c
 }
 
 // Config returns the provider's configuration
@@ -943,10 +932,9 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 		commands = append(commands, cmds...)
 	}
 
-	// Retry any failed Todoist close calls for completed follow-up tasks
-	if p.followUpCloser != nil {
-		p.followUpCloser.RetryPendingCloses(ctx)
-	}
+	// Follow-up close retries are now owned by TodoistFollowUpCloseJob
+	// river workers (event-bus foundation cutover); no inline retry
+	// loop is needed on the Todoist sync tick.
 
 	return commands
 }
