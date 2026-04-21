@@ -10,7 +10,6 @@ import (
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/stretchr/testify/require"
 )
@@ -18,57 +17,6 @@ import (
 // --------------------------------------------------------------------------
 // Stubs for the worker dependency interfaces.
 // --------------------------------------------------------------------------
-
-type stubCreateTaskRepo struct {
-	task           *repository.ContactTask
-	poolReadErr    error
-	freshTask      *repository.ContactTask
-	freshReadErr   error
-	finalizeErr    error
-	setExternalErr error
-	finalizeCalls  int
-	setExtCalls    int
-}
-
-func (s *stubCreateTaskRepo) GetContactTask(_ context.Context, _ uuid.UUID) (*repository.ContactTask, error) {
-	if s.poolReadErr != nil {
-		return nil, s.poolReadErr
-	}
-	if s.task == nil {
-		return nil, errors.New("stubCreateTaskRepo: no task configured")
-	}
-	return s.task, nil
-}
-
-func (s *stubCreateTaskRepo) GetContactTaskTx(_ context.Context, _ pgx.Tx, _ uuid.UUID) (*repository.ContactTask, error) {
-	if s.freshReadErr != nil {
-		return nil, s.freshReadErr
-	}
-	t := s.freshTask
-	if t == nil {
-		t = s.task
-	}
-	if t == nil {
-		return nil, errors.New("stubCreateTaskRepo: no fresh task configured")
-	}
-	return t, nil
-}
-
-func (s *stubCreateTaskRepo) UpdateContactTaskExternalIDTx(_ context.Context, _ pgx.Tx, _ uuid.UUID, externalID string) (*repository.ContactTask, error) {
-	s.finalizeCalls++
-	if s.finalizeErr != nil {
-		return nil, s.finalizeErr
-	}
-	out := *s.task
-	out.ExternalTaskID = externalID
-	out.State = repository.ContactTaskStateManaged
-	return &out, nil
-}
-
-func (s *stubCreateTaskRepo) SetContactTaskExternalIDOnlyTx(_ context.Context, _ pgx.Tx, _ uuid.UUID, _ string) error {
-	s.setExtCalls++
-	return s.setExternalErr
-}
 
 type stubTodoistClient struct {
 	syncErrs  []error
@@ -81,9 +29,7 @@ func (s *stubTodoistClient) QuickAdd(context.Context, string, string) (*todoist.
 }
 
 func (s *stubTodoistClient) Sync(_ context.Context, _ string, _ []string, commands []todoist.SyncCommand) (*todoist.SyncResponse, error) {
-	for _, c := range commands {
-		s.syncCalls = append(s.syncCalls, c)
-	}
+	s.syncCalls = append(s.syncCalls, commands...)
 	// Pop the next error if any; leave realIDs static.
 	if len(s.syncErrs) > 0 {
 		err := s.syncErrs[0]
