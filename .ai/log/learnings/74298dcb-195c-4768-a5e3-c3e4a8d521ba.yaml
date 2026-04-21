@@ -174,3 +174,27 @@ detail: |
   The plan-and-ship skill (/.claude/skills/plan-and-ship/SKILL.md) describes spawning named sub-agents and using SendMessage to resume them, but doesn't clarify that foreground sub-agents (spawned without run_in_background: true) suspend when their turn ends (Agent tool call returns). SendMessage queues a message, but no runtime consumes it. The skill should document: (1) use run_in_background: true if you want asynchronous execution with notifications, or (2) foreground agents that return mid-work require re-spawn (not just SendMessage) to continue. The session shows the orchestrator guessing wrong ('it's running in background') because the skill implied SendMessage would resume.
 actionable: true
 
+---
+timestamp: "2026-04-21T09:52:49.386916"
+type: architecture
+summary: Shadow-to-cutover migration requires 48h production bake before cutover merge
+detail: |
+  Event-bus migrations use a two-PR pattern: PR N ships shadow mode (consumer writes to observation table only, never mutates production state), PR N+1 ships cutover (enables production mutations). The cutover PR's *merge* is gated on a 48-hour production observation period validating zero unexpected divergences in the shadow table - even though planning and implementation can proceed in parallel with the bake. This is a temporal + data-quality gate, not just a CI gate. The pattern is documented in specs (e.g., event-bus-foundation.md 'PR 7 → PR 8 protocol') but easy to miss when CI passes green.
+actionable: true
+
+---
+timestamp: "2026-04-21T09:52:49.386916"
+type: gotcha
+summary: High Codex review rounds (6+) often indicate substantive safety value, not churn
+detail: |
+  In this session, the planner took 8 Codex rounds (vs typical 3-4). The orchestrator flagged it per plan-and-ship's 6-round threshold, and the extra rounds caught non-bus path preservation, single-owner race semantics, tx-vs-HTTP boundary violations, and post-commit refresh plumbing - all real bugs that would have shipped. High round count can signal that the plan is navigating subtle concurrency/safety constraints, not that Codex is confused. Before dismissing as churn, check if the fixes are addressing race conditions, transaction boundaries, or state-machine invariants.
+actionable: true
+
+---
+timestamp: "2026-04-21T09:52:49.386916"
+type: documentation_gap
+summary: Shadow-bake-cutover workflow missing from CLAUDE.md orchestration guidance
+detail: |
+  The shadow→cutover pattern (deploy shadow, bake 48h, merge cutover only after zero-divergence validation) is specified in `.ai/spec/event-bus-foundation.md` but not surfaced in `.ai/rules/core.md` or CLAUDE.md's 'When You Change X' table. A future agent implementing a cutover PR might merge immediately after CI passes, missing the production observation gate. The spec says 'same protocol as PR 7 → PR 8' but doesn't make the bake-before-merge constraint explicit as a rule. Needs either a core.md gotcha ('Merging cutover PRs before shadow bake completes') or a When You Change entry ('Event-bus shadow mode → also schedule production bake validation').
+actionable: true
+
