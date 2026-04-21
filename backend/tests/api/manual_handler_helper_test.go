@@ -46,10 +46,11 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 	workers := river.NewWorkers()
 	shim := &apiTestRecorderShim{}
 	river.AddWorker(workers, shim)
-	// PR 7: interaction.recorded events enqueue cadence_updater jobs.
-	// Register a no-op placeholder so river accepts the kind; API tests
-	// don't exercise the real CadenceUpdater.
+	// interaction.recorded events enqueue cadence_updater and
+	// followup_manager jobs. Register no-op placeholders so river
+	// accepts those kinds; API tests don't exercise the real workers.
 	river.AddWorker(workers, &apiTestCadenceShim{})
+	river.AddWorker(workers, &apiTestFollowUpShim{})
 
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -171,5 +172,19 @@ func (*apiTestCadenceShim) Work(_ context.Context, _ *river.Job[consumerjobs.Cad
 }
 
 func (*apiTestCadenceShim) Timeout(_ *river.Job[consumerjobs.CadenceUpdaterJobArgs]) time.Duration {
+	return 30 * time.Second
+}
+
+// apiTestFollowUpShim is a no-op worker for followup_manager jobs in
+// API tests. Same rationale as apiTestCadenceShim.
+type apiTestFollowUpShim struct {
+	river.WorkerDefaults[consumerjobs.FollowUpManagerJobArgs]
+}
+
+func (*apiTestFollowUpShim) Work(_ context.Context, _ *river.Job[consumerjobs.FollowUpManagerJobArgs]) error {
+	return nil
+}
+
+func (*apiTestFollowUpShim) Timeout(_ *river.Job[consumerjobs.FollowUpManagerJobArgs]) time.Duration {
 	return 30 * time.Second
 }
