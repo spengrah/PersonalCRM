@@ -234,7 +234,7 @@ type Querier interface {
 	// once expected-divergence classes (guard 1 backdated, guard 2
 	// out-of-order) are filtered out at the report layer.
 	//
-	// Race-class filters baked in (mirrors PR 7's cadence-shadow query):
+	// Race-class filters baked in (mirrors the cadence-shadow query):
 	//
 	//   1. Grace window applied on the joined pair, NOT each side
 	//      independently. The direct-path observer fires from an async
