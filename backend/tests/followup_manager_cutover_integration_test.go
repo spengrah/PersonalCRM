@@ -627,6 +627,52 @@ func runHandleEventInFreshTx(ctx context.Context, env *followUpIntegrationEnv, e
 	return pc, err
 }
 
+// TestIntegration_FollowUpManager_InboundClosesFinalizedRow asserts the
+// post-update close-decision path: when a pending_remote_create row has
+// been finalized to managed + populated external_task_id between guard 3
+// and the completion update, the close job MUST still be enqueued.
+// Pre-update state said "pending, skip close" but the row is actually
+// finalized; post-update state carries the external_task_id which is
+// the authoritative signal.
+func TestIntegration_FollowUpManager_InboundClosesFinalizedRow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	env, cleanup := newFollowUpIntegrationEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+	contact := env.seedContact(t, "weekly")
+
+	// Seed a fully-finalized follow-up row: state=managed with a
+	// populated external_task_id, as if the create worker already ran.
+	occurred := accelerated.GetCurrentTime()
+	outbound := env.recordedEnv(t, contact.ID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, occurred, "weekly")
+	env.applyInEventTx(t, outbound)
+	pending, err := env.taskRepo.FindPendingFollowUp(ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, pending)
+
+	// Finalize the row to managed + external_task_id directly (simulating
+	// the create worker's phase 3 write).
+	require.NoError(t, pgx.BeginTxFunc(ctx, env.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		_, err := env.taskRepo.UpdateContactTaskExternalIDTx(ctx, tx, pending.ID, "ext-finalized-"+uuid.NewString()[:8])
+		return err
+	}))
+
+	// Now publish an inbound response. The consumer must enqueue a close
+	// job because the row now has an external_task_id.
+	inbound := env.recordedEnv(t, contact.ID, repository.InteractionDirectionInbound, repository.InteractionSourceTelegram, occurred.Add(1*time.Hour), "weekly")
+	env.applyInEventTx(t, inbound)
+
+	got, err := env.taskRepo.GetContactTask(ctx, pending.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.ContactTaskStateCompleted, got.State)
+	assert.NotEmpty(t, got.ExternalTaskID, "external_task_id preserved through state update")
+
+	closeN := env.countRiverJobsByKind(t, (consumerjobs.TodoistFollowUpCloseJobArgs{}).Kind(), pending.ID)
+	assert.Equal(t, 1, closeN, "inbound on a finalized row must enqueue a close job (post-update state check)")
+}
+
 // silence "imported and not used" when rivertype isn't directly
 // referenced on some tagged builds.
 var _ rivertype.JobInsertResult

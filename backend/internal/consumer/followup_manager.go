@@ -756,18 +756,24 @@ func (h *FollowUpManager) applyInboundMutual(
 		return nil, h.shadowRepo.RecordConsumer(ctx, tx, obs)
 	}
 
-	// Cutover: transition to completed in tx.
-	if _, err := h.taskWriter.UpdateContactTaskStateTx(ctx, tx, pending.ID, repository.ContactTaskStateCompleted); err != nil {
+	// Cutover: transition to completed in tx. Use the RETURNING row so
+	// the close-enqueue decision reads post-update state. The create
+	// worker can finalize (pending_remote_create → managed + external
+	// task id) between our guard-3 read and this update; reading the
+	// pre-update snapshot strands the close when that race fires.
+	updated, err := h.taskWriter.UpdateContactTaskStateTx(ctx, tx, pending.ID, repository.ContactTaskStateCompleted)
+	if err != nil {
 		return nil, fmt.Errorf("mark follow-up completed: %w", err)
 	}
 
-	// Single-owner close-job enqueue: only enqueue when the row was
-	// fully finalized — i.e. state='managed' AND external_task_id
-	// populated. When state was pending_remote_create the create worker
-	// handles the race (create-then-close) itself, so enqueuing here
-	// would produce a duplicate close.
-	if pending.State == repository.ContactTaskStateManaged && pending.ExternalTaskID != "" {
-		if _, err := h.riverInserter.InsertTx(ctx, tx, consumerjobs.TodoistFollowUpCloseJobArgs{ContactTaskID: pending.ID}, &river.InsertOpts{MaxAttempts: 10}); err != nil {
+	// Single-owner close-job enqueue: only enqueue when the row carries a
+	// Todoist external_task_id (i.e. the create worker finished before we
+	// completed). An empty external_task_id means the row is still
+	// pending_remote_create remotely; the create worker handles the
+	// close-while-pending race itself (create-then-close), so enqueuing
+	// here would produce a duplicate close.
+	if updated.ExternalTaskID != "" {
+		if _, err := h.riverInserter.InsertTx(ctx, tx, consumerjobs.TodoistFollowUpCloseJobArgs{ContactTaskID: updated.ID}, &river.InsertOpts{MaxAttempts: 10}); err != nil {
 			return nil, fmt.Errorf("enqueue todoist followup close job: %w", err)
 		}
 	}
