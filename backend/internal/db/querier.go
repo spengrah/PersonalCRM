@@ -491,8 +491,6 @@ type Querier interface {
 	ListEventsForContact(ctx context.Context, arg ListEventsForContactParams) ([]*CalendarEvent, error)
 	ListExternalContactsBySource(ctx context.Context, arg ListExternalContactsBySourceParams) ([]*ExternalContact, error)
 	ListExternalContactsForCRMContact(ctx context.Context, crmContactID pgtype.UUID) ([]*ExternalContact, error)
-	// Find completed follow-up tasks where the Todoist close call failed and needs retry
-	ListFollowUpsWithPendingClose(ctx context.Context) ([]*ContactTask, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
 	ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error)
 	// List all managed tasks for a provider (for reconciliation)

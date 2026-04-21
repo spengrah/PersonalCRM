@@ -167,12 +167,6 @@ WHERE provider = $1 AND state = $2;
 SELECT * FROM contact_task
 WHERE provider = @provider AND metadata->>'pending_temp_id' = @temp_id::text;
 
--- name: ListFollowUpsWithPendingClose :many
--- Find completed follow-up tasks where the Todoist close call failed and needs retry
-SELECT * FROM contact_task
-WHERE kind = 'follow_up' AND state = 'completed'
-  AND metadata->>'todoist_close_pending' = 'true';
-
 -- name: FindPendingFollowUp :one
 -- Find a pending follow-up task for a contact. Matches both 'managed'
 -- and 'pending_remote_create' live states so the two-step create flow

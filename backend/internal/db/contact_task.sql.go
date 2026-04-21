@@ -559,44 +559,6 @@ func (q *Queries) ListContactTasksByProvider(ctx context.Context, arg ListContac
 	return items, nil
 }
 
-const ListFollowUpsWithPendingClose = `-- name: ListFollowUpsWithPendingClose :many
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
-WHERE kind = 'follow_up' AND state = 'completed'
-  AND metadata->>'todoist_close_pending' = 'true'
-`
-
-// Find completed follow-up tasks where the Todoist close call failed and needs retry
-func (q *Queries) ListFollowUpsWithPendingClose(ctx context.Context) ([]*ContactTask, error) {
-	rows, err := q.db.Query(ctx, ListFollowUpsWithPendingClose)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*ContactTask{}
-	for rows.Next() {
-		var i ContactTask
-		if err := rows.Scan(
-			&i.ID,
-			&i.ContactID,
-			&i.Provider,
-			&i.Kind,
-			&i.ExternalTaskID,
-			&i.State,
-			&i.Metadata,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.IdempotencyKey,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const ListManagedContactTasks = `-- name: ListManagedContactTasks :many
 SELECT ct.id, ct.contact_id, ct.provider, ct.kind, ct.external_task_id, ct.state, ct.metadata, ct.created_at, ct.updated_at, ct.idempotency_key, c.full_name, c.cadence, c.contact_by, c.last_contacted
 FROM contact_task ct

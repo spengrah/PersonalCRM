@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow check-cadence-sole-writer
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow check-cadence-sole-writer check-followup-sole-writer
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -300,7 +300,7 @@ lint-fix:
 	@echo "Running golangci-lint with auto-fix..."
 	@cd backend && $(GOLANGCI_LINT) run --fix ./...
 
-ci-test: lint check-cadence-sole-writer test-unit test-integration-fast test-frontend
+ci-test: lint check-cadence-sole-writer check-followup-sole-writer test-unit test-integration-fast test-frontend
 	@echo "✅ All CI tests passed"
 
 # Sole-writer guard: verifies only CadenceUpdater calls cadence-writing queries.
@@ -309,6 +309,13 @@ ci-test: lint check-cadence-sole-writer test-unit test-integration-fast test-fro
 # symbol escapes the allowlist. See scripts/check-cadence-sole-writer.sh.
 check-cadence-sole-writer:
 	@$(REPO_ROOT)/scripts/check-cadence-sole-writer.sh
+
+# Sole-writer guard: verifies only FollowUpManager (consumer/followup_manager.go)
+# calls follow-up writer symbols, and that the retired todoist_close_pending
+# metadata key is not referenced anywhere. See
+# scripts/ci/followup-sole-writer-guard.sh.
+check-followup-sole-writer:
+	@$(REPO_ROOT)/scripts/ci/followup-sole-writer-guard.sh
 
 # Code generation
 sqlc:
