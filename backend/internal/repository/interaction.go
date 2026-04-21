@@ -77,12 +77,20 @@ type RecordInteractionResult struct {
 	// FollowUpFn is the follow-up-manager closure on fresh writes with
 	// a configured manager. Nil otherwise. Caller invokes AFTER tx commit.
 	FollowUpFn func(context.Context)
-	// ShadowDrainFn is the PR 7 cadence shadow observation drain.
-	// Non-nil on fresh writes when the shadow observer is wired AND
-	// withShadow is true. Caller invokes AFTER the interaction.recorded
-	// event is published, passing recordedEnv.ID so direct and consumer
-	// observations share a matching event_id (plan Decision 6).
+	// ShadowDrainFn is the cadence shadow observation drain retained
+	// from the shadow-mode phase. CadenceUpdater is now the sole writer
+	// of cadence columns, so the cadence shadow table is no longer
+	// populated on the hot path and this field is left nil. The field
+	// remains in place until the shadow tables are dropped in the
+	// final cleanup.
 	ShadowDrainFn CadenceShadowDrainFn
+
+	// FollowUpShadowDrainFn is the follow-up shadow observation drain.
+	// Non-nil on fresh writes when the follow-up shadow observer is
+	// wired AND withShadow is true. Caller invokes AFTER the
+	// interaction.recorded event is published, passing recordedEnv.ID
+	// so direct and consumer observations share a matching event_id.
+	FollowUpShadowDrainFn FollowUpShadowDrainFn
 }
 
 // InteractionRepository handles interaction persistence
@@ -412,4 +420,38 @@ func (r *InteractionRepository) UpdateInteractionTimestampTx(ctx context.Context
 	}
 	interaction := convertDbInteraction(dbInteraction)
 	return &interaction, nil
+}
+
+// HasResponseAfter reports whether any inbound or mutual interaction
+// exists for the contact with occurred_at strictly greater than
+// outreachAt. Used by the follow-up consumer's out-of-order guard so an
+// outbound event arriving after a later response has already landed
+// does not produce a stale follow-up.
+func (r *InteractionRepository) HasResponseAfter(ctx context.Context, contactID uuid.UUID, outreachAt time.Time) (bool, error) {
+	hasResp, err := r.queries.HasResponseAfter(ctx, db.HasResponseAfterParams{
+		ContactID:  uuidToPgUUID(contactID),
+		OutreachAt: pgtype.Timestamptz{Time: outreachAt, Valid: true},
+	})
+	if err != nil {
+		return false, err
+	}
+	return hasResp, nil
+}
+
+// HasResponseAfterTx is the tx-threaded variant of HasResponseAfter.
+// The consumer worker holds its tx across guard evaluation to read its
+// own prior writes within the worker's unit of work.
+func (r *InteractionRepository) HasResponseAfterTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, outreachAt time.Time) (bool, error) {
+	q := r.queries
+	if tx != nil {
+		q = db.New(tx)
+	}
+	hasResp, err := q.HasResponseAfter(ctx, db.HasResponseAfterParams{
+		ContactID:  uuidToPgUUID(contactID),
+		OutreachAt: pgtype.Timestamptz{Time: outreachAt, Valid: true},
+	})
+	if err != nil {
+		return false, err
+	}
+	return hasResp, nil
 }

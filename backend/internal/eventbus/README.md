@@ -85,3 +85,91 @@ event. The inline path from `InteractionRecorder` claims
 `(event_id, consumer='cadence_updater')` before mutating cadence; a
 later queued delivery of the same event finds the existing claim row
 and returns a no-op.
+
+## `EVENT_BUS_FOLLOWUP_MODE` — operator reference
+
+In shadow mode, the `FollowUpManager` consumer observes what it *would*
+do for each `interaction.recorded` event and writes a row to
+`event_shadow_followup_observation`. The direct path
+(`service/followup.go` + `ContactService.deriveFollowUpClosure`) remains
+the authoritative writer of `contact_task` follow-up rows. No Todoist
+API calls are made by the consumer in shadow mode.
+
+| Mode value | Behavior | When to use |
+|---|---|---|
+| `shadow` | Default. Consumer observes + writes shadow rows; direct path stays authoritative. | Default during the shadow-mode phase. |
+| `off` | Consumer is disabled entirely. Direct path remains authoritative. Rollback-safe posture. | Emergency rollback of the shadow consumer. |
+| `cutover` | Would run the consumer as sole writer (two-step `contact_task` insert + Todoist task create/close). Not implemented in shadow-mode builds; returns an error if invoked. | Never until the cutover ships. |
+
+Unlike `EVENT_BUS_CADENCE_MODE`, there is no unsafe-override gate on
+`off` — because the direct path is still the authoritative writer,
+turning the consumer off is safe and harmless.
+
+### The three skip guards
+
+Outbound `interaction.recorded` events run through three sequential
+guards before the consumer would create a new follow-up:
+
+1. **Backdated outbound (non-manual only).** If
+   `now - occurred_at > watchdog_days(cadence)`, skip with
+   `skip_reason='backdated'`. Manual-source interactions bypass this
+   guard — the user is intentionally recording a stale outbound.
+2. **Out-of-order delivery.** If any later inbound/mutual interaction
+   already exists for the contact, skip with
+   `skip_reason='out_of_order'`.
+3. **Duplicate pending follow-up.** If a follow-up in state `managed`
+   or `pending_remote_create` already exists, record a `refresh`
+   action instead of creating a new row — matches the direct path's
+   behavior.
+
+All three guards fire only on the consumer side. The direct path
+creates a follow-up regardless, so during bake the shadow-divergence
+query surfaces guard-1 and guard-2 hits as **expected** divergences
+(documented in the post-bake report, not treated as acceptance
+failures).
+
+### Post-bake divergence query
+
+```sql
+WITH direct_obs AS (
+    SELECT event_id, action AS direct_action, direct_contact_task_id
+    FROM event_shadow_followup_observation
+    WHERE writer = 'direct'
+      AND observed_at >= NOW() - INTERVAL '48 hours'
+),
+consumer_obs AS (
+    SELECT event_id, action AS consumer_action,
+           skip_reason AS consumer_skip_reason,
+           consumer_called_todoist
+    FROM event_shadow_followup_observation
+    WHERE writer = 'consumer'
+      AND observed_at >= NOW() - INTERVAL '48 hours'
+)
+SELECT
+    COALESCE(d.direct_action, 'missing') AS direct,
+    COALESCE(c.consumer_action, 'missing') AS consumer,
+    c.consumer_skip_reason,
+    COUNT(*) AS event_count,
+    CASE
+        WHEN d.direct_action = 'create' AND c.consumer_action = 'skip'
+             AND c.consumer_skip_reason = 'backdated'
+             THEN 'expected_guard1_backdated'
+        WHEN d.direct_action = 'create' AND c.consumer_action = 'skip'
+             AND c.consumer_skip_reason = 'out_of_order'
+             THEN 'expected_guard2_out_of_order'
+        WHEN d.direct_action IS NULL AND c.consumer_action IS NOT NULL
+             THEN 'expected_external_or_closure_gap'
+        WHEN d.direct_action = c.consumer_action THEN 'agreement'
+        ELSE 'unexpected'
+    END AS class,
+    BOOL_OR(c.consumer_called_todoist) AS any_consumer_todoist_calls
+FROM direct_obs d
+FULL OUTER JOIN consumer_obs c USING (event_id)
+GROUP BY 1, 2, 3
+ORDER BY class, event_count DESC;
+```
+
+Shadow acceptance requires:
+- `SELECT COUNT(*) FROM event_shadow_followup_observation WHERE writer='consumer' AND consumer_called_todoist = true;` → **0**
+- The `unexpected` class in the report above → **0** event_count after
+  filtering the documented expected classes

@@ -15,7 +15,8 @@ import (
 // consumer names may be added here as new consumers adopt this dedupe
 // mechanism.
 const (
-	EventConsumerCadenceUpdater = "cadence_updater"
+	EventConsumerCadenceUpdater  = "cadence_updater"
+	EventConsumerFollowUpManager = "followup_manager"
 )
 
 // EventConsumerClaimRepository wraps the event_consumer_claim queries

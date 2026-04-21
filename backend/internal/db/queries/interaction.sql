@@ -83,3 +83,17 @@ SET occurred_at = sqlc.arg(occurred_at),
 WHERE id = sqlc.arg(id)
   AND deleted_at IS NULL
 RETURNING *;
+
+-- name: HasResponseAfter :one
+-- Returns TRUE if any later inbound/mutual interaction exists for the
+-- contact after the given outreach time. Used by the FollowUpManager's
+-- out-of-order guard: an outbound event arriving after a response has
+-- already landed must not produce a stale follow-up.
+SELECT EXISTS (
+    SELECT 1 FROM interaction
+    WHERE contact_id = sqlc.arg('contact_id')
+      AND direction IN ('inbound', 'mutual')
+      AND occurred_at > sqlc.arg('outreach_at')
+      AND deleted_at IS NULL
+    LIMIT 1
+) AS has_response;

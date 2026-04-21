@@ -118,3 +118,59 @@ detail: |
   core.md § Code Quality prohibits inline comments referencing "the current task, fix, or callers", stating they "belong in the PR description and rot as the codebase evolves." PR 8 had pervasive violations across main.go, contact.go, cadence_updater.go, enrichment.go with comments like "PR 8 Step 10", "plan Decision 3". Root cause: (1) rule uses abstract terms, doesn't explicitly forbid "PR #N" or "Step N" patterns, (2) agents implementing detailed multi-step plans naturally reference step numbers for traceability, (3) rule buried in Code Quality section, not visible during active implementation. Strengthen by: adding to Common Gotchas table with concrete forbidden examples ("no 'PR #286'", "no 'Step 10'", "no 'Decision 3'"), or creating "Comment Hygiene During Implementation" subsection that explicitly addresses plan-reference tension.
 actionable: true
 
+---
+timestamp: "2026-04-20T22:58:25.620219"
+type: gotcha
+summary: Sub-agents spawned without run_in_background don't resume on SendMessage
+detail: |
+  When Agent() is called without run_in_background: true and returns a result, the sub-agent's turn ends. SendMessage to that named agent queues a message but there's no active runtime consuming it — the agent is suspended, not running. To resume: either re-spawn the Agent with the same name (unclear if state persists) or provide a self-contained brief for a fresh spawn. The plan-and-ship skill documentation implies SendMessage resumes execution, but that only works if the agent is still running or was spawned with run_in_background.
+actionable: true
+
+---
+timestamp: "2026-04-20T22:58:25.620219"
+type: rule
+summary: Shadow mode bake verification requires checking divergence count, time range, and daily activity
+detail: |
+  When verifying a shadow mode bake (e.g., PR 7's event_shadow_cadence_observation), check: (1) paired event count (direct vs consumer must be 1:1), (2) divergent pairs query (must be 0 across all tracked columns), (3) time span (first_obs to last_obs must exceed gate threshold like 48h), (4) daily activity distribution (observations should appear on multiple days, proving shadow path is still actively writing, not stale). This four-part check catches both correctness and staleness issues.
+actionable: true
+
+---
+timestamp: "2026-04-20T22:58:25.620219"
+type: gotcha
+summary: branch-cleanup script checks both tracked modifications and untracked files
+detail: |
+  The branch-cleanup.sh script uses `git status --porcelain` which fails on ANY dirty state — tracked modifications (like backend/main binary drift) AND untracked files (like .ai/skills/ from id-agents). Using .git/info/exclude (local-only) can unblock cleanup for untracked artifacts without polluting the repo .gitignore. For tracked files that shouldn't be tracked, the workflow is: stash → cleanup → pop → gitignore + git rm --cached → commit.
+actionable: true
+
+---
+timestamp: "2026-04-20T22:58:25.620219"
+type: distinction
+summary: "Git exclude vs gitignore for agent artifacts: use local exclude for single-machine workflows"
+detail: |
+  When id-agents worker workspaces (.ai/skills/*, **/.claude/) appear as untracked, there's a choice: (1) .git/info/exclude (local-only, just unblocks your machine) vs (2) repo .gitignore (shared, anyone running id-agents gets clean tree). For single-user repos where only one machine runs the agents, local exclude is cleaner — doesn't assume all contributors use the same tooling. Already-gitignored patterns like .claude/cache/ suggest some agent artifacts ARE in .gitignore, so consistency argues for adding new ones too, but user chose local exclude.
+actionable: true
+
+---
+timestamp: "2026-04-20T22:58:25.620219"
+type: gotcha
+summary: "Staged changes snapshot at commit time: git commit only captures what's in the index"
+detail: |
+  When `git rm --cached backend/main` was staged but `.gitignore` edit was not, `git commit` captured only the deletion — the gitignore edit stayed unstaged. The fix: `git add .gitignore && git commit --amend --no-edit` to add the missed file to the same logical commit. This is a Git 101 issue but the session shows user prefers amending over a follow-up commit when the two changes are logically one unit (untrack + ignore pattern), even though CLAUDE.md normally discourages --amend.
+actionable: true
+
+---
+timestamp: "2026-04-20T22:58:25.620219"
+type: architecture
+summary: Event-bus foundation PRs follow shadow → cutover → next consumer pattern with 48h bake gates
+detail: |
+  The event-bus-foundation migration (#180) is a 12-PR sequence where each consumer follows a two-PR cadence: PR N (shadow mode — consumer observes, writes to event_shadow_*_observation, no side effects) → 48h prod bake to verify zero divergences → PR N+1 (cutover — consumer becomes sole writer, direct path removed). PR 7/8 (CadenceUpdater), PR 9a/9b (FollowUpManager), and likely later PRs all follow this. The 48h gate is in the spec (§5 line 1063 for PR 8). Bake verification is non-negotiable — CI can pass before the bake, but merge is blocked until divergence check clears.
+actionable: true
+
+---
+timestamp: "2026-04-20T22:58:25.620219"
+type: documentation_gap
+summary: plan-and-ship skill doesn't explain foreground sub-agent suspension on tool return
+detail: |
+  The plan-and-ship skill (/.claude/skills/plan-and-ship/SKILL.md) describes spawning named sub-agents and using SendMessage to resume them, but doesn't clarify that foreground sub-agents (spawned without run_in_background: true) suspend when their turn ends (Agent tool call returns). SendMessage queues a message, but no runtime consumes it. The skill should document: (1) use run_in_background: true if you want asynchronous execution with notifications, or (2) foreground agents that return mid-work require re-spawn (not just SendMessage) to continue. The session shows the orchestrator guessing wrong ('it's running in background') because the skill implied SendMessage would resume.
+actionable: true
+

@@ -265,6 +265,47 @@ func run() int {
 	// mode=off HandleEvent short-circuits before any DB write.
 	river.AddWorker(riverWorkers, consumer.NewCadenceUpdaterWorker(eventBus, database.Pool, cadenceUpdater))
 
+	// FollowUpManager consumer + river worker. The mode-gate runs inside
+	// HandleEvent so routing stays config-blind (events.consumerJobsForKind
+	// always enqueues both cadence + follow-up jobs). In mode=off the
+	// worker returns nil without touching the DB. The Todoist create/close
+	// workers are registered so river knows their kinds; in shadow their
+	// bodies return errors because no code path enqueues them.
+	followUpShadowRepo := repository.NewFollowUpShadowObservationRepository(database.Queries, database.Pool)
+	followUpMode := consumer.FollowUpModeFromConfig(cfg.EventBus.FollowUpMode)
+	followUpManager := consumer.NewFollowUpManager(
+		followUpMode,
+		contactTaskRepo,
+		interactionRepo,
+		followUpShadowRepo,
+		cfg.Watchdog,
+	)
+	river.AddWorker(riverWorkers, consumer.NewFollowUpManagerWorker(eventBus, database.Pool, followUpManager))
+	river.AddWorker(riverWorkers, consumer.NewTodoistFollowUpCreateJobWorker(followUpMode))
+	river.AddWorker(riverWorkers, consumer.NewTodoistFollowUpCloseJobWorker(followUpMode))
+
+	// Wire the direct-path shadow observer when the consumer is not off.
+	// With the observer unset, ContactService.deriveFollowUpClosure
+	// returns a nil drain fn and no direct shadow rows are written.
+	if followUpMode != consumer.FollowUpModeOff {
+		contactService.SetFollowUpShadowObserver(followUpShadowRepo)
+	}
+
+	switch cfg.EventBus.FollowUpMode {
+	case config.EventBusFollowUpModeShadow:
+		logger.Info().
+			Str("mode", "shadow").
+			Msg("event-bus FollowUpManager: shadow active (direct path remains authoritative; consumer observes)")
+	case config.EventBusFollowUpModeCutover:
+		logger.Warn().
+			Str("mode", "cutover").
+			Msg("event-bus FollowUpManager: cutover requested but cutover implementation not yet landed; worker will return an error on invocation")
+	default: // off
+		logger.Info().
+			Str("mode", "off").
+			Msg("event-bus FollowUpManager: mode=off — consumer disabled, direct path remains authoritative")
+	}
+
 	switch cfg.EventBus.CadenceMode {
 	case config.EventBusCadenceModeCutover:
 		logger.Info().
@@ -435,6 +476,13 @@ func run() int {
 				cfg,
 			)
 			contactService.SetFollowUpManager(followUpService)
+			// When the follow-up shadow observer is wired, ContactService
+			// also needs the observed-variant manager so the drain can
+			// record the action the direct path took. Unconditional wire
+			// is safe: SetFollowUpObservedManager is a no-op unless
+			// deriveFollowUpClosureWithSink's actionSink is non-nil, which
+			// is only set when SetFollowUpShadowObserver was called above.
+			contactService.SetFollowUpObservedManager(followUpService)
 			todoistProvider.SetFollowUpCloser(followUpService)
 			logger.Info().Msg("Follow-up service initialized")
 

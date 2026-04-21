@@ -219,7 +219,26 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		}
 	}
 
-	return res.Interaction, res.FollowUpFn, nil
+	// Build the post-commit callback. The follow-up closure (res.FollowUpFn)
+	// runs first so it populates the actionSink the drain reads from; the
+	// follow-up shadow drain runs after, binding recordedEnv.ID so the
+	// direct observation row shares the join key with the consumer row.
+	recordedID := recordedEnv.ID
+	followUpFn := res.FollowUpFn
+	drainFn := res.FollowUpShadowDrainFn
+	var postCommit func(context.Context)
+	if followUpFn != nil || drainFn != nil {
+		postCommit = func(pctx context.Context) {
+			if followUpFn != nil {
+				followUpFn(pctx)
+			}
+			if drainFn != nil {
+				drainFn(pctx, recordedID)
+			}
+		}
+	}
+
+	return res.Interaction, postCommit, nil
 }
 
 // extractRequest dispatches on env.Kind to build a RecordInteractionRequest

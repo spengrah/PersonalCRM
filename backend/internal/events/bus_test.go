@@ -41,32 +41,38 @@ func TestConsumerJobsForKind_FiveAsyncKindsEnqueueInteractionRecorder(t *testing
 	}
 }
 
-// TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceUpdater asserts
-// the PR 7 routing: interaction.recorded enqueues exactly one
-// CadenceUpdaterJobArgs job with MaxAttempts=5. This replaces the PR 5
-// assertion that the kind returned an empty slice.
-func TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceUpdater(t *testing.T) {
+// TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceAndFollowUp
+// asserts that interaction.recorded enqueues BOTH the CadenceUpdater
+// and FollowUpManager consumer jobs, each with MaxAttempts=5. Routing
+// is config-blind — the mode gate runs inside each handler's
+// HandleEvent, not at the routing layer.
+func TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceAndFollowUp(t *testing.T) {
 	eventID := uuid.New()
 	jobs := consumerJobsForKind(KindInteractionRecorded, eventID)
-	require.Len(t, jobs, 1, "interaction.recorded should enqueue exactly one consumer job")
-	args, ok := jobs[0].Args.(consumerjobs.CadenceUpdaterJobArgs)
-	require.True(t, ok, "job args type must be CadenceUpdaterJobArgs, got %T", jobs[0].Args)
-	require.Equal(t, eventID, args.EventID)
-	require.Equal(t, "cadence_updater", args.Kind())
+	require.Len(t, jobs, 2, "interaction.recorded should enqueue cadence + follow-up jobs")
+
+	cadenceArgs, ok := jobs[0].Args.(consumerjobs.CadenceUpdaterJobArgs)
+	require.True(t, ok, "job[0] args must be CadenceUpdaterJobArgs, got %T", jobs[0].Args)
+	require.Equal(t, eventID, cadenceArgs.EventID)
+	require.Equal(t, "cadence_updater", cadenceArgs.Kind())
 	require.NotNil(t, jobs[0].Opts, "InsertOpts must be set to pin MaxAttempts")
 	require.Equal(t, 5, jobs[0].Opts.MaxAttempts)
+
+	followupArgs, ok := jobs[1].Args.(consumerjobs.FollowUpManagerJobArgs)
+	require.True(t, ok, "job[1] args must be FollowUpManagerJobArgs, got %T", jobs[1].Args)
+	require.Equal(t, eventID, followupArgs.EventID)
+	require.Equal(t, "followup_manager", followupArgs.Kind())
+	require.NotNil(t, jobs[1].Opts, "InsertOpts must be set to pin MaxAttempts")
+	require.Equal(t, 5, jobs[1].Opts.MaxAttempts)
 }
 
-// TestConsumerJobsForKind_EmptyForPR7DeferredKinds asserts the kinds that
-// still have no active consumer after PR 7 return nil:
+// TestConsumerJobsForKind_EmptyForDeferredKinds asserts the kinds that
+// still have no active consumer return nil:
 //   - interaction.manual: inline-invoked by the manual UI handler
-//     (spec §3.4 "other consumers only" — plan Decision 7).
+//     (spec §3.4 "other consumers only").
 //   - calendar.declined, task.skipped, contact_methods.added: consumers
-//     land in later PRs.
-//
-// PR 7 REMOVED KindInteractionRecorded from this set — see
-// TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceUpdater.
-func TestConsumerJobsForKind_EmptyForPR7DeferredKinds(t *testing.T) {
+//     for those kinds are not yet wired.
+func TestConsumerJobsForKind_EmptyForDeferredKinds(t *testing.T) {
 	deferred := []Kind{
 		KindInteractionManual,
 		KindCalendarDeclined,
@@ -76,7 +82,7 @@ func TestConsumerJobsForKind_EmptyForPR7DeferredKinds(t *testing.T) {
 	for _, k := range deferred {
 		t.Run(string(k), func(t *testing.T) {
 			jobs := consumerJobsForKind(k, uuid.New())
-			require.Empty(t, jobs, "kind %s: expected empty consumer-job slice post-PR 7", k)
+			require.Empty(t, jobs, "kind %s: expected empty consumer-job slice", k)
 		})
 	}
 }

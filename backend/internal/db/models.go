@@ -156,6 +156,7 @@ type ContactTask struct {
 	Metadata       []byte             `json:"metadata"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	IdempotencyKey pgtype.Text        `json:"idempotency_key"`
 }
 
 type Event struct {
@@ -197,6 +198,23 @@ type EventShadowCadenceObservation struct {
 	ApplyLastResponseAt bool               `json:"apply_last_response_at"`
 	ApplyContactBy      bool               `json:"apply_contact_by"`
 	ObservedAt          pgtype.Timestamptz `json:"observed_at"`
+}
+
+type EventShadowFollowupObservation struct {
+	ID                    pgtype.UUID        `json:"id"`
+	EventID               pgtype.UUID        `json:"event_id"`
+	Writer                string             `json:"writer"`
+	ContactID             pgtype.UUID        `json:"contact_id"`
+	Source                string             `json:"source"`
+	Direction             string             `json:"direction"`
+	OccurredAt            pgtype.Timestamptz `json:"occurred_at"`
+	Action                string             `json:"action"`
+	SkipReason            pgtype.Text        `json:"skip_reason"`
+	WouldIdempotencyKey   pgtype.Text        `json:"would_idempotency_key"`
+	WouldDeadline         pgtype.Date        `json:"would_deadline"`
+	DirectContactTaskID   pgtype.UUID        `json:"direct_contact_task_id"`
+	ConsumerCalledTodoist bool               `json:"consumer_called_todoist"`
+	ObservedAt            pgtype.Timestamptz `json:"observed_at"`
 }
 
 type EventShadowObservation struct {

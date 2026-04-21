@@ -64,13 +64,13 @@ func setupTestEventBus(
 	workers := river.NewWorkers()
 	shim := &deferredRecorderWorker{}
 	river.AddWorker(workers, shim)
-	// PR 7: InteractionRecorder publishes interaction.recorded which
-	// enqueues a cadence_updater job. Tests that don't exercise the
-	// CadenceUpdater path must still register a worker for the kind;
-	// otherwise river logs "Unhandled job kind" at dequeue time and
-	// fails the enclosing insert tx. Placeholder no-op worker drains
-	// the queue without doing any work.
+	// InteractionRecorder publishes interaction.recorded which enqueues
+	// both cadence_updater and followup_manager jobs. Tests that don't
+	// exercise those consumers still need to register workers for the
+	// kinds — river rejects unknown kinds at dequeue time. Placeholder
+	// no-op workers drain the queue without doing any work.
 	river.AddWorker(workers, &cadenceUpdaterNoopWorker{})
+	river.AddWorker(workers, &followUpManagerNoopWorker{})
 
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -181,6 +181,21 @@ func (*cadenceUpdaterNoopWorker) Work(_ context.Context, _ *river.Job[consumerjo
 }
 
 func (*cadenceUpdaterNoopWorker) Timeout(_ *river.Job[consumerjobs.CadenceUpdaterJobArgs]) time.Duration {
+	return 30 * time.Second
+}
+
+// followUpManagerNoopWorker satisfies the followup_manager kind for
+// test harnesses that don't exercise the real FollowUpManager. Same
+// rationale as cadenceUpdaterNoopWorker.
+type followUpManagerNoopWorker struct {
+	river.WorkerDefaults[consumerjobs.FollowUpManagerJobArgs]
+}
+
+func (*followUpManagerNoopWorker) Work(_ context.Context, _ *river.Job[consumerjobs.FollowUpManagerJobArgs]) error {
+	return nil
+}
+
+func (*followUpManagerNoopWorker) Timeout(_ *river.Job[consumerjobs.FollowUpManagerJobArgs]) time.Duration {
 	return 30 * time.Second
 }
 

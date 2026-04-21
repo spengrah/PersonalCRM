@@ -10,16 +10,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // ContactTaskState represents the management state of a contact task
 type ContactTaskState string
 
 const (
-	ContactTaskStateManaged   ContactTaskState = "managed"
-	ContactTaskStateUnmanaged ContactTaskState = "unmanaged"
-	ContactTaskStateCompleted ContactTaskState = "completed"
-	ContactTaskStateDismissed ContactTaskState = "dismissed"
+	ContactTaskStateManaged             ContactTaskState = "managed"
+	ContactTaskStateUnmanaged           ContactTaskState = "unmanaged"
+	ContactTaskStateCompleted           ContactTaskState = "completed"
+	ContactTaskStateDismissed           ContactTaskState = "dismissed"
+	ContactTaskStatePendingRemoteCreate ContactTaskState = "pending_remote_create"
 )
 
 // ContactTask represents a link between a contact and an external task provider
@@ -31,6 +33,7 @@ type ContactTask struct {
 	ExternalTaskID string           `json:"external_task_id"`
 	State          ContactTaskState `json:"state"`
 	Metadata       map[string]any   `json:"metadata,omitempty"`
+	IdempotencyKey *string          `json:"idempotency_key,omitempty"`
 	CreatedAt      time.Time        `json:"created_at"`
 	UpdatedAt      time.Time        `json:"updated_at"`
 }
@@ -91,6 +94,11 @@ func convertDbContactTask(dbTask *db.ContactTask) ContactTask {
 		if err := json.Unmarshal(dbTask.Metadata, &metadata); err == nil {
 			task.Metadata = metadata
 		}
+	}
+
+	if dbTask.IdempotencyKey.Valid {
+		key := dbTask.IdempotencyKey.String
+		task.IdempotencyKey = &key
 	}
 
 	return task
@@ -470,6 +478,47 @@ func (r *ContactTaskRepository) CompleteFollowUpForContact(ctx context.Context, 
 	}
 
 	return tasks, nil
+}
+
+// FindPendingFollowUpTx finds a pending follow-up task for a contact using
+// the provided transaction. Matches both 'managed' and
+// 'pending_remote_create' live states so a two-step creation flow is
+// visible to callers running inside the consumer worker tx.
+func (r *ContactTaskRepository) FindPendingFollowUpTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) (*ContactTask, error) {
+	q := r.queries
+	if tx != nil {
+		q = db.New(tx)
+	}
+	dbTask, err := q.FindPendingFollowUpTx(ctx, uuidToPgUUID(contactID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
+// GetContactTaskByIdempotencyKey performs the partial-index lookup on
+// (contact_id, kind, idempotency_key). Used by the crash-safe two-step
+// follow-up creation flow to detect a pre-existing local row before
+// inserting a new one.
+func (r *ContactTaskRepository) GetContactTaskByIdempotencyKey(ctx context.Context, contactID uuid.UUID, kind, key string) (*ContactTask, error) {
+	dbTask, err := r.queries.GetContactTaskByIdempotencyKey(ctx, db.GetContactTaskByIdempotencyKeyParams{
+		ContactID:      uuidToPgUUID(contactID),
+		Kind:           kind,
+		IdempotencyKey: pgtype.Text{String: key, Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	task := convertDbContactTask(dbTask)
+	return &task, nil
 }
 
 // Note: Helper functions (stringToPgText, uuidToPgUUID, timeToPgTimestamptz)

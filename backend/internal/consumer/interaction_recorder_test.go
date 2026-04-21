@@ -47,12 +47,18 @@ type stubWriter struct {
 	// Tests set these to exercise V2 payload construction in HandleEvent.
 	prev          *repository.ContactCadenceFields
 	cadenceAtEmit *string
-	// shadowDrain is the PR 7 cadence shadow drain closure. Tests set
+	// shadowDrain is the cadence shadow drain closure. Tests set
 	// this to assert the consumer invokes it with recordedEnv.ID.
 	shadowDrain repository.CadenceShadowDrainFn
 	// lastShadowDrainEventID captures the eventID passed to shadowDrain
 	// (set by the closure when the consumer invokes it).
 	lastShadowDrainEventID *uuid.UUID
+	// followUpShadowDrain is the follow-up shadow drain closure. Tests
+	// set this to assert the recorder invokes it from the returned
+	// post-commit callback with the derived interaction.recorded event id.
+	followUpShadowDrain repository.FollowUpShadowDrainFn
+	// lastFollowUpShadowDrainEventID captures the eventID passed in.
+	lastFollowUpShadowDrainEventID *uuid.UUID
 }
 
 func (s *stubWriter) RecordInteractionTx(
@@ -88,13 +94,22 @@ func (s *stubWriter) RecordInteractionTx(
 			base(ctx, eventID)
 		}
 	}
+	var followUpDrain repository.FollowUpShadowDrainFn
+	if s.followUpShadowDrain != nil {
+		base := s.followUpShadowDrain
+		followUpDrain = func(ctx context.Context, eventID uuid.UUID) {
+			s.lastFollowUpShadowDrainEventID = &eventID
+			base(ctx, eventID)
+		}
+	}
 	return &repository.RecordInteractionResult{
-		Interaction:   inter,
-		IsReplay:      false,
-		PrevCadence:   s.prev,
-		CadenceAtEmit: s.cadenceAtEmit,
-		FollowUpFn:    s.postCommit,
-		ShadowDrainFn: drain,
+		Interaction:           inter,
+		IsReplay:              false,
+		PrevCadence:           s.prev,
+		CadenceAtEmit:         s.cadenceAtEmit,
+		FollowUpFn:            s.postCommit,
+		ShadowDrainFn:         drain,
+		FollowUpShadowDrainFn: followUpDrain,
 	}, nil
 }
 
@@ -587,6 +602,83 @@ func TestHandleEvent_PostCommitBubblesUp(t *testing.T) {
 	require.False(t, invoked, "HandleEvent must not invoke postCommit itself (caller runs it after tx commit)")
 	postCommit(context.Background())
 	require.True(t, invoked)
+}
+
+// TestHandleEvent_FollowUpShadowDrain_InvokedWithRecordedEventID asserts
+// that when the writer returns a non-nil FollowUpShadowDrainFn, the
+// recorder folds it into the post-commit callback and passes the
+// interaction.recorded envelope's id at invocation time.
+func TestHandleEvent_FollowUpShadowDrain_InvokedWithRecordedEventID(t *testing.T) {
+	cid := uuid.New()
+	rec, w, _, b, _ := newRecorderWithStubs()
+	drainInvocations := 0
+	var observedID uuid.UUID
+	w.followUpShadowDrain = func(_ context.Context, id uuid.UUID) {
+		drainInvocations++
+		observedID = id
+	}
+
+	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
+		Version:    1,
+		ContactID:  cid,
+		Direction:  "outbound",
+		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	})
+	_, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Zero(t, drainInvocations, "drain must not run inside HandleEvent itself")
+
+	require.NotNil(t, postCommit, "fresh write with drain must return non-nil post-commit")
+	postCommit(context.Background())
+	require.Equal(t, 1, drainInvocations)
+	require.NotNil(t, b.lastEnv, "bus.PublishTx must have been called")
+	require.Equal(t, b.lastEnv.ID, observedID,
+		"drain must be invoked with the interaction.recorded event id so direct + consumer rows share the join key")
+}
+
+// TestHandleEvent_FollowUpShadowDrain_OrderedAfterFollowUp asserts the
+// post-commit callback fires follow-up first, drain second — the drain
+// reads from the action sink the follow-up populates.
+func TestHandleEvent_FollowUpShadowDrain_OrderedAfterFollowUp(t *testing.T) {
+	cid := uuid.New()
+	rec, w, _, _, _ := newRecorderWithStubs()
+	var order []string
+	w.postCommit = func(context.Context) { order = append(order, "followup") }
+	w.followUpShadowDrain = func(_ context.Context, _ uuid.UUID) { order = append(order, "drain") }
+
+	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
+		Version:    1,
+		ContactID:  cid,
+		Direction:  "outbound",
+		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	})
+	_, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.NotNil(t, postCommit)
+	postCommit(context.Background())
+	require.Equal(t, []string{"followup", "drain"}, order)
+}
+
+// TestHandleEvent_NoShadowDrain_NilPostCommitWhenNoFollowUp asserts that
+// when neither the writer's FollowUpFn nor its FollowUpShadowDrainFn is
+// populated, the recorder returns a nil post-commit (no-op wrapper
+// isn't constructed). This guards against allocating a wrapper that
+// would run an empty sequence on every replay / non-shadow test path.
+func TestHandleEvent_NoShadowDrain_NilPostCommitWhenNoFollowUp(t *testing.T) {
+	cid := uuid.New()
+	rec, w, _, _, _ := newRecorderWithStubs()
+	w.postCommit = nil
+	w.followUpShadowDrain = nil
+
+	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
+		Version:    1,
+		ContactID:  cid,
+		Direction:  "outbound",
+		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	})
+	_, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Nil(t, postCommit, "no follow-up + no drain must return nil post-commit")
 }
 
 // -----------------------------------------------------------------------------

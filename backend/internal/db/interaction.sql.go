@@ -245,6 +245,33 @@ func (q *Queries) GetInteraction(ctx context.Context, id pgtype.UUID) (*Interact
 	return &i, err
 }
 
+const HasResponseAfter = `-- name: HasResponseAfter :one
+SELECT EXISTS (
+    SELECT 1 FROM interaction
+    WHERE contact_id = $1
+      AND direction IN ('inbound', 'mutual')
+      AND occurred_at > $2
+      AND deleted_at IS NULL
+    LIMIT 1
+) AS has_response
+`
+
+type HasResponseAfterParams struct {
+	ContactID  pgtype.UUID        `json:"contact_id"`
+	OutreachAt pgtype.Timestamptz `json:"outreach_at"`
+}
+
+// Returns TRUE if any later inbound/mutual interaction exists for the
+// contact after the given outreach time. Used by the FollowUpManager's
+// out-of-order guard: an outbound event arriving after a response has
+// already landed must not produce a stale follow-up.
+func (q *Queries) HasResponseAfter(ctx context.Context, arg HasResponseAfterParams) (bool, error) {
+	row := q.db.QueryRow(ctx, HasResponseAfter, arg.ContactID, arg.OutreachAt)
+	var has_response bool
+	err := row.Scan(&has_response)
+	return has_response, err
+}
+
 const ListContactInteractions = `-- name: ListContactInteractions :many
 SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction FROM interaction
 WHERE contact_id = $1 AND deleted_at IS NULL
