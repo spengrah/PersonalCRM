@@ -179,6 +179,7 @@ type RiverConfig struct {
 type EventBusConfig struct {
 	InteractionMode    string // off | shadow | cutover. Default: cutover.
 	CadenceMode        string // off | shadow | cutover. Default: cutover.
+	FollowUpMode       string // off | shadow | cutover. Default: shadow.
 	UnsafeAllowOffMode bool   // EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true opt-in. Never true in normal prod.
 }
 
@@ -197,6 +198,17 @@ const (
 	EventBusCadenceModeOff     = "off"
 	EventBusCadenceModeShadow  = "shadow"
 	EventBusCadenceModeCutover = "cutover"
+)
+
+// EventBus follow-up-mode constants. Mirrors (and must stay in sync
+// with) consumer.FollowUpMode*. Unlike CadenceMode, FollowUpMode=off
+// has no unsafe-override gate: while the consumer is in shadow, the
+// direct path is the authoritative follow-up writer, so turning the
+// consumer off is the rollback-safe state.
+const (
+	EventBusFollowUpModeOff     = "off"
+	EventBusFollowUpModeShadow  = "shadow"
+	EventBusFollowUpModeCutover = "cutover"
 )
 
 // MaybeWarnUnsafeOff emits the mandated WARN log when the unsafe
@@ -354,6 +366,7 @@ func Load() (*Config, error) {
 		EventBus: EventBusConfig{
 			InteractionMode:    getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),
 			CadenceMode:        getEnv("EVENT_BUS_CADENCE_MODE", EventBusCadenceModeCutover),
+			FollowUpMode:       getEnv("EVENT_BUS_FOLLOWUP_MODE", EventBusFollowUpModeShadow),
 			UnsafeAllowOffMode: getEnvAsBool("EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF", false),
 		},
 	}
@@ -519,6 +532,20 @@ func (c *Config) Validate() error {
 		errors = append(errors, ValidationError{
 			Field:   "EVENT_BUS_CADENCE_MODE",
 			Message: fmt.Sprintf("invalid mode %q; must be one of: off, shadow, cutover", c.EventBus.CadenceMode),
+		})
+	}
+
+	// EventBus follow-up-mode validation. All three values are legal at
+	// the phase where the direct path is still live — turning the
+	// consumer off is a valid rollback posture because the authoritative
+	// follow-up writer is the direct path. No UnsafeAllowOffMode gate.
+	switch c.EventBus.FollowUpMode {
+	case EventBusFollowUpModeOff, EventBusFollowUpModeShadow, EventBusFollowUpModeCutover:
+		// ok
+	default:
+		errors = append(errors, ValidationError{
+			Field:   "EVENT_BUS_FOLLOWUP_MODE",
+			Message: fmt.Sprintf("invalid mode %q; must be one of: off, shadow, cutover", c.EventBus.FollowUpMode),
 		})
 	}
 
@@ -698,6 +725,7 @@ func TestConfig() *Config {
 			// to catch prod misconfigs, not test harnesses that
 			// deliberately opt into "off".
 			CadenceMode:        EventBusCadenceModeOff,
+			FollowUpMode:       EventBusFollowUpModeOff,
 			UnsafeAllowOffMode: true,
 		},
 	}

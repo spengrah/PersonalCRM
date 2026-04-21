@@ -962,3 +962,102 @@ func TestConfig_Validate_EventBusCadenceMode(t *testing.T) {
 		})
 	}
 }
+
+// TestConfig_FollowUpMode_DefaultShadow asserts EVENT_BUS_FOLLOWUP_MODE
+// defaults to "shadow" — the direct path is still the authoritative
+// follow-up writer, and the consumer observes in parallel.
+func TestConfig_FollowUpMode_DefaultShadow(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.EventBus.FollowUpMode != EventBusFollowUpModeShadow {
+		t.Errorf("Expected default EventBus.FollowUpMode=%q, got %q",
+			EventBusFollowUpModeShadow, cfg.EventBus.FollowUpMode)
+	}
+}
+
+// TestConfig_FollowUpMode_OffAccepted asserts mode=off is a normal
+// runtime value — unlike CadenceMode, there is no unsafe-override
+// gate because the direct path is still live in shadow phase.
+func TestConfig_FollowUpMode_OffAccepted(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "EVENT_BUS_FOLLOWUP_MODE", "off")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.EventBus.FollowUpMode != EventBusFollowUpModeOff {
+		t.Errorf("Expected EventBus.FollowUpMode=off, got %q", cfg.EventBus.FollowUpMode)
+	}
+}
+
+// TestConfig_FollowUpMode_CutoverFromEnv asserts "cutover" parses —
+// the subsequent PR flips the default, and the config value must flow
+// through the startup seam without validation rejection.
+func TestConfig_FollowUpMode_CutoverFromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "EVENT_BUS_FOLLOWUP_MODE", "cutover")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.EventBus.FollowUpMode != EventBusFollowUpModeCutover {
+		t.Errorf("Expected EventBus.FollowUpMode=cutover, got %q", cfg.EventBus.FollowUpMode)
+	}
+}
+
+func TestConfig_Validate_EventBusFollowUpMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    string
+		wantErr bool
+	}{
+		{"off_ok", EventBusFollowUpModeOff, false},
+		{"shadow_ok", EventBusFollowUpModeShadow, false},
+		{"cutover_ok", EventBusFollowUpModeCutover, false},
+		{"empty_rejected", "", true},
+		{"gibberish_rejected", "garbage", true},
+		{"uppercase_rejected", "SHADOW", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TestConfig()
+			cfg.EventBus.FollowUpMode = tt.mode
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Expected validation error for mode=%q", tt.mode)
+				}
+				verr, ok := err.(ValidationErrors)
+				if !ok {
+					t.Fatalf("Expected ValidationErrors, got %T", err)
+				}
+				found := false
+				for _, e := range verr {
+					if e.Field == "EVENT_BUS_FOLLOWUP_MODE" {
+						found = true
+						if !strings.Contains(e.Message, "invalid mode") {
+							t.Errorf("Expected message to mention invalid mode, got %q", e.Message)
+						}
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected EVENT_BUS_FOLLOWUP_MODE validation error, got: %v", err)
+				}
+			} else if err != nil {
+				t.Errorf("Expected no error for mode=%q, got: %v", tt.mode, err)
+			}
+		})
+	}
+}
