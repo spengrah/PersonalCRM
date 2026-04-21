@@ -997,20 +997,18 @@ func TestConfig_FollowUpMode_OffAccepted(t *testing.T) {
 	}
 }
 
-// TestConfig_FollowUpMode_CutoverFromEnv asserts "cutover" parses —
-// the subsequent PR flips the default, and the config value must flow
-// through the startup seam without validation rejection.
-func TestConfig_FollowUpMode_CutoverFromEnv(t *testing.T) {
+// TestConfig_FollowUpMode_CutoverRejectedFromEnv asserts "cutover"
+// parses as a known value but is rejected at validation time — the
+// consumer's HandleEvent returns an error in cutover mode, so accepting
+// the flag would stall the job queue with retrying failures.
+func TestConfig_FollowUpMode_CutoverRejectedFromEnv(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
 	WithEnv(t, "EVENT_BUS_FOLLOWUP_MODE", "cutover")
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
-	}
-	if cfg.EventBus.FollowUpMode != EventBusFollowUpModeCutover {
-		t.Errorf("Expected EventBus.FollowUpMode=cutover, got %q", cfg.EventBus.FollowUpMode)
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() expected validation error for cutover mode, got nil")
 	}
 }
 
@@ -1022,7 +1020,7 @@ func TestConfig_Validate_EventBusFollowUpMode(t *testing.T) {
 	}{
 		{"off_ok", EventBusFollowUpModeOff, false},
 		{"shadow_ok", EventBusFollowUpModeShadow, false},
-		{"cutover_ok", EventBusFollowUpModeCutover, false},
+		{"cutover_rejected", EventBusFollowUpModeCutover, true},
 		{"empty_rejected", "", true},
 		{"gibberish_rejected", "garbage", true},
 		{"uppercase_rejected", "SHADOW", true},
@@ -1046,9 +1044,6 @@ func TestConfig_Validate_EventBusFollowUpMode(t *testing.T) {
 				for _, e := range verr {
 					if e.Field == "EVENT_BUS_FOLLOWUP_MODE" {
 						found = true
-						if !strings.Contains(e.Message, "invalid mode") {
-							t.Errorf("Expected message to mention invalid mode, got %q", e.Message)
-						}
 						break
 					}
 				}

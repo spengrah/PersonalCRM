@@ -536,17 +536,25 @@ func (c *Config) Validate() error {
 		})
 	}
 
-	// EventBus follow-up-mode validation. All three values are legal at
-	// the phase where the direct path is still live — turning the
-	// consumer off is a valid rollback posture because the authoritative
-	// follow-up writer is the direct path. No UnsafeAllowOffMode gate.
+	// EventBus follow-up-mode validation. "off" and "shadow" are legal:
+	// the direct path is the authoritative writer, so turning the
+	// consumer off is a valid rollback posture. "cutover" is parsed
+	// (forward compatibility with later implementations) but rejected
+	// at startup — FollowUpManager.HandleEvent returns an error in
+	// cutover mode, so accepting the flag would turn every recorded
+	// interaction into retrying River failures.
 	switch c.EventBus.FollowUpMode {
-	case EventBusFollowUpModeOff, EventBusFollowUpModeShadow, EventBusFollowUpModeCutover:
+	case EventBusFollowUpModeOff, EventBusFollowUpModeShadow:
 		// ok
+	case EventBusFollowUpModeCutover:
+		errors = append(errors, ValidationError{
+			Field:   "EVENT_BUS_FOLLOWUP_MODE",
+			Message: "cutover is not implemented on this branch; use off or shadow",
+		})
 	default:
 		errors = append(errors, ValidationError{
 			Field:   "EVENT_BUS_FOLLOWUP_MODE",
-			Message: fmt.Sprintf("invalid mode %q; must be one of: off, shadow, cutover", c.EventBus.FollowUpMode),
+			Message: fmt.Sprintf("invalid mode %q; must be one of: off, shadow", c.EventBus.FollowUpMode),
 		})
 	}
 

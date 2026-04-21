@@ -124,10 +124,9 @@ func (e *followUpShadowTestEnv) insertRecordedEvent(
 		ObservedAt: occurredAt,
 	}
 
-	tx, err := e.database.Pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, e.eventRepo.InsertEvent(ctx, tx, env))
-	require.NoError(t, tx.Commit(ctx))
+	require.NoError(t, pgx.BeginTxFunc(ctx, e.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return e.eventRepo.InsertEvent(ctx, tx, env)
+	}))
 	return env
 }
 
@@ -472,10 +471,9 @@ func TestIntegration_FollowUpManager_V1Payload_RejectedNoRows(t *testing.T) {
 		Payload:    raw,
 		ObservedAt: payload.OccurredAt,
 	}
-	tx, err := env.database.Pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, env.eventRepo.InsertEvent(ctx, tx, eventEnv))
-	require.NoError(t, tx.Commit(ctx))
+	require.NoError(t, pgx.BeginTxFunc(ctx, env.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return env.eventRepo.InsertEvent(ctx, tx, eventEnv)
+	}))
 
 	// Consumer must log + return nil without writing.
 	require.NoError(t, runHandleEventInTx(t, env.database, env.manager, eventEnv))
@@ -483,4 +481,47 @@ func TestIntegration_FollowUpManager_V1Payload_RejectedNoRows(t *testing.T) {
 	count, err := env.shadowRepo.CountByContact(ctx, contactID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), count, "V1 payloads must be rejected without writing shadow rows")
+}
+
+// TestIntegration_FollowUpManager_Divergences_IncludesOneSidedRows
+// asserts that FindDivergences surfaces events with only a consumer
+// row (no paired direct row). The FULL OUTER JOIN's grace-window
+// filter must use a NULL-safe latest-timestamp expression, else
+// one-sided rows are silently dropped.
+func TestIntegration_FollowUpManager_Divergences_IncludesOneSidedRows(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	env, cleanup := newFollowUpShadowEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	contactID := env.seedContact(t, "weekly")
+	recorded := env.insertRecordedEvent(t, ctx, contactID,
+		repository.InteractionDirectionOutbound,
+		repository.InteractionSourceTelegram,
+		accelerated.GetCurrentTime().Add(-time.Hour),
+		"weekly",
+	)
+	// Only the consumer row lands — no direct drain.
+	require.NoError(t, runHandleEventInTx(t, env.database, env.manager, recorded))
+
+	// Query a window that includes the just-written row but whose
+	// upper bound is ~10 minutes in the future, which keeps the row
+	// outside the 5-second grace margin at the tail of the window.
+	from := accelerated.GetCurrentTime().Add(-48 * time.Hour)
+	to := accelerated.GetCurrentTime().Add(10 * time.Minute)
+	divs, err := env.shadowRepo.FindDivergences(ctx, from, to)
+	require.NoError(t, err)
+
+	found := false
+	for _, d := range divs {
+		if d.EventID == recorded.ID {
+			found = true
+			require.Nil(t, d.DirectAction, "direct side should be absent")
+			require.NotNil(t, d.ConsumerAction)
+			break
+		}
+	}
+	assert.True(t, found, "FindDivergences must include consumer-only one-sided rows")
 }

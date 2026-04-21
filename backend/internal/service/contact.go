@@ -808,6 +808,14 @@ func (s *ContactService) buildFollowUpShadowDrain(contact *repository.Contact, i
 	if s.followUpShadow == nil || contact == nil || interaction == nil {
 		return nil
 	}
+	// No direct follow-up manager wired → the closure returned by
+	// deriveFollowUpClosureWithSink is nil and actionSink will never be
+	// populated. Returning nil here avoids manufacturing phantom
+	// writer='direct' rows (with a default 'skip' action) in environments
+	// where no direct follow-up work actually ran.
+	if s.followUpMgr == nil || actionSink == nil {
+		return nil
+	}
 	direction := interaction.Direction
 	switch direction {
 	case repository.InteractionDirectionOutbound, repository.InteractionDirectionInbound, repository.InteractionDirectionMutual:
@@ -828,18 +836,22 @@ func (s *ContactService) buildFollowUpShadowDrain(contact *repository.Contact, i
 				Msg("followup shadow drain called with nil event id; skipping direct row")
 			return
 		}
-		obs := repository.FollowUpShadowObservation{
-			EventID:    recordedEventID,
-			ContactID:  contactID,
-			Source:     source,
-			Direction:  direction,
-			OccurredAt: occ,
-			Action:     repository.FollowUpActionSkip,
+		// If the direct follow-up closure didn't populate actionSink
+		// (e.g., unwired CreateOrRefreshFollowUpObserved / early error
+		// before the action is chosen), skip the write rather than
+		// invent a default action.
+		if actionSink.Action == "" {
+			return
 		}
-		if actionSink != nil && actionSink.Action != "" {
-			obs.Action = actionSink.Action
-			obs.DirectContactTaskID = actionSink.ContactTaskID
-			obs.WouldDeadline = actionSink.Deadline
+		obs := repository.FollowUpShadowObservation{
+			EventID:             recordedEventID,
+			ContactID:           contactID,
+			Source:              source,
+			Direction:           direction,
+			OccurredAt:          occ,
+			Action:              actionSink.Action,
+			DirectContactTaskID: actionSink.ContactTaskID,
+			WouldDeadline:       actionSink.Deadline,
 		}
 		// Direct path does not compute an idempotency key — its
 		// uniqueness is enforced by contact_task indexes, not by a

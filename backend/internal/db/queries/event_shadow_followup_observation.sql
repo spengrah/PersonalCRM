@@ -56,7 +56,7 @@ WHERE contact_id = @contact_id;
 -- once expected-divergence classes (guard 1 backdated, guard 2
 -- out-of-order) are filtered out at the report layer.
 --
--- Race-class filters baked in (mirrors PR 7's cadence-shadow query):
+-- Race-class filters baked in (mirrors the cadence-shadow query):
 --
 --   1. Grace window applied on the joined pair, NOT each side
 --      independently. The direct-path observer fires from an async
@@ -80,19 +80,26 @@ consumer_obs AS (
 ),
 joined AS (
     SELECT
-        COALESCE(d.event_id, c.event_id)       AS event_id,
-        COALESCE(d.contact_id, c.contact_id)   AS contact_id,
-        GREATEST(d.observed_at, c.observed_at) AS pair_observed_at,
-        d.action                                AS direct_action,
-        c.action                                AS consumer_action,
-        d.skip_reason                           AS direct_skip_reason,
-        c.skip_reason                           AS consumer_skip_reason,
-        d.would_idempotency_key                 AS direct_would_idempotency_key,
-        c.would_idempotency_key                 AS consumer_would_idempotency_key,
-        d.would_deadline                        AS direct_would_deadline,
-        c.would_deadline                        AS consumer_would_deadline,
-        d.direct_contact_task_id                AS direct_contact_task_id,
-        c.consumer_called_todoist               AS consumer_called_todoist
+        COALESCE(d.event_id, c.event_id)     AS event_id,
+        COALESCE(d.contact_id, c.contact_id) AS contact_id,
+        -- NULL-safe latest timestamp. GREATEST returns NULL if any input
+        -- is NULL, which would silently drop direct-only / consumer-only
+        -- rows from one-sided-row divergences.
+        COALESCE(
+            GREATEST(d.observed_at, c.observed_at),
+            d.observed_at,
+            c.observed_at
+        )                                    AS pair_observed_at,
+        d.action                             AS direct_action,
+        c.action                             AS consumer_action,
+        d.skip_reason                        AS direct_skip_reason,
+        c.skip_reason                        AS consumer_skip_reason,
+        d.would_idempotency_key              AS direct_would_idempotency_key,
+        c.would_idempotency_key              AS consumer_would_idempotency_key,
+        d.would_deadline                     AS direct_would_deadline,
+        c.would_deadline                     AS consumer_would_deadline,
+        d.direct_contact_task_id             AS direct_contact_task_id,
+        c.consumer_called_todoist            AS consumer_called_todoist
     FROM direct_obs d
     FULL OUTER JOIN consumer_obs c USING (event_id)
     WHERE (d.event_id IS NULL
@@ -100,8 +107,11 @@ joined AS (
        OR d.action            IS DISTINCT FROM c.action
        OR d.skip_reason       IS DISTINCT FROM c.skip_reason
        OR d.would_deadline    IS DISTINCT FROM c.would_deadline)
-      AND GREATEST(d.observed_at, c.observed_at)
-          < sqlc.arg(observed_at_to)::timestamptz - INTERVAL '5 seconds'
+      AND COALESCE(
+              GREATEST(d.observed_at, c.observed_at),
+              d.observed_at,
+              c.observed_at
+          ) < sqlc.arg(observed_at_to)::timestamptz - INTERVAL '5 seconds'
 )
 SELECT
     j.event_id,

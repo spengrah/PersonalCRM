@@ -100,17 +100,21 @@ func (s *FollowUpService) CreateOrRefreshFollowUpObserved(ctx context.Context, c
 	}
 
 	if existing != nil {
-		// Refresh existing follow-up: update Todoist due date
-		if err := s.refreshFollowUp(ctx, existing, deadlineStr, contact); err != nil {
-			return FollowUpActionResult{}, err
-		}
+		// Refresh existing follow-up: update Todoist due date. Return the
+		// attempted action on failure so the shadow drain records a
+		// 'refresh' row (not an empty-action default-to-'skip' row);
+		// mirrors the create path below.
 		id := existing.ID
 		d := deadline
-		return FollowUpActionResult{
+		result := FollowUpActionResult{
 			Action:        repository.FollowUpActionRefresh,
 			ContactTaskID: &id,
 			Deadline:      &d,
-		}, nil
+		}
+		if err := s.refreshFollowUp(ctx, existing, deadlineStr, contact); err != nil {
+			return result, err
+		}
+		return result, nil
 	}
 
 	// Create new follow-up
