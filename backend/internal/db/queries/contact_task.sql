@@ -60,6 +60,30 @@ INSERT INTO contact_task (
     COALESCE(@metadata::jsonb, '{}'::jsonb)
 ) RETURNING *;
 
+-- name: CreateContactTaskWithIdempotencyKey :one
+-- Variant of CreateContactTask that accepts an explicit idempotency_key,
+-- used by the cutover FollowUpManager for crash-safe two-step create.
+-- A NULL key is permitted so the generic path can reuse the query shape;
+-- non-NULL keys collide with the partial unique index
+-- idx_contact_task_followup_idempotency on repeats.
+INSERT INTO contact_task (
+    contact_id,
+    provider,
+    kind,
+    external_task_id,
+    state,
+    metadata,
+    idempotency_key
+) VALUES (
+    @contact_id,
+    @provider,
+    @kind,
+    @external_task_id,
+    COALESCE(@state, 'managed'),
+    COALESCE(@metadata::jsonb, '{}'::jsonb),
+    sqlc.narg('idempotency_key')
+) RETURNING *;
+
 -- name: UpsertContactTask :one
 -- Upsert a contact task by external_task_id (Todoist task IDs are globally unique)
 INSERT INTO contact_task (
@@ -90,13 +114,28 @@ WHERE id = $1
 RETURNING *;
 
 -- name: UpdateContactTaskExternalID :one
--- Update the external task ID (when creating a new Todoist task)
+-- Update the external task ID (when creating a new Todoist task).
+-- Finalizes the two-step follow-up create: transitions a
+-- pending_remote_create row to state='managed' once the remote
+-- task ID is known. Use SetContactTaskExternalIDOnly when the row
+-- should stay in its current state (close-while-pending race).
 UPDATE contact_task
 SET external_task_id = $2,
     state = 'managed',
     updated_at = NOW()
 WHERE id = $1
 RETURNING *;
+
+-- name: SetContactTaskExternalIDOnly :exec
+-- Persist external_task_id on a row without touching state. Used by the
+-- close-while-pending race path: the create worker enters on a row that
+-- has already transitioned to 'completed' (inbound arrived mid-flight),
+-- issues item_add to keep Todoist in sync, and records the resulting ID
+-- without flipping the row back to 'managed'.
+UPDATE contact_task
+SET external_task_id = $2,
+    updated_at = NOW()
+WHERE id = $1;
 
 -- name: UpdateContactTaskMetadata :one
 UPDATE contact_task
@@ -135,17 +174,26 @@ WHERE kind = 'follow_up' AND state = 'completed'
   AND metadata->>'todoist_close_pending' = 'true';
 
 -- name: FindPendingFollowUp :one
--- Find a pending follow-up task for a contact (kind='follow_up', state='managed')
+-- Find a pending follow-up task for a contact. Matches both 'managed'
+-- and 'pending_remote_create' live states so the two-step create flow
+-- is visible to non-tx callers (e.g. Todoist provider's closeOnOutreach).
 SELECT * FROM contact_task
-WHERE contact_id = $1 AND kind = 'follow_up' AND state = 'managed'
+WHERE contact_id = $1
+  AND kind = 'follow_up'
+  AND state IN ('managed', 'pending_remote_create')
 LIMIT 1;
 
 -- name: CompleteFollowUpForContact :many
--- Mark all pending follow-up tasks as completed for a contact (when a response arrives)
+-- Mark all pending follow-up tasks as completed for a contact (when a
+-- response arrives). Matches the same live-state set as FindPendingFollowUp
+-- so an inbound arriving while the create worker is mid-flight still
+-- transitions the row to completed.
 UPDATE contact_task
 SET state = 'completed',
     updated_at = NOW()
-WHERE contact_id = $1 AND kind = 'follow_up' AND state = 'managed'
+WHERE contact_id = $1
+  AND kind = 'follow_up'
+  AND state IN ('managed', 'pending_remote_create')
 RETURNING *;
 
 -- name: FindPendingFollowUpTx :one

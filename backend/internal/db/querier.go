@@ -23,7 +23,10 @@ type Querier interface {
 	// Decision 6) so the scheduler race is avoided at the source.
 	AppendMatchedContact(ctx context.Context, arg AppendMatchedContactParams) error
 	BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error
-	// Mark all pending follow-up tasks as completed for a contact (when a response arrives)
+	// Mark all pending follow-up tasks as completed for a contact (when a
+	// response arrives). Matches the same live-state set as FindPendingFollowUp
+	// so an inbound arriving while the create worker is mid-flight still
+	// transitions the row to completed.
 	CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
 	CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error)
@@ -86,6 +89,12 @@ type Querier interface {
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
 	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
 	CreateContactTask(ctx context.Context, arg CreateContactTaskParams) (*ContactTask, error)
+	// Variant of CreateContactTask that accepts an explicit idempotency_key,
+	// used by the cutover FollowUpManager for crash-safe two-step create.
+	// A NULL key is permitted so the generic path can reuse the query shape;
+	// non-NULL keys collide with the partial unique index
+	// idx_contact_task_followup_idempotency on repeats.
+	CreateContactTaskWithIdempotencyKey(ctx context.Context, arg CreateContactTaskWithIdempotencyKeyParams) (*ContactTask, error)
 	CreateEnrichment(ctx context.Context, arg CreateEnrichmentParams) (*ContactEnrichment, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
 	CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error)
@@ -264,7 +273,9 @@ type Querier interface {
 	// recent fresh-write (kind = 'direct_record') row when multiple exist.
 	FindMatchingDirectWriteBySourceRef(ctx context.Context, arg FindMatchingDirectWriteBySourceRefParams) (*EventShadowObservation, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
-	// Find a pending follow-up task for a contact (kind='follow_up', state='managed')
+	// Find a pending follow-up task for a contact. Matches both 'managed'
+	// and 'pending_remote_create' live states so the two-step create flow
+	// is visible to non-tx callers (e.g. Todoist provider's closeOnOutreach).
 	FindPendingFollowUp(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error)
 	// Transactional sibling of FindPendingFollowUp. Matches both 'managed'
 	// and 'pending_remote_create' live states so the future cutover's
@@ -532,6 +543,12 @@ type Querier interface {
 	SearchContactsSorted(ctx context.Context, arg SearchContactsSortedParams) ([]*Contact, error)
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
 	SetContactMethodPrimary(ctx context.Context, arg SetContactMethodPrimaryParams) error
+	// Persist external_task_id on a row without touching state. Used by the
+	// close-while-pending race path: the create worker enters on a row that
+	// has already transitioned to 'completed' (inbound arrived mid-flight),
+	// issues item_add to keep Todoist in sync, and records the resulting ID
+	// without flipping the row back to 'managed'.
+	SetContactTaskExternalIDOnly(ctx context.Context, arg SetContactTaskExternalIDOnlyParams) error
 	SetTelegramChannelPts(ctx context.Context, arg SetTelegramChannelPtsParams) error
 	SetTelegramDate(ctx context.Context, arg SetTelegramDateParams) error
 	SetTelegramPts(ctx context.Context, arg SetTelegramPtsParams) error
@@ -613,7 +630,11 @@ type Querier interface {
 	// Updates last_contacted, last_interaction_at, last_response_at, and contact_by (for inbound interactions).
 	// Uses forward-only semantics for automated sources; manual always updates.
 	UpdateContactResponseFields(ctx context.Context, arg UpdateContactResponseFieldsParams) error
-	// Update the external task ID (when creating a new Todoist task)
+	// Update the external task ID (when creating a new Todoist task).
+	// Finalizes the two-step follow-up create: transitions a
+	// pending_remote_create row to state='managed' once the remote
+	// task ID is known. Use SetContactTaskExternalIDOnly when the row
+	// should stay in its current state (close-while-pending race).
 	UpdateContactTaskExternalID(ctx context.Context, arg UpdateContactTaskExternalIDParams) (*ContactTask, error)
 	UpdateContactTaskMetadata(ctx context.Context, arg UpdateContactTaskMetadataParams) (*ContactTask, error)
 	UpdateContactTaskState(ctx context.Context, arg UpdateContactTaskStateParams) (*ContactTask, error)
