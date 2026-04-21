@@ -413,3 +413,37 @@ func (r *InteractionRepository) UpdateInteractionTimestampTx(ctx context.Context
 	interaction := convertDbInteraction(dbInteraction)
 	return &interaction, nil
 }
+
+// HasResponseAfter reports whether any inbound or mutual interaction
+// exists for the contact with occurred_at strictly greater than
+// outreachAt. Used by the follow-up consumer's out-of-order guard so an
+// outbound event arriving after a later response has already landed
+// does not produce a stale follow-up.
+func (r *InteractionRepository) HasResponseAfter(ctx context.Context, contactID uuid.UUID, outreachAt time.Time) (bool, error) {
+	hasResp, err := r.queries.HasResponseAfter(ctx, db.HasResponseAfterParams{
+		ContactID:  uuidToPgUUID(contactID),
+		OutreachAt: pgtype.Timestamptz{Time: outreachAt, Valid: true},
+	})
+	if err != nil {
+		return false, err
+	}
+	return hasResp, nil
+}
+
+// HasResponseAfterTx is the tx-threaded variant of HasResponseAfter.
+// The consumer worker holds its tx across guard evaluation to read its
+// own prior writes within the worker's unit of work.
+func (r *InteractionRepository) HasResponseAfterTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, outreachAt time.Time) (bool, error) {
+	q := r.queries
+	if tx != nil {
+		q = db.New(tx)
+	}
+	hasResp, err := q.HasResponseAfter(ctx, db.HasResponseAfterParams{
+		ContactID:  uuidToPgUUID(contactID),
+		OutreachAt: pgtype.Timestamptz{Time: outreachAt, Valid: true},
+	})
+	if err != nil {
+		return false, err
+	}
+	return hasResp, nil
+}
