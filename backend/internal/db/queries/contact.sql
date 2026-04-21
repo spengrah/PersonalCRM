@@ -14,8 +14,8 @@ WHERE deleted_at IS NULL
        (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
   AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
 LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: ListContactsSorted :many
@@ -25,8 +25,8 @@ WHERE deleted_at IS NULL
        (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
   AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
 ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN full_name END ASC,
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'desc' THEN full_name END DESC,
@@ -62,8 +62,8 @@ WHERE c.deleted_at IS NULL
        (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
 ORDER BY ts_rank(
   to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
@@ -83,8 +83,8 @@ WHERE c.deleted_at IS NULL
        (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
 ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN c.full_name END ASC,
@@ -351,8 +351,8 @@ WHERE deleted_at IS NULL
        (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
   AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')));
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))));
 
 -- name: ListContactIDs :many
 -- Lightweight query returning only IDs for navigation
@@ -362,8 +362,8 @@ WHERE deleted_at IS NULL
        (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
   AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')));
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))));
 
 -- name: ListContactIDsSorted :many
 -- Lightweight query returning only IDs with sorting for navigation
@@ -373,8 +373,8 @@ WHERE deleted_at IS NULL
        (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
   AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
 ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN full_name END ASC,
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'desc' THEN full_name END DESC,
@@ -409,8 +409,8 @@ WHERE c.deleted_at IS NULL
        (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
 ORDER BY ts_rank(
   to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
@@ -430,8 +430,8 @@ WHERE c.deleted_at IS NULL
        (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
 ORDER BY
   CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN c.full_name END ASC,
@@ -466,8 +466,8 @@ WHERE c.deleted_at IS NULL
        (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state = 'managed')))
+       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query));
 
 -- name: FindSimilarContacts :many

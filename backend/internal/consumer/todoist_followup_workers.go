@@ -164,11 +164,23 @@ func (w *TodoistFollowUpCreateJobWorker) Work(ctx context.Context, j *river.Job[
 	// If the row was already completed when we entered (inbound arrived
 	// while step-2 was pending), also perform the close. Still outside
 	// the tx — it's a second HTTP call.
-	closeFailed := false
+	closeAttempted := false
+	closeSucceeded := false
 	if task.State == repository.ContactTaskStateCompleted {
+		closeAttempted = true
 		closeCmd := todoist.NewItemCloseCommand(realID)
-		if _, closeErr := client.Sync(ctx, "*", []string{}, []todoist.SyncCommand{closeCmd}); closeErr != nil {
-			closeFailed = true
+		if _, closeErr := client.Sync(ctx, "*", []string{}, []todoist.SyncCommand{closeCmd}); closeErr == nil {
+			closeSucceeded = true
+		}
+	}
+
+	// Snapshot the due_date we sent to Todoist so phase 3 can detect
+	// drift (another event published a refresh between phase 1 read and
+	// phase 3 finalize).
+	var sentDueDate string
+	if task.Metadata != nil {
+		if v, ok := task.Metadata["due_date"].(string); ok {
+			sentDueDate = v
 		}
 	}
 
@@ -180,6 +192,19 @@ func (w *TodoistFollowUpCreateJobWorker) Work(ctx context.Context, j *river.Job[
 		if err != nil {
 			return fmt.Errorf("re-read contact_task %s: %w", j.Args.ContactTaskID, err)
 		}
+
+		// Detect metadata drift: if a refresh updated due_date between
+		// our phase-1 read and now, the Todoist task has the OLD deadline
+		// but the local metadata has the new one. Enqueue a refresh job
+		// so river brings Todoist back in sync.
+		driftDueDate := ""
+		if fresh.Metadata != nil {
+			if v, ok := fresh.Metadata["due_date"].(string); ok {
+				driftDueDate = v
+			}
+		}
+		needsDriftRefresh := sentDueDate != "" && driftDueDate != "" && sentDueDate != driftDueDate
+
 		switch fresh.State {
 		case repository.ContactTaskStatePendingRemoteCreate:
 			// Normal finalize: query atomically sets state='managed' +
@@ -187,13 +212,32 @@ func (w *TodoistFollowUpCreateJobWorker) Work(ctx context.Context, j *river.Job[
 			if _, err := w.deps.taskRepo.UpdateContactTaskExternalIDTx(ctx, tx, fresh.ID, realID); err != nil {
 				return fmt.Errorf("finalize pending_remote_create: %w", err)
 			}
+			if needsDriftRefresh && w.deps.riverInserter != nil {
+				// Parse the fresh deadline back to time.Time for the job arg.
+				if t, perr := time.Parse(todoist.DateFormat, driftDueDate); perr == nil {
+					_, insertErr := w.deps.riverInserter.InsertTx(ctx, tx,
+						consumerjobs.TodoistFollowUpRefreshJobArgs{ContactTaskID: fresh.ID, NewDeadline: t},
+						&river.InsertOpts{MaxAttempts: 10})
+					if insertErr != nil {
+						return fmt.Errorf("enqueue drift refresh: %w", insertErr)
+					}
+				}
+			}
 			return nil
 		case repository.ContactTaskStateCompleted:
 			// Persist external_task_id WITHOUT flipping state.
 			if err := w.deps.taskRepo.SetContactTaskExternalIDOnlyTx(ctx, tx, fresh.ID, realID); err != nil {
 				return fmt.Errorf("persist external id on completed row: %w", err)
 			}
-			if closeFailed && w.deps.riverInserter != nil {
+			// Close-while-pending race: the row is 'completed' but the
+			// Todoist task was just created. If the inline close failed
+			// OR was never attempted (inbound landed between phase 1 and
+			// phase 3 read), enqueue TodoistFollowUpCloseJob so river
+			// retries the close until it succeeds. Skip only when the
+			// inline close already succeeded — in that case Todoist is
+			// already consistent.
+			needsClose := !closeAttempted || !closeSucceeded
+			if needsClose && w.deps.riverInserter != nil {
 				_, insertErr := w.deps.riverInserter.InsertTx(ctx, tx,
 					consumerjobs.TodoistFollowUpCloseJobArgs{ContactTaskID: fresh.ID},
 					&river.InsertOpts{MaxAttempts: 10})

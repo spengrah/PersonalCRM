@@ -73,6 +73,28 @@ func (q *Queries) CountContactTasksByProvider(ctx context.Context, arg CountCont
 	return count, err
 }
 
+const CountRiverJobsByContactTask = `-- name: CountRiverJobsByContactTask :one
+SELECT COUNT(*) FROM river_job
+WHERE kind = $1::text
+  AND (args->>'contact_task_id') = $2::text
+`
+
+type CountRiverJobsByContactTaskParams struct {
+	Kind          string `json:"kind"`
+	ContactTaskID string `json:"contact_task_id"`
+}
+
+// Test-only count of river_job rows with a given kind whose args JSON
+// contains contact_task_id = $2. Used by follow-up cutover integration
+// tests to assert a create/close/refresh job was enqueued without
+// inlining raw SQL into Go test code (core.md rule 2).
+func (q *Queries) CountRiverJobsByContactTask(ctx context.Context, arg CountRiverJobsByContactTaskParams) (int64, error) {
+	row := q.db.QueryRow(ctx, CountRiverJobsByContactTask, arg.Kind, arg.ContactTaskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const CreateContactTask = `-- name: CreateContactTask :one
 INSERT INTO contact_task (
     contact_id,

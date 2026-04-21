@@ -72,6 +72,11 @@ type Querier interface {
 	CountMergeNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
+	// Test-only count of river_job rows with a given kind whose args JSON
+	// contains contact_task_id = $2. Used by follow-up cutover integration
+	// tests to assert a create/close/refresh job was enqueued without
+	// inlining raw SQL into Go test code (core.md rule 2).
+	CountRiverJobsByContactTask(ctx context.Context, arg CountRiverJobsByContactTaskParams) (int64, error)
 	CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error)
 	// Used by integration tests to assert exact row counts per writer. No
 	// deleted_at filter — append-only table.

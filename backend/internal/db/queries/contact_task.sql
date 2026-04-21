@@ -210,3 +210,12 @@ SELECT * FROM contact_task
 WHERE contact_id = sqlc.arg('contact_id')
   AND kind = sqlc.arg('kind')
   AND idempotency_key = sqlc.arg('idempotency_key');
+
+-- name: CountRiverJobsByContactTask :one
+-- Test-only count of river_job rows with a given kind whose args JSON
+-- contains contact_task_id = $2. Used by follow-up cutover integration
+-- tests to assert a create/close/refresh job was enqueued without
+-- inlining raw SQL into Go test code (core.md rule 2).
+SELECT COUNT(*) FROM river_job
+WHERE kind = sqlc.arg('kind')::text
+  AND (args->>'contact_task_id') = sqlc.arg('contact_task_id')::text;

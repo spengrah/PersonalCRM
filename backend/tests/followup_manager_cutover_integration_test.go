@@ -1,6 +1,6 @@
 // Integration coverage for the post-cutover FollowUpManager.
 //
-// Acceptance matrix (spec §5 PR 9b lines 922-943):
+// Acceptance matrix:
 //   - Backdated outbound (non-manual) → no contact_task row, no Todoist call.
 //     Closes #267. Covered by TestIntegration_FollowUpManager_BackdatedOutbound.
 //   - Out-of-order delivery (inbound at T, outbound at T-1d) → guard 2
@@ -316,20 +316,15 @@ func (e *followUpIntegrationEnv) countContactTaskRows(t *testing.T, contactID uu
 }
 
 // countRiverJobsByKind returns the count of river_job rows of a given
-// kind related to the contact_task (via args JSON membership). Uses a
-// broad filter because river_job stores args as JSONB; caller just
-// wants a presence count for assertions.
+// kind related to the contact_task (via args JSON membership).
+// Delegates to the repository's test-only sqlc wrapper so Go test code
+// doesn't inline raw SQL (core.md rule 2).
 func (e *followUpIntegrationEnv) countRiverJobsByKind(t *testing.T, kind string, contactTaskID uuid.UUID) int {
 	t.Helper()
 	ctx := context.Background()
-	var n int
-	err := e.database.Pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM river_job
-		 WHERE kind = $1 AND args->>'contact_task_id' = $2`,
-		kind, contactTaskID.String(),
-	).Scan(&n)
+	n, err := e.taskRepo.CountRiverJobsByContactTask(ctx, kind, contactTaskID)
 	require.NoError(t, err)
-	return n
+	return int(n)
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -482,7 +477,7 @@ func TestIntegration_FollowUpManager_InboundCompletesPending(t *testing.T) {
 	ctx := context.Background()
 	contact := env.seedContact(t, "weekly")
 
-	// Step 1: seed a pending_remote_create row via the outbound path.
+	// Seed a pending_remote_create row via the outbound path first.
 	occurred := accelerated.GetCurrentTime()
 	outboundEnv := env.recordedEnv(t, contact.ID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, occurred, "weekly")
 	env.applyInEventTx(t, outboundEnv)
@@ -491,7 +486,7 @@ func TestIntegration_FollowUpManager_InboundCompletesPending(t *testing.T) {
 	require.NotNil(t, pending)
 	assert.Equal(t, repository.ContactTaskStatePendingRemoteCreate, pending.State)
 
-	// Step 2: publish an inbound response. It should transition the
+	// Then publish an inbound response. It should transition the
 	// pending row to completed in the event tx.
 	inboundEnv := env.recordedEnv(t, contact.ID, repository.InteractionDirectionInbound, repository.InteractionSourceTelegram, occurred.Add(1*time.Hour), "weekly")
 	env.applyInEventTx(t, inboundEnv)

@@ -93,9 +93,10 @@ const (
 	FollowUpActionComplete = "complete"
 	FollowUpActionSkip     = "skip"
 
-	FollowUpSkipReasonBackdated        = "backdated"
-	FollowUpSkipReasonOutOfOrder       = "out_of_order"
-	FollowUpSkipReasonDuplicatePending = "duplicate_pending"
+	FollowUpSkipReasonBackdated           = "backdated"
+	FollowUpSkipReasonOutOfOrder          = "out_of_order"
+	FollowUpSkipReasonDuplicatePending    = "duplicate_pending"
+	FollowUpSkipReasonTodoistUnconfigured = "todoist_unconfigured"
 )
 
 // FollowUpShadowObservationRepository persists follow-up shadow

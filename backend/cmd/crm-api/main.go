@@ -99,19 +99,21 @@ type followUpSettingsRef struct {
 }
 
 // fn returns a TodoistSettingsFunc closure that resolves settings
-// through the populated refs, or errors cleanly when Todoist isn't
-// wired (external sync disabled, or startup failure).
+// through the populated refs. Todoist-unconfigured states (no account,
+// no sync state, missing label) collapse to consumer.ErrTodoistUnconfigured
+// so the follow-up consumer can treat them as a non-fatal skip rather
+// than rolling back the interaction write.
 func (r *followUpSettingsRef) fn() consumer.TodoistSettingsFunc {
 	return func(ctx context.Context) (*todoist.Settings, string, error) {
 		if r.oauth == nil || r.sync == nil {
-			return nil, "", service.ErrNoTodoistAccount
+			return nil, "", consumer.ErrTodoistUnconfigured
 		}
 		accounts, err := r.oauth.ListAccounts(ctx)
 		if err != nil {
 			return nil, "", fmt.Errorf("list todoist accounts: %w", err)
 		}
 		if len(accounts) == 0 {
-			return nil, "", service.ErrNoTodoistAccount
+			return nil, "", consumer.ErrTodoistUnconfigured
 		}
 		accountID := accounts[0].AccountID
 		accessToken, err := r.oauth.GetAccessToken(ctx, accountID)
@@ -121,7 +123,7 @@ func (r *followUpSettingsRef) fn() consumer.TodoistSettingsFunc {
 		state, err := r.sync.GetSyncStateBySource(ctx, todoist.SourceName, &accountID)
 		if err != nil {
 			if errors.Is(err, db.ErrNotFound) {
-				return nil, "", service.ErrTodoistNotConfigured
+				return nil, "", consumer.ErrTodoistUnconfigured
 			}
 			return nil, "", fmt.Errorf("get sync state: %w", err)
 		}
@@ -144,7 +146,7 @@ func (r *followUpSettingsRef) fn() consumer.TodoistSettingsFunc {
 			}
 		}
 		if settings.LabelID == "" {
-			return nil, "", service.ErrTodoistMissingLabel
+			return nil, "", consumer.ErrTodoistUnconfigured
 		}
 		return settings, accessToken, nil
 	}

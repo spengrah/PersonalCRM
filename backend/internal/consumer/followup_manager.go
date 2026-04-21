@@ -33,6 +33,15 @@ const (
 	FollowUpModeCutover = "cutover"
 )
 
+// ErrTodoistUnconfigured is the sentinel the TodoistSettingsFunc returns
+// when Todoist is not wired (no account, no settings, missing label).
+// The consumer treats it as a non-fatal skip so interaction recording
+// doesn't roll back when the user has disabled Todoist integration.
+// Matches the direct-path's best-effort degradation behavior — the
+// local cadence advance still happens; only the follow-up Todoist task
+// is skipped.
+var ErrTodoistUnconfigured = errors.New("todoist integration not configured")
+
 // contactTaskReader is the subset of ContactTaskRepository the consumer
 // depends on for guard 3 (duplicate-pending check).
 type contactTaskReader interface {
@@ -94,8 +103,8 @@ type FollowUpHandler interface {
 }
 
 // FollowUpManager is the event-bus consumer for follow-up task
-// management. In cutover mode (PR 9b of #180) it is the sole writer of
-// the contact_task.kind='follow_up' lifecycle: three-guard skip logic,
+// management. In cutover mode it is the sole writer of the
+// contact_task.kind='follow_up' lifecycle: three-guard skip logic,
 // two-step crash-safe create (pending_remote_create → managed once the
 // Todoist item_add succeeds), refresh with post-commit Todoist call +
 // river-retry fallback, and complete with a river-retried
@@ -418,6 +427,32 @@ func (h *FollowUpManager) applyCreate(
 	// at event-record time.
 	settings, _, err := h.settings(ctx)
 	if err != nil {
+		if errors.Is(err, ErrTodoistUnconfigured) {
+			// Todoist not configured — skip follow-up creation without
+			// rolling back the interaction write. The local cadence
+			// advance still happens; the user sees no follow-up task
+			// until they wire Todoist, matching the direct-path's
+			// best-effort degradation.
+			logger.Warn().
+				Str("event_id", env.ID.String()).
+				Str("contact_id", p.ContactID.String()).
+				Msg("followup_manager: todoist not configured; skipping create")
+			if writeShadow && env != nil {
+				obs := repository.FollowUpShadowObservation{
+					EventID:    env.ID,
+					ContactID:  p.ContactID,
+					Source:     p.Source,
+					Direction:  p.Direction,
+					OccurredAt: p.OccurredAt,
+					Action:     repository.FollowUpActionSkip,
+					SkipReason: repository.FollowUpSkipReasonTodoistUnconfigured,
+				}
+				if shadowErr := h.shadowRepo.RecordConsumer(ctx, tx, obs); shadowErr != nil {
+					return nil, fmt.Errorf("record todoist-unconfigured skip observation: %w", shadowErr)
+				}
+			}
+			return nil, nil
+		}
 		return nil, fmt.Errorf("get todoist settings for create: %w", err)
 	}
 	deadlineStr := deadline.Format(todoist.DateFormat)
@@ -558,6 +593,14 @@ func (h *FollowUpManager) buildRefreshPostCommit(externalID string, contactTaskI
 		deadlineStr := newDeadline.Format(todoist.DateFormat)
 		_, accessToken, err := h.settings(postCtx)
 		if err != nil {
+			if errors.Is(err, ErrTodoistUnconfigured) {
+				// Todoist disabled — local deadline is authoritative;
+				// a retry would never succeed. Skip silently.
+				logger.Debug().
+					Str("contact_task_id", contactTaskID.String()).
+					Msg("followup_manager: refresh skipped — todoist not configured")
+				return
+			}
 			logger.Warn().Err(err).
 				Str("contact_task_id", contactTaskID.String()).
 				Msg("followup_manager: refresh post-commit settings lookup failed; enqueuing retry")
@@ -654,10 +697,11 @@ func (h *FollowUpManager) applyInboundMutual(
 		return nil, fmt.Errorf("mark follow-up completed: %w", err)
 	}
 
-	// Single-owner close-job enqueue (Decision 7). Only enqueue when the
-	// row was fully finalized — i.e. state='managed' AND external_task_id
+	// Single-owner close-job enqueue: only enqueue when the row was
+	// fully finalized — i.e. state='managed' AND external_task_id
 	// populated. When state was pending_remote_create the create worker
-	// handles the race (create-then-close) itself.
+	// handles the race (create-then-close) itself, so enqueuing here
+	// would produce a duplicate close.
 	if pending.State == repository.ContactTaskStateManaged && pending.ExternalTaskID != "" {
 		if _, err := h.riverInserter.InsertTx(ctx, tx, consumerjobs.TodoistFollowUpCloseJobArgs{ContactTaskID: pending.ID}, &river.InsertOpts{MaxAttempts: 10}); err != nil {
 			return nil, fmt.Errorf("enqueue todoist followup close job: %w", err)

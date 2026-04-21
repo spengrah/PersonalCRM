@@ -529,6 +529,17 @@ func (r *ContactTaskRepository) GetContactTaskByIdempotencyKeyTx(ctx context.Con
 	return &task, nil
 }
 
+// CountRiverJobsByContactTask returns the number of river_job rows of
+// the given kind whose args contain contact_task_id = id. Test-only
+// helper backing integration-test assertions; the SQL lives in sqlc so
+// Go tests don't inline raw queries (core.md rule 2).
+func (r *ContactTaskRepository) CountRiverJobsByContactTask(ctx context.Context, kind string, contactTaskID uuid.UUID) (int64, error) {
+	return r.queries.CountRiverJobsByContactTask(ctx, db.CountRiverJobsByContactTaskParams{
+		Kind:          kind,
+		ContactTaskID: contactTaskID.String(),
+	})
+}
+
 // GetContactTaskTx is the tx-threaded variant of GetContactTask. Used by
 // the Todoist follow-up create worker's phase-3 re-read so the write
 // phase sees any state transition that happened during the HTTP phase.
