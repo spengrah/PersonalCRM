@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -129,7 +130,7 @@ func buildRecordedEnv(t *testing.T, contactID uuid.UUID, direction, source strin
 
 func TestFollowUpManager_ModeOff_NoWrites(t *testing.T) {
 	h, tasks, inters, shadow := newUnitFollowUp(FollowUpModeOff)
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, time.Now(), "weekly")
+	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
@@ -140,7 +141,7 @@ func TestFollowUpManager_ModeOff_NoWrites(t *testing.T) {
 
 func TestFollowUpManager_ModeCutover_ReturnsError(t *testing.T) {
 	h, _, _, shadow := newUnitFollowUp(FollowUpModeCutover)
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, time.Now(), "weekly")
+	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.Error(t, err, "cutover mode must fail loudly while cutover code is absent")
@@ -155,7 +156,7 @@ func TestFollowUpManager_NilEnvelope(t *testing.T) {
 
 func TestFollowUpManager_NilTx(t *testing.T) {
 	h, _, _, _ := newUnitFollowUp(FollowUpModeShadow)
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, time.Now(), "weekly")
+	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 	err := h.HandleEvent(context.Background(), nil, env)
 	require.Error(t, err)
 }
@@ -167,7 +168,7 @@ func TestFollowUpManager_V1PayloadRejected(t *testing.T) {
 		ContactID:     uuid.New(),
 		InteractionID: uuid.New(),
 		Direction:     repository.InteractionDirectionOutbound,
-		OccurredAt:    time.Now(),
+		OccurredAt:    accelerated.GetCurrentTime(),
 		Source:        repository.InteractionSourceTelegram,
 	}
 	raw, err := json.Marshal(payload)
@@ -177,7 +178,7 @@ func TestFollowUpManager_V1PayloadRejected(t *testing.T) {
 		Kind:       events.KindInteractionRecorded,
 		Source:     repository.InteractionSourceTelegram,
 		Payload:    raw,
-		ObservedAt: time.Now(),
+		ObservedAt: accelerated.GetCurrentTime(),
 	}
 
 	err = h.HandleEvent(context.Background(), nonNilFakeTx(), env)
@@ -191,7 +192,7 @@ func TestFollowUpManager_V1PayloadRejected(t *testing.T) {
 
 func TestFollowUpManager_UnknownDirection_Skips(t *testing.T) {
 	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
-	env := buildRecordedEnv(t, uuid.New(), "bogus", repository.InteractionSourceTelegram, time.Now(), "weekly")
+	env := buildRecordedEnv(t, uuid.New(), "bogus", repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
@@ -204,7 +205,7 @@ func TestFollowUpManager_UnknownDirection_Skips(t *testing.T) {
 
 func TestFollowUpManager_Outbound_NoCadence_SkipsWithoutReason(t *testing.T) {
 	h, tasks, inters, shadow := newUnitFollowUp(FollowUpModeShadow)
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, time.Now(), "")
+	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "")
 
 	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
@@ -219,7 +220,7 @@ func TestFollowUpManager_Outbound_Backdated_NonManual_SkipsBackdated(t *testing.
 	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
 	// 90 days older than now, with weekly cadence (3-day watchdog): well
 	// past the backdated cutoff.
-	occurred := time.Now().Add(-90 * 24 * time.Hour)
+	occurred := accelerated.GetCurrentTime().Add(-90 * 24 * time.Hour)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, occurred, "weekly")
 
 	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
@@ -231,7 +232,7 @@ func TestFollowUpManager_Outbound_Backdated_NonManual_SkipsBackdated(t *testing.
 
 func TestFollowUpManager_Outbound_Backdated_Manual_BypassesGuard1(t *testing.T) {
 	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
-	occurred := time.Now().Add(-90 * 24 * time.Hour)
+	occurred := accelerated.GetCurrentTime().Add(-90 * 24 * time.Hour)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceManual, occurred, "weekly")
 
 	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
@@ -244,7 +245,7 @@ func TestFollowUpManager_Outbound_Backdated_Manual_BypassesGuard1(t *testing.T) 
 func TestFollowUpManager_Outbound_OutOfOrder_Skips(t *testing.T) {
 	h, _, inters, shadow := newUnitFollowUp(FollowUpModeShadow)
 	inters.hasResp = true
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, time.Now(), "weekly")
+	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
@@ -257,7 +258,7 @@ func TestFollowUpManager_Outbound_OutOfOrder_Skips(t *testing.T) {
 func TestFollowUpManager_Outbound_HasResponseErr_Propagates(t *testing.T) {
 	h, _, inters, _ := newUnitFollowUp(FollowUpModeShadow)
 	inters.err = errors.New("boom")
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, time.Now(), "weekly")
+	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.Error(t, err)
@@ -268,7 +269,7 @@ func TestFollowUpManager_Outbound_DuplicatePending_RefreshNotSkip(t *testing.T) 
 	existing := uuid.New()
 	tasks.pending = &repository.ContactTask{ID: existing, Kind: "follow_up", State: repository.ContactTaskStateManaged}
 	tasks.err = nil
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, time.Now(), "weekly")
+	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
@@ -281,7 +282,7 @@ func TestFollowUpManager_Outbound_DuplicatePending_RefreshNotSkip(t *testing.T) 
 
 func TestFollowUpManager_Outbound_Fresh_RecordsCreate(t *testing.T) {
 	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, time.Now(), "weekly")
+	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
@@ -302,7 +303,7 @@ func TestFollowUpManager_Inbound_HasPending_RecordsComplete(t *testing.T) {
 	h, tasks, _, shadow := newUnitFollowUp(FollowUpModeShadow)
 	tasks.pending = &repository.ContactTask{ID: uuid.New(), Kind: "follow_up", State: repository.ContactTaskStateManaged}
 	tasks.err = nil
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionInbound, repository.InteractionSourceTelegram, time.Now(), "weekly")
+	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionInbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
@@ -312,7 +313,7 @@ func TestFollowUpManager_Inbound_HasPending_RecordsComplete(t *testing.T) {
 
 func TestFollowUpManager_Mutual_NoPending_RecordsSkipNoReason(t *testing.T) {
 	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionMutual, repository.InteractionSourceTelegram, time.Now(), "weekly")
+	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionMutual, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)

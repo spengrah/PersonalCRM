@@ -34,27 +34,27 @@ ALTER TABLE contact_task
         'pending_remote_create'
     ));
 
--- Add a partial unique index over "live" states so follow-up rows are
--- guaranteed at most one live row per (contact_id, provider, kind).
--- Terminal-state rows (completed / unmanaged / dismissed) are unbounded
--- per (contact_id, provider, kind); only one live row is permitted.
--- This unblocks the consumer's two-step cutover from inserting a fresh
--- pending_remote_create row when prior completed/dismissed rows exist.
+-- Add a partial unique index over follow-up rows in live states, so at
+-- most one live follow-up row per (contact_id, provider) exists.
+-- Terminal-state rows (completed / dismissed / unmanaged) are unbounded;
+-- only one live follow-up is permitted. This unblocks the consumer's
+-- two-step cutover from inserting a fresh pending_remote_create row
+-- when prior completed/dismissed follow-ups exist.
+--
+-- Scoped to kind='follow_up' only: action tasks (kind='action') allow
+-- multiple live rows per contact/provider (see migration 029), and
+-- cadence uniqueness is already enforced by unique_contact_provider_cadence.
 --
 -- Context: migration 028 originally declared
 --   CONSTRAINT unique_contact_provider_kind UNIQUE (contact_id, provider, kind)
--- Migration 029 DROPped that hard constraint and installed a partial
--- cadence-only unique index (unique_contact_provider_cadence WHERE
--- kind='cadence'). Follow-up rows (kind='follow_up') have no uniqueness
--- constraint today. The new index below is compatible with the existing
--- cadence partial index — both are enforced on INSERT.
---
--- The DROP below is a safety net for environments that never ran 029.
+-- Migration 029 DROPped that hard constraint. The DROP below is a
+-- safety net for environments that never ran 029.
 ALTER TABLE contact_task DROP CONSTRAINT IF EXISTS unique_contact_provider_kind;
 
-CREATE UNIQUE INDEX idx_contact_task_unique_live
-    ON contact_task (contact_id, provider, kind)
-    WHERE state IN ('managed', 'pending_remote_create');
+CREATE UNIQUE INDEX idx_contact_task_followup_unique_live
+    ON contact_task (contact_id, provider)
+    WHERE kind = 'follow_up'
+      AND state IN ('managed', 'pending_remote_create');
 
 -- Local idempotency key. Predicate is on idempotency_key presence only —
 -- contact_task has no deleted_at column, so the spec's extra

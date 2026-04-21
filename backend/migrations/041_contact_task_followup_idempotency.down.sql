@@ -1,8 +1,8 @@
 -- 041_contact_task_followup_idempotency.down.sql
--- Reverse of 041. Note: any cutover follow-up rows in state
--- 'pending_remote_create' written by a later PR must be cleaned up (or
--- transitioned to another state) before running this down migration —
--- the restored CHECK constraint forbids the new state value entirely.
+-- Reverse of 041. Any follow-up rows in state 'pending_remote_create'
+-- must be cleaned up (or transitioned to another state) before running
+-- this down migration — the restored CHECK constraint forbids the new
+-- state value entirely.
 --
 -- We do NOT restore the legacy unique_contact_provider_kind hard
 -- constraint that migration 028 declared — migration 029 retired it in
@@ -10,7 +10,7 @@
 -- which remains in force.
 
 DROP INDEX IF EXISTS idx_contact_task_followup_idempotency;
-DROP INDEX IF EXISTS idx_contact_task_unique_live;
+DROP INDEX IF EXISTS idx_contact_task_followup_unique_live;
 
 ALTER TABLE contact_task DROP CONSTRAINT IF EXISTS contact_task_state_check;
 ALTER TABLE contact_task
