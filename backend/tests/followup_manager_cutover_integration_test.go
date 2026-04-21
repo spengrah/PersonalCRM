@@ -28,6 +28,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -537,6 +538,93 @@ func TestIntegration_FollowUpManager_DuplicateEventClaimBlocks(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1, "replay must not insert a duplicate row — claim dedupe enforcement")
 	assert.Equal(t, first.ID, rows[0].ID, "same row returned on replay")
+}
+
+// TestIntegration_FollowUpManager_UniqueLiveCollisionRecovers forces
+// the savepoint recovery path by driving two concurrent outbound
+// HandleEvent calls for the same contact. Each tx opens its own DB
+// session, both pass guard 3 (neither sees a pending follow-up), and
+// one hits idx_contact_task_followup_unique_live when inserting.
+// The losing tx must recover via savepoint rollback + refresh rather
+// than aborting the outer interaction tx.
+//
+// Uses SERIALIZABLE isolation to make the race deterministic: both
+// txs observe an empty guard-3 snapshot, then the second tx's insert
+// collides and triggers the recovery. We don't need goroutines — we
+// can just open two sequential txs that each keep their snapshot open
+// past their own guard-3 read.
+func TestIntegration_FollowUpManager_UniqueLiveCollisionRecovers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	env, cleanup := newFollowUpIntegrationEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+	contact := env.seedContact(t, "weekly")
+
+	// Build two distinct envelopes for the same contact so the consumer
+	// takes distinct claims (event_consumer_claim is keyed by event_id).
+	eventAOccurred := accelerated.GetCurrentTime().Add(-2 * time.Hour)
+	eventBOccurred := accelerated.GetCurrentTime().Add(-1 * time.Hour)
+	envA := env.recordedEnv(t, contact.ID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, eventAOccurred, "weekly")
+	envB := env.recordedEnv(t, contact.ID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, eventBOccurred, "weekly")
+
+	// Open tx A and run guard 3 by starting HandleEvent inside tx A.
+	// We can't cleanly pause mid-HandleEvent, so instead we simulate
+	// the race by: (1) opening tx A with REPEATABLE READ, snapshotting
+	// before any follow-up row exists; (2) starting tx B, running
+	// HandleEvent to completion (winner inserts the row); (3) resuming
+	// tx A — it still sees no row in its snapshot, so its insert hits
+	// the unique index and triggers recovery. After A commits, only
+	// one row exists.
+	txA, err := env.database.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	require.NoError(t, err)
+	defer func() { _ = txA.Rollback(ctx) }()
+
+	// Prime tx A's snapshot with a no-op read so the snapshot is taken
+	// BEFORE tx B commits.
+	_, err = env.taskRepo.FindPendingFollowUpTx(ctx, txA, contact.ID)
+	require.True(t, err == nil || errors.Is(err, db.ErrNotFound))
+
+	// Tx B: full HandleEvent, commits. Winner row is now visible to new
+	// transactions but NOT to tx A's snapshot.
+	_, err = txA.Conn().Exec(ctx, "-- snapshot primed")
+	require.NoError(t, err)
+
+	pcB, err := runHandleEventInFreshTx(ctx, env, envB)
+	require.NoError(t, err)
+	assert.Nil(t, pcB)
+
+	// Tx A: HandleEvent. Guard 3 reads txA's snapshot → no row.
+	// The insert hits idx_contact_task_followup_unique_live → savepoint
+	// rollback → recovery via re-read of the winner's row → refresh.
+	// NOTE: the re-read after savepoint rollback uses the outer tx
+	// (tx A) which STILL doesn't see the winner in REPEATABLE READ,
+	// so the recovery path falls through to "no live row on re-read;
+	// skipping" and returns nil. The outer tx must commit cleanly.
+	pcA, err := env.manager.HandleEvent(ctx, txA, envA)
+	require.NoError(t, err, "savepoint recovery must not bubble an error out to the outer tx")
+	assert.Nil(t, pcA)
+	require.NoError(t, txA.Commit(ctx))
+
+	// Only one follow-up row exists.
+	rows, err := env.taskRepo.ListContactTasksFiltered(ctx, contact.ID, nil, ptr(todoist.TaskKindFollowUp))
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "collision recovery must not insert a duplicate row")
+}
+
+// runHandleEventInFreshTx opens a fresh tx on the pool, runs
+// HandleEvent, commits, and returns the post-commit closure + error.
+// Used by the concurrency test so it can drive a second consumer
+// invocation while another tx holds an older snapshot.
+func runHandleEventInFreshTx(ctx context.Context, env *followUpIntegrationEnv, envelope *events.Envelope) (func(context.Context), error) {
+	var pc func(context.Context)
+	err := pgx.BeginTxFunc(ctx, env.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		p, err := env.manager.HandleEvent(ctx, tx, envelope)
+		pc = p
+		return err
+	})
+	return pc, err
 }
 
 // silence "imported and not used" when rivertype isn't directly

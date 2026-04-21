@@ -20,10 +20,31 @@ import (
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 )
+
+// followUpUniqueLiveIndex is the Postgres name of the partial unique
+// index over live follow-up rows (see migration 041). A 23505 raised
+// against this specific index means another concurrent writer has
+// already inserted a pending follow-up for the same contact — recover
+// by re-reading the existing row and routing to refresh.
+const followUpUniqueLiveIndex = "idx_contact_task_followup_unique_live"
+
+// isFollowUpLiveUniqueViolation returns true when err is a 23505 raised
+// against idx_contact_task_followup_unique_live. Scoped narrowly so
+// unrelated unique-violation surfaces (e.g. idempotency-key collisions
+// from a crash-retried worker, or row-level checks) still propagate.
+func isFollowUpLiveUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == pgerrcode.UniqueViolation && pgErr.ConstraintName == followUpUniqueLiveIndex
+}
 
 // FollowUpMode values mirror config.EventBusFollowUpMode*. Duplicated
 // here so non-config callers don't import config just to name a mode.
@@ -479,7 +500,18 @@ func (h *FollowUpManager) applyCreate(
 		"integration_instance_id": settings.IntegrationInstanceID,
 	}
 
-	newTask, err := h.taskWriter.CreateContactTaskTx(ctx, tx, repository.CreateContactTaskRequest{
+	// Wrap the insert in a savepoint so a concurrent-writer collision on
+	// idx_contact_task_followup_unique_live can be recovered without
+	// aborting the outer interaction tx. Two outbound events for the
+	// same contact can both pass guard 3 (FindPendingFollowUpTx) and
+	// then race the insert — the loser's 23505 must be treated as "the
+	// other writer created the pending follow-up" and re-dispatched as a
+	// refresh, not bubbled up as an error.
+	sp, spErr := tx.Begin(ctx)
+	if spErr != nil {
+		return nil, fmt.Errorf("open savepoint for follow-up insert: %w", spErr)
+	}
+	newTask, err := h.taskWriter.CreateContactTaskTx(ctx, sp, repository.CreateContactTaskRequest{
 		ContactID:      p.ContactID,
 		Provider:       todoist.SourceName,
 		Kind:           todoist.TaskKindFollowUp,
@@ -488,7 +520,38 @@ func (h *FollowUpManager) applyCreate(
 		Metadata:       metadata,
 	}, &idemKey)
 	if err != nil {
+		if rbErr := sp.Rollback(ctx); rbErr != nil {
+			return nil, fmt.Errorf("rollback follow-up savepoint: %w", rbErr)
+		}
+		if isFollowUpLiveUniqueViolation(err) {
+			// Another tx inserted the pending follow-up for this contact
+			// between our guard-3 read and our insert. Re-read the winner's
+			// row inside the outer tx and route to the refresh branch so
+			// the deadline advances to this event's occurred_at.
+			existing, findErr := h.taskRepo.FindPendingFollowUpTx(ctx, tx, p.ContactID)
+			if findErr != nil && !errors.Is(findErr, db.ErrNotFound) {
+				return nil, fmt.Errorf("re-read pending follow-up after unique-violation: %w", findErr)
+			}
+			if existing == nil {
+				// Winner's row no longer live (e.g. already completed). Nothing
+				// to refresh; skip silently without failing the outer tx.
+				logger.Debug().
+					Str("event_id", envIDString(env)).
+					Str("contact_id", p.ContactID.String()).
+					Msg("followup_manager: unique-violation but no live row on re-read; skipping")
+				return nil, nil
+			}
+			logger.Debug().
+				Str("event_id", envIDString(env)).
+				Str("contact_id", p.ContactID.String()).
+				Str("contact_task_id", existing.ID.String()).
+				Msg("followup_manager: concurrent insert detected; routing to refresh")
+			return h.applyRefresh(ctx, tx, env, existing, p, days, writeShadow)
+		}
 		return nil, fmt.Errorf("insert pending_remote_create row: %w", err)
+	}
+	if commitErr := sp.Commit(ctx); commitErr != nil {
+		return nil, fmt.Errorf("commit follow-up savepoint: %w", commitErr)
 	}
 
 	if _, err := h.riverInserter.InsertTx(ctx, tx, consumerjobs.TodoistFollowUpCreateJobArgs{ContactTaskID: newTask.ID}, &river.InsertOpts{MaxAttempts: 10}); err != nil {
