@@ -240,11 +240,22 @@ func (h *FollowUpManager) HandleEvent(ctx context.Context, tx pgx.Tx, env *event
 		return h.handleInboundMutual(ctx, tx, env, p)
 	default:
 		logger.Debug().
-			Str("event_id", env.ID.String()).
+			Str("event_id", envIDString(env)).
 			Str("direction", p.Direction).
 			Msg("followup_manager: unknown direction; skipping")
 		return nil, nil
 	}
+}
+
+// envIDString returns env.ID as a string or an empty marker when env is
+// nil. ApplyInteraction and the other direct-invoke callers hand us a
+// nil envelope by design (no event published), so log fields must
+// tolerate that rather than dereferencing env.ID.
+func envIDString(env *events.Envelope) string {
+	if env == nil {
+		return "(none)"
+	}
+	return env.ID.String()
 }
 
 // ApplyInteraction is the direct-invoke entry point for
@@ -409,7 +420,7 @@ func (h *FollowUpManager) applyCreate(
 		}
 	} else if existing != nil {
 		logger.Debug().
-			Str("event_id", env.ID.String()).
+			Str("event_id", envIDString(env)).
 			Str("contact_id", p.ContactID.String()).
 			Str("contact_task_id", existing.ID.String()).
 			Msg("followup_manager: idempotency key already present; skipping insert")
@@ -432,25 +443,15 @@ func (h *FollowUpManager) applyCreate(
 			// rolling back the interaction write. The local cadence
 			// advance still happens; the user sees no follow-up task
 			// until they wire Todoist, matching the direct-path's
-			// best-effort degradation.
+			// best-effort degradation. A log-only skip (no shadow
+			// observation row) is sufficient here: the shadow table's
+			// skip_reason CHECK is scoped to guard-class reasons, and
+			// this config-gap skip is operationally observable via the
+			// WARN log.
 			logger.Warn().
-				Str("event_id", env.ID.String()).
+				Str("event_id", envIDString(env)).
 				Str("contact_id", p.ContactID.String()).
 				Msg("followup_manager: todoist not configured; skipping create")
-			if writeShadow && env != nil {
-				obs := repository.FollowUpShadowObservation{
-					EventID:    env.ID,
-					ContactID:  p.ContactID,
-					Source:     p.Source,
-					Direction:  p.Direction,
-					OccurredAt: p.OccurredAt,
-					Action:     repository.FollowUpActionSkip,
-					SkipReason: repository.FollowUpSkipReasonTodoistUnconfigured,
-				}
-				if shadowErr := h.shadowRepo.RecordConsumer(ctx, tx, obs); shadowErr != nil {
-					return nil, fmt.Errorf("record todoist-unconfigured skip observation: %w", shadowErr)
-				}
-			}
 			return nil, nil
 		}
 		return nil, fmt.Errorf("get todoist settings for create: %w", err)
