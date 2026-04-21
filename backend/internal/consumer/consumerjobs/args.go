@@ -5,9 +5,7 @@
 // jobs; consumer imports consumerjobs to type its workers; consumer also
 // imports events; but events never imports consumer.
 //
-// Each consumer worker's JobArgs type lives here. PR 5 adds
-// InteractionRecorderJobArgs; later PRs (7, 9a, 10) will add CadenceUpdater,
-// FollowUpManager, and RematchDispatcher args.
+// Each consumer worker's JobArgs type lives here.
 package consumerjobs
 
 import "github.com/google/uuid"
@@ -27,10 +25,46 @@ func (InteractionRecorderJobArgs) Kind() string { return "interaction_recorder" 
 
 // CadenceUpdaterJobArgs carries the event id that the CadenceUpdater
 // worker should fetch and process. Enqueued for every interaction.recorded
-// event by events.consumerJobsForKind (PR 7).
+// event by events.consumerJobsForKind.
 type CadenceUpdaterJobArgs struct {
 	EventID uuid.UUID `json:"event_id"`
 }
 
 // Kind returns the river job-kind identifier for CadenceUpdater jobs.
 func (CadenceUpdaterJobArgs) Kind() string { return "cadence_updater" }
+
+// FollowUpManagerJobArgs carries the event id that the FollowUpManager
+// worker should fetch and process. Enqueued alongside CadenceUpdater for
+// every interaction.recorded event. Routing is config-blind — the
+// mode-gate runs inside FollowUpManager.HandleEvent so the worker
+// completes with zero side effects when mode=off.
+type FollowUpManagerJobArgs struct {
+	EventID uuid.UUID `json:"event_id"`
+}
+
+// Kind returns the river job-kind identifier for FollowUpManager jobs.
+func (FollowUpManagerJobArgs) Kind() string { return "followup_manager" }
+
+// TodoistFollowUpCreateJobArgs carries the contact_task id the Todoist
+// follow-up create worker should process. Enqueued only by the cutover
+// consumer; in shadow mode the worker body returns an error when
+// invoked because no code path enqueues it.
+type TodoistFollowUpCreateJobArgs struct {
+	ContactTaskID uuid.UUID `json:"contact_task_id"`
+}
+
+// Kind returns the river job-kind identifier for Todoist follow-up
+// create jobs.
+func (TodoistFollowUpCreateJobArgs) Kind() string { return "todoist_followup_create" }
+
+// TodoistFollowUpCloseJobArgs carries the contact_task id the Todoist
+// follow-up close worker should process. Enqueued only by the cutover
+// consumer when a follow-up is completed; in shadow mode the worker
+// body returns an error when invoked.
+type TodoistFollowUpCloseJobArgs struct {
+	ContactTaskID uuid.UUID `json:"contact_task_id"`
+}
+
+// Kind returns the river job-kind identifier for Todoist follow-up
+// close jobs.
+func (TodoistFollowUpCloseJobArgs) Kind() string { return "todoist_followup_close" }
