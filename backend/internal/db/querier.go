@@ -46,6 +46,11 @@ type Querier interface {
 	// Count events for a specific contact
 	CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	// Per-contact count, narrower than CountByWriter. Integration tests use
+	// this to assert invariants scoped to the contacts they own and avoid
+	// racing against concurrent writes on the shared test DB.
+	CountFollowUpShadowObservationsByContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	CountFollowUpShadowObservationsByWriter(ctx context.Context, writer string) (int64, error)
 	CountIdentitiesBySource(ctx context.Context, source string) (int64, error)
 	// Counts river_job rows that represent an in-flight SyncProviderAccountJob
 	// for the given (source, account_id). Used by
@@ -222,6 +227,27 @@ type Querier interface {
 	// regardless of account_id. Used by the calendar rematch handler to mark
 	// gcal_attendee import candidates as matched after a CRM contact links them.
 	FindExternalContactsBySourceAndSourceID(ctx context.Context, arg FindExternalContactsBySourceAndSourceIDParams) ([]*ExternalContact, error)
+	// Post-bake divergence query. FULL OUTER JOIN of direct vs consumer
+	// rows on event_id — UNIQUE (event_id, writer) guarantees at most one
+	// row per side per event, so the join produces at most one direct +
+	// one consumer row per event. A non-empty result indicates real drift
+	// once expected-divergence classes (guard 1 backdated, guard 2
+	// out-of-order) are filtered out at the report layer.
+	//
+	// Race-class filters baked in (mirrors PR 7's cadence-shadow query):
+	//
+	//   1. Grace window applied on the joined pair, NOT each side
+	//      independently. The direct-path observer fires from an async
+	//      post-commit closure that may land after the consumer. Filtering
+	//      each CTE alone causes a false consumer-only divergence when
+	//      consumer lands past the grace edge and direct lands inside it.
+	//   2. Exclude pairs where the contact is soft-deleted. The direct
+	//      path skips when the contact is gone; the consumer may still
+	//      have written because its check runs at event-time.
+	FindFollowUpShadowDivergences(ctx context.Context, arg FindFollowUpShadowDivergencesParams) ([]*FindFollowUpShadowDivergencesRow, error)
+	// Used by the inline divergence logger and by integration tests that
+	// need to read back a specific writer's observation.
+	FindFollowUpShadowObservationByEventAndWriter(ctx context.Context, arg FindFollowUpShadowObservationByEventAndWriterParams) (*EventShadowFollowupObservation, error)
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
 	// Find an existing interaction by contact, source, and source_ref (for deduplication)
 	FindInteractionBySourceRef(ctx context.Context, arg FindInteractionBySourceRefParams) (*Interaction, error)
@@ -240,6 +266,11 @@ type Querier interface {
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	// Find a pending follow-up task for a contact (kind='follow_up', state='managed')
 	FindPendingFollowUp(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error)
+	// Transactional sibling of FindPendingFollowUp. Matches both 'managed'
+	// and 'pending_remote_create' live states so the future cutover's
+	// two-step creation is visible to this guard. Used by the
+	// FollowUpManager consumer when running inside a worker transaction.
+	FindPendingFollowUpTx(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error)
 	// Find the most recent outbound telegram interaction for a contact in a specific chat
 	// within a time window. source_ref_prefix should include trailing % for LIKE match.
 	FindRecentOutboundTelegramInteraction(ctx context.Context, arg FindRecentOutboundTelegramInteractionParams) (*Interaction, error)
@@ -287,6 +318,11 @@ type Querier interface {
 	GetContactTaskByContact(ctx context.Context, arg GetContactTaskByContactParams) (*ContactTask, error)
 	// Look up a task by its external provider ID
 	GetContactTaskByExternalID(ctx context.Context, arg GetContactTaskByExternalIDParams) (*ContactTask, error)
+	// Partial-index lookup for the local idempotency key used by the
+	// follow-up consumer's crash-safe two-step creation. Matches the
+	// partial unique index on (contact_id, kind, idempotency_key)
+	// WHERE idempotency_key IS NOT NULL.
+	GetContactTaskByIdempotencyKey(ctx context.Context, arg GetContactTaskByIdempotencyKeyParams) (*ContactTask, error)
 	// Find a task by its pending temp ID in metadata (for mapping temp IDs to real Todoist IDs)
 	GetContactTaskByPendingTempID(ctx context.Context, arg GetContactTaskByPendingTempIDParams) (*ContactTask, error)
 	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
@@ -338,6 +374,11 @@ type Querier interface {
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	HasEnrichmentForField(ctx context.Context, arg HasEnrichmentForFieldParams) (bool, error)
+	// Returns TRUE if any later inbound/mutual interaction exists for the
+	// contact after the given outreach time. Used by the FollowUpManager's
+	// out-of-order guard: an outbound event arriving after a response has
+	// already landed must not produce a stale follow-up.
+	HasResponseAfter(ctx context.Context, arg HasResponseAfterParams) (bool, error)
 	IgnoreExternalContact(ctx context.Context, id pgtype.UUID) error
 	// Event shadow cadence-observation queries (spec §3.4.2, PR 7). Sibling
 	// table to event_shadow_observation (migration 038); captures cadence-
@@ -380,6 +421,16 @@ type Querier interface {
 	// that fired without a paired event envelope (e.g., ExtendInteraction,
 	// PromoteInteractionToMutual).
 	InsertEventShadowObservation(ctx context.Context, arg InsertEventShadowObservationParams) (*EventShadowObservation, error)
+	// Event shadow follow-up observation queries (spec §3.4.3). Sibling to
+	// event_shadow_observation (migration 038) and
+	// event_shadow_cadence_observation (migration 039). Captures the action
+	// the FollowUpManager DID (direct path) or WOULD do (consumer) per
+	// interaction.recorded event.
+	// Inserts an observation row. The UNIQUE (event_id, writer) constraint
+	// (migration 042) gives at-most-one-row-per-writer semantics under river
+	// retries. ON CONFLICT DO NOTHING returns no rows on duplicate; callers
+	// treat "no rows" as idempotent success rather than an error.
+	InsertFollowUpShadowObservation(ctx context.Context, arg InsertFollowUpShadowObservationParams) (*EventShadowFollowupObservation, error)
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)

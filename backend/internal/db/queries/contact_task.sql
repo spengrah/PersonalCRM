@@ -147,3 +147,24 @@ SET state = 'completed',
     updated_at = NOW()
 WHERE contact_id = $1 AND kind = 'follow_up' AND state = 'managed'
 RETURNING *;
+
+-- name: FindPendingFollowUpTx :one
+-- Transactional sibling of FindPendingFollowUp. Matches both 'managed'
+-- and 'pending_remote_create' live states so the future cutover's
+-- two-step creation is visible to this guard. Used by the
+-- FollowUpManager consumer when running inside a worker transaction.
+SELECT * FROM contact_task
+WHERE contact_id = $1
+  AND kind = 'follow_up'
+  AND state IN ('managed', 'pending_remote_create')
+LIMIT 1;
+
+-- name: GetContactTaskByIdempotencyKey :one
+-- Partial-index lookup for the local idempotency key used by the
+-- follow-up consumer's crash-safe two-step creation. Matches the
+-- partial unique index on (contact_id, kind, idempotency_key)
+-- WHERE idempotency_key IS NOT NULL.
+SELECT * FROM contact_task
+WHERE contact_id = sqlc.arg('contact_id')
+  AND kind = sqlc.arg('kind')
+  AND idempotency_key = sqlc.arg('idempotency_key');

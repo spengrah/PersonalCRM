@@ -16,7 +16,7 @@ UPDATE contact_task
 SET state = 'completed',
     updated_at = NOW()
 WHERE contact_id = $1 AND kind = 'follow_up' AND state = 'managed'
-RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at
+RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key
 `
 
 // Mark all pending follow-up tasks as completed for a contact (when a response arrives)
@@ -39,6 +39,7 @@ func (q *Queries) CompleteFollowUpForContact(ctx context.Context, contactID pgty
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IdempotencyKey,
 		); err != nil {
 			return nil, err
 		}
@@ -82,7 +83,7 @@ INSERT INTO contact_task (
     $4,
     COALESCE($5, 'managed'),
     COALESCE($6::jsonb, '{}'::jsonb)
-) RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at
+) RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key
 `
 
 type CreateContactTaskParams struct {
@@ -114,6 +115,7 @@ func (q *Queries) CreateContactTask(ctx context.Context, arg CreateContactTaskPa
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IdempotencyKey,
 	)
 	return &i, err
 }
@@ -157,7 +159,7 @@ func (q *Queries) DeleteContactTasksByProvider(ctx context.Context, provider str
 }
 
 const FindPendingFollowUp = `-- name: FindPendingFollowUp :one
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
 WHERE contact_id = $1 AND kind = 'follow_up' AND state = 'managed'
 LIMIT 1
 `
@@ -176,13 +178,44 @@ func (q *Queries) FindPendingFollowUp(ctx context.Context, contactID pgtype.UUID
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IdempotencyKey,
+	)
+	return &i, err
+}
+
+const FindPendingFollowUpTx = `-- name: FindPendingFollowUpTx :one
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
+WHERE contact_id = $1
+  AND kind = 'follow_up'
+  AND state IN ('managed', 'pending_remote_create')
+LIMIT 1
+`
+
+// Transactional sibling of FindPendingFollowUp. Matches both 'managed'
+// and 'pending_remote_create' live states so the future cutover's
+// two-step creation is visible to this guard. Used by the
+// FollowUpManager consumer when running inside a worker transaction.
+func (q *Queries) FindPendingFollowUpTx(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error) {
+	row := q.db.QueryRow(ctx, FindPendingFollowUpTx, contactID)
+	var i ContactTask
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Provider,
+		&i.Kind,
+		&i.ExternalTaskID,
+		&i.State,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IdempotencyKey,
 	)
 	return &i, err
 }
 
 const GetContactTask = `-- name: GetContactTask :one
 
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
 WHERE id = $1
 `
 
@@ -200,12 +233,13 @@ func (q *Queries) GetContactTask(ctx context.Context, id pgtype.UUID) (*ContactT
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IdempotencyKey,
 	)
 	return &i, err
 }
 
 const GetContactTaskByContact = `-- name: GetContactTaskByContact :one
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
 WHERE contact_id = $1 AND provider = $2 AND kind = $3
 `
 
@@ -229,12 +263,13 @@ func (q *Queries) GetContactTaskByContact(ctx context.Context, arg GetContactTas
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IdempotencyKey,
 	)
 	return &i, err
 }
 
 const GetContactTaskByExternalID = `-- name: GetContactTaskByExternalID :one
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
 WHERE provider = $1 AND external_task_id = $2
 `
 
@@ -257,12 +292,48 @@ func (q *Queries) GetContactTaskByExternalID(ctx context.Context, arg GetContact
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IdempotencyKey,
+	)
+	return &i, err
+}
+
+const GetContactTaskByIdempotencyKey = `-- name: GetContactTaskByIdempotencyKey :one
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
+WHERE contact_id = $1
+  AND kind = $2
+  AND idempotency_key = $3
+`
+
+type GetContactTaskByIdempotencyKeyParams struct {
+	ContactID      pgtype.UUID `json:"contact_id"`
+	Kind           string      `json:"kind"`
+	IdempotencyKey pgtype.Text `json:"idempotency_key"`
+}
+
+// Partial-index lookup for the local idempotency key used by the
+// follow-up consumer's crash-safe two-step creation. Matches the
+// partial unique index on (contact_id, kind, idempotency_key)
+// WHERE idempotency_key IS NOT NULL.
+func (q *Queries) GetContactTaskByIdempotencyKey(ctx context.Context, arg GetContactTaskByIdempotencyKeyParams) (*ContactTask, error) {
+	row := q.db.QueryRow(ctx, GetContactTaskByIdempotencyKey, arg.ContactID, arg.Kind, arg.IdempotencyKey)
+	var i ContactTask
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Provider,
+		&i.Kind,
+		&i.ExternalTaskID,
+		&i.State,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IdempotencyKey,
 	)
 	return &i, err
 }
 
 const GetContactTaskByPendingTempID = `-- name: GetContactTaskByPendingTempID :one
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
 WHERE provider = $1 AND metadata->>'pending_temp_id' = $2::text
 `
 
@@ -285,12 +356,13 @@ func (q *Queries) GetContactTaskByPendingTempID(ctx context.Context, arg GetCont
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IdempotencyKey,
 	)
 	return &i, err
 }
 
 const ListContactTasksByContact = `-- name: ListContactTasksByContact :many
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
 WHERE contact_id = $1
 ORDER BY provider, kind
 `
@@ -315,6 +387,7 @@ func (q *Queries) ListContactTasksByContact(ctx context.Context, contactID pgtyp
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IdempotencyKey,
 		); err != nil {
 			return nil, err
 		}
@@ -327,7 +400,7 @@ func (q *Queries) ListContactTasksByContact(ctx context.Context, contactID pgtyp
 }
 
 const ListContactTasksByContactFiltered = `-- name: ListContactTasksByContactFiltered :many
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
 WHERE contact_id = $1
   AND ($2::text IS NULL OR state = $2::text)
   AND ($3::text IS NULL OR kind = $3::text)
@@ -360,6 +433,7 @@ func (q *Queries) ListContactTasksByContactFiltered(ctx context.Context, arg Lis
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IdempotencyKey,
 		); err != nil {
 			return nil, err
 		}
@@ -372,7 +446,7 @@ func (q *Queries) ListContactTasksByContactFiltered(ctx context.Context, arg Lis
 }
 
 const ListContactTasksByProvider = `-- name: ListContactTasksByProvider :many
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
 WHERE provider = $1
   AND ($2::text IS NULL OR state = $2::text)
 ORDER BY created_at DESC
@@ -403,6 +477,7 @@ func (q *Queries) ListContactTasksByProvider(ctx context.Context, arg ListContac
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IdempotencyKey,
 		); err != nil {
 			return nil, err
 		}
@@ -415,7 +490,7 @@ func (q *Queries) ListContactTasksByProvider(ctx context.Context, arg ListContac
 }
 
 const ListFollowUpsWithPendingClose = `-- name: ListFollowUpsWithPendingClose :many
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
 WHERE kind = 'follow_up' AND state = 'completed'
   AND metadata->>'todoist_close_pending' = 'true'
 `
@@ -440,6 +515,7 @@ func (q *Queries) ListFollowUpsWithPendingClose(ctx context.Context) ([]*Contact
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IdempotencyKey,
 		); err != nil {
 			return nil, err
 		}
@@ -452,7 +528,7 @@ func (q *Queries) ListFollowUpsWithPendingClose(ctx context.Context) ([]*Contact
 }
 
 const ListManagedContactTasks = `-- name: ListManagedContactTasks :many
-SELECT ct.id, ct.contact_id, ct.provider, ct.kind, ct.external_task_id, ct.state, ct.metadata, ct.created_at, ct.updated_at, c.full_name, c.cadence, c.contact_by, c.last_contacted
+SELECT ct.id, ct.contact_id, ct.provider, ct.kind, ct.external_task_id, ct.state, ct.metadata, ct.created_at, ct.updated_at, ct.idempotency_key, c.full_name, c.cadence, c.contact_by, c.last_contacted
 FROM contact_task ct
 JOIN contact c ON c.id = ct.contact_id AND c.deleted_at IS NULL
 WHERE ct.provider = $1 AND ct.state = 'managed'
@@ -469,6 +545,7 @@ type ListManagedContactTasksRow struct {
 	Metadata       []byte             `json:"metadata"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	IdempotencyKey pgtype.Text        `json:"idempotency_key"`
 	FullName       string             `json:"full_name"`
 	Cadence        pgtype.Text        `json:"cadence"`
 	ContactBy      pgtype.Date        `json:"contact_by"`
@@ -495,6 +572,7 @@ func (q *Queries) ListManagedContactTasks(ctx context.Context, provider string) 
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IdempotencyKey,
 			&i.FullName,
 			&i.Cadence,
 			&i.ContactBy,
@@ -516,7 +594,7 @@ SET external_task_id = $2,
     state = 'managed',
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at
+RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key
 `
 
 type UpdateContactTaskExternalIDParams struct {
@@ -538,6 +616,7 @@ func (q *Queries) UpdateContactTaskExternalID(ctx context.Context, arg UpdateCon
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IdempotencyKey,
 	)
 	return &i, err
 }
@@ -547,7 +626,7 @@ UPDATE contact_task
 SET metadata = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at
+RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key
 `
 
 type UpdateContactTaskMetadataParams struct {
@@ -568,6 +647,7 @@ func (q *Queries) UpdateContactTaskMetadata(ctx context.Context, arg UpdateConta
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IdempotencyKey,
 	)
 	return &i, err
 }
@@ -577,7 +657,7 @@ UPDATE contact_task
 SET state = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at
+RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key
 `
 
 type UpdateContactTaskStateParams struct {
@@ -598,6 +678,7 @@ func (q *Queries) UpdateContactTaskState(ctx context.Context, arg UpdateContactT
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IdempotencyKey,
 	)
 	return &i, err
 }
@@ -621,7 +702,7 @@ INSERT INTO contact_task (
     state = EXCLUDED.state,
     metadata = EXCLUDED.metadata,
     updated_at = NOW()
-RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at
+RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key
 `
 
 type UpsertContactTaskParams struct {
@@ -654,6 +735,7 @@ func (q *Queries) UpsertContactTask(ctx context.Context, arg UpsertContactTaskPa
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IdempotencyKey,
 	)
 	return &i, err
 }
