@@ -100,7 +100,7 @@ INSERT INTO contact_task (
     @external_task_id,
     COALESCE(@state, 'managed'),
     COALESCE(@metadata::jsonb, '{}'::jsonb)
-) ON CONFLICT (external_task_id) DO UPDATE SET
+) ON CONFLICT (external_task_id) WHERE external_task_id <> '' DO UPDATE SET
     state = EXCLUDED.state,
     metadata = EXCLUDED.metadata,
     updated_at = NOW()
