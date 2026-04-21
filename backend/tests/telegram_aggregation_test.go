@@ -100,6 +100,20 @@ func createTestContact(t *testing.T, contactRepo *repository.ContactRepository, 
 	return contact
 }
 
+// createTestContactWithCadence creates a contact with a cadence + baseline
+// last_contacted so Extend/Promote tests can assert cadence column
+// transitions against a deterministic starting state.
+func createTestContactWithCadence(t *testing.T, contactRepo *repository.ContactRepository, name, cadence string, lastContacted time.Time) *repository.Contact {
+	t.Helper()
+	contact, err := contactRepo.CreateContact(context.Background(), repository.CreateContactRequest{
+		FullName:      name,
+		Cadence:       &cadence,
+		LastContacted: &lastContacted,
+	})
+	require.NoError(t, err)
+	return contact
+}
+
 func insertTestMessage(t *testing.T, repo *repository.TelegramMessageRepository, msgID int32, chatID int64, outgoing bool, sentAt time.Time, contactID *uuid.UUID, peerUserID int64) *repository.TelegramMessage {
 	t.Helper()
 	text := "test message"
@@ -224,10 +238,16 @@ func TestAggregation_IncrementalCoalescing(t *testing.T) {
 	messageRepo, interactionRepo, contactRepo, _, engine, _ := setupAggregationTest(t)
 	ctx := context.Background()
 
-	contact := createTestContact(t, contactRepo, "Aggregation Incremental Coalesce")
+	// Seed with cadence + a baseline last_contacted so we can observe
+	// cadence column transitions after ExtendInteraction runs.
+	initialLastContacted := accelerated.GetCurrentTime().Add(-24 * time.Hour).Truncate(time.Microsecond)
+	contact := createTestContactWithCadence(t, contactRepo, "Aggregation Incremental Coalesce", "weekly", initialLastContacted)
 	t.Cleanup(func() {
 		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
 	})
+	require.NotNil(t, contact.ContactBy, "weekly cadence should seed contact_by")
+	initialContactBy := *contact.ContactBy
+	initialLastInteractionAt := contact.LastInteractionAt
 
 	base := accelerated.GetCurrentTime().Add(-30 * time.Minute).Truncate(time.Microsecond)
 
@@ -242,23 +262,53 @@ func TestAggregation_IncrementalCoalescing(t *testing.T) {
 	// Second outbound message within burst window → aggregation's incremental
 	// path calls ExtendInteraction (sync, not via event bus — plan Decision 3).
 	// Still just one interaction row.
-	insertTestMessage(t, messageRepo, 80042, 301, true, base.Add(10*time.Minute), &contact.ID, 70005)
+	extendTime := base.Add(10 * time.Minute)
+	insertTestMessage(t, messageRepo, 80042, 301, true, extendTime, &contact.ID, 70005)
 	err = engine.AggregateForContact(ctx, contact.ID, 301)
 	require.NoError(t, err)
 
 	interactions, err = interactionRepo.ListContactInteractions(ctx, contact.ID, 100, 0)
 	require.NoError(t, err)
 	assert.Len(t, interactions, 1) // still just 1 interaction (coalesced)
+
+	// Assert ExtendInteraction's cadence side-effects.
+	// Outbound extends bump ONLY last_outreach_at; last_contacted,
+	// last_interaction_at, last_response_at and contact_by must stay put
+	// (spec §3.4.2 direction rules). ExtendInteraction routes through
+	// CadenceUpdater.ApplyInteraction post-cutover.
+	updated, err := contactRepo.GetContact(ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updated.LastOutreachAt, "outbound extend must set last_outreach_at")
+	assert.Equal(t, extendTime.UTC(), updated.LastOutreachAt.UTC(),
+		"outbound ExtendInteraction should advance last_outreach_at to the extend timestamp")
+	require.NotNil(t, updated.LastContacted)
+	assert.Equal(t, initialLastContacted.UTC(), updated.LastContacted.UTC(),
+		"outbound must NOT bump last_contacted")
+	if initialLastInteractionAt == nil {
+		assert.Nil(t, updated.LastInteractionAt, "outbound must NOT set last_interaction_at")
+	} else {
+		assert.Equal(t, initialLastInteractionAt.UTC(), updated.LastInteractionAt.UTC(),
+			"outbound must NOT bump last_interaction_at")
+	}
+	assert.Nil(t, updated.LastResponseAt, "outbound must NOT set last_response_at")
+	require.NotNil(t, updated.ContactBy)
+	assert.Equal(t, initialContactBy.UTC(), updated.ContactBy.UTC(),
+		"outbound must NOT recompute contact_by")
 }
 
 func TestAggregation_IncrementalReplyBridge(t *testing.T) {
 	messageRepo, interactionRepo, contactRepo, _, engine, _ := setupAggregationTest(t)
 	ctx := context.Background()
 
-	contact := createTestContact(t, contactRepo, "Aggregation Incremental Bridge")
+	// Seed with cadence + a baseline last_contacted so we can observe
+	// cadence column transitions after PromoteInteractionToMutual runs.
+	initialLastContacted := accelerated.GetCurrentTime().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
+	contact := createTestContactWithCadence(t, contactRepo, "Aggregation Incremental Bridge", "weekly", initialLastContacted)
 	t.Cleanup(func() {
 		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
 	})
+	require.NotNil(t, contact.ContactBy)
+	initialContactBy := *contact.ContactBy
 
 	base := accelerated.GetCurrentTime().Add(-2 * time.Hour).Truncate(time.Microsecond)
 
@@ -273,13 +323,38 @@ func TestAggregation_IncrementalReplyBridge(t *testing.T) {
 	// Inbound reply within 48h → aggregation's reply-bridge path calls
 	// PromoteInteractionToMutual (sync, plan Decision 3 — extend/promote
 	// stay direct-path through PR 6).
-	insertTestMessage(t, messageRepo, 80052, 302, false, base.Add(30*time.Minute), &contact.ID, 70006)
+	replyTime := base.Add(30 * time.Minute)
+	insertTestMessage(t, messageRepo, 80052, 302, false, replyTime, &contact.ID, 70006)
 	err = engine.AggregateForContact(ctx, contact.ID, 302)
 	require.NoError(t, err)
 
 	interactions = waitForInteractionDirection(t, ctx, interactionRepo, contact.ID, "mutual", defaultInteractionWaitTimeout)
 	require.Len(t, interactions, 1) // still 1, promoted
 	assert.Equal(t, "mutual", interactions[0].Direction)
+
+	// Assert PromoteInteractionToMutual's cadence side-effects.
+	// Mutual promotion via ApplyInteraction should advance ALL
+	// cadence columns (last_contacted, last_interaction_at,
+	// last_outreach_at, last_response_at) to the reply timestamp and
+	// recompute contact_by from the contact's cadence.
+	updated, err := contactRepo.GetContact(ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updated.LastContacted)
+	assert.Equal(t, replyTime.UTC(), updated.LastContacted.UTC(),
+		"mutual promote should advance last_contacted")
+	require.NotNil(t, updated.LastInteractionAt)
+	assert.Equal(t, replyTime.UTC(), updated.LastInteractionAt.UTC(),
+		"mutual promote should advance last_interaction_at")
+	require.NotNil(t, updated.LastOutreachAt)
+	assert.Equal(t, replyTime.UTC(), updated.LastOutreachAt.UTC(),
+		"mutual promote should advance last_outreach_at")
+	require.NotNil(t, updated.LastResponseAt)
+	assert.Equal(t, replyTime.UTC(), updated.LastResponseAt.UTC(),
+		"mutual promote should set last_response_at")
+	require.NotNil(t, updated.ContactBy)
+	assert.True(t, updated.ContactBy.After(initialContactBy),
+		"mutual promote should recompute contact_by forward (initial=%s, updated=%s)",
+		initialContactBy, updated.ContactBy)
 }
 
 func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {

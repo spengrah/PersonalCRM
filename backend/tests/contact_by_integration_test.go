@@ -18,6 +18,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -300,7 +301,12 @@ func TestContactBy_UpdateContactLastContactedIfLater(t *testing.T) {
 	// as no cadence if it somehow got into the database.
 }
 
-// TestContactBy_CadenceStateTransitions verifies contact_by behavior when cadence changes.
+// TestContactBy_CadenceStateTransitions verifies contact_by behavior
+// when cadence changes. Post-cutover the repository.UpdateContact
+// query is profile-only; contact_by mutations route through
+// ContactService.UpdateContact → CadenceUpdater.ApplyContactByOverride,
+// so this test exercises the service layer to cover the end-to-end
+// cadence edit path.
 func TestContactBy_CadenceStateTransitions(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -322,6 +328,11 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 	defer database.Close()
 
 	contactRepo := repository.NewContactRepository(database.Queries)
+	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
+	wireCadenceUpdaterForTest(t, database, contactService)
 
 	t.Run("set cadence -> clear cadence -> set cadence", func(t *testing.T) {
 		weeklyStr := "weekly"
@@ -339,13 +350,13 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 		require.NotNil(t, contact.ContactBy, "contact_by should be set when cadence is set")
 		initialContactBy := *contact.ContactBy
 
-		// Step 2: Update contact to CLEAR cadence (set to nil)
-		// Note: We need to update via the full UpdateContact method which handles contact_by
-		updatedContact, err := contactRepo.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
-			FullName:  contact.FullName,
-			Cadence:   nil, // Clear cadence
-			ContactBy: nil, // contact_by should also be cleared
-		})
+		// Step 2: Update contact to CLEAR cadence. The service recomputes
+		// contact_by from the new cadence (nil → clear) and routes the
+		// contact_by write through CadenceUpdater.ApplyContactByOverride.
+		updatedContact, _, err := contactService.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+			FullName: contact.FullName,
+			Cadence:  nil, // Clear cadence
+		}, nil, false)
 		require.NoError(t, err)
 		assert.Nil(t, updatedContact.ContactBy, "contact_by should be nil when cadence is cleared")
 
@@ -353,16 +364,19 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 		fetchedContact, err := contactRepo.GetContact(ctx, contact.ID)
 		require.NoError(t, err)
 		assert.Nil(t, fetchedContact.ContactBy, "contact_by should remain nil after fetch")
+		// Stale-struct guard: the service returned struct's updated_at
+		// must match the committed row's updated_at (both the profile
+		// UpdateContact and the ApplyContactByOverride bump
+		// updated_at; the service used to return the former's stale
+		// value).
+		assert.Equal(t, fetchedContact.UpdatedAt, updatedContact.UpdatedAt,
+			"returned updated_at should reflect post-override committed state")
 
 		// Step 3: Update contact to SET cadence again (different cadence)
-		// Calculate new contact_by based on now (since last_contacted may be nil)
-		now := accelerated.GetCurrentTime()
-		newContactBy := cadence.CalculateContactBy(now, cadence.CadenceMonthly)
-		updatedContact, err = contactRepo.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
-			FullName:  contact.FullName,
-			Cadence:   &monthlyStr,
-			ContactBy: &newContactBy,
-		})
+		updatedContact, _, err = contactService.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+			FullName: contact.FullName,
+			Cadence:  &monthlyStr,
+		}, nil, false)
 		require.NoError(t, err)
 		require.NotNil(t, updatedContact.ContactBy, "contact_by should be set when cadence is re-enabled")
 
@@ -385,14 +399,11 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 
 		assert.Nil(t, contact.ContactBy, "contact_by should be nil initially")
 
-		// Update to add cadence
-		now := accelerated.GetCurrentTime()
-		newContactBy := cadence.CalculateContactBy(now, cadence.CadenceWeekly)
-		updatedContact, err := contactRepo.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
-			FullName:  contact.FullName,
-			Cadence:   &weeklyStr,
-			ContactBy: &newContactBy,
-		})
+		// Update to add cadence through the service layer.
+		updatedContact, _, err := contactService.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+			FullName: contact.FullName,
+			Cadence:  &weeklyStr,
+		}, nil, false)
 		require.NoError(t, err)
 		require.NotNil(t, updatedContact.ContactBy, "contact_by should be set when cadence is added")
 	})
@@ -402,7 +413,8 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 		annualStr := "annual"
 		lastContacted := time.Date(2024, 6, 15, 12, 0, 0, 0, time.Local)
 
-		// Create with weekly cadence
+		// Create with weekly cadence + a fixed last_contacted so the
+		// service-layer contact_by recompute has a stable base.
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 			FullName:      "Test Change Cadence Type",
 			Cadence:       &weeklyStr,
@@ -414,13 +426,12 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 		require.NotNil(t, contact.ContactBy)
 		weeklyContactBy := *contact.ContactBy
 
-		// Change to annual cadence
-		annualContactBy := cadence.CalculateContactBy(lastContacted, cadence.CadenceAnnual)
-		updatedContact, err := contactRepo.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
-			FullName:  contact.FullName,
-			Cadence:   &annualStr,
-			ContactBy: &annualContactBy,
-		})
+		// Change to annual cadence; the service recomputes contact_by
+		// from (new cadence, existing last_contacted).
+		updatedContact, _, err := contactService.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+			FullName: contact.FullName,
+			Cadence:  &annualStr,
+		}, nil, false)
 		require.NoError(t, err)
 		require.NotNil(t, updatedContact.ContactBy)
 

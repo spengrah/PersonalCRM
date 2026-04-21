@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow check-cadence-sole-writer
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -300,8 +300,15 @@ lint-fix:
 	@echo "Running golangci-lint with auto-fix..."
 	@cd backend && $(GOLANGCI_LINT) run --fix ./...
 
-ci-test: lint test-unit test-integration-fast test-frontend
+ci-test: lint check-cadence-sole-writer test-unit test-integration-fast test-frontend
 	@echo "✅ All CI tests passed"
+
+# Sole-writer guard: verifies only CadenceUpdater calls cadence-writing queries.
+# Runs alongside the Go AST test at backend/tests/sole_writer_static_test.go;
+# produces reviewer-visible file/line evidence whenever a cadence-writing
+# symbol escapes the allowlist. See scripts/check-cadence-sole-writer.sh.
+check-cadence-sole-writer:
+	@$(REPO_ROOT)/scripts/check-cadence-sole-writer.sh
 
 # Code generation
 sqlc:

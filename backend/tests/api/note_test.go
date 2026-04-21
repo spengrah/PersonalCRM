@@ -51,6 +51,7 @@ func setupNoteTestRouter() (*gin.Engine, func()) {
 	// Set up services
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries))
+	wireCadenceUpdaterForAPITest(nil, database, contactService)
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 
 	// Set up handlers

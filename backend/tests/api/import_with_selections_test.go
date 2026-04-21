@@ -52,8 +52,10 @@ func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository
 	// Create services
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries))
+	cadenceUpdater := wireCadenceUpdaterForAPITest(nil, database, contactService)
 	matchService := service.NewImportMatchService(contactRepo)
-	enrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
+	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo)
+	enrichmentService.SetCadenceUpdater(cadenceUpdater)
 
 	// Create handler
 	importHandler := handlers.NewImportHandler(externalRepo, contactService, matchService, enrichmentService)
@@ -832,6 +834,12 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, updatedContact.Cadence)
 		assert.Equal(t, "weekly", *updatedContact.Cadence)
+		// Cadence-present link must recompute contact_by
+		// via CadenceUpdater.ApplyContactByOverride. A weekly cadence on
+		// a fresh contact (no last_contacted) derives contact_by from
+		// created_at + 7 days, so the column must be non-nil.
+		require.NotNil(t, updatedContact.ContactBy,
+			"cadence-present link flow must populate contact_by via CadenceUpdater")
 	})
 
 	t.Run("LinkContact_WithCadence_OverridesExisting", func(t *testing.T) {
@@ -885,6 +893,18 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, updatedContact.Cadence)
 		assert.Equal(t, "biweekly", *updatedContact.Cadence)
+		// The override path must re-derive contact_by
+		// from the NEW cadence (biweekly) rather than the starting
+		// quarterly. Both values are non-nil, so we verify the date
+		// difference is consistent with a ~14-day cadence relative to
+		// the contact's creation time (the base when last_contacted is
+		// nil). Biweekly-from-created-at would be ~14d, whereas the
+		// original quarterly would have been ~90d — far apart enough
+		// that a simple days-apart assertion is tight.
+		require.NotNil(t, updatedContact.ContactBy)
+		daysFromCreation := updatedContact.ContactBy.Sub(updatedContact.CreatedAt).Hours() / 24
+		assert.InDelta(t, 14.0, daysFromCreation, 1.5,
+			"cadence-change override should recompute contact_by from the new biweekly cadence")
 	})
 
 	t.Run("LinkContact_WithoutCadence_PreservesExisting", func(t *testing.T) {
@@ -895,6 +915,8 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 			Cadence:  &existingCadence,
 		})
 		require.NoError(t, err)
+		require.NotNil(t, contact.ContactBy, "annual cadence should seed contact_by at create time")
+		initialContactBy := *contact.ContactBy
 
 		defer func() {
 			_ = contactRepo.HardDeleteContact(ctx, contact.ID)
@@ -936,6 +958,12 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, updatedContact.Cadence)
 		assert.Equal(t, "annual", *updatedContact.Cadence)
+		// Cadence-absent enrichment must NOT mutate contact_by. The
+		// profile-only path runs — it's not permitted to touch
+		// cadence columns per the sole-writer invariant.
+		require.NotNil(t, updatedContact.ContactBy)
+		assert.Equal(t, initialContactBy.UTC(), updatedContact.ContactBy.UTC(),
+			"cadence-absent link must NOT mutate contact_by")
 	})
 
 	t.Run("LinkContact_InvalidCadence", func(t *testing.T) {

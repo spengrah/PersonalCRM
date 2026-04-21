@@ -171,15 +171,42 @@ func run() int {
 	// the interaction insert — plan Decision 10).
 	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
 
-	// PR 6 InteractionRecorder consumer + manual handler (spec §3.4.1, plan
-	// Decisions 4a/10). The consumer delegates the write to
-	// ContactService.RecordInteractionTx, then marks telegram_messages
-	// processed (for message.* kinds) and emits interaction.recorded — all
-	// inside the caller's tx.
+	// CadenceUpdater must be constructed BEFORE InteractionRecorder so
+	// the recorder can inline-invoke it after bus.PublishTx on fresh
+	// writes. Wired here even though its worker is registered further
+	// down, so the construction order matches the runtime dispatch
+	// order. contactRepo.SetPool is called at the first writer-path
+	// construction so the cadence updater can open its own tx if ever
+	// needed outside the caller's tx (defensive — the current path
+	// always runs in the caller's tx).
+	contactRepo.SetPool(database.Pool)
+	eventClaimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
+	cadenceUpdater := consumer.NewCadenceUpdater(
+		eventClaimRepo,
+		contactRepo,
+		database.Queries,
+		consumer.CadenceModeFromConfig(cfg.EventBus.CadenceMode),
+		cfg.EventBus.UnsafeAllowOffMode,
+	)
+
+	// Wire CadenceUpdater into ContactService so Merge / Extend / Promote
+	// / UpdateContact cadence-edit paths route cadence writes through
+	// the sole writer.
+	contactService.SetCadenceUpdater(cadenceUpdater)
+
+	// InteractionRecorder consumer + manual handler (spec §3.4.1).
+	// Delegates the write to ContactService.RecordInteractionTx, then
+	// marks telegram_messages processed (for message.* kinds) and emits
+	// interaction.recorded — all inside the caller's tx. After emitting
+	// interaction.recorded, the recorder inline-invokes
+	// cadenceUpdater.HandleEvent on fresh writes so cadence columns
+	// apply synchronously and queued re-deliveries become durable
+	// no-ops.
 	interactionRecorder := consumer.NewInteractionRecorder(
 		contactService,
 		telegramMessageRepo,
 		eventBus,
+		cadenceUpdater,
 	)
 
 	// Register the consumer worker. The worker is registered UNCONDITIONALLY —
@@ -230,54 +257,45 @@ func run() int {
 	// integration tests / post-bake queries. PR 12 drops the table.
 	_ = shadowObsRepo
 
-	// PR 7 CadenceUpdater wiring (spec §3.4.2; plan Decisions 6 + 9).
-	//
-	// The worker is registered UNCONDITIONALLY regardless of the
-	// configured cadence mode — events.consumerJobsForKind always
-	// enqueues a cadence_updater job for interaction.recorded, so a
-	// registered worker must exist in every mode. HandleEvent branches
-	// internally on mode=off → short-circuits with a DEBUG log and
-	// returns nil, leaving no DB side-effects.
-	//
-	// The ContactRepository gets its pool wired here so
-	// SnapshotContactCadenceFields (used by the direct-path shadow
-	// observer's post-commit closure) can open its own short-lived tx.
-	contactRepo.SetPool(database.Pool)
-
-	cadenceShadowRepo := repository.NewCadenceShadowObservationRepository(database.Queries, database.Pool)
-	cadenceUpdater := consumer.NewCadenceUpdater(
-		cadenceShadowRepo, eventBus,
-		consumer.CadenceModeFromConfig(cfg.EventBus.CadenceMode),
-	)
+	// CadenceUpdater is constructed above (alongside InteractionRecorder).
+	// Register its river worker unconditionally — events.consumerJobsForKind
+	// always enqueues a cadence_updater job for interaction.recorded. In
+	// cutover mode the inline recorder path claims the event first, so
+	// this worker is almost always a durable no-op on re-delivery. In
+	// mode=off HandleEvent short-circuits before any DB write.
 	river.AddWorker(riverWorkers, consumer.NewCadenceUpdaterWorker(eventBus, database.Pool, cadenceUpdater))
 
-	// Direct-path observer is wired only when mode != off. In off mode
-	// the observer stays nil and applyInteractionEffectsFromRow's
-	// shadow-capture branch is dormant.
 	switch cfg.EventBus.CadenceMode {
-	case config.EventBusCadenceModeShadow:
-		contactService.SetCadenceShadowObserver(cadenceShadowRepo)
-		logger.Info().
-			Str("mode", "shadow").
-			Msg("event-bus CadenceUpdater: shadow active (worker registered, direct-path observer wired)")
 	case config.EventBusCadenceModeCutover:
-		// PR 8 territory — PR 7 falls back to shadow with a loud log so
-		// an operator who flips the flag early doesn't get unexpectedly
-		// different runtime behavior.
-		contactService.SetCadenceShadowObserver(cadenceShadowRepo)
-		logger.Error().
-			Msg("event-bus CadenceUpdater: cutover mode requested but this build is PR 7 (shadow-only); behaving as shadow")
-	default: // off
 		logger.Info().
+			Str("mode", "cutover").
+			Msg("event-bus CadenceUpdater: cutover active (sole writer of cadence columns; inline recorder dispatch enabled)")
+	case config.EventBusCadenceModeShadow:
+		// ERROR severity: shadow mode post-cutover has no direct path to
+		// observe, so the consumer runs but produces no meaningful output
+		// while the sole-writer branch is still active. Unlike mode=off,
+		// there is no UnsafeAllowOffMode gate — this is the silently-
+		// broken case, so it earns an ERROR log.
+		logger.Error().
+			Str("mode", "shadow").
+			Msg("event-bus CadenceUpdater: shadow mode requested post-cutover; direct path is gone so shadow has nothing to observe — treat as misconfiguration")
+	default: // off
+		// Validate() already rejected this unless UnsafeAllowOffMode is
+		// true; we reach here only via the emergency escape hatch. The
+		// WARN log in config.Load already fired; repeat it here for
+		// observability on the main-wire path.
+		cfg.EventBus.MaybeWarnUnsafeOff()
+		logger.Warn().
 			Str("mode", "off").
-			Msg("event-bus CadenceUpdater: worker registered, direct-path observer disabled")
+			Msg("event-bus CadenceUpdater: mode=off active — NO cadence columns will be updated until EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF is unset or a `git revert` ships")
 	}
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 	importMatchService := service.NewImportMatchService(contactRepo)
 	// EnrichmentService is shared by the import handler (link/import flows) and
 	// the Telegram peer matcher (auto-match enrichment). Constructed at outer
 	// scope so both feature blocks share a single instance.
-	enrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
+	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo)
+	enrichmentService.SetCadenceUpdater(cadenceUpdater)
 
 	// Rematch service — wired now so downstream services can call SetRematchService.
 	// Handlers are registered below once their dependencies are constructed.

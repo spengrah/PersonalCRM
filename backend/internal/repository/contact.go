@@ -403,7 +403,17 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 	return &contact, nil
 }
 
-// UpdateContact updates an existing contact
+// UpdateContact updates an existing contact's profile fields (name,
+// location, birthday, how_met, cadence, profile_photo). Post-cutover
+// this path NEVER writes last_contacted, last_outreach_at,
+// last_response_at, or contact_by. Cadence-change side effects on
+// contact_by are the caller's responsibility (ContactService routes
+// them through CadenceUpdater.ApplyContactByOverride).
+//
+// The req.ContactBy field is preserved on the DTO for call-site
+// convenience (service layer still wants to pass it through so it can
+// be handed to CadenceUpdater) but is intentionally NOT threaded into
+// the SQL parameters below.
 func (r *ContactRepository) UpdateContact(ctx context.Context, id uuid.UUID, req UpdateContactRequest) (*Contact, error) {
 	dbContact, err := r.queries.UpdateContact(ctx, db.UpdateContactParams{
 		ID:           uuidToPgUUID(id),
@@ -413,7 +423,6 @@ func (r *ContactRepository) UpdateContact(ctx context.Context, id uuid.UUID, req
 		HowMet:       stringToPgText(req.HowMet),
 		Cadence:      stringToPgText(req.Cadence),
 		ProfilePhoto: stringToPgText(req.ProfilePhoto),
-		ContactBy:    timeToPgDate(req.ContactBy),
 	})
 	if err != nil {
 		return nil, err

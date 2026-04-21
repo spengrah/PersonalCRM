@@ -169,6 +169,12 @@ type Event struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type EventConsumerClaim struct {
+	EventID   pgtype.UUID        `json:"event_id"`
+	Consumer  string             `json:"consumer"`
+	ClaimedAt pgtype.Timestamptz `json:"claimed_at"`
+}
+
 type EventShadowCadenceObservation struct {
 	ID                  pgtype.UUID        `json:"id"`
 	EventID             pgtype.UUID        `json:"event_id"`

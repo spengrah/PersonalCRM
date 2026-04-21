@@ -65,8 +65,10 @@ func setupTelegramImportSuggestionTest(t *testing.T) (
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries))
+	cadenceUpdater := wireCadenceUpdaterForTest(t, database, contactService)
 	matchService := service.NewImportMatchService(contactRepo)
-	enrichmentService := service.NewEnrichmentService(contactRepo, contactMethodRepo, enrichmentRepo)
+	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo)
+	enrichmentService.SetCadenceUpdater(cadenceUpdater)
 
 	importHandler := handlers.NewImportHandler(externalRepo, contactService, matchService, enrichmentService)
 

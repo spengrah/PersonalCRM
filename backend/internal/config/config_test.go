@@ -806,10 +806,11 @@ func TestConfig_Validate_EventBusInteractionMode(t *testing.T) {
 	}
 }
 
-// TestConfig_CadenceMode_DefaultShadow asserts EVENT_BUS_CADENCE_MODE
-// defaults to "shadow" in PR 7 so post-merge the bake runs immediately
-// (plan Decision 11 + brief).
-func TestConfig_CadenceMode_DefaultShadow(t *testing.T) {
+// TestConfig_CadenceMode_DefaultCutover asserts EVENT_BUS_CADENCE_MODE
+// defaults to "cutover" post-cutover — the direct path is gone, the
+// consumer is the sole writer, and shadow/off are no longer safe
+// defaults.
+func TestConfig_CadenceMode_DefaultCutover(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
 
@@ -817,24 +818,80 @@ func TestConfig_CadenceMode_DefaultShadow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() failed: %v", err)
 	}
-	if cfg.EventBus.CadenceMode != EventBusCadenceModeShadow {
+	if cfg.EventBus.CadenceMode != EventBusCadenceModeCutover {
 		t.Errorf("Expected default EventBus.CadenceMode=%q, got %q",
-			EventBusCadenceModeShadow, cfg.EventBus.CadenceMode)
+			EventBusCadenceModeCutover, cfg.EventBus.CadenceMode)
 	}
 }
 
-// TestConfig_CadenceMode_OffFromEnv asserts the operator rollback path.
-func TestConfig_CadenceMode_OffFromEnv(t *testing.T) {
+// TestConfig_CadenceMode_OffRejectedWithoutUnsafeOverride asserts the
+// startup gate: EVENT_BUS_CADENCE_MODE=off is a configuration error in
+// non-test load paths because post-cutover the direct path is gone and
+// "off" silently disables the sole writer of cadence columns.
+func TestConfig_CadenceMode_OffRejectedWithoutUnsafeOverride(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
 	WithEnv(t, "EVENT_BUS_CADENCE_MODE", "off")
 
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Expected Load() to reject EVENT_BUS_CADENCE_MODE=off without unsafe override")
+	}
+	verr, ok := err.(ValidationErrors)
+	if !ok {
+		t.Fatalf("Expected ValidationErrors, got %T: %v", err, err)
+	}
+	found := false
+	for _, e := range verr {
+		if e.Field == "EVENT_BUS_CADENCE_MODE" {
+			found = true
+			if !strings.Contains(e.Message, "git revert") {
+				t.Errorf("Expected message to mention `git revert` rollback, got %q", e.Message)
+			}
+			if !strings.Contains(e.Message, "EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true") {
+				t.Errorf("Expected message to mention unsafe override env var, got %q", e.Message)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("Expected EVENT_BUS_CADENCE_MODE validation error, got: %v", err)
+	}
+}
+
+// TestConfig_CadenceMode_OffAllowedWithUnsafeOverride asserts the
+// emergency escape hatch: EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true lets
+// the startup gate accept "off" even though it's dangerous.
+func TestConfig_CadenceMode_OffAllowedWithUnsafeOverride(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "EVENT_BUS_CADENCE_MODE", "off")
+	WithEnv(t, "EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF", "true")
+
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
+		t.Fatalf("Load() should allow EVENT_BUS_CADENCE_MODE=off when unsafe override is set, got: %v", err)
 	}
 	if cfg.EventBus.CadenceMode != EventBusCadenceModeOff {
 		t.Errorf("Expected EventBus.CadenceMode=off, got %q", cfg.EventBus.CadenceMode)
+	}
+	if !cfg.EventBus.UnsafeAllowOffMode {
+		t.Error("Expected UnsafeAllowOffMode=true when EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true")
+	}
+}
+
+// TestTestConfig_AllowsCadenceModeOff asserts TestConfig() keeps
+// bypass behavior for "off" — unit/integration harnesses can exercise
+// off-mode branches without tripping the startup gate.
+func TestTestConfig_AllowsCadenceModeOff(t *testing.T) {
+	cfg := TestConfig()
+	if cfg.EventBus.CadenceMode != EventBusCadenceModeOff {
+		t.Errorf("Expected TestConfig().EventBus.CadenceMode=off, got %q", cfg.EventBus.CadenceMode)
+	}
+	if !cfg.EventBus.UnsafeAllowOffMode {
+		t.Error("TestConfig() must set UnsafeAllowOffMode=true so Validate() accepts mode=off")
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("TestConfig() must Validate cleanly even with CadenceMode=off, got: %v", err)
 	}
 }
 
@@ -862,7 +919,9 @@ func TestConfig_Validate_EventBusCadenceMode(t *testing.T) {
 		wantErr  bool
 		wantHint string
 	}{
-		{"off_ok", EventBusCadenceModeOff, false, ""},
+		// "off" accepted here because TestConfig() sets
+		// UnsafeAllowOffMode=true (see TestTestConfig_AllowsCadenceModeOff).
+		{"off_ok_with_test_override", EventBusCadenceModeOff, false, ""},
 		{"shadow_ok", EventBusCadenceModeShadow, false, ""},
 		{"cutover_ok", EventBusCadenceModeCutover, false, ""},
 		{"empty_rejected", "", true, "invalid mode"},

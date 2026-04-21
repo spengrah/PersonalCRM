@@ -174,12 +174,29 @@ func kindDefaultSource(kind events.Kind) string {
 // cutover there is no mode parameter — the consumer runs unconditionally
 // wherever it's wired (mode gating lives at the publisher + manual-
 // handler wiring level per plan Decision 6).
-func newRecorderWithStubs() (*InteractionRecorder, *stubWriter, *stubTGRepo, *stubBus) {
+func newRecorderWithStubs() (*InteractionRecorder, *stubWriter, *stubTGRepo, *stubBus, *stubCadence) {
 	w := &stubWriter{}
 	tg := &stubTGRepo{}
 	b := &stubBus{}
-	rec := NewInteractionRecorder(w, tg, b)
-	return rec, w, tg, b
+	c := &stubCadence{}
+	rec := NewInteractionRecorder(w, tg, b, c)
+	return rec, w, tg, b, c
+}
+
+// stubCadence captures HandleEvent calls so tests can assert the
+// inline-apply seam fired with the interaction.recorded envelope.
+type stubCadence struct {
+	calls       int
+	lastEnvID   uuid.UUID
+	returnError error
+}
+
+func (s *stubCadence) HandleEvent(_ context.Context, _ pgx.Tx, env *events.Envelope) error {
+	s.calls++
+	if env != nil {
+		s.lastEnvID = env.ID
+	}
+	return s.returnError
 }
 
 // -----------------------------------------------------------------------------
@@ -192,7 +209,7 @@ func newRecorderWithStubs() (*InteractionRecorder, *stubWriter, *stubTGRepo, *st
 func TestHandleEvent_MessageReceived_CutoverFreshWrite(t *testing.T) {
 	cid := uuid.New()
 	msgID := uuid.New()
-	rec, w, tg, b := newRecorderWithStubs()
+	rec, w, tg, b, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
 		Version:           1,
 		ContactID:         &cid,
@@ -224,7 +241,7 @@ func TestHandleEvent_MessageReceived_CutoverFreshWrite(t *testing.T) {
 
 func TestHandleEvent_MessageSent_CutoverFreshWrite_DefaultOutbound(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, _ := newRecorderWithStubs()
+	rec, w, _, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindMessageSent, events.MessageSentPayload{
 		Version:           1,
 		ContactID:         &cid,
@@ -239,7 +256,7 @@ func TestHandleEvent_MessageSent_CutoverFreshWrite_DefaultOutbound(t *testing.T)
 
 func TestHandleEvent_MessageReceived_PayloadDirectionMutual(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, _ := newRecorderWithStubs()
+	rec, w, _, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
 		Version:           1,
 		ContactID:         &cid,
@@ -255,7 +272,7 @@ func TestHandleEvent_MessageReceived_PayloadDirectionMutual(t *testing.T) {
 
 func TestHandleEvent_MessageSent_PayloadDirectionMutual(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, _ := newRecorderWithStubs()
+	rec, w, _, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindMessageSent, events.MessageSentPayload{
 		Version:           1,
 		ContactID:         &cid,
@@ -271,7 +288,7 @@ func TestHandleEvent_MessageSent_PayloadDirectionMutual(t *testing.T) {
 
 func TestHandleEvent_CalendarAttended_CutoverFreshWrite_NoMarkProcessed(t *testing.T) {
 	cid := uuid.New()
-	rec, w, tg, b := newRecorderWithStubs()
+	rec, w, tg, b, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
 		Version:    1,
 		ContactID:  cid,
@@ -295,7 +312,7 @@ func TestHandleEvent_CalendarAttended_CutoverFreshWrite_NoMarkProcessed(t *testi
 // (Codex PR 6 P2 regression fix).
 func TestHandleEvent_CalendarAttended_CopiesTitleToDescription(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, _ := newRecorderWithStubs()
+	rec, w, _, _, _ := newRecorderWithStubs()
 	title := "Quarterly sync with Alice"
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
 		Version:    1,
@@ -312,7 +329,7 @@ func TestHandleEvent_CalendarAttended_CopiesTitleToDescription(t *testing.T) {
 
 func TestHandleEvent_TaskCompleted_CutoverFreshWrite(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, _ := newRecorderWithStubs()
+	rec, w, _, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindTaskCompleted, events.TaskCompletedPayload{
 		Version:     1,
 		ContactID:   cid,
@@ -331,7 +348,7 @@ func TestHandleEvent_TaskCompleted_CutoverFreshWrite(t *testing.T) {
 
 func TestHandleEvent_TaskCompleted_EmptyDirectionDefaultsMutual(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, _ := newRecorderWithStubs()
+	rec, w, _, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindTaskCompleted, events.TaskCompletedPayload{
 		Version:     1,
 		ContactID:   cid,
@@ -346,7 +363,7 @@ func TestHandleEvent_TaskCompleted_EmptyDirectionDefaultsMutual(t *testing.T) {
 
 func TestHandleEvent_TaskOutreachDetected_CutoverFreshWrite(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, _ := newRecorderWithStubs()
+	rec, w, _, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindTaskOutreachDetected, events.TaskOutreachDetectedPayload{
 		Version:    1,
 		ContactID:  cid,
@@ -361,7 +378,7 @@ func TestHandleEvent_TaskOutreachDetected_CutoverFreshWrite(t *testing.T) {
 
 func TestHandleEvent_InteractionManual_CutoverReturnsInteraction(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, b := newRecorderWithStubs()
+	rec, w, _, b, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
 		Version:    1,
 		ContactID:  cid,
@@ -379,7 +396,7 @@ func TestHandleEvent_InteractionManual_CutoverReturnsInteraction(t *testing.T) {
 
 func TestHandleEvent_InteractionManual_EmptyDirectionDefaultsMutual(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, _ := newRecorderWithStubs()
+	rec, w, _, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
 		Version:    1,
 		ContactID:  cid,
@@ -406,7 +423,7 @@ func TestHandleEvent_MessageReceived_CutoverReplay(t *testing.T) {
 		Source:    repository.InteractionSourceTelegram,
 		Direction: repository.InteractionDirectionInbound,
 	}
-	rec, w, tg, b := newRecorderWithStubs()
+	rec, w, tg, b, _ := newRecorderWithStubs()
 	w.existing = existing
 
 	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
@@ -434,7 +451,7 @@ func TestHandleEvent_InteractionManual_Replay(t *testing.T) {
 		Source:    repository.InteractionSourceManual,
 		Direction: repository.InteractionDirectionMutual,
 	}
-	rec, w, _, b := newRecorderWithStubs()
+	rec, w, _, b, _ := newRecorderWithStubs()
 	w.existing = existing
 
 	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
@@ -456,7 +473,7 @@ func TestHandleEvent_InteractionManual_Replay(t *testing.T) {
 
 func TestHandleEvent_MessageReceived_MissingContact(t *testing.T) {
 	cid := uuid.New()
-	rec, w, tg, b := newRecorderWithStubs()
+	rec, w, tg, b, _ := newRecorderWithStubs()
 	w.notFound = true
 
 	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
@@ -475,7 +492,7 @@ func TestHandleEvent_MessageReceived_MissingContact(t *testing.T) {
 
 func TestHandleEvent_CalendarAttended_MissingContact(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, b := newRecorderWithStubs()
+	rec, w, _, b, _ := newRecorderWithStubs()
 	w.notFound = true
 
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
@@ -496,7 +513,7 @@ func TestHandleEvent_CalendarAttended_MissingContact(t *testing.T) {
 
 func TestHandleEvent_WriterFailure_SkipsPublishAndMarkProcessed(t *testing.T) {
 	cid := uuid.New()
-	rec, w, tg, b := newRecorderWithStubs()
+	rec, w, tg, b, _ := newRecorderWithStubs()
 	w.returnErr = errors.New("simulated writer failure")
 
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
@@ -515,7 +532,7 @@ func TestHandleEvent_WriterFailure_SkipsPublishAndMarkProcessed(t *testing.T) {
 func TestHandleEvent_MarkProcessedFailure_RollsBack(t *testing.T) {
 	cid := uuid.New()
 	msgID := uuid.New()
-	rec, _, tg, b := newRecorderWithStubs()
+	rec, _, tg, b, _ := newRecorderWithStubs()
 	tg.markErr = errors.New("simulated mark-processed failure")
 
 	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
@@ -534,7 +551,7 @@ func TestHandleEvent_MarkProcessedFailure_RollsBack(t *testing.T) {
 
 func TestHandleEvent_PublishFailure_ReturnsError(t *testing.T) {
 	cid := uuid.New()
-	rec, _, _, b := newRecorderWithStubs()
+	rec, _, _, b, _ := newRecorderWithStubs()
 	b.publishErr = errors.New("simulated publish failure")
 
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
@@ -554,7 +571,7 @@ func TestHandleEvent_PublishFailure_ReturnsError(t *testing.T) {
 
 func TestHandleEvent_PostCommitBubblesUp(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, _ := newRecorderWithStubs()
+	rec, w, _, _, _ := newRecorderWithStubs()
 	invoked := false
 	w.postCommit = func(context.Context) { invoked = true }
 
@@ -577,14 +594,14 @@ func TestHandleEvent_PostCommitBubblesUp(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_NilEnvelope_Errors(t *testing.T) {
-	rec, _, _, _ := newRecorderWithStubs()
+	rec, _, _, _, _ := newRecorderWithStubs()
 	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), nil)
 	require.Error(t, err)
 }
 
 func TestHandleEvent_NilTx_Errors(t *testing.T) {
 	cid := uuid.New()
-	rec, _, _, _ := newRecorderWithStubs()
+	rec, _, _, _, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
 		Version: 1, ContactID: cid, EventID: "x",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
@@ -594,7 +611,7 @@ func TestHandleEvent_NilTx_Errors(t *testing.T) {
 }
 
 func TestHandleEvent_UnknownKind_Errors(t *testing.T) {
-	rec, _, _, _ := newRecorderWithStubs()
+	rec, _, _, _, _ := newRecorderWithStubs()
 	env := &events.Envelope{
 		Kind:       events.Kind("made.up"),
 		Source:     "telegram",
@@ -607,7 +624,7 @@ func TestHandleEvent_UnknownKind_Errors(t *testing.T) {
 }
 
 func TestHandleEvent_UnresolvedContactID_Errors(t *testing.T) {
-	rec, w, _, b := newRecorderWithStubs()
+	rec, w, _, b, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
 		Version:           1,
 		ContactID:         nil, // publisher bug per plan Decision 4.
@@ -689,7 +706,7 @@ func TestHandleEvent_RefBearingKind_EmptySourceRef_Errors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec, w, _, b := newRecorderWithStubs()
+			rec, w, _, b, _ := newRecorderWithStubs()
 			_, _, err := rec.HandleEvent(ctx, nonNilTx(), tt.env())
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.wantSub)
@@ -700,7 +717,7 @@ func TestHandleEvent_RefBearingKind_EmptySourceRef_Errors(t *testing.T) {
 }
 
 func TestHandleEvent_PayloadUnmarshalFailure_Errors(t *testing.T) {
-	rec, _, _, _ := newRecorderWithStubs()
+	rec, _, _, _, _ := newRecorderWithStubs()
 	env := &events.Envelope{
 		ID:         uuid.New(),
 		Kind:       events.KindMessageReceived,
@@ -718,7 +735,7 @@ func TestHandleEvent_PayloadUnmarshalFailure_Errors(t *testing.T) {
 
 func TestHandleEvent_RecordedEventSourceIDIsInteractionID(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, b := newRecorderWithStubs()
+	rec, w, _, b, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
 		Version:    1,
 		ContactID:  cid,

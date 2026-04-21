@@ -37,6 +37,20 @@ type RecordInteractionRequest struct {
 	Direction   string // "outbound", "inbound", "mutual" — defaults to "mutual" if empty
 }
 
+// ApplyInteractionRequest is the direct-invoke input for
+// CadenceUpdater.ApplyInteraction. Used by ExtendInteraction and
+// PromoteInteractionToMutual to route cadence writes through the
+// consumer even though they don't emit interaction.recorded events
+// themselves. Lives here so ContactService can define its cadence
+// dependency as a narrow interface without importing the consumer
+// package.
+type ApplyInteractionRequest struct {
+	ContactID  uuid.UUID
+	Direction  string // InteractionDirection*
+	Source     string // InteractionSource* — source="manual" takes unconditional branch
+	OccurredAt time.Time
+}
+
 // RecordInteractionResult bundles the non-error returns of
 // ContactService.RecordInteractionTx. Lives in repository (next to
 // RecordInteractionRequest) so consumer.interactionWriter can reference

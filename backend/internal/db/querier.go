@@ -146,6 +146,11 @@ type Querier interface {
 	// Demote source's primary contact methods when target already has a primary for that type
 	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
 	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
+	// Non-mutating lookup. Returns true when a claim row exists for the
+	// given (event_id, consumer). Useful for assertions in tests and for
+	// read-only operator diagnostics; the production dedupe path uses
+	// InsertEventConsumerClaim's rows-inserted signal instead of polling.
+	ExistsEventConsumerClaim(ctx context.Context, arg ExistsEventConsumerClaimParams) (bool, error)
 	// Post-bake divergence query. FULL OUTER JOIN of direct vs consumer rows
 	// on event_id — per plan Decision 1 each (event_id, writer) pair is unique,
 	// so the join resolves at most one direct + one consumer row per event.
@@ -357,6 +362,15 @@ type Querier interface {
 	// sqlc.narg('id') is NULL, the DB generates a fresh UUID via
 	// gen_random_uuid().
 	InsertEvent(ctx context.Context, arg InsertEventParams) (*Event, error)
+	// Event consumer claim queries (migration 040; spec §3.4.2).
+	// The (event_id, consumer) primary key enforces at-most-once
+	// processing across the inline + queued delivery paths for the
+	// CadenceUpdater consumer.
+	// Attempts to claim (event_id, consumer). Returns the number of rows
+	// inserted: 1 if this caller claimed the event, 0 if another caller
+	// already holds the claim. Callers treat 0 as "someone else wrote this
+	// event; return nil without mutating state".
+	InsertEventConsumerClaim(ctx context.Context, arg InsertEventConsumerClaimParams) (int64, error)
 	// Event shadow observation queries (spec §3.8, PR 5). Append-only log of
 	// what each write path (direct vs consumer) produced during shadow-mode
 	// bake. The post-bake divergence query FULL OUTER JOINs direct+consumer
@@ -495,21 +509,41 @@ type Querier interface {
 	// Transfer notes from source to target contact
 	TransferNotes(ctx context.Context, arg TransferNotesParams) error
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
+	// Profile-only update path. Writes name, location, birthday, how_met,
+	// cadence, profile_photo — NEVER writes last_contacted,
+	// last_outreach_at, last_response_at, or contact_by.
+	// ContactService.UpdateContact handles the cadence-change side-effect
+	// (recomputing contact_by) by calling
+	// CadenceUpdater.ApplyContactByOverride in the same tx;
+	// EnrichmentService uses this query for cadence-absent inferred fields
+	// and CadenceUpdater.ApplyContactByOverride when the input DTO carries
+	// an explicit cadence preference.
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
 	// Updates just the contact_by field (for Todoist deadline sync).
 	UpdateContactBy(ctx context.Context, arg UpdateContactByParams) error
-	// Forward-only cadence write (spec §3.4.2). Each of the four cadence
-	// columns is updated only when its apply-flag is true AND the new value
-	// strictly exceeds the existing one (or the existing is NULL). Unused
-	// by the PR 7 runtime path (consumer computes in memory per plan
-	// Decision 4); shipped so sqlc validates the SQL against the schema and
-	// PR 8 cutover can wire it without a second schema-validation step.
+	// Forward-only cadence write (spec §3.4.2). Each of the cadence columns
+	// is updated only when its apply-flag is true AND the new value strictly
+	// exceeds the existing one (or the existing is NULL).
+	//
+	// last_interaction_at is gated by its OWN apply flag
+	// (apply_last_interaction_at), independent of apply_last_contacted.
+	// Interaction-driven paths (HandleEvent, ApplyInteraction) set both
+	// flags together so inbound/mutual still bump last_interaction_at
+	// alongside last_contacted, matching the pre-cutover
+	// UpdateContactResponseFields/UpdateContactMutualFields write surface.
+	// Merge (BulkApply) sets apply_last_interaction_at=false because a
+	// merge is not an interaction and must not mutate the "last
+	// non-outbound interaction" timestamp of the surviving contact.
 	UpdateContactCadenceForward(ctx context.Context, arg UpdateContactCadenceForwardParams) error
 	// Manual-source branch (spec §3.4.2 "manual-source exception"): user
 	// correction — any passed-in value replaces the existing one
 	// unconditionally. Apply-flags still gate which columns are touched
 	// (e.g., a manual outbound still shouldn't bump last_contacted per
-	// direction rules). Unused by the PR 7 runtime path; shipped for PR 8.
+	// direction rules).
+	//
+	// last_interaction_at is gated by its OWN apply flag
+	// (apply_last_interaction_at); see UpdateContactCadenceForward above
+	// for the rationale.
 	UpdateContactCadenceUnconditional(ctx context.Context, arg UpdateContactCadenceUnconditionalParams) error
 	// Updates last_contacted, contact_by, and all direction timestamp fields (for mutual interactions)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
