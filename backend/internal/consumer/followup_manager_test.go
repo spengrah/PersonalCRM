@@ -12,9 +12,12 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/todoist"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,19 +101,26 @@ func testWatchdog() config.WatchdogConfig {
 	}
 }
 
-// newUnitFollowUp builds a cutover-mode manager with a stub claimer
-// (always grants) and an installed DecisionObserver. Returns the
-// observed-decisions slice pointer so tests assert on classifications.
-// Cutover-only deps that aren't reached by skip-branch tests (taskWriter,
-// riverInserter, pool, settings, clientFactory) are nil; tests that
-// reach those paths use newCutoverFollowUp below.
+// newUnitFollowUp builds a cutover-mode manager with all required
+// dependencies wired to minimal stubs. `validateCutoverDeps` now
+// refuses to run HandleEvent with any nil collaborator, so tests that
+// exercise skip branches still need a complete dependency set — even
+// though the skip paths never reach the taskWriter / settings
+// branches. Returns the observed-decisions slice pointer so tests
+// assert on classifications.
 func newUnitFollowUp(mode string) (*FollowUpManager, *stubFollowUpTaskReader, *stubInteractionResponseReader, *[]Decision) {
 	tasks := &stubFollowUpTaskReader{err: db.ErrNotFound}
 	inters := &stubInteractionResponseReader{}
 	claims := &stubEventClaimer{}
 	contacts := &stubFollowUpContactReader{}
+	writer := &stubFollowUpTaskWriter{}
+	inserter := &stubRiverInserter{}
+	settings := func(context.Context) (*todoist.Settings, string, error) {
+		return &todoist.Settings{ProjectID: "p", LabelName: "l", IntegrationInstanceID: "i"}, "token", nil
+	}
+	factory := func(string) todoist.Client { return &stubRefreshTodoistClient{} }
 	var observed []Decision
-	h := NewFollowUpManager(mode, claims, contacts, tasks, nil, inters, nil, nil, nil, nil, "", testWatchdog())
+	h := NewFollowUpManager(mode, claims, contacts, tasks, writer, inters, inserter, nil, settings, factory, "http://localhost", testWatchdog())
 	h.SetDecisionObserver(func(d Decision) { observed = append(observed, d) })
 	return h, tasks, inters, &observed
 }
@@ -158,18 +168,66 @@ func TestFollowUpManager_ModeOff_NoWrites(t *testing.T) {
 	require.Empty(t, *observed, "mode=off must not emit decisions")
 }
 
-func TestFollowUpManager_ModeCutover_RequiresClaimRepo(t *testing.T) {
-	// Cutover without a wired claim repository is a programming error —
-	// the manager errors out at the claim step so a misconfigured
-	// deployment doesn't silently skip dedupe.
-	tasks := &stubFollowUpTaskReader{err: db.ErrNotFound}
-	inters := &stubInteractionResponseReader{}
-	h := NewFollowUpManager(FollowUpModeCutover, nil, nil, tasks, nil, inters, nil, nil, nil, nil, "", testWatchdog())
-
+func TestFollowUpManager_ModeCutover_RequiresCollaborators(t *testing.T) {
+	// Cutover without required collaborators is a programming error.
+	// `validateCutoverDeps` must fail closed with a descriptive error
+	// rather than panicking deep in a create / refresh / complete branch.
+	// The first nil dependency reported determines the error message —
+	// we cover each required dep's check in sequence by wiring all of
+	// them to nil except the ones we've already validated.
+	cases := []struct {
+		name     string
+		build    func() *FollowUpManager
+		contains string
+	}{
+		{
+			name: "nil_claims",
+			build: func() *FollowUpManager {
+				return NewFollowUpManager(FollowUpModeCutover, nil, &stubFollowUpContactReader{}, &stubFollowUpTaskReader{}, &stubFollowUpTaskWriter{}, &stubInteractionResponseReader{}, &stubRiverInserter{}, nil, settingsOKStub(), factoryStub(), "", testWatchdog())
+			},
+			contains: "claim repository",
+		},
+		{
+			name: "nil_contacts",
+			build: func() *FollowUpManager {
+				return NewFollowUpManager(FollowUpModeCutover, &stubEventClaimer{}, nil, &stubFollowUpTaskReader{}, &stubFollowUpTaskWriter{}, &stubInteractionResponseReader{}, &stubRiverInserter{}, nil, settingsOKStub(), factoryStub(), "", testWatchdog())
+			},
+			contains: "contact reader",
+		},
+		{
+			name: "nil_task_writer",
+			build: func() *FollowUpManager {
+				return NewFollowUpManager(FollowUpModeCutover, &stubEventClaimer{}, &stubFollowUpContactReader{}, &stubFollowUpTaskReader{}, nil, &stubInteractionResponseReader{}, &stubRiverInserter{}, nil, settingsOKStub(), factoryStub(), "", testWatchdog())
+			},
+			contains: "contact-task writer",
+		},
+		{
+			name: "nil_settings",
+			build: func() *FollowUpManager {
+				return NewFollowUpManager(FollowUpModeCutover, &stubEventClaimer{}, &stubFollowUpContactReader{}, &stubFollowUpTaskReader{}, &stubFollowUpTaskWriter{}, &stubInteractionResponseReader{}, &stubRiverInserter{}, nil, nil, factoryStub(), "", testWatchdog())
+			},
+			contains: "todoist settings",
+		},
+	}
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "claim")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := tc.build()
+			_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.contains)
+		})
+	}
+}
+
+func settingsOKStub() TodoistSettingsFunc {
+	return func(context.Context) (*todoist.Settings, string, error) {
+		return &todoist.Settings{ProjectID: "p", LabelName: "l", IntegrationInstanceID: "i"}, "token", nil
+	}
+}
+
+func factoryStub() todoist.ClientFactory {
+	return func(string) todoist.Client { return &stubRefreshTodoistClient{} }
 }
 
 func TestFollowUpManager_NilEnvelope(t *testing.T) {
@@ -356,4 +414,146 @@ func TestFollowUpModeFromConfig(t *testing.T) {
 	require.Equal(t, FollowUpModeOff, FollowUpModeFromConfig(config.EventBusFollowUpModeOff))
 	require.Equal(t, FollowUpModeCutover, FollowUpModeFromConfig(config.EventBusFollowUpModeCutover))
 	require.Equal(t, FollowUpModeOff, FollowUpModeFromConfig("garbage"), "unknown mode defaults to off")
+}
+
+// -----------------------------------------------------------------------------
+// Refresh-path coverage. The refresh branch is the only path that emits
+// TWO Decision observations: one at the in-tx decision point (with
+// CalledTodoist=false) and one from the post-commit closure after the
+// Todoist item_update succeeds (with CalledTodoist=true). These tests
+// assert both emissions land with the expected payload fields.
+// -----------------------------------------------------------------------------
+
+// stubFollowUpTaskWriter records metadata updates and returns a
+// ContactTask from the configured pending-lookup. Other methods panic
+// to catch unintended code-path activation.
+type stubFollowUpTaskWriter struct {
+	lastMetadataID       uuid.UUID
+	lastMetadata         map[string]any
+	updatedTask          *repository.ContactTask
+	metadataErr          error
+	stateTransitionCalls int
+}
+
+func (s *stubFollowUpTaskWriter) CreateContactTaskTx(context.Context, pgx.Tx, repository.CreateContactTaskRequest, *string) (*repository.ContactTask, error) {
+	panic("stubFollowUpTaskWriter.CreateContactTaskTx: not exercised in refresh-path tests")
+}
+func (s *stubFollowUpTaskWriter) UpdateContactTaskStateTx(context.Context, pgx.Tx, uuid.UUID, repository.ContactTaskState) (*repository.ContactTask, error) {
+	s.stateTransitionCalls++
+	return s.updatedTask, nil
+}
+func (s *stubFollowUpTaskWriter) UpdateContactTaskMetadataTx(_ context.Context, _ pgx.Tx, id uuid.UUID, metadata map[string]any) (*repository.ContactTask, error) {
+	s.lastMetadataID = id
+	s.lastMetadata = metadata
+	if s.metadataErr != nil {
+		return nil, s.metadataErr
+	}
+	return s.updatedTask, nil
+}
+func (s *stubFollowUpTaskWriter) UpdateContactTaskExternalIDTx(context.Context, pgx.Tx, uuid.UUID, string) (*repository.ContactTask, error) {
+	panic("stubFollowUpTaskWriter.UpdateContactTaskExternalIDTx: not exercised in refresh-path tests")
+}
+func (s *stubFollowUpTaskWriter) SetContactTaskExternalIDOnlyTx(context.Context, pgx.Tx, uuid.UUID, string) error {
+	panic("stubFollowUpTaskWriter.SetContactTaskExternalIDOnlyTx: not exercised in refresh-path tests")
+}
+func (s *stubFollowUpTaskWriter) GetContactTaskByIdempotencyKeyTx(context.Context, pgx.Tx, uuid.UUID, string, string) (*repository.ContactTask, error) {
+	return nil, db.ErrNotFound
+}
+func (s *stubFollowUpTaskWriter) GetContactTaskTx(context.Context, pgx.Tx, uuid.UUID) (*repository.ContactTask, error) {
+	return s.updatedTask, nil
+}
+
+// stubRefreshTodoistClient records Sync calls and returns a configurable
+// response / error. Used by the refresh post-commit test to exercise
+// the CalledTodoist=true observer emission.
+type stubRefreshTodoistClient struct {
+	syncCalls int
+	syncErr   error
+}
+
+func (s *stubRefreshTodoistClient) QuickAdd(context.Context, string, string) (*todoist.QuickAddTask, error) {
+	return nil, errors.New("stubRefreshTodoistClient.QuickAdd: not used in refresh-path test")
+}
+func (s *stubRefreshTodoistClient) Sync(context.Context, string, []string, []todoist.SyncCommand) (*todoist.SyncResponse, error) {
+	s.syncCalls++
+	return &todoist.SyncResponse{}, s.syncErr
+}
+
+// TestFollowUpManager_Refresh_EmitsTwoDecisions drives the refresh
+// branch end-to-end via the test-only DecisionObserver hook. Asserts:
+//
+//  1. The in-tx decision emits Action=Refresh with WouldDeadline and
+//     ContactTaskID set, CalledTodoist=false.
+//  2. The post-commit closure (once invoked) emits a SECOND Decision
+//     with Action=Refresh, CalledTodoist=true, and a matching
+//     ContactTaskID.
+//
+// Guards the Decision contract the plan (§Decision 8) requires to
+// stand in for the retired shadow-table-based integration assertions.
+func TestFollowUpManager_Refresh_EmitsTwoDecisions(t *testing.T) {
+	contactID := uuid.New()
+	taskID := uuid.New()
+	cadenceStr := "weekly"
+
+	tasks := &stubFollowUpTaskReader{
+		pending: &repository.ContactTask{
+			ID:             taskID,
+			ContactID:      contactID,
+			Kind:           todoist.TaskKindFollowUp,
+			State:          repository.ContactTaskStateManaged,
+			ExternalTaskID: "ext-remote-123",
+			Metadata:       map[string]any{"due_date": "2026-01-01"},
+		},
+	}
+	inters := &stubInteractionResponseReader{}
+	claims := &stubEventClaimer{}
+	contacts := &stubFollowUpContactReader{cadence: &cadenceStr}
+	writer := &stubFollowUpTaskWriter{updatedTask: tasks.pending}
+	inserter := &stubRiverInserter{}
+	client := &stubRefreshTodoistClient{}
+	settings := func(context.Context) (*todoist.Settings, string, error) {
+		return &todoist.Settings{ProjectID: "p", LabelName: "l", IntegrationInstanceID: "i"}, "token", nil
+	}
+	factory := func(string) todoist.Client { return client }
+
+	var observed []Decision
+	h := NewFollowUpManager(FollowUpModeCutover, claims, contacts, tasks, writer, inters, inserter, nil, settings, factory, "http://localhost", testWatchdog())
+	h.SetDecisionObserver(func(d Decision) { observed = append(observed, d) })
+
+	env := buildRecordedEnv(t, contactID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), cadenceStr)
+	postCommit, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	require.NoError(t, err)
+	require.NotNil(t, postCommit, "refresh branch must return a non-nil post-commit closure")
+
+	// First emission — in-tx, CalledTodoist=false.
+	require.Len(t, observed, 1, "refresh must emit exactly one decision before post-commit runs")
+	d0 := observed[0]
+	require.Equal(t, repository.FollowUpActionRefresh, d0.Action)
+	require.Empty(t, d0.SkipReason)
+	require.NotNil(t, d0.WouldDeadline, "refresh must report the would-be deadline")
+	require.NotNil(t, d0.ContactTaskID)
+	require.Equal(t, taskID, *d0.ContactTaskID)
+	require.False(t, d0.CalledTodoist, "in-tx emission must precede the post-commit Todoist call")
+
+	// Run the post-commit closure. It should call Todoist Sync + emit
+	// a second observer event with CalledTodoist=true.
+	postCommit(context.Background())
+	require.Equal(t, 1, client.syncCalls, "post-commit closure must invoke Todoist Sync exactly once")
+	require.Len(t, observed, 2, "post-commit Todoist success must emit a second decision")
+	d1 := observed[1]
+	require.Equal(t, repository.FollowUpActionRefresh, d1.Action)
+	require.True(t, d1.CalledTodoist, "second emission must carry CalledTodoist=true")
+	require.NotNil(t, d1.ContactTaskID)
+	require.Equal(t, taskID, *d1.ContactTaskID)
+}
+
+// stubRiverInserter records InsertTx calls and returns a nil result.
+// Refresh path doesn't enqueue a job on success (item_update is done
+// inline via the post-commit closure), so this stub should NOT be
+// invoked — but a type-satisfying stub is required for the manager
+// constructor.
+type stubRiverInserter struct{}
+
+func (*stubRiverInserter) InsertTx(context.Context, pgx.Tx, river.JobArgs, *river.InsertOpts) (*rivertype.JobInsertResult, error) {
+	return nil, nil
 }

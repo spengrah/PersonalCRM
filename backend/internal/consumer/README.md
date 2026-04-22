@@ -13,9 +13,19 @@ Consumer services that subscribe to events and perform domain writes
 | `rematch_dispatcher.go` | Re-runs identity matching on `contact_methods.added` with per-contact serialization (§3.4.4). | Cutover. |
 | `todoist_followup_workers.go` | River workers for follow-up Todoist create / close / refresh jobs. | Cutover. |
 
-Each consumer has an `EVENT_BUS_*_MODE` config flag that accepts
-`cutover` (default) or `off` (emergency kill switch, requires the
-paired `EVENT_BUS_*_UNSAFE_ALLOW_OFF=true` safety gate).
+`InteractionRecorder`, `CadenceUpdater`, and `FollowUpManager` each
+have an `EVENT_BUS_*_MODE` config flag that accepts `cutover` (default)
+or `off` (emergency kill switch).
+
+- `EVENT_BUS_INTERACTION_MODE=off` disables publisher-driven paths
+  directly; it has no paired unsafe-allow gate because publishers are
+  not sole-writer-gated.
+- `EVENT_BUS_CADENCE_MODE=off` and `EVENT_BUS_FOLLOWUP_MODE=off` each
+  require the paired `EVENT_BUS_{CADENCE,FOLLOWUP}_UNSAFE_ALLOW_OFF=true`
+  safety gate at startup — the consumers are sole writers, so "off"
+  freezes the underlying columns / tables entirely.
+
+`RematchDispatcher` has no mode flag; rollback is `git revert`.
 
 ## FollowUpManager — cutover overview
 

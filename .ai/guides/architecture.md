@@ -646,7 +646,7 @@ See Google Calendar or Todoist providers as reference implementations.
 
 The event bus is an append-only `event` table (migration 036) plus a set of river-backed consumers that subscribe to specific `Kind` values and perform the authoritative domain writes. Publishers commit rows into `event` inside their caller's `pgx.Tx` via `events.Bus.PublishTx`; river workers dispatch per-kind consumer jobs after the commit lands.
 
-Modes: each consumer has a config flag (`EVENT_BUS_*_MODE`) that is either `cutover` (normal) or `off` (emergency kill switch, gated by `EVENT_BUS_*_UNSAFE_ALLOW_OFF=true`). The historical `shadow` value is retired — the cutover posture is the only supported operating mode. See `backend/internal/config/config.go` for the validation rules.
+Modes: `InteractionRecorder`, `CadenceUpdater`, and `FollowUpManager` each have an `EVENT_BUS_*_MODE` flag set to `cutover` (default) or `off`. `CadenceMode=off` and `FollowUpMode=off` require the paired `EVENT_BUS_{CADENCE,FOLLOWUP}_UNSAFE_ALLOW_OFF=true` safety gate because those consumers are the sole writers of their columns / tables. `InteractionMode=off` has no unsafe gate because publishers are not sole-writer-gated. `RematchDispatcher` has no mode flag; rollback is `git revert`. The historical `shadow` value is retired — the cutover posture is the only supported operating mode. See `backend/internal/config/config.go` for the validation rules.
 
 ### Consumer Topology
 
@@ -704,7 +704,7 @@ Each consumer is the single source of truth for specific contact / contact_task 
 
 ### Mode Flags
 
-Interaction, cadence, and follow-up consumers each have a mode flag that defaults to `cutover`. The only supported alternate value is `off`, which disables the consumer and requires `EVENT_BUS_*_UNSAFE_ALLOW_OFF=true` as a safety gate. The historical `shadow` mode — used for per-event divergence observation during the cutover series — has been retired along with the `event_shadow_*` observation tables (migrations 038, 039, 042 dropped in 044). Rollback from a problem in cutover is `git revert`, not a runtime flag flip.
+Interaction, cadence, and follow-up consumers each have an `EVENT_BUS_*_MODE` flag that defaults to `cutover`. The alternate value is `off`. Sole-writer consumers (cadence, follow-up) require the paired `EVENT_BUS_{CADENCE,FOLLOWUP}_UNSAFE_ALLOW_OFF=true` safety gate — disabling them freezes the underlying columns / tables. Interaction mode has no unsafe gate: publishers are not sole-writer-gated, so silencing them is safe. `RematchDispatcher` has no mode flag. The historical `shadow` mode — used for per-event divergence observation during the cutover series — has been retired along with the `event_shadow_*` observation tables (migrations 038, 039, 042 dropped in 044). Rollback from a problem in cutover is `git revert`, not a runtime flag flip.
 
 **Key files:**
 - `backend/internal/events/bus.go` — publisher API (`PublishTx`, `GetEvent`).

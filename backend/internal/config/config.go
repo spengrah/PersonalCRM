@@ -138,33 +138,26 @@ type RiverConfig struct {
 //
 // InteractionMode gates the PR 5-8 phase lifecycle for the
 // InteractionRecorder consumer:
-//   - "off":     post-cutover effective no-op. The direct
-//     RecordInteraction call sites have been removed in PR 6;
-//     flag-flipping back to "off" DISABLES publisher-driven
+//   - "off":     emergency override that disables publisher-driven
 //     interaction recording entirely (telegram / calendar /
 //     manual UI will NOT write interactions). The HTTP ingest
-//     path remains functional. Kept as a valid value until
-//     the PR 12 cleanup drops the flag entirely. Rollback is
-//     `git revert`, not flag flip.
-//   - "shadow":  same as "off" post-cutover — the direct path is gone, so
-//     shadow mode has nothing to observe. Retained for
-//     config-parse compatibility with the PR 5 bake window.
+//     path remains functional. Unlike cadence / follow-up
+//     modes, there is no UnsafeAllowOff gate on interaction
+//     mode — publisher paths are not sole-writer-gated the
+//     same way, so "off" is safe to flip without the gate.
+//     Does NOT restore any pre-cutover direct path.
 //   - "cutover": default. Consumer is the sole writer; publishers only
 //     Publish events. This is the intended production mode.
 //
 // CadenceMode gates the PR 7-8 phase lifecycle for the CadenceUpdater
 // consumer (spec §3.9).
 //
-//   - "off":     post-cutover emergency override only. The direct path
-//     is gone; flipping to "off" disables the sole writer of the four
-//     cadence columns entirely. Startup REFUSES to boot on "off"
-//     unless UnsafeAllowOffMode is explicitly set (via
-//     EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true). Real rollback is
-//     `git revert`, not a flag flip. See
-//     backend/internal/eventbus/README.md.
-//   - "shadow":  legacy bake mode. The direct path it observed is
-//     gone, so shadow mode no longer observes anything meaningful.
-//     Retained as a parseable value for migration compatibility.
+//   - "off":     emergency override that disables the sole writer of
+//     the four cadence columns entirely. Startup REFUSES to boot
+//     on "off" unless UnsafeAllowOffMode is explicitly set (via
+//     EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true). Does NOT restore any
+//     pre-cutover direct path. Real rollback is `git revert`, not a
+//     flag flip. See backend/internal/eventbus/README.md.
 //   - "cutover": default. CadenceUpdater is the sole writer of the
 //     four cadence columns; InteractionRecorder inline-applies on
 //     fresh writes; queued deliveries are durable no-ops via the

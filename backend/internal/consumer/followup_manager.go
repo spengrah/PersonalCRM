@@ -120,11 +120,20 @@ type FollowUpHandler interface {
 }
 
 // Decision is the observer payload emitted at each terminal branch of
-// FollowUpManager.HandleEvent / ApplyInteraction. Unit tests install a
-// DecisionObserver to assert on the manager's classification (action,
-// skip reason, would-be deadline, idempotency key) without a DB round
-// trip. Production wiring leaves the observer nil — the hot path pays
-// only a nil check per branch.
+// FollowUpManager.HandleEvent / ApplyInteraction. The hook has two
+// consumers today:
+//
+//  1. Unit + integration tests install a DecisionObserver closure to
+//     assert on the manager's classification (action, skip reason,
+//     would-be deadline, idempotency key, contact_task id) without a
+//     DB round trip. Replaces the shadow-observation-table assertions
+//     retired along with the shadow repo in this PR.
+//  2. Operators / future metrics can wire the observer to emit
+//     Prometheus counters or a structured audit log without having to
+//     modify the manager's branches.
+//
+// Production wiring leaves the observer nil — the hot path pays only
+// a nil check per branch (`emit` is the only call site).
 //
 // Observer calls are emitted AT the decision point, inside the
 // caller's tx. For the refresh/close paths that schedule a post-commit
@@ -243,6 +252,38 @@ func (h *FollowUpManager) emit(d Decision) {
 	}
 }
 
+// validateCutoverDeps returns a wrapped error when a required cutover
+// dependency is nil. Called at the top of every cutover entry point so
+// a misconfigured wiring fails closed with a descriptive error instead
+// of panicking inside a create / refresh / complete branch.
+func (h *FollowUpManager) validateCutoverDeps() error {
+	if h.claims == nil {
+		return errors.New("followup_manager: cutover requires a claim repository")
+	}
+	if h.contacts == nil {
+		return errors.New("followup_manager: cutover requires a contact reader")
+	}
+	if h.taskRepo == nil {
+		return errors.New("followup_manager: cutover requires a contact-task reader")
+	}
+	if h.taskWriter == nil {
+		return errors.New("followup_manager: cutover requires a contact-task writer")
+	}
+	if h.interactionRepo == nil {
+		return errors.New("followup_manager: cutover requires an interaction reader")
+	}
+	if h.riverInserter == nil {
+		return errors.New("followup_manager: cutover requires a river inserter")
+	}
+	if h.settings == nil {
+		return errors.New("followup_manager: cutover requires a todoist settings func")
+	}
+	if h.clientFactory == nil {
+		return errors.New("followup_manager: cutover requires a todoist client factory")
+	}
+	return nil
+}
+
 // HandleEvent processes an interaction.recorded envelope. In mode=off
 // returns nil immediately. In mode=cutover it claims the event via
 // event_consumer_claim then performs the authoritative follow-up
@@ -268,6 +309,9 @@ func (h *FollowUpManager) HandleEvent(ctx context.Context, tx pgx.Tx, env *event
 			Msg("followup_manager: mode=off; skipping")
 		return nil, nil
 	}
+	if err := h.validateCutoverDeps(); err != nil {
+		return nil, err
+	}
 
 	var p events.InteractionRecordedPayload
 	if err := events.Unmarshal(env, &p); err != nil {
@@ -289,9 +333,6 @@ func (h *FollowUpManager) HandleEvent(ctx context.Context, tx pgx.Tx, env *event
 	// Durable dedupe across inline + queued delivery. Whoever wins the
 	// claim runs the write; the loser returns nil. Claim + write commit
 	// atomically in the caller's tx.
-	if h.claims == nil {
-		return nil, errors.New("followup_manager: cutover requires a claim repository")
-	}
 	claimed, err := h.claims.TryClaimTx(ctx, tx, env.ID, repository.EventConsumerFollowUpManager)
 	if err != nil {
 		return nil, fmt.Errorf("claim event for followup_manager: %w", err)
@@ -345,8 +386,8 @@ func (h *FollowUpManager) ApplyInteraction(ctx context.Context, tx pgx.Tx, req r
 	if h.mode == FollowUpModeOff {
 		return nil, nil
 	}
-	if h.contacts == nil {
-		return nil, errors.New("followup_manager: apply interaction requires a contact reader")
+	if err := h.validateCutoverDeps(); err != nil {
+		return nil, err
 	}
 	contact, err := h.contacts.GetContactTx(ctx, tx, req.ContactID)
 	if err != nil {
@@ -411,11 +452,6 @@ func (h *FollowUpManager) handleOutbound(
 		return nil, nil
 	}
 
-	// Cutover requires a contact reader (full name + contact link for
-	// the Todoist task shape).
-	if h.contacts == nil {
-		return nil, errors.New("followup_manager: cutover outbound requires a contact reader")
-	}
 	contact, err := h.contacts.GetContactTx(ctx, tx, p.ContactID)
 	if err != nil {
 		return nil, fmt.Errorf("get contact for outbound: %w", err)

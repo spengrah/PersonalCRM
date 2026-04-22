@@ -32,10 +32,11 @@ import (
 
 // InteractionMode mirrors the constants in config.EventBusInteractionMode*.
 // Kept duplicated here so non-config callers don't import config just
-// to name a mode. "cutover" is the normal operating posture; "off" is
-// the emergency-override gated behind EVENT_BUS_INTERACTION_UNSAFE_ALLOW_OFF
-// for rollback without a code change. See EventBusConfig in config/ for
-// the startup-gate semantics.
+// to name a mode. "cutover" is the normal operating posture; "off"
+// silences publisher-driven paths for emergency rollback. Unlike
+// cadence / follow-up modes there is no paired UnsafeAllowOff gate —
+// "off" is safe to flip directly (publishers are not sole-writer-gated).
+// See EventBusConfig in config/ for the full mode semantics.
 const (
 	InteractionModeOff     = "off"
 	InteractionModeCutover = "cutover"
