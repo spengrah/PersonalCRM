@@ -311,7 +311,6 @@ func TestFollowUpDismissal_IsDeleted(t *testing.T) {
 	}, env.settings, env.accountID)
 
 	require.NoError(t, r.Err)
-	assert.False(t, r.Unsafe, "follow-up dismissal is replay-safe")
 	assert.True(t, r.Processed, "processItem should return processed=true (task was handled)")
 	assert.Empty(t, r.Commands, "no Todoist commands should be emitted when item is already deleted")
 	assert.Equal(t, 0, env.recorder.count, "RecordInteraction must not be called during dismissal")
@@ -337,7 +336,6 @@ func TestFollowUpDismissal_LabelRemoved(t *testing.T) {
 	}, env.settings, env.accountID)
 
 	require.NoError(t, r.Err)
-	assert.False(t, r.Unsafe, "follow-up dismissal is replay-safe")
 	assert.True(t, r.Processed)
 	require.Len(t, r.Commands, 1, "exactly one ItemClose command expected")
 	assert.Equal(t, "item_close", r.Commands[0].Type)
@@ -365,7 +363,6 @@ func TestFollowUpDismissal_DeadlineRemoved(t *testing.T) {
 	}, env.settings, env.accountID)
 
 	require.NoError(t, r.Err)
-	assert.False(t, r.Unsafe, "follow-up dismissal is replay-safe")
 	assert.True(t, r.Processed)
 	require.Len(t, r.Commands, 1)
 	assert.Equal(t, "item_close", r.Commands[0].Type)
@@ -450,7 +447,6 @@ func TestFollowUpDismissal_SubsequentProcessItemSkipsDismissedRow(t *testing.T) 
 
 	require.NoError(t, r.Err)
 	assert.False(t, r.Processed, "subsequent processItem should report the row was skipped")
-	assert.False(t, r.Unsafe)
 	assert.Empty(t, r.Commands, "no commands should be emitted on subsequent calls")
 	assert.Equal(t, 0, env.recorder.count)
 }
@@ -569,7 +565,6 @@ func TestFollowUpDismissal_CadenceDispatchUnchanged(t *testing.T) {
 
 			require.NoError(t, r.Err)
 			assert.True(t, r.Processed)
-			assert.True(t, r.Unsafe, "cadence skip trigger commits non-replay-safe state")
 			require.NotEmpty(t, r.Commands, "handleSkipTrigger should return an item_add command for the replacement cadence task")
 
 			sawItemAdd := false
@@ -611,7 +606,6 @@ func TestFollowUpDismissal_ActionDispatchUnchanged(t *testing.T) {
 
 	require.NoError(t, r.Err)
 	assert.True(t, r.Processed)
-	assert.False(t, r.Unsafe, "action task unmanagement is replay-safe")
 
 	reloaded, err := env.contactTaskRepo.GetContactTask(env.ctx, action.ID)
 	require.NoError(t, err)
@@ -691,7 +685,6 @@ func TestHandleFollowUpDismissal_StateUpdateErrorPropagates(t *testing.T) {
 	assert.Contains(t, r.Err.Error(), "dismiss follow-up", "error should be wrapped with dismiss follow-up")
 	assert.Contains(t, r.Err.Error(), "contact_task state", "error should identify the failed operation")
 	assert.False(t, r.Processed, "failed dismissal must not report Processed=true")
-	assert.False(t, r.Unsafe, "follow-up dismissal is replay-safe")
 	assert.Nil(t, r.Commands, "ItemClose must NOT be forwarded on state-update failure")
 	assert.Equal(t, 0, env.recorder.count, "dismissal path must never record interactions")
 }
@@ -726,7 +719,6 @@ func TestHandleActionTaskTriggers_StateUpdateErrorPropagates_Deleted(t *testing.
 	require.Error(t, r.Err)
 	assert.Contains(t, r.Err.Error(), "action task triggers (deleted)")
 	assert.False(t, r.Processed)
-	assert.False(t, r.Unsafe, "action unmanagement is replay-safe")
 	assert.Nil(t, r.Commands)
 }
 
@@ -760,7 +752,6 @@ func TestHandleActionTaskTriggers_StateUpdateErrorPropagates_LabelRemoved(t *tes
 	require.Error(t, r.Err)
 	assert.Contains(t, r.Err.Error(), "action task triggers (label removed)")
 	assert.False(t, r.Processed)
-	assert.False(t, r.Unsafe)
 	assert.Nil(t, r.Commands)
 }
 
@@ -781,21 +772,19 @@ func TestProcessItem_LookupErrorPropagates(t *testing.T) {
 	require.Error(t, r.Err)
 	assert.Contains(t, r.Err.Error(), "lookup contact_task", "error should identify the failed lookup")
 	assert.False(t, r.Processed)
-	assert.False(t, r.Unsafe)
 	assert.Nil(t, r.Commands)
 }
 
-// TestProcessItems_AbortsWhenNoUnsafeCommit verifies that a fatal error from
-// processItem with no earlier non-replay-safe commit causes processItems to
-// abort (return the error) and leave replayCommittedUnsafe==false so the
-// caller knows the cursor must not advance.
-func TestProcessItems_AbortsWhenNoUnsafeCommit(t *testing.T) {
+// TestProcessItems_AbortsOnFatalError verifies that a fatal error from
+// processItem causes processItems to abort (return the wrapped error)
+// so the caller preserves the pre-batch cursor.
+func TestProcessItems_AbortsOnFatalError(t *testing.T) {
 	env, cleanup := setupDismissalTest(t)
 	defer cleanup()
 
 	badCtx := cancelledContext()
 
-	processed, commands, replayCommittedUnsafe, err := env.provider.processItems(
+	processed, commands, err := env.provider.processItems(
 		badCtx,
 		[]SyncItem{
 			{ID: "td-abort-" + uuid.New().String()[:8], Labels: []string{env.settings.LabelName}},
@@ -810,29 +799,18 @@ func TestProcessItems_AbortsWhenNoUnsafeCommit(t *testing.T) {
 	assert.Equal(t, 0, processed, "no items should be counted as processed on abort")
 	// No prior items succeeded, so no commands accumulated.
 	assert.Empty(t, commands, "no commands should be accumulated when the first item errors")
-	assert.False(t, replayCommittedUnsafe, "no unsafe commit occurred before abort")
 }
 
 // TestProcessItems_SuccessfulDismissalReturnsItemClose verifies that a
 // valid follow-up dismissal routed through processItems returns the
 // ItemClose command in the accumulated commands slice. Together with
-// TestProcessItems_AbortsWhenNoUnsafeCommit (which verifies that the abort
-// path returns the in-scope commands variable rather than a hard-coded
-// nil), this exercises both sides of the command-accumulation contract
-// that the orphaned-Todoist-task fix relies on: the slice always carries
-// whatever was accumulated before the (possibly aborted) iteration, so
-// the caller (Sync) can execute accumulated cleanup commands even when
-// the batch aborts.
-//
-// Note: simulating a true mid-batch "item 1 succeeds with a command,
-// item 2 errors fatally" flow under a shared pgx connection without
-// flakiness is not feasible — the cancelled-context error-injection
-// strategy applies to the whole batch, and live-DB failure injection
-// would require ad-hoc triggers or a mock repository wrapping. The
-// two-line fix (processItems returns `commands` instead of `nil` on
-// abort; Sync executes commands before returning the error) is verified
-// here by exercising both the success return shape and the abort return
-// shape, together with code inspection of the trivial fix.
+// TestProcessItems_AbortsOnFatalError (which verifies the abort path
+// preserves the in-scope commands variable rather than a hard-coded nil),
+// this exercises both sides of the command-accumulation contract that the
+// orphaned-Todoist-task fix relies on: the slice always carries whatever
+// was accumulated before the (possibly aborted) iteration, so the caller
+// (Sync) can execute accumulated cleanup commands even when the batch
+// aborts.
 func TestProcessItems_SuccessfulDismissalReturnsItemClose(t *testing.T) {
 	env, cleanup := setupDismissalTest(t)
 	defer cleanup()
@@ -841,7 +819,7 @@ func TestProcessItems_SuccessfulDismissalReturnsItemClose(t *testing.T) {
 	externalID := "td-preserve-" + uuid.New().String()[:8]
 	_ = createFollowUpTask(t, env, contact.ID, externalID)
 
-	processed, commands, replayCommittedUnsafe, err := env.provider.processItems(
+	processed, commands, err := env.provider.processItems(
 		env.ctx,
 		[]SyncItem{
 			{
@@ -856,7 +834,6 @@ func TestProcessItems_SuccessfulDismissalReturnsItemClose(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, processed)
-	assert.False(t, replayCommittedUnsafe)
 	require.Len(t, commands, 1, "successful dismissal must return an ItemClose command")
 	assert.Equal(t, "item_close", commands[0].Type)
 	assert.Equal(t, externalID, commands[0].Args["id"])
@@ -982,69 +959,7 @@ func TestHandleRecurringDetection_StateUpdateErrorPropagates(t *testing.T) {
 	assert.Contains(t, r.Err.Error(), "update state to unmanaged (recurring)",
 		"error should identify the recurring state-update failure")
 	assert.False(t, r.Processed, "failed state update must not report Processed=true")
-	assert.False(t, r.Unsafe, "recurring transition is replay-safe")
 	assert.Nil(t, r.Commands)
-}
-
-// TestDecideFatalErrorPolicy_AbortsWhenReplaySafe verifies that
-// decideFatalErrorPolicy returns shouldContinue=false and a wrapped error
-// when no earlier unsafe commit has occurred in the batch. This is the
-// direct unit test for the abort path in the conditional-abort logic.
-func TestDecideFatalErrorPolicy_AbortsWhenReplaySafe(t *testing.T) {
-	env, cleanup := setupDismissalTest(t)
-	defer cleanup()
-
-	itemID := "td-abort-policy-" + uuid.New().String()[:8]
-	fakeResult := processItemResult{
-		Err: errors.New("underlying db failure"),
-	}
-
-	shouldContinue, wrappedErr := env.provider.decideFatalErrorPolicy(
-		fakeResult,
-		SyncItem{ID: itemID},
-		0,     // processedBeforeAbort
-		false, // replayCommittedUnsafe
-	)
-
-	assert.False(t, shouldContinue, "no earlier unsafe commit → must abort")
-	require.Error(t, wrappedErr)
-	assert.Contains(t, wrappedErr.Error(), "process item "+itemID,
-		"wrapped error should include item ID")
-	assert.Contains(t, wrappedErr.Error(), "underlying db failure",
-		"wrapped error should chain the original cause")
-}
-
-// TestDecideFatalErrorPolicy_LogsAndContinuesAfterUnsafe verifies that
-// decideFatalErrorPolicy returns shouldContinue=true and nil error when an
-// earlier item in the batch already committed non-replay-safe state via
-// handleSkipTrigger. This is the direct unit test for the log-and-continue
-// path — it exists because simulating mid-batch DB failure with a shared
-// connection is non-trivial, and extracting this policy into a testable
-// helper lets us verify the branch without DB-level failure injection.
-//
-// Together with TestHandleSkipTrigger_FailureDoesNotReturnErrorAndSetsUnsafe
-// (which locks in Unsafe=true on the skip-trigger success path) and
-// TestProcessItems_AbortsWhenNoUnsafeCommit (which verifies the loop wiring
-// for the abort path), this test completes coverage of the conditional-
-// abort semantics.
-func TestDecideFatalErrorPolicy_LogsAndContinuesAfterUnsafe(t *testing.T) {
-	env, cleanup := setupDismissalTest(t)
-	defer cleanup()
-
-	itemID := "td-continue-policy-" + uuid.New().String()[:8]
-	fakeResult := processItemResult{
-		Err: errors.New("underlying db failure"),
-	}
-
-	shouldContinue, wrappedErr := env.provider.decideFatalErrorPolicy(
-		fakeResult,
-		SyncItem{ID: itemID},
-		1,    // processedBeforeAbort — an earlier item succeeded
-		true, // replayCommittedUnsafe — earlier skip trigger advanced contact_by
-	)
-
-	assert.True(t, shouldContinue, "unsafe commit already occurred → must log and continue")
-	assert.NoError(t, wrappedErr, "continuing must not return an error")
 }
 
 // TestHandleSkipTrigger_PublishesEventAtomicallyWithStateAdvance verifies the

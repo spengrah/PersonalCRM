@@ -256,7 +256,7 @@ func (p *CadenceSyncProvider) Sync(
 	}
 
 	// Process synced items.
-	processedTasks, commands, _, processErr := p.processItems(ctx, syncResp.Items, settings, accountID)
+	processedTasks, commands, processErr := p.processItems(ctx, syncResp.Items, settings, accountID)
 	result.ItemsProcessed = processedTasks
 
 	// Execute any accumulated commands BEFORE checking processErr. If
@@ -337,112 +337,50 @@ func (p *CadenceSyncProvider) ValidateCredentials(ctx context.Context, accountID
 	return nil
 }
 
-// processItemResult is the structured return from processItem and its handlers.
+// processItemResult is the structured return from processItem and its
+// handlers.
 //
 // Fields:
 //   - Processed: true if the item was owned by CRM and handled (not skipped).
 //   - Commands:  Todoist commands to enqueue in the batch.
-//   - Unsafe:    true if a non-replay-safe side effect was committed. Today, only
-//     handleSkipTrigger's success path sets this — it advances contact_by and
-//     appends a replacement item_add while leaving the row state='managed',
-//     which is non-idempotent on replay. When the sync loop sees this flag, any
-//     subsequent fatal error in the same batch falls back to log-and-continue
-//     instead of aborting (which would cause double-advancement on replay).
-//   - Err:       non-nil for fatal errors. Callers inspect Unsafe to decide
-//     whether to abort the sync or log-and-continue.
+//   - Err:       non-nil for fatal errors; processItems aborts the batch
+//     without advancing the cursor.
 type processItemResult struct {
 	Processed bool
 	Commands  []SyncCommand
-	Unsafe    bool
 	Err       error
 }
 
-// processItems iterates over the items returned by a Todoist sync, dispatching
-// each through processItem. It is the single point at which fatal-error
-// propagation and replay-safe abort are enforced.
-//
-// Abort semantics: on a fatal processItem error (r.Err != nil), processItems
-// aborts only if no earlier item in this batch committed non-replay-safe
-// state. The replayCommittedUnsafe flag is set by any successful
-// handleSkipTrigger (see its docstring). Aborting after an unsafe commit
-// would cause the next sync to replay the skip trigger, double-advancing the
-// cadence clock — so when the flag is set, we fall back to log-and-continue.
-//
-// The returned replayCommittedUnsafe is discarded by the Sync call site but
-// returned so tests can observe the flag directly.
+// processItems iterates over the items returned by a Todoist sync,
+// dispatching each through processItem. On a fatal processItem error
+// (r.Err != nil) the batch aborts and the Sync caller preserves the
+// pre-batch cursor so the next tick replays. Each successful item commits
+// atomically via its own tx, so replays short-circuit at the state !=
+// 'managed' early-return in processItem and never double-advance.
 func (p *CadenceSyncProvider) processItems(
 	ctx context.Context,
 	items []SyncItem,
 	settings Settings,
 	accountID string,
-) (processed int, commands []SyncCommand, replayCommittedUnsafe bool, err error) {
+) (processed int, commands []SyncCommand, err error) {
 	for _, item := range items {
 		r := p.processItem(ctx, item, settings, accountID)
 		if r.Err != nil {
-			shouldContinue, wrappedErr := p.decideFatalErrorPolicy(r, item, processed, replayCommittedUnsafe)
-			if shouldContinue {
-				continue
-			}
-			// On abort, return the commands accumulated from earlier items
-			// (not nil). These are all cleanup commands — ItemClose from
-			// successful handleFollowUpDismissal and ItemDelete from the
-			// contact-not-found branch in processItem — for local state
-			// transitions that have already been persisted. The caller
-			// (Sync) executes them before returning the error so we don't
-			// orphan Todoist tasks whose local rows are already in terminal
-			// states. Replay is still safe: on the next sync, the replayed
-			// items short-circuit at processItem's state != managed early-
-			// return and do not re-emit their commands.
-			//
-			// replayCommittedUnsafe is always false on this branch (by
-			// construction — we only reach this return when
-			// replayCommittedUnsafe==false) but we return the variable for
-			// clarity rather than a literal.
-			return processed, commands, replayCommittedUnsafe, wrappedErr
+			logger.Error().Err(r.Err).
+				Str("itemId", item.ID).
+				Int("processedBeforeAbort", processed).
+				Msg("processItem fatal error — aborting sync without advancing cursor")
+			// Return accumulated commands so Sync can execute any
+			// ItemClose/ItemDelete commands queued by already-committed
+			// handlers before returning the error.
+			return processed, commands, fmt.Errorf("process item %s: %w", item.ID, r.Err)
 		}
 		if r.Processed {
 			processed++
 		}
-		if r.Unsafe {
-			replayCommittedUnsafe = true
-		}
 		commands = append(commands, r.Commands...)
 	}
-	return processed, commands, replayCommittedUnsafe, nil
-}
-
-// decideFatalErrorPolicy implements the conditional-abort semantics for
-// processItems. Extracted from the loop so tests can verify both branches
-// (abort vs log-and-continue) without needing to simulate a mid-batch DB
-// failure under a shared connection.
-//
-// Returns shouldContinue=true when replayCommittedUnsafe is true: the sync
-// loop must not abort because an earlier unsafe handler (handleSkipTrigger)
-// already committed side effects that cannot be safely replayed. In that
-// case, the error is logged but the cursor will advance past this batch —
-// matching the pre-existing log-and-continue failure mode for the mixed-
-// batch scenario.
-//
-// Returns shouldContinue=false and a wrapped error when no unsafe commit has
-// occurred yet in the batch. The sync loop should return the wrapped error
-// without advancing the cursor, so the next tick replays the batch.
-func (p *CadenceSyncProvider) decideFatalErrorPolicy(
-	r processItemResult,
-	item SyncItem,
-	processedBeforeAbort int,
-	replayCommittedUnsafe bool,
-) (shouldContinue bool, wrappedErr error) {
-	if replayCommittedUnsafe {
-		logger.Error().Err(r.Err).
-			Str("itemId", item.ID).
-			Msg("processItem fatal error after non-replay-safe commit — forced to log-and-continue; cursor will advance and event is dropped")
-		return true, nil
-	}
-	logger.Error().Err(r.Err).
-		Str("itemId", item.ID).
-		Int("processedBeforeAbort", processedBeforeAbort).
-		Msg("processItem fatal error — aborting sync without advancing cursor")
-	return false, fmt.Errorf("process item %s: %w", item.ID, r.Err)
+	return processed, commands, nil
 }
 
 // processItem processes a single Todoist item from sync
@@ -832,7 +770,7 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 
 	// Return replacement item_add only after commit — the HTTP batch fires
 	// outside the tx in Sync's post-loop block (core.md gotcha).
-	return processItemResult{Processed: true, Commands: []SyncCommand{replacementCmd}, Unsafe: true}
+	return processItemResult{Processed: true, Commands: []SyncCommand{replacementCmd}}
 }
 
 // handleFollowUpDismissal handles a follow-up task being dismissed via Todoist.
