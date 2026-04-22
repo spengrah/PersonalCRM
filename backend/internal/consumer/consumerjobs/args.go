@@ -86,3 +86,20 @@ type TodoistFollowUpRefreshJobArgs struct {
 // Kind returns the river job-kind identifier for Todoist follow-up
 // refresh retry jobs.
 func (TodoistFollowUpRefreshJobArgs) Kind() string { return "todoist_followup_refresh" }
+
+// RematchDispatcherJobArgs carries the event id + dedup-arg fields that
+// the RematchDispatcher worker processes. ContactID and RematchJobID
+// are duplicated from the event payload so river's
+// UniqueOpts{ByArgs: ["ContactID", "RematchJobID"]} can dedupe
+// same-mutation publisher retries at enqueue time without having to
+// decode the payload first. The event.source_id unique index is the
+// first dedup layer (publisher-retry side); ByArgs is the belt-and-
+// suspenders second layer (river-enqueue side). Spec §3.4.4.
+type RematchDispatcherJobArgs struct {
+	EventID      uuid.UUID `json:"event_id"`
+	ContactID    uuid.UUID `json:"contact_id"`
+	RematchJobID uuid.UUID `json:"rematch_job_id"`
+}
+
+// Kind returns the river job-kind identifier for RematchDispatcher jobs.
+func (RematchDispatcherJobArgs) Kind() string { return "rematch_dispatcher" }
