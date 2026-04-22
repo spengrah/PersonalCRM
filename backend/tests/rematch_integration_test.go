@@ -458,6 +458,45 @@ func TestRematch_NoHandlerForType_ReturnsNilJobID(t *testing.T) {
 	assert.Equal(t, uuid.Nil, jobID)
 }
 
+// TestRematch_Publisher_NoHandler_ReturnsNilJobID pins the EligibleMethods
+// gate on the actual event-bus publisher paths (CreateContact /
+// UpdateContact / RescanRematch). Without this regression test, an
+// unhandled method type would mint a jobID + enqueue a no-op river
+// job. Only the email handler is registered; adding a phone method
+// must produce uuid.Nil.
+func TestRematch_Publisher_NoHandler_ReturnsNilJobID(t *testing.T) {
+	env := setupRematchEnv(t)
+
+	// CreateContact with a phone-only method — no handler registered
+	// for "phone" in the base env.
+	phone := "+15551212"
+	_, jobID, err := env.contactSvc.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "No Handler " + uuid.NewString()[:8],
+	}, []service.ContactMethodInput{
+		{Type: "phone", Value: phone, IsPrimary: true},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uuid.Nil, jobID, "unhandled method type must not mint a rematch jobID")
+
+	// RescanRematch on a contact whose only methods are unhandled
+	// should also return uuid.Nil.
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "Rescan No Handler " + uuid.NewString()[:8],
+	})
+	require.NoError(t, err)
+	_, err = env.contactMethodRepo.CreateContactMethod(env.ctx, repository.CreateContactMethodRequest{
+		ContactID: contact.ID,
+		Type:      "phone",
+		Value:     phone,
+		IsPrimary: true,
+	})
+	require.NoError(t, err)
+
+	rescanJobID, err := env.contactSvc.RescanRematch(env.ctx, contact.ID)
+	require.NoError(t, err)
+	require.Equal(t, uuid.Nil, rescanJobID, "rescan with unhandled methods must return uuid.Nil")
+}
+
 // registerTelegramHandlers wires the username + phone handlers against env's
 // rematch service using the same PeerMatcher and AggregationEngine the
 // production manager would own. Returns the message repo for seeding.

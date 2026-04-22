@@ -72,6 +72,12 @@ type Querier interface {
 	CountMergeNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
+	// Test-only count of river_job rows for the rematch_dispatcher kind
+	// whose args JSON contains the given (contact_id, rematch_job_id)
+	// tuple. Used by rematch dedup integration tests to assert
+	// UniqueOpts{ByArgs} behavior without inlining raw SQL into Go test
+	// code (core.md rule 2).
+	CountRematchDispatcherJobsByContactAndJob(ctx context.Context, arg CountRematchDispatcherJobsByContactAndJobParams) (int64, error)
 	// Test-only count of river_job rows with a given kind whose args JSON
 	// contains contact_task_id = $2. Used by follow-up cutover integration
 	// tests to assert a create/close/refresh job was enqueued without

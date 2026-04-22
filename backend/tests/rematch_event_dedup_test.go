@@ -117,21 +117,14 @@ func TestRematch_EventSourceIDDedup(t *testing.T) {
 	// the partial unique index enforces this at the DB level, so the
 	// Find returning a single row IS the dedup evidence.
 
-	// River job count requires an arbitrary args JSON filter which is
-	// not reachable via the generated Querier. The river_job table is
-	// not sqlc'd (it belongs to the river queue library). Raw SQL is
-	// the only option for this assertion — pattern matches existing
-	// sync_worker_leased_retry_test.go / sync_worker_load_test.go use.
-	var riverJobCount int
-	err = database.Pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM river_job
-		 WHERE kind = 'rematch_dispatcher'
-		   AND args->>'contact_id' = $1
-		   AND args->>'rematch_job_id' = $2`,
-		contactID.String(), jobID.String(),
-	).Scan(&riverJobCount)
+	// River job count via sqlc-generated repo helper
+	// (CountRematchDispatcherJobs). Raw SQL against river_job is
+	// forbidden by core.md rule 2 even though river_job is owned by
+	// the river library — we wrap the JSON args filter in a sqlc query
+	// in queries/event.sql.
+	riverJobCount, err := eventRepo.CountRematchDispatcherJobs(ctx, contactID, jobID)
 	require.NoError(t, err)
-	require.Equal(t, 1, riverJobCount, "only one river job enqueued for deduped event")
+	require.Equal(t, int64(1), riverJobCount, "only one river job enqueued for deduped event")
 }
 
 // rematchDispatcherNoopWorker accepts and completes the kind without

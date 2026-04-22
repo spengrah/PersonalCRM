@@ -116,19 +116,9 @@ func TestRematch_RiverUniqueOpts_DedupsByContactAndJobID(t *testing.T) {
 
 	// Only one river job for the (ContactID, RematchJobID) tuple.
 	// ByArgs with river:"unique" tags on ContactID + RematchJobID
-	// collapses the second InsertTx to the existing job.
-	//
-	// river_job is owned by the river queue library (not sqlc'd); raw
-	// SQL is the only way to assert. Pattern matches
-	// sync_worker_leased_retry_test.go.
-	var riverJobCount int
-	err = database.Pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM river_job
-		 WHERE kind = 'rematch_dispatcher'
-		   AND args->>'contact_id' = $1
-		   AND args->>'rematch_job_id' = $2`,
-		contactID.String(), jobID.String(),
-	).Scan(&riverJobCount)
+	// collapses the second InsertTx to the existing job. Count via
+	// sqlc-generated repo helper (raw SQL is forbidden by core.md).
+	riverJobCount, err := eventRepo.CountRematchDispatcherJobs(ctx, contactID, jobID)
 	require.NoError(t, err)
-	require.Equal(t, 1, riverJobCount, "River UniqueOpts{ByArgs} must dedupe the second enqueue")
+	require.Equal(t, int64(1), riverJobCount, "River UniqueOpts{ByArgs} must dedupe the second enqueue")
 }

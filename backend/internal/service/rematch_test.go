@@ -81,6 +81,49 @@ func TestStartRematchForContact_NoMatchingHandler(t *testing.T) {
 	}
 }
 
+// TestEligibleMethods_FiltersToRegisteredHandlers pins the publisher
+// contract: ContactService / EnrichmentService / RescanRematch call
+// EligibleMethods BEFORE minting a jobID, so unhandled method types
+// produce uuid.Nil in the API response (matches pre-cutover
+// StartRematchForContact semantics).
+func TestEligibleMethods_FiltersToRegisteredHandlers(t *testing.T) {
+	svc := NewRematchService()
+	svc.Register(&stubHandler{typ: "email"})
+	svc.Register(&stubHandler{typ: "telegram"})
+
+	input := []Method{
+		{Type: "email", Value: "a@b.c"},
+		{Type: "phone", Value: "+15551212"},
+		{Type: "telegram", Value: "alice"},
+		{Type: "discord", Value: "alice#1"},
+	}
+	got := svc.EligibleMethods(input)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 eligible methods, got %d: %+v", len(got), got)
+	}
+	// Order preserved from input slice.
+	if got[0].Type != "email" || got[1].Type != "telegram" {
+		t.Fatalf("unexpected eligible methods: %+v", got)
+	}
+}
+
+func TestEligibleMethods_EmptyWhenNoHandlers(t *testing.T) {
+	svc := NewRematchService()
+	got := svc.EligibleMethods([]Method{{Type: "email", Value: "a@b.c"}})
+	if len(got) != 0 {
+		t.Fatalf("expected 0 eligible methods with no handlers registered, got %d", len(got))
+	}
+}
+
+func TestEligibleMethods_EmptyInput(t *testing.T) {
+	svc := NewRematchService()
+	svc.Register(&stubHandler{typ: "email"})
+	got := svc.EligibleMethods(nil)
+	if got != nil {
+		t.Fatalf("expected nil for empty input, got %+v", got)
+	}
+}
+
 func TestStartRematchForContact_DispatchesToHandler(t *testing.T) {
 	svc := NewRematchService()
 	h := &stubHandler{typ: "email", matched: 3}
