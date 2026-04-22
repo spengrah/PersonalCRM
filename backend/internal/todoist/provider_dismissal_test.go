@@ -27,21 +27,6 @@ import (
 // Test helpers
 // ============================================================================
 
-// countingRecorder is a test double for the interactionRecorder interface that
-// fails the test immediately if RecordInteraction is called. Used to assert the
-// dismissal path never records an interaction.
-type countingRecorder struct {
-	t     *testing.T
-	count int
-}
-
-func (r *countingRecorder) RecordInteraction(_ context.Context, _ repository.RecordInteractionRequest) (*repository.Interaction, error) {
-	r.t.Helper()
-	r.count++
-	r.t.Errorf("unexpected RecordInteraction call during dismissal test (count=%d)", r.count)
-	return &repository.Interaction{ID: uuid.New()}, nil
-}
-
 // busRecorder is a test double for eventPublisher. It records every
 // PublishTx call and optionally injects errors or duplicate (env.ID=Nil)
 // responses. Safe for concurrent use.
@@ -83,7 +68,6 @@ type dismissalTestEnv struct {
 	provider        *CadenceSyncProvider
 	contactRepo     *repository.ContactRepository
 	contactTaskRepo *repository.ContactTaskRepository
-	recorder        *countingRecorder
 	bus             *busRecorder
 	pool            *pgxpool.Pool
 	settings        Settings
@@ -91,10 +75,9 @@ type dismissalTestEnv struct {
 }
 
 // newProviderTestEnv builds the shared DB + repos + provider infrastructure
-// used by setupDismissalTest. Takes the recorder as a parameter so callers
-// can pass the strict countingRecorder (the last surviving test double in
-// this file).
-func newProviderTestEnv(t *testing.T, recorder interactionRecorder) (*CadenceSyncProvider, *repository.ContactRepository, *repository.ContactTaskRepository, *busRecorder, *pgxpool.Pool, context.Context, Settings, string, func()) {
+// used by setupDismissalTest. Returns a busRecorder for tests that need to
+// assert published events or inject publish failures.
+func newProviderTestEnv(t *testing.T) (*CadenceSyncProvider, *repository.ContactRepository, *repository.ContactTaskRepository, *busRecorder, *pgxpool.Pool, context.Context, Settings, string, func()) {
 	t.Helper()
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -128,7 +111,6 @@ func newProviderTestEnv(t *testing.T, recorder interactionRecorder) (*CadenceSyn
 		contactRepo,
 		nil, // syncRepo: not consulted on this code path
 		cfg,
-		recorder,
 		bus,
 		database.Pool,
 		DefaultClientFactory,
@@ -146,21 +128,19 @@ func newProviderTestEnv(t *testing.T, recorder interactionRecorder) (*CadenceSyn
 	return provider, contactRepo, contactTaskRepo, bus, database.Pool, ctx, settings, accountID, func() { database.Close() }
 }
 
-// setupDismissalTest builds a CadenceSyncProvider wired to a real DB and a test
-// interactionRecorder that asserts it is never called. Skips if DATABASE_URL is
-// unset, matching the pattern in backend/tests/followup_service_test.go.
+// setupDismissalTest builds a CadenceSyncProvider wired to a real DB and a
+// busRecorder. Skips if DATABASE_URL is unset, matching the pattern in
+// backend/tests/followup_service_test.go.
 func setupDismissalTest(t *testing.T) (*dismissalTestEnv, func()) {
 	t.Helper()
 
-	recorder := &countingRecorder{t: t}
-	provider, contactRepo, contactTaskRepo, bus, pool, ctx, settings, accountID, cleanup := newProviderTestEnv(t, recorder)
+	provider, contactRepo, contactTaskRepo, bus, pool, ctx, settings, accountID, cleanup := newProviderTestEnv(t)
 
 	return &dismissalTestEnv{
 		ctx:             ctx,
 		provider:        provider,
 		contactRepo:     contactRepo,
 		contactTaskRepo: contactTaskRepo,
-		recorder:        recorder,
 		bus:             bus,
 		pool:            pool,
 		settings:        settings,
@@ -313,7 +293,7 @@ func TestFollowUpDismissal_IsDeleted(t *testing.T) {
 	require.NoError(t, r.Err)
 	assert.True(t, r.Processed, "processItem should return processed=true (task was handled)")
 	assert.Empty(t, r.Commands, "no Todoist commands should be emitted when item is already deleted")
-	assert.Equal(t, 0, env.recorder.count, "RecordInteraction must not be called during dismissal")
+	assert.Empty(t, env.bus.Published(), "dismissal must not publish events")
 
 	assertDismissedAndInvariants(t, env, contact.ID, task.ID, snap)
 }
@@ -340,7 +320,6 @@ func TestFollowUpDismissal_LabelRemoved(t *testing.T) {
 	require.Len(t, r.Commands, 1, "exactly one ItemClose command expected")
 	assert.Equal(t, "item_close", r.Commands[0].Type)
 	assert.Equal(t, externalID, r.Commands[0].Args["id"])
-	assert.Equal(t, 0, env.recorder.count)
 
 	assertDismissedAndInvariants(t, env, contact.ID, task.ID, snap)
 }
@@ -367,7 +346,6 @@ func TestFollowUpDismissal_DeadlineRemoved(t *testing.T) {
 	require.Len(t, r.Commands, 1)
 	assert.Equal(t, "item_close", r.Commands[0].Type)
 	assert.Equal(t, externalID, r.Commands[0].Args["id"])
-	assert.Equal(t, 0, env.recorder.count)
 
 	assertDismissedAndInvariants(t, env, contact.ID, task.ID, snap)
 }
@@ -448,7 +426,6 @@ func TestFollowUpDismissal_SubsequentProcessItemSkipsDismissedRow(t *testing.T) 
 	require.NoError(t, r.Err)
 	assert.False(t, r.Processed, "subsequent processItem should report the row was skipped")
 	assert.Empty(t, r.Commands, "no commands should be emitted on subsequent calls")
-	assert.Equal(t, 0, env.recorder.count)
 }
 
 // Case 6: FindPendingFollowUp must ignore dismissed rows. Regression guardrail
@@ -686,7 +663,7 @@ func TestHandleFollowUpDismissal_StateUpdateErrorPropagates(t *testing.T) {
 	assert.Contains(t, r.Err.Error(), "contact_task state", "error should identify the failed operation")
 	assert.False(t, r.Processed, "failed dismissal must not report Processed=true")
 	assert.Nil(t, r.Commands, "ItemClose must NOT be forwarded on state-update failure")
-	assert.Equal(t, 0, env.recorder.count, "dismissal path must never record interactions")
+	assert.Empty(t, env.bus.Published(), "dismissal must not publish events")
 }
 
 // TestHandleActionTaskTriggers_StateUpdateErrorPropagates_Deleted verifies

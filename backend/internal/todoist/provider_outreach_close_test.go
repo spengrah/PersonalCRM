@@ -100,8 +100,8 @@ func TestReconcile_CloseCadenceTaskOnOutreachWithPendingFollowUp(t *testing.T) {
 	assert.Equal(t, repository.ContactTaskStateManaged, reloadedFollowUp.State,
 		"follow-up task must remain managed")
 
-	// Assert: no interactions recorded.
-	assert.Equal(t, 0, env.recorder.count, "outreach detection must not record interactions")
+	// Assert: no events published (outreach detection path).
+	assert.Empty(t, env.bus.Published(), "outreach detection must not publish events")
 }
 
 // TestReconcile_CadenceTaskUnchangedWhenNoNewOutreach is the negative case:
@@ -282,8 +282,8 @@ func TestReconcile_OutreachDetectionStateFailureSkipsClose(t *testing.T) {
 	assert.Equal(t, repository.ContactTaskStateManaged, reloadedTask.State,
 		"cadence task must remain managed when state update fails")
 
-	// Assert: no interactions recorded.
-	assert.Equal(t, 0, env.recorder.count, "outreach detection must not record interactions")
+	// Assert: no events published (outreach detection path).
+	assert.Empty(t, env.bus.Published(), "outreach detection must not publish events")
 }
 
 // TestCloseOnOutreach_PendingTempID verifies that when outreach is detected but

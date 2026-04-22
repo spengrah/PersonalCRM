@@ -86,7 +86,7 @@ func TestProcessItem_FollowUpDeadlineDoesNotOverwriteContactBy(t *testing.T) {
 	require.NoError(t, r.Err)
 	assert.True(t, r.Processed, "the follow-up task was handled, just without the deadline-edit side effect")
 	assert.Empty(t, r.Commands, "deadline-edit path emits no Todoist commands")
-	assert.Equal(t, 0, env.recorder.count, "deadline-edit path must not record interactions")
+	assert.Empty(t, env.bus.Published(), "deadline-edit path must not publish events")
 
 	// contact.ContactBy is unchanged.
 	reloaded, err := env.contactRepo.GetContact(env.ctx, contact.ID)
@@ -146,7 +146,7 @@ func TestProcessItem_CadenceDeadlineOverwritesContactBy(t *testing.T) {
 	require.NoError(t, r.Err)
 	assert.True(t, r.Processed)
 	assert.Empty(t, r.Commands)
-	assert.Equal(t, 0, env.recorder.count)
+	assert.Empty(t, env.bus.Published())
 
 	// contact.ContactBy is updated to the Todoist deadline.
 	reloaded, err := env.contactRepo.GetContact(env.ctx, contact.ID)

@@ -69,11 +69,6 @@ const (
 // DateFormat is the date format used for Todoist deadlines and synced_deadline metadata (YYYY-MM-DD)
 const DateFormat = "2006-01-02"
 
-// interactionRecorder defines the method for recording interactions (satisfied by ContactService)
-type interactionRecorder interface {
-	RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error)
-}
-
 // eventPublisher is the subset of *events.Bus used by the provider. Defined
 // consumer-side so tests can stub without importing the bus.
 type eventPublisher interface {
@@ -112,11 +107,10 @@ type contactWriter interface {
 
 // CadenceSyncProvider implements SyncProvider for Todoist cadence tasks
 type CadenceSyncProvider struct {
-	oauthService        *OAuthService
-	contactTaskRepo     contactTaskWriter
-	contactRepo         contactWriter
-	syncRepo            *repository.SyncRepository
-	interactionRecorder interactionRecorder
+	oauthService    *OAuthService
+	contactTaskRepo contactTaskWriter
+	contactRepo     contactWriter
+	syncRepo        *repository.SyncRepository
 	// bus, pool, and clientFactory are required for the tx-atomic handlers
 	// and for HTTP-failure injection in tests. Nil values are caught by a
 	// single defensive nil-guard at the top of Sync; production wiring in
@@ -134,21 +128,19 @@ func NewCadenceSyncProvider(
 	contactRepo contactWriter,
 	syncRepo *repository.SyncRepository,
 	cfg *config.Config,
-	interactionRecorder interactionRecorder,
 	bus eventPublisher,
 	pool *pgxpool.Pool,
 	clientFactory ClientFactory,
 ) *CadenceSyncProvider {
 	return &CadenceSyncProvider{
-		oauthService:        oauthService,
-		contactTaskRepo:     contactTaskRepo,
-		contactRepo:         contactRepo,
-		syncRepo:            syncRepo,
-		interactionRecorder: interactionRecorder,
-		bus:                 bus,
-		pool:                pool,
-		clientFactory:       clientFactory,
-		frontendURL:         cfg.CORS.FrontendURL,
+		oauthService:    oauthService,
+		contactTaskRepo: contactTaskRepo,
+		contactRepo:     contactRepo,
+		syncRepo:        syncRepo,
+		bus:             bus,
+		pool:            pool,
+		clientFactory:   clientFactory,
+		frontendURL:     cfg.CORS.FrontendURL,
 	}
 }
 

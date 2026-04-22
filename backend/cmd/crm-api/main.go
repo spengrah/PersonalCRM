@@ -584,7 +584,6 @@ func run() int {
 				contactRepo,
 				syncRepo,
 				cfg,
-				contactService,
 				eventBus,
 				database.Pool,
 				todoist.DefaultClientFactory,
