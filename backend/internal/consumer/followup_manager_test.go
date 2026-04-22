@@ -175,6 +175,13 @@ func TestFollowUpManager_ModeCutover_RequiresCollaborators(t *testing.T) {
 	// The first nil dependency reported determines the error message —
 	// we cover each required dep's check in sequence by wiring all of
 	// them to nil except the ones we've already validated.
+	// Helper captures the full dependency set so each sub-test can null
+	// out a single dep while leaving the rest populated. Returning a
+	// builder closure rather than a manager keeps each sub-test's null
+	// substitution local.
+	fullDeps := func() (eventClaimer, followUpContactReader, contactTaskReader, followUpTaskWriter, interactionResponseReader, RiverInserter, TodoistSettingsFunc, todoist.ClientFactory) {
+		return &stubEventClaimer{}, &stubFollowUpContactReader{}, &stubFollowUpTaskReader{}, &stubFollowUpTaskWriter{}, &stubInteractionResponseReader{}, &stubRiverInserter{}, settingsOKStub(), factoryStub()
+	}
 	cases := []struct {
 		name     string
 		build    func() *FollowUpManager
@@ -183,30 +190,66 @@ func TestFollowUpManager_ModeCutover_RequiresCollaborators(t *testing.T) {
 		{
 			name: "nil_claims",
 			build: func() *FollowUpManager {
-				return NewFollowUpManager(FollowUpModeCutover, nil, &stubFollowUpContactReader{}, &stubFollowUpTaskReader{}, &stubFollowUpTaskWriter{}, &stubInteractionResponseReader{}, &stubRiverInserter{}, nil, settingsOKStub(), factoryStub(), "", testWatchdog())
+				_, contacts, taskRepo, taskWriter, inters, inserter, settings, factory := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, nil, contacts, taskRepo, taskWriter, inters, inserter, nil, settings, factory, "", testWatchdog())
 			},
 			contains: "claim repository",
 		},
 		{
 			name: "nil_contacts",
 			build: func() *FollowUpManager {
-				return NewFollowUpManager(FollowUpModeCutover, &stubEventClaimer{}, nil, &stubFollowUpTaskReader{}, &stubFollowUpTaskWriter{}, &stubInteractionResponseReader{}, &stubRiverInserter{}, nil, settingsOKStub(), factoryStub(), "", testWatchdog())
+				claims, _, taskRepo, taskWriter, inters, inserter, settings, factory := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, nil, taskRepo, taskWriter, inters, inserter, nil, settings, factory, "", testWatchdog())
 			},
 			contains: "contact reader",
 		},
 		{
+			name: "nil_task_repo",
+			build: func() *FollowUpManager {
+				claims, contacts, _, taskWriter, inters, inserter, settings, factory := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, nil, taskWriter, inters, inserter, nil, settings, factory, "", testWatchdog())
+			},
+			contains: "contact-task reader",
+		},
+		{
 			name: "nil_task_writer",
 			build: func() *FollowUpManager {
-				return NewFollowUpManager(FollowUpModeCutover, &stubEventClaimer{}, &stubFollowUpContactReader{}, &stubFollowUpTaskReader{}, nil, &stubInteractionResponseReader{}, &stubRiverInserter{}, nil, settingsOKStub(), factoryStub(), "", testWatchdog())
+				claims, contacts, taskRepo, _, inters, inserter, settings, factory := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, nil, inters, inserter, nil, settings, factory, "", testWatchdog())
 			},
 			contains: "contact-task writer",
 		},
 		{
+			name: "nil_interaction_repo",
+			build: func() *FollowUpManager {
+				claims, contacts, taskRepo, taskWriter, _, inserter, settings, factory := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, taskWriter, nil, inserter, nil, settings, factory, "", testWatchdog())
+			},
+			contains: "interaction reader",
+		},
+		{
+			name: "nil_river_inserter",
+			build: func() *FollowUpManager {
+				claims, contacts, taskRepo, taskWriter, inters, _, settings, factory := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, taskWriter, inters, nil, nil, settings, factory, "", testWatchdog())
+			},
+			contains: "river inserter",
+		},
+		{
 			name: "nil_settings",
 			build: func() *FollowUpManager {
-				return NewFollowUpManager(FollowUpModeCutover, &stubEventClaimer{}, &stubFollowUpContactReader{}, &stubFollowUpTaskReader{}, &stubFollowUpTaskWriter{}, &stubInteractionResponseReader{}, &stubRiverInserter{}, nil, nil, factoryStub(), "", testWatchdog())
+				claims, contacts, taskRepo, taskWriter, inters, inserter, _, factory := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, taskWriter, inters, inserter, nil, nil, factory, "", testWatchdog())
 			},
 			contains: "todoist settings",
+		},
+		{
+			name: "nil_client_factory",
+			build: func() *FollowUpManager {
+				claims, contacts, taskRepo, taskWriter, inters, inserter, settings, _ := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, taskWriter, inters, inserter, nil, settings, nil, "", testWatchdog())
+			},
+			contains: "todoist client factory",
 		},
 	}
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
