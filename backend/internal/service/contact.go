@@ -10,6 +10,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 
@@ -75,8 +76,18 @@ type ContactService struct {
 	// with consumer wiring. Non-bus callers (Todoist completion path,
 	// Promote/Extend) route through followUp.ApplyInteraction inside
 	// deriveFollowUpClosure.
-	followUp   FollowUpConsumer
-	rematchSvc *RematchService
+	followUp FollowUpConsumer
+	// bus is the event bus used to publish contact_methods.added on
+	// method-adding mutations. Required in production wiring (main.go)
+	// per PR-10 spec §3.4.4. Nil-safe for tests that don't exercise
+	// the rematch dispatch path — the publisher short-circuits when
+	// nil and leaves rematchJobID as uuid.Nil in the response.
+	bus *events.Bus
+	// rematchRegistry is the narrow contract for registering an in-memory
+	// job entry synchronously so GET /rematch/jobs/:id works immediately
+	// after publish. Implemented by *RematchService. Required alongside
+	// bus in production; nil-safe for tests.
+	rematchRegistry RematchRegistry
 	// cadence is the direct-invoke writer (the sole writer of the four
 	// cadence columns post-cutover). Injected via SetCadenceUpdater
 	// after construction to avoid a circular dep with consumer wiring.
@@ -87,13 +98,31 @@ type ContactService struct {
 	cadence cadenceWriter
 }
 
-func NewContactService(database *db.Database, contactRepo *repository.ContactRepository, contactMethodRepo *repository.ContactMethodRepository, interactionRepo *repository.InteractionRepository, contactTaskRepo *repository.ContactTaskRepository) *ContactService {
+// NewContactService constructs a ContactService. bus and rematchRegistry
+// are required for the PR-10 event-bus rematch path in production (spec
+// §3.4.4): CreateContact / UpdateContact / RescanRematch publish
+// contact_methods.added through bus and seed the in-memory job entry via
+// rematchRegistry. Tests that don't exercise rematch may pass nil for
+// both — the publisher silently skips when bus is nil, matching the old
+// "SetRematchService not called" semantic without the bug class that
+// setter omission caused in non-test paths.
+func NewContactService(
+	database *db.Database,
+	contactRepo *repository.ContactRepository,
+	contactMethodRepo *repository.ContactMethodRepository,
+	interactionRepo *repository.InteractionRepository,
+	contactTaskRepo *repository.ContactTaskRepository,
+	bus *events.Bus,
+	rematchRegistry RematchRegistry,
+) *ContactService {
 	return &ContactService{
 		database:          database,
 		contactRepo:       contactRepo,
 		contactMethodRepo: contactMethodRepo,
 		interactionRepo:   interactionRepo,
 		contactTaskRepo:   contactTaskRepo,
+		bus:               bus,
+		rematchRegistry:   rematchRegistry,
 	}
 }
 
@@ -107,10 +136,16 @@ func (s *ContactService) SetFollowUpConsumer(fm FollowUpConsumer) {
 	s.followUp = fm
 }
 
-// SetRematchService injects the rematch service. Safe to leave unset — CreateContact
-// and UpdateContact return uuid.Nil as the jobID when nil.
-func (s *ContactService) SetRematchService(r *RematchService) {
-	s.rematchSvc = r
+// InjectBusForTest swaps the event bus reference after construction.
+// Integration tests have a chicken-and-egg dependency where the bus
+// needs the ContactService (via InteractionRecorder) AND the
+// ContactService needs the bus (to publish contact_methods.added).
+// Production main.go resolves this by reordering construction — tests
+// can't do that cleanly across many fixtures, so this setter exists
+// for test-only bus injection. Must only be called before the
+// service is used concurrently; no synchronization is performed.
+func (s *ContactService) InjectBusForTest(bus *events.Bus) {
+	s.bus = bus
 }
 
 // SetCadenceUpdater injects the cadence writer. Main.go wires this
@@ -247,13 +282,33 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 		return nil, uuid.Nil, err
 	}
 
+	// Publish contact_methods.added INSIDE the tx so the event row +
+	// river consumer job land atomically with the method rows (spec §4).
+	// A tx rollback rolls back method rows AND the event AND the river
+	// job together. jobID is only returned to the caller after Commit
+	// succeeds, so clients never see a jobID for work that didn't ship.
+	newMethodRefs := contactMethodsToRefs(createdMethods)
+	if len(newMethodRefs) > 0 && s.bus != nil {
+		jobID = uuid.New()
+		env, marshalErr := buildContactMethodsAddedEnvelope("manual", contact.ID, newMethodRefs, jobID)
+		if marshalErr != nil {
+			return nil, uuid.Nil, marshalErr
+		}
+		if err := s.bus.PublishTx(ctx, tx, env); err != nil {
+			return nil, uuid.Nil, fmt.Errorf("publish contact_methods.added: %w", err)
+		}
+	}
+
 	if err = tx.Commit(ctx); err != nil {
 		return nil, uuid.Nil, err
 	}
 
 	assignMethods(contact, createdMethods)
-	if s.rematchSvc != nil && len(createdMethods) > 0 {
-		jobID = s.rematchSvc.StartRematchForContact(contact.ID, toRematchMethods(createdMethods))
+	// RegisterPending seeds the in-memory entry so GET
+	// /rematch/jobs/:id returns it immediately. Idempotent; safe even
+	// though the bus may have deduped a publisher retry.
+	if jobID != uuid.Nil && s.rematchRegistry != nil {
+		s.rematchRegistry.RegisterPending(jobID, contact.ID, refsToRematchMethods(newMethodRefs))
 	}
 	return contact, jobID, nil
 }
@@ -356,16 +411,33 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 		sortContactMethods(updatedMethods)
 	}
 
+	// Compute the method diff + publish INSIDE the tx so the event row,
+	// river consumer job, and method rows all commit (or roll back)
+	// together (spec §4 atomicity). Only the replaceMethods branch can
+	// add new methods — the !replaceMethods branch leaves methods as-is.
+	var newlyAddedMethods []Method
+	if replaceMethods && s.bus != nil {
+		newlyAddedMethods = diffNewMethods(existingBefore, updatedMethods)
+		if len(newlyAddedMethods) > 0 {
+			jobID = uuid.New()
+			refs := rematchMethodsToRefs(newlyAddedMethods)
+			env, marshalErr := buildContactMethodsAddedEnvelope("manual", id, refs, jobID)
+			if marshalErr != nil {
+				return nil, uuid.Nil, marshalErr
+			}
+			if err := s.bus.PublishTx(ctx, tx, env); err != nil {
+				return nil, uuid.Nil, fmt.Errorf("publish contact_methods.added: %w", err)
+			}
+		}
+	}
+
 	if err = tx.Commit(ctx); err != nil {
 		return nil, uuid.Nil, err
 	}
 
 	assignMethods(contact, updatedMethods)
-	if replaceMethods && s.rematchSvc != nil {
-		newlyAdded := diffNewMethods(existingBefore, updatedMethods)
-		if len(newlyAdded) > 0 {
-			jobID = s.rematchSvc.StartRematchForContact(id, newlyAdded)
-		}
+	if jobID != uuid.Nil && s.rematchRegistry != nil {
+		s.rematchRegistry.RegisterPending(jobID, id, newlyAddedMethods)
 	}
 	return contact, jobID, nil
 }

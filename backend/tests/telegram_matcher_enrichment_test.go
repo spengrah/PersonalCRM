@@ -65,7 +65,7 @@ func setupMatcherEnrichmentTest(t *testing.T) *matcherEnrichTestEnv {
 	messageRepo := repository.NewTelegramMessageRepository(database.Queries)
 
 	identitySvc := service.NewIdentityService(identityRepo)
-	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo)
+	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
 
 	matcher := tgpkg.NewPeerMatcher(identitySvc, messageRepo, externalRepo, enrichmentSvc, 100)
 

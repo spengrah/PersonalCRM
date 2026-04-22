@@ -206,15 +206,17 @@ func run() int {
 	// runtime cost.
 	shadowObsRepo := repository.NewShadowObservationRepository(database.Queries, database.Pool)
 
-	// Initialize services
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
-
 	// River client + event bus + PR 5 consumer wiring. Built EARLY (before
 	// downstream services) so `pubBus` and `manualShadow` are in scope for
 	// constructors that need them (Calendar, Telegram, manual handlers).
 	// Sync workers + periodic job are registered LATER (once syncService
 	// exists) via river.AddWorker + riverClient.PeriodicJobs().Add(), both
 	// of which are safe between NewClient and Start.
+	//
+	// PR 10 (rematch dispatcher) hoisted the bus + rematchService
+	// construction ABOVE ContactService so the constructor can take the
+	// event bus + rematch registry as required args (SetRematchService
+	// is gone; spec §3.4.4).
 	riverWorkers := river.NewWorkers()
 	river.AddWorker(riverWorkers, &noopWorker{})
 
@@ -233,6 +235,14 @@ func run() int {
 	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
 	ingestService := service.NewIngestService(database, eventBus)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
+
+	// Rematch service — hoisted above ContactService (PR 10) so it can be
+	// passed as the RematchRegistry constructor arg. Handlers register
+	// later once their dependencies are constructed.
+	rematchService := service.NewRematchService()
+
+	// Initialize services
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, rematchService)
 
 	// Telegram message repo construction (hoisted above the InteractionRecorder
 	// wiring so the consumer can mark messages processed in the same tx as
@@ -435,14 +445,17 @@ func run() int {
 	// EnrichmentService is shared by the import handler (link/import flows) and
 	// the Telegram peer matcher (auto-match enrichment). Constructed at outer
 	// scope so both feature blocks share a single instance.
-	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo)
+	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, eventBus, rematchService)
 	enrichmentService.SetCadenceUpdater(cadenceUpdater)
 
-	// Rematch service — wired now so downstream services can call SetRematchService.
-	// Handlers are registered below once their dependencies are constructed.
-	rematchService := service.NewRematchService()
-	contactService.SetRematchService(rematchService)
-	enrichmentService.SetRematchService(rematchService)
+	// Rematch dispatcher consumer — subscribes to contact_methods.added
+	// events and runs RematchService.Run with per-contact mutex
+	// serialization (spec §3.4.4). Always-on post-PR-10 (plan Decision 1
+	// dropped the mode flag). Rematch handlers themselves (calendar,
+	// telegram) are registered below once their deps are constructed.
+	rematchDispatcher := consumer.NewRematchDispatcher(rematchService)
+	river.AddWorker(riverWorkers, consumer.NewRematchDispatcherWorker(eventBus, database.Pool, rematchDispatcher))
+	logger.Info().Msg("event-bus RematchDispatcher: cutover active")
 
 	// Initialize external sync components (feature-flagged)
 	var syncService *service.SyncService

@@ -69,7 +69,7 @@ func setupAggregationTest(t *testing.T) (
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil)
 
 	// Cutover wiring: a live events.Bus with the InteractionRecorder worker
 	// running so aggregation publishes → async consumer writes interaction

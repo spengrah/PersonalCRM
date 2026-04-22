@@ -354,21 +354,6 @@ func (s *RematchService) GetJob(id uuid.UUID) (JobProgress, error) {
 	return v.(*job).snapshot(), nil
 }
 
-// RescanContact triggers a full rematch for every method currently on the
-// contact. Resolves the methods via the supplied ContactService so the
-// handler layer doesn't need a direct repository dependency.
-//
-// Deprecated: kept so handler compilation stays green during the PR-10
-// step-wise cutover. Step 7 moves the HTTP rescan path onto
-// ContactService.RescanRematch (event-bus publish) and deletes this method.
-func (s *RematchService) RescanContact(ctx context.Context, contactSvc *ContactService, contactID uuid.UUID) (uuid.UUID, error) {
-	contact, err := contactSvc.GetContact(ctx, contactID)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	return s.StartRematchForContact(contactID, toRematchMethods(contact.Methods)), nil
-}
-
 // diffNewMethods returns methods present in `after` whose (type,
 // value_normalized) pair is not in `before`. Order-insensitive.
 func diffNewMethods(before, after []repository.ContactMethod) []Method {

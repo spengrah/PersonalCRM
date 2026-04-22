@@ -37,7 +37,7 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
 	eventRepo := repository.NewEventRepository(database.Queries)
 
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil)
 
 	// Chicken-and-egg: the worker needs the bus, the bus needs the client,
 	// the client needs the workers bundle pre-registered. Register a shim
