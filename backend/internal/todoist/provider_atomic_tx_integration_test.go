@@ -806,24 +806,23 @@ func TestTodoist_SkipDrift_ReconcileRecovery(t *testing.T) {
 
 // TestTodoist_Sync_ReconcileDefersSkipDriftAfterMappingRollback drives the
 // full provider.Sync(...) method end-to-end. Flow:
-//  1. Sync pulls items — returns a single SyncItem that is a skip trigger
+//   - Sync pulls items — returns a single SyncItem that is a skip trigger
 //     (label removed on a managed cadence task).
-//  2. processItems dispatches to handleSkipTrigger, which commits state +
+//   - processItems dispatches to handleSkipTrigger, which commits state +
 //     advances contact_by + emits an item_add command.
-//  3. Sync's post-items batch sends item_add to the mock; response
+//   - Sync's post-items batch sends item_add to the mock; response
 //     returns a temp_id_mapping for that task.
-//  4. processTempIDMappings runs — faulty metadata-clear rolls the tx
+//   - processTempIDMappings runs — faulty metadata-clear rolls the tx
 //     back; rolledBack=true.
-//  5. reconcileContactTasks is called with deferSkipDrift=true. Skip-drift
+//   - reconcileContactTasks is called with deferSkipDrift=true. Skip-drift
 //     branch must NOT emit a duplicate item_add against the already-
 //     created remote task.
 //
-// Assertion: across ALL calls to mock.Sync, the count of item_add
-// commands for this contact must be exactly 1 (the one from
-// handleSkipTrigger in step 2). Without the mappingRolledBack flag
-// threading through to deferSkipDrift, reconcileExistingTask's skip-drift
-// branch would fire in step 5 and emit a second item_add, failing this
-// assertion.
+// Assertion: across all mock.Sync calls, exactly ONE item_add for this
+// contact is emitted (from handleSkipTrigger). Without the
+// mappingRolledBack → deferSkipDrift wiring, reconcileExistingTask's
+// skip-drift branch would fire during reconcile and emit a second
+// item_add, failing this assertion.
 func TestTodoist_Sync_ReconcileDefersSkipDriftAfterMappingRollback(t *testing.T) {
 	env, cleanup := setupAtomicTxTestEnv(t)
 	defer cleanup()
