@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -31,20 +32,29 @@ import (
 // ============================================================================
 
 // faultyContactTaskWriter wraps a real contactTaskWriter and returns an
-// injected error from a named method on its first call, delegating on
-// subsequent calls. Safe for concurrent use.
+// injected error from a named method. The fault fires on the
+// fireOnInvocation-th matching call (1-indexed). Once fired, subsequent
+// calls delegate normally unless faultyMethod is reset. fireLimit extends
+// this so N sequential firings trigger; default 1. Safe for concurrent use.
 type faultyContactTaskWriter struct {
 	contactTaskWriter
-	mu           sync.Mutex
-	faultyMethod string
-	fireLimit    int // 0 = fire once; N = fire up to N times
-	fired        int
+	mu               sync.Mutex
+	faultyMethod     string
+	fireOnInvocation int // 0 = first matching call; N = Nth matching call (0-indexed skip count)
+	fireLimit        int // 0 = fire once; N = fire up to N times
+	invocations      int
+	fired            int
 }
 
 func (f *faultyContactTaskWriter) shouldFire(method string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.faultyMethod != method {
+		return false
+	}
+	invIdx := f.invocations
+	f.invocations++
+	if invIdx < f.fireOnInvocation {
 		return false
 	}
 	limit := f.fireLimit
@@ -187,7 +197,7 @@ func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 	faultyTaskWriter := &faultyContactTaskWriter{contactTaskWriter: contactTaskRepo}
 	faultyCW := &faultyContactWriter{contactWriter: contactRepo}
 	provider := NewCadenceSyncProvider(
-		nil,
+		stubOAuthProvider{},
 		faultyTaskWriter,
 		faultyCW,
 		nil,
@@ -225,6 +235,63 @@ func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 		accountID:   "test-account",
 		riverClient: riverClient,
 	}, cleanup
+}
+
+// ============================================================================
+// Stub OAuth provider + scripted mock Client for end-to-end Sync tests.
+// ============================================================================
+
+// stubOAuthProvider returns a fixed access token and claims an account
+// exists. Used so tests can drive the real Sync method without OAuth
+// fixtures.
+type stubOAuthProvider struct{}
+
+func (stubOAuthProvider) GetAccessToken(_ context.Context, _ string) (string, error) {
+	return "stub-token", nil
+}
+
+func (stubOAuthProvider) HasAnyAccount(_ context.Context) bool { return true }
+
+// scriptedClient is a Client implementation that replays a queue of
+// pre-canned sync responses and records all outbound command batches.
+// Matches the Client interface in sync.go. Safe for single-threaded use.
+type scriptedClient struct {
+	responses []*SyncResponse
+	errors    []error
+	callIdx   int
+	// batches captures the commands passed to each client.Sync call (one
+	// entry per call). Tests assert over this to verify the skip-drift
+	// branch did not emit a duplicate item_add.
+	batches [][]SyncCommand
+	// onCall is invoked after computing the response for call callIdx
+	// with the outbound commands and the (mutable) response pointer, so
+	// tests can patch the response based on what the batch contains
+	// (e.g., fill in temp_id_mapping from a temp_id the handler just
+	// generated).
+	onCall func(callIdx int, commands []SyncCommand, resp *SyncResponse)
+}
+
+func (c *scriptedClient) QuickAdd(_ context.Context, _ string, _ string) (*QuickAddTask, error) {
+	return &QuickAddTask{ID: "stub-quick-add"}, nil
+}
+
+func (c *scriptedClient) Sync(_ context.Context, _ string, _ []string, commands []SyncCommand) (*SyncResponse, error) {
+	c.batches = append(c.batches, append([]SyncCommand{}, commands...))
+	idx := c.callIdx
+	c.callIdx++
+	if idx < len(c.errors) && c.errors[idx] != nil {
+		return nil, c.errors[idx]
+	}
+	var resp *SyncResponse
+	if idx < len(c.responses) {
+		resp = c.responses[idx]
+	} else {
+		resp = &SyncResponse{SyncToken: "stub-token"}
+	}
+	if c.onCall != nil {
+		c.onCall(idx, commands, resp)
+	}
+	return resp, nil
 }
 
 // ============================================================================
@@ -637,24 +704,24 @@ func TestTodoist_ProcessItems_PropagatesRecoveryFailed(t *testing.T) {
 
 // TestTodoist_ProcessTempIDMappings_RollbackDefersSkipDriftOneTick simulates
 // the round-trip where:
-//  1. handleSkipTrigger commits (state advance + pending_temp_id set).
-//  2. Todoist HTTP batch succeeds remotely (simulated by calling
+//   - handleSkipTrigger commits (state advance + pending_temp_id set).
+//   - Todoist HTTP batch succeeds remotely (simulated by calling
 //     processTempIDMappings with a temp_id_mapping).
-//  3. The mapping tx rolls back (faulty metadata-clear).
-//  4. processTempIDMappings returns rolledBack=true.
-//  5. Same-tick reconcileContactTasks invoked with deferSkipDrift=true
+//   - The mapping tx rolls back (faulty metadata-clear).
+//   - processTempIDMappings returns rolledBack=true.
+//   - Same-tick reconcileContactTasks invoked with deferSkipDrift=true
 //     must NOT emit a duplicate item_add, even though the stale local row
 //     matches the skip-drift detection predicate.
 //
-// This is the key correctness test for the rollback-deferral fix.
+// This is the key correctness test for the rollback-deferral behavior.
 func TestTodoist_ProcessTempIDMappings_RollbackDefersSkipDriftOneTick(t *testing.T) {
 	env, cleanup := setupAtomicTxTestEnv(t)
 	defer cleanup()
 
 	contact, task := createManagedCadenceTask(t, env, "DeferOneTick")
 
-	// Step 1: simulate handleSkipTrigger's committed state — pending_temp_id
-	// set with a new temp id that differs from ExternalTaskID.
+	// Simulate handleSkipTrigger's committed state — pending_temp_id set
+	// with a new temp id that differs from ExternalTaskID.
 	oldExtID := task.ExternalTaskID
 	newTempID := "temp-new-" + uuid.New().String()[:8]
 	_, err := env.contactTaskRepo.UpdateContactTaskMetadata(env.ctx, task.ID, map[string]any{
@@ -663,7 +730,7 @@ func TestTodoist_ProcessTempIDMappings_RollbackDefersSkipDriftOneTick(t *testing
 	})
 	require.NoError(t, err)
 
-	// Step 2 + 3: mapping tx rolls back on metadata clear.
+	// Mapping tx rolls back on metadata clear.
 	env.faultyTaskWriter.mu.Lock()
 	env.faultyTaskWriter.faultyMethod = "UpdateContactTaskMetadataTx"
 	env.faultyTaskWriter.mu.Unlock()
@@ -681,8 +748,8 @@ func TestTodoist_ProcessTempIDMappings_RollbackDefersSkipDriftOneTick(t *testing
 	pending, _ := afterMapping.Metadata[MetadataKeyPendingTempID].(string)
 	assert.Equal(t, newTempID, pending)
 
-	// Step 5: same-tick reconcile with deferSkipDrift=true. Skip-drift
-	// branch must NOT fire — no item_close + item_add emitted from it.
+	// Same-tick reconcile with deferSkipDrift=true — skip-drift branch
+	// must NOT fire (no item_close + item_add emitted from it).
 	syncedDeadline, _ := afterMapping.Metadata[MetadataKeySyncedDeadline].(string)
 	cmds := env.provider.reconcileExistingTask(env.ctx, afterMapping, contact, env.settings, syncedDeadline, true /* deferSkipDrift */)
 
@@ -735,6 +802,173 @@ func TestTodoist_SkipDrift_ReconcileRecovery(t *testing.T) {
 	newPending, _ := afterRecovery.Metadata[MetadataKeyPendingTempID].(string)
 	assert.Equal(t, cmds[1].TempID, newPending)
 	assert.NotEqual(t, staleTempID, newPending)
+}
+
+// TestTodoist_Sync_ReconcileDefersSkipDriftAfterMappingRollback drives the
+// full provider.Sync(...) method end-to-end. Flow:
+//  1. Sync pulls items — returns a single SyncItem that is a skip trigger
+//     (label removed on a managed cadence task).
+//  2. processItems dispatches to handleSkipTrigger, which commits state +
+//     advances contact_by + emits an item_add command.
+//  3. Sync's post-items batch sends item_add to the mock; response
+//     returns a temp_id_mapping for that task.
+//  4. processTempIDMappings runs — faulty metadata-clear rolls the tx
+//     back; rolledBack=true.
+//  5. reconcileContactTasks is called with deferSkipDrift=true. Skip-drift
+//     branch must NOT emit a duplicate item_add against the already-
+//     created remote task.
+//
+// Assertion: across ALL calls to mock.Sync, the count of item_add
+// commands for this contact must be exactly 1 (the one from
+// handleSkipTrigger in step 2). Without the mappingRolledBack flag
+// threading through to deferSkipDrift, reconcileExistingTask's skip-drift
+// branch would fire in step 5 and emit a second item_add, failing this
+// assertion.
+func TestTodoist_Sync_ReconcileDefersSkipDriftAfterMappingRollback(t *testing.T) {
+	env, cleanup := setupAtomicTxTestEnv(t)
+	defer cleanup()
+
+	contact, task := createManagedCadenceTask(t, env, "SyncE2E")
+	// Seed synced_deadline so reconcileExistingTask has a stable baseline.
+	syncedDeadline := contact.ContactBy.Format(DateFormat)
+	_, err := env.contactTaskRepo.UpdateContactTaskMetadata(env.ctx, task.ID, map[string]any{
+		MetadataKeySyncedDeadline: syncedDeadline,
+	})
+	require.NoError(t, err)
+
+	// The single sync item is the task with its CRM label removed — a
+	// skip trigger. handleSkipTrigger will commit + return an item_add.
+	syncItem := SyncItem{
+		ID:        task.ExternalTaskID,
+		ProjectID: env.settings.ProjectID,
+		Labels:    []string{}, // CRM label removed
+		Deadline:  &SyncDate{Date: syncedDeadline},
+		UpdatedAt: "2026-04-09T10:00:00Z",
+	}
+
+	// The scripted client must accept at least 3 Sync calls:
+	//   call 0: items pull → returns our skip-trigger item.
+	//   call 1: post-items batch → item_add executed remotely, returns
+	//           temp_id_mapping for the new task.
+	//   call 2: reconcile batch (if any). Set empty response.
+	// Responses are replayed in order by scriptedClient.Sync.
+	mock := &scriptedClient{}
+	mock.responses = []*SyncResponse{
+		// 0: items pull.
+		{SyncToken: "tok1", Items: []SyncItem{syncItem}},
+		// 1: post-items batch. TempIDMap maps the item_add's temp_id to
+		// a real id. The mock fills this in based on what the batch
+		// contains (see below — we pre-seed with a placeholder that the
+		// test overrides after building the batch).
+		{SyncToken: "tok2", TempIDMap: map[string]string{}},
+		// 2: reconcile batch — must return empty command set.
+		{SyncToken: "tok3"},
+	}
+
+	// Fault the SECOND UpdateContactTaskMetadataTx call. Call sequence:
+	//   1. handleSkipTrigger writes pending_temp_id=<new>.
+	//   2. processTempIDMappings clears pending_temp_id — this is the
+	//      one we want to fail.
+	env.faultyTaskWriter.mu.Lock()
+	env.faultyTaskWriter.faultyMethod = "UpdateContactTaskMetadataTx"
+	env.faultyTaskWriter.fireOnInvocation = 1 // skip first call
+	env.faultyTaskWriter.mu.Unlock()
+
+	// Wire a fresh provider that uses our scripted mock via the factory
+	// AND uses the env's faulty writers.
+	provider := NewCadenceSyncProvider(
+		stubOAuthProvider{},
+		env.faultyTaskWriter,
+		env.faultyContactWriterW,
+		nil,
+		config.TestConfig(),
+		env.bus,
+		env.pool,
+		func(_ string) Client { return mock },
+	)
+
+	// Prime the post-items TempIDMap by pre-registering the temp_id.
+	// handleSkipTrigger generates its own uuid for the replacement
+	// item_add's TempID, so we can't know it upfront. Use a proxy:
+	// after the first call, the scripted mock's batches[0] is empty
+	// (items pull), batches[1] contains the item_add whose TempID we
+	// copy into the second response's TempIDMap. But we can't mutate
+	// responses mid-Sync. Workaround: on the second Sync call the mock
+	// reads the current batch, and we override the response's TempIDMap
+	// to include the actual temp id from the batch.
+
+	// Use a scripted-with-callback: we replace responses[1] with a value
+	// computed from batches[1] on the fly. Easiest: wrap Sync to observe
+	// batch 1 and patch the response.
+	mock.onCall = func(callIdx int, commands []SyncCommand, resp *SyncResponse) {
+		if callIdx == 1 {
+			for _, c := range commands {
+				if c.Type == "item_add" && c.TempID != "" {
+					resp.TempIDMap = map[string]string{
+						c.TempID: "real-" + uuid.New().String()[:8],
+					}
+				}
+			}
+		}
+	}
+
+	accountID := env.accountID
+	syncCursor := "*"
+	state := &repository.SyncState{
+		ID:         uuid.New(),
+		Source:     SourceName,
+		AccountID:  &accountID,
+		SyncCursor: &syncCursor,
+		Metadata: map[string]any{
+			MetadataKeyProjectID: env.settings.ProjectID,
+			MetadataKeyLabelID:   env.settings.LabelID,
+			MetadataKeyLabelName: env.settings.LabelName,
+		},
+	}
+
+	result, err := provider.Sync(env.ctx, state, []repository.Contact{*contact})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.ItemsProcessed, "handleSkipTrigger should have processed the one skip item")
+
+	// Assert: across all Sync-call batches, exactly ONE item_add was
+	// emitted for THIS contact's cadence task. Without the mappingRolledBack
+	// → deferSkipDrift wiring, reconcile would emit a second item_add
+	// (item_close(old) + item_add(temp-newer)) for the same row.
+	//
+	// The test DB is shared — other contacts with cadence (from previous
+	// tests or the test suite's own fixtures) may also emit item_adds
+	// during reconcileContactTasks. Scope the count to our contact by
+	// matching the CRM marker's contact_id in the description.
+	contactMarker := contact.ID.String()
+	itemAddsForContact := 0
+	for _, batch := range mock.batches {
+		for _, c := range batch {
+			if c.Type != "item_add" {
+				continue
+			}
+			desc, _ := c.Args["description"].(string)
+			if strings.Contains(desc, contactMarker) {
+				itemAddsForContact++
+			}
+		}
+	}
+	assert.Equal(t, 1, itemAddsForContact,
+		"only handleSkipTrigger's item_add should emit for this contact; skip-drift must be deferred")
+
+	// Also assert: no item_close for this task's old external id was
+	// emitted (reconcile's skip-drift branch would emit that alongside
+	// item_add).
+	itemCloseForTask := 0
+	for _, batch := range mock.batches {
+		for _, c := range batch {
+			if c.Type == "item_close" {
+				if id, _ := c.Args["id"].(string); id == task.ExternalTaskID {
+					itemCloseForTask++
+				}
+			}
+		}
+	}
+	assert.Equal(t, 0, itemCloseForTask, "deferral must suppress skip-drift item_close for this task")
 }
 
 // TestReconcileExistingTask_SkipDriftRecovery_MetadataWriteFailure verifies

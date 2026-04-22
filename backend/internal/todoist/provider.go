@@ -75,6 +75,14 @@ type eventPublisher interface {
 	PublishTx(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
 }
 
+// oauthTokenProvider is the subset of *OAuthService the provider uses at
+// runtime. Defined as an interface so tests can stub access-token lookup
+// without constructing a real OAuth account.
+type oauthTokenProvider interface {
+	GetAccessToken(ctx context.Context, accountID string) (string, error)
+	HasAnyAccount(ctx context.Context) bool
+}
+
 // contactTaskWriter is the subset of *repository.ContactTaskRepository the
 // provider uses. Narrow interface so integration tests can wrap the real
 // repo with faulty-method injection.
@@ -107,7 +115,7 @@ type contactWriter interface {
 
 // CadenceSyncProvider implements SyncProvider for Todoist cadence tasks
 type CadenceSyncProvider struct {
-	oauthService    *OAuthService
+	oauthService    oauthTokenProvider
 	contactTaskRepo contactTaskWriter
 	contactRepo     contactWriter
 	syncRepo        *repository.SyncRepository
@@ -123,7 +131,7 @@ type CadenceSyncProvider struct {
 
 // NewCadenceSyncProvider creates a new Todoist cadence sync provider
 func NewCadenceSyncProvider(
-	oauthService *OAuthService,
+	oauthService oauthTokenProvider,
 	contactTaskRepo contactTaskWriter,
 	contactRepo contactWriter,
 	syncRepo *repository.SyncRepository,
@@ -1479,7 +1487,20 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 
 	task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contactID, SourceName, kind)
 	if err != nil {
-		return nil, false
+		if errors.Is(err, db.ErrNotFound) {
+			// No local row for this contact/kind — nothing to recover.
+			return nil, false
+		}
+		// Any non-ErrNotFound failure (DB timeout, connection error) means
+		// we can't tell whether a recoverable row exists. A stale local
+		// row may match the skip-drift predicate against a real remote
+		// item that was just delivered; surface recoveryFailed so Sync
+		// forces deferSkipDrift=true and avoids emitting a duplicate
+		// item_add this tick.
+		logger.Warn().Err(err).
+			Str("contactId", marker.ContactID).
+			Msg("tryRecoverPendingTempID: lookup by contact failed")
+		return nil, true
 	}
 
 	// Broadened guard: any managed task with a non-empty pending_temp_id
