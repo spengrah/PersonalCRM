@@ -460,6 +460,18 @@ func (r *ContactRepository) UpdateContactBy(ctx context.Context, id uuid.UUID, c
 	})
 }
 
+// UpdateContactByTx is the tx-threaded variant of UpdateContactBy.
+func (r *ContactRepository) UpdateContactByTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, contactBy time.Time) error {
+	q := r.queries
+	if tx != nil {
+		q = db.New(tx)
+	}
+	return q.UpdateContactBy(ctx, db.UpdateContactByParams{
+		ID:        uuidToPgUUID(id),
+		ContactBy: timeToPgDate(&contactBy),
+	})
+}
+
 // UpdateContactOutreachAt updates only last_outreach_at (for outbound interactions)
 func (r *ContactRepository) UpdateContactOutreachAt(ctx context.Context, id uuid.UUID, outreachAt time.Time, isManual bool) error {
 	return r.queries.UpdateContactOutreachAt(ctx, db.UpdateContactOutreachAtParams{
