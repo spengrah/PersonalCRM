@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow check-cadence-sole-writer check-followup-sole-writer
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -300,7 +300,7 @@ lint-fix:
 	@echo "Running golangci-lint with auto-fix..."
 	@cd backend && $(GOLANGCI_LINT) run --fix ./...
 
-ci-test: lint check-cadence-sole-writer check-followup-sole-writer test-unit test-integration-fast test-frontend
+ci-test: lint check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher test-unit test-integration-fast test-frontend
 	@echo "✅ All CI tests passed"
 
 # Sole-writer guard: verifies only CadenceUpdater calls cadence-writing queries.
@@ -316,6 +316,13 @@ check-cadence-sole-writer:
 # scripts/ci/followup-sole-writer-guard.sh.
 check-followup-sole-writer:
 	@$(REPO_ROOT)/scripts/ci/followup-sole-writer-guard.sh
+
+# Sole-dispatcher guard: enforces that StartRematchForContact is test-only
+# after the PR-10 event-bus cutover (#180). Production rematch dispatch
+# flows through events.Bus + RematchDispatcher; any non-test caller
+# indicates a partial revert. See scripts/ci/rematch-sole-dispatcher-guard.sh.
+check-rematch-sole-dispatcher:
+	@$(REPO_ROOT)/scripts/ci/rematch-sole-dispatcher-guard.sh
 
 # Code generation
 sqlc:
