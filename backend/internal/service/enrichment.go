@@ -546,9 +546,18 @@ func (s *EnrichmentService) enrichContactMethodsWithSelectionsTx(
 		}
 	}
 
-	// Return error if any method operations failed
+	// Per-selection method errors (e.g., "value not found in external
+	// contact") are logged but NOT returned as a tx-failing error —
+	// returning would roll back successfully-inserted methods and drop
+	// the entire link operation. Callers prior to PR 10 ran method
+	// inserts outside a tx and logged-and-proceeded on methodErrors;
+	// the tx-wrap MUST preserve that partial-success semantic for
+	// link/import paths (existing API contract).
 	if len(methodErrors) > 0 {
-		return added, fmt.Errorf("method enrichment errors: %s", strings.Join(methodErrors, "; "))
+		logger.Warn().
+			Str("contact_id", contact.ID.String()).
+			Str("errors", strings.Join(methodErrors, "; ")).
+			Msg("enrichment: one or more selected methods could not be inserted; partial success")
 	}
 
 	return added, nil

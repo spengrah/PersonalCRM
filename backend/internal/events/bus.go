@@ -201,7 +201,13 @@ func (b *Bus) PublishTx(ctx context.Context, tx pgx.Tx, env *Envelope) error {
 	// repository/event.go honors a caller-supplied UUID; otherwise the
 	// DB DEFAULT gen_random_uuid() fires. Generating client-side is
 	// equivalent to a DB-side UUID from a uniqueness standpoint.
-	if env.ID == uuid.Nil {
+	//
+	// We track whether the ID was caller-supplied so a duplicate
+	// (ON CONFLICT) path can restore env.ID to uuid.Nil for the
+	// IngestService duplicate-detection contract (it distinguishes
+	// accepted vs duplicate via `env.ID == uuid.Nil` post-return).
+	callerSuppliedID := env.ID != uuid.Nil
+	if !callerSuppliedID {
 		env.ID = uuid.New()
 	}
 
@@ -215,6 +221,12 @@ func (b *Bus) PublishTx(ctx context.Context, tx pgx.Tx, env *Envelope) error {
 	if err := b.eventRepo.InsertEvent(ctx, tx, env); err != nil {
 		if errors.Is(err, db.ErrDuplicate) {
 			// (source, source_id) collision → idempotent no-op.
+			// Reset env.ID when we pre-assigned it so callers using the
+			// `env.ID == uuid.Nil` duplicate sentinel (IngestService)
+			// see the dup. Caller-supplied IDs stay as-is.
+			if !callerSuppliedID {
+				env.ID = uuid.Nil
+			}
 			return nil
 		}
 		return fmt.Errorf("insert event: %w", err)
