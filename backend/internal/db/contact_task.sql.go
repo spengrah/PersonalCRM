@@ -15,11 +15,16 @@ const CompleteFollowUpForContact = `-- name: CompleteFollowUpForContact :many
 UPDATE contact_task
 SET state = 'completed',
     updated_at = NOW()
-WHERE contact_id = $1 AND kind = 'follow_up' AND state = 'managed'
+WHERE contact_id = $1
+  AND kind = 'follow_up'
+  AND state IN ('managed', 'pending_remote_create')
 RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key
 `
 
-// Mark all pending follow-up tasks as completed for a contact (when a response arrives)
+// Mark all pending follow-up tasks as completed for a contact (when a
+// response arrives). Matches the same live-state set as FindPendingFollowUp
+// so an inbound arriving while the create worker is mid-flight still
+// transitions the row to completed.
 func (q *Queries) CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error) {
 	rows, err := q.db.Query(ctx, CompleteFollowUpForContact, contactID)
 	if err != nil {
@@ -63,6 +68,28 @@ type CountContactTasksByProviderParams struct {
 
 func (q *Queries) CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error) {
 	row := q.db.QueryRow(ctx, CountContactTasksByProvider, arg.Provider, arg.State)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const CountRiverJobsByContactTask = `-- name: CountRiverJobsByContactTask :one
+SELECT COUNT(*) FROM river_job
+WHERE kind = $1::text
+  AND (args->>'contact_task_id') = $2::text
+`
+
+type CountRiverJobsByContactTaskParams struct {
+	Kind          string `json:"kind"`
+	ContactTaskID string `json:"contact_task_id"`
+}
+
+// Test-only count of river_job rows with a given kind whose args JSON
+// contains contact_task_id = $2. Used by follow-up cutover integration
+// tests to assert a create/close/refresh job was enqueued without
+// inlining raw SQL into Go test code (core.md rule 2).
+func (q *Queries) CountRiverJobsByContactTask(ctx context.Context, arg CountRiverJobsByContactTaskParams) (int64, error) {
+	row := q.db.QueryRow(ctx, CountRiverJobsByContactTask, arg.Kind, arg.ContactTaskID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -120,6 +147,67 @@ func (q *Queries) CreateContactTask(ctx context.Context, arg CreateContactTaskPa
 	return &i, err
 }
 
+const CreateContactTaskWithIdempotencyKey = `-- name: CreateContactTaskWithIdempotencyKey :one
+INSERT INTO contact_task (
+    contact_id,
+    provider,
+    kind,
+    external_task_id,
+    state,
+    metadata,
+    idempotency_key
+) VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    COALESCE($5, 'managed'),
+    COALESCE($6::jsonb, '{}'::jsonb),
+    $7
+) RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key
+`
+
+type CreateContactTaskWithIdempotencyKeyParams struct {
+	ContactID      pgtype.UUID `json:"contact_id"`
+	Provider       string      `json:"provider"`
+	Kind           string      `json:"kind"`
+	ExternalTaskID string      `json:"external_task_id"`
+	State          interface{} `json:"state"`
+	Metadata       []byte      `json:"metadata"`
+	IdempotencyKey pgtype.Text `json:"idempotency_key"`
+}
+
+// Variant of CreateContactTask that accepts an explicit idempotency_key,
+// used by the cutover FollowUpManager for crash-safe two-step create.
+// A NULL key is permitted so the generic path can reuse the query shape;
+// non-NULL keys collide with the partial unique index
+// idx_contact_task_followup_idempotency on repeats.
+func (q *Queries) CreateContactTaskWithIdempotencyKey(ctx context.Context, arg CreateContactTaskWithIdempotencyKeyParams) (*ContactTask, error) {
+	row := q.db.QueryRow(ctx, CreateContactTaskWithIdempotencyKey,
+		arg.ContactID,
+		arg.Provider,
+		arg.Kind,
+		arg.ExternalTaskID,
+		arg.State,
+		arg.Metadata,
+		arg.IdempotencyKey,
+	)
+	var i ContactTask
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Provider,
+		&i.Kind,
+		&i.ExternalTaskID,
+		&i.State,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IdempotencyKey,
+	)
+	return &i, err
+}
+
 const DeleteContactTask = `-- name: DeleteContactTask :exec
 DELETE FROM contact_task
 WHERE id = $1
@@ -160,11 +248,15 @@ func (q *Queries) DeleteContactTasksByProvider(ctx context.Context, provider str
 
 const FindPendingFollowUp = `-- name: FindPendingFollowUp :one
 SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
-WHERE contact_id = $1 AND kind = 'follow_up' AND state = 'managed'
+WHERE contact_id = $1
+  AND kind = 'follow_up'
+  AND state IN ('managed', 'pending_remote_create')
 LIMIT 1
 `
 
-// Find a pending follow-up task for a contact (kind='follow_up', state='managed')
+// Find a pending follow-up task for a contact. Matches both 'managed'
+// and 'pending_remote_create' live states so the two-step create flow
+// is visible to non-tx callers (e.g. Todoist provider's closeOnOutreach).
 func (q *Queries) FindPendingFollowUp(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error) {
 	row := q.db.QueryRow(ctx, FindPendingFollowUp, contactID)
 	var i ContactTask
@@ -489,44 +581,6 @@ func (q *Queries) ListContactTasksByProvider(ctx context.Context, arg ListContac
 	return items, nil
 }
 
-const ListFollowUpsWithPendingClose = `-- name: ListFollowUpsWithPendingClose :many
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key FROM contact_task
-WHERE kind = 'follow_up' AND state = 'completed'
-  AND metadata->>'todoist_close_pending' = 'true'
-`
-
-// Find completed follow-up tasks where the Todoist close call failed and needs retry
-func (q *Queries) ListFollowUpsWithPendingClose(ctx context.Context) ([]*ContactTask, error) {
-	rows, err := q.db.Query(ctx, ListFollowUpsWithPendingClose)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*ContactTask{}
-	for rows.Next() {
-		var i ContactTask
-		if err := rows.Scan(
-			&i.ID,
-			&i.ContactID,
-			&i.Provider,
-			&i.Kind,
-			&i.ExternalTaskID,
-			&i.State,
-			&i.Metadata,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.IdempotencyKey,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const ListManagedContactTasks = `-- name: ListManagedContactTasks :many
 SELECT ct.id, ct.contact_id, ct.provider, ct.kind, ct.external_task_id, ct.state, ct.metadata, ct.created_at, ct.updated_at, ct.idempotency_key, c.full_name, c.cadence, c.contact_by, c.last_contacted
 FROM contact_task ct
@@ -588,6 +642,28 @@ func (q *Queries) ListManagedContactTasks(ctx context.Context, provider string) 
 	return items, nil
 }
 
+const SetContactTaskExternalIDOnly = `-- name: SetContactTaskExternalIDOnly :exec
+UPDATE contact_task
+SET external_task_id = $2,
+    updated_at = NOW()
+WHERE id = $1
+`
+
+type SetContactTaskExternalIDOnlyParams struct {
+	ID             pgtype.UUID `json:"id"`
+	ExternalTaskID string      `json:"external_task_id"`
+}
+
+// Persist external_task_id on a row without touching state. Used by the
+// close-while-pending race path: the create worker enters on a row that
+// has already transitioned to 'completed' (inbound arrived mid-flight),
+// issues item_add to keep Todoist in sync, and records the resulting ID
+// without flipping the row back to 'managed'.
+func (q *Queries) SetContactTaskExternalIDOnly(ctx context.Context, arg SetContactTaskExternalIDOnlyParams) error {
+	_, err := q.db.Exec(ctx, SetContactTaskExternalIDOnly, arg.ID, arg.ExternalTaskID)
+	return err
+}
+
 const UpdateContactTaskExternalID = `-- name: UpdateContactTaskExternalID :one
 UPDATE contact_task
 SET external_task_id = $2,
@@ -602,7 +678,11 @@ type UpdateContactTaskExternalIDParams struct {
 	ExternalTaskID string      `json:"external_task_id"`
 }
 
-// Update the external task ID (when creating a new Todoist task)
+// Update the external task ID (when creating a new Todoist task).
+// Finalizes the two-step follow-up create: transitions a
+// pending_remote_create row to state='managed' once the remote
+// task ID is known. Use SetContactTaskExternalIDOnly when the row
+// should stay in its current state (close-while-pending race).
 func (q *Queries) UpdateContactTaskExternalID(ctx context.Context, arg UpdateContactTaskExternalIDParams) (*ContactTask, error) {
 	row := q.db.QueryRow(ctx, UpdateContactTaskExternalID, arg.ID, arg.ExternalTaskID)
 	var i ContactTask
@@ -698,7 +778,7 @@ INSERT INTO contact_task (
     $4,
     COALESCE($5, 'managed'),
     COALESCE($6::jsonb, '{}'::jsonb)
-) ON CONFLICT (external_task_id) DO UPDATE SET
+) ON CONFLICT (external_task_id) WHERE external_task_id <> '' DO UPDATE SET
     state = EXCLUDED.state,
     metadata = EXCLUDED.metadata,
     updated_at = NOW()

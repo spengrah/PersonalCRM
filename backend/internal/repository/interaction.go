@@ -74,8 +74,11 @@ type RecordInteractionResult struct {
 	// (may be nil if the contact has no cadence). Non-nil only when
 	// withShadow=true and cadence is set.
 	CadenceAtEmit *string
-	// FollowUpFn is the follow-up-manager closure on fresh writes with
-	// a configured manager. Nil otherwise. Caller invokes AFTER tx commit.
+	// FollowUpFn is the non-bus path's post-commit hook. Set only when
+	// withShadow=false — the bus path (withShadow=true) runs
+	// FollowUpManager.HandleEvent inline inside the recorder's tx and
+	// carries any refresh post-commit closure through the recorder's
+	// own return. Nil otherwise. Caller invokes AFTER tx commit.
 	FollowUpFn func(context.Context)
 	// ShadowDrainFn is the cadence shadow observation drain retained
 	// from the shadow-mode phase. CadenceUpdater is now the sole writer
@@ -84,13 +87,6 @@ type RecordInteractionResult struct {
 	// remains in place until the shadow tables are dropped in the
 	// final cleanup.
 	ShadowDrainFn CadenceShadowDrainFn
-
-	// FollowUpShadowDrainFn is the follow-up shadow observation drain.
-	// Non-nil on fresh writes when the follow-up shadow observer is
-	// wired AND withShadow is true. Caller invokes AFTER the
-	// interaction.recorded event is published, passing recordedEnv.ID
-	// so direct and consumer observations share a matching event_id.
-	FollowUpShadowDrainFn FollowUpShadowDrainFn
 }
 
 // InteractionRepository handles interaction persistence

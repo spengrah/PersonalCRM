@@ -963,10 +963,10 @@ func TestConfig_Validate_EventBusCadenceMode(t *testing.T) {
 	}
 }
 
-// TestConfig_FollowUpMode_DefaultShadow asserts EVENT_BUS_FOLLOWUP_MODE
-// defaults to "shadow" — the direct path is still the authoritative
-// follow-up writer, and the consumer observes in parallel.
-func TestConfig_FollowUpMode_DefaultShadow(t *testing.T) {
+// TestConfig_FollowUpMode_DefaultCutover asserts EVENT_BUS_FOLLOWUP_MODE
+// defaults to "cutover" — FollowUpManager is the sole writer of
+// follow-up tasks post-cutover.
+func TestConfig_FollowUpMode_DefaultCutover(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
 
@@ -974,19 +974,35 @@ func TestConfig_FollowUpMode_DefaultShadow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() failed: %v", err)
 	}
-	if cfg.EventBus.FollowUpMode != EventBusFollowUpModeShadow {
+	if cfg.EventBus.FollowUpMode != EventBusFollowUpModeCutover {
 		t.Errorf("Expected default EventBus.FollowUpMode=%q, got %q",
-			EventBusFollowUpModeShadow, cfg.EventBus.FollowUpMode)
+			EventBusFollowUpModeCutover, cfg.EventBus.FollowUpMode)
 	}
 }
 
-// TestConfig_FollowUpMode_OffAccepted asserts mode=off is a normal
-// runtime value — unlike CadenceMode, there is no unsafe-override
-// gate because the direct path is still live in shadow phase.
-func TestConfig_FollowUpMode_OffAccepted(t *testing.T) {
+// TestConfig_FollowUpMode_OffRejectedWithoutUnsafeOverride asserts
+// that mode=off without the unsafe-override flag fails startup — the
+// direct path is gone, so "off" silently breaks follow-ups.
+func TestConfig_FollowUpMode_OffRejectedWithoutUnsafeOverride(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
 	WithEnv(t, "EVENT_BUS_FOLLOWUP_MODE", "off")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() expected validation error for mode=off without unsafe override, got nil")
+	}
+}
+
+// TestConfig_FollowUpMode_OffAllowedWithUnsafeOverride asserts that
+// mode=off plus EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF=true lets the
+// server boot (for emergency ops). The MaybeWarnUnsafeOff log fires
+// separately.
+func TestConfig_FollowUpMode_OffAllowedWithUnsafeOverride(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "EVENT_BUS_FOLLOWUP_MODE", "off")
+	WithEnv(t, "EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF", "true")
 
 	cfg, err := Load()
 	if err != nil {
@@ -995,46 +1011,52 @@ func TestConfig_FollowUpMode_OffAccepted(t *testing.T) {
 	if cfg.EventBus.FollowUpMode != EventBusFollowUpModeOff {
 		t.Errorf("Expected EventBus.FollowUpMode=off, got %q", cfg.EventBus.FollowUpMode)
 	}
+	if !cfg.EventBus.FollowUpUnsafeAllowOff {
+		t.Error("Expected FollowUpUnsafeAllowOff=true")
+	}
 }
 
-// TestConfig_FollowUpMode_CutoverRejectedFromEnv asserts "cutover"
-// parses as a known value but is rejected at validation time — the
-// consumer's HandleEvent returns an error in cutover mode, so accepting
-// the flag would stall the job queue with retrying failures.
-func TestConfig_FollowUpMode_CutoverRejectedFromEnv(t *testing.T) {
+// TestConfig_FollowUpMode_ShadowRejected asserts shadow mode is
+// rejected post-cutover — nothing for it to observe.
+func TestConfig_FollowUpMode_ShadowRejected(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
-	WithEnv(t, "EVENT_BUS_FOLLOWUP_MODE", "cutover")
+	WithEnv(t, "EVENT_BUS_FOLLOWUP_MODE", "shadow")
 
 	_, err := Load()
 	if err == nil {
-		t.Fatal("Load() expected validation error for cutover mode, got nil")
+		t.Fatal("Load() expected validation error for mode=shadow post-cutover, got nil")
 	}
 }
 
 func TestConfig_Validate_EventBusFollowUpMode(t *testing.T) {
 	tests := []struct {
-		name    string
-		mode    string
-		wantErr bool
+		name        string
+		mode        string
+		unsafeAllow bool
+		wantErr     bool
 	}{
-		{"off_ok", EventBusFollowUpModeOff, false},
-		{"shadow_ok", EventBusFollowUpModeShadow, false},
-		{"cutover_rejected", EventBusFollowUpModeCutover, true},
-		{"empty_rejected", "", true},
-		{"gibberish_rejected", "garbage", true},
-		{"uppercase_rejected", "SHADOW", true},
+		{"cutover_ok", EventBusFollowUpModeCutover, false, false},
+		{"cutover_with_unsafe_ok", EventBusFollowUpModeCutover, true, false},
+		{"off_with_unsafe_ok", EventBusFollowUpModeOff, true, false},
+		{"off_without_unsafe_rejected", EventBusFollowUpModeOff, false, true},
+		{"shadow_rejected", EventBusFollowUpModeShadow, false, true},
+		{"shadow_with_unsafe_still_rejected", EventBusFollowUpModeShadow, true, true},
+		{"empty_rejected", "", false, true},
+		{"gibberish_rejected", "garbage", false, true},
+		{"uppercase_rejected", "CUTOVER", false, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := TestConfig()
 			cfg.EventBus.FollowUpMode = tt.mode
+			cfg.EventBus.FollowUpUnsafeAllowOff = tt.unsafeAllow
 
 			err := cfg.Validate()
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("Expected validation error for mode=%q", tt.mode)
+					t.Fatalf("Expected validation error for mode=%q unsafeAllow=%v", tt.mode, tt.unsafeAllow)
 				}
 				verr, ok := err.(ValidationErrors)
 				if !ok {
@@ -1051,7 +1073,7 @@ func TestConfig_Validate_EventBusFollowUpMode(t *testing.T) {
 					t.Errorf("Expected EVENT_BUS_FOLLOWUP_MODE validation error, got: %v", err)
 				}
 			} else if err != nil {
-				t.Errorf("Expected no error for mode=%q, got: %v", tt.mode, err)
+				t.Errorf("Expected no error for mode=%q unsafeAllow=%v, got: %v", tt.mode, tt.unsafeAllow, err)
 			}
 		})
 	}

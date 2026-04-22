@@ -82,6 +82,15 @@ type cadenceDispatcher interface {
 	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
 }
 
+// followUpDispatcher is the subset of *FollowUpManager the recorder
+// needs for the inline-apply path. Returns a post-commit closure (non-
+// nil on the refresh branch) that the recorder folds into its own
+// post-commit callback so the Todoist item_update runs outside the
+// caller's tx (core.md rule 153).
+type followUpDispatcher interface {
+	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (postCommit func(context.Context), err error)
+}
+
 // InteractionRecorder is the event-bus consumer that turns raw provider
 // events into interaction rows + emits interaction.recorded. See spec
 // §3.4.1 for the atomicity contract.
@@ -98,25 +107,30 @@ type InteractionRecorder struct {
 	telegramMessageRepo telegramMessageMarker
 	bus                 eventBusTx
 	cadence             cadenceDispatcher
+	followUp            followUpDispatcher
 }
 
 // NewInteractionRecorder builds the consumer. telegramMessageRepo may
 // be nil for test environments that don't exercise message.* kinds.
 // cadence MUST be non-nil in production wiring — the inline cadence
 // apply is the seam that closes the queued-worker replay hole for
-// manual corrections. Tests that don't care about cadence pass a
-// no-op stub.
+// manual corrections. followUp is inline-invoked post-publish so the
+// manual UI stays synchronous and the queued delivery becomes a
+// durable no-op via event_consumer_claim. Tests that don't care
+// about cadence / follow-up pass nil stubs.
 func NewInteractionRecorder(
 	writer interactionWriter,
 	telegramMessageRepo telegramMessageMarker,
 	bus eventBusTx,
 	cadence cadenceDispatcher,
+	followUp followUpDispatcher,
 ) *InteractionRecorder {
 	return &InteractionRecorder{
 		writer:              writer,
 		telegramMessageRepo: telegramMessageRepo,
 		bus:                 bus,
 		cadence:             cadence,
+		followUp:            followUp,
 	}
 }
 
@@ -219,21 +233,35 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		}
 	}
 
-	// Build the post-commit callback. The follow-up closure (res.FollowUpFn)
-	// runs first so it populates the actionSink the drain reads from; the
-	// follow-up shadow drain runs after, binding recordedEnv.ID so the
-	// direct observation row shares the join key with the consumer row.
-	recordedID := recordedEnv.ID
+	// Inline-apply follow-up under the same atomicity + dedupe rules as
+	// cadence. The consumer claims the event via event_consumer_claim so
+	// the queued worker for the same event becomes a durable no-op on
+	// re-delivery. The returned post-commit closure (non-nil on the
+	// refresh branch) carries the Todoist item_update call out of the
+	// tx per core.md rule 153.
+	var followUpPostCommit func(context.Context)
+	if r.followUp != nil {
+		pc, followUpErr := r.followUp.HandleEvent(ctx, tx, recordedEnv)
+		if followUpErr != nil {
+			return nil, nil, fmt.Errorf("inline apply follow-up: %w", followUpErr)
+		}
+		followUpPostCommit = pc
+	}
+
+	// Build the post-commit callback. res.FollowUpFn is nil on the bus
+	// path (withShadow=true); it's set only when the non-bus wrapper
+	// path runs (withShadow=false — Todoist completion). The follow-up
+	// consumer's own post-commit closure fires on the bus path's
+	// refresh branch.
 	followUpFn := res.FollowUpFn
-	drainFn := res.FollowUpShadowDrainFn
 	var postCommit func(context.Context)
-	if followUpFn != nil || drainFn != nil {
+	if followUpFn != nil || followUpPostCommit != nil {
 		postCommit = func(pctx context.Context) {
 			if followUpFn != nil {
 				followUpFn(pctx)
 			}
-			if drainFn != nil {
-				drainFn(pctx, recordedID)
+			if followUpPostCommit != nil {
+				followUpPostCommit(pctx)
 			}
 		}
 	}

@@ -72,6 +72,12 @@ jobs:
           working-directory: backend
           args: --timeout=5m
 
+      - name: Check cadence sole-writer invariant
+        run: ./scripts/check-cadence-sole-writer.sh
+
+      - name: Check follow-up sole-writer invariant
+        run: ./scripts/ci/followup-sole-writer-guard.sh
+
       - name: Run unit tests
         working-directory: backend
         run: go test -short -v ./...

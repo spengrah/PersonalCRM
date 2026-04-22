@@ -436,21 +436,6 @@ func (r *ContactTaskRepository) GetContactTaskByPendingTempID(ctx context.Contex
 	return &task, nil
 }
 
-// ListFollowUpsWithPendingClose finds completed follow-up tasks where Todoist close failed
-func (r *ContactTaskRepository) ListFollowUpsWithPendingClose(ctx context.Context) ([]ContactTask, error) {
-	dbTasks, err := r.queries.ListFollowUpsWithPendingClose(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	tasks := make([]ContactTask, len(dbTasks))
-	for i, dbTask := range dbTasks {
-		tasks[i] = convertDbContactTask(dbTask)
-	}
-
-	return tasks, nil
-}
-
 // FindPendingFollowUp finds a pending follow-up task for a contact
 func (r *ContactTaskRepository) FindPendingFollowUp(ctx context.Context, contactID uuid.UUID) (*ContactTask, error) {
 	dbTask, err := r.queries.FindPendingFollowUp(ctx, uuidToPgUUID(contactID))
@@ -519,6 +504,190 @@ func (r *ContactTaskRepository) GetContactTaskByIdempotencyKey(ctx context.Conte
 	}
 	task := convertDbContactTask(dbTask)
 	return &task, nil
+}
+
+// GetContactTaskByIdempotencyKeyTx is the tx-threaded variant of
+// GetContactTaskByIdempotencyKey. Used by the FollowUpManager consumer
+// inside the event-processing tx to detect a prior step-1 insert.
+func (r *ContactTaskRepository) GetContactTaskByIdempotencyKeyTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, kind, key string) (*ContactTask, error) {
+	q := r.queries
+	if tx != nil {
+		q = db.New(tx)
+	}
+	dbTask, err := q.GetContactTaskByIdempotencyKey(ctx, db.GetContactTaskByIdempotencyKeyParams{
+		ContactID:      uuidToPgUUID(contactID),
+		Kind:           kind,
+		IdempotencyKey: pgtype.Text{String: key, Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
+// CountRiverJobsByContactTask returns the number of river_job rows of
+// the given kind whose args contain contact_task_id = id. Test-only
+// helper backing integration-test assertions; the SQL lives in sqlc so
+// Go tests don't inline raw queries (core.md rule 2).
+func (r *ContactTaskRepository) CountRiverJobsByContactTask(ctx context.Context, kind string, contactTaskID uuid.UUID) (int64, error) {
+	return r.queries.CountRiverJobsByContactTask(ctx, db.CountRiverJobsByContactTaskParams{
+		Kind:          kind,
+		ContactTaskID: contactTaskID.String(),
+	})
+}
+
+// GetContactTaskTx is the tx-threaded variant of GetContactTask. Used by
+// the Todoist follow-up create worker's phase-3 re-read so the write
+// phase sees any state transition that happened during the HTTP phase.
+func (r *ContactTaskRepository) GetContactTaskTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*ContactTask, error) {
+	q := r.queries
+	if tx != nil {
+		q = db.New(tx)
+	}
+	dbTask, err := q.GetContactTask(ctx, uuidToPgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
+// CreateContactTaskTx is the tx-threaded variant of CreateContactTask
+// plus an optional idempotency_key argument. Used by the cutover
+// FollowUpManager to insert step-1 pending_remote_create rows with a
+// deterministic local idempotency key. Callers outside the follow-up
+// flow pass idempotencyKey=nil.
+func (r *ContactTaskRepository) CreateContactTaskTx(ctx context.Context, tx pgx.Tx, req CreateContactTaskRequest, idempotencyKey *string) (*ContactTask, error) {
+	q := r.queries
+	if tx != nil {
+		q = db.New(tx)
+	}
+	state := req.State
+	if state == "" {
+		state = string(ContactTaskStateManaged)
+	}
+	var metadataBytes []byte
+	if req.Metadata != nil {
+		var err error
+		metadataBytes, err = json.Marshal(req.Metadata)
+		if err != nil {
+			return nil, err
+		}
+	}
+	key := pgtype.Text{Valid: false}
+	if idempotencyKey != nil {
+		key = pgtype.Text{String: *idempotencyKey, Valid: true}
+	}
+	dbTask, err := q.CreateContactTaskWithIdempotencyKey(ctx, db.CreateContactTaskWithIdempotencyKeyParams{
+		ContactID:      uuidToPgUUID(req.ContactID),
+		Provider:       req.Provider,
+		Kind:           req.Kind,
+		ExternalTaskID: req.ExternalTaskID,
+		State:          state,
+		Metadata:       metadataBytes,
+		IdempotencyKey: key,
+	})
+	if err != nil {
+		return nil, err
+	}
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
+// UpdateContactTaskStateTx is the tx-threaded variant of UpdateContactTaskState.
+func (r *ContactTaskRepository) UpdateContactTaskStateTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, state ContactTaskState) (*ContactTask, error) {
+	q := r.queries
+	if tx != nil {
+		q = db.New(tx)
+	}
+	dbTask, err := q.UpdateContactTaskState(ctx, db.UpdateContactTaskStateParams{
+		ID:    uuidToPgUUID(id),
+		State: string(state),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
+// UpdateContactTaskMetadataTx is the tx-threaded variant of
+// UpdateContactTaskMetadata.
+func (r *ContactTaskRepository) UpdateContactTaskMetadataTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, metadata map[string]any) (*ContactTask, error) {
+	q := r.queries
+	if tx != nil {
+		q = db.New(tx)
+	}
+	var metadataBytes []byte
+	if metadata != nil {
+		var err error
+		metadataBytes, err = json.Marshal(metadata)
+		if err != nil {
+			return nil, err
+		}
+	}
+	dbTask, err := q.UpdateContactTaskMetadata(ctx, db.UpdateContactTaskMetadataParams{
+		ID:       uuidToPgUUID(id),
+		Metadata: metadataBytes,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
+// UpdateContactTaskExternalIDTx is the tx-threaded variant of
+// UpdateContactTaskExternalID. The underlying query atomically sets
+// external_task_id, transitions state to 'managed', and bumps
+// updated_at — this is the step-2 finalize path for the cutover
+// follow-up flow.
+func (r *ContactTaskRepository) UpdateContactTaskExternalIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, externalTaskID string) (*ContactTask, error) {
+	q := r.queries
+	if tx != nil {
+		q = db.New(tx)
+	}
+	dbTask, err := q.UpdateContactTaskExternalID(ctx, db.UpdateContactTaskExternalIDParams{
+		ID:             uuidToPgUUID(id),
+		ExternalTaskID: externalTaskID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
+// SetContactTaskExternalIDOnlyTx persists external_task_id WITHOUT
+// touching state. Used only by the close-while-pending race path in the
+// cutover follow-up create worker — the row is already in state='completed'
+// (an inbound arrived while step-2 was in flight) and we record the
+// Todoist-returned ID so the subsequent close can target it.
+func (r *ContactTaskRepository) SetContactTaskExternalIDOnlyTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, externalTaskID string) error {
+	q := r.queries
+	if tx != nil {
+		q = db.New(tx)
+	}
+	return q.SetContactTaskExternalIDOnly(ctx, db.SetContactTaskExternalIDOnlyParams{
+		ID:             uuidToPgUUID(id),
+		ExternalTaskID: externalTaskID,
+	})
 }
 
 // Note: Helper functions (stringToPgText, uuidToPgUUID, timeToPgTimestamptz)

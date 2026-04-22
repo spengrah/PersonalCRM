@@ -174,3 +174,59 @@ detail: |
   The plan-and-ship skill (/.claude/skills/plan-and-ship/SKILL.md) describes spawning named sub-agents and using SendMessage to resume them, but doesn't clarify that foreground sub-agents (spawned without run_in_background: true) suspend when their turn ends (Agent tool call returns). SendMessage queues a message, but no runtime consumes it. The skill should document: (1) use run_in_background: true if you want asynchronous execution with notifications, or (2) foreground agents that return mid-work require re-spawn (not just SendMessage) to continue. The session shows the orchestrator guessing wrong ('it's running in background') because the skill implied SendMessage would resume.
 actionable: true
 
+---
+timestamp: "2026-04-21T09:52:49.386916"
+type: architecture
+summary: Shadow-to-cutover migration requires 48h production bake before cutover merge
+detail: |
+  Event-bus migrations use a two-PR pattern: PR N ships shadow mode (consumer writes to observation table only, never mutates production state), PR N+1 ships cutover (enables production mutations). The cutover PR's *merge* is gated on a 48-hour production observation period validating zero unexpected divergences in the shadow table - even though planning and implementation can proceed in parallel with the bake. This is a temporal + data-quality gate, not just a CI gate. The pattern is documented in specs (e.g., event-bus-foundation.md 'PR 7 → PR 8 protocol') but easy to miss when CI passes green.
+actionable: true
+
+---
+timestamp: "2026-04-21T09:52:49.386916"
+type: gotcha
+summary: High Codex review rounds (6+) often indicate substantive safety value, not churn
+detail: |
+  In this session, the planner took 8 Codex rounds (vs typical 3-4). The orchestrator flagged it per plan-and-ship's 6-round threshold, and the extra rounds caught non-bus path preservation, single-owner race semantics, tx-vs-HTTP boundary violations, and post-commit refresh plumbing - all real bugs that would have shipped. High round count can signal that the plan is navigating subtle concurrency/safety constraints, not that Codex is confused. Before dismissing as churn, check if the fixes are addressing race conditions, transaction boundaries, or state-machine invariants.
+actionable: true
+
+---
+timestamp: "2026-04-21T09:52:49.386916"
+type: documentation_gap
+summary: Shadow-bake-cutover workflow missing from CLAUDE.md orchestration guidance
+detail: |
+  The shadow→cutover pattern (deploy shadow, bake 48h, merge cutover only after zero-divergence validation) is specified in `.ai/spec/event-bus-foundation.md` but not surfaced in `.ai/rules/core.md` or CLAUDE.md's 'When You Change X' table. A future agent implementing a cutover PR might merge immediately after CI passes, missing the production observation gate. The spec says 'same protocol as PR 7 → PR 8' but doesn't make the bake-before-merge constraint explicit as a rule. Needs either a core.md gotcha ('Merging cutover PRs before shadow bake completes') or a When You Change entry ('Event-bus shadow mode → also schedule production bake validation').
+actionable: true
+
+---
+timestamp: "2026-04-21T12:39:32.054566"
+type: gotcha
+summary: Claude Code Review action blocks auth when PR modifies workflow files
+detail: |
+  GitHub security feature blocks Claude Code Review on PRs that touch .github/workflows/*.yml. Logs show 'ANTHROPIC_API_KEY: ""' with 401 errors during token exchange. This is NOT an infra flake or transient failure - rerunning won't fix it because the block is structural. The action requires workflow files to match the default branch exactly. Options: (1) accept the limitation and rely on other review passes, or (2) split workflow changes into a separate PR (though this may defeat the purpose if the workflow validates the feature being shipped, like sole-writer guards).
+actionable: true
+
+---
+timestamp: "2026-04-21T12:39:32.054566"
+type: distinction
+summary: Local 'codex exec' and GitHub 'chatgpt-codex-connector[bot]' are separate review passes
+detail: |
+  Local Codex (pre-push 'codex exec' on uncommitted diffs) and GitHub PR bot (post-push 'chatgpt-codex-connector[bot]' reviewing the actual PR) run at different times and can surface different issues. Local reviews catch pre-commit problems; PR bot reviews see full context and can catch race conditions, state management bugs, and issues only visible in the complete changeset. The PR bot uses 'COMMENTED' state for suggestions (not 'CHANGES_REQUESTED'), making findings easy to miss - they don't block merge or trigger obvious alerts. Both passes are valuable; passing local Codex does not mean the PR bot won't find issues.
+actionable: true
+
+---
+timestamp: "2026-04-21T12:39:32.054566"
+type: rule
+summary: Always check for GitHub PR bot inline comments after opening a PR
+detail: |
+  The implementer completed 5 local Codex review rounds (R1 FAIL 9 findings → R5 PASS), pushed, opened PR #288, and reported completion - but missed 2 P1 inline comments from 'chatgpt-codex-connector[bot]' because they were posted as 'COMMENTED' rather than 'CHANGES_REQUESTED'. The orchestrator also missed them initially. The findings were real bugs (race conditions that could lose interactions or strand orphaned tasks). Use 'gh api repos/OWNER/REPO/pulls/PR_NUM/comments' to fetch inline review comments after push. Local Codex approval does NOT mean PR bot won't find critical issues.
+actionable: true
+
+---
+timestamp: "2026-04-21T12:39:32.054566"
+type: documentation_gap
+summary: PR workflow doesn't document checking GitHub PR bot inline comments
+detail: |
+  Existing guidance (.ai/rules/code-review.md, core.md) mentions running local Codex but doesn't explicitly document checking for GitHub PR bot inline comments after push. The implementer thought 'local Codex R5 PASS → PR complete' when the actual flow should be 'local Codex clean → push → check PR bot inline comments → address findings → PR complete'. Both the implementer and orchestrator missed the P1 comments until the user prompted. The COMMENTED state (vs CHANGES_REQUESTED) makes this non-obvious. Strengthen by adding explicit post-push step: 'After opening PR, run gh api repos/{owner}/{repo}/pulls/{number}/comments to check for chatgpt-codex-connector[bot] inline findings before marking work complete.'
+actionable: true
+

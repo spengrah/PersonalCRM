@@ -178,10 +178,11 @@ type RiverConfig struct {
 // load path the caller is expected to log a WARN — see
 // EventBusConfig.MaybeWarnUnsafeOff.
 type EventBusConfig struct {
-	InteractionMode    string // off | shadow | cutover. Default: cutover.
-	CadenceMode        string // off | shadow | cutover. Default: cutover.
-	FollowUpMode       string // off | shadow | cutover. Default: shadow.
-	UnsafeAllowOffMode bool   // EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true opt-in. Never true in normal prod.
+	InteractionMode        string // off | shadow | cutover. Default: cutover.
+	CadenceMode            string // off | shadow | cutover. Default: cutover.
+	FollowUpMode           string // off | shadow | cutover. Default: cutover.
+	UnsafeAllowOffMode     bool   // EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true opt-in. Never true in normal prod.
+	FollowUpUnsafeAllowOff bool   // EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF=true opt-in. Never true in normal prod.
 }
 
 // EventBus interaction-mode constants. Mirrors (and must stay in sync
@@ -202,10 +203,12 @@ const (
 )
 
 // EventBus follow-up-mode constants. Mirrors (and must stay in sync
-// with) consumer.FollowUpMode*. Unlike CadenceMode, FollowUpMode=off
-// has no unsafe-override gate: while the consumer is in shadow, the
-// direct path is the authoritative follow-up writer, so turning the
-// consumer off is the rollback-safe state.
+// with) consumer.FollowUpMode*. Post-cutover the direct path is gone,
+// so FollowUpMode=off is a startup-time kill switch: turning the
+// consumer off leaves nothing to create or complete follow-ups.
+// Startup REFUSES to boot on "off" unless FollowUpUnsafeAllowOff is
+// explicitly set (via EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF=true).
+// Real rollback is `git revert`, not a flag flip.
 const (
 	EventBusFollowUpModeOff     = "off"
 	EventBusFollowUpModeShadow  = "shadow"
@@ -221,15 +224,22 @@ const (
 // logger directly (not internal/logger) to avoid a circular import —
 // internal/logger already depends on internal/config.
 func (c *EventBusConfig) MaybeWarnUnsafeOff() {
-	if !c.UnsafeAllowOffMode || c.CadenceMode != EventBusCadenceModeOff {
-		return
+	if c.UnsafeAllowOffMode && c.CadenceMode == EventBusCadenceModeOff {
+		log.Warn().
+			Str("event", "cadence_mode_off_unsafe_override_active").
+			Str("cadence_mode", EventBusCadenceModeOff).
+			Bool("unsafe_allow_off", true).
+			Str("recovery", "unset EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF to restart in safe mode; git revert the cutover if you need the direct path back").
+			Msg("EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF is active; CadenceUpdater is disabled and cadence columns WILL NOT be written")
 	}
-	log.Warn().
-		Str("event", "cadence_mode_off_unsafe_override_active").
-		Str("cadence_mode", EventBusCadenceModeOff).
-		Bool("unsafe_allow_off", true).
-		Str("recovery", "unset EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF to restart in safe mode; git revert the cutover if you need the direct path back").
-		Msg("EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF is active; CadenceUpdater is disabled and cadence columns WILL NOT be written")
+	if c.FollowUpUnsafeAllowOff && c.FollowUpMode == EventBusFollowUpModeOff {
+		log.Warn().
+			Str("event", "followup_mode_off_unsafe_override_active").
+			Str("followup_mode", EventBusFollowUpModeOff).
+			Bool("unsafe_allow_off", true).
+			Str("recovery", "unset EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF to restart in safe mode; git revert the FollowUpManager cutover to restore direct path").
+			Msg("EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF is active; FollowUpManager is disabled and follow-up tasks WILL NOT be created or completed")
+	}
 }
 
 // ValidationError represents a configuration validation error
@@ -365,10 +375,11 @@ func Load() (*Config, error) {
 			JobTimeout:        getEnvAsDuration("RIVER_JOB_TIMEOUT", DefaultRiverJobTimeout),
 		},
 		EventBus: EventBusConfig{
-			InteractionMode:    getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),
-			CadenceMode:        getEnv("EVENT_BUS_CADENCE_MODE", EventBusCadenceModeCutover),
-			FollowUpMode:       getEnv("EVENT_BUS_FOLLOWUP_MODE", EventBusFollowUpModeShadow),
-			UnsafeAllowOffMode: getEnvAsBool("EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF", false),
+			InteractionMode:        getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),
+			CadenceMode:            getEnv("EVENT_BUS_CADENCE_MODE", EventBusCadenceModeCutover),
+			FollowUpMode:           getEnv("EVENT_BUS_FOLLOWUP_MODE", EventBusFollowUpModeCutover),
+			UnsafeAllowOffMode:     getEnvAsBool("EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF", false),
+			FollowUpUnsafeAllowOff: getEnvAsBool("EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF", false),
 		},
 	}
 
@@ -536,25 +547,38 @@ func (c *Config) Validate() error {
 		})
 	}
 
-	// EventBus follow-up-mode validation. "off" and "shadow" are legal:
-	// the direct path is the authoritative writer, so turning the
-	// consumer off is a valid rollback posture. "cutover" is parsed
-	// (forward compatibility with later implementations) but rejected
-	// at startup — FollowUpManager.HandleEvent returns an error in
-	// cutover mode, so accepting the flag would turn every recorded
-	// interaction into retrying River failures.
+	// EventBus follow-up-mode validation. Default is "cutover". Post-
+	// cutover the direct path is gone, so "off" disables the sole
+	// writer of follow-up tasks entirely. Require explicit opt-in via
+	// FollowUpUnsafeAllowOff (EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF=true)
+	// before accepting "off" in non-test config. "shadow" is retained as
+	// a parseable value but has no direct path to observe post-cutover;
+	// accepting it would suppress follow-up writes silently.
 	switch c.EventBus.FollowUpMode {
-	case EventBusFollowUpModeOff, EventBusFollowUpModeShadow:
-		// ok
 	case EventBusFollowUpModeCutover:
+		// ok
+	case EventBusFollowUpModeShadow:
 		errors = append(errors, ValidationError{
-			Field:   "EVENT_BUS_FOLLOWUP_MODE",
-			Message: "cutover is not implemented on this branch; use off or shadow",
+			Field: "EVENT_BUS_FOLLOWUP_MODE",
+			Message: "follow-up cutover has no direct path to observe: mode=shadow " +
+				"is a silent no-op post-cutover. Use `cutover` or, for emergency " +
+				"ops, set EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF=true with mode=off.",
 		})
+	case EventBusFollowUpModeOff:
+		if !c.EventBus.FollowUpUnsafeAllowOff {
+			errors = append(errors, ValidationError{
+				Field: "EVENT_BUS_FOLLOWUP_MODE",
+				Message: "follow-up cutover has no runtime rollback: mode=off disables " +
+					"the sole writer of follow-up tasks. Use `git revert` to roll back " +
+					"the cutover, or set EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF=true ONLY " +
+					"for emergency ops. This override leaves the system with follow-up " +
+					"creation and completion disabled.",
+			})
+		}
 	default:
 		errors = append(errors, ValidationError{
 			Field:   "EVENT_BUS_FOLLOWUP_MODE",
-			Message: fmt.Sprintf("invalid mode %q; must be one of: off, shadow", c.EventBus.FollowUpMode),
+			Message: fmt.Sprintf("invalid mode %q; must be one of: off, shadow, cutover", c.EventBus.FollowUpMode),
 		})
 	}
 
@@ -721,16 +745,17 @@ func TestConfig() *Config {
 		},
 		EventBus: EventBusConfig{
 			InteractionMode: EventBusInteractionModeCutover,
-			// CadenceMode defaults to "off" in TestConfig so unit tests
-			// don't inadvertently exercise the cutover writer path;
-			// tests that need cutover explicitly override this.
-			// UnsafeAllowOffMode is set so Validate() doesn't reject
-			// "off" via the post-cutover startup gate — the gate exists
-			// to catch prod misconfigs, not test harnesses that
-			// deliberately opt into "off".
-			CadenceMode:        EventBusCadenceModeOff,
-			FollowUpMode:       EventBusFollowUpModeOff,
-			UnsafeAllowOffMode: true,
+			// CadenceMode and FollowUpMode default to "off" in TestConfig so
+			// unit tests don't inadvertently exercise the cutover writer
+			// path; tests that need cutover explicitly override this.
+			// UnsafeAllowOffMode + FollowUpUnsafeAllowOff are set so
+			// Validate() doesn't reject "off" via the post-cutover startup
+			// gates — those gates exist to catch prod misconfigs, not test
+			// harnesses that deliberately opt into "off".
+			CadenceMode:            EventBusCadenceModeOff,
+			FollowUpMode:           EventBusFollowUpModeOff,
+			UnsafeAllowOffMode:     true,
+			FollowUpUnsafeAllowOff: true,
 		},
 	}
 }
