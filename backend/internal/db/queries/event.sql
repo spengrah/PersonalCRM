@@ -38,3 +38,14 @@ LIMIT 1;
 -- ingest outcomes per source. The event log is append-only, so no
 -- deleted_at filter is needed.
 SELECT COUNT(*) FROM event WHERE source = @source;
+
+-- name: CountRematchDispatcherJobsByContactAndJob :one
+-- Test-only count of river_job rows for the rematch_dispatcher kind
+-- whose args JSON contains the given (contact_id, rematch_job_id)
+-- tuple. Used by rematch dedup integration tests to assert
+-- UniqueOpts{ByArgs} behavior without inlining raw SQL into Go test
+-- code (core.md rule 2).
+SELECT COUNT(*) FROM river_job
+WHERE kind = 'rematch_dispatcher'
+  AND (args->>'contact_id') = sqlc.arg('contact_id')::text
+  AND (args->>'rematch_job_id') = sqlc.arg('rematch_job_id')::text;

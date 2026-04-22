@@ -78,6 +78,9 @@ jobs:
       - name: Check follow-up sole-writer invariant
         run: ./scripts/ci/followup-sole-writer-guard.sh
 
+      - name: Check rematch sole-dispatcher invariant
+        run: ./scripts/ci/rematch-sole-dispatcher-guard.sh
+
       - name: Run unit tests
         working-directory: backend
         run: go test -short -v ./...

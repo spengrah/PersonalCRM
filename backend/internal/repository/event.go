@@ -137,3 +137,18 @@ func (r *EventRepository) FindEventBySource(ctx context.Context, source, sourceI
 	}
 	return convertDbEvent(row), nil
 }
+
+// CountRematchDispatcherJobs returns the number of river_job rows of
+// kind "rematch_dispatcher" whose args JSON matches the given
+// (contactID, rematchJobID) tuple. Test-only helper for rematch dedup
+// integration tests — avoids inlining raw SQL into Go test code.
+//
+// The underlying sqlc query lives in queries/event.sql because
+// river_job is interrogated alongside the event-bus tables and has no
+// dedicated sqlc module.
+func (r *EventRepository) CountRematchDispatcherJobs(ctx context.Context, contactID, rematchJobID uuid.UUID) (int64, error) {
+	return r.queries.CountRematchDispatcherJobsByContactAndJob(ctx, db.CountRematchDispatcherJobsByContactAndJobParams{
+		ContactID:    contactID.String(),
+		RematchJobID: rematchJobID.String(),
+	})
+}

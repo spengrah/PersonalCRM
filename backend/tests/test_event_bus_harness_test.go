@@ -116,6 +116,106 @@ func setupTestEventBus(
 	return bus
 }
 
+// setupTestEventBusWithRematch is the PR-10 counterpart to
+// setupTestEventBus that also wires the RematchDispatcherWorker against
+// the given *service.RematchService. Matches the harness pattern
+// (shim + real-worker fill-in) so the rematch consumer is live after
+// Start.
+//
+// Chicken-and-egg: the bus needs InteractionRecorder (which needs
+// contactService), and contactService needs the bus to publish
+// contact_methods.added. Callers construct contactSvc with nil bus
+// FIRST, then call this helper to obtain the live bus, then call
+// contactSvc.InjectBusForTest(bus) to swap the nil bus for the real
+// one before any test runs. Same shape for EnrichmentService if tests
+// exercise enrichment publishes.
+func setupTestEventBusWithRematch(
+	t *testing.T,
+	ctx context.Context,
+	database *db.Database,
+	contactService *service.ContactService,
+	rematchSvc *service.RematchService,
+) *events.Bus {
+	t.Helper()
+
+	eventRepo := repository.NewEventRepository(database.Queries)
+	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
+
+	cfg := config.TestConfig()
+	if cfg.River.WorkerConcurrency <= 0 {
+		cfg.River.WorkerConcurrency = 4
+	}
+
+	workers := river.NewWorkers()
+	interactionShim := &deferredRecorderWorker{}
+	river.AddWorker(workers, interactionShim)
+	river.AddWorker(workers, &cadenceUpdaterNoopWorker{})
+	river.AddWorker(workers, &followUpManagerNoopWorker{})
+	rematchShim := &deferredRematchWorker{}
+	river.AddWorker(workers, rematchShim)
+
+	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
+		},
+		Workers:  workers,
+		TestOnly: true,
+	})
+	require.NoError(t, err)
+
+	bus := events.NewBus(database.Pool, client, eventRepo)
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactRepo.SetPool(database.Pool)
+	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
+	cadenceUpdater := consumer.NewCadenceUpdater(
+		claimRepo, contactRepo, database.Queries,
+		consumer.CadenceModeCutover,
+		false,
+	)
+	contactService.SetCadenceUpdater(cadenceUpdater)
+	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater, nil)
+	interactionShim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder)
+
+	rematchDispatcher := consumer.NewRematchDispatcher(rematchSvc)
+	rematchShim.real = consumer.NewRematchDispatcherWorker(bus, database.Pool, rematchDispatcher)
+
+	// IMPORTANT: pass the OUTER ctx (not a timeout-derived one) to Start.
+	require.NoError(t, client.Start(ctx))
+
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		_ = client.Stop(stopCtx)
+	})
+
+	return bus
+}
+
+// deferredRematchWorker is the rematch counterpart to
+// deferredRecorderWorker: lets us register a River worker on a workers
+// bundle before the real worker exists (river.NewClient consumes the
+// workers bundle at construction time but the real worker needs a bus,
+// and the bus needs the client).
+type deferredRematchWorker struct {
+	river.WorkerDefaults[consumerjobs.RematchDispatcherJobArgs]
+	real *consumer.RematchDispatcherWorker
+}
+
+func (w *deferredRematchWorker) Work(ctx context.Context, j *river.Job[consumerjobs.RematchDispatcherJobArgs]) error {
+	if w.real == nil {
+		return fmt.Errorf("deferredRematchWorker invoked before real worker assignment")
+	}
+	return w.real.Work(ctx, j)
+}
+
+func (w *deferredRematchWorker) Timeout(j *river.Job[consumerjobs.RematchDispatcherJobArgs]) time.Duration {
+	if w.real == nil {
+		return 5 * time.Minute
+	}
+	return w.real.Timeout(j)
+}
+
 // defaultInteractionWaitTimeout is the budget we give the async consumer
 // to pick up an enqueued job and commit the interaction row. Generous to
 // avoid flakes under CI load; integration tests that time out at this

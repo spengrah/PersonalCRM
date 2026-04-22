@@ -80,7 +80,7 @@ func setupSparseEnrichTest(t *testing.T) *sparseEnrichEnv {
 	identityRepo := repository.NewIdentityRepository(database.Queries)
 
 	identitySvc := service.NewIdentityService(identityRepo)
-	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo)
+	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil)
 	matcher := tgpkg.NewPeerMatcher(identitySvc, messageRepo, externalRepo, enrichmentSvc, 1)
 
 	handler := tgpkg.NewMessageHandler(

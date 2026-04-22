@@ -72,18 +72,30 @@ func setupRematchEnv(t *testing.T) *rematchTestEnv {
 	externalRepo := repository.NewExternalContactRepository(database.Queries)
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 
-	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo)
-	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo)
-
-	// Cutover wiring: a live bus + InteractionRecorderWorker so rematch
-	// publishes → async consumer writes the interaction. Tests wait for
-	// the row via waitForInteractionBySourceRef.
-	bus := setupTestEventBus(t, ctx, database, contactSvc)
-
+	// Build rematchSvc first so it can be passed as RematchRegistry to
+	// ContactService's constructor (post-PR-10 wiring; SetRematchService
+	// is gone). Handlers register AFTER the bus exists, below.
 	rematchSvc := service.NewRematchService()
+
+	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, rematchSvc)
+	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, rematchSvc)
+
+	// Cutover wiring: live bus + InteractionRecorderWorker +
+	// RematchDispatcherWorker so UpdateContact's publish flows through
+	// the event bus and fires the rematch dispatcher against the
+	// registered handlers. Tests wait via waitForRematchJob on the
+	// in-memory job entry (RegisterPending seeds it, dispatcher Run
+	// updates it).
+	bus := setupTestEventBusWithRematch(t, ctx, database, contactSvc, rematchSvc)
+
+	// Re-inject the live bus onto services now that it's constructed.
+	// Services took a nil bus above because the bus depends on
+	// contactSvc via the InteractionRecorder; this swap happens before
+	// any test runs.
+	contactSvc.InjectBusForTest(bus)
+	enrichmentSvc.InjectBusForTest(bus)
+
 	rematchSvc.Register(google.NewCalendarRematchHandler(calendarRepo, externalRepo, bus))
-	contactSvc.SetRematchService(rematchSvc)
-	enrichmentSvc.SetRematchService(rematchSvc)
 
 	return &rematchTestEnv{
 		ctx:               ctx,
@@ -446,6 +458,45 @@ func TestRematch_NoHandlerForType_ReturnsNilJobID(t *testing.T) {
 	assert.Equal(t, uuid.Nil, jobID)
 }
 
+// TestRematch_Publisher_NoHandler_ReturnsNilJobID pins the EligibleMethods
+// gate on the actual event-bus publisher paths (CreateContact /
+// UpdateContact / RescanRematch). Without this regression test, an
+// unhandled method type would mint a jobID + enqueue a no-op river
+// job. Only the email handler is registered; adding a phone method
+// must produce uuid.Nil.
+func TestRematch_Publisher_NoHandler_ReturnsNilJobID(t *testing.T) {
+	env := setupRematchEnv(t)
+
+	// CreateContact with a phone-only method — no handler registered
+	// for "phone" in the base env.
+	phone := "+15551212"
+	_, jobID, err := env.contactSvc.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "No Handler " + uuid.NewString()[:8],
+	}, []service.ContactMethodInput{
+		{Type: "phone", Value: phone, IsPrimary: true},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uuid.Nil, jobID, "unhandled method type must not mint a rematch jobID")
+
+	// RescanRematch on a contact whose only methods are unhandled
+	// should also return uuid.Nil.
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "Rescan No Handler " + uuid.NewString()[:8],
+	})
+	require.NoError(t, err)
+	_, err = env.contactMethodRepo.CreateContactMethod(env.ctx, repository.CreateContactMethodRequest{
+		ContactID: contact.ID,
+		Type:      "phone",
+		Value:     phone,
+		IsPrimary: true,
+	})
+	require.NoError(t, err)
+
+	rescanJobID, err := env.contactSvc.RescanRematch(env.ctx, contact.ID)
+	require.NoError(t, err)
+	require.Equal(t, uuid.Nil, rescanJobID, "rescan with unhandled methods must return uuid.Nil")
+}
+
 // registerTelegramHandlers wires the username + phone handlers against env's
 // rematch service using the same PeerMatcher and AggregationEngine the
 // production manager would own. Returns the message repo for seeding.
@@ -590,8 +641,11 @@ func TestRematch_RescanContact_RunsForAllMethods(t *testing.T) {
 	pastEnd := accelerated.GetCurrentTime().Add(-time.Hour)
 	event := seedCalendarEventWithAttendee(t, env, accountID, email, pastEnd, "confirmed")
 
-	// Manual rescan — exercise the service-level method the handler calls.
-	jobID, err := env.rematchSvc.RescanContact(env.ctx, env.contactSvc, contact.ID)
+	// Manual rescan — post-PR-10 the handler calls
+	// ContactService.RescanRematch (publishes via event bus +
+	// RegisterPending) instead of the deleted
+	// RematchService.RescanContact.
+	jobID, err := env.contactSvc.RescanRematch(env.ctx, contact.ID)
 	require.NoError(t, err)
 	require.NotEqual(t, uuid.Nil, jobID)
 
@@ -607,7 +661,7 @@ func TestRematch_RescanContact_RunsForAllMethods(t *testing.T) {
 func TestRematch_RescanContact_UnknownContactReturnsNotFound(t *testing.T) {
 	env := setupRematchEnv(t)
 
-	_, err := env.rematchSvc.RescanContact(env.ctx, env.contactSvc, uuid.New())
+	_, err := env.contactSvc.RescanRematch(env.ctx, uuid.New())
 	assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound for unknown contact, got %v", err)
 }
 

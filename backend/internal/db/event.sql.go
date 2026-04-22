@@ -25,6 +25,30 @@ func (q *Queries) CountEventsBySource(ctx context.Context, source string) (int64
 	return count, err
 }
 
+const CountRematchDispatcherJobsByContactAndJob = `-- name: CountRematchDispatcherJobsByContactAndJob :one
+SELECT COUNT(*) FROM river_job
+WHERE kind = 'rematch_dispatcher'
+  AND (args->>'contact_id') = $1::text
+  AND (args->>'rematch_job_id') = $2::text
+`
+
+type CountRematchDispatcherJobsByContactAndJobParams struct {
+	ContactID    string `json:"contact_id"`
+	RematchJobID string `json:"rematch_job_id"`
+}
+
+// Test-only count of river_job rows for the rematch_dispatcher kind
+// whose args JSON contains the given (contact_id, rematch_job_id)
+// tuple. Used by rematch dedup integration tests to assert
+// UniqueOpts{ByArgs} behavior without inlining raw SQL into Go test
+// code (core.md rule 2).
+func (q *Queries) CountRematchDispatcherJobsByContactAndJob(ctx context.Context, arg CountRematchDispatcherJobsByContactAndJobParams) (int64, error) {
+	row := q.db.QueryRow(ctx, CountRematchDispatcherJobsByContactAndJob, arg.ContactID, arg.RematchJobID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const FindEventBySource = `-- name: FindEventBySource :one
 SELECT id, source, source_id, kind, payload, observed_at, received_at, created_at FROM event
 WHERE source = $1 AND source_id = $2

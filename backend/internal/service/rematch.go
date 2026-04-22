@@ -54,6 +54,23 @@ type JobProgress struct {
 	Error       string
 }
 
+// RematchRegistry is the narrow contract consumed by ContactService /
+// EnrichmentService / rescan handlers for registering an in-memory job
+// entry synchronously after events.Bus.PublishTx. Keeps publishers
+// decoupled from the full *RematchService surface — they just need
+// "make the job visible to GET /rematch/jobs/:id now" so the frontend's
+// synchronous `rematch_job_id` poll loop never 404s.
+//
+// EligibleMethods filters a candidate list down to methods that have a
+// registered rematch handler. Publishers call this BEFORE minting a
+// jobID so an unhandled method slice produces uuid.Nil (matching the
+// old StartRematchForContact contract — no job id for work that won't
+// run).
+type RematchRegistry interface {
+	RegisterPending(jobID, contactID uuid.UUID, methods []Method)
+	EligibleMethods(methods []Method) []Method
+}
+
 // job is the internal mutable representation protected by its own mutex.
 type job struct {
 	id        uuid.UUID
@@ -115,10 +132,25 @@ func (j *job) setFailed(err error) {
 	j.mu.Unlock()
 }
 
+// resetForRun clears the mutable run-state fields before a fresh
+// attempt. Called from rehydrateOrLookup so a River retry after a crash
+// or failure starts clean instead of accumulating matched counts on top
+// of the prior attempt or keeping the prior attempt's error / completedAt.
+func (j *job) resetForRun() {
+	j.mu.Lock()
+	j.status = JobStatusRunning
+	j.matched = 0
+	j.completedAt = nil
+	j.err = ""
+	j.mu.Unlock()
+}
+
 // RematchService dispatches rematch work per contact method type. Handlers
-// register at startup; StartRematchForContact spawns a background goroutine
-// that runs handlers sequentially for the given methods, serialized per
-// contactID by a mutex.
+// register at startup. The primary entry point is Run, which the
+// RematchDispatcher consumer invokes per contact_methods.added event.
+// StartRematchForContact is retained as a test-only helper that
+// spawns Run on the detached context; production code publishes events
+// and relies on the consumer to dispatch.
 type RematchService struct {
 	handlers     map[string]RematchHandler
 	jobs         sync.Map // uuid.UUID -> *job
@@ -146,14 +178,70 @@ func (s *RematchService) Register(h RematchHandler) {
 
 // jobRetention bounds how long terminal jobs remain queryable via GetJob.
 // After a job completes/fails, clients have this long to poll for the final
-// state before the entry is evicted on the next StartRematchForContact call.
-// Keeps the in-memory job map bounded without requiring a separate reaper.
+// state before the entry is evicted on the next RegisterPending /
+// StartRematchForContact call. Keeps the in-memory job map bounded without
+// requiring a separate reaper.
 const jobRetention = 10 * time.Minute
 
+// RegisterPending creates an in-memory job entry keyed by jobID with
+// Status=Running so GET /rematch/jobs/:id returns it immediately after
+// a publisher publishes a contact_methods.added event — i.e. before the
+// async RematchDispatcher consumer picks up. Idempotent on duplicate
+// jobID (second call is a no-op) so publisher retries don't clobber
+// in-progress run state.
+//
+// The spec text at §3.4.4 calls this the "pending" state; the existing
+// JobStatus enum has only running|completed|failed. We reuse Running
+// rather than adding a new terminal state because the frontend contract
+// (`useRematchJob` polls until terminal) already treats Running as
+// "not done, keep polling" — introducing Pending would break
+// `frontend/src/lib/rematch-api.ts`'s three-state shape.
+func (s *RematchService) RegisterPending(jobID, contactID uuid.UUID, methods []Method) {
+	if jobID == uuid.Nil {
+		return
+	}
+	// Opportunistic prune on registration — keeps the map bounded for
+	// long-running processes without a dedicated reaper.
+	s.pruneTerminalJobs()
+	j := &job{
+		id:        jobID,
+		contactID: contactID,
+		methods:   append([]Method(nil), methods...),
+		startedAt: accelerated.GetCurrentTime(),
+		status:    JobStatusRunning,
+	}
+	// LoadOrStore keeps the first writer — second call is a no-op so
+	// publisher retries or a race with the consumer's rehydrate don't
+	// clobber an in-progress entry.
+	s.jobs.LoadOrStore(jobID, j)
+}
+
+// EligibleMethods returns the subset of methods whose Type has a
+// registered handler. Publishers call this at mutation time so they
+// can skip minting a jobID + publishing an event when nothing would
+// actually run — preserves the pre-cutover contract that
+// mutation responses return rematch_job_id=null when no rematch work
+// applies.
+func (s *RematchService) EligibleMethods(methods []Method) []Method {
+	if len(methods) == 0 {
+		return nil
+	}
+	eligible := make([]Method, 0, len(methods))
+	for _, m := range methods {
+		if _, ok := s.handlers[m.Type]; ok {
+			eligible = append(eligible, m)
+		}
+	}
+	return eligible
+}
+
 // StartRematchForContact filters the given methods to those that have a
-// registered handler, then spawns a detached goroutine to run them. Returns
-// uuid.Nil when no methods map to a registered handler — this is the normal
-// case when the feature is off or only some handler types are wired.
+// registered handler, then spawns a detached goroutine to run them.
+// Returns uuid.Nil when no methods map to a registered handler.
+//
+// Deprecated: production code publishes contact_methods.added via
+// events.Bus.PublishTx and relies on RematchDispatcher to invoke Run.
+// Kept alive for tests that exercise the in-process spawn path.
 func (s *RematchService) StartRematchForContact(contactID uuid.UUID, methods []Method) uuid.UUID {
 	eligible := make([]Method, 0, len(methods))
 	for _, m := range methods {
@@ -165,21 +253,20 @@ func (s *RematchService) StartRematchForContact(contactID uuid.UUID, methods []M
 		return uuid.Nil
 	}
 
-	// Opportunistic prune on dispatch — keeps the map bounded for long-running
-	// processes without a dedicated reaper goroutine.
+	// Opportunistic prune on dispatch — keeps the map bounded for
+	// long-running processes without a dedicated reaper goroutine.
 	s.pruneTerminalJobs()
 
-	j := &job{
-		id:        uuid.New(),
-		contactID: contactID,
-		methods:   eligible,
-		startedAt: accelerated.GetCurrentTime(),
-		status:    JobStatusRunning,
-	}
-	s.jobs.Store(j.id, j)
+	jobID := uuid.New()
+	s.RegisterPending(jobID, contactID, eligible)
 
-	go s.run(j)
-	return j.id
+	// Fire-and-forget; Run records failure on the in-memory entry via
+	// setFailed and returns an error for River semantics — for this
+	// test-only spawn we discard it since there is no River wrapper.
+	go func() {
+		_ = s.Run(s.detachedCtx(), jobID, contactID, eligible)
+	}()
+	return jobID
 }
 
 // pruneTerminalJobs evicts completed/failed jobs whose terminal timestamp is
@@ -202,43 +289,86 @@ func (s *RematchService) pruneTerminalJobs() {
 	})
 }
 
-func (s *RematchService) run(j *job) {
+// Run executes a rematch job for the given (jobID, contactID, methods)
+// tuple under per-contact mutex serialization. Called by
+// RematchDispatcher.HandleEvent (production) and via StartRematchForContact
+// (tests only).
+//
+// Rehydrates the in-memory *job entry from parameters when none exists
+// (worker retry after crash, or consumer pickup before RegisterPending
+// ran) and resets mutable run-state (matched / status / completedAt /
+// err) so a retry begins from a clean slate.
+//
+// The named `err` return is crucial: a recovered panic is assigned to
+// err via the deferred recover, so River sees the error and retries the
+// job per its MaxAttempts. Without the named return, a bare `return`
+// after setFailed would hand back a zero-valued nil error and River
+// would ack the job as complete.
+func (s *RematchService) Run(ctx context.Context, jobID, contactID uuid.UUID, methods []Method) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error().
-				Str("contactId", j.contactID.String()).
-				Str("jobId", j.id.String()).
+				Str("contactId", contactID.String()).
+				Str("jobId", jobID.String()).
 				Interface("panic", r).
 				Msg("rematch: job panicked")
-			j.setFailed(fmt.Errorf("handler panic: %v", r))
+			panicErr := fmt.Errorf("handler panic: %v", r)
+			if j, ok := s.jobs.Load(jobID); ok {
+				j.(*job).setFailed(panicErr)
+			}
+			// Propagate so River retries per MaxAttempts. A named return
+			// is required so this deferred assignment survives `return`.
+			err = panicErr
 		}
 	}()
 
-	lockIface, _ := s.contactLocks.LoadOrStore(j.contactID, &sync.Mutex{})
+	j := s.rehydrateOrLookup(jobID, contactID, methods)
+
+	lockIface, _ := s.contactLocks.LoadOrStore(contactID, &sync.Mutex{})
 	lock := lockIface.(*sync.Mutex)
 	lock.Lock()
 	defer lock.Unlock()
-
-	ctx := s.detachedCtx()
 
 	for _, m := range j.methods {
 		handler, ok := s.handlers[m.Type]
 		if !ok {
 			continue
 		}
-		n, err := handler.Rematch(ctx, j.contactID, m.Value)
-		if err != nil {
-			logger.Warn().Err(err).
-				Str("contactId", j.contactID.String()).
+		n, handlerErr := handler.Rematch(ctx, contactID, m.Value)
+		if handlerErr != nil {
+			logger.Warn().Err(handlerErr).
+				Str("contactId", contactID.String()).
 				Str("type", m.Type).
 				Msg("rematch: handler failed")
-			j.setFailed(err)
-			return
+			j.setFailed(handlerErr)
+			return handlerErr
 		}
 		j.addMatched(n)
 	}
-
 	j.setCompleted()
+	return nil
+}
+
+// rehydrateOrLookup returns the job for jobID, creating a fresh in-memory
+// entry when none exists (process crashed between RegisterPending and
+// consumer pickup, or a River retry picked up the job on a worker that
+// never saw the publisher's registration). Resets mutable run-state on
+// every call so a retry begins clean — without this the second attempt's
+// matched counts accumulate on top of the first attempt's partial counts
+// and the old error/completedAt linger on the entry.
+func (s *RematchService) rehydrateOrLookup(jobID, contactID uuid.UUID, methods []Method) *job {
+	j := &job{
+		id:        jobID,
+		contactID: contactID,
+		methods:   append([]Method(nil), methods...),
+		startedAt: accelerated.GetCurrentTime(),
+		status:    JobStatusRunning,
+	}
+	if actual, loaded := s.jobs.LoadOrStore(jobID, j); loaded {
+		j = actual.(*job)
+	}
+	j.resetForRun()
+	return j
 }
 
 // GetJob returns a snapshot of the job, or ErrJobNotFound if unknown.
@@ -248,17 +378,6 @@ func (s *RematchService) GetJob(id uuid.UUID) (JobProgress, error) {
 		return JobProgress{}, ErrJobNotFound
 	}
 	return v.(*job).snapshot(), nil
-}
-
-// RescanContact triggers a full rematch for every method currently on the
-// contact. Resolves the methods via the supplied ContactService so the
-// handler layer doesn't need a direct repository dependency.
-func (s *RematchService) RescanContact(ctx context.Context, contactSvc *ContactService, contactID uuid.UUID) (uuid.UUID, error) {
-	contact, err := contactSvc.GetContact(ctx, contactID)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	return s.StartRematchForContact(contactID, toRematchMethods(contact.Methods)), nil
 }
 
 // diffNewMethods returns methods present in `after` whose (type,

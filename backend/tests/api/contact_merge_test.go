@@ -50,7 +50,7 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	// Create service
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries))
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil)
 	wireCadenceUpdaterForAPITest(t, database, contactService)
 
 	t.Run("GetMergePreview_BasicCounts", func(t *testing.T) {

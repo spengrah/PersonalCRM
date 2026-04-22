@@ -100,7 +100,7 @@ func (h *RematchHandler) Rescan(c *gin.Context) {
 		return
 	}
 
-	jobID, err := h.rematchSvc.RescanContact(ctx, h.contactSvc, id)
+	jobID, err := h.contactSvc.RescanRematch(ctx, id)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			api.SendNotFound(c, "Contact")
