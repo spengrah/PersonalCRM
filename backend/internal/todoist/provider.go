@@ -1389,14 +1389,17 @@ func isPendingTempID(task *repository.ContactTask) bool {
 
 // tryRecoverPendingTempID handles the case where processTempIDMappings failed
 // to update a contact_task's external_task_id from a temp ID to the real Todoist ID.
-// It parses the CRM marker in the item description to find the contact, then checks
-// if there's a managed cadence task with a pending temp ID for that contact.
-// If found, it migrates the external_task_id to the real ID.
+// It parses the CRM marker in the item description to find the contact, then
+// finalizes the mapping atomically inside a pgx.Tx (external_id + metadata clear
+// commit together or roll back together).
 //
-// TODO(#265): this recovery path's internal DB calls currently swallow
-// failures silently. Not on the critical correctness path but deserves audit
-// under the same transactional treatment as handleTaskCompletion and
-// handleSkipTrigger — tracked in the deferred refactor issue.
+// Recovery guard: task.State == managed && pending_temp_id != "". Broadened
+// from the narrow isPendingTempID check (which required pending_temp_id ==
+// ExternalTaskID) so this function also recovers the post-rollback shape
+// where ExternalTaskID still points at the old id and pending_temp_id is
+// the temp of the (already-created remotely) new task. The CRM marker
+// parse above verifies the sync item belongs to the same contact + cadence
+// kind, so advancing ExternalTaskID = item.ID is safe.
 func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item SyncItem) *repository.ContactTask {
 	// Parse CRM marker from description to get contact ID
 	var marker struct {
@@ -1438,39 +1441,58 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 		return nil
 	}
 
-	// Only recover tasks that still have a pending temp ID
-	if task.State != repository.ContactTaskStateManaged || !isPendingTempID(task) {
+	// Broadened guard: any managed task with a non-empty pending_temp_id
+	// is a candidate for finalizing the mapping. See function docstring.
+	pendingTempID, _ := task.Metadata[MetadataKeyPendingTempID].(string)
+	if task.State != repository.ContactTaskStateManaged || pendingTempID == "" {
 		return nil
 	}
 
-	// Migrate external_task_id to the real Todoist ID
 	oldID := task.ExternalTaskID
-	if _, err := p.contactTaskRepo.UpdateContactTaskExternalID(ctx, task.ID, item.ID); err != nil {
+
+	// Atomic: external_id update + metadata clear inside one tx.
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		logger.Warn().Err(err).
+			Str("contactId", marker.ContactID).
+			Msg("tryRecoverPendingTempID: begin tx failed")
+		return task // fallback: process with old ID
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := p.contactTaskRepo.UpdateContactTaskExternalIDTx(ctx, tx, task.ID, item.ID); err != nil {
 		logger.Warn().Err(err).
 			Str("contactId", marker.ContactID).
 			Str("oldExternalId", oldID).
 			Str("newExternalId", item.ID).
-			Msg("failed to recover pending temp ID")
-		return task // still process with old ID
+			Msg("tryRecoverPendingTempID: update external_id failed")
+		return task
 	}
 
-	task.ExternalTaskID = item.ID
-
-	// Clear pending_temp_id from metadata
 	metadata := task.Metadata
 	if metadata == nil {
 		metadata = make(map[string]any)
 	}
 	delete(metadata, MetadataKeyPendingTempID)
-	if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
-		logger.Warn().Err(err).Msg("failed to clear pending_temp_id after recovery")
+	if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, task.ID, metadata); err != nil {
+		logger.Warn().Err(err).Msg("tryRecoverPendingTempID: clear pending_temp_id failed")
+		return task
 	}
+
+	if err := tx.Commit(ctx); err != nil {
+		logger.Warn().Err(err).Msg("tryRecoverPendingTempID: commit failed")
+		return task
+	}
+
+	// Reflect in the returned task (in-memory).
+	task.ExternalTaskID = item.ID
+	task.Metadata = metadata
 
 	logger.Info().
 		Str("contactId", marker.ContactID).
 		Str("oldTempId", oldID).
 		Str("realId", item.ID).
-		Msg("recovered pending temp ID mapping")
+		Msg("recovered pending temp ID mapping (atomic commit)")
 
 	return task
 }
