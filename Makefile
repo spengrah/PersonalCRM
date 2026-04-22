@@ -256,11 +256,11 @@ test-unit:
 
 test-integration-fast:
 	@echo "Running backend integration tests (default set)..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test ./tests/... -v
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test ./tests/... ./internal/todoist/... -v
 
 test-integration:
 	@echo "Running backend integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test ./tests/... -v
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test ./tests/... ./internal/todoist/... -v
 
 test-integration-slow:
 	@echo "Running backend slow integration tests..."
