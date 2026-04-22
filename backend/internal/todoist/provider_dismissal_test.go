@@ -1101,3 +1101,89 @@ func TestHandleSkipTrigger_ReplayIsNoOp(t *testing.T) {
 	assert.True(t, after1.ContactBy.Equal(*after2.ContactBy),
 		"contact_by must not advance on replay (duplicate event)")
 }
+
+// TestReconcileExistingTask_SkipDriftRecovery verifies the self-healing
+// branch: when pending_temp_id is set and differs from ExternalTaskID, the
+// reconciler emits item_close(old) + item_add(new) and persists the new
+// TempID in metadata.
+func TestReconcileExistingTask_SkipDriftRecovery(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	contact, _ := createDismissalContact(t, env, "SkipDrift")
+	cadenceExtID := "td-original-" + uuid.New().String()[:8]
+	origTempID := "temp-stale-" + uuid.New().String()[:8]
+	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindCadence,
+		ExternalTaskID: cadenceExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata: map[string]any{
+			MetadataKeyPendingTempID:  origTempID,
+			MetadataKeySyncedDeadline: "2027-03-15",
+		},
+	})
+	require.NoError(t, err)
+
+	currentDeadline := "2027-04-15"
+	cmds := env.provider.reconcileExistingTask(env.ctx, task, contact, env.settings, currentDeadline, false)
+
+	require.Len(t, cmds, 2, "skip-drift branch must emit item_close + item_add")
+	assert.Equal(t, "item_close", cmds[0].Type)
+	assert.Equal(t, cadenceExtID, cmds[0].Args["id"])
+	assert.Equal(t, "item_add", cmds[1].Type)
+
+	// Metadata pending_temp_id now matches the new item_add TempID.
+	reloaded, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
+	require.NoError(t, err)
+	newPending, _ := reloaded.Metadata[MetadataKeyPendingTempID].(string)
+	assert.Equal(t, cmds[1].TempID, newPending, "metadata pending_temp_id must be updated to the new TempID")
+	assert.NotEqual(t, origTempID, newPending, "new TempID must differ from the stale one")
+}
+
+// TestReconcileExistingTask_SkipDrift_DeferralSuppressesBranch verifies that
+// when deferSkipDrift=true the skip-drift branch does NOT fire, even when
+// the detection predicate matches. This is the round-7 deferral fix.
+//
+// synced_deadline matches currentDeadline so the non-drift happy path
+// doesn't emit any close+add commands either — leaving the skip-drift
+// branch as the only possible source of commands. With deferral true, no
+// commands should be emitted at all.
+func TestReconcileExistingTask_SkipDrift_DeferralSuppressesBranch(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	contact, _ := createDismissalContact(t, env, "SkipDriftDeferred")
+	cadenceExtID := "td-deferred-" + uuid.New().String()[:8]
+	origTempID := "temp-deferred-" + uuid.New().String()[:8]
+	syncedDeadline := "2027-04-15"
+	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindCadence,
+		ExternalTaskID: cadenceExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata: map[string]any{
+			MetadataKeyPendingTempID:  origTempID,
+			MetadataKeySyncedDeadline: syncedDeadline,
+		},
+	})
+	require.NoError(t, err)
+
+	cmds := env.provider.reconcileExistingTask(env.ctx, task, contact, env.settings, syncedDeadline, true)
+
+	// With deferSkipDrift=true the skip-drift branch is suppressed. Since
+	// synced_deadline == currentDeadline the non-drift happy path also
+	// emits no close+add, so the total command count is zero.
+	for _, c := range cmds {
+		assert.NotEqual(t, "item_close", c.Type, "deferral must suppress skip-drift item_close")
+		assert.NotEqual(t, "item_add", c.Type, "deferral must suppress skip-drift item_add")
+	}
+
+	// Metadata pending_temp_id unchanged (branch did not run).
+	reloaded, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
+	require.NoError(t, err)
+	pending, _ := reloaded.Metadata[MetadataKeyPendingTempID].(string)
+	assert.Equal(t, origTempID, pending, "pending_temp_id must be unchanged when deferral is set")
+}
