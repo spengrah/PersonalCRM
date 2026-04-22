@@ -12,8 +12,24 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
 )
+
+// mustMarshalContactMethodsAdded builds a valid contact_methods.added
+// payload for tests that need a routable envelope.
+func mustMarshalContactMethodsAdded(t *testing.T, contactID, jobID uuid.UUID) json.RawMessage {
+	t.Helper()
+	raw, err := Marshal(KindContactMethodsAdded, ContactMethodsAddedPayload{
+		Version:      1,
+		ContactID:    contactID,
+		Methods:      []ContactMethodRef{{Type: "email", Value: "a@b.c"}},
+		RematchJobID: jobID,
+	})
+	require.NoError(t, err)
+	return raw
+}
 
 // TestConsumerJobsForKind_FiveAsyncKindsEnqueueInteractionRecorder asserts
 // the PR 5 routing: async-publisher kinds enqueue exactly one
@@ -26,7 +42,9 @@ func TestConsumerJobsForKind_FiveAsyncKindsEnqueueInteractionRecorder(t *testing
 	for _, k := range asyncKinds {
 		t.Run(string(k), func(t *testing.T) {
 			eventID := uuid.New()
-			jobs := consumerJobsForKind(k, eventID)
+			env := &Envelope{ID: eventID, Kind: k}
+			jobs, err := consumerJobsForKind(env)
+			require.NoError(t, err)
 			require.Len(t, jobs, 1, "kind %s should enqueue exactly one consumer job", k)
 			args, ok := jobs[0].Args.(consumerjobs.InteractionRecorderJobArgs)
 			require.True(t, ok, "job args type must be InteractionRecorderJobArgs, got %T", jobs[0].Args)
@@ -34,9 +52,6 @@ func TestConsumerJobsForKind_FiveAsyncKindsEnqueueInteractionRecorder(t *testing
 			require.Equal(t, "interaction_recorder", args.Kind())
 			require.NotNil(t, jobs[0].Opts, "InsertOpts must be set to pin MaxAttempts")
 			require.Equal(t, 5, jobs[0].Opts.MaxAttempts)
-			// Sanity: confirm the opts value survives a round-trip through
-			// river.InsertOpts (not accidentally a different struct).
-			_ = jobs[0].Opts
 		})
 	}
 }
@@ -48,7 +63,9 @@ func TestConsumerJobsForKind_FiveAsyncKindsEnqueueInteractionRecorder(t *testing
 // HandleEvent, not at the routing layer.
 func TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceAndFollowUp(t *testing.T) {
 	eventID := uuid.New()
-	jobs := consumerJobsForKind(KindInteractionRecorded, eventID)
+	env := &Envelope{ID: eventID, Kind: KindInteractionRecorded}
+	jobs, err := consumerJobsForKind(env)
+	require.NoError(t, err)
 	require.Len(t, jobs, 2, "interaction.recorded should enqueue cadence + follow-up jobs")
 
 	cadenceArgs, ok := jobs[0].Args.(consumerjobs.CadenceUpdaterJobArgs)
@@ -70,21 +87,117 @@ func TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceAndFollowUp(t *te
 // still have no active consumer return nil:
 //   - interaction.manual: inline-invoked by the manual UI handler
 //     (spec §3.4 "other consumers only").
-//   - calendar.declined, task.skipped, contact_methods.added: consumers
-//     for those kinds are not yet wired.
+//   - calendar.declined, task.skipped: consumers for those kinds are
+//     not yet wired.
+//
+// (contact_methods.added HAS a consumer now — see the dedicated
+// TestConsumerJobsForKind_ContactMethodsAdded tests below.)
 func TestConsumerJobsForKind_EmptyForDeferredKinds(t *testing.T) {
 	deferred := []Kind{
 		KindInteractionManual,
 		KindCalendarDeclined,
 		KindTaskSkipped,
-		KindContactMethodsAdded,
 	}
 	for _, k := range deferred {
 		t.Run(string(k), func(t *testing.T) {
-			jobs := consumerJobsForKind(k, uuid.New())
+			env := &Envelope{ID: uuid.New(), Kind: k}
+			jobs, err := consumerJobsForKind(env)
+			require.NoError(t, err)
 			require.Empty(t, jobs, "kind %s: expected empty consumer-job slice", k)
 		})
 	}
+}
+
+// TestConsumerJobsForKind_ContactMethodsAdded asserts the PR 10 routing:
+// contact_methods.added enqueues exactly one RematchDispatcher job with
+// the payload-derived ContactID + RematchJobID and UniqueOpts set for
+// belt-and-suspenders dedup behind the event.source_id unique index.
+func TestConsumerJobsForKind_ContactMethodsAdded(t *testing.T) {
+	eventID := uuid.New()
+	contactID := uuid.New()
+	jobID := uuid.New()
+	env := &Envelope{
+		ID:         eventID,
+		Kind:       KindContactMethodsAdded,
+		Source:     "manual",
+		SourceID:   jobID.String(),
+		Payload:    mustMarshalContactMethodsAdded(t, contactID, jobID),
+		ObservedAt: time.Now(),
+	}
+	jobs, err := consumerJobsForKind(env)
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+
+	args, ok := jobs[0].Args.(consumerjobs.RematchDispatcherJobArgs)
+	require.True(t, ok, "job args must be RematchDispatcherJobArgs, got %T", jobs[0].Args)
+	require.Equal(t, eventID, args.EventID)
+	require.Equal(t, contactID, args.ContactID)
+	require.Equal(t, jobID, args.RematchJobID)
+	require.Equal(t, "rematch_dispatcher", args.Kind())
+
+	require.NotNil(t, jobs[0].Opts)
+	require.Equal(t, 3, jobs[0].Opts.MaxAttempts)
+	require.True(t, jobs[0].Opts.UniqueOpts.ByArgs, "ByArgs must be true so UniqueOpts considers args; river:\"unique\" tags on ContactID+RematchJobID scope the hash")
+	require.ElementsMatch(t,
+		[]rivertype.JobState{
+			rivertype.JobStateScheduled,
+			rivertype.JobStateAvailable,
+			rivertype.JobStateRunning,
+			rivertype.JobStateRetryable,
+		},
+		jobs[0].Opts.UniqueOpts.ByState,
+	)
+}
+
+// TestConsumerJobsForKind_ContactMethodsAdded_MalformedPayload_Errors
+// confirms a non-JSON payload fails routing (Design Decision 3).
+func TestConsumerJobsForKind_ContactMethodsAdded_MalformedPayload_Errors(t *testing.T) {
+	env := &Envelope{
+		ID:      uuid.New(),
+		Kind:    KindContactMethodsAdded,
+		Payload: json.RawMessage(`{not valid json`),
+	}
+	jobs, err := consumerJobsForKind(env)
+	require.Error(t, err)
+	require.Nil(t, jobs)
+	require.Contains(t, err.Error(), "decode contact_methods.added")
+}
+
+// TestConsumerJobsForKind_ContactMethodsAdded_ZeroContactID_Errors
+// rejects payloads with uuid.Nil ContactID. Downstream rematch handlers
+// cannot do anything with a nil contact.
+func TestConsumerJobsForKind_ContactMethodsAdded_ZeroContactID_Errors(t *testing.T) {
+	payload, err := Marshal(KindContactMethodsAdded, ContactMethodsAddedPayload{
+		Version:      1,
+		ContactID:    uuid.Nil,
+		Methods:      []ContactMethodRef{{Type: "email", Value: "x"}},
+		RematchJobID: uuid.New(),
+	})
+	require.NoError(t, err)
+	env := &Envelope{ID: uuid.New(), Kind: KindContactMethodsAdded, Payload: payload}
+	jobs, err := consumerJobsForKind(env)
+	require.Error(t, err)
+	require.Nil(t, jobs)
+	require.Contains(t, err.Error(), "empty contact_id")
+}
+
+// TestConsumerJobsForKind_ContactMethodsAdded_ZeroRematchJobID_Errors
+// rejects payloads with uuid.Nil RematchJobID. UniqueOpts{ByArgs} would
+// collapse every nil-jobID publish to a single River job — never what
+// the publisher intends.
+func TestConsumerJobsForKind_ContactMethodsAdded_ZeroRematchJobID_Errors(t *testing.T) {
+	payload, err := Marshal(KindContactMethodsAdded, ContactMethodsAddedPayload{
+		Version:      1,
+		ContactID:    uuid.New(),
+		Methods:      []ContactMethodRef{{Type: "email", Value: "x"}},
+		RematchJobID: uuid.Nil,
+	})
+	require.NoError(t, err)
+	env := &Envelope{ID: uuid.New(), Kind: KindContactMethodsAdded, Payload: payload}
+	jobs, err := consumerJobsForKind(env)
+	require.Error(t, err)
+	require.Nil(t, jobs)
+	require.Contains(t, err.Error(), "empty rematch_job_id")
 }
 
 // stubEventRepo is a test-only EventRepository that lets Bus_test files
@@ -257,3 +370,83 @@ func TestPublishTx_RepoErrorPropagates(t *testing.T) {
 	require.ErrorIs(t, err, sentinel)
 	require.Contains(t, err.Error(), "insert event")
 }
+
+// TestPublishTx_PreassignsEventID confirms the pre-insert env.ID
+// assignment fires before routing so RematchDispatcherJobArgs.EventID
+// (derived from env.ID at routing time) is never uuid.Nil. Covers the
+// Codex round-2 P1-A fix.
+func TestPublishTx_PreassignsEventID(t *testing.T) {
+	ctx := context.Background()
+	// Have the stub return ErrDuplicate so we stop after routing
+	// populates env.ID (we don't need a real river client here).
+	stub := &stubEventRepo{insertErr: db.ErrDuplicate}
+	bus := &Bus{eventRepo: stub}
+
+	contactID := uuid.New()
+	jobID := uuid.New()
+	payload, err := Marshal(KindContactMethodsAdded, ContactMethodsAddedPayload{
+		Version:      1,
+		ContactID:    contactID,
+		Methods:      []ContactMethodRef{{Type: "email", Value: "a@b.c"}},
+		RematchJobID: jobID,
+	})
+	require.NoError(t, err)
+
+	env := &Envelope{
+		// env.ID deliberately zero — PublishTx must fill it.
+		Kind:       KindContactMethodsAdded,
+		Source:     "manual",
+		SourceID:   jobID.String(),
+		Payload:    payload,
+		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, bus.PublishTx(ctx, nonNilStubTx(), env))
+	require.NotEqual(t, uuid.Nil, env.ID, "PublishTx must preassign env.ID before routing")
+}
+
+// TestPublishTx_MalformedPayload_RollsBackTx confirms that a bad
+// contact_methods.added payload fails the publish before event insert,
+// so caller tx can roll back without a stranded event row. Regression
+// guard for Design Decision 3 (Codex round-1 P2).
+func TestPublishTx_MalformedPayload_RollsBackTx(t *testing.T) {
+	ctx := context.Background()
+	stub := &stubEventRepo{}
+	bus := &Bus{eventRepo: stub}
+
+	env := &Envelope{
+		Kind:       KindContactMethodsAdded,
+		Source:     "manual",
+		SourceID:   "job-x",
+		Payload:    json.RawMessage(`{definitely not json`),
+		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	}
+	err := bus.PublishTx(ctx, nonNilStubTx(), env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "route consumer jobs")
+	require.Zero(t, stub.insertCalls, "InsertEvent must not run when routing fails")
+}
+
+// TestPublishTx_EnqueueRivers_NilClientPanicGuard is a NEGATIVE-space
+// sanity: when routing yields no jobs (e.g. interaction.manual), nil
+// riverClient is safe because the enqueue loop is skipped entirely.
+// Existing TestPublishTx_DuplicateIsNoOp covers the post-duplicate case;
+// this documents the same invariant for the routing-yields-empty path.
+func TestPublishTx_NoJobsMeansNilRiverOK(t *testing.T) {
+	ctx := context.Background()
+	stub := &stubEventRepo{}
+	bus := &Bus{eventRepo: stub}
+
+	env := &Envelope{
+		Kind:       KindInteractionManual,
+		Source:     "manual",
+		Payload:    json.RawMessage(`{"version":1,"contact_id":"00000000-0000-0000-0000-000000000001","direction":"outbound","occurred_at":"2026-04-10T12:00:00Z"}`),
+		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, bus.PublishTx(ctx, nonNilStubTx(), env))
+	require.Equal(t, 1, stub.insertCalls)
+}
+
+// Ensure the rivertype import stays referenced even if the router case
+// above is one day refactored to drop the explicit ByState slice.
+var _ = rivertype.JobStateScheduled
+var _ = river.UniqueOpts{}

@@ -89,16 +89,20 @@ func (TodoistFollowUpRefreshJobArgs) Kind() string { return "todoist_followup_re
 
 // RematchDispatcherJobArgs carries the event id + dedup-arg fields that
 // the RematchDispatcher worker processes. ContactID and RematchJobID
-// are duplicated from the event payload so river's
-// UniqueOpts{ByArgs: ["ContactID", "RematchJobID"]} can dedupe
-// same-mutation publisher retries at enqueue time without having to
-// decode the payload first. The event.source_id unique index is the
-// first dedup layer (publisher-retry side); ByArgs is the belt-and-
-// suspenders second layer (river-enqueue side). Spec §3.4.4.
+// are duplicated from the event payload and carry the river:"unique"
+// struct tag so river's UniqueOpts{ByArgs: true} dedupes same-mutation
+// publisher retries at enqueue time without decoding the payload. The
+// event.source_id unique index is the first dedup layer (publisher-
+// retry side); river args-based uniqueness is the belt-and-suspenders
+// second layer (river-enqueue side). EventID is intentionally NOT
+// tagged — two retries of the same mutation produce distinct event
+// rows (different event.id) but identical (ContactID, RematchJobID),
+// so only those two fields participate in the uniqueness hash.
+// Spec §3.4.4.
 type RematchDispatcherJobArgs struct {
 	EventID      uuid.UUID `json:"event_id"`
-	ContactID    uuid.UUID `json:"contact_id"`
-	RematchJobID uuid.UUID `json:"rematch_job_id"`
+	ContactID    uuid.UUID `json:"contact_id"    river:"unique"`
+	RematchJobID uuid.UUID `json:"rematch_job_id" river:"unique"`
 }
 
 // Kind returns the river job-kind identifier for RematchDispatcher jobs.
