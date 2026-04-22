@@ -12,11 +12,14 @@ import (
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/sync"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -71,24 +74,70 @@ type interactionRecorder interface {
 	RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error)
 }
 
+// eventPublisher is the subset of *events.Bus used by the provider. Defined
+// consumer-side so tests can stub without importing the bus.
+type eventPublisher interface {
+	PublishTx(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
+}
+
+// contactTaskWriter is the subset of *repository.ContactTaskRepository the
+// provider uses. Narrow interface so integration tests can wrap the real
+// repo with faulty-method injection.
+type contactTaskWriter interface {
+	GetContactTaskByExternalID(ctx context.Context, provider, externalID string) (*repository.ContactTask, error)
+	GetContactTaskByContact(ctx context.Context, contactID uuid.UUID, provider, kind string) (*repository.ContactTask, error)
+	GetContactTaskByPendingTempID(ctx context.Context, provider, tempID string) (*repository.ContactTask, error)
+	GetContactTask(ctx context.Context, id uuid.UUID) (*repository.ContactTask, error)
+	CreateContactTask(ctx context.Context, req repository.CreateContactTaskRequest) (*repository.ContactTask, error)
+	DeleteContactTask(ctx context.Context, id uuid.UUID) error
+	UpdateContactTaskState(ctx context.Context, id uuid.UUID, state repository.ContactTaskState) (*repository.ContactTask, error)
+	UpdateContactTaskStateTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, state repository.ContactTaskState) (*repository.ContactTask, error)
+	UpdateContactTaskMetadata(ctx context.Context, id uuid.UUID, metadata map[string]any) (*repository.ContactTask, error)
+	UpdateContactTaskMetadataTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, metadata map[string]any) (*repository.ContactTask, error)
+	UpdateContactTaskExternalID(ctx context.Context, id uuid.UUID, externalID string) (*repository.ContactTask, error)
+	UpdateContactTaskExternalIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, externalID string) (*repository.ContactTask, error)
+	FindPendingFollowUp(ctx context.Context, contactID uuid.UUID) (*repository.ContactTask, error)
+	ListContactTasksByContact(ctx context.Context, contactID uuid.UUID) ([]repository.ContactTask, error)
+}
+
+// contactWriter is the subset of *repository.ContactRepository the provider
+// uses. Narrow interface so tests can inject UpdateContactByTx failures for
+// skip-path rollback tests.
+type contactWriter interface {
+	GetContact(ctx context.Context, id uuid.UUID) (*repository.Contact, error)
+	ListContactsWithContactBy(ctx context.Context, limit int32) ([]repository.Contact, error)
+	UpdateContactBy(ctx context.Context, id uuid.UUID, contactBy time.Time) error
+	UpdateContactByTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, contactBy time.Time) error
+}
+
 // CadenceSyncProvider implements SyncProvider for Todoist cadence tasks
 type CadenceSyncProvider struct {
 	oauthService        *OAuthService
-	contactTaskRepo     *repository.ContactTaskRepository
-	contactRepo         *repository.ContactRepository
+	contactTaskRepo     contactTaskWriter
+	contactRepo         contactWriter
 	syncRepo            *repository.SyncRepository
 	interactionRecorder interactionRecorder
-	frontendURL         string
+	// bus, pool, and clientFactory are required for the tx-atomic handlers
+	// and for HTTP-failure injection in tests. Nil values are caught by a
+	// single defensive nil-guard at the top of Sync; production wiring in
+	// main.go passes non-nil values.
+	bus           eventPublisher
+	pool          *pgxpool.Pool
+	clientFactory ClientFactory
+	frontendURL   string
 }
 
 // NewCadenceSyncProvider creates a new Todoist cadence sync provider
 func NewCadenceSyncProvider(
 	oauthService *OAuthService,
-	contactTaskRepo *repository.ContactTaskRepository,
-	contactRepo *repository.ContactRepository,
+	contactTaskRepo contactTaskWriter,
+	contactRepo contactWriter,
 	syncRepo *repository.SyncRepository,
 	cfg *config.Config,
 	interactionRecorder interactionRecorder,
+	bus eventPublisher,
+	pool *pgxpool.Pool,
+	clientFactory ClientFactory,
 ) *CadenceSyncProvider {
 	return &CadenceSyncProvider{
 		oauthService:        oauthService,
@@ -96,6 +145,9 @@ func NewCadenceSyncProvider(
 		contactRepo:         contactRepo,
 		syncRepo:            syncRepo,
 		interactionRecorder: interactionRecorder,
+		bus:                 bus,
+		pool:                pool,
+		clientFactory:       clientFactory,
 		frontendURL:         cfg.CORS.FrontendURL,
 	}
 }
@@ -118,6 +170,10 @@ func (p *CadenceSyncProvider) Sync(
 	state *repository.SyncState,
 	contacts []repository.Contact,
 ) (*sync.SyncResult, error) {
+	if p.bus == nil || p.pool == nil || p.clientFactory == nil {
+		return nil, fmt.Errorf("todoist: bus + pool + clientFactory must be non-nil")
+	}
+
 	// Get account ID from state
 	if state.AccountID == nil {
 		return nil, fmt.Errorf("account ID required for Todoist sync")
@@ -142,7 +198,7 @@ func (p *CadenceSyncProvider) Sync(
 	}
 
 	// Create sync client
-	client := NewSyncClient(accessToken)
+	client := p.clientFactory(accessToken)
 
 	result := &sync.SyncResult{}
 
@@ -824,7 +880,7 @@ func (p *CadenceSyncProvider) handleActionTaskTriggers(
 // and that existing tasks have deadlines matching the contact's contact_by.
 func (p *CadenceSyncProvider) reconcileContactTasks(
 	ctx context.Context,
-	client *SyncClient,
+	client Client,
 	settings Settings,
 	accountID string,
 ) []SyncCommand {

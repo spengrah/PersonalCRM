@@ -6,15 +6,19 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,12 +55,50 @@ func (r *permissiveRecorder) RecordInteraction(_ context.Context, _ repository.R
 	return &repository.Interaction{ID: uuid.New()}, nil
 }
 
+// busRecorder is a test double for eventPublisher. It records every
+// PublishTx call and optionally injects errors or duplicate (env.ID=Nil)
+// responses. Safe for concurrent use.
+type busRecorder struct {
+	mu              sync.Mutex
+	published       []*events.Envelope
+	err             error
+	returnDuplicate bool
+}
+
+func (b *busRecorder) PublishTx(_ context.Context, _ pgx.Tx, env *events.Envelope) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.err != nil {
+		return b.err
+	}
+	if b.returnDuplicate {
+		env.ID = uuid.Nil
+		return nil
+	}
+	env.ID = uuid.New()
+	// Copy envelope so later mutations by the handler don't race with the
+	// recorder's captured slice.
+	copied := *env
+	b.published = append(b.published, &copied)
+	return nil
+}
+
+func (b *busRecorder) Published() []*events.Envelope {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]*events.Envelope, len(b.published))
+	copy(out, b.published)
+	return out
+}
+
 type dismissalTestEnv struct {
 	ctx             context.Context
 	provider        *CadenceSyncProvider
 	contactRepo     *repository.ContactRepository
 	contactTaskRepo *repository.ContactTaskRepository
 	recorder        *countingRecorder
+	bus             *busRecorder
+	pool            *pgxpool.Pool
 	settings        Settings
 	accountID       string
 }
@@ -70,6 +112,8 @@ type providerTestEnv struct {
 	provider        *CadenceSyncProvider
 	contactRepo     *repository.ContactRepository
 	contactTaskRepo *repository.ContactTaskRepository
+	bus             *busRecorder
+	pool            *pgxpool.Pool
 	settings        Settings
 	accountID       string
 }
@@ -78,7 +122,7 @@ type providerTestEnv struct {
 // used by both setupDismissalTest and setupProviderTestPermissive. Takes the
 // recorder as a parameter so callers can pass either the strict countingRecorder
 // or the permissiveRecorder.
-func newProviderTestEnv(t *testing.T, recorder interactionRecorder) (*CadenceSyncProvider, *repository.ContactRepository, *repository.ContactTaskRepository, context.Context, Settings, string, func()) {
+func newProviderTestEnv(t *testing.T, recorder interactionRecorder) (*CadenceSyncProvider, *repository.ContactRepository, *repository.ContactTaskRepository, *busRecorder, *pgxpool.Pool, context.Context, Settings, string, func()) {
 	t.Helper()
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -105,6 +149,7 @@ func newProviderTestEnv(t *testing.T, recorder interactionRecorder) (*CadenceSyn
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	cfg := config.TestConfig()
 
+	bus := &busRecorder{}
 	provider := NewCadenceSyncProvider(
 		nil, // oauthService: not consulted on this code path
 		contactTaskRepo,
@@ -112,6 +157,9 @@ func newProviderTestEnv(t *testing.T, recorder interactionRecorder) (*CadenceSyn
 		nil, // syncRepo: not consulted on this code path
 		cfg,
 		recorder,
+		bus,
+		database.Pool,
+		DefaultClientFactory,
 	)
 
 	settings := Settings{
@@ -123,7 +171,7 @@ func newProviderTestEnv(t *testing.T, recorder interactionRecorder) (*CadenceSyn
 	}
 	accountID := "test-account"
 
-	return provider, contactRepo, contactTaskRepo, ctx, settings, accountID, func() { database.Close() }
+	return provider, contactRepo, contactTaskRepo, bus, database.Pool, ctx, settings, accountID, func() { database.Close() }
 }
 
 // setupDismissalTest builds a CadenceSyncProvider wired to a real DB and a test
@@ -133,7 +181,7 @@ func setupDismissalTest(t *testing.T) (*dismissalTestEnv, func()) {
 	t.Helper()
 
 	recorder := &countingRecorder{t: t}
-	provider, contactRepo, contactTaskRepo, ctx, settings, accountID, cleanup := newProviderTestEnv(t, recorder)
+	provider, contactRepo, contactTaskRepo, bus, pool, ctx, settings, accountID, cleanup := newProviderTestEnv(t, recorder)
 
 	return &dismissalTestEnv{
 		ctx:             ctx,
@@ -141,6 +189,8 @@ func setupDismissalTest(t *testing.T) (*dismissalTestEnv, func()) {
 		contactRepo:     contactRepo,
 		contactTaskRepo: contactTaskRepo,
 		recorder:        recorder,
+		bus:             bus,
+		pool:            pool,
 		settings:        settings,
 		accountID:       accountID,
 	}, cleanup
@@ -154,13 +204,15 @@ func setupProviderTestPermissive(t *testing.T) (*providerTestEnv, func()) {
 	t.Helper()
 
 	recorder := &permissiveRecorder{}
-	provider, contactRepo, contactTaskRepo, ctx, settings, accountID, cleanup := newProviderTestEnv(t, recorder)
+	provider, contactRepo, contactTaskRepo, bus, pool, ctx, settings, accountID, cleanup := newProviderTestEnv(t, recorder)
 
 	return &providerTestEnv{
 		ctx:             ctx,
 		provider:        provider,
 		contactRepo:     contactRepo,
 		contactTaskRepo: contactTaskRepo,
+		bus:             bus,
+		pool:            pool,
 		settings:        settings,
 		accountID:       accountID,
 	}, cleanup
