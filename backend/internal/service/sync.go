@@ -172,39 +172,6 @@ func (s *SyncService) TriggerSync(ctx context.Context, source string, accountID 
 	return s.runSyncForState(ctx, state, provider)
 }
 
-// RunDueSyncs checks for and runs all due syncs inline.
-//
-// Deprecated: production now uses the river SchedulerTickWorker +
-// RunAccountSync path. RunDueSyncs is retained for direct-invocation
-// callers (e.g., admin tooling, older integration tests) and for the
-// sentinel-nil-enqueuer fallback. Scheduled for removal in #180 PR 12.
-func (s *SyncService) RunDueSyncs(ctx context.Context) error {
-	accounts, err := s.ListDueAccounts(ctx)
-	if err != nil {
-		return fmt.Errorf("list due accounts: %w", err)
-	}
-	if len(accounts) == 0 {
-		logger.Debug().Msg("no due syncs found")
-		return nil
-	}
-
-	logger.Info().
-		Int("count", len(accounts)).
-		Msg("found due syncs")
-
-	var lastErr error
-	for _, acct := range accounts {
-		if err := s.RunAccountSync(ctx, acct.Source, acct.AccountID); err != nil {
-			logger.Error().
-				Err(err).
-				Str("source", acct.Source).
-				Msg("sync failed")
-			lastErr = err
-		}
-	}
-	return lastErr
-}
-
 // RunAccountSync fetches fresh sync state for (source, accountID) and
 // runs the sync pipeline. Called by the SyncProviderAccountWorker.
 //
@@ -240,14 +207,11 @@ func (s *SyncService) RunAccountSync(ctx context.Context, source string, account
 }
 
 // runSyncForState executes a sync operation for a given state and
-// provider. Extracted from the legacy performSync. Differences from the
-// legacy path:
-//   - No UpdateSyncStateStatus(..., SyncStatusSyncing, ...) mutex write.
-//     River's job state (available/running/completed/retryable) is the
-//     source of truth for "in-flight".
-//   - Prefixes a call to AbandonRunningLogsForState so that if a prior
-//     attempt crashed mid-sync, its orphan 'running' log row is marked
-//     'abandoned' before the new attempt inserts a fresh log.
+// provider. River's job state (available/running/completed/retryable)
+// is the source of truth for "in-flight"; no mutex write is needed.
+// Prefixes a call to AbandonRunningLogsForState so that if a prior
+// attempt crashed mid-sync, its orphan 'running' log row is marked
+// 'abandoned' before the new attempt inserts a fresh log.
 func (s *SyncService) runSyncForState(ctx context.Context, state *repository.SyncState, provider sync.SyncProvider) error {
 	logger.Info().
 		Str("source", state.Source).

@@ -200,15 +200,10 @@ func run() int {
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
-	// Shadow-observation repo is constructed unconditionally. When
-	// InteractionMode=off the direct path never calls RecordDirectWrite and
-	// no publisher emits events, so the repo's queries stay idle — zero
-	// runtime cost.
-	shadowObsRepo := repository.NewShadowObservationRepository(database.Queries, database.Pool)
 
-	// River client + event bus + PR 5 consumer wiring. Built EARLY (before
-	// downstream services) so `pubBus` and `manualShadow` are in scope for
-	// constructors that need them (Calendar, Telegram, manual handlers).
+	// River client + event bus + consumer wiring. Built EARLY (before
+	// downstream services) so `pubBus` and `manualHandler` are in scope
+	// for constructors that need them (Calendar, Telegram, manual handlers).
 	// Sync workers + periodic job are registered LATER (once syncService
 	// exists) via river.AddWorker + riverClient.PeriodicJobs().Add(), both
 	// of which are safe between NewClient and Start.
@@ -280,7 +275,6 @@ func run() int {
 	// external-sync branch; until populated, Todoist-dependent post-
 	// commit paths (refresh item_update, close retries) degrade to
 	// local-only writes with a logged warning.
-	followUpShadowRepo := repository.NewFollowUpShadowObservationRepository(database.Queries, database.Pool)
 	followUpMode := consumer.FollowUpModeFromConfig(cfg.EventBus.FollowUpMode)
 	followUpSettingsHolder := &followUpSettingsRef{frontendURL: cfg.CORS.FrontendURL}
 	followUpSettings := followUpSettingsHolder.fn()
@@ -291,7 +285,6 @@ func run() int {
 		contactTaskRepo,
 		contactTaskRepo,
 		interactionRepo,
-		followUpShadowRepo,
 		riverClient,
 		database.Pool,
 		followUpSettings,
@@ -323,15 +316,16 @@ func run() int {
 
 	// Register the consumer worker. The worker is registered UNCONDITIONALLY —
 	// river rejects unknown job kinds at dequeue time, so having the worker
-	// present with mode=off/shadow costs nothing (no events route to it
-	// when pubBus is nil). Mode gating happens at the publisher sites via
+	// present with mode=off costs nothing (no events route to it when
+	// pubBus is nil). Mode gating happens at the publisher sites via
 	// pubBus and at the manual-handler level via manualHandler.
 	river.AddWorker(riverWorkers, consumer.NewInteractionRecorderWorker(eventBus, database.Pool, interactionRecorder))
 
-	// Cutover wiring gate. PR 6 flips the default to "cutover"; off/shadow
-	// become effective no-ops for publisher-driven paths (spec §3.9;
-	// plan Decision 6). Rollback to off/shadow does NOT restore the
-	// direct path — rollback is git-revert.
+	// Interaction-mode wiring gate. Cutover is the normal operating
+	// posture; off is the emergency-override retained so rollback can
+	// silence publisher-driven paths without a code change. A deploy in
+	// off mode does NOT restore any pre-cutover direct path — rollback
+	// is `git revert`.
 	effectiveMode := cfg.EventBus.InteractionMode
 	var pubBus *events.Bus
 	var manualHandler *service.ManualInteractionHandler
@@ -342,13 +336,13 @@ func run() int {
 		logger.Info().
 			Str("mode", "cutover").
 			Msg("event-bus interaction consumer: cutover active")
-	default: // off, shadow
+	default: // off
 		pubBus = nil
 		manualHandler = nil
 		logger.Warn().
 			Str("mode", effectiveMode).
-			Msg("event-bus interaction consumer: mode is effectively a no-op post-cutover; " +
-				"publisher-driven (telegram/calendar/manual) interactions will NOT be recorded. " +
+			Msg("event-bus interaction consumer: mode=off — publisher-driven " +
+				"(telegram/calendar/manual) interactions will NOT be recorded. " +
 				"HTTP ingest path is unaffected. Use EVENT_BUS_INTERACTION_MODE=cutover (default) to restore publisher paths.")
 	}
 
@@ -360,14 +354,9 @@ func run() int {
 			Str("interaction_mode", effectiveMode).
 			Bool("ingest_enabled", cfg.Features.EnableEventBusIngest).
 			Msg("event-bus ingest enabled but InteractionRecorder is not in cutover mode; " +
-				"ingested events WILL still be written by the consumer — the mode=off/shadow warning " +
+				"ingested events WILL still be written by the consumer — the mode=off warning " +
 				"above does NOT apply to ingested-event-driven writes.")
 	}
-
-	// shadowObsRepo is retained (not passed anywhere in PR 6+) because
-	// the event_shadow_observation table may still be referenced by
-	// integration tests / post-bake queries. PR 12 drops the table.
-	_ = shadowObsRepo
 
 	// CadenceUpdater is constructed above (alongside InteractionRecorder).
 	// Register its river worker unconditionally — events.consumerJobsForKind
@@ -401,14 +390,6 @@ func run() int {
 		logger.Info().
 			Str("mode", "cutover").
 			Msg("event-bus FollowUpManager: cutover active (sole writer of follow-up tasks; inline recorder dispatch enabled)")
-	case config.EventBusFollowUpModeShadow:
-		// ERROR: shadow mode post-cutover has no direct path to observe;
-		// config.Validate rejects shadow so this branch is only reachable
-		// via test-time overrides. Kept as a loud signal for anyone
-		// poking at a non-test config that slips past validation.
-		logger.Error().
-			Str("mode", "shadow").
-			Msg("event-bus FollowUpManager: shadow mode requested post-cutover; direct path is gone so shadow has nothing to observe — treat as misconfiguration")
 	default: // off
 		cfg.EventBus.MaybeWarnUnsafeOff()
 		logger.Warn().
@@ -421,15 +402,6 @@ func run() int {
 		logger.Info().
 			Str("mode", "cutover").
 			Msg("event-bus CadenceUpdater: cutover active (sole writer of cadence columns; inline recorder dispatch enabled)")
-	case config.EventBusCadenceModeShadow:
-		// ERROR severity: shadow mode post-cutover has no direct path to
-		// observe, so the consumer runs but produces no meaningful output
-		// while the sole-writer branch is still active. Unlike mode=off,
-		// there is no UnsafeAllowOffMode gate — this is the silently-
-		// broken case, so it earns an ERROR log.
-		logger.Error().
-			Str("mode", "shadow").
-			Msg("event-bus CadenceUpdater: shadow mode requested post-cutover; direct path is gone so shadow has nothing to observe — treat as misconfiguration")
 	default: // off
 		// Validate() already rejected this unless UnsafeAllowOffMode is
 		// true; we reach here only via the emergency escape hatch. The
@@ -474,18 +446,6 @@ func run() int {
 
 	if cfg.Features.EnableExternalSync {
 		syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
-
-		// One-shot recovery for legacy stuck status='syncing' rows. After
-		// #180 PR 3 no live code writes 'syncing'; this call is a no-op on
-		// subsequent boots. Non-fatal on error: the scheduler will still
-		// pick up rows whose next_sync_at has come due.
-		if recovered, err := syncRepo.RecoverStuckSyncingStates(ctx); err != nil {
-			logger.Warn().Err(err).Msg("failed to recover stuck sync states (non-fatal)")
-		} else if recovered > 0 {
-			logger.Info().
-				Int64("recovered", recovered).
-				Msg("reset stuck status='syncing' rows from pre-PR-3 crash")
-		}
 		identityRepo := repository.NewIdentityRepository(database.Queries)
 		oauthRepo := repository.NewOAuthRepository(database.Queries)
 		providerRegistry := sync.NewProviderRegistry()

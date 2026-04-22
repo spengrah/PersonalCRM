@@ -82,16 +82,13 @@ func CadenceApplyFlagsByDirection(direction string) (applyLastContacted, applyLa
 	}
 }
 
-// ShouldApplyContactBy reproduces the direct-path's gate on whether an
-// event should recompute contact_by. Matches service/contact.go's
-// applyInteractionEffectsFromRow lines 541-547 / 557-562: apply if the
-// contact has cadence AND (source is manual OR prev.LastContacted is nil
-// OR occurredAt is strictly after prev.LastContacted).
-//
-// Used by both the direct-path shadow observer (before the authoritative
-// UPDATE) and the consumer (replaying against payload's prev snapshot).
-// Keeping the logic here — in the repository package — avoids duplicating
-// it between service and consumer and eliminates drift risk.
+// ShouldApplyContactBy gates whether an interaction event should
+// recompute contact_by: apply if the contact has cadence AND (source is
+// manual OR prev.LastContacted is nil OR occurredAt is strictly after
+// prev.LastContacted). Used by the CadenceUpdater consumer when
+// replaying against the payload's prev snapshot. Keeping the logic in
+// the repository package avoids duplicating it between service and
+// consumer and eliminates drift risk.
 func ShouldApplyContactBy(prevLastContacted *time.Time, occurredAt time.Time, isManual bool, hasCadence bool) bool {
 	if !hasCadence {
 		return false
@@ -120,11 +117,10 @@ func ForwardMax(prev *time.Time, incoming time.Time) time.Time {
 }
 
 // ContactCadenceFieldsFromContact extracts the four cadence columns from
-// an in-memory Contact row. Used by both the direct-path observer (at
-// the top of applyInteractionEffectsFromRow, before the UPDATE) and by
-// anywhere that needs to snapshot the pre-cadence state without a DB
-// round-trip. Returns a value (not pointer) so callers can embed it in
-// closures by value.
+// an in-memory Contact row. Used by any path that needs to snapshot the
+// pre-cadence state without a DB round-trip (e.g. the InteractionRecorder
+// path that populates the V2 interaction.recorded payload). Returns a
+// value (not pointer) so callers can embed it in closures by value.
 func ContactCadenceFieldsFromContact(c *Contact) ContactCadenceFields {
 	if c == nil {
 		return ContactCadenceFields{}

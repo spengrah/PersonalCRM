@@ -472,28 +472,3 @@ func TestIntegration_MissingContact_ConsumerReturnsNotFound(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, db.ErrNotFound)
 }
-
-// TestIntegration_CutoverMode_NoShadowObservationRowsWritten asserts the
-// shadow-observation side-effects are gone in cutover. PR 7 will re-add
-// observations for CadenceUpdater shadow, but in PR 6 the table stays
-// empty during InteractionRecorder flows.
-func TestIntegration_CutoverMode_NoShadowObservationRowsWritten(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	ctx := context.Background()
-	env := newConsumerTestEnv(t, ctx)
-
-	contactID := env.newContact(t, "no-shadow-obs")
-	occurredAt := time.Date(2026, 4, 10, 12, 30, 0, 0, time.UTC)
-	_, err := env.manualHandler.Run(ctx, contactID, repository.InteractionDirectionMutual, occurredAt, "cutover")
-	require.NoError(t, err)
-
-	var obsCount int
-	err = env.database.Pool.QueryRow(ctx,
-		"SELECT COUNT(*) FROM event_shadow_observation WHERE contact_id = $1",
-		contactID,
-	).Scan(&obsCount)
-	require.NoError(t, err)
-	require.Zero(t, obsCount, "cutover mode must not write any shadow observation rows for InteractionRecorder")
-}

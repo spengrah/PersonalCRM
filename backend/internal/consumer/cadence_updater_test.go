@@ -86,7 +86,7 @@ func TestBuildInteractionWrite_Outbound_WritesOnlyLastOutreachAt(t *testing.T) {
 		"weekly",
 	)
 
-	require.Equal(t, repository.CadenceShadowBranchForward, req.Branch)
+	require.Equal(t, repository.CadenceBranchForward, req.Branch)
 	require.False(t, req.ApplyLastContacted)
 	require.False(t, req.ApplyLastInteractionAt, "outbound never touches last_interaction_at")
 	require.True(t, req.ApplyLastOutreachAt)
@@ -109,7 +109,7 @@ func TestBuildInteractionWrite_Inbound_WritesThreeFields(t *testing.T) {
 		"weekly",
 	)
 
-	require.Equal(t, repository.CadenceShadowBranchForward, req.Branch)
+	require.Equal(t, repository.CadenceBranchForward, req.Branch)
 	require.True(t, req.ApplyLastContacted)
 	require.True(t, req.ApplyLastInteractionAt, "inbound bumps last_interaction_at alongside last_contacted")
 	require.False(t, req.ApplyLastOutreachAt, "inbound does NOT bump last_outreach_at")
@@ -133,7 +133,7 @@ func TestBuildInteractionWrite_Mutual_WritesAllFour(t *testing.T) {
 		"weekly",
 	)
 
-	require.Equal(t, repository.CadenceShadowBranchForward, req.Branch)
+	require.Equal(t, repository.CadenceBranchForward, req.Branch)
 	require.True(t, req.ApplyLastContacted)
 	require.True(t, req.ApplyLastInteractionAt, "mutual bumps last_interaction_at alongside last_contacted")
 	require.True(t, req.ApplyLastOutreachAt)
@@ -154,7 +154,7 @@ func TestBuildInteractionWrite_Manual_UsesUnconditionalBranch(t *testing.T) {
 		"weekly",
 	)
 
-	require.Equal(t, repository.CadenceShadowBranchUnconditional, req.Branch,
+	require.Equal(t, repository.CadenceBranchUnconditional, req.Branch,
 		"manual-source interactions take the unconditional branch (spec §3.4.2)")
 	require.True(t, req.ApplyContactBy)
 }
@@ -191,7 +191,7 @@ func TestBuildInteractionWrite_ForwardGate_OlderIncoming(t *testing.T) {
 		"weekly",
 	)
 
-	require.Equal(t, repository.CadenceShadowBranchForward, req.Branch)
+	require.Equal(t, repository.CadenceBranchForward, req.Branch)
 	// Apply flags stay true — the SQL's forward guard is what refuses the
 	// regression. ApplyContactBy specifically falls to false because the
 	// time-gate is violated.

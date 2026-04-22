@@ -67,26 +67,20 @@ type RecordInteractionResult struct {
 	IsReplay bool
 	// PrevCadence is the pre-cadence snapshot captured in-memory from
 	// the contact row BEFORE the authoritative UPDATE. Non-nil on fresh
-	// writes when the caller passes withShadow=true; nil on replay and
-	// when withShadow=false.
+	// writes when the caller passes publishesEvent=true (event-bus path,
+	// so the snapshot can populate the V2 payload); nil on replay and
+	// on the non-bus wrapper path.
 	PrevCadence *ContactCadenceFields
 	// CadenceAtEmit is the value of contact.cadence at capture time
 	// (may be nil if the contact has no cadence). Non-nil only when
-	// withShadow=true and cadence is set.
+	// publishesEvent=true and cadence is set.
 	CadenceAtEmit *string
 	// FollowUpFn is the non-bus path's post-commit hook. Set only when
-	// withShadow=false — the bus path (withShadow=true) runs
-	// FollowUpManager.HandleEvent inline inside the recorder's tx and
-	// carries any refresh post-commit closure through the recorder's
-	// own return. Nil otherwise. Caller invokes AFTER tx commit.
+	// publishesEvent=false — the bus path runs FollowUpManager.HandleEvent
+	// inline inside the recorder's tx and carries any refresh
+	// post-commit closure through the recorder's own return. Nil
+	// otherwise. Caller invokes AFTER tx commit.
 	FollowUpFn func(context.Context)
-	// ShadowDrainFn is the cadence shadow observation drain retained
-	// from the shadow-mode phase. CadenceUpdater is now the sole writer
-	// of cadence columns, so the cadence shadow table is no longer
-	// populated on the hot path and this field is left nil. The field
-	// remains in place until the shadow tables are dropped in the
-	// final cleanup.
-	ShadowDrainFn CadenceShadowDrainFn
 }
 
 // InteractionRepository handles interaction persistence

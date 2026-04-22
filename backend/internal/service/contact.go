@@ -484,7 +484,7 @@ func (s *ContactService) RecordInteraction(ctx context.Context, req repository.R
 	err := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		var txErr error
 		// Non-event-bus wrapper: no paired interaction.recorded event
-		// will be published, so withShadow=false — shadow drain is
+		// will be published, so publishesEvent=false — shadow drain is
 		// skipped entirely.
 		res, txErr = s.RecordInteractionTx(ctx, tx, false, req)
 		return txErr
@@ -509,7 +509,7 @@ type RecordInteractionResult = repository.RecordInteractionResult
 // BeginTxFunc). Dedup, contact existence check, interaction insert, and
 // cadence UPDATEs all run inside the caller's tx (spec §3.4.1).
 //
-// The `withShadow` flag tells the service whether the caller intends to
+// The `publishesEvent` flag tells the service whether the caller intends to
 // publish an interaction.recorded event after commit and therefore
 // needs the pre-cadence snapshot populated on the result (for the V2
 // payload). Event-bus consumer callers pass true; the non-tx
@@ -521,7 +521,7 @@ type RecordInteractionResult = repository.RecordInteractionResult
 // nilability contracts. On error the result is nil and the caller
 // should roll back the tx.
 func (s *ContactService) RecordInteractionTx(
-	ctx context.Context, tx pgx.Tx, withShadow bool, req repository.RecordInteractionRequest,
+	ctx context.Context, tx pgx.Tx, publishesEvent bool, req repository.RecordInteractionRequest,
 ) (*RecordInteractionResult, error) {
 	// 1. Default direction to "mutual" if empty (backward compat).
 	if req.Direction == "" {
@@ -579,18 +579,18 @@ func (s *ContactService) RecordInteractionTx(
 		return nil, fmt.Errorf("create interaction: %w", err)
 	}
 
-	// 6. Direct-path cadence write. When withShadow=false the caller is
+	// 6. Direct-path cadence write. When publishesEvent=false the caller is
 	// NOT going through the event bus (non-bus wrappers: Todoist action /
 	// cadence task completion, and service-layer tests). No
 	// interaction.recorded will be emitted, so InteractionRecorder's
 	// inline CadenceUpdater.HandleEvent dispatch won't fire and cadence
 	// columns would otherwise silently stop updating. Route through
 	// CadenceUpdater.ApplyInteraction so this path stays under the
-	// sole-writer invariant. withShadow=true callers (the
+	// sole-writer invariant. publishesEvent=true callers (the
 	// InteractionRecorder) still rely on the recorder's inline
 	// HandleEvent path + event-id claim for dedupe across inline +
 	// queued delivery.
-	if !withShadow {
+	if !publishesEvent {
 		if s.cadence == nil {
 			return nil, errors.New("record interaction: cadence updater not wired (call SetCadenceUpdater)")
 		}
@@ -605,15 +605,15 @@ func (s *ContactService) RecordInteractionTx(
 	}
 
 	// 7. Derive the follow-up closure. Cadence writes happen via either
-	// the recorder's inline CadenceUpdater.HandleEvent (withShadow true)
-	// or the direct ApplyInteraction call above (withShadow false). The
+	// the recorder's inline CadenceUpdater.HandleEvent (publishesEvent true)
+	// or the direct ApplyInteraction call above (publishesEvent false). The
 	// FollowUpManager consumer runs inline in the recorder on the
-	// withShadow=true path (post-commit closure for refresh path only);
-	// the withShadow=false path (Todoist completion wrapper) still
+	// publishesEvent=true path (post-commit closure for refresh path only);
+	// the publishesEvent=false path (Todoist completion wrapper) still
 	// needs a post-commit closure that calls
 	// FollowUpManager.ApplyInteraction on a fresh tx.
 	var followUpFn func(context.Context)
-	if !withShadow {
+	if !publishesEvent {
 		followUpFn = s.deriveFollowUpClosure(contact, interaction)
 	}
 
@@ -622,11 +622,10 @@ func (s *ContactService) RecordInteractionTx(
 		IsReplay:    false,
 		FollowUpFn:  followUpFn,
 	}
-	if withShadow {
-		// withShadow's name is a historical artifact — post-cutover it
-		// means "populate the V2 payload snapshot + cadence-at-emit
-		// fields so the bus event carries the pre-image for downstream
-		// consumers".
+	if publishesEvent {
+		// The caller will publish interaction.recorded after this returns;
+		// populate the V2 payload snapshot + cadence-at-emit fields so
+		// the bus event carries the pre-image for downstream consumers.
 		res.PrevCadence = &prevSnap
 		res.CadenceAtEmit = cadenceAtEmit
 	}

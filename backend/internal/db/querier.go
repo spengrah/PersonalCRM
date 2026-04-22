@@ -30,13 +30,6 @@ type Querier interface {
 	CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
 	CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error)
-	// Per-contact shadow observation count. Narrower than CountByWriter so
-	// integration tests can assert invariants scoped to the contacts they
-	// own, without racing against rows written by concurrently-running
-	// tests on the shared test DB.
-	CountCadenceShadowObservationsByContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
-	// Used by integration tests and bake-window evidence collection.
-	CountCadenceShadowObservationsByWriter(ctx context.Context, writer string) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error)
@@ -49,11 +42,6 @@ type Querier interface {
 	// Count events for a specific contact
 	CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
-	// Per-contact count, narrower than CountByWriter. Integration tests use
-	// this to assert invariants scoped to the contacts they own and avoid
-	// racing against concurrent writes on the shared test DB.
-	CountFollowUpShadowObservationsByContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
-	CountFollowUpShadowObservationsByWriter(ctx context.Context, writer string) (int64, error)
 	CountIdentitiesBySource(ctx context.Context, source string) (int64, error)
 	// Counts river_job rows that represent an in-flight SyncProviderAccountJob
 	// for the given (source, account_id). Used by
@@ -84,9 +72,6 @@ type Querier interface {
 	// inlining raw SQL into Go test code (core.md rule 2).
 	CountRiverJobsByContactTask(ctx context.Context, arg CountRiverJobsByContactTaskParams) (int64, error)
 	CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error)
-	// Used by integration tests to assert exact row counts per writer. No
-	// deleted_at filter — append-only table.
-	CountShadowObservationsByWriter(ctx context.Context, writer string) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountTelegramMessagesByChat(ctx context.Context) ([]*CountTelegramMessagesByChatRow, error)
 	CountTelegramMessagesByPeer(ctx context.Context) ([]*CountTelegramMessagesByPeerRow, error)
@@ -176,41 +161,6 @@ type Querier interface {
 	// read-only operator diagnostics; the production dedupe path uses
 	// InsertEventConsumerClaim's rows-inserted signal instead of polling.
 	ExistsEventConsumerClaim(ctx context.Context, arg ExistsEventConsumerClaimParams) (bool, error)
-	// Post-bake divergence query. FULL OUTER JOIN of direct vs consumer rows
-	// on event_id — per plan Decision 1 each (event_id, writer) pair is unique,
-	// so the join resolves at most one direct + one consumer row per event.
-	// A non-empty result indicates real drift: direct missing, consumer
-	// missing, or next_* values disagreeing.
-	//
-	// Race-class filters baked in (plan Decision 4 taxonomy):
-	//
-	//   1. Grace window (`GREATEST(direct.observed_at, consumer.observed_at)
-	//      < @observed_at_to - 5s`) — applied on the JOINED pair, NOT on each
-	//      side independently. The direct-path observer fires from an async
-	//      post-commit closure that may land after the consumer. Filtering
-	//      each CTE independently causes a false consumer-only divergence
-	//      when consumer lands past the grace edge (e.g. T-6s) and direct
-	//      lands inside the grace edge (e.g. T-4s): the pre-filter removes
-	//      direct, consumer survives, and the FULL OUTER JOIN flags the
-	//      surviving consumer row as "direct missing". Moving the filter to
-	//      the joined CTE keeps both sides visible and only excludes the
-	//      pair when the later of the two is still within grace.
-	//   2. Exclude events where the paired contact is soft-deleted
-	//      (contact.deleted_at IS NOT NULL). The direct-path closure skips
-	//      snapshot writes when the contact is gone (plan Decision 4
-	//      contact_soft_deleted_midstream race class); the consumer may
-	//      still have written because its check runs at event-time, not
-	//      query-time. These rows are expected-one-sided.
-	// @observed_at_to is the "hard" right edge of the query window; the
-	// 5-second grace is subtracted on the joined pair's latest observed_at
-	// so the direct-path post-commit closure gets ample time to land before
-	// we treat "direct missing" (or "consumer missing") as real drift.
-	FindCadenceShadowDivergences(ctx context.Context, arg FindCadenceShadowDivergencesParams) ([]*FindCadenceShadowDivergencesRow, error)
-	// Inline divergence logger uses this: given a consumer row just inserted,
-	// look up the paired 'direct' row to compare next_* values. Returns
-	// sql.ErrNoRows when the direct path hasn't observed yet (expected when
-	// the consumer fires before the direct-path post-commit closure lands).
-	FindCadenceShadowObservationByEventAndWriter(ctx context.Context, arg FindCadenceShadowObservationByEventAndWriterParams) (*EventShadowCadenceObservation, error)
 	// peer_phone is stored raw from MTProto (typically digits only); contact_method
 	// value_normalized is E.164 with leading '+'. Compare on digits-only.
 	// Same DISTINCT ON ordering as the username variant — prefer rows with a
@@ -247,42 +197,11 @@ type Querier interface {
 	// regardless of account_id. Used by the calendar rematch handler to mark
 	// gcal_attendee import candidates as matched after a CRM contact links them.
 	FindExternalContactsBySourceAndSourceID(ctx context.Context, arg FindExternalContactsBySourceAndSourceIDParams) ([]*ExternalContact, error)
-	// Post-bake divergence query. FULL OUTER JOIN of direct vs consumer
-	// rows on event_id — UNIQUE (event_id, writer) guarantees at most one
-	// row per side per event, so the join produces at most one direct +
-	// one consumer row per event. A non-empty result indicates real drift
-	// once expected-divergence classes (guard 1 backdated, guard 2
-	// out-of-order) are filtered out at the report layer.
-	//
-	// Race-class filters baked in (mirrors the cadence-shadow query):
-	//
-	//   1. Grace window applied on the joined pair, NOT each side
-	//      independently. The direct-path observer fires from an async
-	//      post-commit closure that may land after the consumer. Filtering
-	//      each CTE alone causes a false consumer-only divergence when
-	//      consumer lands past the grace edge and direct lands inside it.
-	//   2. Exclude pairs where the contact is soft-deleted. The direct
-	//      path skips when the contact is gone; the consumer may still
-	//      have written because its check runs at event-time.
-	FindFollowUpShadowDivergences(ctx context.Context, arg FindFollowUpShadowDivergencesParams) ([]*FindFollowUpShadowDivergencesRow, error)
-	// Used by the inline divergence logger and by integration tests that
-	// need to read back a specific writer's observation.
-	FindFollowUpShadowObservationByEventAndWriter(ctx context.Context, arg FindFollowUpShadowObservationByEventAndWriterParams) (*EventShadowFollowupObservation, error)
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
 	// Find an existing interaction by contact, source, and source_ref (for deduplication)
 	FindInteractionBySourceRef(ctx context.Context, arg FindInteractionBySourceRefParams) (*Interaction, error)
 	// Find an existing manual interaction within a time window (for manual deduplication)
 	FindInteractionInWindow(ctx context.Context, arg FindInteractionInWindowParams) (*Interaction, error)
-	// Manual (no source_ref) variant: matches on (source, contact_id) and the
-	// occurred_at truncated to the second. The 30-minute dedup window of the
-	// direct path guarantees a single row per contact per minute-level ts.
-	FindMatchingDirectWriteByManual(ctx context.Context, arg FindMatchingDirectWriteByManualParams) (*EventShadowObservation, error)
-	// Fetches the most recent direct-path row matching the given
-	// (source, source_ref, contact_id). Used by the inline divergence logger
-	// (Decision 14 Part A) when the consumer commits a writer='consumer' row
-	// and wants to compare against the peer direct-path row. Returns the most
-	// recent fresh-write (kind = 'direct_record') row when multiple exist.
-	FindMatchingDirectWriteBySourceRef(ctx context.Context, arg FindMatchingDirectWriteBySourceRefParams) (*EventShadowObservation, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	// Find a pending follow-up task for a contact. Matches both 'managed'
 	// and 'pending_remote_create' live states so the two-step create flow
@@ -299,27 +218,6 @@ type Querier interface {
 	// Find the most recent telegram interaction for a contact in a specific chat
 	// with a given direction. Used for incremental coalescing.
 	FindRecentTelegramInteraction(ctx context.Context, arg FindRecentTelegramInteractionParams) (*Interaction, error)
-	// Post-bake divergence query for manual (no-source_ref) kind. Joins on
-	// (source, contact_id, ts-second). Same semantics as the ref-bearing
-	// variant: consumer side includes replay=true (consumer "observed" the
-	// direct-path row via FindInWindow dedup).
-	FindShadowDivergencesManual(ctx context.Context, arg FindShadowDivergencesManualParams) ([]*FindShadowDivergencesManualRow, error)
-	// Post-bake divergence query for ref-bearing kinds. FULL OUTER JOIN of
-	// direct fresh-writes vs ALL consumer observations (including replay=true,
-	// which is the expected shadow-mode state: direct wrote first, consumer
-	// saw the existing row and early-returned). A non-empty result means one
-	// or more interactions disagreed between the two paths (direction
-	// mismatch, occurred_at mismatch, or one-side-only). Parameters bound the
-	// observation time range so the bake-window evidence is reproducible.
-	//
-	// Direct side: only replay=false (fresh writes). Direct-path dedupe hits
-	// (replay=true) are excluded because they're re-observations of rows the
-	// consumer already accounted for at their fresh-write time.
-	//
-	// Consumer side: BOTH replay=true and replay=false are included — the
-	// consumer "observed" the event either way; replay=true just means it
-	// found the direct-path row in the dedupe check.
-	FindShadowDivergencesRefBearing(ctx context.Context, arg FindShadowDivergencesRefBearingParams) ([]*FindShadowDivergencesRefBearingRow, error)
 	FindSimilarContacts(ctx context.Context, arg FindSimilarContactsParams) ([]*FindSimilarContactsRow, error)
 	// Finds similar contacts for multiple candidate names in a single batch query.
 	// Uses UNNEST to expand input arrays and LATERAL join to find matches per candidate.
@@ -402,23 +300,6 @@ type Querier interface {
 	// already landed must not produce a stale follow-up.
 	HasResponseAfter(ctx context.Context, arg HasResponseAfterParams) (bool, error)
 	IgnoreExternalContact(ctx context.Context, id pgtype.UUID) error
-	// Event shadow cadence-observation queries (spec §3.4.2, PR 7). Sibling
-	// table to event_shadow_observation (migration 038); captures cadence-
-	// column pre/post image per event so the post-bake divergence query can
-	// FULL OUTER JOIN on event_id. See
-	// .ai/log/plan/event-bus-foundation-pr7-cadence-updater-shadow.md.
-	// Inserts an observation row. The UNIQUE (event_id, writer) constraint
-	// (migration 039) gives at-most-one-row-per-writer semantics under river
-	// retries. ON CONFLICT DO NOTHING returns no rows on duplicate; callers
-	// treat "no rows" as idempotent success rather than an error.
-	InsertCadenceShadowObservation(ctx context.Context, arg InsertCadenceShadowObservationParams) (*EventShadowCadenceObservation, error)
-	// Test-only variant of InsertCadenceShadowObservation that accepts an
-	// explicit observed_at instead of defaulting to NOW(). The production
-	// writers (direct-path post-commit closure + consumer worker) always
-	// use the DEFAULT; this query exists so integration tests can pin
-	// observed_at deterministically when exercising the grace-window
-	// filter in FindCadenceShadowDivergences.
-	InsertCadenceShadowObservationAtTime(ctx context.Context, arg InsertCadenceShadowObservationAtTimeParams) (*EventShadowCadenceObservation, error)
 	// Event queries (spec §3.1, §3.3). Raw append-only event log.
 	// Insert an event; conflicts on (source, source_id) (when source_id is not
 	// NULL) return zero rows so the caller can treat as idempotent no-op. When
@@ -434,25 +315,6 @@ type Querier interface {
 	// already holds the claim. Callers treat 0 as "someone else wrote this
 	// event; return nil without mutating state".
 	InsertEventConsumerClaim(ctx context.Context, arg InsertEventConsumerClaimParams) (int64, error)
-	// Event shadow observation queries (spec §3.8, PR 5). Append-only log of
-	// what each write path (direct vs consumer) produced during shadow-mode
-	// bake. The post-bake divergence query FULL OUTER JOINs direct+consumer
-	// rows on (source, source_ref) to surface drift.
-	// Inserts an observation row and returns it. No ON CONFLICT — each call
-	// produces a new row. The event_id FK may be NULL for direct-path rows
-	// that fired without a paired event envelope (e.g., ExtendInteraction,
-	// PromoteInteractionToMutual).
-	InsertEventShadowObservation(ctx context.Context, arg InsertEventShadowObservationParams) (*EventShadowObservation, error)
-	// Event shadow follow-up observation queries (spec §3.4.3). Sibling to
-	// event_shadow_observation (migration 038) and
-	// event_shadow_cadence_observation (migration 039). Captures the action
-	// the FollowUpManager DID (direct path) or WOULD do (consumer) per
-	// interaction.recorded event.
-	// Inserts an observation row. The UNIQUE (event_id, writer) constraint
-	// (migration 042) gives at-most-one-row-per-writer semantics under river
-	// retries. ON CONFLICT DO NOTHING returns no rows on duplicate; callers
-	// treat "no rows" as idempotent success rather than an error.
-	InsertFollowUpShadowObservation(ctx context.Context, arg InsertFollowUpShadowObservationParams) (*EventShadowFollowupObservation, error)
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
@@ -488,11 +350,11 @@ type Querier interface {
 	// NULL for entity fields on outbound private chats, and those rows must not
 	// outrank a row with a real name.
 	ListDistinctUnmatchedPeers(ctx context.Context) ([]*ListDistinctUnmatchedPeersRow, error)
-	// The 'syncing' status is no longer written by the river-based scheduler
-	// (#180 PR 3). Rows with the legacy 'syncing' status are still returned here
-	// so the one-time RecoverStuckSyncingStates boot helper can pick them up;
-	// after PR 3 ships, no live code path writes 'syncing' so this is a harmless
-	// inclusion in practice.
+	// The 'syncing' status value stays in the CHECK constraint for
+	// down-migration safety but is no longer written by any code path.
+	// River job state (available/running/completed/retryable) is the
+	// source of truth for "in-flight" — this query only needs to filter
+	// out 'disabled' rows whose next_sync_at has come due.
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListEnrichmentsBySource(ctx context.Context, arg ListEnrichmentsBySourceParams) ([]*ContactEnrichment, error)
@@ -535,10 +397,6 @@ type Querier interface {
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
 	MarkTelegramMessagesProcessed(ctx context.Context, arg MarkTelegramMessagesProcessedParams) error
-	// One-shot boot-time recovery. Resets any rows left in status='syncing' from
-	// a pre-upgrade crash so the next scheduler tick picks them up. Mirrors the
-	// canonical #208 remediation: sets both status and next_sync_at.
-	RecoverStuckSyncingStates(ctx context.Context) (int64, error)
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement

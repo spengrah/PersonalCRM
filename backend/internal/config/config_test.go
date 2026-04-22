@@ -710,20 +710,6 @@ func TestConfig_EventBus_DefaultCutover(t *testing.T) {
 	}
 }
 
-func TestConfig_EventBus_ShadowFromEnv(t *testing.T) {
-	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
-	WithEnv(t, "NODE_ENV", "development")
-	WithEnv(t, "EVENT_BUS_INTERACTION_MODE", "shadow")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
-	}
-	if cfg.EventBus.InteractionMode != EventBusInteractionModeShadow {
-		t.Errorf("Expected EventBus.InteractionMode=shadow, got %q", cfg.EventBus.InteractionMode)
-	}
-}
-
 // TestConfig_EventBus_OffFromEnv asserts "off" still parses — rollback
 // flexibility per plan Decision 6. Post-cutover "off" disables publisher-
 // driven writes entirely (see EventBusConfig doc comment).
@@ -763,8 +749,8 @@ func TestConfig_Validate_EventBusInteractionMode(t *testing.T) {
 		wantHint string
 	}{
 		{"off_ok", EventBusInteractionModeOff, false, ""},
-		{"shadow_ok", EventBusInteractionModeShadow, false, ""},
 		{"cutover_ok", EventBusInteractionModeCutover, false, ""},
+		{"shadow_rejected", "shadow", true, "invalid mode"},
 		{"empty_rejected", "", true, "invalid mode"},
 		{"gibberish_rejected", "garbage", true, "invalid mode"},
 		{"uppercase_rejected", "OFF", true, "invalid mode"},
@@ -922,11 +908,11 @@ func TestConfig_Validate_EventBusCadenceMode(t *testing.T) {
 		// "off" accepted here because TestConfig() sets
 		// UnsafeAllowOffMode=true (see TestTestConfig_AllowsCadenceModeOff).
 		{"off_ok_with_test_override", EventBusCadenceModeOff, false, ""},
-		{"shadow_ok", EventBusCadenceModeShadow, false, ""},
 		{"cutover_ok", EventBusCadenceModeCutover, false, ""},
+		{"shadow_rejected", "shadow", true, "invalid mode"},
 		{"empty_rejected", "", true, "invalid mode"},
 		{"gibberish_rejected", "garbage", true, "invalid mode"},
-		{"uppercase_rejected", "SHADOW", true, "invalid mode"},
+		{"uppercase_rejected", "CUTOVER", true, "invalid mode"},
 	}
 
 	for _, tt := range tests {
@@ -1016,19 +1002,6 @@ func TestConfig_FollowUpMode_OffAllowedWithUnsafeOverride(t *testing.T) {
 	}
 }
 
-// TestConfig_FollowUpMode_ShadowRejected asserts shadow mode is
-// rejected post-cutover — nothing for it to observe.
-func TestConfig_FollowUpMode_ShadowRejected(t *testing.T) {
-	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
-	WithEnv(t, "NODE_ENV", "development")
-	WithEnv(t, "EVENT_BUS_FOLLOWUP_MODE", "shadow")
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("Load() expected validation error for mode=shadow post-cutover, got nil")
-	}
-}
-
 func TestConfig_Validate_EventBusFollowUpMode(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1040,8 +1013,8 @@ func TestConfig_Validate_EventBusFollowUpMode(t *testing.T) {
 		{"cutover_with_unsafe_ok", EventBusFollowUpModeCutover, true, false},
 		{"off_with_unsafe_ok", EventBusFollowUpModeOff, true, false},
 		{"off_without_unsafe_rejected", EventBusFollowUpModeOff, false, true},
-		{"shadow_rejected", EventBusFollowUpModeShadow, false, true},
-		{"shadow_with_unsafe_still_rejected", EventBusFollowUpModeShadow, true, true},
+		{"shadow_rejected", "shadow", false, true},
+		{"shadow_with_unsafe_still_rejected", "shadow", true, true},
 		{"empty_rejected", "", false, true},
 		{"gibberish_rejected", "garbage", false, true},
 		{"uppercase_rejected", "CUTOVER", false, true},

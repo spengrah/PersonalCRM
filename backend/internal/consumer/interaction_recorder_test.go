@@ -21,18 +21,16 @@ import (
 // typed nil (the writer stub never dereferences it).
 // -----------------------------------------------------------------------------
 
-// stubWriter is the cutover-era replacement for the PR 5 stubContactRepo /
-// stubInteractionRepo split. It emulates ContactService.RecordInteractionTx:
-// dedup, contact-existence check, and interaction insert collapse into one
-// entry point (plan Decision 4a). PR 7 extends the returns with the
-// pre-cadence snapshot + cadence-at-emit value (plan Decision 2a) plus a
-// shadow-drain closure (plan Decision 6).
+// stubWriter emulates ContactService.RecordInteractionTx: dedup,
+// contact-existence check, and interaction insert collapse into one
+// entry point. The pre-cadence snapshot + cadence-at-emit returns
+// populate the V2 InteractionRecordedPayload that HandleEvent emits.
 type stubWriter struct {
 	calls   int
 	lastReq repository.RecordInteractionRequest
-	// lastWithShadow captures the withShadow arg so tests can assert
+	// lastPublishesEvent captures the publishesEvent arg so tests can assert
 	// the consumer threads it as true.
-	lastWithShadow bool
+	lastPublishesEvent bool
 	// Existing row forces isReplay=true; otherwise a fresh row is fabricated.
 	existing *repository.Interaction
 	// notFound simulates GetContactTx returning db.ErrNotFound.
@@ -43,24 +41,18 @@ type stubWriter struct {
 	lastCreated *repository.Interaction
 	// postCommit is returned on fresh writes; caller may invoke it.
 	postCommit func(context.Context)
-	// prev + cadenceAtEmit are the PR 7 pre-cadence snapshot returns.
-	// Tests set these to exercise V2 payload construction in HandleEvent.
+	// prev + cadenceAtEmit are the pre-cadence snapshot returns. Tests
+	// set these to exercise V2 payload construction in HandleEvent.
 	prev          *repository.ContactCadenceFields
 	cadenceAtEmit *string
-	// shadowDrain is the cadence shadow drain closure. Tests set
-	// this to assert the consumer invokes it with recordedEnv.ID.
-	shadowDrain repository.CadenceShadowDrainFn
-	// lastShadowDrainEventID captures the eventID passed to shadowDrain
-	// (set by the closure when the consumer invokes it).
-	lastShadowDrainEventID *uuid.UUID
 }
 
 func (s *stubWriter) RecordInteractionTx(
-	_ context.Context, _ pgx.Tx, withShadow bool, req repository.RecordInteractionRequest,
+	_ context.Context, _ pgx.Tx, publishesEvent bool, req repository.RecordInteractionRequest,
 ) (*repository.RecordInteractionResult, error) {
 	s.calls++
 	s.lastReq = req
-	s.lastWithShadow = withShadow
+	s.lastPublishesEvent = publishesEvent
 	if s.returnErr != nil {
 		return nil, s.returnErr
 	}
@@ -79,22 +71,12 @@ func (s *stubWriter) RecordInteractionTx(
 		Direction:  req.Direction,
 	}
 	s.lastCreated = inter
-	// Wrap shadowDrain so we can observe the eventID passed at drain time.
-	var drain repository.CadenceShadowDrainFn
-	if s.shadowDrain != nil {
-		base := s.shadowDrain
-		drain = func(ctx context.Context, eventID uuid.UUID) {
-			s.lastShadowDrainEventID = &eventID
-			base(ctx, eventID)
-		}
-	}
 	return &repository.RecordInteractionResult{
 		Interaction:   inter,
 		IsReplay:      false,
 		PrevCadence:   s.prev,
 		CadenceAtEmit: s.cadenceAtEmit,
 		FollowUpFn:    s.postCommit,
-		ShadowDrainFn: drain,
 	}, nil
 }
 

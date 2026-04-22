@@ -30,16 +30,14 @@ import (
 	"github.com/riverqueue/river"
 )
 
-// InteractionMode gates the PR 5-12 rollout (spec §3.9). Mirrors the
-// constants in config.EventBusInteractionMode*. Kept duplicated here so
-// non-config callers don't import config just to name a mode.
-//
-// Post-PR-6 (cutover merged), only "cutover" is a real mode; "off" and
-// "shadow" become effective no-ops for the publisher-driven paths. See
-// EventBusConfig in config/ for the full lifecycle notes.
+// InteractionMode mirrors the constants in config.EventBusInteractionMode*.
+// Kept duplicated here so non-config callers don't import config just
+// to name a mode. "cutover" is the normal operating posture; "off" is
+// the emergency-override gated behind EVENT_BUS_INTERACTION_UNSAFE_ALLOW_OFF
+// for rollback without a code change. See EventBusConfig in config/ for
+// the startup-gate semantics.
 const (
 	InteractionModeOff     = "off"
-	InteractionModeShadow  = "shadow"
 	InteractionModeCutover = "cutover"
 )
 
@@ -48,16 +46,15 @@ const (
 // it without instantiating the full service graph. Production wiring passes
 // the concrete *service.ContactService.
 //
-// PR 7 signature: `withShadow` is true for event-bus consumer callers
-// (so the service queues the direct-path cadence shadow drain). The
-// returned *repository.RecordInteractionResult carries the pre-cadence
-// snapshot + cadence-at-emit that populate the V2 InteractionRecordedPayload
-// (plan Decision 2a) and the shadowDrain closure, which must be invoked
-// AFTER bus.PublishTx so it can be bound to the interaction.recorded
-// event's id (plan Decision 6).
+// `publishesEvent` is true for event-bus consumer callers: the service
+// populates the V2 InteractionRecordedPayload snapshot fields
+// (PrevCadence + CadenceAtEmit) on the returned result so the recorder
+// can emit them on interaction.recorded. False for the non-bus wrapper
+// (Todoist completion path), which takes the direct
+// CadenceUpdater.ApplyInteraction route instead.
 type interactionWriter interface {
 	RecordInteractionTx(
-		ctx context.Context, tx pgx.Tx, withShadow bool, req repository.RecordInteractionRequest,
+		ctx context.Context, tx pgx.Tx, publishesEvent bool, req repository.RecordInteractionRequest,
 	) (*repository.RecordInteractionResult, error)
 }
 
@@ -170,12 +167,10 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	}
 
 	// Delegate to ContactService.RecordInteractionTx — single source of
-	// truth for dedup + insert + cadence updates. withShadow=true asks
-	// the service to queue the PR 7 direct-path cadence shadow drain
-	// (plan Decisions 4a, 6, and 2a). The ShadowDrainFn is invoked
-	// AFTER bus.PublishTx so the direct observation can be tagged with
-	// the interaction.recorded event's id — matching the event_id the
-	// consumer will use on its own observation.
+	// truth for dedup + insert + cadence updates. publishesEvent=true asks
+	// the service to populate the V2 payload snapshot (PrevCadence +
+	// CadenceAtEmit) on the returned result so we can attach them to
+	// the interaction.recorded event we publish below.
 	res, err := r.writer.RecordInteractionTx(ctx, tx, true, req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("record interaction tx: %w", err)
@@ -249,8 +244,8 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	}
 
 	// Build the post-commit callback. res.FollowUpFn is nil on the bus
-	// path (withShadow=true); it's set only when the non-bus wrapper
-	// path runs (withShadow=false — Todoist completion). The follow-up
+	// path (publishesEvent=true); it's set only when the non-bus wrapper
+	// path runs (publishesEvent=false — Todoist completion). The follow-up
 	// consumer's own post-commit closure fires on the bus path's
 	// refresh branch.
 	followUpFn := res.FollowUpFn

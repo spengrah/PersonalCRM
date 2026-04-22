@@ -141,7 +141,6 @@ func TestProviderRegistry(t *testing.T) {
 func TestSyncStatus(t *testing.T) {
 	t.Run("sync status constants", func(t *testing.T) {
 		assert.Equal(t, repository.SyncStatus("idle"), repository.SyncStatusIdle)
-		assert.Equal(t, repository.SyncStatus("syncing"), repository.SyncStatusSyncing)
 		assert.Equal(t, repository.SyncStatus("error"), repository.SyncStatusError)
 		assert.Equal(t, repository.SyncStatus("disabled"), repository.SyncStatusDisabled)
 	})

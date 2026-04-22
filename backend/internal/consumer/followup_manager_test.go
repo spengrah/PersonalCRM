@@ -21,8 +21,10 @@ import (
 // -----------------------------------------------------------------------------
 // FollowUpManager unit tests. Exercises direction dispatch, three
 // guards, mode gates, payload-version rejection, and the idempotency-
-// key helper without a live DB. The Record* helpers funnel through the
-// shadow writer stub so tests inspect exactly what would be persisted.
+// key helper without a live DB. The DecisionObserver hook captures the
+// manager's terminal decision for each branch so tests assert on the
+// full classification (action, skip reason, would-be deadline,
+// idempotency key) without a DB round trip.
 // -----------------------------------------------------------------------------
 
 // stubFollowUpTaskReader records which contact FindPendingFollowUpTx was
@@ -50,22 +52,30 @@ func (s *stubInteractionResponseReader) HasResponseAfterTx(_ context.Context, _ 
 	return s.hasResp, s.err
 }
 
-// stubFollowUpShadowWriter captures what the consumer would persist.
-type stubFollowUpShadowWriter struct {
-	records []repository.FollowUpShadowObservation
+// stubEventClaimer unconditionally grants the claim. Production claim
+// behavior is covered by integration tests — unit tests here care only
+// that the manager reaches the decision branch.
+type stubEventClaimer struct {
+	calls int
+}
+
+func (s *stubEventClaimer) TryClaimTx(_ context.Context, _ pgx.Tx, _ uuid.UUID, _ string) (bool, error) {
+	s.calls++
+	return true, nil
+}
+
+// stubFollowUpContactReader returns a test-fixture contact with an
+// optional cadence string.
+type stubFollowUpContactReader struct {
+	cadence *string
 	err     error
 }
 
-func (s *stubFollowUpShadowWriter) RecordConsumer(_ context.Context, _ pgx.Tx, obs repository.FollowUpShadowObservation) error {
+func (s *stubFollowUpContactReader) GetContactTx(_ context.Context, _ pgx.Tx, id uuid.UUID) (*repository.Contact, error) {
 	if s.err != nil {
-		return s.err
+		return nil, s.err
 	}
-	s.records = append(s.records, obs)
-	return nil
-}
-
-func (s *stubFollowUpShadowWriter) FindMatchingDirect(_ context.Context, _ pgx.Tx, _ uuid.UUID) (*repository.FollowUpShadowObservation, error) {
-	return nil, nil
+	return &repository.Contact{ID: id, FullName: "Test Contact", Cadence: s.cadence}, nil
 }
 
 // fakeTx is a typed-nil pgx.Tx sufficient for branching that never
@@ -88,16 +98,21 @@ func testWatchdog() config.WatchdogConfig {
 	}
 }
 
-func newUnitFollowUp(mode string) (*FollowUpManager, *stubFollowUpTaskReader, *stubInteractionResponseReader, *stubFollowUpShadowWriter) {
+// newUnitFollowUp builds a cutover-mode manager with a stub claimer
+// (always grants) and an installed DecisionObserver. Returns the
+// observed-decisions slice pointer so tests assert on classifications.
+// Cutover-only deps that aren't reached by skip-branch tests (taskWriter,
+// riverInserter, pool, settings, clientFactory) are nil; tests that
+// reach those paths use newCutoverFollowUp below.
+func newUnitFollowUp(mode string) (*FollowUpManager, *stubFollowUpTaskReader, *stubInteractionResponseReader, *[]Decision) {
 	tasks := &stubFollowUpTaskReader{err: db.ErrNotFound}
 	inters := &stubInteractionResponseReader{}
-	shadow := &stubFollowUpShadowWriter{}
-	// Cutover-only deps (claims, contacts, taskWriter, riverInserter,
-	// pool, settings, clientFactory, frontendURL) are nil here — shadow-
-	// and off-mode tests don't reach code that dereferences them. The
-	// cutover tests opt in by constructing a manager with real stubs.
-	h := NewFollowUpManager(mode, nil, nil, tasks, nil, inters, shadow, nil, nil, nil, nil, "", testWatchdog())
-	return h, tasks, inters, shadow
+	claims := &stubEventClaimer{}
+	contacts := &stubFollowUpContactReader{}
+	var observed []Decision
+	h := NewFollowUpManager(mode, claims, contacts, tasks, nil, inters, nil, nil, nil, nil, "", testWatchdog())
+	h.SetDecisionObserver(func(d Decision) { observed = append(observed, d) })
+	return h, tasks, inters, &observed
 }
 
 // buildRecordedEnv constructs a V2 interaction.recorded envelope for
@@ -133,43 +148,45 @@ func buildRecordedEnv(t *testing.T, contactID uuid.UUID, direction, source strin
 // -----------------------------------------------------------------------------
 
 func TestFollowUpManager_ModeOff_NoWrites(t *testing.T) {
-	h, tasks, inters, shadow := newUnitFollowUp(FollowUpModeOff)
+	h, tasks, inters, observed := newUnitFollowUp(FollowUpModeOff)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 0, tasks.calls, "mode=off must not query task repo")
 	require.Equal(t, 0, inters.calls, "mode=off must not query interaction repo")
-	require.Empty(t, shadow.records, "mode=off must not write shadow rows")
+	require.Empty(t, *observed, "mode=off must not emit decisions")
 }
 
 func TestFollowUpManager_ModeCutover_RequiresClaimRepo(t *testing.T) {
 	// Cutover without a wired claim repository is a programming error —
 	// the manager errors out at the claim step so a misconfigured
 	// deployment doesn't silently skip dedupe.
-	h, _, _, _ := newUnitFollowUp(FollowUpModeCutover)
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
+	tasks := &stubFollowUpTaskReader{err: db.ErrNotFound}
+	inters := &stubInteractionResponseReader{}
+	h := NewFollowUpManager(FollowUpModeCutover, nil, nil, tasks, nil, inters, nil, nil, nil, nil, "", testWatchdog())
 
+	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "claim")
 }
 
 func TestFollowUpManager_NilEnvelope(t *testing.T) {
-	h, _, _, _ := newUnitFollowUp(FollowUpModeShadow)
+	h, _, _, _ := newUnitFollowUp(FollowUpModeCutover)
 	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), nil)
 	require.Error(t, err)
 }
 
 func TestFollowUpManager_NilTx(t *testing.T) {
-	h, _, _, _ := newUnitFollowUp(FollowUpModeShadow)
+	h, _, _, _ := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 	_, err := h.HandleEvent(context.Background(), nil, env)
 	require.Error(t, err)
 }
 
 func TestFollowUpManager_V1PayloadRejected(t *testing.T) {
-	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
+	h, _, _, observed := newUnitFollowUp(FollowUpModeCutover)
 	payload := events.InteractionRecordedPayload{
 		Version:       1,
 		ContactID:     uuid.New(),
@@ -190,7 +207,7 @@ func TestFollowUpManager_V1PayloadRejected(t *testing.T) {
 
 	_, err = h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err, "V1 payload is logged but not returned as error")
-	require.Empty(t, shadow.records)
+	require.Empty(t, *observed)
 }
 
 // -----------------------------------------------------------------------------
@@ -198,33 +215,36 @@ func TestFollowUpManager_V1PayloadRejected(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestFollowUpManager_UnknownDirection_Skips(t *testing.T) {
-	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
+	h, _, _, observed := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), "bogus", repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
-	require.Empty(t, shadow.records)
+	require.Empty(t, *observed)
 }
 
 // -----------------------------------------------------------------------------
-// Outbound + guard branches.
+// Outbound + guard branches. These tests exercise the skip-path
+// classification only (guards 1, 2, 0), so they do not reach the
+// Todoist-settings / taskWriter path — a simpler manager with nil
+// writer/settings suffices.
 // -----------------------------------------------------------------------------
 
 func TestFollowUpManager_Outbound_NoCadence_SkipsWithoutReason(t *testing.T) {
-	h, tasks, inters, shadow := newUnitFollowUp(FollowUpModeShadow)
+	h, tasks, inters, observed := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "")
 
 	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 0, tasks.calls, "no-cadence skip must not run guard 3")
 	require.Equal(t, 0, inters.calls, "no-cadence skip must not run guard 2")
-	require.Len(t, shadow.records, 1)
-	require.Equal(t, repository.FollowUpActionSkip, shadow.records[0].Action)
-	require.Empty(t, shadow.records[0].SkipReason, "no-cadence skip has empty skip_reason")
+	require.Len(t, *observed, 1)
+	require.Equal(t, repository.FollowUpActionSkip, (*observed)[0].Action)
+	require.Empty(t, (*observed)[0].SkipReason, "no-cadence skip has empty skip_reason")
 }
 
 func TestFollowUpManager_Outbound_Backdated_NonManual_SkipsBackdated(t *testing.T) {
-	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
+	h, _, _, observed := newUnitFollowUp(FollowUpModeCutover)
 	// 90 days older than now, with weekly cadence (3-day watchdog): well
 	// past the backdated cutoff.
 	occurred := accelerated.GetCurrentTime().Add(-90 * 24 * time.Hour)
@@ -232,38 +252,26 @@ func TestFollowUpManager_Outbound_Backdated_NonManual_SkipsBackdated(t *testing.
 
 	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
-	require.Len(t, shadow.records, 1)
-	require.Equal(t, repository.FollowUpActionSkip, shadow.records[0].Action)
-	require.Equal(t, repository.FollowUpSkipReasonBackdated, shadow.records[0].SkipReason)
-}
-
-func TestFollowUpManager_Outbound_Backdated_Manual_BypassesGuard1(t *testing.T) {
-	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
-	occurred := accelerated.GetCurrentTime().Add(-90 * 24 * time.Hour)
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceManual, occurred, "weekly")
-
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
-	require.NoError(t, err)
-	require.Len(t, shadow.records, 1)
-	require.Equal(t, repository.FollowUpActionCreate, shadow.records[0].Action,
-		"manual source must bypass the backdated guard and proceed to create")
+	require.Len(t, *observed, 1)
+	require.Equal(t, repository.FollowUpActionSkip, (*observed)[0].Action)
+	require.Equal(t, repository.FollowUpSkipReasonBackdated, (*observed)[0].SkipReason)
 }
 
 func TestFollowUpManager_Outbound_OutOfOrder_Skips(t *testing.T) {
-	h, _, inters, shadow := newUnitFollowUp(FollowUpModeShadow)
+	h, _, inters, observed := newUnitFollowUp(FollowUpModeCutover)
 	inters.hasResp = true
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 1, inters.calls)
-	require.Len(t, shadow.records, 1)
-	require.Equal(t, repository.FollowUpActionSkip, shadow.records[0].Action)
-	require.Equal(t, repository.FollowUpSkipReasonOutOfOrder, shadow.records[0].SkipReason)
+	require.Len(t, *observed, 1)
+	require.Equal(t, repository.FollowUpActionSkip, (*observed)[0].Action)
+	require.Equal(t, repository.FollowUpSkipReasonOutOfOrder, (*observed)[0].SkipReason)
 }
 
 func TestFollowUpManager_Outbound_HasResponseErr_Propagates(t *testing.T) {
-	h, _, inters, _ := newUnitFollowUp(FollowUpModeShadow)
+	h, _, inters, _ := newUnitFollowUp(FollowUpModeCutover)
 	inters.err = errors.New("boom")
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
@@ -271,62 +279,22 @@ func TestFollowUpManager_Outbound_HasResponseErr_Propagates(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestFollowUpManager_Outbound_DuplicatePending_RefreshNotSkip(t *testing.T) {
-	h, tasks, _, shadow := newUnitFollowUp(FollowUpModeShadow)
-	existing := uuid.New()
-	tasks.pending = &repository.ContactTask{ID: existing, Kind: "follow_up", State: repository.ContactTaskStateManaged}
-	tasks.err = nil
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
-
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
-	require.NoError(t, err)
-	require.Len(t, shadow.records, 1)
-	require.Equal(t, repository.FollowUpActionRefresh, shadow.records[0].Action,
-		"duplicate-pending outbound records refresh, not skip — mirrors direct-path behavior")
-	require.Empty(t, shadow.records[0].SkipReason)
-	require.NotNil(t, shadow.records[0].WouldDeadline)
-}
-
-func TestFollowUpManager_Outbound_Fresh_RecordsCreate(t *testing.T) {
-	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
-
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
-	require.NoError(t, err)
-	require.Len(t, shadow.records, 1)
-	obs := shadow.records[0]
-	require.Equal(t, repository.FollowUpActionCreate, obs.Action)
-	require.NotNil(t, obs.WouldIdempotencyKey)
-	require.NotEmpty(t, *obs.WouldIdempotencyKey)
-	require.NotNil(t, obs.WouldDeadline)
-	require.False(t, obs.ConsumerCalledTodoist)
-}
-
 // -----------------------------------------------------------------------------
-// Inbound / mutual dispatch.
+// Inbound / mutual dispatch. Only the no-pending skip path is reachable
+// without a taskWriter; the complete-with-pending path requires the
+// full integration-test harness (UpdateContactTaskStateTx + river
+// inserter). Integration tests in backend/tests cover that branch.
 // -----------------------------------------------------------------------------
-
-func TestFollowUpManager_Inbound_HasPending_RecordsComplete(t *testing.T) {
-	h, tasks, _, shadow := newUnitFollowUp(FollowUpModeShadow)
-	tasks.pending = &repository.ContactTask{ID: uuid.New(), Kind: "follow_up", State: repository.ContactTaskStateManaged}
-	tasks.err = nil
-	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionInbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
-
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
-	require.NoError(t, err)
-	require.Len(t, shadow.records, 1)
-	require.Equal(t, repository.FollowUpActionComplete, shadow.records[0].Action)
-}
 
 func TestFollowUpManager_Mutual_NoPending_RecordsSkipNoReason(t *testing.T) {
-	h, _, _, shadow := newUnitFollowUp(FollowUpModeShadow)
+	h, _, _, observed := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionMutual, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
 	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
-	require.Len(t, shadow.records, 1)
-	require.Equal(t, repository.FollowUpActionSkip, shadow.records[0].Action)
-	require.Empty(t, shadow.records[0].SkipReason, "inbound/mutual no-pending skip is not guard-class")
+	require.Len(t, *observed, 1)
+	require.Equal(t, repository.FollowUpActionSkip, (*observed)[0].Action)
+	require.Empty(t, (*observed)[0].SkipReason, "inbound/mutual no-pending skip is not guard-class")
 }
 
 // -----------------------------------------------------------------------------
@@ -386,7 +354,6 @@ func TestWatchdogDaysForCadenceStr(t *testing.T) {
 
 func TestFollowUpModeFromConfig(t *testing.T) {
 	require.Equal(t, FollowUpModeOff, FollowUpModeFromConfig(config.EventBusFollowUpModeOff))
-	require.Equal(t, FollowUpModeShadow, FollowUpModeFromConfig(config.EventBusFollowUpModeShadow))
 	require.Equal(t, FollowUpModeCutover, FollowUpModeFromConfig(config.EventBusFollowUpModeCutover))
 	require.Equal(t, FollowUpModeOff, FollowUpModeFromConfig("garbage"), "unknown mode defaults to off")
 }

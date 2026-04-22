@@ -178,9 +178,9 @@ type RiverConfig struct {
 // load path the caller is expected to log a WARN — see
 // EventBusConfig.MaybeWarnUnsafeOff.
 type EventBusConfig struct {
-	InteractionMode        string // off | shadow | cutover. Default: cutover.
-	CadenceMode            string // off | shadow | cutover. Default: cutover.
-	FollowUpMode           string // off | shadow | cutover. Default: cutover.
+	InteractionMode        string // off | cutover. Default: cutover.
+	CadenceMode            string // off | cutover. Default: cutover.
+	FollowUpMode           string // off | cutover. Default: cutover.
 	UnsafeAllowOffMode     bool   // EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true opt-in. Never true in normal prod.
 	FollowUpUnsafeAllowOff bool   // EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF=true opt-in. Never true in normal prod.
 }
@@ -190,7 +190,6 @@ type EventBusConfig struct {
 // config-package import from the consumer package in validation / defaults.
 const (
 	EventBusInteractionModeOff     = "off"
-	EventBusInteractionModeShadow  = "shadow"
 	EventBusInteractionModeCutover = "cutover"
 )
 
@@ -198,7 +197,6 @@ const (
 // consumer.CadenceMode*.
 const (
 	EventBusCadenceModeOff     = "off"
-	EventBusCadenceModeShadow  = "shadow"
 	EventBusCadenceModeCutover = "cutover"
 )
 
@@ -211,7 +209,6 @@ const (
 // Real rollback is `git revert`, not a flag flip.
 const (
 	EventBusFollowUpModeOff     = "off"
-	EventBusFollowUpModeShadow  = "shadow"
 	EventBusFollowUpModeCutover = "cutover"
 )
 
@@ -504,30 +501,29 @@ func (c *Config) Validate() error {
 		})
 	}
 
-	// EventBus interaction-mode validation. Must be one of the three phase
-	// values (spec §3.9). Default "off" is applied in Load, so the empty
-	// string should never reach Validate — but guard regardless for
-	// test-constructed configs.
+	// EventBus interaction-mode validation. Default "cutover" is applied
+	// in Load, so the empty string should never reach Validate — but
+	// guard regardless for test-constructed configs.
 	switch c.EventBus.InteractionMode {
-	case EventBusInteractionModeOff, EventBusInteractionModeShadow, EventBusInteractionModeCutover:
+	case EventBusInteractionModeOff, EventBusInteractionModeCutover:
 		// ok
 	default:
 		errors = append(errors, ValidationError{
 			Field:   "EVENT_BUS_INTERACTION_MODE",
-			Message: fmt.Sprintf("invalid mode %q; must be one of: off, shadow, cutover", c.EventBus.InteractionMode),
+			Message: fmt.Sprintf("invalid mode %q; must be one of: off, cutover", c.EventBus.InteractionMode),
 		})
 	}
 
 	// EventBus cadence-mode validation. Default is "cutover". The "off"
-	// value remains parseable but is a startup-time kill switch post-
-	// cutover — the direct path is gone, so "off" disables the sole
-	// writer of cadence columns. Require explicit opt-in via
-	// UnsafeAllowOffMode (EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true)
-	// before accepting "off" in non-test config. TestConfig() sets
-	// UnsafeAllowOffMode=true so unit/integration harnesses can
-	// exercise the off branch without tripping this gate.
+	// value is a startup-time kill switch post-cutover — the direct path
+	// is gone, so "off" disables the sole writer of cadence columns.
+	// Require explicit opt-in via UnsafeAllowOffMode
+	// (EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true) before accepting "off"
+	// in non-test config. TestConfig() sets UnsafeAllowOffMode=true so
+	// unit/integration harnesses can exercise the off branch without
+	// tripping this gate.
 	switch c.EventBus.CadenceMode {
-	case EventBusCadenceModeShadow, EventBusCadenceModeCutover:
+	case EventBusCadenceModeCutover:
 		// ok
 	case EventBusCadenceModeOff:
 		if !c.EventBus.UnsafeAllowOffMode {
@@ -543,7 +539,7 @@ func (c *Config) Validate() error {
 	default:
 		errors = append(errors, ValidationError{
 			Field:   "EVENT_BUS_CADENCE_MODE",
-			Message: fmt.Sprintf("invalid mode %q; must be one of: off, shadow, cutover", c.EventBus.CadenceMode),
+			Message: fmt.Sprintf("invalid mode %q; must be one of: off, cutover", c.EventBus.CadenceMode),
 		})
 	}
 
@@ -551,19 +547,10 @@ func (c *Config) Validate() error {
 	// cutover the direct path is gone, so "off" disables the sole
 	// writer of follow-up tasks entirely. Require explicit opt-in via
 	// FollowUpUnsafeAllowOff (EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF=true)
-	// before accepting "off" in non-test config. "shadow" is retained as
-	// a parseable value but has no direct path to observe post-cutover;
-	// accepting it would suppress follow-up writes silently.
+	// before accepting "off" in non-test config.
 	switch c.EventBus.FollowUpMode {
 	case EventBusFollowUpModeCutover:
 		// ok
-	case EventBusFollowUpModeShadow:
-		errors = append(errors, ValidationError{
-			Field: "EVENT_BUS_FOLLOWUP_MODE",
-			Message: "follow-up cutover has no direct path to observe: mode=shadow " +
-				"is a silent no-op post-cutover. Use `cutover` or, for emergency " +
-				"ops, set EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF=true with mode=off.",
-		})
 	case EventBusFollowUpModeOff:
 		if !c.EventBus.FollowUpUnsafeAllowOff {
 			errors = append(errors, ValidationError{
@@ -578,7 +565,7 @@ func (c *Config) Validate() error {
 	default:
 		errors = append(errors, ValidationError{
 			Field:   "EVENT_BUS_FOLLOWUP_MODE",
-			Message: fmt.Sprintf("invalid mode %q; must be one of: off, shadow, cutover", c.EventBus.FollowUpMode),
+			Message: fmt.Sprintf("invalid mode %q; must be one of: off, cutover", c.EventBus.FollowUpMode),
 		})
 	}
 

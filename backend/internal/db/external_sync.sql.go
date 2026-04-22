@@ -354,11 +354,11 @@ WHERE enabled = TRUE
 ORDER BY next_sync_at ASC NULLS FIRST
 `
 
-// The 'syncing' status is no longer written by the river-based scheduler
-// (#180 PR 3). Rows with the legacy 'syncing' status are still returned here
-// so the one-time RecoverStuckSyncingStates boot helper can pick them up;
-// after PR 3 ships, no live code path writes 'syncing' so this is a harmless
-// inclusion in practice.
+// The 'syncing' status value stays in the CHECK constraint for
+// down-migration safety but is no longer written by any code path.
+// River job state (available/running/completed/retryable) is the
+// source of truth for "in-flight" — this query only needs to filter
+// out 'disabled' rows whose next_sync_at has come due.
 func (q *Queries) ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error) {
 	rows, err := q.db.Query(ctx, ListDueSyncStates, nextSyncAt)
 	if err != nil {
@@ -563,25 +563,6 @@ func (q *Queries) ListSyncStates(ctx context.Context) ([]*ExternalSyncState, err
 		return nil, err
 	}
 	return items, nil
-}
-
-const RecoverStuckSyncingStates = `-- name: RecoverStuckSyncingStates :execrows
-UPDATE external_sync_state
-SET status = 'idle',
-    next_sync_at = NOW(),
-    updated_at = NOW()
-WHERE status = 'syncing'
-`
-
-// One-shot boot-time recovery. Resets any rows left in status='syncing' from
-// a pre-upgrade crash so the next scheduler tick picks them up. Mirrors the
-// canonical #208 remediation: sets both status and next_sync_at.
-func (q *Queries) RecoverStuckSyncingStates(ctx context.Context) (int64, error) {
-	result, err := q.db.Exec(ctx, RecoverStuckSyncingStates)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const UpdateSyncStateCursor = `-- name: UpdateSyncStateCursor :exec

@@ -51,7 +51,6 @@ func newApplyInteractionEnv(t *testing.T, settingsErr error) (*applyInteractionE
 	contactRepo.SetPool(database.Pool)
 	taskRepo := repository.NewContactTaskRepository(database.Queries)
 	interRepo := repository.NewInteractionRepository(database.Queries)
-	shadowRepo := repository.NewFollowUpShadowObservationRepository(database.Queries, database.Pool)
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 
 	workers := river.NewWorkers()
@@ -83,7 +82,6 @@ func newApplyInteractionEnv(t *testing.T, settingsErr error) (*applyInteractionE
 		taskRepo,
 		taskRepo,
 		interRepo,
-		shadowRepo,
 		riverClient,
 		database.Pool,
 		settings,

@@ -302,14 +302,19 @@ func TestSyncService_TriggerSync_NoLongerReadsSyncingStatus(t *testing.T) {
 	}}
 	registry.Register(provider)
 
-	// Seed state with status='syncing' BEFORE wiring the enqueuer.
+	// Seed state with the legacy 'syncing' value BEFORE wiring the
+	// enqueuer. The SyncStatusSyncing constant is retired; stamp the row
+	// directly via SQL so this regression test still exercises the
+	// "no-longer-blocks-on-syncing" invariant against any historical
+	// pre-PR-3 rows.
 	state, err := syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
 		Source:   source,
 		Enabled:  true,
 		Strategy: repository.SyncStrategyFetchAll,
 	})
 	require.NoError(t, err)
-	_, err = syncRepo.UpdateSyncStateStatus(ctx, state.ID, repository.SyncStatusSyncing, nil)
+	_, err = database.Pool.Exec(ctx,
+		`UPDATE external_sync_state SET status = 'syncing' WHERE id = $1`, state.ID)
 	require.NoError(t, err)
 
 	svc := service.NewSyncService(syncRepo, contactRepo, registry)

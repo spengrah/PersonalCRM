@@ -17,22 +17,17 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-// SyncStatus represents the status of a sync source
+// SyncStatus represents the status of a sync source. The legacy
+// 'syncing' status value is no longer written by any Go code path —
+// river_job state (available / running / completed / retryable) is the
+// source of truth for "in-flight". The CHECK value remains in the
+// schema and the ListDueSyncStates query still tolerates it on read so
+// any historical row surfaces on the next scheduler tick. New code
+// MUST NOT write 'syncing'.
 type SyncStatus string
 
 const (
-	SyncStatusIdle SyncStatus = "idle"
-	// SyncStatusSyncing is no longer written by any code path after #180 PR 3
-	// (the river-based scheduler). Kept for backward compatibility with
-	// pre-migration database rows (RecoverStuckSyncingStates resets them at
-	// boot) and so `SELECT ... WHERE status='syncing'` queries from legacy
-	// admin tooling still compile. Removal is scheduled for the #180 PR 12
-	// cleanup pass.
-	//
-	// Deprecated: do not write 'syncing' from new code; the scheduler and
-	// TriggerSync now dispatch via river jobs and rely on river_job state
-	// for "in-flight" semantics.
-	SyncStatusSyncing  SyncStatus = "syncing"
+	SyncStatusIdle     SyncStatus = "idle"
 	SyncStatusError    SyncStatus = "error"
 	SyncStatusDisabled SyncStatus = "disabled"
 )
@@ -584,14 +579,6 @@ func (r *SyncRepository) ListDueAccounts(ctx context.Context, now time.Time) ([]
 		accounts[i] = DueAccount{Source: st.Source, AccountID: st.AccountID}
 	}
 	return accounts, nil
-}
-
-// RecoverStuckSyncingStates is a one-shot boot helper that resets any rows
-// left in status='syncing' from a pre-PR-3 crash. Returns the number of
-// rows reset. Idempotent — after PR 3 no code writes 'syncing' so this
-// becomes a no-op on subsequent boots.
-func (r *SyncRepository) RecoverStuckSyncingStates(ctx context.Context) (int64, error) {
-	return r.queries.RecoverStuckSyncingStates(ctx)
 }
 
 // AbandonRunningLogsForState marks any pre-existing 'running' log rows for
