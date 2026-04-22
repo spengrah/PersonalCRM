@@ -67,7 +67,7 @@ func TestReconcile_CloseCadenceTaskOnOutreachWithPendingFollowUp(t *testing.T) {
 	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, newOutreach, true))
 
 	// Run reconciler.
-	commands := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID)
+	commands := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID, false)
 
 	// Assert: item_close command for the cadence task.
 	var closedIDs []string
@@ -100,8 +100,8 @@ func TestReconcile_CloseCadenceTaskOnOutreachWithPendingFollowUp(t *testing.T) {
 	assert.Equal(t, repository.ContactTaskStateManaged, reloadedFollowUp.State,
 		"follow-up task must remain managed")
 
-	// Assert: no interactions recorded.
-	assert.Equal(t, 0, env.recorder.count, "outreach detection must not record interactions")
+	// Assert: no events published (outreach detection path).
+	assert.Empty(t, env.bus.Published(), "outreach detection must not publish events")
 }
 
 // TestReconcile_CadenceTaskUnchangedWhenNoNewOutreach is the negative case:
@@ -121,7 +121,7 @@ func TestReconcile_CadenceTaskUnchangedWhenNoNewOutreach(t *testing.T) {
 	})
 
 	// No change to last_outreach_at — reconciler should not close the task.
-	commands := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID)
+	commands := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID, false)
 
 	// Assert: no item_close command for the cadence task.
 	for _, cmd := range commands {
@@ -159,7 +159,7 @@ func TestReconcile_OutreachClosesWithoutPendingFollowUp(t *testing.T) {
 	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, newOutreach, true))
 
 	// First reconcile: cadence task should be closed.
-	commands := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID)
+	commands := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID, false)
 
 	var closedIDs []string
 	for _, cmd := range commands {
@@ -171,7 +171,7 @@ func TestReconcile_OutreachClosesWithoutPendingFollowUp(t *testing.T) {
 
 	// Second reconcile: completed task is cleaned up, new cadence task created
 	// (no follow-up gate blocks recreation).
-	commands2 := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID)
+	commands2 := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID, false)
 
 	var addCount int
 	for _, cmd := range commands2 {
@@ -206,7 +206,7 @@ func TestReconcile_LegacyTaskBackfillsWithoutClosing(t *testing.T) {
 	createFollowUpTask(t, env, contact.ID, followUpExtID)
 
 	// First reconcile: should backfill synced_last_outreach_at without closing.
-	commands := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID)
+	commands := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID, false)
 
 	// Assert: no item_close for the cadence task.
 	for _, cmd := range commands {
@@ -230,7 +230,7 @@ func TestReconcile_LegacyTaskBackfillsWithoutClosing(t *testing.T) {
 	newOutreach := accelerated.GetCurrentTime().UTC().Truncate(time.Second)
 	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, newOutreach, true))
 
-	commands2 := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID)
+	commands2 := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID, false)
 
 	var closedIDs []string
 	for _, cmd := range commands2 {
@@ -282,8 +282,8 @@ func TestReconcile_OutreachDetectionStateFailureSkipsClose(t *testing.T) {
 	assert.Equal(t, repository.ContactTaskStateManaged, reloadedTask.State,
 		"cadence task must remain managed when state update fails")
 
-	// Assert: no interactions recorded.
-	assert.Equal(t, 0, env.recorder.count, "outreach detection must not record interactions")
+	// Assert: no events published (outreach detection path).
+	assert.Empty(t, env.bus.Published(), "outreach detection must not publish events")
 }
 
 // TestCloseOnOutreach_PendingTempID verifies that when outreach is detected but

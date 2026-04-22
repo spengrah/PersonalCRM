@@ -63,6 +63,7 @@ var cadenceWritingSymbols = map[string]struct{}{
 	"UpdateContactCadenceForward":       {},
 	"UpdateContactCadenceUnconditional": {},
 	"UpdateContactBy":                   {},
+	"UpdateContactByTx":                 {},
 	// Include CreateContact + UpdateContact so a future regression
 	// that adds a cadence column to either query is caught. Selector
 	// matching alone would flag every service-layer wrapper caller;
@@ -104,6 +105,7 @@ var allowedCallSites = map[string]string{
 	"internal/repository/contact.go:CreateContact":                     "initial row seed carve-out",
 	"internal/repository/contact.go:UpdateContact":                     "profile-only wrapper (post-cutover cadence columns not written)",
 	"internal/repository/contact.go:UpdateContactBy":                   "wrapper for Todoist carve-outs",
+	"internal/repository/contact.go:UpdateContactByTx":                 "tx-threaded wrapper for Todoist carve-outs",
 	"internal/repository/contact.go:UpdateContactLastContacted":        "legacy wrapper (no production callers post-cutover)",
 	"internal/repository/contact.go:UpdateContactLastContactedIfLater": "legacy wrapper (no production callers post-cutover)",
 	"internal/repository/contact.go:UpdateContactOutreachAt":           "legacy wrapper (no production callers post-cutover)",

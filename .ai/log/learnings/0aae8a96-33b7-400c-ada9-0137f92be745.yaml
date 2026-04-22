@@ -1,0 +1,16 @@
+---
+timestamp: "2026-04-22T16:41:32.920530"
+type: documentation_gap
+summary: plan-and-ship skill doesn't explain agent lifecycle (SendMessage to completed agents)
+detail: |
+  The ~/.claude/skills/plan-and-ship/SKILL.md explains that 'SendMessage({ to: "X" }) resumes it with full memory' but doesn't mention that once task-notification returns status:completed, the agent process has EXITED. SendMessage to a completed agent succeeds at API level ({"success":true}) but silently queues messages to an unread inbox - the agent won't resume. This mistake happened TWICE in this session (SendMessage to 'planner' after completion at 19:10, then to 'planner2' after completion at 19:34). The skill's 'Persistent sub-agents' section should explicitly warn: 'Once status:completed appears in task-notification, the agent is dead. To continue work, spawn a new Agent() with fresh context; SendMessage only works while the agent is still running.'
+actionable: true
+
+---
+timestamp: "2026-04-22T16:41:32.920530"
+type: rule
+summary: Cross-tick recovery predicates must be verified against ALL post-failure state shapes
+detail: |
+  When designing 'defer operation to next tick, then recover' fixes, enumerate every possible state shape the entity can be in after the failure that triggered deferral, and verify the recovery gate predicate fires for EACH shape. In this session: option 2 deferred reconcile on processTempIDMappings tx rollback, assuming tryRecoverPendingTempID would finalize next tick. But the recovery guard required pending_temp_id == ExternalTaskID - true for the historical 'never-mapped' case (both fields equal temp-id) but FALSE for the 'HTTP succeeded, local tx rolled back' case (ExternalTaskID=old-id, pending_temp_id=new-temp-id). The defer only delayed the duplicate-add bug instead of fixing it. Codex caught this in round 8 after the fix was already integrated into the plan. General pattern: any deferred-state-machine recovery (saga compensation, partial-failure rollback, eventual-consistency healing) needs recovery gates that account for all state shapes reachable via the failure path, not just the common case.
+actionable: true
+

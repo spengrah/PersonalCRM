@@ -12,11 +12,14 @@ import (
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/sync"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -66,37 +69,86 @@ const (
 // DateFormat is the date format used for Todoist deadlines and synced_deadline metadata (YYYY-MM-DD)
 const DateFormat = "2006-01-02"
 
-// interactionRecorder defines the method for recording interactions (satisfied by ContactService)
-type interactionRecorder interface {
-	RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error)
+// eventPublisher is the subset of *events.Bus used by the provider. Defined
+// consumer-side so tests can stub without importing the bus.
+type eventPublisher interface {
+	PublishTx(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
+}
+
+// oauthTokenProvider is the subset of *OAuthService the provider uses at
+// runtime. Defined as an interface so tests can stub access-token lookup
+// without constructing a real OAuth account.
+type oauthTokenProvider interface {
+	GetAccessToken(ctx context.Context, accountID string) (string, error)
+	HasAnyAccount(ctx context.Context) bool
+}
+
+// contactTaskWriter is the subset of *repository.ContactTaskRepository the
+// provider uses. Narrow interface so integration tests can wrap the real
+// repo with faulty-method injection.
+type contactTaskWriter interface {
+	GetContactTaskByExternalID(ctx context.Context, provider, externalID string) (*repository.ContactTask, error)
+	GetContactTaskByContact(ctx context.Context, contactID uuid.UUID, provider, kind string) (*repository.ContactTask, error)
+	GetContactTaskByPendingTempID(ctx context.Context, provider, tempID string) (*repository.ContactTask, error)
+	GetContactTask(ctx context.Context, id uuid.UUID) (*repository.ContactTask, error)
+	CreateContactTask(ctx context.Context, req repository.CreateContactTaskRequest) (*repository.ContactTask, error)
+	DeleteContactTask(ctx context.Context, id uuid.UUID) error
+	UpdateContactTaskState(ctx context.Context, id uuid.UUID, state repository.ContactTaskState) (*repository.ContactTask, error)
+	UpdateContactTaskStateTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, state repository.ContactTaskState) (*repository.ContactTask, error)
+	UpdateContactTaskMetadata(ctx context.Context, id uuid.UUID, metadata map[string]any) (*repository.ContactTask, error)
+	UpdateContactTaskMetadataTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, metadata map[string]any) (*repository.ContactTask, error)
+	UpdateContactTaskExternalID(ctx context.Context, id uuid.UUID, externalID string) (*repository.ContactTask, error)
+	UpdateContactTaskExternalIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, externalID string) (*repository.ContactTask, error)
+	FindPendingFollowUp(ctx context.Context, contactID uuid.UUID) (*repository.ContactTask, error)
+	ListContactTasksByContact(ctx context.Context, contactID uuid.UUID) ([]repository.ContactTask, error)
+}
+
+// contactWriter is the subset of *repository.ContactRepository the provider
+// uses. Narrow interface so tests can inject UpdateContactByTx failures for
+// skip-path rollback tests.
+type contactWriter interface {
+	GetContact(ctx context.Context, id uuid.UUID) (*repository.Contact, error)
+	ListContactsWithContactBy(ctx context.Context, limit int32) ([]repository.Contact, error)
+	UpdateContactBy(ctx context.Context, id uuid.UUID, contactBy time.Time) error
+	UpdateContactByTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, contactBy time.Time) error
 }
 
 // CadenceSyncProvider implements SyncProvider for Todoist cadence tasks
 type CadenceSyncProvider struct {
-	oauthService        *OAuthService
-	contactTaskRepo     *repository.ContactTaskRepository
-	contactRepo         *repository.ContactRepository
-	syncRepo            *repository.SyncRepository
-	interactionRecorder interactionRecorder
-	frontendURL         string
+	oauthService    oauthTokenProvider
+	contactTaskRepo contactTaskWriter
+	contactRepo     contactWriter
+	syncRepo        *repository.SyncRepository
+	// bus, pool, and clientFactory are required for the tx-atomic handlers
+	// and for HTTP-failure injection in tests. Nil values are caught by a
+	// single defensive nil-guard at the top of Sync; production wiring in
+	// main.go passes non-nil values.
+	bus           eventPublisher
+	pool          *pgxpool.Pool
+	clientFactory ClientFactory
+	frontendURL   string
 }
 
 // NewCadenceSyncProvider creates a new Todoist cadence sync provider
 func NewCadenceSyncProvider(
-	oauthService *OAuthService,
-	contactTaskRepo *repository.ContactTaskRepository,
-	contactRepo *repository.ContactRepository,
+	oauthService oauthTokenProvider,
+	contactTaskRepo contactTaskWriter,
+	contactRepo contactWriter,
 	syncRepo *repository.SyncRepository,
 	cfg *config.Config,
-	interactionRecorder interactionRecorder,
+	bus eventPublisher,
+	pool *pgxpool.Pool,
+	clientFactory ClientFactory,
 ) *CadenceSyncProvider {
 	return &CadenceSyncProvider{
-		oauthService:        oauthService,
-		contactTaskRepo:     contactTaskRepo,
-		contactRepo:         contactRepo,
-		syncRepo:            syncRepo,
-		interactionRecorder: interactionRecorder,
-		frontendURL:         cfg.CORS.FrontendURL,
+		oauthService:    oauthService,
+		contactTaskRepo: contactTaskRepo,
+		contactRepo:     contactRepo,
+		syncRepo:        syncRepo,
+		bus:             bus,
+		pool:            pool,
+		clientFactory:   clientFactory,
+		frontendURL:     cfg.CORS.FrontendURL,
 	}
 }
 
@@ -118,6 +170,10 @@ func (p *CadenceSyncProvider) Sync(
 	state *repository.SyncState,
 	contacts []repository.Contact,
 ) (*sync.SyncResult, error) {
+	if p.bus == nil || p.pool == nil || p.clientFactory == nil {
+		return nil, fmt.Errorf("todoist: bus + pool + clientFactory must be non-nil")
+	}
+
 	// Get account ID from state
 	if state.AccountID == nil {
 		return nil, fmt.Errorf("account ID required for Todoist sync")
@@ -142,7 +198,7 @@ func (p *CadenceSyncProvider) Sync(
 	}
 
 	// Create sync client
-	client := NewSyncClient(accessToken)
+	client := p.clientFactory(accessToken)
 
 	result := &sync.SyncResult{}
 
@@ -200,7 +256,7 @@ func (p *CadenceSyncProvider) Sync(
 	}
 
 	// Process synced items.
-	processedTasks, commands, _, processErr := p.processItems(ctx, syncResp.Items, settings, accountID)
+	processedTasks, commands, itemsRecoveryFailed, processErr := p.processItems(ctx, syncResp.Items, settings, accountID)
 	result.ItemsProcessed = processedTasks
 
 	// Execute any accumulated commands BEFORE checking processErr. If
@@ -209,13 +265,16 @@ func (p *CadenceSyncProvider) Sync(
 	// persisted local state transitions — executing them prevents orphaning
 	// Todoist tasks whose local rows are already in terminal states. See the
 	// comment in processItems's abort path for why this is safe.
+	mappingRolledBack := false
 	if len(commands) > 0 {
 		for _, batch := range BatchCommands(commands, 100) {
 			cmdResp, err := client.Sync(ctx, syncResp.SyncToken, []string{}, batch)
 			if err != nil {
 				logger.Warn().Err(err).Int("commands", len(batch)).Msg("failed to execute Todoist commands")
 			} else if cmdResp != nil {
-				p.processTempIDMappings(ctx, cmdResp.TempIDMap)
+				if p.processTempIDMappings(ctx, cmdResp.TempIDMap) {
+					mappingRolledBack = true
+				}
 			}
 		}
 	}
@@ -240,15 +299,24 @@ func (p *CadenceSyncProvider) Sync(
 		}
 	}
 
-	// Reconcile: ensure all contacts with cadence have tasks
-	reconcileCommands := p.reconcileContactTasks(ctx, client, settings, accountID)
+	// Reconcile: ensure all contacts with cadence have tasks.
+	// deferSkipDrift suppresses the skip-drift recovery branch when:
+	//   - processTempIDMappings had a per-task tx rollback (mapping
+	//     ambiguous — real remote task may exist); OR
+	//   - tryRecoverPendingTempID attempted recovery but the tx rolled
+	//     back (local row stale while real remote item was delivered this
+	//     tick — skip-drift would emit a duplicate item_add).
+	deferSkipDrift := mappingRolledBack || itemsRecoveryFailed
+	reconcileCommands := p.reconcileContactTasks(ctx, client, settings, accountID, deferSkipDrift)
 	if len(reconcileCommands) > 0 {
 		for _, batch := range BatchCommands(reconcileCommands, 100) {
 			cmdResp, err := client.Sync(ctx, result.NewCursor, []string{}, batch)
 			if err != nil {
 				logger.Warn().Err(err).Int("commands", len(batch)).Msg("failed to execute reconciliation commands")
 			} else if cmdResp != nil {
-				p.processTempIDMappings(ctx, cmdResp.TempIDMap)
+				// Rollback here is picked up next tick by design — no further
+				// reconcile pass within this Sync invocation.
+				_ = p.processTempIDMappings(ctx, cmdResp.TempIDMap)
 			}
 		}
 	}
@@ -281,112 +349,66 @@ func (p *CadenceSyncProvider) ValidateCredentials(ctx context.Context, accountID
 	return nil
 }
 
-// processItemResult is the structured return from processItem and its handlers.
+// processItemResult is the structured return from processItem and its
+// handlers.
 //
 // Fields:
 //   - Processed: true if the item was owned by CRM and handled (not skipped).
 //   - Commands:  Todoist commands to enqueue in the batch.
-//   - Unsafe:    true if a non-replay-safe side effect was committed. Today, only
-//     handleSkipTrigger's success path sets this — it advances contact_by and
-//     appends a replacement item_add while leaving the row state='managed',
-//     which is non-idempotent on replay. When the sync loop sees this flag, any
-//     subsequent fatal error in the same batch falls back to log-and-continue
-//     instead of aborting (which would cause double-advancement on replay).
-//   - Err:       non-nil for fatal errors. Callers inspect Unsafe to decide
-//     whether to abort the sync or log-and-continue.
+//   - Err:       non-nil for fatal errors; processItems aborts the batch
+//     without advancing the cursor.
+//   - RecoveryFailed: tryRecoverPendingTempID matched a CRM marker for
+//     this item but its atomic tx (external_id swap + pending_temp_id
+//     clear) rolled back, leaving the local row stale. Sync uses this to
+//     force deferSkipDrift=true for reconcile in the same invocation —
+//     otherwise reconcile's skip-drift branch would emit a duplicate
+//     item_add against the real remote task that already exists.
 type processItemResult struct {
-	Processed bool
-	Commands  []SyncCommand
-	Unsafe    bool
-	Err       error
+	Processed      bool
+	Commands       []SyncCommand
+	Err            error
+	RecoveryFailed bool
 }
 
-// processItems iterates over the items returned by a Todoist sync, dispatching
-// each through processItem. It is the single point at which fatal-error
-// propagation and replay-safe abort are enforced.
+// processItems iterates over the items returned by a Todoist sync,
+// dispatching each through processItem. On a fatal processItem error
+// (r.Err != nil) the batch aborts and the Sync caller preserves the
+// pre-batch cursor so the next tick replays. Each successful item commits
+// atomically via its own tx, so replays short-circuit at the state !=
+// 'managed' early-return in processItem and never double-advance.
 //
-// Abort semantics: on a fatal processItem error (r.Err != nil), processItems
-// aborts only if no earlier item in this batch committed non-replay-safe
-// state. The replayCommittedUnsafe flag is set by any successful
-// handleSkipTrigger (see its docstring). Aborting after an unsafe commit
-// would cause the next sync to replay the skip trigger, double-advancing the
-// cadence clock — so when the flag is set, we fall back to log-and-continue.
-//
-// The returned replayCommittedUnsafe is discarded by the Sync call site but
-// returned so tests can observe the flag directly.
+// recoveryFailed is set when any item's tryRecoverPendingTempID attempted
+// recovery but the atomic tx rolled back. Sync threads this into
+// reconcileContactTasks as deferSkipDrift=true so the skip-drift branch
+// does not fire against the stale local row this tick — the real Todoist
+// task already exists server-side.
 func (p *CadenceSyncProvider) processItems(
 	ctx context.Context,
 	items []SyncItem,
 	settings Settings,
 	accountID string,
-) (processed int, commands []SyncCommand, replayCommittedUnsafe bool, err error) {
+) (processed int, commands []SyncCommand, recoveryFailed bool, err error) {
 	for _, item := range items {
 		r := p.processItem(ctx, item, settings, accountID)
+		if r.RecoveryFailed {
+			recoveryFailed = true
+		}
 		if r.Err != nil {
-			shouldContinue, wrappedErr := p.decideFatalErrorPolicy(r, item, processed, replayCommittedUnsafe)
-			if shouldContinue {
-				continue
-			}
-			// On abort, return the commands accumulated from earlier items
-			// (not nil). These are all cleanup commands — ItemClose from
-			// successful handleFollowUpDismissal and ItemDelete from the
-			// contact-not-found branch in processItem — for local state
-			// transitions that have already been persisted. The caller
-			// (Sync) executes them before returning the error so we don't
-			// orphan Todoist tasks whose local rows are already in terminal
-			// states. Replay is still safe: on the next sync, the replayed
-			// items short-circuit at processItem's state != managed early-
-			// return and do not re-emit their commands.
-			//
-			// replayCommittedUnsafe is always false on this branch (by
-			// construction — we only reach this return when
-			// replayCommittedUnsafe==false) but we return the variable for
-			// clarity rather than a literal.
-			return processed, commands, replayCommittedUnsafe, wrappedErr
+			logger.Error().Err(r.Err).
+				Str("itemId", item.ID).
+				Int("processedBeforeAbort", processed).
+				Msg("processItem fatal error — aborting sync without advancing cursor")
+			// Return accumulated commands so Sync can execute any
+			// ItemClose/ItemDelete commands queued by already-committed
+			// handlers before returning the error.
+			return processed, commands, recoveryFailed, fmt.Errorf("process item %s: %w", item.ID, r.Err)
 		}
 		if r.Processed {
 			processed++
 		}
-		if r.Unsafe {
-			replayCommittedUnsafe = true
-		}
 		commands = append(commands, r.Commands...)
 	}
-	return processed, commands, replayCommittedUnsafe, nil
-}
-
-// decideFatalErrorPolicy implements the conditional-abort semantics for
-// processItems. Extracted from the loop so tests can verify both branches
-// (abort vs log-and-continue) without needing to simulate a mid-batch DB
-// failure under a shared connection.
-//
-// Returns shouldContinue=true when replayCommittedUnsafe is true: the sync
-// loop must not abort because an earlier unsafe handler (handleSkipTrigger)
-// already committed side effects that cannot be safely replayed. In that
-// case, the error is logged but the cursor will advance past this batch —
-// matching the pre-existing log-and-continue failure mode for the mixed-
-// batch scenario.
-//
-// Returns shouldContinue=false and a wrapped error when no unsafe commit has
-// occurred yet in the batch. The sync loop should return the wrapped error
-// without advancing the cursor, so the next tick replays the batch.
-func (p *CadenceSyncProvider) decideFatalErrorPolicy(
-	r processItemResult,
-	item SyncItem,
-	processedBeforeAbort int,
-	replayCommittedUnsafe bool,
-) (shouldContinue bool, wrappedErr error) {
-	if replayCommittedUnsafe {
-		logger.Error().Err(r.Err).
-			Str("itemId", item.ID).
-			Msg("processItem fatal error after non-replay-safe commit — forced to log-and-continue; cursor will advance and event is dropped")
-		return true, nil
-	}
-	logger.Error().Err(r.Err).
-		Str("itemId", item.ID).
-		Int("processedBeforeAbort", processedBeforeAbort).
-		Msg("processItem fatal error — aborting sync without advancing cursor")
-	return false, fmt.Errorf("process item %s: %w", item.ID, r.Err)
+	return processed, commands, recoveryFailed, nil
 }
 
 // processItem processes a single Todoist item from sync
@@ -395,8 +417,19 @@ func (p *CadenceSyncProvider) processItem(
 	item SyncItem,
 	settings Settings,
 	accountID string,
-) processItemResult {
+) (result processItemResult) {
 	var commands []SyncCommand
+
+	// Recovery-failed signal propagates up to Sync (via processItems) so
+	// deferSkipDrift=true forces reconcile's skip-drift branch to defer
+	// when this item's recovery tx rolled back. Applied via defer so every
+	// return path carries the flag.
+	var recoveryFailed bool
+	defer func() {
+		if recoveryFailed {
+			result.RecoveryFailed = true
+		}
+	}()
 
 	// Find if this task is linked to a contact
 	task, err := p.contactTaskRepo.GetContactTaskByExternalID(ctx, SourceName, item.ID)
@@ -407,9 +440,9 @@ func (p *CadenceSyncProvider) processItem(
 		// Fallback: if processTempIDMappings failed, the contact_task still has a
 		// temp ID while Todoist uses the real ID. Try to recover by matching the
 		// CRM marker in the description to find a task with a pending temp ID.
-		task = p.tryRecoverPendingTempID(ctx, item)
+		task, recoveryFailed = p.tryRecoverPendingTempID(ctx, item)
 		if task == nil {
-			return processItemResult{} // Not a managed task
+			return processItemResult{}
 		}
 	}
 
@@ -469,7 +502,7 @@ func (p *CadenceSyncProvider) processItem(
 		if task.Kind == TaskKindFollowUp {
 			return p.handleFollowUpDismissal(ctx, item, task, contact)
 		}
-		return p.handleSkipTrigger(ctx, task, contact, settings, accountID)
+		return p.handleSkipTrigger(ctx, item, task, contact, settings, accountID)
 	}
 
 	// Check for deadline edit (Todoist wins) — only for cadence tasks.
@@ -541,18 +574,17 @@ func (p *CadenceSyncProvider) handleRecurringDetection(
 
 // handleTaskCompletion handles a completed Todoist task.
 //
-// Failure semantics: this handler intentionally retains log-and-continue on DB
-// failure (returns Err: nil always). The state→interaction ordering comment
-// below documents why a naive fatal-error conversion would break the follow-up
-// cycle; correct fix requires repository-layer transaction threading.
-// TODO(#265): see the deferred refactor tracking issue — this
-// handler is on the list for transactional rewrite.
+// Atomic publish + state advance: opens a pgx.Tx, publishes task.completed
+// via PublishTx, transitions the local row to 'completed' via
+// UpdateContactTaskStateTx, commits. The downstream InteractionRecorder
+// (async via river) consumes the event and writes the interaction row.
 //
-// Returns Unsafe: false because on success the row transitions to 'completed'
-// and replay short-circuits at processItem's state != 'managed' early-return.
-// (On partial failure — state=completed but RecordInteraction failed — the
-// interaction record is lost, but replay is still idempotent because of the
-// early-return, so `Unsafe: false` is defensible.)
+// Direction derivation (spec §3.4.5): action tasks emit direction="mutual"
+// (matching the legacy default), cadence/follow_up emit direction="outbound".
+//
+// SourceID is task.ID.String() (stable internal uuid). Using ExternalTaskID
+// would collide with the temp→real id swap in tryRecoverPendingTempID,
+// bypassing event-layer dedup.
 func (p *CadenceSyncProvider) handleTaskCompletion(
 	ctx context.Context,
 	item SyncItem,
@@ -561,9 +593,7 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 	settings Settings,
 	accountID string,
 ) processItemResult {
-	var commands []SyncCommand
-
-	// Parse completion timestamp
+	// Parse completion timestamp.
 	completedAt := accelerated.GetCurrentTime()
 	if item.CompletedAt != nil {
 		if parsed, err := time.Parse(time.RFC3339, *item.CompletedAt); err == nil {
@@ -571,146 +601,215 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 		}
 	}
 
-	// Handle action tasks — mark as completed, record mutual interaction, no new task
+	// Direction: action → mutual; cadence/follow_up → outbound.
+	direction := repository.InteractionDirectionOutbound
 	if task.Kind == TaskKindAction {
-		sourceRef := task.ExternalTaskID
-		_, err := p.interactionRecorder.RecordInteraction(ctx, repository.RecordInteractionRequest{
-			ContactID:  contact.ID,
-			Source:     repository.InteractionSourceTodoist,
-			SourceRef:  &sourceRef,
-			OccurredAt: completedAt,
-		})
-		if err != nil {
-			logger.Warn().Err(err).Msg("failed to record interaction from action task completion")
-		}
-		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateCompleted); err != nil {
-			logger.Warn().Err(err).Msg("failed to update action task state to completed")
-		}
+		direction = repository.InteractionDirectionMutual
+	}
+
+	payload, err := events.Marshal(events.KindTaskCompleted, events.TaskCompletedPayload{
+		Version:     1,
+		ContactID:   contact.ID,
+		TaskID:      task.ExternalTaskID,
+		TaskKind:    task.Kind,
+		CompletedAt: completedAt,
+		Direction:   direction,
+	})
+	if err != nil {
+		return processItemResult{Err: fmt.Errorf("marshal task.completed: %w", err)}
+	}
+	env := &events.Envelope{
+		Source:     SourceName,
+		SourceID:   task.ID.String(),
+		Kind:       events.KindTaskCompleted,
+		Payload:    payload,
+		ObservedAt: completedAt,
+	}
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return processItemResult{Err: fmt.Errorf("begin tx: %w", err)}
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Publish-before-mutate (core.md gotcha).
+	if err := p.bus.PublishTx(ctx, tx, env); err != nil {
+		return processItemResult{Err: fmt.Errorf("publish task.completed: %w", err)}
+	}
+	if env.ID == uuid.Nil {
+		// Duplicate — prior tick already processed this completion. The
+		// state=completed short-circuit at processItem normally prevents
+		// reaching this handler on replay; this branch defends against
+		// the degenerate case where the state update rolled back on the
+		// earlier tick but the event committed.
+		logger.Debug().
+			Str("contactTaskId", task.ID.String()).
+			Str("externalTaskId", task.ExternalTaskID).
+			Msg("task.completed duplicate; skipping state update")
 		return processItemResult{Processed: true}
 	}
 
-	// For cadence and follow_up tasks: mark completed FIRST, then record outbound interaction.
-	// CRITICAL: Must mark completed before RecordInteraction because RecordInteraction triggers
-	// followUpManager.CreateOrRefreshFollowUp, which looks for existing pending follow-ups.
-	// If this task is still 'managed' when that lookup runs, it refreshes the dying task
-	// instead of creating a successor — collapsing the follow-up cycle.
-	if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateCompleted); err != nil {
-		logger.Warn().Err(err).
-			Str("taskKind", task.Kind).
-			Msg("failed to mark task as completed")
+	// Transition local state to 'completed' inside the tx. For cadence /
+	// follow_up tasks, the state advance is the pre-condition for the
+	// downstream FollowUpManager's FindPendingFollowUp gate — once the tx
+	// commits, the async consumer sees state='completed' and creates the
+	// successor follow-up instead of refreshing the dying task.
+	if _, err := p.contactTaskRepo.UpdateContactTaskStateTx(
+		ctx, tx, task.ID, repository.ContactTaskStateCompleted,
+	); err != nil {
+		return processItemResult{Err: fmt.Errorf("update task state: %w", err)}
 	}
 
-	// Record outbound interaction — this triggers follow-up creation via followUpManager
-	sourceRef := task.ExternalTaskID
-	_, err := p.interactionRecorder.RecordInteraction(ctx, repository.RecordInteractionRequest{
-		ContactID:  contact.ID,
-		Source:     repository.InteractionSourceTodoist,
-		SourceRef:  &sourceRef,
-		OccurredAt: completedAt,
-		Direction:  repository.InteractionDirectionOutbound,
-	})
-	if err != nil {
-		logger.Warn().Err(err).Msg("failed to record outbound interaction from Todoist completion")
+	if err := tx.Commit(ctx); err != nil {
+		return processItemResult{Err: fmt.Errorf("commit: %w", err)}
 	}
 
 	logger.Info().
 		Str("contactId", contact.ID.String()).
 		Str("taskKind", task.Kind).
 		Time("completedAt", completedAt).
-		Msg("recorded outbound interaction from Todoist task completion")
+		Str("direction", direction).
+		Msg("published task.completed (atomic commit)")
 
-	return processItemResult{Processed: true, Commands: commands}
+	return processItemResult{Processed: true}
 }
 
 // handleSkipTrigger handles a skip trigger (task deleted, label removed, deadline removed).
 //
-// Failure semantics: this handler intentionally retains log-and-continue on DB
-// failure (returns Err: nil always). It commits non-idempotent side effects —
-// advances contact.contact_by and appends a replacement item_add command while
-// leaving the row state='managed'. On replay, processItem would NOT
-// short-circuit (state is still managed), so the same skip trigger would run
-// a second time and double-advance the cadence clock. Fixing this requires
-// transactional state tracking or an idempotency marker.
-// TODO(#265): see the deferred refactor tracking issue — this
-// handler is on the list for transactional rewrite.
+// Atomic publish + mutate: opens a pgx.Tx, publishes task.skipped via PublishTx,
+// advances contact.contact_by via UpdateContactByTx, writes metadata keys
+// (pending_temp_id, synced_deadline, synced_last_*) via UpdateContactTaskMetadataTx,
+// commits. Rollback on any error rolls back event row, contact_by advance, and
+// metadata together — no partial commits.
 //
-// Returns Unsafe: true on every successful return. This flag tells the sync
-// loop's processItems method that a non-replay-safe side effect was committed
-// in this batch; subsequent fatal errors in the same batch fall back to
-// log-and-continue instead of aborting (which would cause replay
-// double-advancement of this contact's cadence clock). The flag is set
-// unconditionally because partial failures (e.g., UpdateContactBy succeeded
-// but UpdateContactTaskMetadata failed) still advance contact_by — so even a
-// "failed" skip is unsafe to replay.
+// Replay safety: the event SourceID is task.ID.String():item.UpdatedAt. A
+// replay of the same unchanged Todoist item hits the (source, source_id)
+// unique on the event table; PublishTx resets env.ID to uuid.Nil and returns
+// nil; the handler short-circuits without advancing contact_by. The suffix
+// distinguishes genuine repeat-skips (item re-edited → new UpdatedAt) from
+// replays of the same unchanged item.
+//
+// Ordering (publish-before-mutate per core.md): PublishTx → mutate →
+// commit. Reversing would strand interactions on publish failure.
 func (p *CadenceSyncProvider) handleSkipTrigger(
 	ctx context.Context,
+	item SyncItem,
 	task *repository.ContactTask,
 	contact *repository.Contact,
 	settings Settings,
 	accountID string,
 ) processItemResult {
-	var commands []SyncCommand
-
-	// Calculate new contact_by using skip semantics
-	if contact.Cadence != nil && *contact.Cadence != "" {
-		cadenceType, err := cadence.ParseCadence(*contact.Cadence)
-		if err == nil {
-			// Skip pushes deadline out by a full cadence period
-			// Use the later of: (skipped contact_by + cadence) or (today + cadence)
-			days := cadence.CadenceDays(cadenceType)
-			now := accelerated.GetCurrentTime()
-			today := cadence.Today(now)
-
-			// Option 1: today + cadence
-			fromToday := today.AddDate(0, 0, days)
-
-			// Option 2: skipped contact_by + cadence
-			fromSkipped := fromToday // fallback if no contact_by
-			if contact.ContactBy != nil {
-				fromSkipped = contact.ContactBy.AddDate(0, 0, days)
-			}
-
-			// Use whichever is farther in the future
-			nextContactBy := fromToday
-			if fromSkipped.After(fromToday) {
-				nextContactBy = fromSkipped
-			}
-
-			// Update contact_by
-			if err := p.contactRepo.UpdateContactBy(ctx, contact.ID, nextContactBy); err != nil {
-				logger.Warn().Err(err).Msg("failed to update contact_by after skip")
-			}
-
-			// Create new task
-			deadlineStr := nextContactBy.Format(DateFormat)
-			cmd := p.createTaskCommand(contact, settings, &deadlineStr)
-			commands = append(commands, cmd)
-
-			// Update metadata with temp_id, synced_deadline, and synced_last_contacted (preserving existing keys)
-			metadata := task.Metadata
-			if metadata == nil {
-				metadata = make(map[string]any)
-			}
-			metadata[MetadataKeyPendingTempID] = cmd.TempID
-			metadata[MetadataKeySyncedDeadline] = deadlineStr
-			if contact.LastContacted != nil {
-				metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
-			}
-			if contact.LastOutreachAt != nil {
-				metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
-			}
-			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
-				logger.Warn().Err(err).Msg("failed to store pending_temp_id and synced_deadline in task metadata")
-			}
-
-			logger.Info().
-				Str("contactId", contact.ID.String()).
-				Time("newContactBy", nextContactBy).
-				Msg("processed skip trigger, created new task")
-		}
+	// Early-return: no cadence → nothing to advance → no state change, no event.
+	if contact.Cadence == nil || *contact.Cadence == "" {
+		return processItemResult{Processed: true}
+	}
+	cadenceType, err := cadence.ParseCadence(*contact.Cadence)
+	if err != nil {
+		logger.Warn().Err(err).
+			Str("contactId", contact.ID.String()).
+			Str("cadence", *contact.Cadence).
+			Msg("skip trigger: invalid cadence; no-op")
+		return processItemResult{Processed: true}
 	}
 
-	return processItemResult{Processed: true, Commands: commands, Unsafe: true}
+	// Compute nextContactBy (skip semantics: later of today+cadence or
+	// old contact_by+cadence).
+	days := cadence.CadenceDays(cadenceType)
+	now := accelerated.GetCurrentTime()
+	today := cadence.Today(now)
+	fromToday := today.AddDate(0, 0, days)
+	fromSkipped := fromToday
+	if contact.ContactBy != nil {
+		fromSkipped = contact.ContactBy.AddDate(0, 0, days)
+	}
+	nextContactBy := fromToday
+	if fromSkipped.After(fromToday) {
+		nextContactBy = fromSkipped
+	}
+
+	skippedAt := accelerated.GetCurrentTime()
+	payload, err := events.Marshal(events.KindTaskSkipped, events.TaskSkippedPayload{
+		Version:   1,
+		ContactID: contact.ID,
+		TaskID:    task.ExternalTaskID,
+		SkippedAt: skippedAt,
+	})
+	if err != nil {
+		return processItemResult{Err: fmt.Errorf("marshal task.skipped: %w", err)}
+	}
+	// SourceID: stable internal contact_task.id + item.UpdatedAt so replays
+	// of the same unchanged item dedup, while user re-edits produce new events.
+	env := &events.Envelope{
+		Source:     SourceName,
+		SourceID:   fmt.Sprintf("%s:%s", task.ID.String(), item.UpdatedAt),
+		Kind:       events.KindTaskSkipped,
+		Payload:    payload,
+		ObservedAt: skippedAt,
+	}
+
+	// Pre-compute replacement item_add so its TempID can land in metadata
+	// atomically with the state advance.
+	deadlineStr := nextContactBy.Format(DateFormat)
+	replacementCmd := p.createTaskCommand(contact, settings, &deadlineStr)
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return processItemResult{Err: fmt.Errorf("begin tx: %w", err)}
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Publish-before-mutate (core.md gotcha).
+	if err := p.bus.PublishTx(ctx, tx, env); err != nil {
+		return processItemResult{Err: fmt.Errorf("publish task.skipped: %w", err)}
+	}
+	if env.ID == uuid.Nil {
+		// Duplicate — prior tick processed this skip. No state change, no
+		// replacement command. Self-healing for a previously-failed HTTP
+		// batch is the responsibility of reconcileExistingTask's skip-drift
+		// branch, not this handler.
+		logger.Debug().
+			Str("sourceId", env.SourceID).
+			Msg("task.skipped duplicate; skipping state advance")
+		return processItemResult{Processed: true}
+	}
+
+	// Advance contact_by.
+	if err := p.contactRepo.UpdateContactByTx(ctx, tx, contact.ID, nextContactBy); err != nil {
+		return processItemResult{Err: fmt.Errorf("update contact_by: %w", err)}
+	}
+
+	// Update metadata. Preserve existing keys — pre-skip synced_deadline is
+	// consulted by the reconciler's skip-drift branch to close+recreate on
+	// HTTP failure.
+	metadata := task.Metadata
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	metadata[MetadataKeyPendingTempID] = replacementCmd.TempID
+	metadata[MetadataKeySyncedDeadline] = deadlineStr
+	if contact.LastContacted != nil {
+		metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+	}
+	if contact.LastOutreachAt != nil {
+		metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+	}
+	if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, task.ID, metadata); err != nil {
+		return processItemResult{Err: fmt.Errorf("update task metadata: %w", err)}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return processItemResult{Err: fmt.Errorf("commit: %w", err)}
+	}
+
+	logger.Info().
+		Str("contactId", contact.ID.String()).
+		Time("newContactBy", nextContactBy).
+		Str("sourceId", env.SourceID).
+		Msg("published task.skipped (atomic commit)")
+
+	// Return replacement item_add only after commit — the HTTP batch fires
+	// outside the tx in Sync's post-loop block (core.md gotcha).
+	return processItemResult{Processed: true, Commands: []SyncCommand{replacementCmd}}
 }
 
 // handleFollowUpDismissal handles a follow-up task being dismissed via Todoist.
@@ -723,20 +822,15 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 // mutual/inbound interaction.
 //
 // State is persisted BEFORE any ItemClose command is queued. On state-update
-// failure, this handler returns a fatal error via processItemResult.Err; the
-// sync loop (processItems) then decides whether to abort or log-and-continue
-// based on whether any earlier item in the same batch committed non-replay-
-// safe state. If no earlier unsafe commit occurred, the sync aborts without
-// advancing the cursor and the next tick replays the item. If an earlier
-// handleSkipTrigger already advanced contact_by in this batch, the dismissal
-// falls back to log-and-continue (the pre-existing failure mode for that
-// specific mixed-batch scenario).
+// failure, this handler returns a fatal error via processItemResult.Err;
+// processItems aborts the batch, the Sync caller preserves the pre-batch
+// cursor, and the next tick replays.
 //
 // For non-deletion triggers, once the state transition succeeds we queue an
 // ItemClose command so the batched sync path cleans up the orphaned task in
-// Todoist. No retry flag is set — if the batch fails, the local row is still
-// correctly 'dismissed' and subsequent syncs will skip it via the existing
-// state != 'managed' early-return in processItem.
+// Todoist. If the batch fails, the local row is still correctly 'dismissed'
+// and subsequent syncs will skip it via the existing state != 'managed'
+// early-return in processItem.
 func (p *CadenceSyncProvider) handleFollowUpDismissal(
 	ctx context.Context,
 	item SyncItem,
@@ -822,11 +916,22 @@ func (p *CadenceSyncProvider) handleActionTaskTriggers(
 
 // reconcileContactTasks ensures all contacts with cadence have managed tasks
 // and that existing tasks have deadlines matching the contact's contact_by.
+//
+// deferSkipDrift suppresses the skip-drift recovery branch in
+// reconcileExistingTask for this invocation. Set when processTempIDMappings
+// had a tx rollback earlier in the same Sync call — the row's
+// (ExternalTaskID=<old>, pending_temp_id=<temp-new>) shape then becomes
+// ambiguous between "HTTP batch failed" (branch should fire) and "HTTP
+// succeeded, local mapping rolled back" (branch must NOT fire, else emits a
+// duplicate item_add against an already-created remote task). Safe choice
+// is to defer one tick; tryRecoverPendingTempID finalizes next tick when
+// the real item arrives in syncResp.Items.
 func (p *CadenceSyncProvider) reconcileContactTasks(
 	ctx context.Context,
-	client *SyncClient,
+	client Client,
 	settings Settings,
 	accountID string,
+	deferSkipDrift bool,
 ) []SyncCommand {
 	var commands []SyncCommand
 
@@ -928,7 +1033,7 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 		}
 
 		// Task exists and is managed - check if deadline needs updating
-		cmds := p.reconcileExistingTask(ctx, task, &contact, settings, currentDeadline)
+		cmds := p.reconcileExistingTask(ctx, task, &contact, settings, currentDeadline, deferSkipDrift)
 		commands = append(commands, cmds...)
 	}
 
@@ -1027,8 +1132,66 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 	contact *repository.Contact,
 	settings Settings,
 	currentDeadline string,
+	deferSkipDrift bool,
 ) []SyncCommand {
 	var commands []SyncCommand
+
+	// Skip-drift recovery: a prior handleSkipTrigger tx committed state +
+	// event, but the post-commit Todoist HTTP batch (item_add) never
+	// processed, so pending_temp_id is stale. Detection: metadata has a
+	// non-empty pending_temp_id that does NOT match the current
+	// ExternalTaskID. On the happy path, processTempIDMappings clears
+	// pending_temp_id once the real Todoist id returns; a stale
+	// pending_temp_id with unchanged ExternalTaskID means the mapping
+	// never landed.
+	//
+	// Deferral: when this Sync invocation had a processTempIDMappings tx
+	// roll back (deferSkipDrift=true), the row's stale-looking state
+	// cannot be distinguished from "HTTP batch failed". Firing the branch
+	// anyway would emit a duplicate item_add against an already-created
+	// remote task. Wait one tick; next tick's syncResp.Items will deliver
+	// the real task and tryRecoverPendingTempID will finalize the mapping.
+	pendingTemp, hasPending := task.Metadata[MetadataKeyPendingTempID].(string)
+	if !deferSkipDrift && hasPending && pendingTemp != "" && pendingTemp != task.ExternalTaskID {
+		logger.Info().
+			Str("contactId", contact.ID.String()).
+			Str("externalTaskId", task.ExternalTaskID).
+			Str("pendingTempId", pendingTemp).
+			Msg("skip-drift recovery: re-emitting close+create for replacement cadence task")
+
+		cmd := p.createTaskCommand(contact, settings, &currentDeadline)
+
+		// Persist new pending_temp_id BEFORE emitting commands. If the
+		// metadata write fails, do NOT return the commands — the new
+		// temp id would never land in the row, so the post-loop HTTP
+		// batch's temp_id_mapping response couldn't be applied via
+		// processTempIDMappings. Emitting the commands anyway would
+		// create a Todoist task with no way to map back to the contact_task.
+		metadata := task.Metadata
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		metadata[MetadataKeyPendingTempID] = cmd.TempID
+		metadata[MetadataKeySyncedDeadline] = currentDeadline
+		if contact.LastContacted != nil {
+			metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+		}
+		if contact.LastOutreachAt != nil {
+			metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+		}
+		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
+			logger.Warn().Err(err).
+				Str("contactId", contact.ID.String()).
+				Msg("skip-drift recovery: update metadata failed; not emitting commands (retry next tick)")
+			return commands
+		}
+
+		if task.ExternalTaskID != "" {
+			commands = append(commands, NewItemCloseCommand(task.ExternalTaskID))
+		}
+		commands = append(commands, cmd)
+		return commands
+	}
 
 	// Get synced_deadline from metadata
 	syncedDeadline, hasSyncedDeadline := task.Metadata[MetadataKeySyncedDeadline].(string)
@@ -1267,15 +1430,26 @@ func isPendingTempID(task *repository.ContactTask) bool {
 
 // tryRecoverPendingTempID handles the case where processTempIDMappings failed
 // to update a contact_task's external_task_id from a temp ID to the real Todoist ID.
-// It parses the CRM marker in the item description to find the contact, then checks
-// if there's a managed cadence task with a pending temp ID for that contact.
-// If found, it migrates the external_task_id to the real ID.
+// It parses the CRM marker in the item description to find the contact, then
+// finalizes the mapping atomically inside a pgx.Tx (external_id + metadata clear
+// commit together or roll back together).
 //
-// TODO(#265): this recovery path's internal DB calls currently swallow
-// failures silently. Not on the critical correctness path but deserves audit
-// under the same transactional treatment as handleTaskCompletion and
-// handleSkipTrigger — tracked in the deferred refactor issue.
-func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item SyncItem) *repository.ContactTask {
+// Returns (task, recoveryFailed). recoveryFailed is true when a CRM marker
+// was matched and the atomic recovery tx rolled back — the caller
+// (processItem) propagates this via processItemResult.RecoveryFailed so
+// Sync can force deferSkipDrift=true for the same-tick reconcile pass.
+// recoveryFailed is false when no CRM marker matched (task is nil; nothing
+// to recover), when recovery succeeded, or when recovery was not applicable
+// (guard rejected the task).
+//
+// Recovery guard: task.State == managed && pending_temp_id != "". Broadened
+// from the narrow isPendingTempID check (which required pending_temp_id ==
+// ExternalTaskID) so this function also recovers the post-rollback shape
+// where ExternalTaskID still points at the old id and pending_temp_id is
+// the temp of the (already-created remotely) new task. The CRM marker
+// parse above verifies the sync item belongs to the same contact + cadence
+// kind, so advancing ExternalTaskID = item.ID is safe.
+func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item SyncItem) (*repository.ContactTask, bool) {
 	// Parse CRM marker from description to get contact ID
 	var marker struct {
 		CRM       bool   `json:"crm"`
@@ -1293,13 +1467,13 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 			descToTry = item.Description[idx:]
 		}
 		if err := json.Unmarshal([]byte(descToTry), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
-			return nil
+			return nil, false
 		}
 	}
 
 	contactID, err := uuid.Parse(marker.ContactID)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 
 	// Only recover cadence tasks
@@ -1308,49 +1482,81 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 		kind = TaskKindCadence
 	}
 	if kind != TaskKindCadence {
-		return nil
+		return nil, false
 	}
 
 	task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contactID, SourceName, kind)
 	if err != nil {
-		return nil
+		if errors.Is(err, db.ErrNotFound) {
+			// No local row for this contact/kind — nothing to recover.
+			return nil, false
+		}
+		// Any non-ErrNotFound failure (DB timeout, connection error) means
+		// we can't tell whether a recoverable row exists. A stale local
+		// row may match the skip-drift predicate against a real remote
+		// item that was just delivered; surface recoveryFailed so Sync
+		// forces deferSkipDrift=true and avoids emitting a duplicate
+		// item_add this tick.
+		logger.Warn().Err(err).
+			Str("contactId", marker.ContactID).
+			Msg("tryRecoverPendingTempID: lookup by contact failed")
+		return nil, true
 	}
 
-	// Only recover tasks that still have a pending temp ID
-	if task.State != repository.ContactTaskStateManaged || !isPendingTempID(task) {
-		return nil
+	// Broadened guard: any managed task with a non-empty pending_temp_id
+	// is a candidate for finalizing the mapping. See function docstring.
+	pendingTempID, _ := task.Metadata[MetadataKeyPendingTempID].(string)
+	if task.State != repository.ContactTaskStateManaged || pendingTempID == "" {
+		return nil, false
 	}
 
-	// Migrate external_task_id to the real Todoist ID
 	oldID := task.ExternalTaskID
-	if _, err := p.contactTaskRepo.UpdateContactTaskExternalID(ctx, task.ID, item.ID); err != nil {
+
+	// Atomic: external_id update + metadata clear inside one tx.
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		logger.Warn().Err(err).
+			Str("contactId", marker.ContactID).
+			Msg("tryRecoverPendingTempID: begin tx failed")
+		return task, true
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := p.contactTaskRepo.UpdateContactTaskExternalIDTx(ctx, tx, task.ID, item.ID); err != nil {
 		logger.Warn().Err(err).
 			Str("contactId", marker.ContactID).
 			Str("oldExternalId", oldID).
 			Str("newExternalId", item.ID).
-			Msg("failed to recover pending temp ID")
-		return task // still process with old ID
+			Msg("tryRecoverPendingTempID: update external_id failed")
+		return task, true
 	}
 
-	task.ExternalTaskID = item.ID
-
-	// Clear pending_temp_id from metadata
 	metadata := task.Metadata
 	if metadata == nil {
 		metadata = make(map[string]any)
 	}
 	delete(metadata, MetadataKeyPendingTempID)
-	if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
-		logger.Warn().Err(err).Msg("failed to clear pending_temp_id after recovery")
+	if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, task.ID, metadata); err != nil {
+		logger.Warn().Err(err).Msg("tryRecoverPendingTempID: clear pending_temp_id failed")
+		return task, true
 	}
+
+	if err := tx.Commit(ctx); err != nil {
+		logger.Warn().Err(err).Msg("tryRecoverPendingTempID: commit failed")
+		return task, true
+	}
+
+	// Reflect in the returned task (in-memory).
+	task.ExternalTaskID = item.ID
+	task.Metadata = metadata
 
 	logger.Info().
 		Str("contactId", marker.ContactID).
 		Str("oldTempId", oldID).
 		Str("realId", item.ID).
-		Msg("recovered pending temp ID mapping")
+		Msg("recovered pending temp ID mapping (atomic commit)")
 
-	return task
+	return task, false
 }
 
 // createTaskCommand creates a Todoist task creation command
@@ -1385,47 +1591,83 @@ func (p *CadenceSyncProvider) createTaskCommand(contact *repository.Contact, set
 	)
 }
 
-// processTempIDMappings updates contact_task records with real Todoist task IDs
-func (p *CadenceSyncProvider) processTempIDMappings(ctx context.Context, tempIDMap map[string]string) {
+// processTempIDMappings updates contact_task records with real Todoist task
+// IDs returned in a sync response's temp_id_mapping. Each per-task update
+// runs in its own tx (external_id + pending_temp_id clear commit together
+// or roll back together), eliminating the partial-commit ambiguity where
+// ExternalTaskID advanced but pending_temp_id stayed stale.
+//
+// Returns rolledBack=true if any per-task tx rolled back during this
+// invocation. Callers (Sync) thread that flag into reconcileContactTasks so
+// the skip-drift recovery branch defers by one tick when a rollback leaves
+// the row in a state indistinguishable from an HTTP-batch failure — the
+// real Todoist task already exists server-side, so firing skip-drift this
+// tick would emit a duplicate item_add. Next tick, tryRecoverPendingTempID
+// finalizes via the real item arriving in syncResp.Items.
+func (p *CadenceSyncProvider) processTempIDMappings(ctx context.Context, tempIDMap map[string]string) (rolledBack bool) {
 	if len(tempIDMap) == 0 {
-		return
+		return false
 	}
 
 	for tempID, realID := range tempIDMap {
 		// Find the task by pending_temp_id
 		task, err := p.contactTaskRepo.GetContactTaskByPendingTempID(ctx, SourceName, tempID)
 		if err != nil {
-			// Not found is expected if this temp_id wasn't from us
-			continue
-		}
-
-		// Update with real Todoist task ID
-		_, err = p.contactTaskRepo.UpdateContactTaskExternalID(ctx, task.ID, realID)
-		if err != nil {
-			logger.Warn().
-				Err(err).
+			if errors.Is(err, db.ErrNotFound) {
+				// Expected when this temp_id wasn't from us.
+				continue
+			}
+			// Any non-ErrNotFound lookup failure (DB timeout, connection
+			// error) means we can't tell whether this mapping applies to
+			// a local row. The safe move is to set rolledBack=true so the
+			// skip-drift recovery branch defers by one tick — otherwise
+			// this-tick reconcile could emit a duplicate item_add against
+			// an already-created remote task.
+			logger.Warn().Err(err).
 				Str("tempId", tempID).
 				Str("realId", realID).
-				Msg("failed to update external task ID")
+				Msg("temp_id mapping: lookup failed; deferring reconcile skip-drift this tick")
+			rolledBack = true
 			continue
 		}
 
-		// Clear pending_temp_id from metadata (preserves synced_deadline and other keys)
-		metadata := task.Metadata
-		if metadata == nil {
-			metadata = make(map[string]any)
-		}
-		delete(metadata, MetadataKeyPendingTempID)
-		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
-			logger.Warn().Err(err).Msg("failed to clear pending_temp_id from metadata")
+		txErr := func() error {
+			tx, err := p.pool.Begin(ctx)
+			if err != nil {
+				return fmt.Errorf("begin tx: %w", err)
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+
+			if _, err := p.contactTaskRepo.UpdateContactTaskExternalIDTx(ctx, tx, task.ID, realID); err != nil {
+				return fmt.Errorf("update external_id: %w", err)
+			}
+			metadata := task.Metadata
+			if metadata == nil {
+				metadata = make(map[string]any)
+			}
+			delete(metadata, MetadataKeyPendingTempID)
+			if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, task.ID, metadata); err != nil {
+				return fmt.Errorf("clear pending_temp_id: %w", err)
+			}
+			return tx.Commit(ctx)
+		}()
+		if txErr != nil {
+			logger.Warn().Err(txErr).
+				Str("tempId", tempID).
+				Str("realId", realID).
+				Str("contactTaskId", task.ID.String()).
+				Msg("temp_id mapping: tx rolled back; deferring reconcile skip-drift this tick")
+			rolledBack = true
+			continue
 		}
 
 		logger.Debug().
 			Str("tempId", tempID).
 			Str("realId", realID).
 			Str("contactTaskId", task.ID.String()).
-			Msg("updated contact task with real Todoist ID")
+			Msg("updated contact task with real Todoist ID (atomic commit)")
 	}
+	return rolledBack
 }
 
 // handleSyncError classifies and returns appropriate error

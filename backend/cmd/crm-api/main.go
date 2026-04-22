@@ -584,7 +584,9 @@ func run() int {
 				contactRepo,
 				syncRepo,
 				cfg,
-				contactService,
+				eventBus,
+				database.Pool,
+				todoist.DefaultClientFactory,
 			)
 			providerRegistry.Register(todoistProvider)
 			logger.Info().Msg("Todoist Cadence sync provider registered")
