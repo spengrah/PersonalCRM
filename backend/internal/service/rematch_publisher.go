@@ -6,32 +6,9 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/events"
-	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
 )
-
-// contactMethodsToRefs converts repository.ContactMethod to the typed
-// ContactMethodRef used in the ContactMethodsAdded event payload.
-// Always uses the normalized value (matches DB unique-index + identity
-// normalization convention).
-func contactMethodsToRefs(methods []repository.ContactMethod) []events.ContactMethodRef {
-	out := make([]events.ContactMethodRef, len(methods))
-	for i, m := range methods {
-		out[i] = events.ContactMethodRef{Type: m.Type, Value: m.ValueNormalized}
-	}
-	return out
-}
-
-// refsToRematchMethods converts event-layer ContactMethodRef slice back
-// to the service-layer Method slice used by RematchRegistry.RegisterPending.
-func refsToRematchMethods(refs []events.ContactMethodRef) []Method {
-	out := make([]Method, len(refs))
-	for i, r := range refs {
-		out[i] = Method{Type: r.Type, Value: r.Value}
-	}
-	return out
-}
 
 // rematchMethodsToRefs converts service.Method (from diffNewMethods) to
 // the event-layer ref type.
@@ -92,20 +69,28 @@ func (s *ContactService) RescanRematch(ctx context.Context, contactID uuid.UUID)
 	if err != nil {
 		return uuid.Nil, err // propagates db.ErrNotFound
 	}
-	refs := contactMethodsToRefs(contact.Methods)
-	if len(refs) == 0 {
+	// Filter to eligible methods so a contact with no matchable methods
+	// (no registered handler for any method type) returns uuid.Nil
+	// instead of enqueueing a no-op rematch job.
+	var eligible []Method
+	if s.rematchRegistry != nil {
+		all := make([]Method, 0, len(contact.Methods))
+		for _, m := range contact.Methods {
+			all = append(all, Method{Type: m.Type, Value: m.ValueNormalized})
+		}
+		eligible = s.rematchRegistry.EligibleMethods(all)
+	}
+	if len(eligible) == 0 {
 		return uuid.Nil, nil
 	}
 	jobID := uuid.New()
-	env, err := buildContactMethodsAddedEnvelope("manual", contactID, refs, jobID)
+	env, err := buildContactMethodsAddedEnvelope("manual", contactID, rematchMethodsToRefs(eligible), jobID)
 	if err != nil {
 		return uuid.Nil, err
 	}
 	if err := s.bus.Publish(ctx, env); err != nil {
 		return uuid.Nil, fmt.Errorf("publish contact_methods.added: %w", err)
 	}
-	if s.rematchRegistry != nil {
-		s.rematchRegistry.RegisterPending(jobID, contactID, refsToRematchMethods(refs))
-	}
+	s.rematchRegistry.RegisterPending(jobID, contactID, eligible)
 	return jobID, nil
 }

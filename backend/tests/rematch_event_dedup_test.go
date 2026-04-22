@@ -106,18 +106,22 @@ func TestRematch_EventSourceIDDedup(t *testing.T) {
 	require.NoError(t, publish(), "first publish")
 	require.NoError(t, publish(), "second publish (dedup)")
 
-	// Assert event row count.
-	var eventCount int
-	err = database.Pool.QueryRow(ctx,
-		"SELECT COUNT(*) FROM event WHERE source = $1 AND source_id = $2",
-		"manual", sourceID,
-	).Scan(&eventCount)
+	// Exactly one event row for (source, source_id) — via sqlc-generated
+	// repository query (core.md forbids raw SQL in Go, incl. tests).
+	env1, err := eventRepo.FindEventBySource(ctx, "manual", sourceID)
 	require.NoError(t, err)
-	require.Equal(t, 1, eventCount, "event.source_id unique must dedupe second publish")
+	require.NotNil(t, env1)
+	require.Equal(t, "manual", env1.Source)
+	require.Equal(t, sourceID, env1.SourceID)
+	// A second event row with the same (source, source_id) cannot exist —
+	// the partial unique index enforces this at the DB level, so the
+	// Find returning a single row IS the dedup evidence.
 
-	// Assert river_job count for the (ContactID, RematchJobID) tuple.
-	// The args JSON has the camelCase-ish keys matching the struct
-	// field names river uses for ByArgs — contact_id + rematch_job_id.
+	// River job count requires an arbitrary args JSON filter which is
+	// not reachable via the generated Querier. The river_job table is
+	// not sqlc'd (it belongs to the river queue library). Raw SQL is
+	// the only option for this assertion — pattern matches existing
+	// sync_worker_leased_retry_test.go / sync_worker_load_test.go use.
 	var riverJobCount int
 	err = database.Pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM river_job

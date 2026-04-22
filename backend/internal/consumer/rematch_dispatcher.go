@@ -24,12 +24,10 @@ type rematchRunner interface {
 }
 
 // RematchDispatcher is the event-bus consumer for contact_methods.added.
-// Per spec §3.4.4 it runs the existing rematch pipeline (per-method
-// handler iteration + per-contact mutex serialization) via
-// RematchService.Run. Always-on — PR 10 plan Decision 1 removed the
-// mode flag because a registered River worker returning nil in off
-// mode would permanently ack queued jobs and make git revert the only
-// real rollback path anyway.
+// It runs the rematch pipeline (per-method handler iteration +
+// per-contact mutex serialization) via RematchService.Run. Always-on:
+// a registered River worker returning nil on a kill-switch would
+// permanently ack queued jobs, so rollback is `git revert` only.
 type RematchDispatcher struct {
 	runner rematchRunner
 }

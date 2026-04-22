@@ -199,12 +199,16 @@ func TestConsumerJobsForKind_ContactMethodsAdded_ZeroRematchJobID_Errors(t *test
 // stubEventRepo is a test-only EventRepository that lets Bus_test files
 // exercise envelope validation without touching the database or river.
 type stubEventRepo struct {
-	insertCalls int
-	insertErr   error
+	insertCalls  int
+	insertErr    error
+	lastInsertID uuid.UUID
 }
 
-func (s *stubEventRepo) InsertEvent(_ context.Context, _ pgx.Tx, _ *Envelope) error {
+func (s *stubEventRepo) InsertEvent(_ context.Context, _ pgx.Tx, env *Envelope) error {
 	s.insertCalls++
+	if env != nil {
+		s.lastInsertID = env.ID
+	}
 	return s.insertErr
 }
 
@@ -369,12 +373,19 @@ func TestPublishTx_RepoErrorPropagates(t *testing.T) {
 
 // TestPublishTx_PreassignsEventID confirms the pre-insert env.ID
 // assignment fires before routing so RematchDispatcherJobArgs.EventID
-// (derived from env.ID at routing time) is never uuid.Nil. Covers the
-// Codex round-2 P1-A fix.
+// (derived from env.ID at routing time) is never uuid.Nil.
+//
+// On ErrDuplicate with a bus-assigned ID, env.ID is intentionally
+// reset to uuid.Nil so the IngestService duplicate sentinel
+// (env.ID == uuid.Nil) works correctly. We verify preassignment by
+// observing that the stub's insertCalls saw a non-zero ID at insert
+// time — that's the window where routing has populated the consumer
+// job args.
 func TestPublishTx_PreassignsEventID(t *testing.T) {
 	ctx := context.Background()
-	// Have the stub return ErrDuplicate so we stop after routing
-	// populates env.ID (we don't need a real river client here).
+	// Stub returns ErrDuplicate after capturing the insert params so we
+	// can verify env.ID was populated at insert time. The bus then
+	// resets env.ID on the dup path.
 	stub := &stubEventRepo{insertErr: db.ErrDuplicate}
 	bus := &Bus{eventRepo: stub}
 
@@ -389,7 +400,6 @@ func TestPublishTx_PreassignsEventID(t *testing.T) {
 	require.NoError(t, err)
 
 	env := &Envelope{
-		// env.ID deliberately zero — PublishTx must fill it.
 		Kind:       KindContactMethodsAdded,
 		Source:     "manual",
 		SourceID:   jobID.String(),
@@ -397,7 +407,13 @@ func TestPublishTx_PreassignsEventID(t *testing.T) {
 		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	}
 	require.NoError(t, bus.PublishTx(ctx, nonNilStubTx(), env))
-	require.NotEqual(t, uuid.Nil, env.ID, "PublishTx must preassign env.ID before routing")
+	require.Equal(t, 1, stub.insertCalls)
+	require.NotEqual(t, uuid.Nil, stub.lastInsertID,
+		"PublishTx must preassign env.ID before InsertEvent — the stub captures the insert-time ID")
+	// Post-duplicate, env.ID is reset so IngestService's
+	// `env.ID == uuid.Nil` duplicate sentinel works.
+	require.Equal(t, uuid.Nil, env.ID,
+		"PublishTx must reset env.ID to uuid.Nil on duplicate when it pre-assigned the ID")
 }
 
 // TestPublishTx_MalformedPayload_RollsBackTx confirms that a bad

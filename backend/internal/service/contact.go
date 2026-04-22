@@ -78,10 +78,10 @@ type ContactService struct {
 	// deriveFollowUpClosure.
 	followUp FollowUpConsumer
 	// bus is the event bus used to publish contact_methods.added on
-	// method-adding mutations. Required in production wiring (main.go)
-	// per PR-10 spec §3.4.4. Nil-safe for tests that don't exercise
-	// the rematch dispatch path — the publisher short-circuits when
-	// nil and leaves rematchJobID as uuid.Nil in the response.
+	// method-adding mutations. Required in production wiring (main.go).
+	// Nil-safe for tests that don't exercise the rematch dispatch path —
+	// the publisher short-circuits when nil and leaves rematchJobID as
+	// uuid.Nil in the response.
 	bus *events.Bus
 	// rematchRegistry is the narrow contract for registering an in-memory
 	// job entry synchronously so GET /rematch/jobs/:id works immediately
@@ -99,13 +99,11 @@ type ContactService struct {
 }
 
 // NewContactService constructs a ContactService. bus and rematchRegistry
-// are required for the PR-10 event-bus rematch path in production (spec
-// §3.4.4): CreateContact / UpdateContact / RescanRematch publish
+// are required for the event-bus rematch path in production:
+// CreateContact / UpdateContact / RescanRematch publish
 // contact_methods.added through bus and seed the in-memory job entry via
 // rematchRegistry. Tests that don't exercise rematch may pass nil for
-// both — the publisher silently skips when bus is nil, matching the old
-// "SetRematchService not called" semantic without the bug class that
-// setter omission caused in non-test paths.
+// both — the publisher silently skips when bus is nil.
 func NewContactService(
 	database *db.Database,
 	contactRepo *repository.ContactRepository,
@@ -282,15 +280,22 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 		return nil, uuid.Nil, err
 	}
 
-	// Publish contact_methods.added INSIDE the tx so the event row +
-	// river consumer job land atomically with the method rows (spec §4).
-	// A tx rollback rolls back method rows AND the event AND the river
-	// job together. jobID is only returned to the caller after Commit
-	// succeeds, so clients never see a jobID for work that didn't ship.
-	newMethodRefs := contactMethodsToRefs(createdMethods)
-	if len(newMethodRefs) > 0 && s.bus != nil {
+	// Publish contact_methods.added inside the tx so event row + river
+	// consumer job land atomically with the method rows (spec §4). A tx
+	// rollback rolls back all three. jobID returns only after Commit,
+	// so clients never see a jobID for work that didn't ship.
+	//
+	// Filter to eligible methods first: if no registered rematch handler
+	// matches any new method, we skip publishing entirely and return
+	// uuid.Nil — matches the pre-cutover StartRematchForContact contract
+	// where unhandled methods produced no job id.
+	var eligibleMethods []Method
+	if len(createdMethods) > 0 && s.rematchRegistry != nil {
+		eligibleMethods = s.rematchRegistry.EligibleMethods(toRematchMethods(createdMethods))
+	}
+	if len(eligibleMethods) > 0 && s.bus != nil {
 		jobID = uuid.New()
-		env, marshalErr := buildContactMethodsAddedEnvelope("manual", contact.ID, newMethodRefs, jobID)
+		env, marshalErr := buildContactMethodsAddedEnvelope("manual", contact.ID, rematchMethodsToRefs(eligibleMethods), jobID)
 		if marshalErr != nil {
 			return nil, uuid.Nil, marshalErr
 		}
@@ -308,7 +313,7 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 	// /rematch/jobs/:id returns it immediately. Idempotent; safe even
 	// though the bus may have deduped a publisher retry.
 	if jobID != uuid.Nil && s.rematchRegistry != nil {
-		s.rematchRegistry.RegisterPending(jobID, contact.ID, refsToRematchMethods(newMethodRefs))
+		s.rematchRegistry.RegisterPending(jobID, contact.ID, eligibleMethods)
 	}
 	return contact, jobID, nil
 }
@@ -411,23 +416,27 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 		sortContactMethods(updatedMethods)
 	}
 
-	// Compute the method diff + publish INSIDE the tx so the event row,
-	// river consumer job, and method rows all commit (or roll back)
-	// together (spec §4 atomicity). Only the replaceMethods branch can
-	// add new methods — the !replaceMethods branch leaves methods as-is.
-	var newlyAddedMethods []Method
-	if replaceMethods && s.bus != nil {
-		newlyAddedMethods = diffNewMethods(existingBefore, updatedMethods)
-		if len(newlyAddedMethods) > 0 {
-			jobID = uuid.New()
-			refs := rematchMethodsToRefs(newlyAddedMethods)
-			env, marshalErr := buildContactMethodsAddedEnvelope("manual", id, refs, jobID)
-			if marshalErr != nil {
-				return nil, uuid.Nil, marshalErr
-			}
-			if err := s.bus.PublishTx(ctx, tx, env); err != nil {
-				return nil, uuid.Nil, fmt.Errorf("publish contact_methods.added: %w", err)
-			}
+	// Compute method diff + publish inside the tx so event row + river
+	// job + method rows commit/roll back together (spec §4). Only the
+	// replaceMethods branch can add new methods — !replaceMethods leaves
+	// methods as-is.
+	//
+	// Filter to eligible methods first (see CreateContact for rationale):
+	// unhandled types skip publishing and return uuid.Nil.
+	var eligibleAddedMethods []Method
+	if replaceMethods && s.rematchRegistry != nil {
+		newlyAdded := diffNewMethods(existingBefore, updatedMethods)
+		eligibleAddedMethods = s.rematchRegistry.EligibleMethods(newlyAdded)
+	}
+	if replaceMethods && len(eligibleAddedMethods) > 0 && s.bus != nil {
+		jobID = uuid.New()
+		refs := rematchMethodsToRefs(eligibleAddedMethods)
+		env, marshalErr := buildContactMethodsAddedEnvelope("manual", id, refs, jobID)
+		if marshalErr != nil {
+			return nil, uuid.Nil, marshalErr
+		}
+		if err := s.bus.PublishTx(ctx, tx, env); err != nil {
+			return nil, uuid.Nil, fmt.Errorf("publish contact_methods.added: %w", err)
 		}
 	}
 
@@ -437,7 +446,7 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 
 	assignMethods(contact, updatedMethods)
 	if jobID != uuid.Nil && s.rematchRegistry != nil {
-		s.rematchRegistry.RegisterPending(jobID, id, newlyAddedMethods)
+		s.rematchRegistry.RegisterPending(jobID, id, eligibleAddedMethods)
 	}
 	return contact, jobID, nil
 }

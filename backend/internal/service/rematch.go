@@ -60,8 +60,15 @@ type JobProgress struct {
 // decoupled from the full *RematchService surface — they just need
 // "make the job visible to GET /rematch/jobs/:id now" so the frontend's
 // synchronous `rematch_job_id` poll loop never 404s.
+//
+// EligibleMethods filters a candidate list down to methods that have a
+// registered rematch handler. Publishers call this BEFORE minting a
+// jobID so an unhandled method slice produces uuid.Nil (matching the
+// old StartRematchForContact contract — no job id for work that won't
+// run).
 type RematchRegistry interface {
 	RegisterPending(jobID, contactID uuid.UUID, methods []Method)
+	EligibleMethods(methods []Method) []Method
 }
 
 // job is the internal mutable representation protected by its own mutex.
@@ -139,9 +146,9 @@ func (j *job) resetForRun() {
 }
 
 // RematchService dispatches rematch work per contact method type. Handlers
-// register at startup. Post-PR-10 (#180) the primary entry point is Run,
-// which the RematchDispatcher consumer invokes per contact_methods.added
-// event. StartRematchForContact is retained as a test-only helper that
+// register at startup. The primary entry point is Run, which the
+// RematchDispatcher consumer invokes per contact_methods.added event.
+// StartRematchForContact is retained as a test-only helper that
 // spawns Run on the detached context; production code publishes events
 // and relies on the consumer to dispatch.
 type RematchService struct {
@@ -207,6 +214,25 @@ func (s *RematchService) RegisterPending(jobID, contactID uuid.UUID, methods []M
 	// publisher retries or a race with the consumer's rehydrate don't
 	// clobber an in-progress entry.
 	s.jobs.LoadOrStore(jobID, j)
+}
+
+// EligibleMethods returns the subset of methods whose Type has a
+// registered handler. Publishers call this at mutation time so they
+// can skip minting a jobID + publishing an event when nothing would
+// actually run — preserves the pre-cutover contract that
+// mutation responses return rematch_job_id=null when no rematch work
+// applies.
+func (s *RematchService) EligibleMethods(methods []Method) []Method {
+	if len(methods) == 0 {
+		return nil
+	}
+	eligible := make([]Method, 0, len(methods))
+	for _, m := range methods {
+		if _, ok := s.handlers[m.Type]; ok {
+			eligible = append(eligible, m)
+		}
+	}
+	return eligible
 }
 
 // StartRematchForContact filters the given methods to those that have a

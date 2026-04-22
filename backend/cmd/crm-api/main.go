@@ -213,10 +213,10 @@ func run() int {
 	// exists) via river.AddWorker + riverClient.PeriodicJobs().Add(), both
 	// of which are safe between NewClient and Start.
 	//
-	// PR 10 (rematch dispatcher) hoisted the bus + rematchService
-	// construction ABOVE ContactService so the constructor can take the
-	// event bus + rematch registry as required args (SetRematchService
-	// is gone; spec §3.4.4).
+	// eventBus + rematchService are constructed BEFORE ContactService /
+	// EnrichmentService so those services can take them as constructor
+	// args (the rematch registry is required; SetRematchService setter
+	// is gone).
 	riverWorkers := river.NewWorkers()
 	river.AddWorker(riverWorkers, &noopWorker{})
 
@@ -236,7 +236,7 @@ func run() int {
 	ingestService := service.NewIngestService(database, eventBus)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
-	// Rematch service — hoisted above ContactService (PR 10) so it can be
+	// Rematch service — constructed above ContactService so it can be
 	// passed as the RematchRegistry constructor arg. Handlers register
 	// later once their dependencies are constructed.
 	rematchService := service.NewRematchService()
@@ -450,9 +450,11 @@ func run() int {
 
 	// Rematch dispatcher consumer — subscribes to contact_methods.added
 	// events and runs RematchService.Run with per-contact mutex
-	// serialization (spec §3.4.4). Always-on post-PR-10 (plan Decision 1
-	// dropped the mode flag). Rematch handlers themselves (calendar,
-	// telegram) are registered below once their deps are constructed.
+	// serialization. Always-on (no mode flag): a registered River
+	// worker that returned nil in kill-switch mode would permanently
+	// ack queued jobs, so rollback is `git revert` only. Rematch
+	// handlers themselves (calendar, telegram) are registered below
+	// once their deps are constructed.
 	rematchDispatcher := consumer.NewRematchDispatcher(rematchService)
 	river.AddWorker(riverWorkers, consumer.NewRematchDispatcherWorker(eventBus, database.Pool, rematchDispatcher))
 	logger.Info().Msg("event-bus RematchDispatcher: cutover active")

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# rematch-sole-dispatcher-guard.sh — grep guard for the PR-10 event-bus
+# rematch-sole-dispatcher-guard.sh — grep guard for the event-bus
 # rematch dispatcher invariant.
 #
 # Production rematch dispatch flows through events.Bus.PublishTx →
 # RematchDispatcher consumer → RematchService.Run. The legacy
 # StartRematchForContact method is kept only for unit tests (see
 # service/rematch.go godoc Deprecated: note). Any non-test caller
-# indicates a partial revert of PR 10.
+# indicates a regression in the sole-dispatcher invariant.
 #
 # Legal call sites for StartRematchForContact:
 #   - backend/internal/service/rematch.go        (definition)
@@ -19,7 +19,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-SYMBOL_PATTERN='StartRematchForContact'
+# Match only the call form — `.StartRematchForContact(` — so prose
+# comments that reference the name descriptively don't flag.
+SYMBOL_PATTERN='\.StartRematchForContact\('
 
 # Only inspect Go source, exclude generated files.
 find_hits() {
@@ -63,7 +65,7 @@ if [[ -n "$HITS" ]]; then
 fi
 
 if (( violation_count > 0 )); then
-  echo "ERROR: PR 10 of #180 requires production rematch dispatch via events.Bus + RematchDispatcher only." >&2
+  echo "ERROR: production rematch dispatch must flow through events.Bus + RematchDispatcher only." >&2
   exit 1
 fi
 

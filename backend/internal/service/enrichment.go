@@ -45,7 +45,7 @@ type EnrichmentService struct {
 // NewEnrichmentService creates a new enrichment service. database is
 // required post-cutover so the cadence-override path can open its own
 // tx for the profile-update + ApplyContactByOverride pair. bus +
-// rematchRegistry are required for the PR-10 event-bus rematch path:
+// rematchRegistry are required for the event-bus rematch path:
 // EnrichContactFromExternal* publish contact_methods.added through bus
 // and seed the in-memory job entry via rematchRegistry. Tests that
 // don't exercise rematch may pass nil for both — the publisher silently
@@ -141,10 +141,10 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 	}
 
 	// Method enrichment + per-method audit inserts + contact_methods.added
-	// publish all share a single tx (spec §4 atomicity). Propagating the
-	// tx error is required — silent swallow would let the caller see a
+	// publish all share a single tx for atomicity. Propagating the tx
+	// error is required — silent swallow would let the caller see a
 	// uuid.Nil jobID while the rolled-back method rows leave the contact
-	// unchanged (Codex round 1 P1).
+	// unchanged.
 	jobID, addedMethods, err := s.enrichMethodsAndPublish(ctx, contact, external, "")
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("enrich contact methods: %w", err)
@@ -181,6 +181,7 @@ func (s *EnrichmentService) enrichMethodsAndPublish(
 		// the external contact's provenance (gcontacts, telegram, etc.).
 		effectiveSource = external.Source
 	}
+	var eligible []Method
 	txErr := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		txQueries := db.New(tx)
 		txMethodRepo := repository.NewContactMethodRepository(txQueries)
@@ -194,11 +195,19 @@ func (s *EnrichmentService) enrichMethodsAndPublish(
 		if len(added) == 0 {
 			return nil
 		}
+		// Filter to handler-eligible methods: skip publish when no
+		// registered rematch handler matches any added method.
+		if s.rematchRegistry != nil {
+			eligible = s.rematchRegistry.EligibleMethods(added)
+		}
+		if len(eligible) == 0 {
+			return nil
+		}
 		if s.bus == nil {
 			return nil
 		}
 		jobID = uuid.New()
-		refs := rematchMethodsToRefs(added)
+		refs := rematchMethodsToRefs(eligible)
 		env, err := buildContactMethodsAddedEnvelope(effectiveSource, contact.ID, refs, jobID)
 		if err != nil {
 			return err
@@ -208,7 +217,9 @@ func (s *EnrichmentService) enrichMethodsAndPublish(
 	if txErr != nil {
 		return uuid.Nil, nil, txErr
 	}
-	return jobID, added, nil
+	// Caller passes eligible methods into RegisterPending so the
+	// in-memory job entry matches what the consumer will run.
+	return jobID, eligible, nil
 }
 
 // EnrichContactFromExternalWithSelections enriches a CRM contact with user-selected methods.
@@ -348,6 +359,7 @@ func (s *EnrichmentService) enrichMethodsAndPublishWithSelections(
 	if effectiveSource == "" {
 		effectiveSource = "manual"
 	}
+	var eligible []Method
 	txErr := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		txQueries := db.New(tx)
 		txMethodRepo := repository.NewContactMethodRepository(txQueries)
@@ -363,11 +375,19 @@ func (s *EnrichmentService) enrichMethodsAndPublishWithSelections(
 		if len(added) == 0 {
 			return nil
 		}
+		// Filter to handler-eligible methods: skip publish when no
+		// registered rematch handler matches any added method.
+		if s.rematchRegistry != nil {
+			eligible = s.rematchRegistry.EligibleMethods(added)
+		}
+		if len(eligible) == 0 {
+			return nil
+		}
 		if s.bus == nil {
 			return nil
 		}
 		jobID = uuid.New()
-		refs := rematchMethodsToRefs(added)
+		refs := rematchMethodsToRefs(eligible)
 		env, err := buildContactMethodsAddedEnvelope(effectiveSource, contact.ID, refs, jobID)
 		if err != nil {
 			return err
@@ -377,7 +397,7 @@ func (s *EnrichmentService) enrichMethodsAndPublishWithSelections(
 	if txErr != nil {
 		return uuid.Nil, nil, txErr
 	}
-	return jobID, added, nil
+	return jobID, eligible, nil
 }
 
 // enrichContactMethodsWithSelectionsTx adds methods based on user
@@ -513,9 +533,11 @@ func (s *EnrichmentService) enrichContactMethodsWithSelectionsTx(
 		}
 
 		added = append(added, Method{Type: newMethod.Type, Value: newMethod.ValueNormalized})
-		s.recordEnrichmentTx(ctx, txEnrichmentRepo, contact.ID, external,
+		if auditErr := s.recordEnrichmentTx(ctx, txEnrichmentRepo, contact.ID, external,
 			"method:"+sel.Type+":"+identity.Normalize(storedValue, mapMethodTypeToIdentifier(sel.Type)),
-			storedValue)
+			storedValue); auditErr != nil {
+			return nil, auditErr
+		}
 		existingKeys[selKey] = true
 	}
 
@@ -549,10 +571,8 @@ func (s *EnrichmentService) enrichContactMethodsWithSelectionsTx(
 	// Per-selection method errors (e.g., "value not found in external
 	// contact") are logged but NOT returned as a tx-failing error —
 	// returning would roll back successfully-inserted methods and drop
-	// the entire link operation. Callers prior to PR 10 ran method
-	// inserts outside a tx and logged-and-proceeded on methodErrors;
-	// the tx-wrap MUST preserve that partial-success semantic for
-	// link/import paths (existing API contract).
+	// the entire link operation. Link/import paths expect partial
+	// success: valid selections commit, invalid ones log and skip.
 	if len(methodErrors) > 0 {
 		logger.Warn().
 			Str("contact_id", contact.ID.String()).
@@ -620,9 +640,11 @@ func (s *EnrichmentService) enrichContactMethodsTx(
 			continue
 		}
 		added = append(added, Method{Type: created.Type, Value: created.ValueNormalized})
-		s.recordEnrichmentTx(ctx, txEnrichmentRepo, contact.ID, external,
+		if auditErr := s.recordEnrichmentTx(ctx, txEnrichmentRepo, contact.ID, external,
 			"method:"+input.Type+":"+identity.Normalize(input.Value, mapMethodTypeToIdentifier(input.Type)),
-			input.Value)
+			input.Value); auditErr != nil {
+			return nil, auditErr
+		}
 		existingSet[key] = true
 	}
 	return added, nil
@@ -684,8 +706,7 @@ func (s *EnrichmentService) recordEnrichment(
 // Unlike recordEnrichment which log-swallows insert errors, this
 // variant returns the error to its caller — an audit-insert failure
 // inside the tx aborts the whole flow so method rows + event + audit
-// all roll back together. Wraps insert errors with context for debug
-// logging by the caller.
+// all roll back together.
 func (s *EnrichmentService) recordEnrichmentTx(
 	ctx context.Context,
 	txEnrichmentRepo *repository.EnrichmentRepository,
@@ -693,7 +714,7 @@ func (s *EnrichmentService) recordEnrichmentTx(
 	external *repository.ExternalContact,
 	field string,
 	value string,
-) {
+) error {
 	var externalContactID *uuid.UUID
 	if external.ID != uuid.Nil {
 		externalContactID = &external.ID
@@ -707,8 +728,9 @@ func (s *EnrichmentService) recordEnrichmentTx(
 		OriginalValue:     &value,
 	})
 	if err != nil {
-		logger.Warn().Err(err).Str("field", field).Msg("failed to record enrichment (tx)")
+		return fmt.Errorf("record enrichment (tx) for field %s: %w", field, err)
 	}
+	return nil
 }
 
 // insertContactMethodSavepoint wraps CreateContactMethod in a nested
