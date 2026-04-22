@@ -782,20 +782,15 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 // mutual/inbound interaction.
 //
 // State is persisted BEFORE any ItemClose command is queued. On state-update
-// failure, this handler returns a fatal error via processItemResult.Err; the
-// sync loop (processItems) then decides whether to abort or log-and-continue
-// based on whether any earlier item in the same batch committed non-replay-
-// safe state. If no earlier unsafe commit occurred, the sync aborts without
-// advancing the cursor and the next tick replays the item. If an earlier
-// handleSkipTrigger already advanced contact_by in this batch, the dismissal
-// falls back to log-and-continue (the pre-existing failure mode for that
-// specific mixed-batch scenario).
+// failure, this handler returns a fatal error via processItemResult.Err;
+// processItems aborts the batch, the Sync caller preserves the pre-batch
+// cursor, and the next tick replays.
 //
 // For non-deletion triggers, once the state transition succeeds we queue an
 // ItemClose command so the batched sync path cleans up the orphaned task in
-// Todoist. No retry flag is set — if the batch fails, the local row is still
-// correctly 'dismissed' and subsequent syncs will skip it via the existing
-// state != 'managed' early-return in processItem.
+// Todoist. If the batch fails, the local row is still correctly 'dismissed'
+// and subsequent syncs will skip it via the existing state != 'managed'
+// early-return in processItem.
 func (p *CadenceSyncProvider) handleFollowUpDismissal(
 	ctx context.Context,
 	item SyncItem,

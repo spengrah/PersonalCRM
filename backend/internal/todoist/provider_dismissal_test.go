@@ -623,17 +623,18 @@ func assertDismissedAndInvariants(t *testing.T, env *dismissalTestEnv, contactID
 }
 
 // ============================================================================
-// Error-propagation regression tests (Option C / #264)
+// Error-propagation and atomic-transaction regression tests
 // ============================================================================
 //
-// These tests exercise the fatal-error propagation paths added in Step 2 of
-// the todoist-processitem-error-propagation plan. They use a cancelled
-// context to force repository calls to fail deterministically with
-// context.Canceled (more reliable than closing the pool mid-test).
+// These tests exercise fatal-error propagation and atomic-tx rollback in
+// the Todoist handlers. They use a cancelled context to force repository
+// calls to fail deterministically with context.Canceled (more reliable
+// than closing the pool mid-test).
 //
 // The tests call handlers directly, not through processItem, because
-// processItem's GetContactTaskByExternalID lookup would fail first under the
-// cancelled-context strategy, masking the target handler's error path.
+// processItem's GetContactTaskByExternalID lookup would fail first under
+// the cancelled-context strategy, masking the target handler's error
+// path.
 
 // TestHandleFollowUpDismissal_StateUpdateErrorPropagates verifies that a DB
 // failure in UpdateContactTaskState is propagated via processItemResult.Err
