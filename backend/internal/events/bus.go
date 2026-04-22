@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/rivertype"
 )
 
 // EventRepository is the persistence contract used by Bus. Defined here
@@ -102,12 +101,12 @@ func consumerJobsForKind(env *Envelope) ([]consumerJob, error) {
 					// tagged, so retries with different event.id but same
 					// (ContactID, RematchJobID) dedupe to one river job).
 					ByArgs: true,
-					ByState: []rivertype.JobState{
-						rivertype.JobStateScheduled,
-						rivertype.JobStateAvailable,
-						rivertype.JobStateRunning,
-						rivertype.JobStateRetryable,
-					},
+					// ByState is nil here to accept river's default set
+					// (Pending/Scheduled/Available/Running/Retryable). A
+					// partial ByState list must include Pending or river
+					// rejects the InsertOpts at InsertTx time. Default
+					// covers our "not yet terminal" window as tightly as
+					// a custom list would.
 				},
 			},
 		}}, nil

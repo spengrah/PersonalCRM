@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -139,15 +138,11 @@ func TestConsumerJobsForKind_ContactMethodsAdded(t *testing.T) {
 	require.NotNil(t, jobs[0].Opts)
 	require.Equal(t, 3, jobs[0].Opts.MaxAttempts)
 	require.True(t, jobs[0].Opts.UniqueOpts.ByArgs, "ByArgs must be true so UniqueOpts considers args; river:\"unique\" tags on ContactID+RematchJobID scope the hash")
-	require.ElementsMatch(t,
-		[]rivertype.JobState{
-			rivertype.JobStateScheduled,
-			rivertype.JobStateAvailable,
-			rivertype.JobStateRunning,
-			rivertype.JobStateRetryable,
-		},
-		jobs[0].Opts.UniqueOpts.ByState,
-	)
+	// ByState intentionally empty — river applies its default set
+	// (Pending/Scheduled/Available/Running/Retryable) when ByState is
+	// nil. A partial list must include Pending or river rejects the
+	// InsertOpts.
+	require.Empty(t, jobs[0].Opts.UniqueOpts.ByState)
 }
 
 // TestConsumerJobsForKind_ContactMethodsAdded_MalformedPayload_Errors
@@ -447,7 +442,4 @@ func TestPublishTx_NoJobsMeansNilRiverOK(t *testing.T) {
 	require.Equal(t, 1, stub.insertCalls)
 }
 
-// Ensure the rivertype import stays referenced even if the router case
-// above is one day refactored to drop the explicit ByState slice.
-var _ = rivertype.JobStateScheduled
 var _ = river.UniqueOpts{}
