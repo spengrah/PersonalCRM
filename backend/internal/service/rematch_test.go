@@ -107,18 +107,26 @@ func TestStartRematchForContact_DispatchesToHandler(t *testing.T) {
 	}
 }
 
-func TestStartRematchForContact_AggregatesCountsAcrossMethods(t *testing.T) {
+func TestRun_AggregatesCountsAcrossMethods(t *testing.T) {
 	svc := NewRematchService()
 	emailH := &stubHandler{typ: "email", matched: 2}
 	phoneH := &stubHandler{typ: "phone", matched: 4}
 	svc.Register(emailH)
 	svc.Register(phoneH)
 
-	jobID := svc.StartRematchForContact(uuid.New(), []Method{
+	jobID := uuid.New()
+	contactID := uuid.New()
+	methods := []Method{
 		{Type: "email", Value: "a@b.c"},
 		{Type: "phone", Value: "+15551212"},
-	})
-	job := waitForJob(t, svc, jobID)
+	}
+	if err := svc.Run(context.Background(), jobID, contactID, methods); err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+	job, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
 	if job.Status != JobStatusCompleted {
 		t.Fatalf("expected completed, got %s", job.Status)
 	}
@@ -127,13 +135,20 @@ func TestStartRematchForContact_AggregatesCountsAcrossMethods(t *testing.T) {
 	}
 }
 
-func TestStartRematchForContact_HandlerErrorFailsJob(t *testing.T) {
+func TestRun_HandlerErrorFailsJob(t *testing.T) {
 	svc := NewRematchService()
 	errBoom := errors.New("boom")
 	svc.Register(&stubHandler{typ: "email", err: errBoom})
 
-	jobID := svc.StartRematchForContact(uuid.New(), []Method{{Type: "email", Value: "a@b.c"}})
-	job := waitForJob(t, svc, jobID)
+	jobID := uuid.New()
+	runErr := svc.Run(context.Background(), jobID, uuid.New(), []Method{{Type: "email", Value: "a@b.c"}})
+	if !errors.Is(runErr, errBoom) {
+		t.Fatalf("Run should return handler error for river retry; got %v", runErr)
+	}
+	job, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
 	if job.Status != JobStatusFailed {
 		t.Fatalf("expected failed, got %s", job.Status)
 	}
@@ -142,13 +157,208 @@ func TestStartRematchForContact_HandlerErrorFailsJob(t *testing.T) {
 	}
 }
 
-func TestStartRematchForContact_PanicRecovered(t *testing.T) {
+func TestRun_PanicPropagatesAsError(t *testing.T) {
 	svc := NewRematchService()
 	svc.Register(panickyHandler{})
-	jobID := svc.StartRematchForContact(uuid.New(), []Method{{Type: "email", Value: "x"}})
-	job := waitForJob(t, svc, jobID)
+	jobID := uuid.New()
+	runErr := svc.Run(context.Background(), jobID, uuid.New(), []Method{{Type: "email", Value: "x"}})
+	if runErr == nil {
+		t.Fatal("Run should return non-nil error when handler panics (named-return recovery)")
+	}
+	job, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
 	if job.Status != JobStatusFailed {
 		t.Fatalf("expected failed after panic, got %s", job.Status)
+	}
+	if job.Error == "" {
+		t.Fatal("expected non-empty error message after panic")
+	}
+}
+
+func TestRun_NoMatchingHandler_Completes(t *testing.T) {
+	// Run with no registered handler for the method type completes
+	// cleanly (handler iteration skips unknown types) → terminal
+	// Completed with matched=0. Distinct from
+	// TestStartRematchForContact_NoMatchingHandler which exercises the
+	// pre-spawn eligibility filter.
+	svc := NewRematchService()
+	jobID := uuid.New()
+	if err := svc.Run(context.Background(), jobID, uuid.New(), []Method{{Type: "email", Value: "x"}}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	job, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.Status != JobStatusCompleted {
+		t.Fatalf("expected completed, got %s", job.Status)
+	}
+	if job.Matched != 0 {
+		t.Fatalf("expected Matched=0, got %d", job.Matched)
+	}
+}
+
+func TestRun_RehydrateOrLookup_CreatesEntry(t *testing.T) {
+	// Call Run on a jobID that was never RegisterPending'd (simulating
+	// consumer pickup after a crash that lost the in-memory map).
+	svc := NewRematchService()
+	svc.Register(&stubHandler{typ: "email", matched: 1})
+
+	jobID := uuid.New()
+	contactID := uuid.New()
+	if err := svc.Run(context.Background(), jobID, contactID, []Method{{Type: "email", Value: "a@b.c"}}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	job, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.ContactID != contactID {
+		t.Fatalf("expected contactID=%s, got %s", contactID, job.ContactID)
+	}
+	if job.Matched != 1 {
+		t.Fatalf("expected Matched=1, got %d", job.Matched)
+	}
+}
+
+func TestRun_RehydrateOrLookup_LoadsExistingEntry(t *testing.T) {
+	// RegisterPending first, then Run: no duplicate entry, counts
+	// accumulate on the same job.
+	svc := NewRematchService()
+	svc.Register(&stubHandler{typ: "email", matched: 2})
+
+	jobID := uuid.New()
+	contactID := uuid.New()
+	methods := []Method{{Type: "email", Value: "a@b.c"}}
+
+	svc.RegisterPending(jobID, contactID, methods)
+	snap, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob after RegisterPending: %v", err)
+	}
+	if snap.Status != JobStatusRunning {
+		t.Fatalf("expected Running after RegisterPending, got %s", snap.Status)
+	}
+	if snap.Matched != 0 {
+		t.Fatalf("expected Matched=0 before Run, got %d", snap.Matched)
+	}
+
+	if err := svc.Run(context.Background(), jobID, contactID, methods); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	final, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob after Run: %v", err)
+	}
+	if final.Status != JobStatusCompleted {
+		t.Fatalf("expected Completed, got %s", final.Status)
+	}
+	if final.Matched != 2 {
+		t.Fatalf("expected Matched=2, got %d", final.Matched)
+	}
+	// StartedAt must be the RegisterPending-assigned value, not a fresh one.
+	if !final.StartedAt.Equal(snap.StartedAt) {
+		t.Fatalf("StartedAt should match RegisterPending snapshot; got %v vs %v",
+			final.StartedAt, snap.StartedAt)
+	}
+}
+
+func TestRun_RetryAfterFailure_ResetsState(t *testing.T) {
+	// First Run fails; second Run with same jobID succeeds. Assert
+	// the second attempt's state replaces (not accumulates on) the
+	// first attempt's partial state.
+	svc := NewRematchService()
+	errBoom := errors.New("boom")
+	failing := &stubHandler{typ: "email", err: errBoom}
+	svc.Register(failing)
+
+	jobID := uuid.New()
+	contactID := uuid.New()
+	methods := []Method{{Type: "email", Value: "a@b.c"}}
+
+	if err := svc.Run(context.Background(), jobID, contactID, methods); !errors.Is(err, errBoom) {
+		t.Fatalf("first Run should fail with boom, got %v", err)
+	}
+	firstSnap, _ := svc.GetJob(jobID)
+	if firstSnap.Status != JobStatusFailed {
+		t.Fatalf("expected Failed after first run, got %s", firstSnap.Status)
+	}
+
+	// Swap in a successful handler for the retry and re-run.
+	svc.handlers["email"] = &stubHandler{typ: "email", matched: 5}
+	if err := svc.Run(context.Background(), jobID, contactID, methods); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	final, _ := svc.GetJob(jobID)
+	if final.Status != JobStatusCompleted {
+		t.Fatalf("expected Completed after retry, got %s", final.Status)
+	}
+	if final.Matched != 5 {
+		t.Fatalf("expected Matched=5 (only second attempt), got %d", final.Matched)
+	}
+	if final.Error != "" {
+		t.Fatalf("expected cleared Error after retry, got %q", final.Error)
+	}
+	if final.CompletedAt == nil || firstSnap.CompletedAt == nil {
+		t.Fatal("expected non-nil CompletedAt on both snapshots")
+	}
+	if !final.CompletedAt.After(*firstSnap.CompletedAt) &&
+		!final.CompletedAt.Equal(*firstSnap.CompletedAt) {
+		// Accelerated clock may produce identical timestamps; accept equal or after.
+		t.Fatalf("expected retry CompletedAt >= first; got %v vs %v",
+			final.CompletedAt, firstSnap.CompletedAt)
+	}
+}
+
+func TestRegisterPending_CreatesRunningEntry(t *testing.T) {
+	svc := NewRematchService()
+	jobID := uuid.New()
+	contactID := uuid.New()
+	methods := []Method{{Type: "email", Value: "a@b.c"}}
+
+	svc.RegisterPending(jobID, contactID, methods)
+	snap, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if snap.Status != JobStatusRunning {
+		t.Fatalf("expected Running, got %s", snap.Status)
+	}
+	if snap.ContactID != contactID {
+		t.Fatalf("expected contactID=%s, got %s", contactID, snap.ContactID)
+	}
+	if len(snap.Methods) != 1 || snap.Methods[0].Value != "a@b.c" {
+		t.Fatalf("unexpected methods: %+v", snap.Methods)
+	}
+}
+
+func TestRegisterPending_Idempotent(t *testing.T) {
+	svc := NewRematchService()
+	jobID := uuid.New()
+	contactID := uuid.New()
+
+	svc.RegisterPending(jobID, contactID, []Method{{Type: "email", Value: "a@b.c"}})
+	first, _ := svc.GetJob(jobID)
+
+	// Second call with different methods should be a no-op.
+	svc.RegisterPending(jobID, contactID, []Method{{Type: "phone", Value: "+1"}})
+	second, _ := svc.GetJob(jobID)
+
+	if second.StartedAt != first.StartedAt {
+		t.Fatalf("second RegisterPending bumped StartedAt: %v vs %v", second.StartedAt, first.StartedAt)
+	}
+	if len(second.Methods) != 1 || second.Methods[0].Value != "a@b.c" {
+		t.Fatalf("expected first call's methods preserved, got %+v", second.Methods)
+	}
+}
+
+func TestRegisterPending_NilJobID_NoOp(t *testing.T) {
+	svc := NewRematchService()
+	svc.RegisterPending(uuid.Nil, uuid.New(), []Method{{Type: "email", Value: "x"}})
+	if _, err := svc.GetJob(uuid.Nil); !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("expected ErrJobNotFound for nil jobID, got %v", err)
 	}
 }
 
