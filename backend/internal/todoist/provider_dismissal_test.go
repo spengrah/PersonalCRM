@@ -42,19 +42,6 @@ func (r *countingRecorder) RecordInteraction(_ context.Context, _ repository.Rec
 	return &repository.Interaction{ID: uuid.New()}, nil
 }
 
-// permissiveRecorder records call counts without failing the test. Used by
-// tests that exercise code paths which legitimately call RecordInteraction
-// (e.g., handleTaskCompletion) where the test only cares about the caller's
-// return value, not whether the interaction succeeds.
-type permissiveRecorder struct {
-	count int
-}
-
-func (r *permissiveRecorder) RecordInteraction(_ context.Context, _ repository.RecordInteractionRequest) (*repository.Interaction, error) {
-	r.count++
-	return &repository.Interaction{ID: uuid.New()}, nil
-}
-
 // busRecorder is a test double for eventPublisher. It records every
 // PublishTx call and optionally injects errors or duplicate (env.ID=Nil)
 // responses. Safe for concurrent use.
@@ -103,25 +90,10 @@ type dismissalTestEnv struct {
 	accountID       string
 }
 
-// providerTestEnv is a lightweight variant of dismissalTestEnv used by tests
-// that need a permissive recorder (notably the handleTaskCompletion guardrail
-// test, where RecordInteraction is legitimately called during the handler's
-// normal flow).
-type providerTestEnv struct {
-	ctx             context.Context
-	provider        *CadenceSyncProvider
-	contactRepo     *repository.ContactRepository
-	contactTaskRepo *repository.ContactTaskRepository
-	bus             *busRecorder
-	pool            *pgxpool.Pool
-	settings        Settings
-	accountID       string
-}
-
 // newProviderTestEnv builds the shared DB + repos + provider infrastructure
-// used by both setupDismissalTest and setupProviderTestPermissive. Takes the
-// recorder as a parameter so callers can pass either the strict countingRecorder
-// or the permissiveRecorder.
+// used by setupDismissalTest. Takes the recorder as a parameter so callers
+// can pass the strict countingRecorder (the last surviving test double in
+// this file).
 func newProviderTestEnv(t *testing.T, recorder interactionRecorder) (*CadenceSyncProvider, *repository.ContactRepository, *repository.ContactTaskRepository, *busRecorder, *pgxpool.Pool, context.Context, Settings, string, func()) {
 	t.Helper()
 
@@ -189,28 +161,6 @@ func setupDismissalTest(t *testing.T) (*dismissalTestEnv, func()) {
 		contactRepo:     contactRepo,
 		contactTaskRepo: contactTaskRepo,
 		recorder:        recorder,
-		bus:             bus,
-		pool:            pool,
-		settings:        settings,
-		accountID:       accountID,
-	}, cleanup
-}
-
-// setupProviderTestPermissive builds a CadenceSyncProvider with a permissive
-// recorder that does not fail the test on RecordInteraction calls. Used by
-// tests that exercise handleTaskCompletion directly, since it calls
-// RecordInteraction as part of its normal flow.
-func setupProviderTestPermissive(t *testing.T) (*providerTestEnv, func()) {
-	t.Helper()
-
-	recorder := &permissiveRecorder{}
-	provider, contactRepo, contactTaskRepo, bus, pool, ctx, settings, accountID, cleanup := newProviderTestEnv(t, recorder)
-
-	return &providerTestEnv{
-		ctx:             ctx,
-		provider:        provider,
-		contactRepo:     contactRepo,
-		contactTaskRepo: contactTaskRepo,
 		bus:             bus,
 		pool:            pool,
 		settings:        settings,
@@ -912,32 +862,67 @@ func TestProcessItems_SuccessfulDismissalReturnsItemClose(t *testing.T) {
 	assert.Equal(t, externalID, commands[0].Args["id"])
 }
 
-// TestHandleTaskCompletion_StateUpdateFailureDoesNotReturnError is a
-// guardrail test: handleTaskCompletion intentionally retains log-and-continue
-// semantics on DB failure, because a fatal-error conversion would break the
-// state→interaction ordering invariant documented in the handler's comment.
-// If someone later changes this to return an error without addressing the
-// ordering, this test fails loudly.
-//
-// Uses setupProviderTestPermissive because handleTaskCompletion calls
-// RecordInteraction as part of its normal flow, which would trip the strict
-// countingRecorder.
-//
-// TODO(#265): when the deferred transactional refactor lands, this
-// guardrail test should be updated or removed to reflect the new semantics.
-func TestHandleTaskCompletion_StateUpdateFailureDoesNotReturnError(t *testing.T) {
-	env, cleanup := setupProviderTestPermissive(t)
+// TestHandleTaskCompletion_PublishesEventAtomicallyWithStateUpdate verifies
+// that on the happy path, handleTaskCompletion publishes a task.completed
+// event, transitions the row to 'completed', and commits both atomically.
+func TestHandleTaskCompletion_PublishesEventAtomicallyWithStateUpdate(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
 	defer cleanup()
 
-	// Create contact + managed cadence task.
 	cadenceStr := "monthly"
 	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "CompletionGuard " + uuid.New().String()[:8],
+		FullName: "CompleteHappy " + uuid.New().String()[:8],
 		Cadence:  &cadenceStr,
 	})
 	require.NoError(t, err)
 
-	cadenceExtID := "td-cad-guard-" + uuid.New().String()[:8]
+	cadenceExtID := "td-cad-happy-" + uuid.New().String()[:8]
+	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindCadence,
+		ExternalTaskID: cadenceExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata:       map[string]any{},
+	})
+	require.NoError(t, err)
+
+	r := env.provider.handleTaskCompletion(env.ctx, SyncItem{
+		ID:      cadenceExtID,
+		Checked: true,
+	}, task, contact, env.settings, env.accountID)
+
+	require.NoError(t, r.Err)
+	assert.True(t, r.Processed)
+
+	// Task state is now 'completed'.
+	reloaded, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.ContactTaskStateCompleted, reloaded.State)
+
+	// Exactly one event published with SourceID = task.ID.String().
+	pubs := env.bus.Published()
+	require.Len(t, pubs, 1)
+	assert.Equal(t, "todoist", pubs[0].Source)
+	assert.Equal(t, task.ID.String(), pubs[0].SourceID)
+	assert.Equal(t, events.KindTaskCompleted, pubs[0].Kind)
+}
+
+// TestHandleTaskCompletion_DBFailureRollsBackEventAndState verifies that a
+// cancelled context causes both the event publish and the state update to
+// roll back — the row stays 'managed'.
+func TestHandleTaskCompletion_DBFailureRollsBackEventAndState(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	cadenceStr := "monthly"
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "CompleteFail " + uuid.New().String()[:8],
+		Cadence:  &cadenceStr,
+	})
+	require.NoError(t, err)
+
+	cadenceExtID := "td-cad-fail-" + uuid.New().String()[:8]
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
@@ -949,15 +934,18 @@ func TestHandleTaskCompletion_StateUpdateFailureDoesNotReturnError(t *testing.T)
 	require.NoError(t, err)
 
 	badCtx := cancelledContext()
-
 	r := env.provider.handleTaskCompletion(badCtx, SyncItem{
 		ID:      cadenceExtID,
 		Checked: true,
 	}, task, contact, env.settings, env.accountID)
 
-	// Behavior intentionally unchanged: never returns an error.
-	require.NoError(t, r.Err, "handleTaskCompletion must retain log-and-continue semantics on DB failure")
-	assert.False(t, r.Unsafe, "completion's state transition is replay-safe")
+	require.Error(t, r.Err, "handleTaskCompletion must return an error under injected DB failure")
+	assert.False(t, r.Processed)
+
+	// Task state still 'managed' — rollback.
+	reloaded, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.ContactTaskStateManaged, reloaded.State)
 }
 
 // TestHandleRecurringDetection_StateUpdateErrorPropagates verifies that a DB

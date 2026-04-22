@@ -597,18 +597,17 @@ func (p *CadenceSyncProvider) handleRecurringDetection(
 
 // handleTaskCompletion handles a completed Todoist task.
 //
-// Failure semantics: this handler intentionally retains log-and-continue on DB
-// failure (returns Err: nil always). The state→interaction ordering comment
-// below documents why a naive fatal-error conversion would break the follow-up
-// cycle; correct fix requires repository-layer transaction threading.
-// TODO(#265): see the deferred refactor tracking issue — this
-// handler is on the list for transactional rewrite.
+// Atomic publish + state advance: opens a pgx.Tx, publishes task.completed
+// via PublishTx, transitions the local row to 'completed' via
+// UpdateContactTaskStateTx, commits. The downstream InteractionRecorder
+// (async via river) consumes the event and writes the interaction row.
 //
-// Returns Unsafe: false because on success the row transitions to 'completed'
-// and replay short-circuits at processItem's state != 'managed' early-return.
-// (On partial failure — state=completed but RecordInteraction failed — the
-// interaction record is lost, but replay is still idempotent because of the
-// early-return, so `Unsafe: false` is defensible.)
+// Direction derivation (spec §3.4.5): action tasks emit direction="mutual"
+// (matching the legacy default), cadence/follow_up emit direction="outbound".
+//
+// SourceID is task.ID.String() (stable internal uuid). Using ExternalTaskID
+// would collide with the temp→real id swap in tryRecoverPendingTempID,
+// bypassing event-layer dedup.
 func (p *CadenceSyncProvider) handleTaskCompletion(
 	ctx context.Context,
 	item SyncItem,
@@ -617,9 +616,7 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 	settings Settings,
 	accountID string,
 ) processItemResult {
-	var commands []SyncCommand
-
-	// Parse completion timestamp
+	// Parse completion timestamp.
 	completedAt := accelerated.GetCurrentTime()
 	if item.CompletedAt != nil {
 		if parsed, err := time.Parse(time.RFC3339, *item.CompletedAt); err == nil {
@@ -627,55 +624,77 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 		}
 	}
 
-	// Handle action tasks — mark as completed, record mutual interaction, no new task
+	// Direction: action → mutual; cadence/follow_up → outbound.
+	direction := repository.InteractionDirectionOutbound
 	if task.Kind == TaskKindAction {
-		sourceRef := task.ExternalTaskID
-		_, err := p.interactionRecorder.RecordInteraction(ctx, repository.RecordInteractionRequest{
-			ContactID:  contact.ID,
-			Source:     repository.InteractionSourceTodoist,
-			SourceRef:  &sourceRef,
-			OccurredAt: completedAt,
-		})
-		if err != nil {
-			logger.Warn().Err(err).Msg("failed to record interaction from action task completion")
-		}
-		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateCompleted); err != nil {
-			logger.Warn().Err(err).Msg("failed to update action task state to completed")
-		}
+		direction = repository.InteractionDirectionMutual
+	}
+
+	payload, err := events.Marshal(events.KindTaskCompleted, events.TaskCompletedPayload{
+		Version:     1,
+		ContactID:   contact.ID,
+		TaskID:      task.ExternalTaskID,
+		TaskKind:    task.Kind,
+		CompletedAt: completedAt,
+		Direction:   direction,
+	})
+	if err != nil {
+		return processItemResult{Err: fmt.Errorf("marshal task.completed: %w", err)}
+	}
+	env := &events.Envelope{
+		Source:     SourceName,
+		SourceID:   task.ID.String(),
+		Kind:       events.KindTaskCompleted,
+		Payload:    payload,
+		ObservedAt: completedAt,
+	}
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return processItemResult{Err: fmt.Errorf("begin tx: %w", err)}
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Publish-before-mutate (core.md gotcha).
+	if err := p.bus.PublishTx(ctx, tx, env); err != nil {
+		return processItemResult{Err: fmt.Errorf("publish task.completed: %w", err)}
+	}
+	if env.ID == uuid.Nil {
+		// Duplicate — prior tick already processed this completion. The
+		// state=completed short-circuit at processItem normally prevents
+		// reaching this handler on replay; this branch defends against
+		// the degenerate case where the state update rolled back on the
+		// earlier tick but the event committed.
+		logger.Debug().
+			Str("contactTaskId", task.ID.String()).
+			Str("externalTaskId", task.ExternalTaskID).
+			Msg("task.completed duplicate; skipping state update")
 		return processItemResult{Processed: true}
 	}
 
-	// For cadence and follow_up tasks: mark completed FIRST, then record outbound interaction.
-	// CRITICAL: Must mark completed before RecordInteraction because RecordInteraction triggers
-	// followUpManager.CreateOrRefreshFollowUp, which looks for existing pending follow-ups.
-	// If this task is still 'managed' when that lookup runs, it refreshes the dying task
-	// instead of creating a successor — collapsing the follow-up cycle.
-	if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateCompleted); err != nil {
-		logger.Warn().Err(err).
-			Str("taskKind", task.Kind).
-			Msg("failed to mark task as completed")
+	// Transition local state to 'completed' inside the tx. For cadence /
+	// follow_up tasks, the state advance is the pre-condition for the
+	// downstream FollowUpManager's FindPendingFollowUp gate — once the tx
+	// commits, the async consumer sees state='completed' and creates the
+	// successor follow-up instead of refreshing the dying task.
+	if _, err := p.contactTaskRepo.UpdateContactTaskStateTx(
+		ctx, tx, task.ID, repository.ContactTaskStateCompleted,
+	); err != nil {
+		return processItemResult{Err: fmt.Errorf("update task state: %w", err)}
 	}
 
-	// Record outbound interaction — this triggers follow-up creation via followUpManager
-	sourceRef := task.ExternalTaskID
-	_, err := p.interactionRecorder.RecordInteraction(ctx, repository.RecordInteractionRequest{
-		ContactID:  contact.ID,
-		Source:     repository.InteractionSourceTodoist,
-		SourceRef:  &sourceRef,
-		OccurredAt: completedAt,
-		Direction:  repository.InteractionDirectionOutbound,
-	})
-	if err != nil {
-		logger.Warn().Err(err).Msg("failed to record outbound interaction from Todoist completion")
+	if err := tx.Commit(ctx); err != nil {
+		return processItemResult{Err: fmt.Errorf("commit: %w", err)}
 	}
 
 	logger.Info().
 		Str("contactId", contact.ID.String()).
 		Str("taskKind", task.Kind).
 		Time("completedAt", completedAt).
-		Msg("recorded outbound interaction from Todoist task completion")
+		Str("direction", direction).
+		Msg("published task.completed (atomic commit)")
 
-	return processItemResult{Processed: true, Commands: commands}
+	return processItemResult{Processed: true}
 }
 
 // handleSkipTrigger handles a skip trigger (task deleted, label removed, deadline removed).
