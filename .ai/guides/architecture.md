@@ -640,6 +640,80 @@ See Google Calendar or Todoist providers as reference implementations.
 
 ---
 
+## Event Bus and Consumers
+
+### Overview
+
+The event bus is an append-only `event` table (migration 036) plus a set of river-backed consumers that subscribe to specific `Kind` values and perform the authoritative domain writes. Publishers commit rows into `event` inside their caller's `pgx.Tx` via `events.Bus.PublishTx`; river workers dispatch per-kind consumer jobs after the commit lands.
+
+Modes: each consumer has a config flag (`EVENT_BUS_*_MODE`) that is either `cutover` (normal) or `off` (emergency kill switch, gated by `EVENT_BUS_*_UNSAFE_ALLOW_OFF=true`). The historical `shadow` value is retired — the cutover posture is the only supported operating mode. See `backend/internal/config/config.go` for the validation rules.
+
+### Consumer Topology
+
+```mermaid
+flowchart LR
+    Publisher["Publisher<br/>(telegram, gcal, todoist,<br/>ManualInteractionHandler,<br/>HTTP /ingest/events)"]
+    Publisher -->|events.Bus.PublishTx| EventTable["event table<br/>(append-only)"]
+    EventTable -->|river job per kind| InteractionRecorder
+    InteractionRecorder -->|interaction.recorded<br/>(V2 payload)| CadenceUpdater
+    InteractionRecorder -->|interaction.recorded| FollowUpManager
+    EventTable -->|contact_methods.added| RematchDispatcher
+```
+
+Concrete writer → kind mapping:
+
+| Consumer | Subscribes to | Authoritative write |
+|---|---|---|
+| `InteractionRecorder` | `message.received`, `message.sent`, `calendar.attended`, `task.completed`, `task.outreach_detected`, `interaction.manual` | `interaction` row insert + emits `interaction.recorded` V2 |
+| `CadenceUpdater` | `interaction.recorded` | `contact.last_contacted`, `last_interaction_at`, `last_outreach_at`, `last_response_at`, `contact_by` |
+| `FollowUpManager` | `interaction.recorded` | `contact_task.kind='follow_up'` lifecycle (create / refresh / complete) + Todoist create/close/refresh river jobs |
+| `RematchDispatcher` | `contact_methods.added` | Serializes per-contact rematch via `contactLocks` and runs `RematchService.Run` |
+
+The InteractionRecorder invokes CadenceUpdater + FollowUpManager **inline** after `bus.PublishTx` so cadence + follow-up state apply synchronously in the caller's tx. The queued river workers for the same event become durable no-ops via `event_consumer_claim` when they eventually run. This pattern closes the queued-worker replay hole while keeping per-consumer retries available.
+
+### Sole-Writer Map
+
+Each consumer is the single source of truth for specific contact / contact_task columns post-cutover. Direct writes from anywhere else MUST be routed through the consumer's public API (e.g. `CadenceUpdater.ApplyInteraction` / `BulkApply` / `ApplyContactByOverride`). The sole-writer invariant is enforced by `scripts/ci/*-sole-writer-guard.sh` grep-based CI checks.
+
+| Column / table | Sole writer | Notes |
+|---|---|---|
+| `contact.last_contacted` | `CadenceUpdater` | Forward-max on non-manual sources; unconditional on manual. |
+| `contact.last_interaction_at` | `CadenceUpdater` | Same column set as `last_contacted` except merge does NOT bump. |
+| `contact.last_outreach_at` | `CadenceUpdater` | Outbound / mutual directions only. |
+| `contact.last_response_at` | `CadenceUpdater` | Inbound / mutual directions only. |
+| `contact.contact_by` | `CadenceUpdater` | Recomputed from cadence string on interaction; user-override path via `ApplyContactByOverride`. |
+| `contact_task` (kind='follow_up') lifecycle | `FollowUpManager` | `CreateContactTaskTx`, `UpdateContactTaskStateTx`, `UpdateContactTaskMetadataTx` are callable only via the manager's entry points. |
+| `interaction` row insert | `InteractionRecorder` (inline via `ContactService.RecordInteractionTx`) | Non-bus wrappers route via `ContactService.RecordInteraction`. |
+
+### Hybrid Sync / Async Contract
+
+"Sync from caller" means the write is visible in the caller's tx before it returns. "Post-commit best-effort" means the local write is in-tx but a follow-up external call runs after tx commit with a river-backed retry fallback. "Async" means the caller returns before the domain write lands.
+
+| Write | Sync from caller? | Notes |
+|---|---|---|
+| `interaction` row insert | **Yes** (in caller's tx) | Via `interactionRecorder` / `ContactService.RecordInteractionTx`. |
+| `contact.last_contacted` / `last_outreach_at` / `last_response_at` / `contact_by` | **Yes** (in caller's tx) | Inline via `CadenceUpdater.HandleEvent` from the recorder's post-emit path (or `ApplyInteraction` for non-bus wrappers). |
+| `contact_task` follow-up local state (create / refresh / complete) | **Yes** (in caller's tx) | `pending_remote_create` insert + `metadata['due_date']` refresh commit inline with the interaction. |
+| Todoist `item_add` for new follow-ups | **Async** | Enqueued as `TodoistFollowUpCreateJob`; worker finalizes `external_task_id` on success. |
+| Todoist `item_update` for follow-up refresh | **Post-commit best-effort, river fallback** | Closure returned from `FollowUpManager.HandleEvent` runs after `tx.Commit` and issues `item_update` directly; on failure enqueues `TodoistFollowUpRefreshJob`. Caller DOES wait for the post-commit closure on UI-initiated paths, so caller-visible latency includes best-effort Todoist RTT. |
+| Todoist `item_close` for follow-up completion | **Post-commit best-effort, river fallback** | Same closure pattern as refresh; on failure enqueues `TodoistFollowUpCloseJob`. |
+| Rematch contact-method reprocessing | **Async** | Enqueued via `RematchDispatcher`; caller sees `rematch_job_id` in the response envelope and polls `GET /rematch/jobs/:id`. |
+| HTTP ingest (`POST /ingest/events`) | **Async** | The `event` row is inserted synchronously inside the request tx, but the consumer runs in river. The HTTP response returns after the insert, not after the consumer runs. |
+
+**Operator takeaway:** "sync from caller" means the contact's cadence / task state is readable immediately after the caller returns. It does NOT mean the Todoist side of the world is in sync — that's best-effort with retry for refresh / close, and fully async for create. UI code handles this via React Query's stale-time refresh + follow-up-status polling.
+
+### Mode Flags
+
+Interaction, cadence, and follow-up consumers each have a mode flag that defaults to `cutover`. The only supported alternate value is `off`, which disables the consumer and requires `EVENT_BUS_*_UNSAFE_ALLOW_OFF=true` as a safety gate. The historical `shadow` mode — used for per-event divergence observation during the cutover series — has been retired along with the `event_shadow_*` observation tables (migrations 038, 039, 042 dropped in 044). Rollback from a problem in cutover is `git revert`, not a runtime flag flip.
+
+**Key files:**
+- `backend/internal/events/bus.go` — publisher API (`PublishTx`, `GetEvent`).
+- `backend/internal/consumer/` — all four consumers + river worker wrappers.
+- `backend/internal/consumer/README.md` — per-consumer operator reference.
+- `backend/internal/eventbus/README.md` — publisher + bus surface reference.
+
+---
+
 ## Testing Philosophy
 
 ### Test Pyramid
