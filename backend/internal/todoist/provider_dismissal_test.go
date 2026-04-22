@@ -1059,21 +1059,16 @@ func TestDecideFatalErrorPolicy_LogsAndContinuesAfterUnsafe(t *testing.T) {
 	assert.NoError(t, wrappedErr, "continuing must not return an error")
 }
 
-// TestHandleSkipTrigger_FailureDoesNotReturnErrorAndSetsUnsafe is a guardrail
-// test: handleSkipTrigger intentionally retains log-and-continue semantics
-// on DB failure because it commits non-idempotent side effects (contact_by
-// advancement). Critically, it must set Unsafe: true even on partial
-// failures, because UpdateContactBy may already have fired before the
-// failure, advancing contact_by in the DB.
-//
-// TODO(#265): when the deferred transactional refactor lands, this
-// guardrail test should be updated or removed to reflect the new semantics.
-func TestHandleSkipTrigger_FailureDoesNotReturnErrorAndSetsUnsafe(t *testing.T) {
+// TestHandleSkipTrigger_PublishesEventAtomicallyWithStateAdvance verifies the
+// happy path: publish task.skipped + advance contact_by + update metadata
+// land atomically when handleSkipTrigger succeeds. This is a replacement
+// for the pre-atomic-tx guardrail that locked in log-and-continue.
+func TestHandleSkipTrigger_PublishesEventAtomicallyWithStateAdvance(t *testing.T) {
 	env, cleanup := setupDismissalTest(t)
 	defer cleanup()
 
-	contact, _ := createDismissalContact(t, env, "SkipGuard")
-	cadenceExtID := "td-skip-guard-" + uuid.New().String()[:8]
+	contact, _ := createDismissalContact(t, env, "SkipHappy")
+	cadenceExtID := "td-skip-happy-" + uuid.New().String()[:8]
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
@@ -1084,13 +1079,145 @@ func TestHandleSkipTrigger_FailureDoesNotReturnErrorAndSetsUnsafe(t *testing.T) 
 	})
 	require.NoError(t, err)
 
+	item := SyncItem{
+		ID:        cadenceExtID,
+		UpdatedAt: "2026-04-01T12:00:00Z",
+	}
+
+	r := env.provider.handleSkipTrigger(env.ctx, item, task, contact, env.settings, env.accountID)
+
+	require.NoError(t, r.Err)
+	assert.True(t, r.Processed)
+	require.Len(t, r.Commands, 1, "exactly one item_add command expected")
+	assert.Equal(t, "item_add", r.Commands[0].Type)
+
+	// Bus recorded the envelope with the expected SourceID.
+	pubs := env.bus.Published()
+	require.Len(t, pubs, 1, "exactly one event should have been published")
+	expectedSourceID := task.ID.String() + ":" + item.UpdatedAt
+	assert.Equal(t, "todoist", pubs[0].Source)
+	assert.Equal(t, expectedSourceID, pubs[0].SourceID)
+	assert.Equal(t, events.KindTaskSkipped, pubs[0].Kind)
+
+	// contact_by advanced by one cadence period (monthly → 30 days).
+	reloaded, err := env.contactRepo.GetContact(env.ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded.ContactBy)
+	if contact.ContactBy != nil {
+		assert.True(t, reloaded.ContactBy.After(*contact.ContactBy),
+			"contact_by should advance past original")
+	}
+
+	// Task metadata contains pending_temp_id (matching the replacement
+	// item_add TempID) and synced_deadline.
+	taskReloaded, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
+	require.NoError(t, err)
+	pending, _ := taskReloaded.Metadata[MetadataKeyPendingTempID].(string)
+	assert.Equal(t, r.Commands[0].TempID, pending)
+	syncedDeadline, _ := taskReloaded.Metadata[MetadataKeySyncedDeadline].(string)
+	assert.NotEmpty(t, syncedDeadline)
+}
+
+// TestHandleSkipTrigger_DBFailureRollsBackEventAndState verifies that when
+// the in-tx UpdateContactByTx or UpdateContactTaskMetadataTx fails, no event
+// row is visible, contact_by stays unchanged, and no replacement command is
+// returned.
+func TestHandleSkipTrigger_DBFailureRollsBackEventAndState(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	contact, snap := createDismissalContact(t, env, "SkipFail")
+	cadenceExtID := "td-skip-fail-" + uuid.New().String()[:8]
+	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindCadence,
+		ExternalTaskID: cadenceExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata:       map[string]any{},
+	})
+	require.NoError(t, err)
+
+	// Cancelled context: tx.Begin / publish succeed? Actually pool.Begin
+	// with a cancelled ctx fails at ctx.Err() check. Either way the handler
+	// returns an error and everything rolls back.
 	badCtx := cancelledContext()
 
-	r := env.provider.handleSkipTrigger(badCtx, task, contact, env.settings, env.accountID)
+	item := SyncItem{ID: cadenceExtID, UpdatedAt: "2026-04-02T09:00:00Z"}
+	r := env.provider.handleSkipTrigger(badCtx, item, task, contact, env.settings, env.accountID)
 
-	// Behavior intentionally unchanged: never returns an error.
-	require.NoError(t, r.Err, "handleSkipTrigger must retain log-and-continue semantics on DB failure")
-	// CRUCIAL: Unsafe must still be true. UpdateContactBy may have advanced
-	// contact_by before the failure, so replay would double-advance.
-	assert.True(t, r.Unsafe, "skip trigger must report Unsafe=true even on partial failure")
+	require.Error(t, r.Err, "handleSkipTrigger must return an error under injected DB failure")
+	assert.False(t, r.Processed, "failed skip must not report Processed=true")
+	assert.Nil(t, r.Commands, "no replacement item_add must be returned when the tx rolls back")
+
+	// contact_by unchanged.
+	reloaded, err := env.contactRepo.GetContact(env.ctx, contact.ID)
+	require.NoError(t, err)
+	assertTimePtrEqual(t, snap.ContactBy, reloaded.ContactBy, "contact_by")
+
+	// Task metadata unchanged (no pending_temp_id inserted).
+	taskReloaded, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
+	require.NoError(t, err)
+	_, hasPending := taskReloaded.Metadata[MetadataKeyPendingTempID]
+	assert.False(t, hasPending, "pending_temp_id must not be set after rollback")
+}
+
+// TestHandleSkipTrigger_ReplayIsNoOp verifies the spec-mandated property
+// that "the former second skip ran twice on replay scenario is now
+// impossible". Invokes the handler twice with the same (task, UpdatedAt).
+// The second call hits the bus's duplicate-detection branch (env.ID=Nil),
+// returns Processed=true with no commands, and does NOT advance contact_by
+// a second time.
+func TestHandleSkipTrigger_ReplayIsNoOp(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	contact, _ := createDismissalContact(t, env, "SkipReplay")
+	cadenceExtID := "td-skip-replay-" + uuid.New().String()[:8]
+	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindCadence,
+		ExternalTaskID: cadenceExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata:       map[string]any{},
+	})
+	require.NoError(t, err)
+
+	item := SyncItem{ID: cadenceExtID, UpdatedAt: "2026-04-03T10:00:00Z"}
+
+	// First call — happy path.
+	r1 := env.provider.handleSkipTrigger(env.ctx, item, task, contact, env.settings, env.accountID)
+	require.NoError(t, r1.Err)
+	require.Len(t, r1.Commands, 1)
+
+	// Capture contact_by after the first advance.
+	after1, err := env.contactRepo.GetContact(env.ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, after1.ContactBy)
+
+	// Second call — busRecorder flips returnDuplicate to mimic the
+	// (source, source_id) unique collision that a real bus returns on
+	// replay. With the real bus in integration tests, env.ID=Nil is set
+	// by the bus itself; here we simulate it.
+	env.bus.mu.Lock()
+	env.bus.returnDuplicate = true
+	env.bus.mu.Unlock()
+
+	taskReloaded, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
+	require.NoError(t, err)
+	contactReloaded, err := env.contactRepo.GetContact(env.ctx, contact.ID)
+	require.NoError(t, err)
+
+	r2 := env.provider.handleSkipTrigger(env.ctx, item, taskReloaded, contactReloaded, env.settings, env.accountID)
+	require.NoError(t, r2.Err)
+	assert.True(t, r2.Processed)
+	assert.Nil(t, r2.Commands, "replay must NOT return a second item_add command")
+
+	// contact_by did NOT advance a second time.
+	after2, err := env.contactRepo.GetContact(env.ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, after2.ContactBy)
+	assert.True(t, after1.ContactBy.Equal(*after2.ContactBy),
+		"contact_by must not advance on replay (duplicate event)")
 }

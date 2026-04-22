@@ -525,7 +525,7 @@ func (p *CadenceSyncProvider) processItem(
 		if task.Kind == TaskKindFollowUp {
 			return p.handleFollowUpDismissal(ctx, item, task, contact)
 		}
-		return p.handleSkipTrigger(ctx, task, contact, settings, accountID)
+		return p.handleSkipTrigger(ctx, item, task, contact, settings, accountID)
 	}
 
 	// Check for deadline edit (Todoist wins) — only for cadence tasks.
@@ -680,93 +680,140 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 
 // handleSkipTrigger handles a skip trigger (task deleted, label removed, deadline removed).
 //
-// Failure semantics: this handler intentionally retains log-and-continue on DB
-// failure (returns Err: nil always). It commits non-idempotent side effects —
-// advances contact.contact_by and appends a replacement item_add command while
-// leaving the row state='managed'. On replay, processItem would NOT
-// short-circuit (state is still managed), so the same skip trigger would run
-// a second time and double-advance the cadence clock. Fixing this requires
-// transactional state tracking or an idempotency marker.
-// TODO(#265): see the deferred refactor tracking issue — this
-// handler is on the list for transactional rewrite.
+// Atomic publish + mutate: opens a pgx.Tx, publishes task.skipped via PublishTx,
+// advances contact.contact_by via UpdateContactByTx, writes metadata keys
+// (pending_temp_id, synced_deadline, synced_last_*) via UpdateContactTaskMetadataTx,
+// commits. Rollback on any error rolls back event row, contact_by advance, and
+// metadata together — no partial commits.
 //
-// Returns Unsafe: true on every successful return. This flag tells the sync
-// loop's processItems method that a non-replay-safe side effect was committed
-// in this batch; subsequent fatal errors in the same batch fall back to
-// log-and-continue instead of aborting (which would cause replay
-// double-advancement of this contact's cadence clock). The flag is set
-// unconditionally because partial failures (e.g., UpdateContactBy succeeded
-// but UpdateContactTaskMetadata failed) still advance contact_by — so even a
-// "failed" skip is unsafe to replay.
+// Replay safety: the event SourceID is task.ID.String():item.UpdatedAt. A
+// replay of the same unchanged Todoist item hits the (source, source_id)
+// unique on the event table; PublishTx resets env.ID to uuid.Nil and returns
+// nil; the handler short-circuits without advancing contact_by. The suffix
+// distinguishes genuine repeat-skips (item re-edited → new UpdatedAt) from
+// replays of the same unchanged item.
+//
+// Ordering (publish-before-mutate per core.md): PublishTx → mutate →
+// commit. Reversing would strand interactions on publish failure.
 func (p *CadenceSyncProvider) handleSkipTrigger(
 	ctx context.Context,
+	item SyncItem,
 	task *repository.ContactTask,
 	contact *repository.Contact,
 	settings Settings,
 	accountID string,
 ) processItemResult {
-	var commands []SyncCommand
-
-	// Calculate new contact_by using skip semantics
-	if contact.Cadence != nil && *contact.Cadence != "" {
-		cadenceType, err := cadence.ParseCadence(*contact.Cadence)
-		if err == nil {
-			// Skip pushes deadline out by a full cadence period
-			// Use the later of: (skipped contact_by + cadence) or (today + cadence)
-			days := cadence.CadenceDays(cadenceType)
-			now := accelerated.GetCurrentTime()
-			today := cadence.Today(now)
-
-			// Option 1: today + cadence
-			fromToday := today.AddDate(0, 0, days)
-
-			// Option 2: skipped contact_by + cadence
-			fromSkipped := fromToday // fallback if no contact_by
-			if contact.ContactBy != nil {
-				fromSkipped = contact.ContactBy.AddDate(0, 0, days)
-			}
-
-			// Use whichever is farther in the future
-			nextContactBy := fromToday
-			if fromSkipped.After(fromToday) {
-				nextContactBy = fromSkipped
-			}
-
-			// Update contact_by
-			if err := p.contactRepo.UpdateContactBy(ctx, contact.ID, nextContactBy); err != nil {
-				logger.Warn().Err(err).Msg("failed to update contact_by after skip")
-			}
-
-			// Create new task
-			deadlineStr := nextContactBy.Format(DateFormat)
-			cmd := p.createTaskCommand(contact, settings, &deadlineStr)
-			commands = append(commands, cmd)
-
-			// Update metadata with temp_id, synced_deadline, and synced_last_contacted (preserving existing keys)
-			metadata := task.Metadata
-			if metadata == nil {
-				metadata = make(map[string]any)
-			}
-			metadata[MetadataKeyPendingTempID] = cmd.TempID
-			metadata[MetadataKeySyncedDeadline] = deadlineStr
-			if contact.LastContacted != nil {
-				metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
-			}
-			if contact.LastOutreachAt != nil {
-				metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
-			}
-			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
-				logger.Warn().Err(err).Msg("failed to store pending_temp_id and synced_deadline in task metadata")
-			}
-
-			logger.Info().
-				Str("contactId", contact.ID.String()).
-				Time("newContactBy", nextContactBy).
-				Msg("processed skip trigger, created new task")
-		}
+	// Early-return: no cadence → nothing to advance → no state change, no event.
+	if contact.Cadence == nil || *contact.Cadence == "" {
+		return processItemResult{Processed: true}
+	}
+	cadenceType, err := cadence.ParseCadence(*contact.Cadence)
+	if err != nil {
+		logger.Warn().Err(err).
+			Str("contactId", contact.ID.String()).
+			Str("cadence", *contact.Cadence).
+			Msg("skip trigger: invalid cadence; no-op")
+		return processItemResult{Processed: true}
 	}
 
-	return processItemResult{Processed: true, Commands: commands, Unsafe: true}
+	// Compute nextContactBy (skip semantics: later of today+cadence or
+	// old contact_by+cadence).
+	days := cadence.CadenceDays(cadenceType)
+	now := accelerated.GetCurrentTime()
+	today := cadence.Today(now)
+	fromToday := today.AddDate(0, 0, days)
+	fromSkipped := fromToday
+	if contact.ContactBy != nil {
+		fromSkipped = contact.ContactBy.AddDate(0, 0, days)
+	}
+	nextContactBy := fromToday
+	if fromSkipped.After(fromToday) {
+		nextContactBy = fromSkipped
+	}
+
+	skippedAt := accelerated.GetCurrentTime()
+	payload, err := events.Marshal(events.KindTaskSkipped, events.TaskSkippedPayload{
+		Version:   1,
+		ContactID: contact.ID,
+		TaskID:    task.ExternalTaskID,
+		SkippedAt: skippedAt,
+	})
+	if err != nil {
+		return processItemResult{Err: fmt.Errorf("marshal task.skipped: %w", err)}
+	}
+	// SourceID: stable internal contact_task.id + item.UpdatedAt so replays
+	// of the same unchanged item dedup, while user re-edits produce new events.
+	env := &events.Envelope{
+		Source:     SourceName,
+		SourceID:   fmt.Sprintf("%s:%s", task.ID.String(), item.UpdatedAt),
+		Kind:       events.KindTaskSkipped,
+		Payload:    payload,
+		ObservedAt: skippedAt,
+	}
+
+	// Pre-compute replacement item_add so its TempID can land in metadata
+	// atomically with the state advance.
+	deadlineStr := nextContactBy.Format(DateFormat)
+	replacementCmd := p.createTaskCommand(contact, settings, &deadlineStr)
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return processItemResult{Err: fmt.Errorf("begin tx: %w", err)}
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Publish-before-mutate (core.md gotcha).
+	if err := p.bus.PublishTx(ctx, tx, env); err != nil {
+		return processItemResult{Err: fmt.Errorf("publish task.skipped: %w", err)}
+	}
+	if env.ID == uuid.Nil {
+		// Duplicate — prior tick processed this skip. No state change, no
+		// replacement command. Self-healing for a previously-failed HTTP
+		// batch is the responsibility of reconcileExistingTask's skip-drift
+		// branch, not this handler.
+		logger.Debug().
+			Str("sourceId", env.SourceID).
+			Msg("task.skipped duplicate; skipping state advance")
+		return processItemResult{Processed: true}
+	}
+
+	// Advance contact_by.
+	if err := p.contactRepo.UpdateContactByTx(ctx, tx, contact.ID, nextContactBy); err != nil {
+		return processItemResult{Err: fmt.Errorf("update contact_by: %w", err)}
+	}
+
+	// Update metadata. Preserve existing keys — pre-skip synced_deadline is
+	// consulted by the reconciler's skip-drift branch to close+recreate on
+	// HTTP failure.
+	metadata := task.Metadata
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	metadata[MetadataKeyPendingTempID] = replacementCmd.TempID
+	metadata[MetadataKeySyncedDeadline] = deadlineStr
+	if contact.LastContacted != nil {
+		metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+	}
+	if contact.LastOutreachAt != nil {
+		metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+	}
+	if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, task.ID, metadata); err != nil {
+		return processItemResult{Err: fmt.Errorf("update task metadata: %w", err)}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return processItemResult{Err: fmt.Errorf("commit: %w", err)}
+	}
+
+	logger.Info().
+		Str("contactId", contact.ID.String()).
+		Time("newContactBy", nextContactBy).
+		Str("sourceId", env.SourceID).
+		Msg("published task.skipped (atomic commit)")
+
+	// Return replacement item_add only after commit — the HTTP batch fires
+	// outside the tx in Sync's post-loop block (core.md gotcha).
+	return processItemResult{Processed: true, Commands: []SyncCommand{replacementCmd}, Unsafe: true}
 }
 
 // handleFollowUpDismissal handles a follow-up task being dismissed via Todoist.
