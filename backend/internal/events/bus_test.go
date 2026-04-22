@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 
@@ -122,7 +123,7 @@ func TestConsumerJobsForKind_ContactMethodsAdded(t *testing.T) {
 		Source:     "manual",
 		SourceID:   jobID.String(),
 		Payload:    mustMarshalContactMethodsAdded(t, contactID, jobID),
-		ObservedAt: time.Now(),
+		ObservedAt: accelerated.GetCurrentTime(),
 	}
 	jobs, err := consumerJobsForKind(env)
 	require.NoError(t, err)

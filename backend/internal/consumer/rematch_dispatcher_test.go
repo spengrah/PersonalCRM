@@ -6,8 +6,8 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/service"
 
@@ -57,7 +57,7 @@ func validEnvelope(t *testing.T, contactID, jobID uuid.UUID, methods []events.Co
 		SourceID:   jobID.String(),
 		Kind:       events.KindContactMethodsAdded,
 		Payload:    payload,
-		ObservedAt: time.Now(),
+		ObservedAt: accelerated.GetCurrentTime(),
 	}
 }
 
