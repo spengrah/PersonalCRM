@@ -491,7 +491,9 @@ func TestTodoist_TryRecoverPendingTempID_RollsBackOnDBFailure(t *testing.T) {
 		Description: marker,
 	}
 
-	_ = env.provider.tryRecoverPendingTempID(env.ctx, syncItem)
+	recovered, recoveryFailed := env.provider.tryRecoverPendingTempID(env.ctx, syncItem)
+	_ = recovered
+	assert.True(t, recoveryFailed, "recoveryFailed must surface so Sync can defer skip-drift")
 
 	// Both writes rolled back: external_task_id still the temp, metadata
 	// still has pending_temp_id.
@@ -573,11 +575,12 @@ func TestTodoist_ProcessTempIDMappings_RollbackRecoversViaTryRecoverPendingTempI
 	// triggered once). tryRecoverPendingTempID runs against an item with
 	// the CRM marker pointing at this contact.
 	marker := fmt.Sprintf(`{"crm":true,"contact_id":"%s","kind":"cadence","instance":"x"}`, contact.ID.String())
-	recovered := env.provider.tryRecoverPendingTempID(env.ctx, SyncItem{
+	recovered, recoveryFailed := env.provider.tryRecoverPendingTempID(env.ctx, SyncItem{
 		ID:          realID,
 		Description: marker,
 	})
 	require.NotNil(t, recovered, "tryRecoverPendingTempID must match the CRM marker and recover")
+	assert.False(t, recoveryFailed, "second-tick recovery must succeed")
 
 	// State after recovery: ExternalTaskID is real, pending_temp_id cleared.
 	afterTick2, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
@@ -585,6 +588,153 @@ func TestTodoist_ProcessTempIDMappings_RollbackRecoversViaTryRecoverPendingTempI
 	assert.Equal(t, realID, afterTick2.ExternalTaskID)
 	_, hasPending := afterTick2.Metadata[MetadataKeyPendingTempID]
 	assert.False(t, hasPending, "pending_temp_id must be cleared after recovery")
+}
+
+// TestTodoist_ProcessItems_PropagatesRecoveryFailed verifies that a
+// tryRecoverPendingTempID rollback in one item propagates through
+// processItem's result into processItems's aggregated recoveryFailed
+// return — so Sync forces deferSkipDrift=true for this tick.
+func TestTodoist_ProcessItems_PropagatesRecoveryFailed(t *testing.T) {
+	env, cleanup := setupAtomicTxTestEnv(t)
+	defer cleanup()
+
+	contact, task := createManagedCadenceTask(t, env, "RecoverFailProp")
+
+	// Put task in the "needs recovery" shape: ExternalTaskID is a temp,
+	// pending_temp_id matches it.
+	tempID := "temp-prop-" + uuid.New().String()[:8]
+	_, err := env.contactTaskRepo.UpdateContactTaskExternalID(env.ctx, task.ID, tempID)
+	require.NoError(t, err)
+	_, err = env.contactTaskRepo.UpdateContactTaskMetadata(env.ctx, task.ID, map[string]any{
+		MetadataKeyPendingTempID: tempID,
+	})
+	require.NoError(t, err)
+
+	// Faulty metadata-clear inside the recovery tx.
+	env.faultyTaskWriter.mu.Lock()
+	env.faultyTaskWriter.faultyMethod = "UpdateContactTaskMetadataTx"
+	env.faultyTaskWriter.mu.Unlock()
+
+	// Sync item carries a CRM marker that matches the contact — this is
+	// the "real Todoist id just delivered in syncResp.Items" case where
+	// GetContactTaskByExternalID misses (the local row still has the temp
+	// id) and processItem falls back to tryRecoverPendingTempID.
+	realID := "real-prop-" + uuid.New().String()[:8]
+	marker := fmt.Sprintf(`{"crm":true,"contact_id":"%s","kind":"cadence","instance":"x"}`, contact.ID.String())
+
+	items := []SyncItem{{
+		ID:          realID,
+		Description: marker,
+		Labels:      []string{env.settings.LabelName},
+		Deadline:    &SyncDate{Date: contact.ContactBy.Format(DateFormat)},
+		UpdatedAt:   "2026-04-08T10:00:00Z",
+	}}
+
+	_, _, recoveryFailed, err := env.provider.processItems(env.ctx, items, env.settings, env.accountID)
+	require.NoError(t, err, "processItems should not error — recovery failure is non-fatal")
+	assert.True(t, recoveryFailed, "processItems must propagate RecoveryFailed up from processItem")
+}
+
+// TestTodoist_ProcessTempIDMappings_RollbackDefersSkipDriftOneTick simulates
+// the round-trip where:
+//  1. handleSkipTrigger commits (state advance + pending_temp_id set).
+//  2. Todoist HTTP batch succeeds remotely (simulated by calling
+//     processTempIDMappings with a temp_id_mapping).
+//  3. The mapping tx rolls back (faulty metadata-clear).
+//  4. processTempIDMappings returns rolledBack=true.
+//  5. Same-tick reconcileContactTasks invoked with deferSkipDrift=true
+//     must NOT emit a duplicate item_add, even though the stale local row
+//     matches the skip-drift detection predicate.
+//
+// This is the key correctness test for the rollback-deferral fix.
+func TestTodoist_ProcessTempIDMappings_RollbackDefersSkipDriftOneTick(t *testing.T) {
+	env, cleanup := setupAtomicTxTestEnv(t)
+	defer cleanup()
+
+	contact, task := createManagedCadenceTask(t, env, "DeferOneTick")
+
+	// Step 1: simulate handleSkipTrigger's committed state — pending_temp_id
+	// set with a new temp id that differs from ExternalTaskID.
+	oldExtID := task.ExternalTaskID
+	newTempID := "temp-new-" + uuid.New().String()[:8]
+	_, err := env.contactTaskRepo.UpdateContactTaskMetadata(env.ctx, task.ID, map[string]any{
+		MetadataKeyPendingTempID:  newTempID,
+		MetadataKeySyncedDeadline: contact.ContactBy.Format(DateFormat),
+	})
+	require.NoError(t, err)
+
+	// Step 2 + 3: mapping tx rolls back on metadata clear.
+	env.faultyTaskWriter.mu.Lock()
+	env.faultyTaskWriter.faultyMethod = "UpdateContactTaskMetadataTx"
+	env.faultyTaskWriter.mu.Unlock()
+
+	realID := "real-defer-" + uuid.New().String()[:8]
+	rolledBack := env.provider.processTempIDMappings(env.ctx, map[string]string{newTempID: realID})
+	require.True(t, rolledBack, "mapping tx must have rolled back")
+
+	// State after rollback: ExternalTaskID unchanged (still oldExtID),
+	// pending_temp_id unchanged (still newTempID). Detection predicate
+	// (pending_temp_id != "" && pending_temp_id != ExternalTaskID) is TRUE.
+	afterMapping, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, oldExtID, afterMapping.ExternalTaskID)
+	pending, _ := afterMapping.Metadata[MetadataKeyPendingTempID].(string)
+	assert.Equal(t, newTempID, pending)
+
+	// Step 5: same-tick reconcile with deferSkipDrift=true. Skip-drift
+	// branch must NOT fire — no item_close + item_add emitted from it.
+	syncedDeadline, _ := afterMapping.Metadata[MetadataKeySyncedDeadline].(string)
+	cmds := env.provider.reconcileExistingTask(env.ctx, afterMapping, contact, env.settings, syncedDeadline, true /* deferSkipDrift */)
+
+	for _, c := range cmds {
+		assert.NotEqual(t, "item_close", c.Type, "deferral must suppress duplicate item_close")
+		assert.NotEqual(t, "item_add", c.Type, "deferral must suppress duplicate item_add")
+	}
+
+	// Metadata pending_temp_id unchanged (branch did not run).
+	afterReconcile, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
+	require.NoError(t, err)
+	stillPending, _ := afterReconcile.Metadata[MetadataKeyPendingTempID].(string)
+	assert.Equal(t, newTempID, stillPending, "pending_temp_id must be unchanged under deferral")
+}
+
+// TestTodoist_SkipDrift_ReconcileRecovery exercises the end-to-end skip-drift
+// self-healing path: when pending_temp_id mismatches ExternalTaskID and
+// deferSkipDrift=false, reconcileExistingTask emits item_close + item_add
+// so the next HTTP batch retries the replacement. This is the "HTTP batch
+// truly failed" case where the remote task was never created.
+func TestTodoist_SkipDrift_ReconcileRecovery(t *testing.T) {
+	env, cleanup := setupAtomicTxTestEnv(t)
+	defer cleanup()
+
+	contact, task := createManagedCadenceTask(t, env, "SkipDriftReconcile")
+
+	oldExtID := task.ExternalTaskID
+	staleTempID := "temp-stale-" + uuid.New().String()[:8]
+	syncedDeadline := contact.ContactBy.Format(DateFormat)
+	_, err := env.contactTaskRepo.UpdateContactTaskMetadata(env.ctx, task.ID, map[string]any{
+		MetadataKeyPendingTempID:  staleTempID,
+		MetadataKeySyncedDeadline: syncedDeadline,
+	})
+	require.NoError(t, err)
+
+	afterSkip, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
+	require.NoError(t, err)
+
+	// Reconcile with deferSkipDrift=false — branch must fire.
+	cmds := env.provider.reconcileExistingTask(env.ctx, afterSkip, contact, env.settings, syncedDeadline, false)
+
+	require.Len(t, cmds, 2, "skip-drift branch must emit item_close + item_add")
+	assert.Equal(t, "item_close", cmds[0].Type)
+	assert.Equal(t, oldExtID, cmds[0].Args["id"])
+	assert.Equal(t, "item_add", cmds[1].Type)
+
+	// pending_temp_id updated to the new item_add TempID.
+	afterRecovery, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
+	require.NoError(t, err)
+	newPending, _ := afterRecovery.Metadata[MetadataKeyPendingTempID].(string)
+	assert.Equal(t, cmds[1].TempID, newPending)
+	assert.NotEqual(t, staleTempID, newPending)
 }
 
 // TestReconcileExistingTask_SkipDriftRecovery_MetadataWriteFailure verifies

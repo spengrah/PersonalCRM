@@ -762,7 +762,7 @@ func TestProcessItems_AbortsOnFatalError(t *testing.T) {
 
 	badCtx := cancelledContext()
 
-	processed, commands, err := env.provider.processItems(
+	processed, commands, _, err := env.provider.processItems(
 		badCtx,
 		[]SyncItem{
 			{ID: "td-abort-" + uuid.New().String()[:8], Labels: []string{env.settings.LabelName}},
@@ -797,7 +797,7 @@ func TestProcessItems_SuccessfulDismissalReturnsItemClose(t *testing.T) {
 	externalID := "td-preserve-" + uuid.New().String()[:8]
 	_ = createFollowUpTask(t, env, contact.ID, externalID)
 
-	processed, commands, err := env.provider.processItems(
+	processed, commands, _, err := env.provider.processItems(
 		env.ctx,
 		[]SyncItem{
 			{
@@ -1145,7 +1145,7 @@ func TestReconcileExistingTask_SkipDriftRecovery(t *testing.T) {
 
 // TestReconcileExistingTask_SkipDrift_DeferralSuppressesBranch verifies that
 // when deferSkipDrift=true the skip-drift branch does NOT fire, even when
-// the detection predicate matches. This is the round-7 deferral fix.
+// the detection predicate matches.
 //
 // synced_deadline matches currentDeadline so the non-drift happy path
 // doesn't emit any close+add commands either — leaving the skip-drift

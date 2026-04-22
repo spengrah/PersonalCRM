@@ -248,7 +248,7 @@ func (p *CadenceSyncProvider) Sync(
 	}
 
 	// Process synced items.
-	processedTasks, commands, processErr := p.processItems(ctx, syncResp.Items, settings, accountID)
+	processedTasks, commands, itemsRecoveryFailed, processErr := p.processItems(ctx, syncResp.Items, settings, accountID)
 	result.ItemsProcessed = processedTasks
 
 	// Execute any accumulated commands BEFORE checking processErr. If
@@ -292,9 +292,14 @@ func (p *CadenceSyncProvider) Sync(
 	}
 
 	// Reconcile: ensure all contacts with cadence have tasks.
-	// deferSkipDrift suppresses the skip-drift recovery branch when a
-	// mapping tx rolled back earlier this invocation — see processTempIDMappings.
-	reconcileCommands := p.reconcileContactTasks(ctx, client, settings, accountID, mappingRolledBack)
+	// deferSkipDrift suppresses the skip-drift recovery branch when:
+	//   - processTempIDMappings had a per-task tx rollback (mapping
+	//     ambiguous — real remote task may exist); OR
+	//   - tryRecoverPendingTempID attempted recovery but the tx rolled
+	//     back (local row stale while real remote item was delivered this
+	//     tick — skip-drift would emit a duplicate item_add).
+	deferSkipDrift := mappingRolledBack || itemsRecoveryFailed
+	reconcileCommands := p.reconcileContactTasks(ctx, client, settings, accountID, deferSkipDrift)
 	if len(reconcileCommands) > 0 {
 		for _, batch := range BatchCommands(reconcileCommands, 100) {
 			cmdResp, err := client.Sync(ctx, result.NewCursor, []string{}, batch)
@@ -344,10 +349,17 @@ func (p *CadenceSyncProvider) ValidateCredentials(ctx context.Context, accountID
 //   - Commands:  Todoist commands to enqueue in the batch.
 //   - Err:       non-nil for fatal errors; processItems aborts the batch
 //     without advancing the cursor.
+//   - RecoveryFailed: tryRecoverPendingTempID matched a CRM marker for
+//     this item but its atomic tx (external_id swap + pending_temp_id
+//     clear) rolled back, leaving the local row stale. Sync uses this to
+//     force deferSkipDrift=true for reconcile in the same invocation —
+//     otherwise reconcile's skip-drift branch would emit a duplicate
+//     item_add against the real remote task that already exists.
 type processItemResult struct {
-	Processed bool
-	Commands  []SyncCommand
-	Err       error
+	Processed      bool
+	Commands       []SyncCommand
+	Err            error
+	RecoveryFailed bool
 }
 
 // processItems iterates over the items returned by a Todoist sync,
@@ -356,14 +368,23 @@ type processItemResult struct {
 // pre-batch cursor so the next tick replays. Each successful item commits
 // atomically via its own tx, so replays short-circuit at the state !=
 // 'managed' early-return in processItem and never double-advance.
+//
+// recoveryFailed is set when any item's tryRecoverPendingTempID attempted
+// recovery but the atomic tx rolled back. Sync threads this into
+// reconcileContactTasks as deferSkipDrift=true so the skip-drift branch
+// does not fire against the stale local row this tick — the real Todoist
+// task already exists server-side.
 func (p *CadenceSyncProvider) processItems(
 	ctx context.Context,
 	items []SyncItem,
 	settings Settings,
 	accountID string,
-) (processed int, commands []SyncCommand, err error) {
+) (processed int, commands []SyncCommand, recoveryFailed bool, err error) {
 	for _, item := range items {
 		r := p.processItem(ctx, item, settings, accountID)
+		if r.RecoveryFailed {
+			recoveryFailed = true
+		}
 		if r.Err != nil {
 			logger.Error().Err(r.Err).
 				Str("itemId", item.ID).
@@ -372,14 +393,14 @@ func (p *CadenceSyncProvider) processItems(
 			// Return accumulated commands so Sync can execute any
 			// ItemClose/ItemDelete commands queued by already-committed
 			// handlers before returning the error.
-			return processed, commands, fmt.Errorf("process item %s: %w", item.ID, r.Err)
+			return processed, commands, recoveryFailed, fmt.Errorf("process item %s: %w", item.ID, r.Err)
 		}
 		if r.Processed {
 			processed++
 		}
 		commands = append(commands, r.Commands...)
 	}
-	return processed, commands, nil
+	return processed, commands, recoveryFailed, nil
 }
 
 // processItem processes a single Todoist item from sync
@@ -388,8 +409,19 @@ func (p *CadenceSyncProvider) processItem(
 	item SyncItem,
 	settings Settings,
 	accountID string,
-) processItemResult {
+) (result processItemResult) {
 	var commands []SyncCommand
+
+	// Recovery-failed signal propagates up to Sync (via processItems) so
+	// deferSkipDrift=true forces reconcile's skip-drift branch to defer
+	// when this item's recovery tx rolled back. Applied via defer so every
+	// return path carries the flag.
+	var recoveryFailed bool
+	defer func() {
+		if recoveryFailed {
+			result.RecoveryFailed = true
+		}
+	}()
 
 	// Find if this task is linked to a contact
 	task, err := p.contactTaskRepo.GetContactTaskByExternalID(ctx, SourceName, item.ID)
@@ -400,9 +432,9 @@ func (p *CadenceSyncProvider) processItem(
 		// Fallback: if processTempIDMappings failed, the contact_task still has a
 		// temp ID while Todoist uses the real ID. Try to recover by matching the
 		// CRM marker in the description to find a task with a pending temp ID.
-		task = p.tryRecoverPendingTempID(ctx, item)
+		task, recoveryFailed = p.tryRecoverPendingTempID(ctx, item)
 		if task == nil {
-			return processItemResult{} // Not a managed task
+			return processItemResult{}
 		}
 	}
 
@@ -1394,6 +1426,14 @@ func isPendingTempID(task *repository.ContactTask) bool {
 // finalizes the mapping atomically inside a pgx.Tx (external_id + metadata clear
 // commit together or roll back together).
 //
+// Returns (task, recoveryFailed). recoveryFailed is true when a CRM marker
+// was matched and the atomic recovery tx rolled back — the caller
+// (processItem) propagates this via processItemResult.RecoveryFailed so
+// Sync can force deferSkipDrift=true for the same-tick reconcile pass.
+// recoveryFailed is false when no CRM marker matched (task is nil; nothing
+// to recover), when recovery succeeded, or when recovery was not applicable
+// (guard rejected the task).
+//
 // Recovery guard: task.State == managed && pending_temp_id != "". Broadened
 // from the narrow isPendingTempID check (which required pending_temp_id ==
 // ExternalTaskID) so this function also recovers the post-rollback shape
@@ -1401,7 +1441,7 @@ func isPendingTempID(task *repository.ContactTask) bool {
 // the temp of the (already-created remotely) new task. The CRM marker
 // parse above verifies the sync item belongs to the same contact + cadence
 // kind, so advancing ExternalTaskID = item.ID is safe.
-func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item SyncItem) *repository.ContactTask {
+func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item SyncItem) (*repository.ContactTask, bool) {
 	// Parse CRM marker from description to get contact ID
 	var marker struct {
 		CRM       bool   `json:"crm"`
@@ -1419,13 +1459,13 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 			descToTry = item.Description[idx:]
 		}
 		if err := json.Unmarshal([]byte(descToTry), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
-			return nil
+			return nil, false
 		}
 	}
 
 	contactID, err := uuid.Parse(marker.ContactID)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 
 	// Only recover cadence tasks
@@ -1434,19 +1474,19 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 		kind = TaskKindCadence
 	}
 	if kind != TaskKindCadence {
-		return nil
+		return nil, false
 	}
 
 	task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contactID, SourceName, kind)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 
 	// Broadened guard: any managed task with a non-empty pending_temp_id
 	// is a candidate for finalizing the mapping. See function docstring.
 	pendingTempID, _ := task.Metadata[MetadataKeyPendingTempID].(string)
 	if task.State != repository.ContactTaskStateManaged || pendingTempID == "" {
-		return nil
+		return nil, false
 	}
 
 	oldID := task.ExternalTaskID
@@ -1457,7 +1497,7 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 		logger.Warn().Err(err).
 			Str("contactId", marker.ContactID).
 			Msg("tryRecoverPendingTempID: begin tx failed")
-		return task // fallback: process with old ID
+		return task, true
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -1467,7 +1507,7 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 			Str("oldExternalId", oldID).
 			Str("newExternalId", item.ID).
 			Msg("tryRecoverPendingTempID: update external_id failed")
-		return task
+		return task, true
 	}
 
 	metadata := task.Metadata
@@ -1477,12 +1517,12 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 	delete(metadata, MetadataKeyPendingTempID)
 	if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, task.ID, metadata); err != nil {
 		logger.Warn().Err(err).Msg("tryRecoverPendingTempID: clear pending_temp_id failed")
-		return task
+		return task, true
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		logger.Warn().Err(err).Msg("tryRecoverPendingTempID: commit failed")
-		return task
+		return task, true
 	}
 
 	// Reflect in the returned task (in-memory).
@@ -1495,7 +1535,7 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 		Str("realId", item.ID).
 		Msg("recovered pending temp ID mapping (atomic commit)")
 
-	return task
+	return task, false
 }
 
 // createTaskCommand creates a Todoist task creation command
@@ -1552,7 +1592,21 @@ func (p *CadenceSyncProvider) processTempIDMappings(ctx context.Context, tempIDM
 		// Find the task by pending_temp_id
 		task, err := p.contactTaskRepo.GetContactTaskByPendingTempID(ctx, SourceName, tempID)
 		if err != nil {
-			// Not found is expected if this temp_id wasn't from us.
+			if errors.Is(err, db.ErrNotFound) {
+				// Expected when this temp_id wasn't from us.
+				continue
+			}
+			// Any non-ErrNotFound lookup failure (DB timeout, connection
+			// error) means we can't tell whether this mapping applies to
+			// a local row. The safe move is to set rolledBack=true so the
+			// skip-drift recovery branch defers by one tick — otherwise
+			// this-tick reconcile could emit a duplicate item_add against
+			// an already-created remote task.
+			logger.Warn().Err(err).
+				Str("tempId", tempID).
+				Str("realId", realID).
+				Msg("temp_id mapping: lookup failed; deferring reconcile skip-drift this tick")
+			rolledBack = true
 			continue
 		}
 
