@@ -693,9 +693,9 @@ func TestConfig_DatabasePoolInvalidDuration(t *testing.T) {
 }
 
 // TestConfig_EventBus_DefaultCutover asserts EVENT_BUS_INTERACTION_MODE
-// defaults to "cutover" after PR 6. The PR 5 default ("off") is retained
-// as a valid config value for rollback flexibility, but it is effectively
-// a no-op post-cutover (the direct path is gone).
+// defaults to "cutover". "off" is retained as a valid config value for
+// rollback flexibility but is effectively a no-op — no direct path
+// remains.
 func TestConfig_EventBus_DefaultCutover(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
@@ -711,8 +711,8 @@ func TestConfig_EventBus_DefaultCutover(t *testing.T) {
 }
 
 // TestConfig_EventBus_OffFromEnv asserts "off" still parses — rollback
-// flexibility per plan Decision 6. Post-cutover "off" disables publisher-
-// driven writes entirely (see EventBusConfig doc comment).
+// flexibility. "off" disables publisher-driven writes entirely (see
+// EventBusConfig doc comment).
 func TestConfig_EventBus_OffFromEnv(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
@@ -881,9 +881,8 @@ func TestTestConfig_AllowsCadenceModeOff(t *testing.T) {
 	}
 }
 
-// TestConfig_CadenceMode_CutoverFromEnv asserts "cutover" parses — PR 7
-// logs an ERROR and treats it as shadow, but the config value must flow
-// through for the startup log line to fire.
+// TestConfig_CadenceMode_CutoverFromEnv asserts "cutover" parses and
+// flows through as the cutover mode value.
 func TestConfig_CadenceMode_CutoverFromEnv(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")

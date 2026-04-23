@@ -21,8 +21,8 @@ import (
 )
 
 // -----------------------------------------------------------------------------
-// Integration test helpers for the PR 6 cutover-mode InteractionRecorder.
-// The consumer is now the sole writer; ContactService.RecordInteractionTx
+// Integration test helpers for the cutover-mode InteractionRecorder.
+// The consumer is the sole writer; ContactService.RecordInteractionTx
 // handles dedup + insert + cadence updates inside the caller's tx.
 // -----------------------------------------------------------------------------
 
@@ -251,7 +251,9 @@ func TestIntegration_CalendarAttended_CutoverWritesInteraction(t *testing.T) {
 
 	contactID := env.newContact(t, "calendar-attended-cutover")
 	eventIDStr := uuid.NewString()
-	// Per plan Decision 11, the publisher-built SourceID is per-(event, contact).
+	// Publishers build SourceID as event-id ":" contact-id so one
+	// upstream event can fan out to multiple contacts without
+	// colliding on the event table's (source, source_id) dedupe.
 	sourceID := eventIDStr + ":" + contactID.String()
 	occurredAt := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 

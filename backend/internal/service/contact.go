@@ -475,17 +475,19 @@ func (s *ContactService) DeleteContact(ctx context.Context, id uuid.UUID) error 
 //   - inbound/mutual: completes any pending follow-up task
 //
 // Non-tx wrapper. Opens a short-lived tx via BeginTxFunc and delegates to
-// RecordInteractionTx. Used by Todoist (PR 11) and internal service callers
-// that don't own a tx. The event-bus consumer and manual-UI handler use
-// RecordInteractionTx directly so they can share the outer tx (spec §3.4.1
-// atomicity contract; plan Decision 4a).
+// RecordInteractionTx. Used by the Todoist completion path and internal
+// service callers that don't own a tx. The event-bus consumer and
+// manual-UI handler use
+// RecordInteractionTx directly so they can share the outer tx (spec
+// §3.4.1 atomicity contract).
 func (s *ContactService) RecordInteraction(ctx context.Context, req repository.RecordInteractionRequest) (*repository.Interaction, error) {
 	var res *RecordInteractionResult
 	err := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		var txErr error
 		// Non-event-bus wrapper: no paired interaction.recorded event
-		// will be published, so publishesEvent=false — shadow drain is
-		// skipped entirely.
+		// will be published, so publishesEvent=false. The direct
+		// CadenceUpdater.ApplyInteraction path is used instead of the
+		// bus-path inline HandleEvent.
 		res, txErr = s.RecordInteractionTx(ctx, tx, false, req)
 		return txErr
 	})
@@ -563,9 +565,10 @@ func (s *ContactService) RecordInteractionTx(
 		return nil, err // propagates db.ErrNotFound
 	}
 
-	// 4. Capture pre-cadence snapshot + cadence-at-emit from the in-memory
-	// contact BEFORE the write. This is the pre-image that both the direct
-	// path and the payload-carried consumer prev use (plan Decision 2a).
+	// 4. Capture pre-cadence snapshot + cadence-at-emit from the
+	// in-memory contact BEFORE the write. This is the pre-image the
+	// interaction.recorded V2 payload carries so CadenceUpdater can
+	// replay against a deterministic prev snapshot.
 	prevSnap := repository.ContactCadenceFieldsFromContact(contact)
 	var cadenceAtEmit *string
 	if contact.Cadence != nil && *contact.Cadence != "" {
@@ -654,7 +657,8 @@ func (s *ContactService) PromoteInteractionToMutual(ctx context.Context, interac
 
 // PromoteInteractionToMutualTx is the tx-threaded variant. Caller owns the tx.
 // The returned postCommit closure (nil-safe) captures follow-up-manager work
-// that should fire AFTER the tx commits (plan Decision 4 + 8).
+// that should fire AFTER the tx commits so Todoist side effects run
+// outside the caller's transaction.
 func (s *ContactService) PromoteInteractionToMutualTx(
 	ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, replyAt time.Time,
 ) (func(context.Context), error) {

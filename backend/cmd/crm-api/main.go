@@ -73,8 +73,7 @@ func (noopJobArgs) Kind() string { return "noop" }
 // and the scheduler workers are not registered. river.NewClient rejects
 // an empty Workers bundle (the constructor returns an error), so the
 // API fails to boot in the default non-sync configuration without this
-// placeholder. See PR 1 (#279) where the noop worker was introduced for
-// exactly this reason; PR 3 briefly removed it and #281 restores it.
+// placeholder.
 type noopWorker struct {
 	river.WorkerDefaults[noopJobArgs]
 }
@@ -239,9 +238,9 @@ func run() int {
 	// Initialize services
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, rematchService)
 
-	// Telegram message repo construction (hoisted above the InteractionRecorder
-	// wiring so the consumer can mark messages processed in the same tx as
-	// the interaction insert — plan Decision 10).
+	// Telegram message repo construction (hoisted above the
+	// InteractionRecorder wiring so the consumer can mark messages
+	// processed in the same tx as the interaction insert).
 	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
 
 	// CadenceUpdater must be constructed BEFORE InteractionRecorder so
@@ -347,8 +346,9 @@ func run() int {
 	}
 
 	// Informational warning when ingest is enabled but cutover isn't —
-	// ingested events still write interactions (plan Decision 12 ingest
-	// carve-out); this log line makes the seam visible in operator logs.
+	// ingested events still write interactions (the HTTP ingest path is
+	// an intentional carve-out of the off-mode gate); this log line
+	// makes the seam visible in operator logs.
 	if cfg.Features.EnableEventBusIngest && effectiveMode != config.EventBusInteractionModeCutover {
 		logger.Warn().
 			Str("interaction_mode", effectiveMode).
@@ -879,9 +879,9 @@ func run() int {
 		v1.POST("/import", systemHandler.ImportData)
 
 		// Event bus ingestion endpoint (feature-flagged per spec §3.9).
-		// When the flag is off the route is NOT registered — gin's NoRoute
-		// handler returns 404 without running the API-key middleware, per
-		// plan Decision 1. This matches the spec's acceptance criterion:
+		// When the flag is off the route is NOT registered — gin's
+		// NoRoute handler returns 404 without running the API-key
+		// middleware, matching the spec's acceptance criterion
 		// "EVENT_BUS_INGEST_ENABLED=false (default) returns 404."
 		if cfg.Features.EnableEventBusIngest {
 			ingest := v1.Group("/ingest")

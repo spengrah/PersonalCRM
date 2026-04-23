@@ -133,11 +133,10 @@ type RiverConfig struct {
 	JobTimeout time.Duration
 }
 
-// EventBusConfig holds event-bus rollout phase flags. See
+// EventBusConfig holds the event-bus consumer mode flags. See
 // .ai/spec/event-bus-foundation.md §3.9.
 //
-// InteractionMode gates the PR 5-8 phase lifecycle for the
-// InteractionRecorder consumer:
+// InteractionMode controls the InteractionRecorder consumer:
 //   - "off":     emergency override that disables publisher-driven
 //     interaction recording entirely (telegram / calendar /
 //     manual UI will NOT write interactions). The HTTP ingest
@@ -149,8 +148,7 @@ type RiverConfig struct {
 //   - "cutover": default. Consumer is the sole writer; publishers only
 //     Publish events. This is the intended production mode.
 //
-// CadenceMode gates the PR 7-8 phase lifecycle for the CadenceUpdater
-// consumer (spec §3.9).
+// CadenceMode controls the CadenceUpdater consumer (spec §3.9).
 //
 //   - "off":     emergency override that disables the sole writer of
 //     the four cadence columns entirely. Startup REFUSES to boot

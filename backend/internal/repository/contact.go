@@ -21,32 +21,28 @@ import (
 type ContactRepository struct {
 	queries db.Querier
 	// pool is optional; when non-nil it enables own-tx methods like
-	// SnapshotContactCadenceFields that need to run a SELECT outside the
-	// caller's tx (e.g., direct-path shadow observer post-commit closure
-	// per PR 7 plan Decision 5). Nil in most test constructors — methods
-	// that require it return an error when pool == nil.
+	// SnapshotContactCadenceFields that need to run a SELECT outside
+	// the caller's tx. Nil in most test constructors — methods that
+	// require it return an error when pool == nil.
 	pool *pgxpool.Pool
 }
 
 // NewContactRepository constructs the repository with the sqlc queries
-// querier. Callers that need own-tx methods (PR 7+ cadence shadow
-// observer) must separately call SetPool.
+// querier. Callers that need own-tx methods must separately call SetPool.
 func NewContactRepository(queries db.Querier) *ContactRepository {
 	return &ContactRepository{queries: queries}
 }
 
 // SetPool injects the pgxpool used by own-tx methods. Optional; safe to
 // leave unset for code paths that don't need SnapshotContactCadenceFields.
-// PR 7 wires this in main.go so the direct-path shadow observer can SELECT
-// the post-image outside the caller's authoritative tx.
 func (r *ContactRepository) SetPool(pool *pgxpool.Pool) {
 	r.pool = pool
 }
 
-// ContactCadenceFields is the four-cadence-column snapshot used by the
-// CadenceUpdater shadow mode (PR 7, spec §3.4.2). Captures the exact
-// pre-image the direct-path UPDATE saw so the consumer's forward-only
-// math can be compared against the direct path's actual post-image.
+// ContactCadenceFields is the four-cadence-column snapshot carried on
+// the interaction.recorded V2 payload (spec §3.4.2). It captures the
+// pre-image of the cadence columns so CadenceUpdater can replay
+// forward-only math against a deterministic prev state.
 //
 // Timestamps are UTC; ContactBy is day-precision (DATE column).
 type ContactCadenceFields struct {
@@ -57,11 +53,11 @@ type ContactCadenceFields struct {
 }
 
 // CadenceApplyFlagsByDirection returns the four per-column apply flags
-// derived from the interaction direction. Mirrors today's direct-path
-// behavior bit-for-bit (plan Decision 3): outbound → only last_outreach_at;
-// inbound → last_contacted + last_response_at + contact_by (but NOT
-// last_outreach_at, matching UpdateContactResponseFields); mutual → all
-// four. Unknown / empty direction returns all-false.
+// derived from the interaction direction: outbound → only
+// last_outreach_at; inbound → last_contacted + last_response_at +
+// contact_by (but NOT last_outreach_at — inbound interactions are
+// responses to outreach we've already recorded, not new outreach);
+// mutual → all four. Unknown / empty direction returns all-false.
 //
 // NOTE: applyContactBy here is the "direction permits contact_by" flag;
 // the actual per-call decision combines this with ShouldApplyContactBy
@@ -72,8 +68,8 @@ func CadenceApplyFlagsByDirection(direction string) (applyLastContacted, applyLa
 	case InteractionDirectionOutbound:
 		return false, true, false, false
 	case InteractionDirectionInbound:
-		// Matches today's UpdateContactResponseFields — inbound does NOT
-		// bump last_outreach_at. See plan Decision 3 + Risk 11.
+		// Inbound does NOT bump last_outreach_at: it's the response, not
+		// the outreach.
 		return true, false, true, true
 	case InteractionDirectionMutual:
 		return true, true, true, true
@@ -103,9 +99,9 @@ func ShouldApplyContactBy(prevLastContacted *time.Time, occurredAt time.Time, is
 }
 
 // ForwardMax returns the strictly-forward max of prev and incoming.
-// Mirrors "last_X IS NULL OR incoming > last_X" semantics in the direct
-// path's UPDATE queries. Strict `>` — equal timestamps do NOT advance
-// (plan Decision 4 forwardMax helper).
+// Mirrors the "last_X IS NULL OR incoming > last_X" semantics used by
+// the forward-only cadence UPDATE. Strict `>` — equal timestamps do
+// NOT advance.
 func ForwardMax(prev *time.Time, incoming time.Time) time.Time {
 	if prev == nil {
 		return incoming
@@ -532,9 +528,9 @@ func (r *ContactRepository) UpdateContactMutualFieldsTx(ctx context.Context, tx 
 // (last_contacted, last_outreach_at, last_response_at, contact_by) for
 // the given contact. Opens a short-lived own-tx on the configured pool
 // — callers MUST NOT be inside an existing tx that they'd starve by
-// taking another pool connection. Used by PR 7's direct-path shadow
-// observer in its post-commit closure (plan Decision 5). Returns
-// db.ErrNotFound when the contact is soft-deleted.
+// taking another pool connection. Intended for any path that needs a
+// post-image read outside a caller's tx. Returns db.ErrNotFound when
+// the contact is soft-deleted.
 //
 // Requires SetPool to have been called. Returns an error otherwise.
 func (r *ContactRepository) SnapshotContactCadenceFields(

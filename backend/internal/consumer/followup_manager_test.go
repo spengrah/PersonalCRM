@@ -531,8 +531,8 @@ func (s *stubRefreshTodoistClient) Sync(context.Context, string, []string, []tod
 //     with Action=Refresh, CalledTodoist=true, and a matching
 //     ContactTaskID.
 //
-// Guards the Decision contract the plan (§Decision 8) requires to
-// stand in for the retired shadow-table-based integration assertions.
+// Guards the Decision contract that stands in for the retired
+// shadow-table-based integration assertions.
 func TestFollowUpManager_Refresh_EmitsTwoDecisions(t *testing.T) {
 	contactID := uuid.New()
 	taskID := uuid.New()

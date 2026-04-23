@@ -2,14 +2,12 @@
 // to events and perform domain writes. See
 // .ai/spec/event-bus-foundation.md §3.4.
 //
-// PR 6 of #180 cuts the InteractionRecorder over from shadow mode to
-// cutover — the consumer is now the sole writer of interaction rows for
-// its 6 input kinds (message.received/sent, calendar.attended,
+// InteractionRecorder is the sole writer of interaction rows for its
+// six input kinds (message.received/sent, calendar.attended,
 // task.completed, task.outreach_detected, interaction.manual). The
-// write is delegated to ContactService.RecordInteractionTx so the
-// dedup + cadence-update semantics stay in one place (plan Decision
-// 4a). Later PRs add CadenceUpdater (7), FollowUpManager (9a), and
-// RematchDispatcher (10).
+// write is delegated to ContactService.RecordInteractionTx so dedup
+// + cadence-update semantics stay in one place. Sibling consumers in
+// this package: CadenceUpdater, FollowUpManager, RematchDispatcher.
 package consumer
 
 import (
@@ -141,8 +139,8 @@ func NewInteractionRecorder(
 //   - interaction: the persisted row (either freshly-inserted or the
 //     existing dedup-hit row). Caller may use the ID for HTTP responses.
 //   - postCommit:  non-nil when the write warrants a best-effort follow-up-
-//     manager call. Nil on replay (dedup-hit) per plan Decision 8.
-//     Callers invoke AFTER the outer tx commits.
+//     manager call. Nil on replay (dedup-hit) so re-delivery never
+//     re-triggers side effects. Callers invoke AFTER the outer tx commits.
 //   - error:       wrapped. Caller rolls back tx.
 func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (*repository.Interaction, func(context.Context), error) {
 	if env == nil {
@@ -157,8 +155,9 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		return nil, nil, fmt.Errorf("extract %s: %w", env.Kind, err)
 	}
 
-	// Publisher-resolved ContactID (plan Decision 4). Consumer does no
-	// peer-ref → contact lookup; a zero ContactID is a publisher bug.
+	// ContactID is resolved by the publisher before PublishTx; the
+	// consumer does no peer-ref → contact lookup, so a zero ContactID
+	// at this point is a publisher bug.
 	if req.ContactID == uuid.Nil {
 		logger.Error().
 			Str("event_id", env.ID.String()).
@@ -177,11 +176,12 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		return nil, nil, fmt.Errorf("record interaction tx: %w", err)
 	}
 
-	// Mark telegram messages processed inside the SAME tx as the interaction
-	// insert so telegram_message.interaction_id FK write is atomic with the
-	// row it references (plan Decision 10). Runs on BOTH fresh-write and
-	// replay paths — today's telegram publisher code always called
-	// MarkMessagesProcessed after RecordInteraction, regardless of dedup-hit.
+	// Mark telegram messages processed inside the SAME tx as the
+	// interaction insert so the telegram_message.interaction_id FK
+	// write is atomic with the row it references. Runs on BOTH
+	// fresh-write and replay paths — matches the telegram publisher's
+	// pre-cutover behavior of always calling MarkMessagesProcessed
+	// after RecordInteraction, regardless of dedup-hit.
 	if env.Kind == events.KindMessageReceived || env.Kind == events.KindMessageSent {
 		if msgIDs, extractErr := extractTelegramMessageIDs(env); extractErr == nil && len(msgIDs) > 0 && r.telegramMessageRepo != nil && res.Interaction != nil {
 			if markErr := r.telegramMessageRepo.MarkMessagesProcessedTx(ctx, tx, msgIDs, res.Interaction.ID); markErr != nil {
@@ -190,18 +190,18 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		}
 	}
 
-	// Replay: skip interaction.recorded emit (spec §3.4.1) and return nil
-	// postCommit (today's no-re-apply-on-replay semantics; plan Decision 4).
+	// Replay: skip interaction.recorded emit (spec §3.4.1) and return
+	// nil postCommit so re-delivery doesn't re-fire side effects.
 	if res.IsReplay {
 		return res.Interaction, nil, nil
 	}
 
 	// Fresh-write: emit interaction.recorded atomically in the same tx.
-	// SourceID = interaction.ID so the event table's partial unique index
-	// (source, source_id) dedupes any retry that reaches this point.
-	// PR 7: payload is V2 — includes PrevCadenceSnapshot + PrevCadenceValue
-	// so CadenceUpdater can replay the direct-path's pre-cadence state
-	// deterministically (plan Decision 2a).
+	// SourceID = interaction.ID so the event table's partial unique
+	// index (source, source_id) dedupes any retry that reaches this
+	// point. Payload is V2 — includes PrevCadenceSnapshot +
+	// PrevCadenceValue so CadenceUpdater can replay the pre-cadence
+	// state deterministically.
 	recordedPayload, err := marshalRecordedPayload(res.Interaction, direction, req, res.PrevCadence, res.CadenceAtEmit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal interaction.recorded: %w", err)
@@ -266,8 +266,11 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 }
 
 // extractRequest dispatches on env.Kind to build a RecordInteractionRequest
-// + the effective direction. Direction derivation rules follow plan
-// Decision 3 (PR 5).
+// + the effective direction. Per-kind direction derivation: message.*
+// defaults to the kind's natural direction (inbound / outbound); calendar
+// is mutual; task.completed defaults to mutual; task.outreach_detected
+// is always outbound; interaction.manual defaults to mutual. Callers may
+// override via the payload's Direction field where applicable.
 func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.RecordInteractionRequest, string, error) {
 	switch env.Kind {
 	case events.KindMessageReceived:
@@ -425,12 +428,12 @@ func makeTelegramRequest(contactID *uuid.UUID, externalMessageID string, message
 
 // marshalRecordedPayload builds the JSON payload for the
 // interaction.recorded derived event emitted after a successful insert.
-// PR 7 bumps Version to 2 and adds PrevCadenceSnapshot + PrevCadenceValue
-// so CadenceUpdater can replay direct-path's pre-cadence state (plan
-// Decision 2a). prev may be nil when the service wrapper was called
-// without an eventID (non-event-bus callers); in that case the event
-// is emitted WITHOUT the snapshot and downstream consumers treat it as
-// a V1-shape payload.
+// Payload is V2 — it includes PrevCadenceSnapshot + PrevCadenceValue so
+// CadenceUpdater can deterministically replay the pre-cadence state.
+// prev may be nil when the service wrapper was called without an
+// eventID (non-event-bus callers); in that case the event is emitted
+// WITHOUT the snapshot and downstream consumers treat it as a V1-shape
+// payload.
 func marshalRecordedPayload(
 	interaction *repository.Interaction, direction string, req repository.RecordInteractionRequest,
 	prev *repository.ContactCadenceFields, cadenceAtEmit *string,
@@ -483,7 +486,7 @@ func NewInteractionRecorderWorker(bus eventBusTx, pool *pgxpool.Pool, recorder *
 // fresh tx, and invokes HandleEvent. On error river will retry per
 // MaxAttempts (set to 5 via InsertOpts in events.consumerJobsForKind).
 // After the tx commits, invokes the recorder's returned postCommit
-// closure (best-effort follow-up manager invocation; plan Decision 8).
+// closure (best-effort follow-up manager invocation).
 func (w *InteractionRecorderWorker) Work(ctx context.Context, j *river.Job[consumerjobs.InteractionRecorderJobArgs]) error {
 	env, err := w.bus.GetEvent(ctx, j.Args.EventID)
 	if err != nil {
@@ -509,7 +512,7 @@ func (w *InteractionRecorderWorker) Work(ctx context.Context, j *river.Job[consu
 
 // Timeout bounds how long a single worker invocation can run. A single
 // interaction insert should complete in ~10ms on the Pi; 30s is ample
-// headroom for pool saturation + retries (plan Decision 8).
+// headroom for pool saturation + retries.
 func (*InteractionRecorderWorker) Timeout(*river.Job[consumerjobs.InteractionRecorderJobArgs]) time.Duration {
 	return 30 * time.Second
 }

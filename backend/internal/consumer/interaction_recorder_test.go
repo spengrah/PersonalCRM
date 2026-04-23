@@ -152,10 +152,10 @@ func kindDefaultSource(kind events.Kind) string {
 	return "telegram"
 }
 
-// newRecorderWithStubs constructs the consumer with fresh stubs. In
-// cutover there is no mode parameter — the consumer runs unconditionally
-// wherever it's wired (mode gating lives at the publisher + manual-
-// handler wiring level per plan Decision 6).
+// newRecorderWithStubs constructs the consumer with fresh stubs. The
+// consumer has no mode parameter — it runs unconditionally wherever
+// it's wired; mode gating lives at the publisher + manual-handler
+// wiring level.
 func newRecorderWithStubs() (*InteractionRecorder, *stubWriter, *stubTGRepo, *stubBus, *stubCadence) {
 	w := &stubWriter{}
 	tg := &stubTGRepo{}
@@ -182,10 +182,10 @@ func (s *stubCadence) HandleEvent(_ context.Context, _ pgx.Tx, env *events.Envel
 }
 
 // -----------------------------------------------------------------------------
-// Per-kind new-write cases. Each asserts: RecordInteractionTx runs with the
-// expected (source, source_ref, direction), interaction.recorded is published
-// with SourceID = interaction.ID, and MarkMessagesProcessedTx fires only on
-// message.* kinds (plan Decisions 4a + 10).
+// Per-kind new-write cases. Each asserts: RecordInteractionTx runs with
+// the expected (source, source_ref, direction), interaction.recorded is
+// published with SourceID = interaction.ID, and MarkMessagesProcessedTx
+// fires only on message.* kinds.
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_MessageReceived_CutoverFreshWrite(t *testing.T) {
@@ -215,7 +215,9 @@ func TestHandleEvent_MessageReceived_CutoverFreshWrite(t *testing.T) {
 	require.Equal(t, events.KindInteractionRecorded, b.lastEnv.Kind)
 	require.Equal(t, w.lastCreated.ID.String(), b.lastEnv.SourceID)
 
-	// MarkMessagesProcessedTx fires inside the same tx (plan Decision 10).
+	// MarkMessagesProcessedTx fires inside the same tx as the
+	// interaction insert so the FK write is atomic with the row it
+	// references.
 	require.Equal(t, 1, tg.calls, "message.* kinds mark telegram messages processed in-tx")
 	require.Equal(t, []uuid.UUID{msgID}, tg.lastMessageIDs)
 	require.Equal(t, w.lastCreated.ID, tg.lastInteraction)
@@ -290,8 +292,7 @@ func TestHandleEvent_CalendarAttended_CutoverFreshWrite_NoMarkProcessed(t *testi
 
 // TestHandleEvent_CalendarAttended_CopiesTitleToDescription asserts that
 // the payload's Title flows through to interaction.description so
-// calendar interactions preserve their user-visible context post-cutover
-// (Codex PR 6 P2 regression fix).
+// calendar interactions preserve their user-visible context.
 func TestHandleEvent_CalendarAttended_CopiesTitleToDescription(t *testing.T) {
 	cid := uuid.New()
 	rec, w, _, _, _ := newRecorderWithStubs()
@@ -390,10 +391,10 @@ func TestHandleEvent_InteractionManual_EmptyDirectionDefaultsMutual(t *testing.T
 }
 
 // -----------------------------------------------------------------------------
-// Replay cases. Writer returns isReplay=true → consumer skips interaction.recorded
-// emit, returns nil postCommit, but mark-processed still fires for telegram
-// kinds (plan Decision 10 — matches today's publisher's unconditional
-// MarkMessagesProcessed call).
+// Replay cases. Writer returns isReplay=true → consumer skips
+// interaction.recorded emit, returns nil postCommit, but mark-processed
+// still fires for telegram kinds — matches the pre-cutover publisher's
+// unconditional MarkMessagesProcessed call.
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_MessageReceived_CutoverReplay(t *testing.T) {
@@ -419,9 +420,9 @@ func TestHandleEvent_MessageReceived_CutoverReplay(t *testing.T) {
 	interaction, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, existing.ID, interaction.ID, "replay returns the existing row")
-	require.Nil(t, postCommit, "replay returns nil postCommit (plan Decision 8)")
+	require.Nil(t, postCommit, "replay returns nil postCommit")
 	require.Zero(t, b.publishCalls, "replay must not emit interaction.recorded (spec §3.4.1)")
-	require.Equal(t, 1, tg.calls, "mark-processed runs on replay per plan Decision 10")
+	require.Equal(t, 1, tg.calls, "mark-processed runs on replay")
 	require.Equal(t, existing.ID, tg.lastInteraction)
 }
 
@@ -694,7 +695,7 @@ func TestHandleEvent_UnresolvedContactID_Errors(t *testing.T) {
 	rec, w, _, b, _ := newRecorderWithStubs()
 	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
 		Version:           1,
-		ContactID:         nil, // publisher bug per plan Decision 4.
+		ContactID:         nil, // simulates a publisher that failed to resolve ContactID before PublishTx.
 		PeerRef:           "tg:1:2",
 		MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		ExternalMessageID: "tg:1:2:unresolved",
@@ -813,7 +814,7 @@ func TestHandleEvent_RecordedEventSourceIDIsInteractionID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, w.lastCreated)
 	require.Equal(t, w.lastCreated.ID.String(), b.lastEnv.SourceID,
-		"interaction.recorded SourceID must equal interaction.ID (plan Decision 9)")
+		"interaction.recorded SourceID must equal interaction.ID so the event table's partial unique index dedupes retries")
 	require.Equal(t, env.Source, b.lastEnv.Source)
 
 	// Payload decodes correctly.
