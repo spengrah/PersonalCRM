@@ -127,7 +127,7 @@ type FollowUpHandler interface {
 //     assert on the manager's classification (action, skip reason,
 //     would-be deadline, idempotency key, contact_task id) without a
 //     DB round trip. Replaces the shadow-observation-table assertions
-//     retired along with the shadow repo in this PR.
+//     retired with migration 044.
 //  2. Operators / future metrics can wire the observer to emit
 //     Prometheus counters or a structured audit log without having to
 //     modify the manager's branches.
@@ -476,7 +476,7 @@ func (h *FollowUpManager) applyOutbound(
 		return nil, fmt.Errorf("find pending follow-up: %w", err)
 	}
 	if pending != nil {
-		return h.applyRefresh(ctx, tx, env, pending, p, days)
+		return h.applyRefresh(ctx, tx, pending, p, days)
 	}
 	return h.applyCreate(ctx, tx, env, contact, p, days)
 }
@@ -603,7 +603,7 @@ func (h *FollowUpManager) applyCreate(
 				Str("contact_id", p.ContactID.String()).
 				Str("contact_task_id", existing.ID.String()).
 				Msg("followup_manager: concurrent insert detected; routing to refresh")
-			return h.applyRefresh(ctx, tx, env, existing, p, days)
+			return h.applyRefresh(ctx, tx, existing, p, days)
 		}
 		return nil, fmt.Errorf("insert pending_remote_create row: %w", err)
 	}
@@ -629,7 +629,7 @@ func (h *FollowUpManager) applyCreate(
 // post-commit closure that calls Todoist item_update + on failure
 // enqueues TodoistFollowUpRefreshJob for river-managed retry.
 func (h *FollowUpManager) applyRefresh(
-	ctx context.Context, tx pgx.Tx, env *events.Envelope,
+	ctx context.Context, tx pgx.Tx,
 	pending *repository.ContactTask, p events.InteractionRecordedPayload, days int,
 ) (func(context.Context), error) {
 	deadline := cadence.Today(p.OccurredAt).AddDate(0, 0, days)
@@ -663,7 +663,6 @@ func (h *FollowUpManager) applyRefresh(
 	// remote task yet, so no item_update is needed. The create worker's
 	// metadata build reads due_date from the same local row.
 	externalID := pending.ExternalTaskID
-	_ = env // env presence was used previously to gate shadow observation; decisions now carry all observables.
 	return h.buildRefreshPostCommit(externalID, taskID, deadline), nil
 }
 
