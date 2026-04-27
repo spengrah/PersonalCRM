@@ -178,8 +178,8 @@ func (p *CadenceSyncProvider) Sync(
 	state *repository.SyncState,
 	contacts []repository.Contact,
 ) (*sync.SyncResult, error) {
-	if p.bus == nil || p.pool == nil || p.clientFactory == nil {
-		return nil, fmt.Errorf("todoist: bus + pool + clientFactory must be non-nil")
+	if p.bus == nil || p.pool == nil || p.clientFactory == nil || p.cadenceUpdater == nil {
+		return nil, fmt.Errorf("todoist: bus + pool + clientFactory + cadenceUpdater must be non-nil")
 	}
 
 	// Get account ID from state
