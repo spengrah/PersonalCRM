@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -293,9 +294,8 @@ func TestFindEventsByAttendeeEmailUnmatchedForContact_Behavior(t *testing.T) {
 	t.Run("Case11B_MixedCaseStoredAttendee_LowercaseQuery_Matches", func(t *testing.T) {
 		// The rewritten SQL uses LOWER(@email::text) and the helper lowercases
 		// the stored value, so lookups with either side cased differently must
-		// still match. This case is the calendar-side analogue of cases 1 and 2
-		// for external_contact and guards the case-insensitivity contract that
-		// the issue specifically calls out.
+		// still match. Calendar-side analogue of the external_contact
+		// mixed-case cases above.
 		stored := []byte(fmt.Sprintf(`[{"email":"User11B_%s@Domain.invalid"}]`, env.suffix))
 		_, err := env.fixtureRepo.InsertCalendarEventRawAttendees(
 			env.ctx,
@@ -498,7 +498,7 @@ func TestParity_NewVsLegacyForms_CalendarEvent(t *testing.T) {
 func filterExternalBySourceIDPrefix(rows []repository.ExternalContact, prefix string) []repository.ExternalContact {
 	out := make([]repository.ExternalContact, 0, len(rows))
 	for _, r := range rows {
-		if hasPrefix(r.SourceID, prefix) {
+		if strings.HasPrefix(r.SourceID, prefix) {
 			out = append(out, r)
 		}
 	}
@@ -508,15 +508,11 @@ func filterExternalBySourceIDPrefix(rows []repository.ExternalContact, prefix st
 func filterCalendarByGcalIDPrefix(rows []repository.CalendarEvent, prefix string) []repository.CalendarEvent {
 	out := make([]repository.CalendarEvent, 0, len(rows))
 	for _, r := range rows {
-		if hasPrefix(r.GcalEventID, prefix) {
+		if strings.HasPrefix(r.GcalEventID, prefix) {
 			out = append(out, r)
 		}
 	}
 	return out
-}
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
 
 // externalIDsForPrefix returns sorted UUIDs from a repo result set, filtered
@@ -524,7 +520,7 @@ func hasPrefix(s, prefix string) bool {
 func externalIDsForPrefix(rows []repository.ExternalContact, prefix string) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(rows))
 	for _, r := range rows {
-		if hasPrefix(r.SourceID, prefix) {
+		if strings.HasPrefix(r.SourceID, prefix) {
 			ids = append(ids, r.ID)
 		}
 	}
@@ -535,7 +531,7 @@ func externalIDsForPrefix(rows []repository.ExternalContact, prefix string) []uu
 func calendarIDsForPrefix(rows []repository.CalendarEvent, prefix string) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(rows))
 	for _, r := range rows {
-		if hasPrefix(r.GcalEventID, prefix) {
+		if strings.HasPrefix(r.GcalEventID, prefix) {
 			ids = append(ids, r.ID)
 		}
 	}
@@ -548,7 +544,7 @@ func calendarIDsForPrefix(rows []repository.CalendarEvent, prefix string) []uuid
 func legacyExternalIDsForPrefix(rows []repository.LegacyExternalContactFinding, prefix string) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(rows))
 	for _, r := range rows {
-		if hasPrefix(r.SourceID, prefix) {
+		if strings.HasPrefix(r.SourceID, prefix) {
 			ids = append(ids, r.ID)
 		}
 	}
@@ -559,7 +555,7 @@ func legacyExternalIDsForPrefix(rows []repository.LegacyExternalContactFinding, 
 func legacyCalendarIDsForPrefix(rows []repository.LegacyCalendarEventFinding, prefix string) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(rows))
 	for _, r := range rows {
-		if hasPrefix(r.GcalEventID, prefix) {
+		if strings.HasPrefix(r.GcalEventID, prefix) {
 			ids = append(ids, r.ID)
 		}
 	}
