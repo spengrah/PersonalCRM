@@ -585,6 +585,7 @@ func run() int {
 				syncRepo,
 				cfg,
 				eventBus,
+				cadenceUpdater,
 				database.Pool,
 				todoist.DefaultClientFactory,
 			)

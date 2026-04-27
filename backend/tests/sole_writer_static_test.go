@@ -114,12 +114,6 @@ var allowedCallSites = map[string]string{
 	"internal/repository/contact.go:UpdateContactResponseFieldsTx":     "legacy wrapper (no production callers post-cutover)",
 	"internal/repository/contact.go:UpdateContactMutualFields":         "legacy wrapper (no production callers post-cutover)",
 	"internal/repository/contact.go:UpdateContactMutualFieldsTx":       "legacy wrapper (no production callers post-cutover)",
-
-	// Todoist carve-outs. These are the ONLY non-CadenceUpdater
-	// production callers of UpdateContactBy. Adding a cadence write to
-	// any other Todoist function will trip this guard.
-	"internal/todoist/provider.go:processItem":       "Todoist cadence-task deadline edit carve-out",
-	"internal/todoist/provider.go:handleSkipTrigger": "Todoist skip-trigger carve-out",
 }
 
 // TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL walks the Go AST

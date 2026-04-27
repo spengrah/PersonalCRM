@@ -63,21 +63,73 @@ func (b *busRecorder) Published() []*events.Envelope {
 	return out
 }
 
+// fakeCadenceOverrider is a test double for cadenceOverrider. It delegates
+// to contactRepo.UpdateContactByTx so the SQL end state matches the real
+// CadenceUpdater's unconditional branch, which keeps Harness B's existing
+// rollback assertions intact. Optional fault injection mirrors the
+// faultyContactTaskWriter shape: set faultyMethod = "ApplyContactByOverride"
+// to inject context.Canceled. Safe for concurrent use.
+type fakeCadenceOverrider struct {
+	contactRepo  *repository.ContactRepository
+	mu           sync.Mutex
+	faultyMethod string
+	fired        int
+	calls        int
+}
+
+func (f *fakeCadenceOverrider) ApplyContactByOverride(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, contactBy *time.Time) error {
+	f.mu.Lock()
+	f.calls++
+	if f.faultyMethod == "ApplyContactByOverride" && f.fired == 0 {
+		f.fired++
+		f.mu.Unlock()
+		return context.Canceled
+	}
+	f.mu.Unlock()
+	if contactBy == nil {
+		return errors.New("fakeCadenceOverrider: nil contactBy not used by todoist provider")
+	}
+	return f.contactRepo.UpdateContactByTx(ctx, tx, contactID, *contactBy)
+}
+
+func (f *fakeCadenceOverrider) Calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 type dismissalTestEnv struct {
 	ctx             context.Context
 	provider        *CadenceSyncProvider
 	contactRepo     *repository.ContactRepository
 	contactTaskRepo *repository.ContactTaskRepository
 	bus             *busRecorder
+	cadence         *fakeCadenceOverrider
 	pool            *pgxpool.Pool
 	settings        Settings
 	accountID       string
 }
 
+// providerTestEnv bundles the shared DB + repos + fake cadence overrider +
+// busRecorder so callers (setupDismissalTest, regression tests) can pull
+// whatever subset they need without the call site juggling 9+ return values.
+type providerTestEnv struct {
+	provider        *CadenceSyncProvider
+	contactRepo     *repository.ContactRepository
+	contactTaskRepo *repository.ContactTaskRepository
+	bus             *busRecorder
+	cadence         *fakeCadenceOverrider
+	pool            *pgxpool.Pool
+	ctx             context.Context
+	settings        Settings
+	accountID       string
+	cleanup         func()
+}
+
 // newProviderTestEnv builds the shared DB + repos + provider infrastructure
 // used by setupDismissalTest. Returns a busRecorder for tests that need to
 // assert published events or inject publish failures.
-func newProviderTestEnv(t *testing.T) (*CadenceSyncProvider, *repository.ContactRepository, *repository.ContactTaskRepository, *busRecorder, *pgxpool.Pool, context.Context, Settings, string, func()) {
+func newProviderTestEnv(t *testing.T) *providerTestEnv {
 	t.Helper()
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -105,6 +157,7 @@ func newProviderTestEnv(t *testing.T) (*CadenceSyncProvider, *repository.Contact
 	cfg := config.TestConfig()
 
 	bus := &busRecorder{}
+	cadenceFake := &fakeCadenceOverrider{contactRepo: contactRepo}
 	provider := NewCadenceSyncProvider(
 		nil, // oauthService: not consulted on this code path
 		contactTaskRepo,
@@ -112,6 +165,7 @@ func newProviderTestEnv(t *testing.T) (*CadenceSyncProvider, *repository.Contact
 		nil, // syncRepo: not consulted on this code path
 		cfg,
 		bus,
+		cadenceFake,
 		database.Pool,
 		DefaultClientFactory,
 	)
@@ -125,7 +179,18 @@ func newProviderTestEnv(t *testing.T) (*CadenceSyncProvider, *repository.Contact
 	}
 	accountID := "test-account"
 
-	return provider, contactRepo, contactTaskRepo, bus, database.Pool, ctx, settings, accountID, func() { database.Close() }
+	return &providerTestEnv{
+		provider:        provider,
+		contactRepo:     contactRepo,
+		contactTaskRepo: contactTaskRepo,
+		bus:             bus,
+		cadence:         cadenceFake,
+		pool:            database.Pool,
+		ctx:             ctx,
+		settings:        settings,
+		accountID:       accountID,
+		cleanup:         func() { database.Close() },
+	}
 }
 
 // setupDismissalTest builds a CadenceSyncProvider wired to a real DB and a
@@ -134,18 +199,19 @@ func newProviderTestEnv(t *testing.T) (*CadenceSyncProvider, *repository.Contact
 func setupDismissalTest(t *testing.T) (*dismissalTestEnv, func()) {
 	t.Helper()
 
-	provider, contactRepo, contactTaskRepo, bus, pool, ctx, settings, accountID, cleanup := newProviderTestEnv(t)
+	env := newProviderTestEnv(t)
 
 	return &dismissalTestEnv{
-		ctx:             ctx,
-		provider:        provider,
-		contactRepo:     contactRepo,
-		contactTaskRepo: contactTaskRepo,
-		bus:             bus,
-		pool:            pool,
-		settings:        settings,
-		accountID:       accountID,
-	}, cleanup
+		ctx:             env.ctx,
+		provider:        env.provider,
+		contactRepo:     env.contactRepo,
+		contactTaskRepo: env.contactTaskRepo,
+		bus:             env.bus,
+		cadence:         env.cadence,
+		pool:            env.pool,
+		settings:        env.settings,
+		accountID:       env.accountID,
+	}, env.cleanup
 }
 
 // cancelledContext returns a context that is already cancelled. Used by

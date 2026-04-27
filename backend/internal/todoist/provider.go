@@ -104,13 +104,18 @@ type contactTaskWriter interface {
 }
 
 // contactWriter is the subset of *repository.ContactRepository the provider
-// uses. Narrow interface so tests can inject UpdateContactByTx failures for
-// skip-path rollback tests.
+// uses.
 type contactWriter interface {
 	GetContact(ctx context.Context, id uuid.UUID) (*repository.Contact, error)
 	ListContactsWithContactBy(ctx context.Context, limit int32) ([]repository.Contact, error)
-	UpdateContactBy(ctx context.Context, id uuid.UUID, contactBy time.Time) error
-	UpdateContactByTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, contactBy time.Time) error
+}
+
+// cadenceOverrider is the subset of *consumer.CadenceUpdater the provider
+// uses to route contact_by writes through the sole writer. Defined
+// consumer-side so the todoist package does not import the consumer
+// package directly.
+type cadenceOverrider interface {
+	ApplyContactByOverride(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, contactBy *time.Time) error
 }
 
 // CadenceSyncProvider implements SyncProvider for Todoist cadence tasks
@@ -118,6 +123,7 @@ type CadenceSyncProvider struct {
 	oauthService    oauthTokenProvider
 	contactTaskRepo contactTaskWriter
 	contactRepo     contactWriter
+	cadenceUpdater  cadenceOverrider
 	syncRepo        *repository.SyncRepository
 	// bus, pool, and clientFactory are required for the tx-atomic handlers
 	// and for HTTP-failure injection in tests. Nil values are caught by a
@@ -137,6 +143,7 @@ func NewCadenceSyncProvider(
 	syncRepo *repository.SyncRepository,
 	cfg *config.Config,
 	bus eventPublisher,
+	cadenceUpdater cadenceOverrider,
 	pool *pgxpool.Pool,
 	clientFactory ClientFactory,
 ) *CadenceSyncProvider {
@@ -144,6 +151,7 @@ func NewCadenceSyncProvider(
 		oauthService:    oauthService,
 		contactTaskRepo: contactTaskRepo,
 		contactRepo:     contactRepo,
+		cadenceUpdater:  cadenceUpdater,
 		syncRepo:        syncRepo,
 		bus:             bus,
 		pool:            pool,
@@ -521,25 +529,55 @@ func (p *CadenceSyncProvider) processItem(
 			tY, tM, tD := todoistDeadline.UTC().Date()
 			cY, cM, cD := contact.ContactBy.UTC().Date()
 			if tY != cY || tM != cM || tD != cD {
-				// Update CRM contact_by to match Todoist
-				if err := p.contactRepo.UpdateContactBy(ctx, contact.ID, todoistDeadline); err != nil {
-					logger.Warn().Err(err).Msg("failed to update contact_by from Todoist deadline")
+				// Gate: distinguish a stale Todoist re-delivery (item.Deadline
+				// matches synced_deadline — i.e., what we last pushed) from a
+				// real user-side Todoist edit (item.Deadline differs from
+				// synced_deadline). When stale, fall through and let
+				// reconcileContactTasks push CRM → Todoist on a later tick.
+				// When synced_deadline is missing (legacy task or fresh-create
+				// race), preserve pre-fix behavior and fire the clobber so a
+				// genuine Todoist edit on a legacy task is not dropped (the
+				// incremental sync cursor advances past unprocessed items, so
+				// skipping is permanent data loss).
+				syncedDeadline, _ := task.Metadata[MetadataKeySyncedDeadline].(string)
+				if syncedDeadline != "" && item.Deadline.Date == syncedDeadline {
+					logger.Debug().
+						Str("contactId", contact.ID.String()).
+						Str("taskKind", task.Kind).
+						Str("itemDeadline", item.Deadline.Date).
+						Str("syncedDeadline", syncedDeadline).
+						Str("contactBy", contact.ContactBy.Format(DateFormat)).
+						Msg("todoist deadline matches synced_deadline; CRM ahead, skipping Todoist-wins branch")
 				} else {
-					// Also update synced_deadline to prevent reconciliation from treating
-					// this Todoist-originated edit as CRM-initiated drift
+					// Real user edit (or legacy task with no synced_deadline).
+					// Apply atomically: route contact_by through CadenceUpdater
+					// and write synced_deadline metadata in the same tx so a
+					// half-applied state can never strand reconciliation in a
+					// spurious-drift loop.
 					newDeadlineStr := todoistDeadline.Format(DateFormat)
 					metadata := task.Metadata
 					if metadata == nil {
 						metadata = make(map[string]any)
 					}
 					metadata[MetadataKeySyncedDeadline] = newDeadlineStr
-					if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
-						logger.Warn().Err(err).Msg("failed to update synced_deadline from Todoist deadline edit")
+
+					txErr := pgx.BeginTxFunc(ctx, p.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+						if err := p.cadenceUpdater.ApplyContactByOverride(ctx, tx, contact.ID, &todoistDeadline); err != nil {
+							return fmt.Errorf("apply contact_by override from todoist deadline edit: %w", err)
+						}
+						if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, task.ID, metadata); err != nil {
+							return fmt.Errorf("update synced_deadline after todoist deadline edit: %w", err)
+						}
+						return nil
+					})
+					if txErr != nil {
+						return processItemResult{Err: fmt.Errorf("deadline-edit tx: %w", txErr)}
 					}
 
 					logger.Info().
 						Str("contactId", contact.ID.String()).
 						Str("taskKind", task.Kind).
+						Str("syncedDeadline", syncedDeadline).
 						Time("newContactBy", todoistDeadline).
 						Msg("updated contact_by and synced_deadline from Todoist deadline edit")
 				}
@@ -773,8 +811,8 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 		return processItemResult{Processed: true}
 	}
 
-	// Advance contact_by.
-	if err := p.contactRepo.UpdateContactByTx(ctx, tx, contact.ID, nextContactBy); err != nil {
+	// Advance contact_by via the sole writer.
+	if err := p.cadenceUpdater.ApplyContactByOverride(ctx, tx, contact.ID, &nextContactBy); err != nil {
 		return processItemResult{Err: fmt.Errorf("update contact_by: %w", err)}
 	}
 

@@ -96,52 +96,23 @@ func (f *faultyContactTaskWriter) UpdateContactTaskMetadata(ctx context.Context,
 	return f.contactTaskWriter.UpdateContactTaskMetadata(ctx, id, metadata)
 }
 
-// faultyContactWriter wraps a real contactWriter and injects errors on
-// UpdateContactByTx.
-type faultyContactWriter struct {
-	contactWriter
-	mu           sync.Mutex
-	faultyMethod string
-	fired        int
-}
-
-func (f *faultyContactWriter) shouldFire(method string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.faultyMethod != method {
-		return false
-	}
-	if f.fired >= 1 {
-		return false
-	}
-	f.fired++
-	return true
-}
-
-func (f *faultyContactWriter) UpdateContactByTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, contactBy time.Time) error {
-	if f.shouldFire("UpdateContactByTx") {
-		return context.Canceled
-	}
-	return f.contactWriter.UpdateContactByTx(ctx, tx, id, contactBy)
-}
-
 // atomicTxTestEnv bundles the live bus + faulty writers + pool so tests
 // can construct a provider with the exact fault-injection behavior they
 // need.
 type atomicTxTestEnv struct {
-	ctx                  context.Context
-	database             *db.Database
-	pool                 *pgxpool.Pool
-	bus                  *events.Bus
-	eventRepo            *repository.EventRepository
-	contactRepo          *repository.ContactRepository
-	contactTaskRepo      *repository.ContactTaskRepository
-	faultyTaskWriter     *faultyContactTaskWriter
-	faultyContactWriterW *faultyContactWriter
-	provider             *CadenceSyncProvider
-	settings             Settings
-	accountID            string
-	riverClient          *river.Client[pgx.Tx]
+	ctx              context.Context
+	database         *db.Database
+	pool             *pgxpool.Pool
+	bus              *events.Bus
+	eventRepo        *repository.EventRepository
+	contactRepo      *repository.ContactRepository
+	contactTaskRepo  *repository.ContactTaskRepository
+	faultyTaskWriter *faultyContactTaskWriter
+	cadenceFake      *fakeCadenceOverrider
+	provider         *CadenceSyncProvider
+	settings         Settings
+	accountID        string
+	riverClient      *river.Client[pgx.Tx]
 }
 
 // setupAtomicTxTestEnv wires a real DB + real events.Bus (with a TestOnly
@@ -195,14 +166,15 @@ func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 	bus := events.NewBus(database.Pool, riverClient, eventRepo)
 
 	faultyTaskWriter := &faultyContactTaskWriter{contactTaskWriter: contactTaskRepo}
-	faultyCW := &faultyContactWriter{contactWriter: contactRepo}
+	cadenceFake := &fakeCadenceOverrider{contactRepo: contactRepo}
 	provider := NewCadenceSyncProvider(
 		stubOAuthProvider{},
 		faultyTaskWriter,
-		faultyCW,
+		contactRepo,
 		nil,
 		config.TestConfig(),
 		bus,
+		cadenceFake,
 		database.Pool,
 		DefaultClientFactory,
 	)
@@ -215,16 +187,16 @@ func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 	}
 
 	return &atomicTxTestEnv{
-		ctx:                  ctx,
-		database:             database,
-		pool:                 database.Pool,
-		bus:                  bus,
-		eventRepo:            eventRepo,
-		contactRepo:          contactRepo,
-		contactTaskRepo:      contactTaskRepo,
-		faultyTaskWriter:     faultyTaskWriter,
-		faultyContactWriterW: faultyCW,
-		provider:             provider,
+		ctx:              ctx,
+		database:         database,
+		pool:             database.Pool,
+		bus:              bus,
+		eventRepo:        eventRepo,
+		contactRepo:      contactRepo,
+		contactTaskRepo:  contactTaskRepo,
+		faultyTaskWriter: faultyTaskWriter,
+		cadenceFake:      cadenceFake,
+		provider:         provider,
 		settings: Settings{
 			ProjectID:             "test-project",
 			ProjectName:           "CRM",
@@ -402,8 +374,8 @@ func TestTodoist_HandleTaskCompletion_RollsBackEventAndStateOnDBFailure(t *testi
 }
 
 // TestTodoist_HandleSkipTrigger_RollsBackEventAndStateOnDBFailure verifies
-// that an injected failure in UpdateContactByTx rolls back the event row,
-// contact_by, and metadata all together.
+// that an injected failure on the cadence-override write rolls back the
+// event row, contact_by, and metadata all together.
 func TestTodoist_HandleSkipTrigger_RollsBackEventAndStateOnDBFailure(t *testing.T) {
 	env, cleanup := setupAtomicTxTestEnv(t)
 	defer cleanup()
@@ -411,9 +383,9 @@ func TestTodoist_HandleSkipTrigger_RollsBackEventAndStateOnDBFailure(t *testing.
 	contact, task := createManagedCadenceTask(t, env, "SkipFail")
 	beforeContactBy := contact.ContactBy
 
-	env.faultyContactWriterW.mu.Lock()
-	env.faultyContactWriterW.faultyMethod = "UpdateContactByTx"
-	env.faultyContactWriterW.mu.Unlock()
+	env.cadenceFake.mu.Lock()
+	env.cadenceFake.faultyMethod = "ApplyContactByOverride"
+	env.cadenceFake.mu.Unlock()
 
 	item := SyncItem{ID: task.ExternalTaskID, UpdatedAt: "2026-04-04T10:00:00Z"}
 	r := env.provider.handleSkipTrigger(env.ctx, item, task, contact, env.settings, env.accountID)
@@ -878,10 +850,11 @@ func TestTodoist_Sync_ReconcileDefersSkipDriftAfterMappingRollback(t *testing.T)
 	provider := NewCadenceSyncProvider(
 		stubOAuthProvider{},
 		env.faultyTaskWriter,
-		env.faultyContactWriterW,
+		env.contactRepo,
 		nil,
 		config.TestConfig(),
 		env.bus,
+		env.cadenceFake,
 		env.pool,
 		func(_ string) Client { return mock },
 	)
@@ -1005,4 +978,423 @@ func TestReconcileExistingTask_SkipDriftRecovery_MetadataWriteFailure(t *testing
 	require.NoError(t, err)
 	pending, _ := afterFail.Metadata[MetadataKeyPendingTempID].(string)
 	assert.Equal(t, origTempID, pending)
+}
+
+// makeStaleDeadlineSyncState builds a *repository.SyncState configured the
+// way the test harness expects (account ID + cursor + project/label
+// metadata), so the gate / reconcile end-to-end tests can drive Sync().
+func makeStaleDeadlineSyncState(env *atomicTxTestEnv) *repository.SyncState {
+	accountID := env.accountID
+	syncCursor := "*"
+	return &repository.SyncState{
+		ID:         uuid.New(),
+		Source:     SourceName,
+		AccountID:  &accountID,
+		SyncCursor: &syncCursor,
+		Metadata: map[string]any{
+			MetadataKeyProjectID: env.settings.ProjectID,
+			MetadataKeyLabelID:   env.settings.LabelID,
+			MetadataKeyLabelName: env.settings.LabelName,
+		},
+	}
+}
+
+// TestSync_StaleTodoistDeadline_OutreachRecovery is sub-case 4a: full Sync()
+// end-to-end where the user PATCHed /last-contacted, advancing both
+// contact_by and last_outreach_at, and the next Todoist incremental sync
+// re-delivers the cadence task at its still-stale deadline. The gate must
+// hold (contact_by stays advanced through processItem) and reconcile's
+// closeOnOutreach branch must fire to close the old task — the prod
+// recovery path for Marjie + Rocky.
+func TestSync_StaleTodoistDeadline_OutreachRecovery(t *testing.T) {
+	env, cleanup := setupAtomicTxTestEnv(t)
+	defer cleanup()
+
+	cadenceStr := "weekly"
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "Sync4a " + uuid.New().String()[:8],
+		Cadence:  &cadenceStr,
+	})
+	require.NoError(t, err)
+
+	// Pre-deploy state: synced_deadline + LastOutreachAt are on the OLD
+	// values (matching what we last pushed). Then the user PATCHed
+	// /last-contacted, which both advanced contact_by AND bumped
+	// last_outreach_at via the mutual interaction path.
+	staleDeadline := "2026-04-19"
+	oldOutreach := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
+	advancedContactBy := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)
+	advancedOutreach := time.Date(2026, 4, 23, 15, 0, 47, 0, time.UTC)
+
+	cadenceExtID := "td-sync4a-" + uuid.New().String()[:8]
+	_, err = env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindCadence,
+		ExternalTaskID: cadenceExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata: map[string]any{
+			MetadataKeySyncedDeadline:       staleDeadline,
+			MetadataKeySyncedLastOutreachAt: oldOutreach.Format(time.RFC3339),
+		},
+	})
+	require.NoError(t, err)
+
+	// Advance contact_by + last_outreach_at to simulate the post-PATCH
+	// state. UpdateContactBy is the test fixture's seeding tool (still
+	// allowed for fixtures); UpdateContactOutreachAt sets last_outreach_at.
+	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, advancedContactBy))
+	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, advancedOutreach, true))
+
+	// Scripted client returns the cadence task with its stale deadline.
+	syncItem := SyncItem{
+		ID:        cadenceExtID,
+		ProjectID: env.settings.ProjectID,
+		Labels:    []string{env.settings.LabelName},
+		Deadline:  &SyncDate{Date: staleDeadline},
+		UpdatedAt: "2026-04-23T15:00:52Z",
+	}
+	mock := &scriptedClient{
+		responses: []*SyncResponse{
+			{SyncToken: "tok1", Items: []SyncItem{syncItem}},
+			{SyncToken: "tok2"},
+			{SyncToken: "tok3"},
+		},
+	}
+
+	provider := NewCadenceSyncProvider(
+		stubOAuthProvider{},
+		env.faultyTaskWriter,
+		env.contactRepo,
+		nil,
+		config.TestConfig(),
+		env.bus,
+		env.cadenceFake,
+		env.pool,
+		func(_ string) Client { return mock },
+	)
+
+	state := makeStaleDeadlineSyncState(env)
+	_, err = provider.Sync(env.ctx, state, []repository.Contact{*contact})
+	require.NoError(t, err)
+
+	// Gate held: contact_by is still the advanced value, NOT clobbered to
+	// the stale Todoist deadline.
+	reloaded, err := env.contactRepo.GetContact(env.ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded.ContactBy)
+	assert.True(t, reloaded.ContactBy.Equal(advancedContactBy),
+		"contact_by must remain advanced after Sync; want=%v got=%v",
+		advancedContactBy, *reloaded.ContactBy)
+
+	// closeOnOutreach fired: a NewItemCloseCommand for cadenceExtID
+	// appears in some batch.
+	closedForExtID := false
+	for _, batch := range mock.batches {
+		for _, c := range batch {
+			if c.Type != "item_close" {
+				continue
+			}
+			if id, _ := c.Args["id"].(string); id == cadenceExtID {
+				closedForExtID = true
+			}
+		}
+	}
+	assert.True(t, closedForExtID, "closeOnOutreach must emit item_close for cadenceExtID")
+}
+
+// TestSync_StaleTodoistDeadline_CRMDriftPath is sub-case 4b: same gate
+// scenario as 4a but last_outreach_at was NOT advanced (e.g., a
+// future-dated cadence change rather than a Mark Contacted). The gate must
+// hold; reconcileExistingTask's CRM-drift branch fires instead of
+// closeOnOutreach, emitting close+create scoped to the seeded cadenceExtID.
+func TestSync_StaleTodoistDeadline_CRMDriftPath(t *testing.T) {
+	env, cleanup := setupAtomicTxTestEnv(t)
+	defer cleanup()
+
+	cadenceStr := "weekly"
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "Sync4b " + uuid.New().String()[:8],
+		Cadence:  &cadenceStr,
+	})
+	require.NoError(t, err)
+
+	staleDeadline := "2026-04-19"
+	advancedContactBy := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)
+	stableOutreach := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
+
+	cadenceExtID := "td-sync4b-" + uuid.New().String()[:8]
+	_, err = env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindCadence,
+		ExternalTaskID: cadenceExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata: map[string]any{
+			MetadataKeySyncedDeadline: staleDeadline,
+			// synced_last_outreach_at == contact.LastOutreachAt → no
+			// outreach detected.
+			MetadataKeySyncedLastOutreachAt: stableOutreach.Format(time.RFC3339),
+		},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, advancedContactBy))
+	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, stableOutreach, true))
+
+	syncItem := SyncItem{
+		ID:        cadenceExtID,
+		ProjectID: env.settings.ProjectID,
+		Labels:    []string{env.settings.LabelName},
+		Deadline:  &SyncDate{Date: staleDeadline},
+		UpdatedAt: "2026-04-23T15:00:52Z",
+	}
+	mock := &scriptedClient{
+		responses: []*SyncResponse{
+			{SyncToken: "tok1", Items: []SyncItem{syncItem}},
+			{SyncToken: "tok2"},
+			{SyncToken: "tok3"},
+		},
+	}
+
+	provider := NewCadenceSyncProvider(
+		stubOAuthProvider{},
+		env.faultyTaskWriter,
+		env.contactRepo,
+		nil,
+		config.TestConfig(),
+		env.bus,
+		env.cadenceFake,
+		env.pool,
+		func(_ string) Client { return mock },
+	)
+
+	state := makeStaleDeadlineSyncState(env)
+	_, err = provider.Sync(env.ctx, state, []repository.Contact{*contact})
+	require.NoError(t, err)
+
+	// Gate held.
+	reloaded, err := env.contactRepo.GetContact(env.ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded.ContactBy)
+	assert.True(t, reloaded.ContactBy.Equal(advancedContactBy),
+		"contact_by must remain advanced after Sync (CRM-drift path)")
+
+	// CRM-drift branch fires: item_close for cadenceExtID + at least one
+	// item_add scoped to this contact appear in the batches.
+	closedForExtID := 0
+	addsForContact := 0
+	contactMarker := contact.ID.String()
+	for _, batch := range mock.batches {
+		for _, c := range batch {
+			switch c.Type {
+			case "item_close":
+				if id, _ := c.Args["id"].(string); id == cadenceExtID {
+					closedForExtID++
+				}
+			case "item_add":
+				desc, _ := c.Args["description"].(string)
+				if strings.Contains(desc, contactMarker) {
+					addsForContact++
+				}
+			}
+		}
+	}
+	assert.GreaterOrEqual(t, closedForExtID, 1, "CRM-drift branch must emit item_close for cadenceExtID")
+	assert.GreaterOrEqual(t, addsForContact, 1, "CRM-drift branch must emit item_add for the contact")
+}
+
+// TestProcessItem_DeadlineEditTxFailure_RollsBackAndSurfacesErr is the
+// critical tx-failure regression test. Setup is a legitimate Todoist-wins
+// scenario (synced_deadline != item.Deadline AND item.Deadline !=
+// contact.ContactBy). Failure injection on the metadata-write step inside
+// the new pgx.BeginTxFunc proves that:
+//   - The contact_by write rolls back even though ApplyContactByOverride
+//     itself succeeded — this pins the tx atomicity fix.
+//   - synced_deadline metadata is unchanged.
+//   - processItemResult.Err is non-nil so processItems aborts the batch.
+//   - Sync() returns with result.NewCursor == "" so the next tick replays
+//     the same batch (cursor preserved at the SyncService layer).
+func TestProcessItem_DeadlineEditTxFailure_RollsBackAndSurfacesErr(t *testing.T) {
+	env, cleanup := setupAtomicTxTestEnv(t)
+	defer cleanup()
+
+	cadenceStr := "weekly"
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "TxFail " + uuid.New().String()[:8],
+		Cadence:  &cadenceStr,
+	})
+	require.NoError(t, err)
+
+	// Legitimate-edit precondition: synced_deadline ≠ item.Deadline AND
+	// item.Deadline ≠ contact.ContactBy.
+	originalContactBy := time.Date(2027, 2, 3, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, originalContactBy))
+
+	cadenceExtID := "td-txfail-" + uuid.New().String()[:8]
+	_, err = env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindCadence,
+		ExternalTaskID: cadenceExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata: map[string]any{
+			MetadataKeySyncedDeadline: "2027-02-03",
+		},
+	})
+	require.NoError(t, err)
+
+	// Inject failure on the metadata-write step inside the new tx —
+	// reproduces the original non-tx bug shape (first write succeeds,
+	// second write fails) but inside the tx so the rollback is observable.
+	env.faultyTaskWriter.mu.Lock()
+	env.faultyTaskWriter.faultyMethod = "UpdateContactTaskMetadataTx"
+	env.faultyTaskWriter.fired = 0
+	env.faultyTaskWriter.invocations = 0
+	env.faultyTaskWriter.mu.Unlock()
+
+	syncItem := SyncItem{
+		ID:        cadenceExtID,
+		ProjectID: env.settings.ProjectID,
+		Labels:    []string{env.settings.LabelName},
+		Deadline:  &SyncDate{Date: "2026-02-24"},
+		UpdatedAt: "2026-04-15T10:00:00Z",
+	}
+	mock := &scriptedClient{
+		responses: []*SyncResponse{
+			{SyncToken: "tok1", Items: []SyncItem{syncItem}},
+			{SyncToken: "tok2"},
+			{SyncToken: "tok3"},
+		},
+	}
+
+	provider := NewCadenceSyncProvider(
+		stubOAuthProvider{},
+		env.faultyTaskWriter,
+		env.contactRepo,
+		nil,
+		config.TestConfig(),
+		env.bus,
+		env.cadenceFake,
+		env.pool,
+		func(_ string) Client { return mock },
+	)
+
+	state := makeStaleDeadlineSyncState(env)
+	result, err := provider.Sync(env.ctx, state, []repository.Contact{*contact})
+	require.Error(t, err, "Sync must surface the deadline-edit tx failure")
+	assert.Contains(t, err.Error(), "deadline-edit tx")
+	require.NotNil(t, result)
+	assert.Equal(t, "", result.NewCursor,
+		"result.NewCursor must remain empty so SyncService preserves the pre-batch cursor")
+
+	// contact_by rolled back to the original CRM value despite
+	// ApplyContactByOverride succeeding inside the tx.
+	reloaded, err := env.contactRepo.GetContact(env.ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded.ContactBy)
+	assert.True(t, reloaded.ContactBy.Equal(originalContactBy),
+		"contact_by must roll back to its pre-call value; want=%v got=%v",
+		originalContactBy, *reloaded.ContactBy)
+
+	// synced_deadline still on its pre-call value — second write failed.
+	reloadedTask, err := env.contactTaskRepo.GetContactTaskByExternalID(env.ctx, SourceName, cadenceExtID)
+	require.NoError(t, err)
+	assert.Equal(t, "2027-02-03", reloadedTask.Metadata[MetadataKeySyncedDeadline],
+		"synced_deadline must remain unchanged after rollback")
+}
+
+// TestSync_LegitimateTodoistEdit_SameTickReconcileIsNotSpuriousCloseCreate
+// pins the same-tick ordering edge: after a legitimate Todoist-wins
+// clobber commits in processItem, reconcileExistingTask runs in the same
+// Sync() invocation with the new contact_by + new synced_deadline visible
+// (committed reads). It must NOT emit a spurious close+create.
+func TestSync_LegitimateTodoistEdit_SameTickReconcileIsNotSpuriousCloseCreate(t *testing.T) {
+	env, cleanup := setupAtomicTxTestEnv(t)
+	defer cleanup()
+
+	cadenceStr := "weekly"
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "SameTick " + uuid.New().String()[:8],
+		Cadence:  &cadenceStr,
+	})
+	require.NoError(t, err)
+
+	originalContactBy := time.Date(2027, 2, 3, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, originalContactBy))
+
+	cadenceExtID := "td-sametick-" + uuid.New().String()[:8]
+	_, err = env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           TaskKindCadence,
+		ExternalTaskID: cadenceExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata: map[string]any{
+			MetadataKeySyncedDeadline: "2027-02-03",
+		},
+	})
+	require.NoError(t, err)
+
+	editedDeadline := "2026-02-24"
+	syncItem := SyncItem{
+		ID:        cadenceExtID,
+		ProjectID: env.settings.ProjectID,
+		Labels:    []string{env.settings.LabelName},
+		Deadline:  &SyncDate{Date: editedDeadline},
+		UpdatedAt: "2026-04-15T10:00:00Z",
+	}
+	mock := &scriptedClient{
+		responses: []*SyncResponse{
+			{SyncToken: "tok1", Items: []SyncItem{syncItem}},
+			{SyncToken: "tok2"},
+			{SyncToken: "tok3"},
+		},
+	}
+
+	provider := NewCadenceSyncProvider(
+		stubOAuthProvider{},
+		env.faultyTaskWriter,
+		env.contactRepo,
+		nil,
+		config.TestConfig(),
+		env.bus,
+		env.cadenceFake,
+		env.pool,
+		func(_ string) Client { return mock },
+	)
+
+	state := makeStaleDeadlineSyncState(env)
+	_, err = provider.Sync(env.ctx, state, []repository.Contact{*contact})
+	require.NoError(t, err)
+
+	// processItem's clobber committed: contact_by + synced_deadline both
+	// equal the new Todoist value.
+	reloaded, err := env.contactRepo.GetContact(env.ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded.ContactBy)
+	expectedContactBy := time.Date(2026, 2, 24, 0, 0, 0, 0, time.UTC)
+	assert.True(t, reloaded.ContactBy.Equal(expectedContactBy),
+		"contact_by must equal the Todoist edit; want=%v got=%v", expectedContactBy, *reloaded.ContactBy)
+
+	reloadedTask, err := env.contactTaskRepo.GetContactTaskByExternalID(env.ctx, SourceName, cadenceExtID)
+	require.NoError(t, err)
+	assert.Equal(t, editedDeadline, reloadedTask.Metadata[MetadataKeySyncedDeadline],
+		"synced_deadline must be updated to the new Todoist deadline")
+
+	// Same-tick reconcile must NOT emit a NewItemCloseCommand for
+	// cadenceExtID — the drift branch emits close+create together, so
+	// close-absence is sufficient proof the drift branch did not fire.
+	closeForExtID := 0
+	for _, batch := range mock.batches {
+		for _, c := range batch {
+			if c.Type == "item_close" {
+				if id, _ := c.Args["id"].(string); id == cadenceExtID {
+					closeForExtID++
+				}
+			}
+		}
+	}
+	assert.Equal(t, 0, closeForExtID,
+		"same-tick reconcile must not emit a spurious item_close for the seeded task")
 }
