@@ -98,14 +98,17 @@ var allowedCallSites = map[string]string{
 	"internal/consumer/cadence_updater.go:applyTx": "sole writer",
 
 	// Repository wrappers. Each wrapper is a thin method that delegates
-	// to the corresponding sqlc query and is called from either
-	// CadenceUpdater (for the cutover queries) or Todoist/tests (for
-	// UpdateContactBy). Adding a NEW wrapper here requires a matching
-	// allowlist entry, so regressions surface at review time.
+	// to the corresponding sqlc query. All production cadence writes
+	// route through CadenceUpdater; these wrappers remain in the
+	// allowlist because the wrapper bodies themselves call cadence SQL
+	// and because test fixtures use UpdateContactBy/UpdateContactByTx
+	// directly to seed contact_by without going through the sole-writer
+	// path. Adding a NEW wrapper here requires a matching allowlist
+	// entry, so regressions surface at review time.
 	"internal/repository/contact.go:CreateContact":                     "initial row seed carve-out",
 	"internal/repository/contact.go:UpdateContact":                     "profile-only wrapper (post-cutover cadence columns not written)",
-	"internal/repository/contact.go:UpdateContactBy":                   "wrapper for Todoist carve-outs",
-	"internal/repository/contact.go:UpdateContactByTx":                 "tx-threaded wrapper for Todoist carve-outs",
+	"internal/repository/contact.go:UpdateContactBy":                   "test-fixture / implementation wrapper; production writes route through CadenceUpdater",
+	"internal/repository/contact.go:UpdateContactByTx":                 "test-fixture / implementation wrapper; production writes route through CadenceUpdater",
 	"internal/repository/contact.go:UpdateContactLastContacted":        "legacy wrapper (no production callers post-cutover)",
 	"internal/repository/contact.go:UpdateContactLastContactedIfLater": "legacy wrapper (no production callers post-cutover)",
 	"internal/repository/contact.go:UpdateContactOutreachAt":           "legacy wrapper (no production callers post-cutover)",
@@ -114,12 +117,6 @@ var allowedCallSites = map[string]string{
 	"internal/repository/contact.go:UpdateContactResponseFieldsTx":     "legacy wrapper (no production callers post-cutover)",
 	"internal/repository/contact.go:UpdateContactMutualFields":         "legacy wrapper (no production callers post-cutover)",
 	"internal/repository/contact.go:UpdateContactMutualFieldsTx":       "legacy wrapper (no production callers post-cutover)",
-
-	// Todoist carve-outs. These are the ONLY non-CadenceUpdater
-	// production callers of UpdateContactBy. Adding a cadence write to
-	// any other Todoist function will trip this guard.
-	"internal/todoist/provider.go:processItem":       "Todoist cadence-task deadline edit carve-out",
-	"internal/todoist/provider.go:handleSkipTrigger": "Todoist skip-trigger carve-out",
 }
 
 // TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL walks the Go AST

@@ -1,0 +1,56 @@
+---
+timestamp: "2026-04-27T12:53:35.255131"
+type: gotcha
+summary: Integration tests fail from DB state accumulation — `make e2e-db` resets test DB before running
+detail: |
+  The integration test DB (`personal_crm_test`) accumulates state across runs, causing assertion failures like "contact X should be in list" when the test assumes a limited number of contacts but finds 255+. The symptom: tests pass on a fresh DB and on `main`, but fail mid-session after many runs. `make e2e-db` drops and recreates the test DB schema. The Makefile wires `e2e-db` into `test-e2e` but NOT into `test-integration` — you must run `make e2e-db` manually before `make test-integration` if list-bounded tests fail. This is documented in `.ai/rules/core.md` Gotchas table but was rediscovered during this session when TestCadenceFilter_Integration failed after multiple runs.
+actionable: true
+
+---
+timestamp: "2026-04-27T12:53:35.255131"
+type: gotcha
+summary: Pre-existing test infrastructure failures don't block PR work — verify failures exist on `main` before debugging
+detail: |
+  During this session, `provider_dismissal_test.go` tests failed with "no migration found for version 44: read down for version 44 .: file does not exist". The agent correctly verified this was pre-existing by checking the migrations directory (highest migration was 043, not 044). The pattern: when a test fails that seems unrelated to your changes, `git checkout main && make test-integration` to confirm it's pre-existing before spending time debugging. Distinguish genuine regressions from inherited flakiness.
+actionable: true
+
+---
+timestamp: "2026-04-27T12:53:35.255131"
+type: rule
+summary: Single-file build verification (`go build cmd/crm-api/main.go`) catches wiring errors that package builds miss
+detail: |
+  The project uses a single-file build convention for CI, Playwright, and the Makefile (`go build cmd/crm-api/main.go`, not `./cmd/crm-api`). This means companion files in `cmd/crm-api/` (like `river.go`) are ignored. During this session, the agent correctly ran `go build cmd/crm-api/main.go` after adding the `cadenceUpdater` parameter to `NewCadenceSyncProvider` in `main.go`. The gotcha: if you define new types or workers referenced from `main.go`, you must either inline them into `main.go` or update ALL build sites to package form (`./cmd/crm-api`): `.github/workflows/ci.yml`, `Makefile` (6+ targets), and `frontend/playwright.config.ts` webServer. This is already documented in `.ai/rules/core.md` 'When You Change X, Check Y' table but bears repeating.
+actionable: true
+
+---
+timestamp: "2026-04-27T12:53:35.255131"
+type: architecture
+summary: Codex review in implement-and-review skill catches nil-pointer wiring errors before push
+detail: |
+  During this session, Codex review round 1 flagged a P2 finding: the new `cadenceUpdater` field on `CadenceSyncProvider` was not nil-guarded in the `Sync` method. The existing pattern checks `p.bus == nil || p.pool == nil || p.clientFactory == nil` at the top of `Sync` to fail fast on miswiring. Adding `cadenceUpdater` to the guard prevented a panic-on-first-deadline-edit failure mode. The fix was trivial (extend the guard condition and error message) but required Codex to notice — the human-authored plan didn't specify this. This demonstrates the value of local Codex review catching wiring mistakes before CI.
+actionable: true
+
+---
+timestamp: "2026-04-27T12:53:35.255131"
+type: distinction
+summary: Codex review approved after 2 rounds — round 1 found nil-guard issue, round 2 passed with no actionable feedback
+detail: |
+  The implement-and-review skill ran Codex review twice: round 1 returned a P2 finding (missing `cadenceUpdater` nil-guard), which was fixed and committed. Round 2 re-ran the full branch review and returned "no actionable issues", approving the PR for push. The agent correctly interpreted this as `approve` verdict and proceeded to push. This confirms the iterative review loop worked as designed — genuine issues surface and get fixed, then re-review confirms the fix.
+actionable: false
+
+---
+timestamp: "2026-04-27T13:06:51.068334"
+type: gotcha
+summary: Claude Code Review posts findings in review body as COMMENTED state - fetch with `gh pr view --json reviews`
+detail: |
+  Automated reviewers (Claude Code Review, Codex) post findings as review state `COMMENTED`, not `CHANGES_REQUESTED`, so they don't block merge or surface prominently in basic `gh pr checks`. Claude Code Review specifically puts comprehensive findings in the review summary (`.body` field), not as inline code comments. After a failed automated review check, fetch with `gh pr view {PR} --json reviews --jq '.reviews[] | {state, author: .author.login, body}'` to see the full finding. The existing core.md rule mentions Codex + inline comments via `gh api`, but Claude Code Review is a distinct check that uses review summaries instead.
+actionable: true
+
+---
+timestamp: "2026-04-27T13:06:51.068334"
+type: documentation_gap
+summary: "Core.md 'When You Change X' table missing: removal of allowlist/special-case code → update explanatory comments"
+detail: |
+  When the PR removed two Todoist allowlist entries from sole_writer_static_test.go, it didn't update the block comment and inline justifications that explained them as 'Todoist production carve-outs.' Claude Code Review caught this: the remaining test-only entries looked like they were still carve-outs when in fact they serve a different purpose. The 'When You Change X, Check Y' table in core.md has many cross-cutting patterns but doesn't cover: 'When you remove allowlist entries / special-case code / carve-outs → grep for and update comments that reference those entries.' This is a specific instance of a broader principle: when removing special-case code, search for explanatory comments elsewhere that justify or reference it.
+actionable: true
+

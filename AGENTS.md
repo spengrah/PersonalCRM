@@ -65,3 +65,8 @@ Find all instances of a layer:
 - Read repository code before using methods (names vary, e.g., `SoftDeleteContact` not `DeleteContact`)
 - Prefer integration tests over heavy mocking
 - Use `accelerated.GetCurrentTime()` not `time.Now()`
+
+## Privacy
+
+- **Never include PII in code, comments, commit messages, PR descriptions, GitHub issues, plan docs, learnings, or any other repo artifact.** PII = real contact full names, email addresses, phone numbers, contact UUIDs, account IDs, prod hostnames, anything that could identify a real person or system. Use placeholders ("contact A", "the affected contact", "two contacts on date X"), redact UUIDs, and keep specifics in private notes outside the repo. The repo is the user's own CRM and the data inside it is real — leaking PII into git history is irreversible.
+- This applies to plan docs in `.ai/log/plan/` too. If a plan needs prod observation details to be useful, scrub names + IDs before committing.
