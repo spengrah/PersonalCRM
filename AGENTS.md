@@ -68,5 +68,6 @@ Find all instances of a layer:
 
 ## Privacy
 
-- **Never include PII in code, comments, commit messages, PR descriptions, GitHub issues, plan docs, learnings, or any other repo artifact.** PII = real contact full names, email addresses, phone numbers, contact UUIDs, account IDs, prod hostnames, anything that could identify a real person or system. Use placeholders ("contact A", "the affected contact", "two contacts on date X"), redact UUIDs, and keep specifics in private notes outside the repo. The repo is the user's own CRM and the data inside it is real — leaking PII into git history is irreversible.
-- This applies to plan docs in `.ai/log/plan/` too. If a plan needs prod observation details to be useful, scrub names + IDs before committing.
+- **Never include PII in code, comments, commit messages, PR descriptions, GitHub issues, plan docs, learnings, or any other repo artifact.** PII = real contact full names, email addresses, phone numbers, contact UUIDs, account IDs, prod hostnames, anything that could identify a real person or system. Use placeholders ("contact A", "the affected contact", "two contacts on date X", `<prod-host>`), redact UUIDs, and keep specifics in private notes outside the repo. The repo is the user's own CRM and the data inside it is real — leaking PII into git history is irreversible.
+- `.ai/log/plan/` is gitignored (safe scratch space for raw prod observations).
+- `.ai/log/learnings/*.yaml` IS tracked in git (the `.ai/log/*` ignore is overridden by `!.ai/log/learnings/*`) — the PII rule applies there. Don't write prod hostnames, real names, or contact identifiers into learnings yaml.

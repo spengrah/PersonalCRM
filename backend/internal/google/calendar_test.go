@@ -486,17 +486,17 @@ func TestBuildAttendeeList_OrganizerNotInAttendees(t *testing.T) {
 	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 
-	// Event where organizer (Eugene) is NOT in the attendees list
-	// This matches the bug report example: Spencer<>Eugene meeting
+	// Event where the organizer (Bob) is NOT in the attendees list.
+	// Regression scenario from issue #183.
 	event := &calendar.Event{
 		Organizer: &calendar.EventOrganizer{
-			Email:       "eugene@golem.foundation",
-			DisplayName: "Eugene",
+			Email:       "bob@example.com",
+			DisplayName: "Bob",
 		},
 		Attendees: []*calendar.EventAttendee{
 			{
-				Email:          "hello@spengrah.xyz",
-				DisplayName:    "Spencer",
+				Email:          "alice@example.com",
+				DisplayName:    "Alice",
 				Self:           true,
 				ResponseStatus: "accepted",
 			},
@@ -505,22 +505,22 @@ func TestBuildAttendeeList_OrganizerNotInAttendees(t *testing.T) {
 
 	attendees := provider.buildAttendeeList(event, accountID)
 
-	// Should have 2 attendees: Spencer (self) + Eugene (organizer added)
+	// Should have 2 attendees: Alice (self) + Bob (organizer added)
 	assert.Len(t, attendees, 2)
 
-	// Find Eugene (organizer who was added)
-	var eugene *repository.Attendee
+	// Find Bob (organizer who was added)
+	var organizer *repository.Attendee
 	for i := range attendees {
-		if attendees[i].Email == "eugene@golem.foundation" {
-			eugene = &attendees[i]
+		if attendees[i].Email == "bob@example.com" {
+			organizer = &attendees[i]
 			break
 		}
 	}
-	assert.NotNil(t, eugene, "Organizer Eugene should be in attendees list")
-	assert.Equal(t, "Eugene", eugene.DisplayName)
-	assert.True(t, eugene.Organizer)
-	assert.False(t, eugene.Self)
-	assert.Equal(t, "", eugene.ResponseType) // Organizers don't have response status
+	assert.NotNil(t, organizer, "Organizer should be in attendees list")
+	assert.Equal(t, "Bob", organizer.DisplayName)
+	assert.True(t, organizer.Organizer)
+	assert.False(t, organizer.Self)
+	assert.Equal(t, "", organizer.ResponseType) // Organizers don't have response status
 }
 
 // TestBuildAttendeeList_OrganizerAlreadyInAttendees verifies organizer is not duplicated
@@ -1289,17 +1289,17 @@ func TestProcessEvent_MatchesOrganizerNotInAttendees(t *testing.T) {
 	mockContactRepo := &mockContactRepo{}
 	mockIdentity := &mockIdentityService{
 		matchOrCreateResults: map[string]*service.MatchResult{
-			"eugene@golem.foundation": {ContactID: &organizerContactID, MatchType: "exact"},
+			"bob@example.com": {ContactID: &organizerContactID, MatchType: "exact"},
 		},
 	}
 
 	provider := newTestProvider(mockCalRepo, mockContactRepo, mockIdentity)
 
-	// Recreate the exact scenario from issue #183:
-	// Event "Spencer<>Eugene" where Eugene organized but isn't in attendees
+	// Recreate the scenario from issue #183:
+	// Event where the organizer (Bob) is not in the attendees list.
 	event := &calendar.Event{
-		Id:       "spencer-eugene-meeting",
-		Summary:  "Spencer<>Eugene",
+		Id:       "alice-bob-meeting",
+		Summary:  "Alice<>Bob",
 		Status:   "confirmed",
 		HtmlLink: "https://calendar.google.com/event?eid=abc123",
 		Start: &calendar.EventDateTime{
@@ -1309,21 +1309,21 @@ func TestProcessEvent_MatchesOrganizerNotInAttendees(t *testing.T) {
 			DateTime: "2025-12-23T11:00:00Z",
 		},
 		Organizer: &calendar.EventOrganizer{
-			Email:       "eugene@golem.foundation",
-			DisplayName: "Eugene",
+			Email:       "bob@example.com",
+			DisplayName: "Bob",
 		},
 		Attendees: []*calendar.EventAttendee{
 			{
-				Email:          "hello@spengrah.xyz",
-				DisplayName:    "Spencer",
+				Email:          "alice@example.com",
+				DisplayName:    "Alice",
 				Self:           true,
 				ResponseStatus: "accepted",
 			},
-			// Note: Eugene is NOT in the attendees list
+			// Note: the organizer (Bob) is NOT in the attendees list
 		},
 	}
 
-	err := provider.processEvent(ctx, event, "hello@spengrah.xyz")
+	err := provider.processEvent(ctx, event, "alice@example.com")
 
 	assert.NoError(t, err)
 	assert.True(t, mockCalRepo.upsertCalled, "Upsert should be called")
@@ -1339,7 +1339,7 @@ func TestProcessEvent_MatchesOrganizerNotInAttendees(t *testing.T) {
 	assert.True(t, mockIdentity.matchOrCreateCalled, "Identity service should be called")
 	var foundOrganizerCall bool
 	for _, req := range mockIdentity.matchOrCreateRequests {
-		if req.RawIdentifier == "eugene@golem.foundation" {
+		if req.RawIdentifier == "bob@example.com" {
 			foundOrganizerCall = true
 			break
 		}
@@ -1980,8 +1980,8 @@ func TestIsBlockedCalendarEmail_AllowedEmails(t *testing.T) {
 		"jane+work@gmail.com",
 		"contact@startup.io",
 		"hello@business.com",
-		"eugene@golem.foundation",
-		"spencer@spengrah.xyz",
+		"bob@example.com",
+		"alice@anotherdomain.test",
 		// Emails that might look suspicious but are valid
 		"noreplyman@example.com",    // Contains "noreply" but not as prefix
 		"john.noreply@company.com",  // Contains "noreply" but not as prefix

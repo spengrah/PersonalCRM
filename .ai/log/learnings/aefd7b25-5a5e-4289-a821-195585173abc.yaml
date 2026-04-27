@@ -155,7 +155,7 @@ timestamp: "2026-04-15T16:22:36.349301"
 type: gotcha
 summary: "Claude remote scheduling fallback: use systemd-run or cron when claude.ai /schedule fails"
 detail: |
-  Session attempted `/schedule` skill for 65-min delayed rescue verification but got 'trouble connecting with your remote claude.ai account'. User wanted agent to self-schedule (not a Pi-side log dump). Fallback pattern demonstrated: `ssh raspberet 'sudo systemd-run --on-active=65min --unit=pr3-rescue-check /bin/bash -c "..."'` schedules a one-shot timer that writes verification results to `/tmp/pr3-rescue-check.log`. Limitation: Pi-side timer has no way to resume Claude session — file is ready but requires user ping ('check rescue') or manual review. If remote scheduling recovers, can still use CronCreate for proper agent callback. User was dissatisfied with Pi-only approach; expected self-resuming agent.
+  Session attempted `/schedule` skill for 65-min delayed rescue verification but got 'trouble connecting with your remote claude.ai account'. User wanted agent to self-schedule (not a Pi-side log dump). Fallback pattern demonstrated: `ssh <prod-host> 'sudo systemd-run --on-active=65min --unit=pr3-rescue-check /bin/bash -c "..."'` schedules a one-shot timer that writes verification results to `/tmp/pr3-rescue-check.log`. Limitation: Pi-side timer has no way to resume Claude session — file is ready but requires user ping ('check rescue') or manual review. If remote scheduling recovers, can still use CronCreate for proper agent callback. User was dissatisfied with Pi-only approach; expected self-resuming agent.
 actionable: false
 
 ---
