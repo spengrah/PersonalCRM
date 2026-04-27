@@ -60,10 +60,7 @@ func (q *Queries) DeleteEventsByAccount(ctx context.Context, googleAccountID str
 
 const FindEventsByAttendeeEmailUnmatchedForContact = `-- name: FindEventsByAttendeeEmailUnmatchedForContact :many
 SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
-WHERE EXISTS (
-    SELECT 1 FROM jsonb_array_elements(attendees) AS a
-    WHERE LOWER(a->>'email') = LOWER($1::text)
-)
+WHERE jsonb_array_lower_values(attendees, 'email') && ARRAY[LOWER($1::text)]
   AND NOT ($2::uuid = ANY(matched_contact_ids))
   AND status != 'cancelled'
 `
@@ -76,7 +73,9 @@ type FindEventsByAttendeeEmailUnmatchedForContactParams struct {
 // Finds events whose JSONB attendees contain the given normalized email but
 // do not yet have the contact in matched_contact_ids. Used by the rematch
 // service to retroactively link historical calendar events when a contact
-// method is added to a CRM contact.
+// method is added to a CRM contact. Backed by
+// idx_calendar_event_attendees_email_lower_gin via the
+// jsonb_array_lower_values helper.
 // calendar_event has no deleted_at column — do not filter on it.
 func (q *Queries) FindEventsByAttendeeEmailUnmatchedForContact(ctx context.Context, arg FindEventsByAttendeeEmailUnmatchedForContactParams) ([]*CalendarEvent, error) {
 	rows, err := q.db.Query(ctx, FindEventsByAttendeeEmailUnmatchedForContact, arg.Email, arg.ContactID)
