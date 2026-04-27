@@ -38,3 +38,19 @@ detail: |
   The implement-and-review skill ran Codex review twice: round 1 returned a P2 finding (missing `cadenceUpdater` nil-guard), which was fixed and committed. Round 2 re-ran the full branch review and returned "no actionable issues", approving the PR for push. The agent correctly interpreted this as `approve` verdict and proceeded to push. This confirms the iterative review loop worked as designed — genuine issues surface and get fixed, then re-review confirms the fix.
 actionable: false
 
+---
+timestamp: "2026-04-27T13:06:51.068334"
+type: gotcha
+summary: Claude Code Review posts findings in review body as COMMENTED state - fetch with `gh pr view --json reviews`
+detail: |
+  Automated reviewers (Claude Code Review, Codex) post findings as review state `COMMENTED`, not `CHANGES_REQUESTED`, so they don't block merge or surface prominently in basic `gh pr checks`. Claude Code Review specifically puts comprehensive findings in the review summary (`.body` field), not as inline code comments. After a failed automated review check, fetch with `gh pr view {PR} --json reviews --jq '.reviews[] | {state, author: .author.login, body}'` to see the full finding. The existing core.md rule mentions Codex + inline comments via `gh api`, but Claude Code Review is a distinct check that uses review summaries instead.
+actionable: true
+
+---
+timestamp: "2026-04-27T13:06:51.068334"
+type: documentation_gap
+summary: "Core.md 'When You Change X' table missing: removal of allowlist/special-case code → update explanatory comments"
+detail: |
+  When the PR removed two Todoist allowlist entries from sole_writer_static_test.go, it didn't update the block comment and inline justifications that explained them as 'Todoist production carve-outs.' Claude Code Review caught this: the remaining test-only entries looked like they were still carve-outs when in fact they serve a different purpose. The 'When You Change X, Check Y' table in core.md has many cross-cutting patterns but doesn't cover: 'When you remove allowlist entries / special-case code / carve-outs → grep for and update comments that reference those entries.' This is a specific instance of a broader principle: when removing special-case code, search for explanatory comments elsewhere that justify or reference it.
+actionable: true
+
