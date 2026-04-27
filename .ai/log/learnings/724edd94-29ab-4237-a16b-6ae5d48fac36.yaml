@@ -1,0 +1,32 @@
+---
+timestamp: "2026-04-27T16:25:44.352139"
+type: gotcha
+summary: Plain GIN on JSONB arrays breaks case-insensitive matching
+detail: |
+  PostgreSQL GIN indexes on JSONB with `@>` operator (e.g., `WHERE col @> '[{"email": "foo@bar.com"}]'`) only match exact values. They do NOT support case-insensitive lookups like `LOWER(email)`. If existing queries use `LOWER()` for matching, switching to plain GIN + `@>` silently drops case-insensitivity and breaks on mixed-case data. Solution: functional GIN on a helper function that returns lowercased array values (e.g., `CREATE INDEX ON table USING GIN (jsonb_array_lower_values(col, 'email'))`). This issue surfaced in #277 where 17 external_contact rows had mixed-case emails that would have been silently unmatchable with plain GIN.
+actionable: true
+
+---
+timestamp: "2026-04-27T16:25:44.352139"
+type: gotcha
+summary: Adding JSONB indexes may force query rewrites, not just migrations
+detail: |
+  When scoping work to "add a GIN index on JSONB column," don't assume it's migration-only. Existing query patterns like `EXISTS(SELECT 1 FROM jsonb_array_elements(...) WHERE LOWER(...) = LOWER($1))` are NOT GIN-rewritable — PostgreSQL cannot use a GIN index for predicates involving `LOWER()` on extracted values. The index requires a companion query rewrite to use an indexed helper function. Issue #277 was scoped as "single migration" but actually required query changes across 2 SQL files + sqlc regeneration + integration test updates to preserve behavior. Always grep for the query pattern before committing to "migration-only" scope.
+actionable: true
+
+---
+timestamp: "2026-04-27T16:25:44.352139"
+type: rule
+summary: Use CREATE FUNCTION (not OR REPLACE) in migrations for loud failures
+detail: |
+  In database migrations, use `CREATE FUNCTION` rather than `CREATE OR REPLACE FUNCTION` for new helper functions. If a future migration or manual change creates a function with the same name, `CREATE` will fail loudly (duplicate object error) instead of silently overwriting. This prevents accidental shadowing and makes migration conflicts explicit. Applies to all DDL in migrations: functions, types, etc. The exception is when you're genuinely fixing/updating an existing function in a later migration — then `OR REPLACE` is intentional.
+actionable: true
+
+---
+timestamp: "2026-04-27T16:25:44.352139"
+type: distinction
+summary: Honest EXPLAIN ANALYZE means no enable_seqscan cheats
+detail: |
+  When verifying that PostgreSQL will actually use a new index, measure with "honest" EXPLAIN ANALYZE: run the query without overriding planner settings like `SET enable_seqscan = off`. The cheat forces index usage even when the planner would naturally choose seq scan (e.g., on small tables where seq scan is genuinely faster). Honest measurement proves the index wins on actual data shape and row counts, not just in artificial conditions. If the planner ignores your index in honest mode, the index may be correctly deemed too expensive — investigate before shipping. Plan for #277 explicitly called out "no enable_seqscan cheats" in verification steps.
+actionable: true
+
