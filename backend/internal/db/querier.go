@@ -441,6 +441,12 @@ type Querier interface {
 	// TEST ONLY. Hard-deletes external_contact rows whose source_id starts with
 	// the given prefix. Used by t.Cleanup to remove fixtures inserted by a test.
 	TestDeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) error
+	// TEST ONLY. Checks whether a named index exists. Used by the integration
+	// test as a structural guard that migration 045's GIN indexes are actually
+	// present (a behavior-only test would pass even if a future migration
+	// accidentally dropped them). to_regclass returns NULL when the index
+	// does not exist.
+	TestIndexExists(ctx context.Context, indexName string) (bool, error)
 	// TEST ONLY. See TestInsertExternalContactRawEmails. Same rationale for
 	// calendar_event.attendees.
 	TestInsertCalendarEventRawAttendees(ctx context.Context, arg TestInsertCalendarEventRawAttendeesParams) (*CalendarEvent, error)

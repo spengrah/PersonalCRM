@@ -64,3 +64,11 @@ WHERE EXISTS (
 )
   AND NOT (@contact_id::uuid = ANY(matched_contact_ids))
   AND status != 'cancelled';
+
+-- name: TestIndexExists :one
+-- TEST ONLY. Checks whether a named index exists. Used by the integration
+-- test as a structural guard that migration 045's GIN indexes are actually
+-- present (a behavior-only test would pass even if a future migration
+-- accidentally dropped them). to_regclass returns NULL when the index
+-- does not exist.
+SELECT (to_regclass(@index_name::text) IS NOT NULL)::boolean AS exists;

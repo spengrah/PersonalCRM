@@ -33,6 +33,22 @@ func (q *Queries) TestDeleteExternalContactsBySourceIDPrefix(ctx context.Context
 	return err
 }
 
+const TestIndexExists = `-- name: TestIndexExists :one
+SELECT (to_regclass($1::text) IS NOT NULL)::boolean AS exists
+`
+
+// TEST ONLY. Checks whether a named index exists. Used by the integration
+// test as a structural guard that migration 045's GIN indexes are actually
+// present (a behavior-only test would pass even if a future migration
+// accidentally dropped them). to_regclass returns NULL when the index
+// does not exist.
+func (q *Queries) TestIndexExists(ctx context.Context, indexName string) (bool, error) {
+	row := q.db.QueryRow(ctx, TestIndexExists, indexName)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const TestInsertCalendarEventRawAttendees = `-- name: TestInsertCalendarEventRawAttendees :one
 INSERT INTO calendar_event (
   gcal_event_id, gcal_calendar_id, google_account_id,

@@ -89,6 +89,24 @@ func (e *jsonbGINEnv) gcalIDFor(label string) string {
 	return e.gcalIDPfx + label
 }
 
+// TestJSONBGINIndexes_Exist is a structural guard that migration 045 actually
+// created the two GIN indexes the rest of this file's behavior tests depend
+// on. Behavioral tests can pass with an empty index (PostgreSQL falls back
+// to seq scan) — this test catches a future migration that accidentally
+// drops or renames the index.
+func TestJSONBGINIndexes_Exist(t *testing.T) {
+	env := setupJSONBGINEnv(t)
+
+	for _, name := range []string{
+		"idx_calendar_event_attendees_email_lower_gin",
+		"idx_external_contact_emails_value_lower_gin",
+	} {
+		exists, err := env.fixtureRepo.IndexExists(env.ctx, name)
+		require.NoError(t, err)
+		assert.True(t, exists, "index %s must exist", name)
+	}
+}
+
 // TestFindExternalContactsByNormalizedEmail_Behavior covers cases 1–10 from
 // the plan: behavioral correctness of the GIN-backed query against
 // every JSONB shape that exists in prod plus the defensive shapes that
@@ -166,12 +184,12 @@ func TestFindExternalContactsByNormalizedEmail_Behavior(t *testing.T) {
 		shared := fmt.Sprintf("dupe_%s@x.invalid", env.suffix)
 		stored := []byte(fmt.Sprintf(`[{"value":"%s"}]`, shared))
 
-		first, err := env.fixtureRepo.InsertExternalContactRawEmails(env.ctx, "google", env.sourceIDFor("case06_a"), "Case 06 A", stored)
+		firstID, err := env.fixtureRepo.InsertExternalContactRawEmails(env.ctx, "google", env.sourceIDFor("case06_a"), "Case 06 A", stored)
 		require.NoError(t, err)
-		second, err := env.fixtureRepo.InsertExternalContactRawEmails(env.ctx, "google", env.sourceIDFor("case06_b"), "Case 06 B", stored)
+		secondID, err := env.fixtureRepo.InsertExternalContactRawEmails(env.ctx, "google", env.sourceIDFor("case06_b"), "Case 06 B", stored)
 		require.NoError(t, err)
 
-		require.NoError(t, env.externalRepo.MarkAsDuplicate(env.ctx, uuid.UUID(second.ID.Bytes), uuid.UUID(first.ID.Bytes)))
+		require.NoError(t, env.externalRepo.MarkAsDuplicate(env.ctx, secondID, firstID))
 
 		results, err := env.externalRepo.FindByNormalizedEmail(env.ctx, shared)
 		require.NoError(t, err)
@@ -183,11 +201,12 @@ func TestFindExternalContactsByNormalizedEmail_Behavior(t *testing.T) {
 		shared := fmt.Sprintf("shared_%s@x.invalid", env.suffix)
 		stored := []byte(fmt.Sprintf(`[{"value":"%s"}]`, shared))
 
-		first, err := env.fixtureRepo.InsertExternalContactRawEmails(env.ctx, "google", env.sourceIDFor("case07_a"), "Case 07 A", stored)
+		firstID, err := env.fixtureRepo.InsertExternalContactRawEmails(env.ctx, "google", env.sourceIDFor("case07_a"), "Case 07 A", stored)
 		require.NoError(t, err)
-		// Sleep one ms to disambiguate created_at ordering.
+		// Sleep two ms to disambiguate created_at ordering on systems with
+		// coarser timestamp resolution.
 		time.Sleep(2 * time.Millisecond)
-		second, err := env.fixtureRepo.InsertExternalContactRawEmails(env.ctx, "google", env.sourceIDFor("case07_b"), "Case 07 B", stored)
+		secondID, err := env.fixtureRepo.InsertExternalContactRawEmails(env.ctx, "google", env.sourceIDFor("case07_b"), "Case 07 B", stored)
 		require.NoError(t, err)
 
 		results, err := env.externalRepo.FindByNormalizedEmail(env.ctx, shared)
@@ -195,8 +214,8 @@ func TestFindExternalContactsByNormalizedEmail_Behavior(t *testing.T) {
 		matches := filterExternalBySourceIDPrefix(results, env.sourceIDPfx)
 		require.Len(t, matches, 2, "both non-duplicate rows should be returned")
 		// Ordered by created_at, so first inserted should come first.
-		assert.Equal(t, uuid.UUID(first.ID.Bytes), matches[0].ID)
-		assert.Equal(t, uuid.UUID(second.ID.Bytes), matches[1].ID)
+		assert.Equal(t, firstID, matches[0].ID)
+		assert.Equal(t, secondID, matches[1].ID)
 	})
 
 	t.Run("Case08_ElementMissingValueKey_OtherElementMatches", func(t *testing.T) {
@@ -248,7 +267,7 @@ func TestFindExternalContactsByNormalizedEmail_Behavior(t *testing.T) {
 }
 
 // TestFindEventsByAttendeeEmailUnmatchedForContact_Behavior covers cases
-// 11–16: the GIN-backed query for calendar_event.attendees.
+// 11–16 plus a case-insensitivity guard (Case11B) for the calendar query.
 func TestFindEventsByAttendeeEmailUnmatchedForContact_Behavior(t *testing.T) {
 	env := setupJSONBGINEnv(t)
 	now := accelerated.GetCurrentTime().UTC()
@@ -269,6 +288,28 @@ func TestFindEventsByAttendeeEmailUnmatchedForContact_Behavior(t *testing.T) {
 		require.NoError(t, err)
 		matches := filterCalendarByGcalIDPrefix(results, env.gcalIDPfx)
 		assert.Len(t, matches, 1)
+	})
+
+	t.Run("Case11B_MixedCaseStoredAttendee_LowercaseQuery_Matches", func(t *testing.T) {
+		// The rewritten SQL uses LOWER(@email::text) and the helper lowercases
+		// the stored value, so lookups with either side cased differently must
+		// still match. This case is the calendar-side analogue of cases 1 and 2
+		// for external_contact and guards the case-insensitivity contract that
+		// the issue specifically calls out.
+		stored := []byte(fmt.Sprintf(`[{"email":"User11B_%s@Domain.invalid"}]`, env.suffix))
+		_, err := env.fixtureRepo.InsertCalendarEventRawAttendees(
+			env.ctx,
+			env.gcalIDFor("case11b"), "primary", "acct11b_"+env.suffix,
+			now, now.Add(time.Hour),
+			"confirmed", stored, nil,
+		)
+		require.NoError(t, err)
+
+		queryEmail := fmt.Sprintf("user11b_%s@domain.invalid", env.suffix)
+		results, err := env.calendarRepo.FindEventsByAttendeeEmailUnmatchedForContact(env.ctx, queryEmail, uuid.New())
+		require.NoError(t, err)
+		matches := filterCalendarByGcalIDPrefix(results, env.gcalIDPfx)
+		assert.Len(t, matches, 1, "case-insensitive match must work for calendar_event.attendees")
 	})
 
 	t.Run("Case12_ContactAlreadyInMatched_Excluded", func(t *testing.T) {
@@ -368,7 +409,6 @@ func TestFindEventsByAttendeeEmailUnmatchedForContact_Behavior(t *testing.T) {
 func TestParity_NewVsLegacyForms_ExternalContact(t *testing.T) {
 	env := setupJSONBGINEnv(t)
 
-	// Lookup target — a value that case A and case C both contain.
 	target := fmt.Sprintf("parity_target_%s@x.invalid", env.suffix)
 
 	// Fixture A: stores the target in mixed case.
@@ -396,7 +436,7 @@ func TestParity_NewVsLegacyForms_ExternalContact(t *testing.T) {
 	require.NoError(t, err)
 
 	newIDs := externalIDsForPrefix(newRows, env.sourceIDPfx)
-	legacyIDs := dbExternalIDsForPrefix(legacyRows, env.sourceIDPfx)
+	legacyIDs := legacyExternalIDsForPrefix(legacyRows, env.sourceIDPfx)
 	assert.Equal(t, newIDs, legacyIDs, "new and legacy queries must return identical IDs for array-shape fixtures")
 }
 
@@ -448,7 +488,7 @@ func TestParity_NewVsLegacyForms_CalendarEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	newIDs := calendarIDsForPrefix(newRows, env.gcalIDPfx)
-	legacyIDs := dbCalendarIDsForPrefix(legacyRows, env.gcalIDPfx)
+	legacyIDs := legacyCalendarIDsForPrefix(legacyRows, env.gcalIDPfx)
 	assert.Equal(t, newIDs, legacyIDs, "new and legacy queries must return identical IDs for array-shape fixtures")
 }
 
@@ -503,30 +543,24 @@ func calendarIDsForPrefix(rows []repository.CalendarEvent, prefix string) []uuid
 	return ids
 }
 
-// dbExternalIDsForPrefix is the equivalent of externalIDsForPrefix for the
-// generated db.ExternalContact type returned by the legacy parity query.
-func dbExternalIDsForPrefix(rows []*db.ExternalContact, prefix string) []uuid.UUID {
+// legacyExternalIDsForPrefix is the equivalent of externalIDsForPrefix for
+// the LegacyExternalContactFinding type returned by the parity wrapper.
+func legacyExternalIDsForPrefix(rows []repository.LegacyExternalContactFinding, prefix string) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(rows))
 	for _, r := range rows {
-		if r == nil || !r.ID.Valid {
-			continue
-		}
 		if hasPrefix(r.SourceID, prefix) {
-			ids = append(ids, uuid.UUID(r.ID.Bytes))
+			ids = append(ids, r.ID)
 		}
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
 	return ids
 }
 
-func dbCalendarIDsForPrefix(rows []*db.CalendarEvent, prefix string) []uuid.UUID {
+func legacyCalendarIDsForPrefix(rows []repository.LegacyCalendarEventFinding, prefix string) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(rows))
 	for _, r := range rows {
-		if r == nil || !r.ID.Valid {
-			continue
-		}
 		if hasPrefix(r.GcalEventID, prefix) {
-			ids = append(ids, uuid.UUID(r.ID.Bytes))
+			ids = append(ids, r.ID)
 		}
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
