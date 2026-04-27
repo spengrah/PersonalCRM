@@ -1004,8 +1004,8 @@ func makeStaleDeadlineSyncState(env *atomicTxTestEnv) *repository.SyncState {
 // contact_by and last_outreach_at, and the next Todoist incremental sync
 // re-delivers the cadence task at its still-stale deadline. The gate must
 // hold (contact_by stays advanced through processItem) and reconcile's
-// closeOnOutreach branch must fire to close the old task — the prod
-// recovery path for Marjie + Rocky.
+// closeOnOutreach branch must fire to close the old task — mirrors the
+// prod recovery path for the affected contacts.
 func TestSync_StaleTodoistDeadline_OutreachRecovery(t *testing.T) {
 	env, cleanup := setupAtomicTxTestEnv(t)
 	defer cleanup()

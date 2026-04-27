@@ -969,7 +969,7 @@ GET    /api/v1/telegram/auth/status            — Connection status
 // Request
 { "auth_token": "random-uuid", "code": "12345" }
 // Response (success)
-{ "status": "connected", "username": "spengrah", "user_id": 123456789 }
+{ "status": "connected", "username": "crm_user", "user_id": 123456789 }
 // Response (needs 2FA)
 { "status": "awaiting_password" }
 ```
@@ -979,12 +979,12 @@ GET    /api/v1/telegram/auth/status            — Connection status
 // Request
 { "auth_token": "random-uuid", "password": "my2fapassword" }
 // Response
-{ "status": "connected", "username": "spengrah", "user_id": 123456789 }
+{ "status": "connected", "username": "crm_user", "user_id": 123456789 }
 ```
 
 **GET /api/v1/telegram/auth/status**
 ```json
-{ "status": "connected", "username": "spengrah", "last_sync_at": "2026-04-05T10:00:00Z" }
+{ "status": "connected", "username": "crm_user", "last_sync_at": "2026-04-05T10:00:00Z" }
 ```
 
 ### 7.2 Group Chat Management Endpoints

@@ -659,7 +659,7 @@ timestamp: "2026-04-11T16:31:54.276345"
 type: gotcha
 summary: Ghostty terminal type not in remote Pi terminfo causes nano/editor failures
 detail: |
-  When SSH'ing to production Pi from Ghostty terminal, `nano` fails with "Error opening terminal: xterm-ghostty" because the terminfo entry doesn't exist on the remote system. Fix permanently: `infocmp -x xterm-ghostty | ssh raspberet 'sudo tic -x -'`. Applies to any remote system that hasn't seen Ghostty before. Alternative: use `TERM=xterm-256color` prefix for one-off commands.
+  When SSH'ing to production Pi from Ghostty terminal, `nano` fails with "Error opening terminal: xterm-ghostty" because the terminfo entry doesn't exist on the remote system. Fix permanently: `infocmp -x xterm-ghostty | ssh <prod-host> 'sudo tic -x -'`. Applies to any remote system that hasn't seen Ghostty before. Alternative: use `TERM=xterm-256color` prefix for one-off commands.
 actionable: true
 
 ---
