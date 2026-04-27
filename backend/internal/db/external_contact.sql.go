@@ -175,14 +175,14 @@ func (q *Queries) FindExternalContactsByEmail(ctx context.Context, dollar_1 []by
 
 const FindExternalContactsByNormalizedEmail = `-- name: FindExternalContactsByNormalizedEmail :many
 SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at FROM external_contact
-WHERE EXISTS (
-    SELECT 1 FROM jsonb_array_elements(emails) AS e
-    WHERE LOWER(e->>'value') = LOWER($1)
-)
-AND duplicate_of_id IS NULL
+WHERE jsonb_array_lower_values(emails, 'value') && ARRAY[LOWER($1)]
+  AND duplicate_of_id IS NULL
 ORDER BY created_at
 `
 
+// Finds external contacts whose JSONB emails contain the given normalized
+// email value. Backed by idx_external_contact_emails_value_lower_gin via
+// the jsonb_array_lower_values helper.
 func (q *Queries) FindExternalContactsByNormalizedEmail(ctx context.Context, lower string) ([]*ExternalContact, error) {
 	rows, err := q.db.Query(ctx, FindExternalContactsByNormalizedEmail, lower)
 	if err != nil {

@@ -98,12 +98,12 @@ WHERE emails @> $1::jsonb
 ORDER BY created_at;
 
 -- name: FindExternalContactsByNormalizedEmail :many
+-- Finds external contacts whose JSONB emails contain the given normalized
+-- email value. Backed by idx_external_contact_emails_value_lower_gin via
+-- the jsonb_array_lower_values helper.
 SELECT * FROM external_contact
-WHERE EXISTS (
-    SELECT 1 FROM jsonb_array_elements(emails) AS e
-    WHERE LOWER(e->>'value') = LOWER($1)
-)
-AND duplicate_of_id IS NULL
+WHERE jsonb_array_lower_values(emails, 'value') && ARRAY[LOWER($1)]
+  AND duplicate_of_id IS NULL
 ORDER BY created_at;
 
 -- name: ListExternalContactsForCRMContact :many

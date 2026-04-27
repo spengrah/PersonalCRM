@@ -188,10 +188,15 @@ type Querier interface {
 	// Finds events whose JSONB attendees contain the given normalized email but
 	// do not yet have the contact in matched_contact_ids. Used by the rematch
 	// service to retroactively link historical calendar events when a contact
-	// method is added to a CRM contact.
+	// method is added to a CRM contact. Backed by
+	// idx_calendar_event_attendees_email_lower_gin via the
+	// jsonb_array_lower_values helper.
 	// calendar_event has no deleted_at column — do not filter on it.
 	FindEventsByAttendeeEmailUnmatchedForContact(ctx context.Context, arg FindEventsByAttendeeEmailUnmatchedForContactParams) ([]*CalendarEvent, error)
 	FindExternalContactsByEmail(ctx context.Context, dollar_1 []byte) ([]*ExternalContact, error)
+	// Finds external contacts whose JSONB emails contain the given normalized
+	// email value. Backed by idx_external_contact_emails_value_lower_gin via
+	// the jsonb_array_lower_values helper.
 	FindExternalContactsByNormalizedEmail(ctx context.Context, lower string) ([]*ExternalContact, error)
 	// Finds all unmatched external_contact rows for a (source, source_id) pair
 	// regardless of account_id. Used by the calendar rematch handler to mark
@@ -430,6 +435,43 @@ type Querier interface {
 	SoftDeleteInteraction(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteTelegramChannelMessages(ctx context.Context, arg SoftDeleteTelegramChannelMessagesParams) error
 	SoftDeleteTelegramMessages(ctx context.Context, messageIds []int32) error
+	// TEST ONLY. Hard-deletes calendar_event rows whose gcal_event_id starts
+	// with the given prefix. Used by t.Cleanup to remove fixtures.
+	TestDeleteCalendarEventsByGcalEventIDPrefix(ctx context.Context, prefix string) error
+	// TEST ONLY. Hard-deletes external_contact rows whose source_id starts with
+	// the given prefix. Used by t.Cleanup to remove fixtures inserted by a test.
+	TestDeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) error
+	// TEST ONLY. Checks whether a named index exists. Used by the integration
+	// test as a structural guard that migration 045's GIN indexes are actually
+	// present (a behavior-only test would pass even if a future migration
+	// accidentally dropped them). to_regclass returns NULL when the index
+	// does not exist.
+	TestIndexExists(ctx context.Context, indexName string) (bool, error)
+	// TEST ONLY. See TestInsertExternalContactRawEmails. Same rationale for
+	// calendar_event.attendees.
+	TestInsertCalendarEventRawAttendees(ctx context.Context, arg TestInsertCalendarEventRawAttendeesParams) (*CalendarEvent, error)
+	// TEST ONLY. Fixture queries used by jsonb_gin_index_test.go to construct
+	// edge-case JSONB shapes (non-array, NULL, missing keys) that production
+	// code paths cannot create, plus permanent regression-guard queries that
+	// mirror the legacy form of the rewritten production queries. Do NOT call
+	// these from production code.
+	// TEST ONLY. Inserts an external_contact with a literal JSONB value supplied
+	// by the caller, bypassing the typed-Go marshalling that UpsertExternalContact
+	// enforces. sqlc.narg('emails') makes the parameter nullable so callers can
+	// exercise the NULL JSONB column case.
+	TestInsertExternalContactRawEmails(ctx context.Context, arg TestInsertExternalContactRawEmailsParams) (*ExternalContact, error)
+	// TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
+	// FindEventsByAttendeeEmailUnmatchedForContact. Permanent regression guard.
+	// Callers must restrict input fixtures to well-formed JSONB arrays
+	// (jsonb_array_elements raises on scalar/object input). Do NOT call from
+	// production code.
+	TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacy(ctx context.Context, arg TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacyParams) ([]*CalendarEvent, error)
+	// TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
+	// FindExternalContactsByNormalizedEmail. Permanent regression guard against
+	// semantic drift in the rewritten query. Callers must restrict input fixtures
+	// to well-formed JSONB arrays (jsonb_array_elements raises on scalar/object
+	// input). Do NOT call from production code.
+	TestParityFindExternalContactsByNormalizedEmailLegacy(ctx context.Context, lower string) ([]*ExternalContact, error)
 	// Transfer connections where source is contact_a to use target instead
 	// This handles the bidirectional relationship table
 	TransferConnectionsAsContactA(ctx context.Context, arg TransferConnectionsAsContactAParams) error

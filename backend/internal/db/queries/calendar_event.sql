@@ -137,13 +137,12 @@ WHERE google_account_id = $1;
 -- Finds events whose JSONB attendees contain the given normalized email but
 -- do not yet have the contact in matched_contact_ids. Used by the rematch
 -- service to retroactively link historical calendar events when a contact
--- method is added to a CRM contact.
+-- method is added to a CRM contact. Backed by
+-- idx_calendar_event_attendees_email_lower_gin via the
+-- jsonb_array_lower_values helper.
 -- calendar_event has no deleted_at column — do not filter on it.
 SELECT * FROM calendar_event
-WHERE EXISTS (
-    SELECT 1 FROM jsonb_array_elements(attendees) AS a
-    WHERE LOWER(a->>'email') = LOWER(@email::text)
-)
+WHERE jsonb_array_lower_values(attendees, 'email') && ARRAY[LOWER(@email::text)]
   AND NOT (@contact_id::uuid = ANY(matched_contact_ids))
   AND status != 'cancelled';
 
