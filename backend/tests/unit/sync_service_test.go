@@ -159,9 +159,10 @@ func TestSyncService_TriggerSync_FallsBackWhenEnqueuerNil(t *testing.T) {
 
 // TestSyncService_TriggerSync_DedupedIsNoError verifies that when the
 // atomic-claim helper reports a duplicate (another job is already
-// in-flight for this source), TriggerSync returns nil — the call is an
-// idempotent no-op. Pre-PR-3 the equivalent state would have been the
-// "sync already in progress" hard-block returning an error.
+// in-flight for this source), TriggerSync returns nil — the call is
+// an idempotent no-op. The legacy "sync already in progress"
+// hard-block returning an error was retired along with the
+// status='syncing' mutex.
 func TestSyncService_TriggerSync_DedupedIsNoError(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping db-backed service test in short mode")
@@ -273,9 +274,10 @@ func (f *failingEnqueuer) InsertTx(_ context.Context, _ pgx.Tx, _ river.JobArgs,
 }
 
 // TestSyncService_TriggerSync_NoLongerReadsSyncingStatus verifies that
-// the pre-PR-3 "already syncing" early-return is gone. Seed a state
-// with status='syncing' and assert TriggerSync still dispatches
-// successfully (the status mutex is no longer read).
+// the legacy "already syncing" early-return is gone. Seed a state with
+// status='syncing' and assert TriggerSync still dispatches
+// successfully — the status-column mutex was retired in favor of
+// river_job state as the source of truth for "in-flight".
 func TestSyncService_TriggerSync_NoLongerReadsSyncingStatus(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping db-backed service test in short mode")
@@ -302,14 +304,19 @@ func TestSyncService_TriggerSync_NoLongerReadsSyncingStatus(t *testing.T) {
 	}}
 	registry.Register(provider)
 
-	// Seed state with status='syncing' BEFORE wiring the enqueuer.
+	// Seed state with the legacy 'syncing' value BEFORE wiring the
+	// enqueuer. The SyncStatusSyncing constant is retired, but the
+	// repository's UpdateSyncStateStatus takes any SyncStatus string;
+	// passing the literal exercises the same DB-level invariant the
+	// retired constant used to cover without bypassing the repository
+	// layer (core rule: never write raw SQL in Go).
 	state, err := syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
 		Source:   source,
 		Enabled:  true,
 		Strategy: repository.SyncStrategyFetchAll,
 	})
 	require.NoError(t, err)
-	_, err = syncRepo.UpdateSyncStateStatus(ctx, state.ID, repository.SyncStatusSyncing, nil)
+	_, err = syncRepo.UpdateSyncStateStatus(ctx, state.ID, repository.SyncStatus("syncing"), nil)
 	require.NoError(t, err)
 
 	svc := service.NewSyncService(syncRepo, contactRepo, registry)
@@ -318,8 +325,9 @@ func TestSyncService_TriggerSync_NoLongerReadsSyncingStatus(t *testing.T) {
 	client := mustTestClient(t, database, workers)
 	svc.SetRiverEnqueuer(client)
 
-	// Pre-PR-3 behavior would return "sync already in progress" here;
-	// post-PR-3 the call succeeds.
+	// Legacy behavior (when the service read status='syncing' as a
+	// mutex) would return "sync already in progress" here. Today's
+	// service does not read status for dispatch, so the call succeeds.
 	require.NoError(t, svc.TriggerSync(ctx, source, nil))
 
 	// A new river_job row should be enqueued despite status='syncing'.

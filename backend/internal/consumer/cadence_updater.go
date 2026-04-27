@@ -25,9 +25,13 @@ import (
 // duplicated here so non-config callers don't import config just to
 // name a mode. Cross-reference: see config.EventBusCadenceMode* for
 // the startup-gate + unsafe-override semantics.
+//
+// ModeOff is the emergency-override for disabling the consumer
+// entirely; it is gated behind EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF in
+// config.Validate and is retained so rollback from the cutover series
+// can silence the consumer without a code change.
 const (
 	CadenceModeOff     = "off"
-	CadenceModeShadow  = "shadow"
 	CadenceModeCutover = "cutover"
 )
 
@@ -102,7 +106,7 @@ func NewCadenceUpdater(
 // type system rather than relying on implicit SQL-side piggybacking.
 type cadenceWriteRequest struct {
 	ContactID uuid.UUID
-	Branch    string // CadenceShadowBranchForward or CadenceShadowBranchUnconditional
+	Branch    string // CadenceBranchForward or CadenceBranchUnconditional
 
 	ApplyLastContacted     bool
 	LastContacted          *time.Time
@@ -237,7 +241,7 @@ func (h *CadenceUpdater) BulkApply(ctx context.Context, tx pgx.Tx, contactID uui
 	}
 	req := cadenceWriteRequest{
 		ContactID:           contactID,
-		Branch:              repository.CadenceShadowBranchForward,
+		Branch:              repository.CadenceBranchForward,
 		ApplyLastContacted:  fields.LastContacted != nil,
 		LastContacted:       fields.LastContacted,
 		ApplyLastOutreachAt: fields.LastOutreachAt != nil,
@@ -266,7 +270,7 @@ func (h *CadenceUpdater) ApplyContactByOverride(ctx context.Context, tx pgx.Tx, 
 	}
 	req := cadenceWriteRequest{
 		ContactID:      contactID,
-		Branch:         repository.CadenceShadowBranchUnconditional,
+		Branch:         repository.CadenceBranchUnconditional,
 		ApplyContactBy: true,
 		ContactBy:      contactBy,
 	}
@@ -292,9 +296,9 @@ func (h *CadenceUpdater) buildInteractionWrite(
 	applyLastContacted, applyLastOutreachAt, applyLastResponseAt, directionAllowsContactBy := repository.CadenceApplyFlagsByDirection(direction)
 	applyContactBy := directionAllowsContactBy && repository.ShouldApplyContactBy(prev.LastContacted, occurredAt, isManual, hasCadence)
 
-	branch := repository.CadenceShadowBranchForward
+	branch := repository.CadenceBranchForward
 	if isManual {
-		branch = repository.CadenceShadowBranchUnconditional
+		branch = repository.CadenceBranchUnconditional
 	}
 
 	// Interaction-driven paths bump last_interaction_at whenever they
@@ -346,7 +350,7 @@ func (h *CadenceUpdater) applyTx(ctx context.Context, tx pgx.Tx, req cadenceWrit
 	}
 	q := db.New(tx)
 	switch req.Branch {
-	case repository.CadenceShadowBranchForward:
+	case repository.CadenceBranchForward:
 		return q.UpdateContactCadenceForward(ctx, db.UpdateContactCadenceForwardParams{
 			ApplyLastContacted:     req.ApplyLastContacted,
 			LastContacted:          timePtrToPgTimestamptz(req.LastContacted),
@@ -360,7 +364,7 @@ func (h *CadenceUpdater) applyTx(ctx context.Context, tx pgx.Tx, req cadenceWrit
 			ContactBy:              timePtrToPgDate(req.ContactBy),
 			ID:                     uuidToPgUUID(req.ContactID),
 		})
-	case repository.CadenceShadowBranchUnconditional:
+	case repository.CadenceBranchUnconditional:
 		return q.UpdateContactCadenceUnconditional(ctx, db.UpdateContactCadenceUnconditionalParams{
 			ApplyLastContacted:     req.ApplyLastContacted,
 			LastContacted:          timePtrToPgTimestamptz(req.LastContacted),
@@ -441,7 +445,7 @@ func (*CadenceUpdaterWorker) Timeout(*river.Job[consumerjobs.CadenceUpdaterJobAr
 	return 30 * time.Second
 }
 
-// CadenceModeFromConfig narrows the config string to one of the three
+// CadenceModeFromConfig narrows the config string to one of the two
 // valid mode names. Unknown values fall back to off with an ERROR log
 // — a misconfigured consumer MUST NOT silently write. config.Validate
 // rejects unknown values at startup; this fallback defends test-
@@ -450,8 +454,6 @@ func CadenceModeFromConfig(mode string) string {
 	switch mode {
 	case config.EventBusCadenceModeOff:
 		return CadenceModeOff
-	case config.EventBusCadenceModeShadow:
-		return CadenceModeShadow
 	case config.EventBusCadenceModeCutover:
 		return CadenceModeCutover
 	default:

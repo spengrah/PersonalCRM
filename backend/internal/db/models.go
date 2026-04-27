@@ -176,62 +176,6 @@ type EventConsumerClaim struct {
 	ClaimedAt pgtype.Timestamptz `json:"claimed_at"`
 }
 
-type EventShadowCadenceObservation struct {
-	ID                  pgtype.UUID        `json:"id"`
-	EventID             pgtype.UUID        `json:"event_id"`
-	Writer              string             `json:"writer"`
-	ContactID           pgtype.UUID        `json:"contact_id"`
-	Source              string             `json:"source"`
-	Direction           string             `json:"direction"`
-	Branch              string             `json:"branch"`
-	OccurredAt          pgtype.Timestamptz `json:"occurred_at"`
-	PrevLastContacted   pgtype.Timestamptz `json:"prev_last_contacted"`
-	PrevLastOutreachAt  pgtype.Timestamptz `json:"prev_last_outreach_at"`
-	PrevLastResponseAt  pgtype.Timestamptz `json:"prev_last_response_at"`
-	PrevContactBy       pgtype.Date        `json:"prev_contact_by"`
-	NextLastContacted   pgtype.Timestamptz `json:"next_last_contacted"`
-	NextLastOutreachAt  pgtype.Timestamptz `json:"next_last_outreach_at"`
-	NextLastResponseAt  pgtype.Timestamptz `json:"next_last_response_at"`
-	NextContactBy       pgtype.Date        `json:"next_contact_by"`
-	ApplyLastContacted  bool               `json:"apply_last_contacted"`
-	ApplyLastOutreachAt bool               `json:"apply_last_outreach_at"`
-	ApplyLastResponseAt bool               `json:"apply_last_response_at"`
-	ApplyContactBy      bool               `json:"apply_contact_by"`
-	ObservedAt          pgtype.Timestamptz `json:"observed_at"`
-}
-
-type EventShadowFollowupObservation struct {
-	ID                    pgtype.UUID        `json:"id"`
-	EventID               pgtype.UUID        `json:"event_id"`
-	Writer                string             `json:"writer"`
-	ContactID             pgtype.UUID        `json:"contact_id"`
-	Source                string             `json:"source"`
-	Direction             string             `json:"direction"`
-	OccurredAt            pgtype.Timestamptz `json:"occurred_at"`
-	Action                string             `json:"action"`
-	SkipReason            pgtype.Text        `json:"skip_reason"`
-	WouldIdempotencyKey   pgtype.Text        `json:"would_idempotency_key"`
-	WouldDeadline         pgtype.Date        `json:"would_deadline"`
-	DirectContactTaskID   pgtype.UUID        `json:"direct_contact_task_id"`
-	ConsumerCalledTodoist bool               `json:"consumer_called_todoist"`
-	ObservedAt            pgtype.Timestamptz `json:"observed_at"`
-}
-
-type EventShadowObservation struct {
-	ID            pgtype.UUID        `json:"id"`
-	EventID       pgtype.UUID        `json:"event_id"`
-	Writer        string             `json:"writer"`
-	Kind          string             `json:"kind"`
-	Source        string             `json:"source"`
-	SourceRef     pgtype.Text        `json:"source_ref"`
-	ContactID     pgtype.UUID        `json:"contact_id"`
-	Direction     string             `json:"direction"`
-	OccurredAt    pgtype.Timestamptz `json:"occurred_at"`
-	InteractionID pgtype.UUID        `json:"interaction_id"`
-	Replay        bool               `json:"replay"`
-	ObservedAt    pgtype.Timestamptz `json:"observed_at"`
-}
-
 type ExternalContact struct {
 	ID            pgtype.UUID        `json:"id"`
 	Source        string             `json:"source"`

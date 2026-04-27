@@ -511,20 +511,15 @@ func TestSyncRepository_Integration(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = repo.DeleteSyncState(ctx, state.ID) }()
 
-		// Update to syncing
-		_, err = repo.UpdateSyncStateStatus(ctx, state.ID, repository.SyncStatusSyncing, nil)
-		require.NoError(t, err)
-
-		updated, err := repo.GetSyncState(ctx, state.ID)
-		require.NoError(t, err)
-		assert.Equal(t, repository.SyncStatusSyncing, updated.Status)
-
-		// Update to error with message
+		// Update to error with message — exercises the status + error_message
+		// round-trip. The legacy 'syncing' value is no longer written by any
+		// Go code path, so the repository round-trip is exercised with the
+		// 'error' status instead.
 		errMsg := "connection timeout"
 		_, err = repo.UpdateSyncStateStatus(ctx, state.ID, repository.SyncStatusError, &errMsg)
 		require.NoError(t, err)
 
-		updated, err = repo.GetSyncState(ctx, state.ID)
+		updated, err := repo.GetSyncState(ctx, state.ID)
 		require.NoError(t, err)
 		assert.Equal(t, repository.SyncStatusError, updated.Status)
 		assert.NotNil(t, updated.ErrorMessage)

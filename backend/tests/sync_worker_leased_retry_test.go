@@ -200,11 +200,11 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 	// Total logs: one per attempt = 2.
 	assert.GreaterOrEqual(t, abandoned+succeeded, 1)
 
-	// Assertion 3: state.status is 'idle' (no 'syncing' lingers).
+	// Assertion 3: state.status is 'idle' (no mutex-era 'syncing' lingers).
 	updatedState, err := syncRepo.GetSyncState(ctx, state.ID)
 	require.NoError(t, err)
-	assert.NotEqual(t, repository.SyncStatusSyncing, updatedState.Status,
-		"status='syncing' should never linger after a retry")
+	assert.Equal(t, repository.SyncStatusIdle, updatedState.Status,
+		"status must land on 'idle' after a retry succeeds")
 }
 
 // TestSyncWorker_AbandonedLogOnStartupRecovery verifies the explicit
@@ -489,11 +489,14 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	).Scan(&successCount))
 	assert.Equal(t, 1, successCount, "rescued retry should produce exactly one success log")
 
-	// Assertion 3: state.status is not 'syncing' (the #208 invariant).
+	// Assertion 3: state.status is 'idle' after rescue (the #208 invariant
+	// used to forbid the legacy 'syncing' value here; that value is no
+	// longer written by any code path, so assert the successful end state
+	// directly).
 	updatedState, err := syncRepo.GetSyncState(ctx, state.ID)
 	require.NoError(t, err)
-	assert.NotEqual(t, repository.SyncStatusSyncing, updatedState.Status,
-		"status='syncing' must not linger after rescue")
+	assert.Equal(t, repository.SyncStatusIdle, updatedState.Status,
+		"status must land on 'idle' after rescue")
 
 	// Assertion 4: the same river_job row we seeded ended up completed.
 	// This is what proves the rescuer (not a fresh Insert) drove the

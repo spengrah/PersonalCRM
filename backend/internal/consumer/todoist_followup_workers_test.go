@@ -68,16 +68,12 @@ func settingsOK() TodoistSettingsFunc {
 // --------------------------------------------------------------------------
 
 func TestTodoistFollowUpCreateWorker_NonCutoverModesFail(t *testing.T) {
-	for _, mode := range []string{FollowUpModeOff, FollowUpModeShadow} {
-		t.Run(mode, func(t *testing.T) {
-			w := NewTodoistFollowUpCreateJobWorker(mode, nil, nil, nil, nil, nil)
-			err := w.Work(context.Background(), &river.Job[consumerjobs.TodoistFollowUpCreateJobArgs]{
-				Args: consumerjobs.TodoistFollowUpCreateJobArgs{ContactTaskID: uuid.New()},
-			})
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "mode="+mode)
-		})
-	}
+	w := NewTodoistFollowUpCreateJobWorker(FollowUpModeOff, nil, nil, nil, nil, nil)
+	err := w.Work(context.Background(), &river.Job[consumerjobs.TodoistFollowUpCreateJobArgs]{
+		Args: consumerjobs.TodoistFollowUpCreateJobArgs{ContactTaskID: uuid.New()},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "mode="+FollowUpModeOff)
 }
 
 func TestTodoistFollowUpCreateWorker_MissingDependenciesFail(t *testing.T) {
@@ -106,16 +102,12 @@ func (s *stubCloseTaskRepo) GetContactTask(context.Context, uuid.UUID) (*reposit
 }
 
 func TestTodoistFollowUpCloseWorker_NonCutoverModesFail(t *testing.T) {
-	for _, mode := range []string{FollowUpModeOff, FollowUpModeShadow} {
-		t.Run(mode, func(t *testing.T) {
-			w := NewTodoistFollowUpCloseJobWorker(mode, nil, nil, nil)
-			err := w.Work(context.Background(), &river.Job[consumerjobs.TodoistFollowUpCloseJobArgs]{
-				Args: consumerjobs.TodoistFollowUpCloseJobArgs{ContactTaskID: uuid.New()},
-			})
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "mode="+mode)
-		})
-	}
+	w := NewTodoistFollowUpCloseJobWorker(FollowUpModeOff, nil, nil, nil)
+	err := w.Work(context.Background(), &river.Job[consumerjobs.TodoistFollowUpCloseJobArgs]{
+		Args: consumerjobs.TodoistFollowUpCloseJobArgs{ContactTaskID: uuid.New()},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "mode="+FollowUpModeOff)
 }
 
 func TestTodoistFollowUpCloseWorker_EmptyExternalID_ReturnsError(t *testing.T) {
@@ -162,12 +154,12 @@ func TestTodoistFollowUpCloseWorker_TodoistFailureBubblesUp(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestTodoistFollowUpRefreshWorker_NonCutoverModesFail(t *testing.T) {
-	w := NewTodoistFollowUpRefreshJobWorker(FollowUpModeShadow, nil, nil, nil)
+	w := NewTodoistFollowUpRefreshJobWorker(FollowUpModeOff, nil, nil, nil)
 	err := w.Work(context.Background(), &river.Job[consumerjobs.TodoistFollowUpRefreshJobArgs]{
 		Args: consumerjobs.TodoistFollowUpRefreshJobArgs{ContactTaskID: uuid.New()},
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "mode=shadow")
+	require.Contains(t, err.Error(), "mode=off")
 }
 
 func TestTodoistFollowUpRefreshWorker_EmptyExternalID_NoOp(t *testing.T) {

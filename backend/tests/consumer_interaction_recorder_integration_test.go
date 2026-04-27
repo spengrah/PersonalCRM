@@ -21,8 +21,8 @@ import (
 )
 
 // -----------------------------------------------------------------------------
-// Integration test helpers for the PR 6 cutover-mode InteractionRecorder.
-// The consumer is now the sole writer; ContactService.RecordInteractionTx
+// Integration test helpers for the cutover-mode InteractionRecorder.
+// The consumer is the sole writer; ContactService.RecordInteractionTx
 // handles dedup + insert + cadence updates inside the caller's tx.
 // -----------------------------------------------------------------------------
 
@@ -251,7 +251,9 @@ func TestIntegration_CalendarAttended_CutoverWritesInteraction(t *testing.T) {
 
 	contactID := env.newContact(t, "calendar-attended-cutover")
 	eventIDStr := uuid.NewString()
-	// Per plan Decision 11, the publisher-built SourceID is per-(event, contact).
+	// Publishers build SourceID as event-id ":" contact-id so one
+	// upstream event can fan out to multiple contacts without
+	// colliding on the event table's (source, source_id) dedupe.
 	sourceID := eventIDStr + ":" + contactID.String()
 	occurredAt := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 
@@ -471,29 +473,4 @@ func TestIntegration_MissingContact_ConsumerReturnsNotFound(t *testing.T) {
 	err = env.runHandleEvent(t, envelope)
 	require.Error(t, err)
 	require.ErrorIs(t, err, db.ErrNotFound)
-}
-
-// TestIntegration_CutoverMode_NoShadowObservationRowsWritten asserts the
-// shadow-observation side-effects are gone in cutover. PR 7 will re-add
-// observations for CadenceUpdater shadow, but in PR 6 the table stays
-// empty during InteractionRecorder flows.
-func TestIntegration_CutoverMode_NoShadowObservationRowsWritten(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	ctx := context.Background()
-	env := newConsumerTestEnv(t, ctx)
-
-	contactID := env.newContact(t, "no-shadow-obs")
-	occurredAt := time.Date(2026, 4, 10, 12, 30, 0, 0, time.UTC)
-	_, err := env.manualHandler.Run(ctx, contactID, repository.InteractionDirectionMutual, occurredAt, "cutover")
-	require.NoError(t, err)
-
-	var obsCount int
-	err = env.database.Pool.QueryRow(ctx,
-		"SELECT COUNT(*) FROM event_shadow_observation WHERE contact_id = $1",
-		contactID,
-	).Scan(&obsCount)
-	require.NoError(t, err)
-	require.Zero(t, obsCount, "cutover mode must not write any shadow observation rows for InteractionRecorder")
 }

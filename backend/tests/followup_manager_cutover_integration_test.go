@@ -84,13 +84,17 @@ type followUpIntegrationEnv struct {
 	contactRepo *repository.ContactRepository
 	taskRepo    *repository.ContactTaskRepository
 	interRepo   *repository.InteractionRepository
-	shadowRepo  *repository.FollowUpShadowObservationRepository
 	eventRepo   *repository.EventRepository
 	claimRepo   *repository.EventConsumerClaimRepository
 	riverClient *river.Client[pgx.Tx]
 	manager     *consumer.FollowUpManager
 	bus         *events.Bus
 	watchdog    config.WatchdogConfig
+	// decisions is populated by the DecisionObserver installed on the
+	// manager; integration tests inspect it to assert on the manager's
+	// terminal classification (action, skip reason) for each branch
+	// without a DB round trip.
+	decisions *[]consumer.Decision
 }
 
 // newFollowUpIntegrationEnv builds a FollowUpManager with a real river
@@ -107,7 +111,6 @@ func newFollowUpIntegrationEnv(t *testing.T) (*followUpIntegrationEnv, func()) {
 	contactRepo.SetPool(database.Pool)
 	taskRepo := repository.NewContactTaskRepository(database.Queries)
 	interRepo := repository.NewInteractionRepository(database.Queries)
-	shadowRepo := repository.NewFollowUpShadowObservationRepository(database.Queries, database.Pool)
 	eventRepo := repository.NewEventRepository(database.Queries)
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 
@@ -159,7 +162,6 @@ func newFollowUpIntegrationEnv(t *testing.T) (*followUpIntegrationEnv, func()) {
 		taskRepo,
 		taskRepo,
 		interRepo,
-		shadowRepo,
 		riverClient,
 		database.Pool,
 		settings,
@@ -167,19 +169,23 @@ func newFollowUpIntegrationEnv(t *testing.T) (*followUpIntegrationEnv, func()) {
 		"http://localhost:3000",
 		watchdog,
 	)
+	var decisions []consumer.Decision
+	manager.SetDecisionObserver(func(d consumer.Decision) {
+		decisions = append(decisions, d)
+	})
 
 	env := &followUpIntegrationEnv{
 		database:    database,
 		contactRepo: contactRepo,
 		taskRepo:    taskRepo,
 		interRepo:   interRepo,
-		shadowRepo:  shadowRepo,
 		eventRepo:   eventRepo,
 		claimRepo:   claimRepo,
 		riverClient: riverClient,
 		manager:     manager,
 		bus:         bus,
 		watchdog:    watchdog,
+		decisions:   &decisions,
 	}
 	return env, func() {
 		// Don't Start() the client — no workers, and we only want the
@@ -364,12 +370,11 @@ func TestIntegration_FollowUpManager_BackdatedOutbound(t *testing.T) {
 
 	assert.Equal(t, 0, env.countContactTaskRows(t, contact.ID), "backdated outbound must not create a contact_task row")
 
-	// Shadow observation: skip with reason=backdated.
-	obs, err := env.shadowRepo.FindMatchingConsumer(context.Background(), nil, recorded.ID)
-	require.NoError(t, err)
-	require.NotNil(t, obs)
-	assert.Equal(t, repository.FollowUpActionSkip, obs.Action)
-	assert.Equal(t, repository.FollowUpSkipReasonBackdated, obs.SkipReason)
+	// Decision classification: skip with reason=backdated.
+	require.Len(t, *env.decisions, 1)
+	d := (*env.decisions)[0]
+	assert.Equal(t, repository.FollowUpActionSkip, d.Action)
+	assert.Equal(t, repository.FollowUpSkipReasonBackdated, d.SkipReason)
 }
 
 // TestIntegration_FollowUpManager_ManualSourceBypassesBackdatedGuard
@@ -421,11 +426,10 @@ func TestIntegration_FollowUpManager_OutOfOrderSkips(t *testing.T) {
 	env.applyInEventTx(t, recorded)
 
 	assert.Equal(t, 0, env.countContactTaskRows(t, contact.ID), "out-of-order outbound must not create a follow-up")
-	obs, err := env.shadowRepo.FindMatchingConsumer(ctx, nil, recorded.ID)
-	require.NoError(t, err)
-	require.NotNil(t, obs)
-	assert.Equal(t, repository.FollowUpActionSkip, obs.Action)
-	assert.Equal(t, repository.FollowUpSkipReasonOutOfOrder, obs.SkipReason)
+	require.Len(t, *env.decisions, 1)
+	d := (*env.decisions)[0]
+	assert.Equal(t, repository.FollowUpActionSkip, d.Action)
+	assert.Equal(t, repository.FollowUpSkipReasonOutOfOrder, d.SkipReason)
 }
 
 // TestIntegration_FollowUpManager_OutboundFreshCreatesPendingRow asserts
@@ -457,11 +461,13 @@ func TestIntegration_FollowUpManager_OutboundFreshCreatesPendingRow(t *testing.T
 	n := env.countRiverJobsByKind(t, (consumerjobs.TodoistFollowUpCreateJobArgs{}).Kind(), pending.ID)
 	assert.Equal(t, 1, n, "a single TodoistFollowUpCreateJob must be enqueued in the same tx")
 
-	// Shadow observation: create action.
-	obs, err := env.shadowRepo.FindMatchingConsumer(ctx, nil, recorded.ID)
-	require.NoError(t, err)
-	require.NotNil(t, obs)
-	assert.Equal(t, repository.FollowUpActionCreate, obs.Action)
+	// Decision classification: create action with matching idempotency key.
+	require.Len(t, *env.decisions, 1)
+	d := (*env.decisions)[0]
+	assert.Equal(t, repository.FollowUpActionCreate, d.Action)
+	require.NotNil(t, d.WouldIdempotencyKey)
+	assert.Equal(t, *pending.IdempotencyKey, *d.WouldIdempotencyKey)
+	_ = recorded // envelope id is no longer read after decision-observer move
 }
 
 // TestIntegration_FollowUpManager_InboundCompletesPending asserts that
@@ -501,11 +507,11 @@ func TestIntegration_FollowUpManager_InboundCompletesPending(t *testing.T) {
 	closeN := env.countRiverJobsByKind(t, (consumerjobs.TodoistFollowUpCloseJobArgs{}).Kind(), pending.ID)
 	assert.Equal(t, 0, closeN, "single-owner rule: no close job when pending row was still pending_remote_create")
 
-	// Shadow obs for inbound: complete.
-	obs, err := env.shadowRepo.FindMatchingConsumer(ctx, nil, inboundEnv.ID)
-	require.NoError(t, err)
-	require.NotNil(t, obs)
-	assert.Equal(t, repository.FollowUpActionComplete, obs.Action)
+	// Decision classification: outbound→create, then inbound→complete.
+	require.Len(t, *env.decisions, 2)
+	assert.Equal(t, repository.FollowUpActionCreate, (*env.decisions)[0].Action)
+	assert.Equal(t, repository.FollowUpActionComplete, (*env.decisions)[1].Action)
+	_ = inboundEnv // envelope id is no longer read after decision-observer move
 }
 
 // TestIntegration_FollowUpManager_DuplicateEventClaimBlocks asserts

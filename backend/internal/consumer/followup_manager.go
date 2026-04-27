@@ -48,9 +48,13 @@ func isFollowUpLiveUniqueViolation(err error) bool {
 
 // FollowUpMode values mirror config.EventBusFollowUpMode*. Duplicated
 // here so non-config callers don't import config just to name a mode.
+//
+// ModeOff is the emergency-override for disabling the consumer
+// entirely; it is gated behind EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF in
+// config.Validate and is retained so rollback from the cutover series
+// can silence the consumer without a code change.
 const (
 	FollowUpModeOff     = "off"
-	FollowUpModeShadow  = "shadow"
 	FollowUpModeCutover = "cutover"
 )
 
@@ -75,14 +79,6 @@ type interactionResponseReader interface {
 	HasResponseAfterTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, outreachAt time.Time) (bool, error)
 }
 
-// followUpShadowWriter is the subset of
-// FollowUpShadowObservationRepository the consumer depends on. Narrow
-// interface so unit tests stub the writer without a DB.
-type followUpShadowWriter interface {
-	RecordConsumer(ctx context.Context, tx pgx.Tx, obs repository.FollowUpShadowObservation) error
-	FindMatchingDirect(ctx context.Context, tx pgx.Tx, eventID uuid.UUID) (*repository.FollowUpShadowObservation, error)
-}
-
 // followUpContactReader reads contact rows inside the caller's tx. Used
 // by the cutover path to resolve cadence + full name for the Todoist
 // task shape, and to synthesize the payload in ApplyInteraction direct
@@ -93,7 +89,7 @@ type followUpContactReader interface {
 
 // followUpTaskWriter collects the contact_task mutation surface the
 // cutover consumer needs. Tx-threaded throughout so the consumer's
-// writes commit atomically with its claim + shadow-obs writes.
+// writes commit atomically with its claim.
 type followUpTaskWriter interface {
 	CreateContactTaskTx(ctx context.Context, tx pgx.Tx, req repository.CreateContactTaskRequest, idempotencyKey *string) (*repository.ContactTask, error)
 	UpdateContactTaskStateTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, state repository.ContactTaskState) (*repository.ContactTask, error)
@@ -123,6 +119,58 @@ type FollowUpHandler interface {
 	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (postCommit func(context.Context), err error)
 }
 
+// Decision is the observer payload emitted at each terminal branch of
+// FollowUpManager.HandleEvent / ApplyInteraction. The hook has two
+// consumers today:
+//
+//  1. Unit + integration tests install a DecisionObserver closure to
+//     assert on the manager's classification (action, skip reason,
+//     would-be deadline, idempotency key, contact_task id) without a
+//     DB round trip. Replaces the shadow-observation-table assertions
+//     retired with migration 044.
+//  2. Operators / future metrics can wire the observer to emit
+//     Prometheus counters or a structured audit log without having to
+//     modify the manager's branches.
+//
+// Production wiring leaves the observer nil — the hot path pays only
+// a nil check per branch (`emit` is the only call site).
+//
+// Observer calls are emitted AT the decision point, inside the
+// caller's tx. For the refresh/close paths that schedule a post-commit
+// Todoist call, a SECOND observer call (with CalledTodoist=true) is
+// emitted after the post-commit closure finishes its remote call; the
+// closure is best-effort so the second call may never fire if the
+// closure never runs (e.g. skipped for empty externalID).
+type Decision struct {
+	// Action is one of FollowUpActionCreate / Refresh / Complete / Skip.
+	Action string
+	// SkipReason is set on outbound skip branches that fire one of the
+	// three guards (backdated, out_of_order, duplicate_pending). Empty
+	// string for non-skip actions and for non-guard-class skips.
+	SkipReason string
+	// WouldDeadline is the deadline the manager WOULD set for create /
+	// refresh actions. Nil for skip / complete and for the post-Todoist
+	// second call on refresh (which only reports CalledTodoist).
+	WouldDeadline *time.Time
+	// WouldIdempotencyKey is the local idempotency key the manager
+	// WOULD use for a create branch. Non-nil only on create branches.
+	WouldIdempotencyKey *string
+	// ContactTaskID is the target contact_task.id for refresh /
+	// complete branches, and on create after the row is inserted.
+	ContactTaskID *uuid.UUID
+	// CalledTodoist is true only on the second observer call for
+	// refresh / close branches, reported from the post-commit closure
+	// after the Todoist sync API call returns successfully. false on
+	// the in-tx first call and on branches that do not schedule a
+	// post-commit call.
+	CalledTodoist bool
+}
+
+// DecisionObserver receives Decision payloads at every terminal branch.
+// Production wiring leaves this nil; unit tests install a closure that
+// appends to a slice to assert on classification coverage.
+type DecisionObserver func(Decision)
+
 // FollowUpManager is the event-bus consumer for follow-up task
 // management. In cutover mode it is the sole writer of the
 // contact_task.kind='follow_up' lifecycle: three-guard skip logic,
@@ -137,7 +185,6 @@ type FollowUpManager struct {
 	taskRepo        contactTaskReader
 	taskWriter      followUpTaskWriter
 	interactionRepo interactionResponseReader
-	shadowRepo      followUpShadowWriter
 	riverInserter   RiverInserter
 	// pool is used only by the refresh post-commit closure to open a
 	// short tx for enqueueing TodoistFollowUpRefreshJob when the inline
@@ -148,14 +195,18 @@ type FollowUpManager struct {
 	clientFactory todoist.ClientFactory
 	frontendURL   string
 	watchdog      config.WatchdogConfig
+	// onDecision is an optional test-only hook emitted at every terminal
+	// branch. Production wiring leaves it nil for zero cost. See Decision
+	// docs above for semantics.
+	onDecision DecisionObserver
 }
 
 // NewFollowUpManager constructs the consumer. mode must be one of
 // FollowUpMode*; unknown values are treated as off so a misconfigured
-// consumer never writes shadow rows. The cutover-only dependencies
-// (claims, contacts, taskWriter, riverInserter, settings,
-// clientFactory, frontendURL) may be nil in off/shadow tests — their
-// use is gated on mode == cutover.
+// consumer never writes. The cutover-only dependencies (claims,
+// contacts, taskWriter, riverInserter, settings, clientFactory,
+// frontendURL) may be nil in off-mode tests — their use is gated on
+// mode == cutover.
 func NewFollowUpManager(
 	mode string,
 	claims eventClaimer,
@@ -163,7 +214,6 @@ func NewFollowUpManager(
 	taskRepo contactTaskReader,
 	taskWriter followUpTaskWriter,
 	interactionRepo interactionResponseReader,
-	shadowRepo followUpShadowWriter,
 	riverInserter RiverInserter,
 	pool *pgxpool.Pool,
 	settings TodoistSettingsFunc,
@@ -178,7 +228,6 @@ func NewFollowUpManager(
 		taskRepo:        taskRepo,
 		taskWriter:      taskWriter,
 		interactionRepo: interactionRepo,
-		shadowRepo:      shadowRepo,
 		riverInserter:   riverInserter,
 		pool:            pool,
 		settings:        settings,
@@ -188,10 +237,55 @@ func NewFollowUpManager(
 	}
 }
 
+// SetDecisionObserver installs a test-only observer. Must be called
+// BEFORE the manager is used concurrently; the field is read without
+// synchronization on the hot path. Prod wiring must NOT call this.
+func (h *FollowUpManager) SetDecisionObserver(obs DecisionObserver) {
+	h.onDecision = obs
+}
+
+// emit invokes the observer if one is installed. Zero-cost nil check on
+// the hot path.
+func (h *FollowUpManager) emit(d Decision) {
+	if h.onDecision != nil {
+		h.onDecision(d)
+	}
+}
+
+// validateCutoverDeps returns a wrapped error when a required cutover
+// dependency is nil. Called at the top of every cutover entry point so
+// a misconfigured wiring fails closed with a descriptive error instead
+// of panicking inside a create / refresh / complete branch.
+func (h *FollowUpManager) validateCutoverDeps() error {
+	if h.claims == nil {
+		return errors.New("followup_manager: cutover requires a claim repository")
+	}
+	if h.contacts == nil {
+		return errors.New("followup_manager: cutover requires a contact reader")
+	}
+	if h.taskRepo == nil {
+		return errors.New("followup_manager: cutover requires a contact-task reader")
+	}
+	if h.taskWriter == nil {
+		return errors.New("followup_manager: cutover requires a contact-task writer")
+	}
+	if h.interactionRepo == nil {
+		return errors.New("followup_manager: cutover requires an interaction reader")
+	}
+	if h.riverInserter == nil {
+		return errors.New("followup_manager: cutover requires a river inserter")
+	}
+	if h.settings == nil {
+		return errors.New("followup_manager: cutover requires a todoist settings func")
+	}
+	if h.clientFactory == nil {
+		return errors.New("followup_manager: cutover requires a todoist client factory")
+	}
+	return nil
+}
+
 // HandleEvent processes an interaction.recorded envelope. In mode=off
-// returns nil immediately. In mode=shadow, evaluates the three guards,
-// computes the action + would_* values, and writes the consumer
-// observation row. In mode=cutover it claims the event via
+// returns nil immediately. In mode=cutover it claims the event via
 // event_consumer_claim then performs the authoritative follow-up
 // write (create / refresh / complete / skip), enqueuing Todoist
 // create/close river jobs as needed.
@@ -215,6 +309,9 @@ func (h *FollowUpManager) HandleEvent(ctx context.Context, tx pgx.Tx, env *event
 			Msg("followup_manager: mode=off; skipping")
 		return nil, nil
 	}
+	if err := h.validateCutoverDeps(); err != nil {
+		return nil, err
+	}
 
 	var p events.InteractionRecordedPayload
 	if err := events.Unmarshal(env, &p); err != nil {
@@ -233,32 +330,25 @@ func (h *FollowUpManager) HandleEvent(ctx context.Context, tx pgx.Tx, env *event
 		cadenceStr = *p.PrevCadenceValue
 	}
 
-	// Durable dedupe across inline + queued delivery in cutover mode.
-	// Shadow mode doesn't claim because its writes are best-effort and
-	// the observation table itself tolerates duplicates via its unique
-	// index. Whoever wins the claim runs the write; the loser returns
-	// nil. Claim + write commit atomically in the caller's tx.
-	if h.mode == FollowUpModeCutover {
-		if h.claims == nil {
-			return nil, errors.New("followup_manager: cutover requires a claim repository")
-		}
-		claimed, err := h.claims.TryClaimTx(ctx, tx, env.ID, repository.EventConsumerFollowUpManager)
-		if err != nil {
-			return nil, fmt.Errorf("claim event for followup_manager: %w", err)
-		}
-		if !claimed {
-			logger.Debug().
-				Str("event_id", env.ID.String()).
-				Msg("followup_manager: event already claimed by another path; no-op")
-			return nil, nil
-		}
+	// Durable dedupe across inline + queued delivery. Whoever wins the
+	// claim runs the write; the loser returns nil. Claim + write commit
+	// atomically in the caller's tx.
+	claimed, err := h.claims.TryClaimTx(ctx, tx, env.ID, repository.EventConsumerFollowUpManager)
+	if err != nil {
+		return nil, fmt.Errorf("claim event for followup_manager: %w", err)
+	}
+	if !claimed {
+		logger.Debug().
+			Str("event_id", env.ID.String()).
+			Msg("followup_manager: event already claimed by another path; no-op")
+		return nil, nil
 	}
 
 	switch p.Direction {
 	case repository.InteractionDirectionOutbound:
 		return h.handleOutbound(ctx, tx, env, p, cadenceStr)
 	case repository.InteractionDirectionInbound, repository.InteractionDirectionMutual:
-		return h.handleInboundMutual(ctx, tx, env, p)
+		return h.handleInboundMutual(ctx, tx, p)
 	default:
 		logger.Debug().
 			Str("event_id", envIDString(env)).
@@ -285,7 +375,7 @@ func envIDString(env *events.Envelope) string {
 // No event is published, so no claim is taken. Synthesizes the payload
 // from the contact row (inside the caller's tx) and dispatches to the
 // same create / refresh / complete branches the event-driven path
-// uses, minus the shadow-observation write (no event_id to key off).
+// uses.
 //
 // Returns a post-commit closure on the refresh path matching
 // HandleEvent's semantics.
@@ -296,14 +386,8 @@ func (h *FollowUpManager) ApplyInteraction(ctx context.Context, tx pgx.Tx, req r
 	if h.mode == FollowUpModeOff {
 		return nil, nil
 	}
-	if h.mode != FollowUpModeCutover {
-		// Shadow mode has no direct-invoke surface — the direct path that
-		// shadow observes has no events either. Callers on non-cutover
-		// branches must hold the direct path themselves until cutover.
-		return nil, nil
-	}
-	if h.contacts == nil {
-		return nil, errors.New("followup_manager: apply interaction requires a contact reader")
+	if err := h.validateCutoverDeps(); err != nil {
+		return nil, err
 	}
 	contact, err := h.contacts.GetContactTx(ctx, tx, req.ContactID)
 	if err != nil {
@@ -323,9 +407,9 @@ func (h *FollowUpManager) ApplyInteraction(ctx context.Context, tx pgx.Tx, req r
 	}
 	switch req.Direction {
 	case repository.InteractionDirectionOutbound:
-		return h.applyOutbound(ctx, tx, nil, contact, payload, cadenceStr, false)
+		return h.applyOutbound(ctx, tx, nil, contact, payload, cadenceStr)
 	case repository.InteractionDirectionInbound, repository.InteractionDirectionMutual:
-		return h.applyInboundMutual(ctx, tx, nil, payload, false)
+		return h.applyInboundMutual(ctx, tx, payload)
 	default:
 		return nil, nil
 	}
@@ -341,7 +425,8 @@ func (h *FollowUpManager) handleOutbound(
 	// behavior (early-return when contact.Cadence is nil).
 	days := watchdogDaysForCadenceStr(cadenceStr, h.watchdog)
 	if days == 0 {
-		return nil, h.recordSkip(ctx, tx, env, p, "")
+		h.emit(Decision{Action: repository.FollowUpActionSkip})
+		return nil, nil
 	}
 
 	// Guard 1: backdated outbound. Manual interactions are exempt so a
@@ -350,7 +435,8 @@ func (h *FollowUpManager) handleOutbound(
 	if !isManual {
 		cutoff := time.Duration(days) * 24 * time.Hour
 		if accelerated.GetCurrentTime().Sub(p.OccurredAt) > cutoff {
-			return nil, h.recordSkip(ctx, tx, env, p, repository.FollowUpSkipReasonBackdated)
+			h.emit(Decision{Action: repository.FollowUpActionSkip, SkipReason: repository.FollowUpSkipReasonBackdated})
+			return nil, nil
 		}
 	}
 
@@ -362,34 +448,22 @@ func (h *FollowUpManager) handleOutbound(
 		return nil, fmt.Errorf("has-response check: %w", err)
 	}
 	if hasResp {
-		return nil, h.recordSkip(ctx, tx, env, p, repository.FollowUpSkipReasonOutOfOrder)
+		h.emit(Decision{Action: repository.FollowUpActionSkip, SkipReason: repository.FollowUpSkipReasonOutOfOrder})
+		return nil, nil
 	}
 
-	// In cutover, the contact reader is needed for the Todoist task
-	// shape even in the create branch (full name, contact link); in
-	// shadow we don't read the contact.
-	var contact *repository.Contact
-	if h.mode == FollowUpModeCutover {
-		if h.contacts == nil {
-			return nil, errors.New("followup_manager: cutover outbound requires a contact reader")
-		}
-		c, err := h.contacts.GetContactTx(ctx, tx, p.ContactID)
-		if err != nil {
-			return nil, fmt.Errorf("get contact for outbound: %w", err)
-		}
-		contact = c
+	contact, err := h.contacts.GetContactTx(ctx, tx, p.ContactID)
+	if err != nil {
+		return nil, fmt.Errorf("get contact for outbound: %w", err)
 	}
-
-	return h.applyOutbound(ctx, tx, env, contact, p, cadenceStr, true)
+	return h.applyOutbound(ctx, tx, env, contact, p, cadenceStr)
 }
 
 // applyOutbound dispatches guard 3 (find pending) and then create or
-// refresh. env may be nil on the ApplyInteraction path (no shadow
-// write). writeShadow controls whether the path writes a consumer
-// observation row.
+// refresh. env may be nil on the ApplyInteraction path.
 func (h *FollowUpManager) applyOutbound(
 	ctx context.Context, tx pgx.Tx, env *events.Envelope,
-	contact *repository.Contact, p events.InteractionRecordedPayload, cadenceStr string, writeShadow bool,
+	contact *repository.Contact, p events.InteractionRecordedPayload, cadenceStr string,
 ) (func(context.Context), error) {
 	days := watchdogDaysForCadenceStr(cadenceStr, h.watchdog)
 	if days == 0 {
@@ -402,39 +476,24 @@ func (h *FollowUpManager) applyOutbound(
 		return nil, fmt.Errorf("find pending follow-up: %w", err)
 	}
 	if pending != nil {
-		return h.applyRefresh(ctx, tx, env, pending, p, days, writeShadow)
+		return h.applyRefresh(ctx, tx, pending, p, days)
 	}
-	return h.applyCreate(ctx, tx, env, contact, p, days, writeShadow)
+	return h.applyCreate(ctx, tx, env, contact, p, days)
 }
 
 // applyCreate inserts a pending_remote_create row + enqueues the
-// TodoistFollowUpCreateJob (cutover) or writes a create shadow
-// observation (shadow).
+// TodoistFollowUpCreateJob.
 func (h *FollowUpManager) applyCreate(
 	ctx context.Context, tx pgx.Tx, env *events.Envelope,
-	contact *repository.Contact, p events.InteractionRecordedPayload, days int, writeShadow bool,
+	contact *repository.Contact, p events.InteractionRecordedPayload, days int,
 ) (func(context.Context), error) {
 	deadline := cadence.Today(p.OccurredAt).AddDate(0, 0, days)
 	idemKey := buildFollowUpIdempotencyKey(p.ContactID, p.OccurredAt)
 
-	if h.mode == FollowUpModeShadow {
-		obs := repository.FollowUpShadowObservation{
-			EventID:             env.ID,
-			ContactID:           p.ContactID,
-			Source:              p.Source,
-			Direction:           p.Direction,
-			OccurredAt:          p.OccurredAt,
-			Action:              repository.FollowUpActionCreate,
-			WouldIdempotencyKey: &idemKey,
-			WouldDeadline:       &deadline,
-		}
-		return nil, h.shadowRepo.RecordConsumer(ctx, tx, obs)
-	}
-
-	// Cutover path. Guard against a prior step-1 insert that raced us
-	// (crash-retry of a queued worker, or duplicate inline call). If the
-	// idempotency-key row already exists, we have nothing to do: the
-	// caller lost the race and the winner's step-2 worker will finalize.
+	// Guard against a prior step-1 insert that raced us (crash-retry of
+	// a queued worker, or duplicate inline call). If the idempotency-key
+	// row already exists, we have nothing to do: the caller lost the
+	// race and the winner's step-2 worker will finalize.
 	if existing, err := h.taskWriter.GetContactTaskByIdempotencyKeyTx(ctx, tx, p.ContactID, todoist.TaskKindFollowUp, idemKey); err != nil {
 		if !errors.Is(err, db.ErrNotFound) {
 			return nil, fmt.Errorf("check idempotency key: %w", err)
@@ -464,11 +523,9 @@ func (h *FollowUpManager) applyCreate(
 			// rolling back the interaction write. The local cadence
 			// advance still happens; the user sees no follow-up task
 			// until they wire Todoist, matching the direct-path's
-			// best-effort degradation. A log-only skip (no shadow
-			// observation row) is sufficient here: the shadow table's
-			// skip_reason CHECK is scoped to guard-class reasons, and
-			// this config-gap skip is operationally observable via the
-			// WARN log.
+			// best-effort degradation. A log-only skip is sufficient
+			// here: the skip is operationally observable via the WARN
+			// log.
 			logger.Warn().
 				Str("event_id", envIDString(env)).
 				Str("contact_id", p.ContactID.String()).
@@ -546,7 +603,7 @@ func (h *FollowUpManager) applyCreate(
 				Str("contact_id", p.ContactID.String()).
 				Str("contact_task_id", existing.ID.String()).
 				Msg("followup_manager: concurrent insert detected; routing to refresh")
-			return h.applyRefresh(ctx, tx, env, existing, p, days, writeShadow)
+			return h.applyRefresh(ctx, tx, existing, p, days)
 		}
 		return nil, fmt.Errorf("insert pending_remote_create row: %w", err)
 	}
@@ -558,51 +615,26 @@ func (h *FollowUpManager) applyCreate(
 		return nil, fmt.Errorf("enqueue todoist followup create job: %w", err)
 	}
 
-	if writeShadow && env != nil {
-		obs := repository.FollowUpShadowObservation{
-			EventID:             env.ID,
-			ContactID:           p.ContactID,
-			Source:              p.Source,
-			Direction:           p.Direction,
-			OccurredAt:          p.OccurredAt,
-			Action:              repository.FollowUpActionCreate,
-			WouldIdempotencyKey: &idemKey,
-			WouldDeadline:       &deadline,
-			DirectContactTaskID: &newTask.ID,
-		}
-		if err := h.shadowRepo.RecordConsumer(ctx, tx, obs); err != nil {
-			return nil, fmt.Errorf("record create shadow observation: %w", err)
-		}
-	}
-
+	taskID := newTask.ID
+	h.emit(Decision{
+		Action:              repository.FollowUpActionCreate,
+		WouldDeadline:       &deadline,
+		WouldIdempotencyKey: &idemKey,
+		ContactTaskID:       &taskID,
+	})
 	return nil, nil
 }
 
-// applyRefresh updates the local metadata deadline in tx (cutover) and
-// returns a post-commit closure that calls Todoist item_update + on
-// failure enqueues TodoistFollowUpRefreshJob for river-managed retry.
-// Shadow mode just writes the observation row.
+// applyRefresh updates the local metadata deadline in tx and returns a
+// post-commit closure that calls Todoist item_update + on failure
+// enqueues TodoistFollowUpRefreshJob for river-managed retry.
 func (h *FollowUpManager) applyRefresh(
-	ctx context.Context, tx pgx.Tx, env *events.Envelope,
-	pending *repository.ContactTask, p events.InteractionRecordedPayload, days int, writeShadow bool,
+	ctx context.Context, tx pgx.Tx,
+	pending *repository.ContactTask, p events.InteractionRecordedPayload, days int,
 ) (func(context.Context), error) {
 	deadline := cadence.Today(p.OccurredAt).AddDate(0, 0, days)
 
-	if h.mode == FollowUpModeShadow {
-		obs := repository.FollowUpShadowObservation{
-			EventID:             env.ID,
-			ContactID:           p.ContactID,
-			Source:              p.Source,
-			Direction:           p.Direction,
-			OccurredAt:          p.OccurredAt,
-			Action:              repository.FollowUpActionRefresh,
-			WouldDeadline:       &deadline,
-			DirectContactTaskID: &pending.ID,
-		}
-		return nil, h.shadowRepo.RecordConsumer(ctx, tx, obs)
-	}
-
-	// Cutover: update local metadata in tx.
+	// Update local metadata in tx.
 	deadlineStr := deadline.Format(todoist.DateFormat)
 	metadata := pending.Metadata
 	if metadata == nil {
@@ -619,29 +651,19 @@ func (h *FollowUpManager) applyRefresh(
 		return nil, fmt.Errorf("refresh local metadata: %w", err)
 	}
 
-	if writeShadow && env != nil {
-		obs := repository.FollowUpShadowObservation{
-			EventID:             env.ID,
-			ContactID:           p.ContactID,
-			Source:              p.Source,
-			Direction:           p.Direction,
-			OccurredAt:          p.OccurredAt,
-			Action:              repository.FollowUpActionRefresh,
-			WouldDeadline:       &deadline,
-			DirectContactTaskID: &pending.ID,
-		}
-		if err := h.shadowRepo.RecordConsumer(ctx, tx, obs); err != nil {
-			return nil, fmt.Errorf("record refresh shadow observation: %w", err)
-		}
-	}
+	taskID := pending.ID
+	h.emit(Decision{
+		Action:        repository.FollowUpActionRefresh,
+		WouldDeadline: &deadline,
+		ContactTaskID: &taskID,
+	})
 
 	// Capture externalID so the post-commit closure can issue item_update.
 	// If externalID is empty the row is still pending_remote_create — no
 	// remote task yet, so no item_update is needed. The create worker's
 	// metadata build reads due_date from the same local row.
 	externalID := pending.ExternalTaskID
-	contactTaskID := pending.ID
-	return h.buildRefreshPostCommit(externalID, contactTaskID, deadline), nil
+	return h.buildRefreshPostCommit(externalID, taskID, deadline), nil
 }
 
 // buildRefreshPostCommit returns a closure that calls Todoist
@@ -683,6 +705,16 @@ func (h *FollowUpManager) buildRefreshPostCommit(externalID string, contactTaskI
 			h.enqueueRefreshRetry(postCtx, contactTaskID, newDeadline)
 			return
 		}
+		// Second observer call: remote call succeeded. WouldDeadline is
+		// deliberately nil — the first observer call (inside the tx)
+		// already reported the deadline; this one is purely a "Todoist
+		// side of the world caught up" signal.
+		id := contactTaskID
+		h.emit(Decision{
+			Action:        repository.FollowUpActionRefresh,
+			ContactTaskID: &id,
+			CalledTodoist: true,
+		})
 	}
 }
 
@@ -712,55 +744,38 @@ func (h *FollowUpManager) enqueueRefreshRetry(ctx context.Context, contactTaskID
 	}
 }
 
-// handleInboundMutual handles inbound/mutual direction under the
-// cutover rules. Finds any pending follow-up; if present, transitions
-// state to 'completed' (in tx) and — under single-owner semantics —
-// enqueues TodoistFollowUpCloseJob only when the row was fully
-// finalized (state='managed' AND external_task_id != ”). When the
-// row is still pending_remote_create the create worker handles the
+// handleInboundMutual handles inbound/mutual direction. Finds any
+// pending follow-up; if present, transitions state to 'completed' (in
+// tx) and — under single-owner semantics — enqueues
+// TodoistFollowUpCloseJob only when the row was fully finalized
+// (state='managed' AND external_task_id != ”). When the row is still
+// pending_remote_create the create worker handles the
 // close-while-pending race itself (create-then-close).
 func (h *FollowUpManager) handleInboundMutual(
-	ctx context.Context, tx pgx.Tx, env *events.Envelope,
-	p events.InteractionRecordedPayload,
+	ctx context.Context, tx pgx.Tx, p events.InteractionRecordedPayload,
 ) (func(context.Context), error) {
-	return h.applyInboundMutual(ctx, tx, env, p, true)
+	return h.applyInboundMutual(ctx, tx, p)
 }
 
 // applyInboundMutual shares the inbound/mutual logic between
-// HandleEvent and ApplyInteraction. writeShadow=false on direct-invoke.
+// HandleEvent and ApplyInteraction.
 func (h *FollowUpManager) applyInboundMutual(
-	ctx context.Context, tx pgx.Tx, env *events.Envelope,
-	p events.InteractionRecordedPayload, writeShadow bool,
+	ctx context.Context, tx pgx.Tx, p events.InteractionRecordedPayload,
 ) (func(context.Context), error) {
 	pending, err := h.taskRepo.FindPendingFollowUpTx(ctx, tx, p.ContactID)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
 		return nil, fmt.Errorf("find pending follow-up for complete: %w", err)
 	}
 	if pending == nil {
-		if writeShadow && env != nil {
-			return nil, h.recordSkip(ctx, tx, env, p, "")
-		}
+		h.emit(Decision{Action: repository.FollowUpActionSkip})
 		return nil, nil
 	}
 
-	if h.mode == FollowUpModeShadow {
-		obs := repository.FollowUpShadowObservation{
-			EventID:             env.ID,
-			ContactID:           p.ContactID,
-			Source:              p.Source,
-			Direction:           p.Direction,
-			OccurredAt:          p.OccurredAt,
-			Action:              repository.FollowUpActionComplete,
-			DirectContactTaskID: &pending.ID,
-		}
-		return nil, h.shadowRepo.RecordConsumer(ctx, tx, obs)
-	}
-
-	// Cutover: transition to completed in tx. Use the RETURNING row so
-	// the close-enqueue decision reads post-update state. The create
-	// worker can finalize (pending_remote_create → managed + external
-	// task id) between our guard-3 read and this update; reading the
-	// pre-update snapshot strands the close when that race fires.
+	// Transition to completed in tx. Use the RETURNING row so the
+	// close-enqueue decision reads post-update state. The create worker
+	// can finalize (pending_remote_create → managed + external task id)
+	// between our guard-3 read and this update; reading the pre-update
+	// snapshot strands the close when that race fires.
 	updated, err := h.taskWriter.UpdateContactTaskStateTx(ctx, tx, pending.ID, repository.ContactTaskStateCompleted)
 	if err != nil {
 		return nil, fmt.Errorf("mark follow-up completed: %w", err)
@@ -778,40 +793,12 @@ func (h *FollowUpManager) applyInboundMutual(
 		}
 	}
 
-	if writeShadow && env != nil {
-		obs := repository.FollowUpShadowObservation{
-			EventID:             env.ID,
-			ContactID:           p.ContactID,
-			Source:              p.Source,
-			Direction:           p.Direction,
-			OccurredAt:          p.OccurredAt,
-			Action:              repository.FollowUpActionComplete,
-			DirectContactTaskID: &pending.ID,
-		}
-		if err := h.shadowRepo.RecordConsumer(ctx, tx, obs); err != nil {
-			return nil, fmt.Errorf("record complete shadow observation: %w", err)
-		}
-	}
+	taskID := pending.ID
+	h.emit(Decision{
+		Action:        repository.FollowUpActionComplete,
+		ContactTaskID: &taskID,
+	})
 	return nil, nil
-}
-
-// recordSkip records a skip-action observation with the given reason.
-// An empty reason maps to NULL in the DB (no-cadence / no-pending
-// skips are not guard-class).
-func (h *FollowUpManager) recordSkip(
-	ctx context.Context, tx pgx.Tx, env *events.Envelope,
-	p events.InteractionRecordedPayload, reason string,
-) error {
-	obs := repository.FollowUpShadowObservation{
-		EventID:    env.ID,
-		ContactID:  p.ContactID,
-		Source:     p.Source,
-		Direction:  p.Direction,
-		OccurredAt: p.OccurredAt,
-		Action:     repository.FollowUpActionSkip,
-		SkipReason: reason,
-	}
-	return h.shadowRepo.RecordConsumer(ctx, tx, obs)
 }
 
 // buildFollowUpIdempotencyKey derives the deterministic local idempotency
@@ -904,14 +891,12 @@ func (*FollowUpManagerWorker) Timeout(*river.Job[consumerjobs.FollowUpManagerJob
 	return 30 * time.Second
 }
 
-// FollowUpModeFromConfig narrows the config string to one of the three
+// FollowUpModeFromConfig narrows the config string to one of the two
 // valid mode names. Unknown values fall back to off with an ERROR log.
 func FollowUpModeFromConfig(mode string) string {
 	switch mode {
 	case config.EventBusFollowUpModeOff:
 		return FollowUpModeOff
-	case config.EventBusFollowUpModeShadow:
-		return FollowUpModeShadow
 	case config.EventBusFollowUpModeCutover:
 		return FollowUpModeCutover
 	default:

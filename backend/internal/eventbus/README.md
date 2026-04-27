@@ -14,24 +14,20 @@ The typed event kinds and `Bus.Publish` helper live in a separate package
 
 ## `EVENT_BUS_CADENCE_MODE` — operator reference
 
-Post-cutover (PR 8), the `CadenceUpdater` consumer is the **sole writer** of
+The `CadenceUpdater` consumer is the **sole writer** of
 `contact.last_contacted`, `contact.last_outreach_at`,
-`contact.last_response_at`, and `contact.contact_by`. The legacy direct-path
-cadence SQL in `ContactService.applyInteractionEffectsFromRow` has been
-removed. This changes what each mode value means — read carefully before
-flipping the flag.
+`contact.last_response_at`, and `contact.contact_by`.
 
 | Mode value | Behavior | When to use |
 |---|---|---|
 | `cutover` | Default. `CadenceUpdater` writes cadence columns for every `interaction.recorded` event (inline on the recorder path; durable no-op on queued retries). | Always, in production. |
-| `shadow` | Legacy PR 7 mode. After cutover there is no direct path to observe, so shadow mode no longer observes anything. Parseable for migration compatibility only. | Never, post-cutover. |
 | `off` | **Dangerous.** Disables the sole writer entirely. No cadence columns will be updated by any path. Startup refuses to boot unless the unsafe override is explicitly set. | Emergency ops only. |
 
 ### Rollback is `git revert`, not a flag flip
 
-The PR 8 cutover deletes the legacy direct path. Setting
+The cutover deleted the legacy direct path. Setting
 `EVENT_BUS_CADENCE_MODE=off` **does not** re-enable direct-path writes — it
-just silences the sole remaining writer. To roll back PR 8 you must
+just silences the sole remaining writer. To roll back you must
 `git revert` the cutover commit(s) and redeploy the prior binary.
 
 ### Emergency escape hatch
@@ -48,12 +44,12 @@ cadence columns must stop updating temporarily (for example, to isolate a
 runaway consumer bug while the `git revert` is being prepared).
 
 While the override is honored, `config.Load` emits a WARN log on every
-config load with these fields (acceptance criterion 4):
+config load with these fields:
 
 - `event=cadence_mode_off_unsafe_override_active`
 - `cadence_mode=off`
 - `unsafe_allow_off=true`
-- `recovery="unset EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF to restart in safe mode; git revert PR 8 if you need the direct path back"`
+- `recovery="unset EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF to restart in safe mode; git revert the cutover if you need the direct path back"`
 
 **What breaks while `mode=off` is active:**
 
@@ -88,27 +84,25 @@ and returns a no-op.
 
 ## `EVENT_BUS_FOLLOWUP_MODE` — operator reference
 
-In shadow mode, the `FollowUpManager` consumer observes what it *would*
-do for each `interaction.recorded` event and writes a row to
-`event_shadow_followup_observation`. The direct path
-(`service/followup.go` + `ContactService.deriveFollowUpClosure`) remains
-the authoritative writer of `contact_task` follow-up rows. No Todoist
-API calls are made by the consumer in shadow mode.
+The `FollowUpManager` consumer is the **sole writer** of the
+`contact_task.kind='follow_up'` lifecycle post-cutover: it creates,
+refreshes, and completes follow-ups, and enqueues the Todoist create /
+close / refresh river jobs that finalize the remote task state.
 
 | Mode value | Behavior | When to use |
 |---|---|---|
-| `shadow` | Default. Consumer observes + writes shadow rows; direct path stays authoritative. | Default during the shadow-mode phase. |
-| `off` | Consumer is disabled entirely. Direct path remains authoritative. Rollback-safe posture. | Emergency rollback of the shadow consumer. |
-| `cutover` | Would run the consumer as sole writer (two-step `contact_task` insert + Todoist task create/close). Not implemented in shadow-mode builds; returns an error if invoked. | Never until the cutover ships. |
+| `cutover` | Default. Consumer runs as sole writer. | Always, in production. |
+| `off` | **Dangerous.** Consumer is disabled entirely. No follow-ups will be created or completed. Startup refuses to boot unless the unsafe override is explicitly set. | Emergency ops only. |
 
-Unlike `EVENT_BUS_CADENCE_MODE`, there is no unsafe-override gate on
-`off` — because the direct path is still the authoritative writer,
-turning the consumer off is safe and harmless.
+Setting `EVENT_BUS_FOLLOWUP_MODE=off` requires the paired
+`EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF=true` safety gate and does NOT
+restore any pre-cutover direct path. To roll back, `git revert` the
+cutover commits and redeploy the prior binary.
 
 ### The three skip guards
 
 Outbound `interaction.recorded` events run through three sequential
-guards before the consumer would create a new follow-up:
+guards before the consumer creates a new follow-up:
 
 1. **Backdated outbound (non-manual only).** If
    `now - occurred_at > watchdog_days(cadence)`, skip with
@@ -118,58 +112,16 @@ guards before the consumer would create a new follow-up:
    already exists for the contact, skip with
    `skip_reason='out_of_order'`.
 3. **Duplicate pending follow-up.** If a follow-up in state `managed`
-   or `pending_remote_create` already exists, record a `refresh`
-   action instead of creating a new row — matches the direct path's
-   behavior.
+   or `pending_remote_create` already exists, the consumer records a
+   `refresh` action (advances the deadline) instead of creating a new
+   row.
 
-All three guards fire only on the consumer side. The direct path
-creates a follow-up regardless, so during bake the shadow-divergence
-query surfaces guard-1 and guard-2 hits as **expected** divergences
-(documented in the post-bake report, not treated as acceptance
-failures).
+### Hybrid sync / async contract
 
-### Post-bake divergence query
-
-```sql
-WITH direct_obs AS (
-    SELECT event_id, action AS direct_action, direct_contact_task_id
-    FROM event_shadow_followup_observation
-    WHERE writer = 'direct'
-      AND observed_at >= NOW() - INTERVAL '48 hours'
-),
-consumer_obs AS (
-    SELECT event_id, action AS consumer_action,
-           skip_reason AS consumer_skip_reason,
-           consumer_called_todoist
-    FROM event_shadow_followup_observation
-    WHERE writer = 'consumer'
-      AND observed_at >= NOW() - INTERVAL '48 hours'
-)
-SELECT
-    COALESCE(d.direct_action, 'missing') AS direct,
-    COALESCE(c.consumer_action, 'missing') AS consumer,
-    c.consumer_skip_reason,
-    COUNT(*) AS event_count,
-    CASE
-        WHEN d.direct_action = 'create' AND c.consumer_action = 'skip'
-             AND c.consumer_skip_reason = 'backdated'
-             THEN 'expected_guard1_backdated'
-        WHEN d.direct_action = 'create' AND c.consumer_action = 'skip'
-             AND c.consumer_skip_reason = 'out_of_order'
-             THEN 'expected_guard2_out_of_order'
-        WHEN d.direct_action IS NULL AND c.consumer_action IS NOT NULL
-             THEN 'expected_external_or_closure_gap'
-        WHEN d.direct_action = c.consumer_action THEN 'agreement'
-        ELSE 'unexpected'
-    END AS class,
-    BOOL_OR(c.consumer_called_todoist) AS any_consumer_todoist_calls
-FROM direct_obs d
-FULL OUTER JOIN consumer_obs c USING (event_id)
-GROUP BY 1, 2, 3
-ORDER BY class, event_count DESC;
-```
-
-Shadow acceptance requires:
-- `SELECT COUNT(*) FROM event_shadow_followup_observation WHERE writer='consumer' AND consumer_called_todoist = true;` → **0**
-- The `unexpected` class in the report above → **0** event_count after
-  filtering the documented expected classes
+Local `contact_task` inserts and the `contact.last_contacted` /
+`contact_by` writes commit inline in the caller's tx. The Todoist
+`item_add` for a new follow-up is enqueued as a river job (async). The
+Todoist `item_update` (refresh) and `item_close` (complete) calls run
+in a post-commit closure that falls back to a river-retried job on
+failure. See the "Event Bus and Consumers" section of
+`.ai/guides/architecture.md` for the full table.

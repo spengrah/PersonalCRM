@@ -66,7 +66,7 @@ TriggerSync() (HTTP handler)
 
 **Key insight:** Matching and enrichment are NOT separate background jobs. They run inline inside `provider.Sync`. The outer dispatch (tick → worker → runSyncForState) is river-backed so a crashed worker is re-leased by river's `JobRescuer`.
 
-The old `external_sync_state.status = 'syncing'` mutex is retired; river_job's own state (available/running/completed/retryable) is the source of truth for "in-flight". `SyncStatusSyncing` remains as a deprecated constant for legacy-row recovery (`RecoverStuckSyncingStates` at boot).
+The old `external_sync_state.status = 'syncing'` mutex is retired; river_job's own state (available/running/completed/retryable) is the source of truth for "in-flight". The `status` column + CHECK value `'syncing'` remain in the schema for down-migration safety but no Go code reads or writes them.
 
 ### Sync Data Flow Diagram
 

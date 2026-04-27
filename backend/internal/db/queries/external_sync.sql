@@ -18,26 +18,16 @@ WHERE enabled = TRUE AND status != 'disabled'
 ORDER BY source, account_id;
 
 -- name: ListDueSyncStates :many
--- The 'syncing' status is no longer written by the river-based scheduler
--- (#180 PR 3). Rows with the legacy 'syncing' status are still returned here
--- so the one-time RecoverStuckSyncingStates boot helper can pick them up;
--- after PR 3 ships, no live code path writes 'syncing' so this is a harmless
--- inclusion in practice.
+-- The 'syncing' status value stays in the CHECK constraint for
+-- down-migration safety but is no longer written by any code path.
+-- River job state (available/running/completed/retryable) is the
+-- source of truth for "in-flight" — this query only needs to filter
+-- out 'disabled' rows whose next_sync_at has come due.
 SELECT * FROM external_sync_state
 WHERE enabled = TRUE
   AND status != 'disabled'
   AND (next_sync_at IS NULL OR next_sync_at <= $1)
 ORDER BY next_sync_at ASC NULLS FIRST;
-
--- name: RecoverStuckSyncingStates :execrows
--- One-shot boot-time recovery. Resets any rows left in status='syncing' from
--- a pre-upgrade crash so the next scheduler tick picks them up. Mirrors the
--- canonical #208 remediation: sets both status and next_sync_at.
-UPDATE external_sync_state
-SET status = 'idle',
-    next_sync_at = NOW(),
-    updated_at = NOW()
-WHERE status = 'syncing';
 
 -- name: AbandonRunningLogsForState :exec
 -- Called at the start of a retry attempt: marks any pre-existing 'running'
