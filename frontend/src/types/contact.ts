@@ -66,7 +66,14 @@ export interface ContactListParams {
   page?: number
   limit?: number
   search?: string
-  sort?: 'name' | 'location' | 'birthday' | 'last_contacted' | 'contact_by' | 'cadence'
+  sort?:
+    | 'name'
+    | 'location'
+    | 'birthday'
+    | 'last_contacted'
+    | 'last_response_at'
+    | 'contact_by'
+    | 'cadence'
   order?: 'asc' | 'desc'
   cadence_filter?: 'has_cadence' | 'no_cadence'
   followup_filter?: 'has_followup' | 'no_followup'

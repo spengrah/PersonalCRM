@@ -150,7 +150,7 @@ type ListContactsQuery struct {
 	Page           int    `form:"page" validate:"omitempty,min=1" example:"1"`
 	Limit          int    `form:"limit" validate:"omitempty,min=1,max=1000" example:"20"`
 	Search         string `form:"search" validate:"omitempty,max=255" example:"john"`
-	Sort           string `form:"sort" validate:"omitempty,oneof=name location birthday last_contacted contact_by cadence" example:"name"`
+	Sort           string `form:"sort" validate:"omitempty,oneof=name location birthday last_contacted last_response_at contact_by cadence" example:"name"`
 	Order          string `form:"order" validate:"omitempty,oneof=asc desc" example:"asc"`
 	IDsOnly        bool   `form:"ids_only" example:"false"`
 	CadenceFilter  string `form:"cadence_filter" validate:"omitempty,oneof=has_cadence no_cadence" example:"has_cadence"`
@@ -372,7 +372,7 @@ func (h *ContactHandler) GetContact(c *gin.Context) {
 // @Param page query int false "Page number" default(1) minimum(1)
 // @Param limit query int false "Items per page" default(20) minimum(1) maximum(100)
 // @Param search query string false "Search term (name or contact methods)" maxlength(255)
-// @Param sort query string false "Sort by field" Enums(name, location, birthday, last_contacted) default("")
+// @Param sort query string false "Sort by field" Enums(name, location, birthday, last_contacted, last_response_at, contact_by, cadence) default("")
 // @Param order query string false "Sort order" Enums(asc, desc) default("asc")
 // @Param ids_only query bool false "Return only contact IDs (for navigation)" default(false)
 // @Success 200 {object} api.APIResponse{data=[]ContactResponse,meta=api.Meta} "Contacts retrieved successfully"

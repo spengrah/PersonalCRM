@@ -358,6 +358,8 @@ ORDER BY
   CASE WHEN $3 = 'birthday' AND $4 = 'desc' THEN birthday END DESC NULLS LAST,
   CASE WHEN $3 = 'last_contacted' AND $4 = 'asc' THEN last_contacted END ASC NULLS LAST,
   CASE WHEN $3 = 'last_contacted' AND $4 = 'desc' THEN last_contacted END DESC NULLS LAST,
+  CASE WHEN $3 = 'last_response_at' AND $4 = 'asc' THEN last_response_at END ASC NULLS LAST,
+  CASE WHEN $3 = 'last_response_at' AND $4 = 'desc' THEN last_response_at END DESC NULLS LAST,
   CASE WHEN $3 = 'contact_by' AND $4 = 'asc' THEN contact_by END ASC NULLS LAST,
   CASE WHEN $3 = 'contact_by' AND $4 = 'desc' THEN contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
@@ -485,6 +487,8 @@ ORDER BY
   CASE WHEN $3 = 'birthday' AND $4 = 'desc' THEN birthday END DESC NULLS LAST,
   CASE WHEN $3 = 'last_contacted' AND $4 = 'asc' THEN last_contacted END ASC NULLS LAST,
   CASE WHEN $3 = 'last_contacted' AND $4 = 'desc' THEN last_contacted END DESC NULLS LAST,
+  CASE WHEN $3 = 'last_response_at' AND $4 = 'asc' THEN last_response_at END ASC NULLS LAST,
+  CASE WHEN $3 = 'last_response_at' AND $4 = 'desc' THEN last_response_at END DESC NULLS LAST,
   CASE WHEN $3 = 'contact_by' AND $4 = 'asc' THEN contact_by END ASC NULLS LAST,
   CASE WHEN $3 = 'contact_by' AND $4 = 'desc' THEN contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
@@ -768,6 +772,8 @@ ORDER BY
   CASE WHEN $4 = 'birthday' AND $5 = 'desc' THEN c.birthday END DESC NULLS LAST,
   CASE WHEN $4 = 'last_contacted' AND $5 = 'asc' THEN c.last_contacted END ASC NULLS LAST,
   CASE WHEN $4 = 'last_contacted' AND $5 = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN $4 = 'last_response_at' AND $5 = 'asc' THEN c.last_response_at END ASC NULLS LAST,
+  CASE WHEN $4 = 'last_response_at' AND $5 = 'desc' THEN c.last_response_at END DESC NULLS LAST,
   CASE WHEN $4 = 'contact_by' AND $5 = 'asc' THEN c.contact_by END ASC NULLS LAST,
   CASE WHEN $4 = 'contact_by' AND $5 = 'desc' THEN c.contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
@@ -912,6 +918,8 @@ ORDER BY
   CASE WHEN $4 = 'birthday' AND $5 = 'desc' THEN c.birthday END DESC NULLS LAST,
   CASE WHEN $4 = 'last_contacted' AND $5 = 'asc' THEN c.last_contacted END ASC NULLS LAST,
   CASE WHEN $4 = 'last_contacted' AND $5 = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN $4 = 'last_response_at' AND $5 = 'asc' THEN c.last_response_at END ASC NULLS LAST,
+  CASE WHEN $4 = 'last_response_at' AND $5 = 'desc' THEN c.last_response_at END DESC NULLS LAST,
   CASE WHEN $4 = 'contact_by' AND $5 = 'asc' THEN c.contact_by END ASC NULLS LAST,
   CASE WHEN $4 = 'contact_by' AND $5 = 'desc' THEN c.contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
