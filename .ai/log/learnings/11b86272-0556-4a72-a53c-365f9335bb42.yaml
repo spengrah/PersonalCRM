@@ -1,0 +1,80 @@
+---
+timestamp: "2026-04-28T16:45:08.206030"
+type: gotcha
+summary: Sub-agents may not return required structured output formats
+detail: |
+  The plan-and-ship skill instructs implementer sub-agents to end with `STATUS: complete` + `PR_URL` + `SUMMARY`, but implementer-a returned just "Tests are running" instead. Even with explicit format requirements in the spawn prompt, sub-agents may return unstructured or incomplete results. Orchestrators must parse and validate the `<result>` field from `<task-notification>` blocks and have recovery paths (resume via agent ID, or spawn fresh continuation agent) rather than assuming success when completion fires.
+actionable: true
+
+---
+timestamp: "2026-04-28T16:45:08.206030"
+type: gotcha
+summary: Completed agents are not resumable by name, only by agent ID
+detail: |
+  The plan-and-ship skill uses `Agent({ name: "implementer", ... })` and assumes `SendMessage({ to: "implementer" })` will resume it. But after the agent completes and terminates, SendMessage by name fails with "No agent named 'implementer-a' is currently addressable." The `<task-notification>` block provides the agent ID (e.g., a54ba109201bebbcd) with explicit instructions "Use SendMessage with to: '<id>' to continue this agent" — that ID must be used for post-completion resumption, not the name. The skill's persistent-agent model doesn't account for agent termination.
+actionable: true
+
+---
+timestamp: "2026-04-28T16:45:08.206030"
+type: documentation_gap
+summary: plan-and-ship doesn't document multi-plan scenarios
+detail: |
+  The planner returned TWO separate `PLAN_PATH:` entries (PR-A and PR-B to ship sequentially). The plan-and-ship skill documents single-plan flow (planner → implementer → done) but doesn't cover: (a) how to parse multiple PLAN_PATH lines from planner output, (b) whether to spawn multiple implementers in sequence or parallel, (c) how to handle PR dependencies (PR-B depends on PR-A merge). This session required improvising "spawn implementer-a for PR-A, wait for completion, then spawn implementer-b" — that orchestration logic should be documented or the skill should constrain planners to single-plan output.
+actionable: true
+
+---
+timestamp: "2026-04-28T16:45:08.206030"
+type: rule
+summary: Check ID agents environment before attempting inter-agent communication
+detail: |
+  Before using ID agents team (architect/backend/reviewer), verify the runtime is active by checking env vars: `ID_AGENT_PORT`, `ID_TEAM`, `MANAGER_URL`, `ID_AGENT_ALIAS`. If these are empty/unset, the manager isn't reachable and inter-agent communication will fail. In this session, user suggested trying ID agents for implementation, but env check revealed they weren't running — catching this early prevented wasted work attempting curl-based agent dispatch. For projects with ID agents skills installed, the pre-check should gate any /talk-to or team dispatch attempts.
+actionable: true
+
+---
+timestamp: "2026-04-28T16:45:08.206030"
+type: distinction
+summary: LSP diagnostics lag behind actual code state after signature changes
+detail: |
+  After implementer-a finished, LSP showed diagnostics in contact_sort_test.go (interface{} → any) and contact.go:802 (omitempty). But running `golangci-lint run` showed 0 issues, and `git diff` confirmed contact.go:802 wasn't touched by PR-A (pre-existing code). The gotchas table already documents 'LSP state lags behind code after signature changes. Always verify with `go build ./...` before treating a diagnostic as real.' This session correctly applied that rule — the LSP noise was ignored after lint verification. The distinction: LSP warnings after bulk changes are not ground truth; project lint enforcement (golangci-lint, go build) is authoritative.
+actionable: false
+
+---
+timestamp: "2026-04-28T17:54:52.454752"
+type: gotcha
+summary: Next.js loads env from frontend/ directory, not project root
+detail: |
+  Next.js loads `.env.local` from the directory where `bun run dev` executes (`frontend/`), NOT the project root. The root `.env` is only read by the Go backend. This caused a 401 storm when `NEXT_PUBLIC_API_KEY` was empty in `frontend/.env.local` but populated in root `.env` — Next.js bundled the empty value, making the frontend send no auth header. The startup log showing "Environments: .env.local" was misleading because it confirmed the file was loaded, not that the key had a value.
+actionable: true
+
+---
+timestamp: "2026-04-28T17:54:52.454752"
+type: gotcha
+summary: Empty env var (KEY=) is present but blank, causing silent auth failures
+detail: |
+  An env file line like `NEXT_PUBLIC_API_KEY=` (no value after `=`) is parsed as PRESENT with an empty string value, not as absent. Frontend api-client.ts sends `X-API-Key: ''` which gets stripped/ignored, triggering backend MISSING_API_KEY 401s. This is distinct from the key being undefined, and harder to diagnose because the file exists, the line exists, and Next.js logs confirm loading the file. The symptom (401s) doesn't immediately point to "check if the value is empty" vs "check if the key is missing."
+actionable: true
+
+---
+timestamp: "2026-04-28T17:54:52.454752"
+type: rule
+summary: Diagnose env-related 401s via response body error code, not env file contents
+detail: |
+  When the frontend hits backend 401s, check the Network tab response body for `MISSING_API_KEY` (header not sent) vs `INVALID_API_KEY` (wrong value sent). This disambiguates the failure mode without touching env file contents. Then verify structural properties: does the file exist (`test -f`), encoding (`file`), line count (`wc -l`), key presence (`grep -c '^KEY='`). For runtime checks, use length-only assertions like `bun -e 'console.log("len:", (process.env.KEY||"").length)'`. Avoid `cat`, `grep <value>`, or any command that would echo the secret into the transcript.
+actionable: true
+
+---
+timestamp: "2026-04-28T17:54:52.454752"
+type: distinction
+summary: bun -e doesn't auto-load .env files; bun run and file execution do
+detail: |
+  `bun -e 'code'` evaluates code in a fresh env without loading `.env.local`. `bun run <script>` and `bun <file.js>` DO load env files from the cwd. During diagnosis, `bun -e 'console.log(process.env.KEY)'` reported `undefined` even though the key was set in `.env.local` (though empty). This false negative sent the diagnostic down the wrong path ("bun can't parse the file") when the real issue was the value being empty. For env checks, use `echo 'console.log(...)' > _check.js && bun _check.js` instead of `bun -e`.
+actionable: true
+
+---
+timestamp: "2026-04-28T17:54:52.454752"
+type: documentation_gap
+summary: No guidance on diagnosing env issues while respecting 'don't leak secrets' rule
+detail: |
+  The privacy rule ("Never include PII in... any repo artifact") and the in-session "don't check actual ENV values" directive are correct, but there's no documented pattern for diagnosing env-related failures without touching values. During the session, I attempted multiple `grep`, `cat`, `ls -la .env*` commands that hit permission denials because the harness interpreted them as secret-leaking. The gap: agents need a playbook for structural env diagnosis (file existence, encoding, key presence, value length) that doesn't trigger the block. Suggested addition to core.md or a new `.ai/guides/env-debugging.md`: diagnostic checklist (response error codes, `test -f`, `file`, `wc -l`, `grep -c '^KEY='`, length-only runtime checks) with examples of what NOT to do (`cat .env`, `echo $KEY`).
+actionable: true
+

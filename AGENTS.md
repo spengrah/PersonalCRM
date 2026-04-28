@@ -65,6 +65,7 @@ Find all instances of a layer:
 - Read repository code before using methods (names vary, e.g., `SoftDeleteContact` not `DeleteContact`)
 - Prefer integration tests over heavy mocking
 - Use `accelerated.GetCurrentTime()` not `time.Now()`
+- Before using ID agents team, check environment: `ID_AGENT_PORT`, `ID_TEAM`, `MANAGER_URL`, `ID_AGENT_ALIAS` must be set
 
 ## Privacy
 
