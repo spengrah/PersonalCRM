@@ -181,7 +181,10 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     const today = getTodayUTC()
     await expect(page.getByText(today).first()).toBeVisible()
 
-    // 2. Contacts List: should show today's date in the row (use first() as date may appear in both Last Contact and Next Contact columns)
+    // 2. Contacts List: should show today's date in the Next Contact column
+    // (weekly cadence + just-marked = contact_by is today). The Last response
+    // column may render "Never" because PATCH /last-contacted does not bump
+    // last_response_at. Use first() to match any matching cell in the row.
     await page.goto('/contacts')
     await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible()
     const contactRow = page.locator('tr').filter({ hasText: contactName })
