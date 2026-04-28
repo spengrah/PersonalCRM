@@ -280,7 +280,7 @@ function ContactsTable({
                       month: 'numeric',
                       day: 'numeric',
                     })
-                  : 'Never'}
+                  : '-'}
               </td>
               <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
                 {contact.cadence && contact.contact_by
