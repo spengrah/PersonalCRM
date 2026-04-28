@@ -13,6 +13,7 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -201,7 +202,8 @@ func TestContactAPI_HasPendingFollowup(t *testing.T) {
 		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      id,
 			Provider:       "todoist",
-			Kind:           "follow_up",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleFollowUpLoop,
 			ExternalTaskID: "test-followup-api-" + contactID,
 			State:          "managed",
 		})
@@ -273,7 +275,8 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 	_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      id,
 		Provider:       "todoist",
-		Kind:           "follow_up",
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
 		ExternalTaskID: "test-filter-api-" + contactID,
 		State:          "managed",
 	})
@@ -336,7 +339,8 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      id,
 		Provider:       "todoist",
-		Kind:           "follow_up",
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
 		ExternalTaskID: "test-kind-followup-" + contactID,
 		State:          "managed",
 		Metadata:       map[string]any{"content": "Follow up: Test", "due_date": "2026-04-10"},
@@ -346,7 +350,8 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      id,
 		Provider:       "todoist",
-		Kind:           "action",
+		Kind:           contacttask.KindAction,
+		Lifecycle:      contacttask.LifecycleManual,
 		ExternalTaskID: "test-kind-action-" + contactID,
 		State:          "managed",
 		Metadata:       map[string]any{"content": "Action task"},

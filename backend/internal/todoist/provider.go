@@ -11,6 +11,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
@@ -25,12 +26,6 @@ import (
 const (
 	// SourceName is the source identifier for Todoist sync
 	SourceName = "todoist"
-	// TaskKindCadence is the task kind for contact cadence tasks
-	TaskKindCadence = "cadence"
-	// TaskKindAction is the task kind for one-off action tasks
-	TaskKindAction = "action"
-	// TaskKindFollowUp is the task kind for follow-up tasks
-	TaskKindFollowUp = "follow_up"
 	// DefaultSyncInterval is the default sync interval (5 minutes)
 	DefaultSyncInterval = 5 * time.Minute
 )
@@ -88,7 +83,7 @@ type oauthTokenProvider interface {
 // repo with faulty-method injection.
 type contactTaskWriter interface {
 	GetContactTaskByExternalID(ctx context.Context, provider, externalID string) (*repository.ContactTask, error)
-	GetContactTaskByContact(ctx context.Context, contactID uuid.UUID, provider, kind string) (*repository.ContactTask, error)
+	GetContactTaskByContactCadenceDue(ctx context.Context, contactID uuid.UUID, provider string) (*repository.ContactTask, error)
 	GetContactTaskByPendingTempID(ctx context.Context, provider, tempID string) (*repository.ContactTask, error)
 	GetContactTask(ctx context.Context, id uuid.UUID) (*repository.ContactTask, error)
 	CreateContactTask(ctx context.Context, req repository.CreateContactTaskRequest) (*repository.ContactTask, error)
@@ -483,12 +478,12 @@ func (p *CadenceSyncProvider) processItem(
 		return p.handleTaskCompletion(ctx, item, task, contact, settings, accountID)
 	}
 
-	// Handle action tasks vs cadence/follow-up tasks differently for skip triggers.
-	if task.Kind == TaskKindAction {
+	// Handle legacy action tasks separately (kind-keyed, no lifecycle dispatch).
+	if task.Kind == contacttask.KindAction {
 		return p.handleActionTaskTriggers(ctx, item, task, settings)
 	}
 
-	// Detect skip triggers (shared between cadence and follow_up kinds).
+	// Detect skip triggers (shared across the lifecycle dispatches below).
 	skipTriggered := false
 	reason := ""
 	switch {
@@ -505,23 +500,34 @@ func (p *CadenceSyncProvider) processItem(
 			Str("taskId", item.ID).
 			Str("reason", reason).
 			Str("kind", task.Kind).
+			Str("lifecycle", task.Lifecycle).
 			Msg("skip trigger detected")
 
-		if task.Kind == TaskKindFollowUp {
+		switch task.Lifecycle {
+		case contacttask.LifecycleFollowUpLoop:
 			return p.handleFollowUpDismissal(ctx, item, task, contact)
+		case contacttask.LifecycleCadenceDue:
+			return p.handleSkipTrigger(ctx, item, task, contact, settings, accountID)
+		case contacttask.LifecycleManual:
+			return p.handleManualDismissal(ctx, task)
+		default:
+			logger.Warn().
+				Str("taskId", item.ID).
+				Str("kind", task.Kind).
+				Str("lifecycle", task.Lifecycle).
+				Msg("skip trigger fired for unknown lifecycle; falling through")
+			return processItemResult{Processed: true}
 		}
-		return p.handleSkipTrigger(ctx, item, task, contact, settings, accountID)
 	}
 
-	// Check for deadline edit (Todoist wins) — only for cadence tasks.
+	// Check for deadline edit (Todoist wins) — only for cadence-due tasks.
 	// Follow-up tasks use a separate grace-period deadline (last_outreach_at +
 	// watchdog_days) that is unrelated to contact_by; allowing them through
 	// here previously regressed contact_by via UpdateContactBy on the next
-	// sync tick (see fix/followup-deadline-regression). Action tasks are
-	// already routed out at the TaskKindAction dispatch above and cannot
-	// reach here in normal flow, but the explicit TaskKindCadence check is
-	// self-documenting and load-bearing for follow-ups.
-	if task.Kind == TaskKindCadence && item.Deadline != nil && contact.ContactBy != nil {
+	// sync tick (see fix/followup-deadline-regression). Manual and legacy
+	// action tasks have already been routed out above; the explicit
+	// LifecycleCadenceDue check is self-documenting and load-bearing.
+	if task.Lifecycle == contacttask.LifecycleCadenceDue && item.Deadline != nil && contact.ContactBy != nil {
 		todoistDeadline, err := time.Parse(DateFormat, item.Deadline.Date)
 		if err == nil {
 			// Compare dates using UTC year/month/day to avoid timezone issues
@@ -639,19 +645,45 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 		}
 	}
 
-	// Direction: action → mutual; cadence/follow_up → outbound.
+	// Reminder short-circuits BEFORE event publishing: no event, no
+	// interaction row, just transition state to 'completed'. Must run
+	// before the publish path because reminder-completion is supposed
+	// to be invisible to the event bus.
+	if task.Kind == contacttask.KindReminder {
+		if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateCompleted); err != nil {
+			return processItemResult{Err: fmt.Errorf("reminder completion: update state: %w", err)}
+		}
+		logger.Info().
+			Str("contactId", contact.ID.String()).
+			Str("taskKind", task.Kind).
+			Time("completedAt", completedAt).
+			Msg("reminder completed; no event published")
+		return processItemResult{Processed: true}
+	}
+
+	// Direction + suppress flags by kind.
+	//
+	//   reach_out → outbound, no suppression (default flow: spawns follow-up).
+	//   send      → outbound, suppress follow-up (one-shot send).
+	//   meet      → mutual (legacy).
+	//   action    → mutual (legacy).
 	direction := repository.InteractionDirectionOutbound
-	if task.Kind == TaskKindAction {
+	suppressFollowUp := false
+	switch task.Kind {
+	case contacttask.KindSend:
+		suppressFollowUp = true
+	case contacttask.KindMeet, contacttask.KindAction:
 		direction = repository.InteractionDirectionMutual
 	}
 
 	payload, err := events.Marshal(events.KindTaskCompleted, events.TaskCompletedPayload{
-		Version:     1,
-		ContactID:   contact.ID,
-		TaskID:      task.ExternalTaskID,
-		TaskKind:    task.Kind,
-		CompletedAt: completedAt,
-		Direction:   direction,
+		Version:          2,
+		ContactID:        contact.ID,
+		TaskID:           task.ExternalTaskID,
+		TaskKind:         task.Kind,
+		CompletedAt:      completedAt,
+		Direction:        direction,
+		SuppressFollowUp: suppressFollowUp,
 	})
 	if err != nil {
 		return processItemResult{Err: fmt.Errorf("marshal task.completed: %w", err)}
@@ -897,6 +929,33 @@ func (p *CadenceSyncProvider) handleFollowUpDismissal(
 	return processItemResult{Processed: true, Commands: commands}
 }
 
+// handleManualDismissal transitions a manual-lifecycle task (kind in
+// reach_out / send / reminder) to state='dismissed' when the user
+// removes/deletes/unlabels it in Todoist. No interaction row, no event,
+// no successor task. Distinct from legacy action's `unmanaged` semantics
+// per spec §2 Decision row "Legacy `action` row dismissal semantics."
+//
+// No ItemClose is enqueued — the dismissal trigger is "user deleted /
+// unlabelled / removed deadline in Todoist", so there is nothing to
+// close on the remote side.
+func (p *CadenceSyncProvider) handleManualDismissal(
+	ctx context.Context,
+	task *repository.ContactTask,
+) processItemResult {
+	if _, err := p.contactTaskRepo.UpdateContactTaskState(ctx, task.ID, repository.ContactTaskStateDismissed); err != nil {
+		return processItemResult{Err: fmt.Errorf("manual dismissal: update state: %w", err)}
+	}
+
+	logger.Info().
+		Str("contactId", task.ContactID.String()).
+		Str("contactTaskId", task.ID.String()).
+		Str("kind", task.Kind).
+		Str("lifecycle", task.Lifecycle).
+		Msg("manual task dismissed via Todoist")
+
+	return processItemResult{Processed: true}
+}
+
 // handleActionTaskTriggers handles unmanagement triggers for action tasks
 // Action tasks are simpler than cadence tasks - they just transition to unmanaged
 // when the label is removed or the task is deleted. No skip semantics.
@@ -993,7 +1052,7 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 
 		// Look up existing cadence task (before follow-up gate so outreach detection
 		// can fire even when a pending follow-up exists).
-		task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contact.ID, SourceName, TaskKindCadence)
+		task, err := p.contactTaskRepo.GetContactTaskByContactCadenceDue(ctx, contact.ID, SourceName)
 		if err == nil && task.State == repository.ContactTaskStateCompleted {
 			// Clean up completed cadence task so a new one can be created.
 			// This happens after handleTaskCompletion marks cadence tasks completed
@@ -1054,7 +1113,8 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 			_, createErr := p.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 				ContactID:      contact.ID,
 				Provider:       SourceName,
-				Kind:           TaskKindCadence,
+				Kind:           contacttask.KindReachOut,
+				Lifecycle:      contacttask.LifecycleCadenceDue,
 				ExternalTaskID: cmd.TempID, // Will be updated on sync response
 				State:          string(repository.ContactTaskStateManaged),
 				Metadata:       taskMetadata,
@@ -1488,19 +1548,17 @@ func isPendingTempID(task *repository.ContactTask) bool {
 // parse above verifies the sync item belongs to the same contact + cadence
 // kind, so advancing ExternalTaskID = item.ID is safe.
 func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item SyncItem) (*repository.ContactTask, bool) {
-	// Parse CRM marker from description to get contact ID
-	var marker struct {
+	// Parse CRM marker from description to get contact ID + kind/lifecycle.
+	type crmMarker struct {
 		CRM       bool   `json:"crm"`
 		ContactID string `json:"contact_id"`
 		Kind      string `json:"kind"`
+		Lifecycle string `json:"lifecycle"`
 	}
+	var marker crmMarker
 	descToTry := item.Description
 	if err := json.Unmarshal([]byte(descToTry), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
-		marker = struct {
-			CRM       bool   `json:"crm"`
-			ContactID string `json:"contact_id"`
-			Kind      string `json:"kind"`
-		}{}
+		marker = crmMarker{}
 		if idx := strings.LastIndex(item.Description, "{"); idx >= 0 {
 			descToTry = item.Description[idx:]
 		}
@@ -1514,16 +1572,33 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 		return nil, false
 	}
 
-	// Only recover cadence tasks
-	kind := marker.Kind
-	if kind == "" {
-		kind = TaskKindCadence
+	// Translate legacy markers (no lifecycle field) into the new
+	// (kind, lifecycle) shape. Recovery here is cadence-only; non-cadence
+	// markers fall through the gate below. The unconditional translation
+	// keeps the parsed marker fields useful for future debugging.
+	if marker.Lifecycle == "" {
+		switch marker.Kind {
+		case "cadence", "":
+			marker.Kind = contacttask.KindReachOut
+			marker.Lifecycle = contacttask.LifecycleCadenceDue
+		case "follow_up":
+			marker.Kind = contacttask.KindReachOut
+			marker.Lifecycle = contacttask.LifecycleFollowUpLoop
+		case "action":
+			marker.Kind = contacttask.KindAction
+			marker.Lifecycle = contacttask.LifecycleManual
+		default:
+			return nil, false
+		}
 	}
-	if kind != TaskKindCadence {
+
+	// Cadence-only recovery: follow-up and manual rows reconcile via the
+	// post-create external_task_id path on the next sync tick.
+	if marker.Lifecycle != contacttask.LifecycleCadenceDue {
 		return nil, false
 	}
 
-	task, err := p.contactTaskRepo.GetContactTaskByContact(ctx, contactID, SourceName, kind)
+	task, err := p.contactTaskRepo.GetContactTaskByContactCadenceDue(ctx, contactID, SourceName)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			// No local row for this contact/kind — nothing to recover.
@@ -1609,7 +1684,8 @@ func (p *CadenceSyncProvider) createTaskCommand(contact *repository.Contact, set
 	marker := map[string]any{
 		"crm":        true,
 		"contact_id": contact.ID.String(),
-		"kind":       TaskKindCadence,
+		"kind":       contacttask.KindReachOut,
+		"lifecycle":  contacttask.LifecycleCadenceDue,
 		"instance":   settings.IntegrationInstanceID,
 	}
 	markerJSON, err := json.Marshal(marker)

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"personal-crm/backend/internal/todoist"
+	"personal-crm/backend/internal/contacttask"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -602,10 +602,19 @@ func TestBackfillSyncedLastContacted(t *testing.T) {
 	})
 }
 
-// TestActionTaskKindConstant verifies the action task kind constant
-func TestActionTaskKindConstant(t *testing.T) {
-	assert.Equal(t, "action", todoist.TaskKindAction)
-	assert.Equal(t, "cadence", todoist.TaskKindCadence)
+// TestKindLifecycleConstants verifies the post-046 kind/lifecycle constants
+// match their wire values. These strings are persisted in contact_task.kind
+// and contact_task.lifecycle and in CRM marker JSON; changing them would
+// orphan existing rows and pre-migration markers.
+func TestKindLifecycleConstants(t *testing.T) {
+	assert.Equal(t, "reach_out", contacttask.KindReachOut)
+	assert.Equal(t, "send", contacttask.KindSend)
+	assert.Equal(t, "reminder", contacttask.KindReminder)
+	assert.Equal(t, "meet", contacttask.KindMeet)
+	assert.Equal(t, "action", contacttask.KindAction)
+	assert.Equal(t, "manual", contacttask.LifecycleManual)
+	assert.Equal(t, "cadence_due", contacttask.LifecycleCadenceDue)
+	assert.Equal(t, "followup_loop", contacttask.LifecycleFollowUpLoop)
 }
 
 // TestActionTaskStateTransitions tests the expected state transitions for action tasks

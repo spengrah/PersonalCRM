@@ -843,10 +843,10 @@ func run() int {
 			// Add identity route to contacts
 			contacts.GET("/:id/identities", identityHandler.ListIdentitiesForContact)
 
-			// Add contact task routes (action tasks) if Todoist is configured
+			// Add contact task routes (manual tasks) if Todoist is configured
 			if contactTaskHandler != nil {
 				contacts.GET("/:id/tasks", contactTaskHandler.ListContactTasks)
-				contacts.POST("/:id/tasks", contactTaskHandler.CreateActionTask)
+				contacts.POST("/:id/tasks", contactTaskHandler.CreateManualTask)
 				contacts.DELETE("/:id/tasks/:taskId", contactTaskHandler.DeleteTaskLink)
 			}
 

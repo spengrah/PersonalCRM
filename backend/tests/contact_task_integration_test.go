@@ -11,6 +11,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
@@ -61,7 +62,8 @@ func TestContactTask_CRUD(t *testing.T) {
 		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "12345",
 			State:          "managed",
 			Metadata:       map[string]any{"test_key": "test_value"},
@@ -69,7 +71,7 @@ func TestContactTask_CRUD(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, contact.ID, task.ContactID)
 		assert.Equal(t, "todoist", task.Provider)
-		assert.Equal(t, "cadence", task.Kind)
+		assert.Equal(t, contacttask.KindReachOut, task.Kind)
 		assert.Equal(t, "12345", task.ExternalTaskID)
 		assert.Equal(t, repository.ContactTaskStateManaged, task.State)
 
@@ -80,7 +82,7 @@ func TestContactTask_CRUD(t *testing.T) {
 		assert.Equal(t, "test_value", retrieved.Metadata["test_key"])
 
 		// Retrieve by contact+provider+kind
-		retrieved2, err := contactTaskRepo.GetContactTaskByContact(ctx, contact.ID, "todoist", "cadence")
+		retrieved2, err := contactTaskRepo.GetContactTaskByContactCadenceDue(ctx, contact.ID, "todoist")
 		require.NoError(t, err)
 		assert.Equal(t, task.ID, retrieved2.ID)
 
@@ -99,7 +101,8 @@ func TestContactTask_CRUD(t *testing.T) {
 		task1, err := contactTaskRepo.UpsertContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "11111",
 			State:          string(repository.ContactTaskStateManaged),
 		})
@@ -111,7 +114,8 @@ func TestContactTask_CRUD(t *testing.T) {
 		task2, err := contactTaskRepo.UpsertContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "11111", // Same external ID
 			State:          string(repository.ContactTaskStateUnmanaged),
 		})
@@ -130,7 +134,8 @@ func TestContactTask_CRUD(t *testing.T) {
 		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "33333",
 		})
 		require.NoError(t, err)
@@ -151,7 +156,8 @@ func TestContactTask_CRUD(t *testing.T) {
 		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "44444",
 		})
 		require.NoError(t, err)
@@ -177,7 +183,8 @@ func TestContactTask_CRUD(t *testing.T) {
 		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "55555",
 		})
 		require.NoError(t, err)
@@ -208,17 +215,18 @@ func TestContactTask_CRUD(t *testing.T) {
 		_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "66666",
 		})
 		require.NoError(t, err)
 
 		// Delete by contact+provider+kind
-		err = contactTaskRepo.DeleteContactTaskByContact(ctx, contact.ID, "todoist", "cadence")
+		err = contactTaskRepo.DeleteContactTaskByContactCadenceDue(ctx, contact.ID, "todoist")
 		require.NoError(t, err)
 
 		// Verify deleted
-		_, err = contactTaskRepo.GetContactTaskByContact(ctx, contact.ID, "todoist", "cadence")
+		_, err = contactTaskRepo.GetContactTaskByContactCadenceDue(ctx, contact.ID, "todoist")
 		assert.ErrorIs(t, err, db.ErrNotFound)
 	})
 
@@ -233,7 +241,8 @@ func TestContactTask_CRUD(t *testing.T) {
 		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      tempContact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "77777",
 		})
 		require.NoError(t, err)
@@ -252,7 +261,8 @@ func TestContactTask_CRUD(t *testing.T) {
 		_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "88888",
 		})
 		require.NoError(t, err)
@@ -261,13 +271,14 @@ func TestContactTask_CRUD(t *testing.T) {
 		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "99999",
 		})
 		assert.Error(t, err) // Should fail due to unique constraint
 
 		// Clean up
-		err = contactTaskRepo.DeleteContactTaskByContact(ctx, contact.ID, "todoist", "cadence")
+		err = contactTaskRepo.DeleteContactTaskByContactCadenceDue(ctx, contact.ID, "todoist")
 		require.NoError(t, err)
 	})
 }
@@ -324,7 +335,8 @@ func TestContactTask_CountByProvider(t *testing.T) {
 		_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contactID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: uuid.New().String(),
 			State:          state,
 		})
@@ -388,7 +400,8 @@ func TestContactTask_SyncedDeadlineMetadata(t *testing.T) {
 		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "temp-uuid-123",
 			State:          "managed",
 			Metadata: map[string]any{
@@ -426,7 +439,8 @@ func TestContactTask_SyncedDeadlineMetadata(t *testing.T) {
 		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "12345678",
 			State:          "managed",
 			Metadata:       map[string]any{}, // No synced_deadline
@@ -490,7 +504,8 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		task1, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "action",
+			Kind:           contacttask.KindAction,
+			Lifecycle:      contacttask.LifecycleManual,
 			ExternalTaskID: "action-task-1",
 			State:          "managed",
 			Metadata: map[string]any{
@@ -505,7 +520,8 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		task2, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "action",
+			Kind:           contacttask.KindAction,
+			Lifecycle:      contacttask.LifecycleManual,
 			ExternalTaskID: "action-task-2",
 			State:          "managed",
 			Metadata: map[string]any{
@@ -521,7 +537,8 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		task3, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "action",
+			Kind:           contacttask.KindAction,
+			Lifecycle:      contacttask.LifecycleManual,
 			ExternalTaskID: "action-task-3",
 			State:          "managed",
 			Metadata: map[string]any{
@@ -544,7 +561,8 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		actionManaged, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "action",
+			Kind:           contacttask.KindAction,
+			Lifecycle:      contacttask.LifecycleManual,
 			ExternalTaskID: "action-managed",
 			State:          "managed",
 		})
@@ -553,7 +571,8 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		actionCompleted, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "action",
+			Kind:           contacttask.KindAction,
+			Lifecycle:      contacttask.LifecycleManual,
 			ExternalTaskID: "action-completed",
 			State:          "completed",
 		})
@@ -562,7 +581,8 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		cadenceManaged, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "cadence",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
 			ExternalTaskID: "cadence-managed",
 			State:          "managed",
 		})
@@ -575,25 +595,25 @@ func TestContactTask_ActionTasks(t *testing.T) {
 
 		// Filter by state=managed
 		managed := "managed"
-		managedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &managed, nil)
+		managedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &managed, nil, nil)
 		require.NoError(t, err)
 		assert.Len(t, managedTasks, 2) // action-managed and cadence-managed
 
 		// Filter by state=completed
 		completed := "completed"
-		completedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &completed, nil)
+		completedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &completed, nil, nil)
 		require.NoError(t, err)
 		assert.Len(t, completedTasks, 1)
 		assert.Equal(t, "action-completed", completedTasks[0].ExternalTaskID)
 
 		// Filter by kind=action
 		action := "action"
-		actionTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, nil, &action)
+		actionTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, nil, &action, nil)
 		require.NoError(t, err)
 		assert.Len(t, actionTasks, 2) // action-managed and action-completed
 
 		// Filter by kind=action AND state=managed
-		actionManagedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &managed, &action)
+		actionManagedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &managed, &action, nil)
 		require.NoError(t, err)
 		assert.Len(t, actionManagedTasks, 1)
 		assert.Equal(t, "action-managed", actionManagedTasks[0].ExternalTaskID)
@@ -612,7 +632,8 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "action",
+			Kind:           contacttask.KindAction,
+			Lifecycle:      contacttask.LifecycleManual,
 			ExternalTaskID: "task-to-complete",
 			State:          "managed",
 		})
@@ -639,7 +660,8 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
-			Kind:           "action",
+			Kind:           contacttask.KindAction,
+			Lifecycle:      contacttask.LifecycleManual,
 			ExternalTaskID: "action-with-metadata",
 			State:          "managed",
 			Metadata: map[string]any{

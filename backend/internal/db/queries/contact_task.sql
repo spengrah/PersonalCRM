@@ -4,10 +4,35 @@
 SELECT * FROM contact_task
 WHERE id = $1;
 
--- name: GetContactTaskByContact :one
--- Get the task for a specific contact+provider+kind combination
+-- name: GetContactTaskByContactCadenceDue :one
+-- Look up the cadence-due task for a contact+provider. Backed by the
+-- partial unique index unique_contact_provider_cadence
+-- (lifecycle='cadence_due', no state filter), so at most one row exists.
 SELECT * FROM contact_task
-WHERE contact_id = $1 AND provider = $2 AND kind = $3;
+WHERE contact_id = sqlc.arg('contact_id')
+  AND provider = sqlc.arg('provider')
+  AND lifecycle = 'cadence_due';
+
+-- name: GetContactTaskByContactFollowUpLive :one
+-- Look up the live follow-up task for a contact+provider. Backed by the
+-- partial unique index idx_contact_task_followup_unique_live
+-- (lifecycle='followup_loop' AND state IN live states).
+SELECT * FROM contact_task
+WHERE contact_id = sqlc.arg('contact_id')
+  AND provider = sqlc.arg('provider')
+  AND lifecycle = 'followup_loop'
+  AND state IN ('managed', 'pending_remote_create');
+
+-- name: GetLegacyActionTaskByContact :one
+-- Legacy lookup for action-kind rows (no new creator path; preserved for
+-- pre-migration rows). Multiple action rows are possible per
+-- contact/provider; this returns the most recent.
+SELECT * FROM contact_task
+WHERE contact_id = sqlc.arg('contact_id')
+  AND provider = sqlc.arg('provider')
+  AND kind = 'action'
+ORDER BY created_at DESC
+LIMIT 1;
 
 -- name: GetContactTaskByExternalID :one
 -- Look up a task by its external provider ID
@@ -28,11 +53,12 @@ WHERE contact_id = $1
 ORDER BY provider, kind;
 
 -- name: ListContactTasksByContactFiltered :many
--- List tasks for a contact with optional state and kind filters
+-- List tasks for a contact with optional state, kind, and lifecycle filters
 SELECT * FROM contact_task
-WHERE contact_id = $1
+WHERE contact_id = sqlc.arg('contact_id')
   AND (sqlc.narg('state')::text IS NULL OR state = sqlc.narg('state')::text)
   AND (sqlc.narg('kind')::text IS NULL OR kind = sqlc.narg('kind')::text)
+  AND (sqlc.narg('lifecycle')::text IS NULL OR lifecycle = sqlc.narg('lifecycle')::text)
 ORDER BY created_at DESC;
 
 -- name: ListManagedContactTasks :many
@@ -48,6 +74,7 @@ INSERT INTO contact_task (
     contact_id,
     provider,
     kind,
+    lifecycle,
     external_task_id,
     state,
     metadata
@@ -55,6 +82,7 @@ INSERT INTO contact_task (
     @contact_id,
     @provider,
     @kind,
+    @lifecycle,
     @external_task_id,
     COALESCE(@state, 'managed'),
     COALESCE(@metadata::jsonb, '{}'::jsonb)
@@ -70,6 +98,7 @@ INSERT INTO contact_task (
     contact_id,
     provider,
     kind,
+    lifecycle,
     external_task_id,
     state,
     metadata,
@@ -78,6 +107,7 @@ INSERT INTO contact_task (
     @contact_id,
     @provider,
     @kind,
+    @lifecycle,
     @external_task_id,
     COALESCE(@state, 'managed'),
     COALESCE(@metadata::jsonb, '{}'::jsonb),
@@ -90,6 +120,7 @@ INSERT INTO contact_task (
     contact_id,
     provider,
     kind,
+    lifecycle,
     external_task_id,
     state,
     metadata
@@ -97,6 +128,7 @@ INSERT INTO contact_task (
     @contact_id,
     @provider,
     @kind,
+    @lifecycle,
     @external_task_id,
     COALESCE(@state, 'managed'),
     COALESCE(@metadata::jsonb, '{}'::jsonb)
@@ -148,10 +180,14 @@ RETURNING *;
 DELETE FROM contact_task
 WHERE id = $1;
 
--- name: DeleteContactTaskByContact :exec
--- Delete task link for a contact+provider+kind (e.g., when cadence is disabled)
+-- name: DeleteContactTaskByContactCadenceDue :exec
+-- Delete the cadence-due task link for a contact+provider (e.g., when
+-- cadence is disabled). Uses the lifecycle predicate to match the
+-- post-046 schema.
 DELETE FROM contact_task
-WHERE contact_id = $1 AND provider = $2 AND kind = $3;
+WHERE contact_id = sqlc.arg('contact_id')
+  AND provider = sqlc.arg('provider')
+  AND lifecycle = 'cadence_due';
 
 -- name: DeleteContactTasksByProvider :exec
 -- Delete all tasks for a provider (e.g., when disconnecting Todoist)
@@ -173,7 +209,7 @@ WHERE provider = @provider AND metadata->>'pending_temp_id' = @temp_id::text;
 -- is visible to non-tx callers (e.g. Todoist provider's closeOnOutreach).
 SELECT * FROM contact_task
 WHERE contact_id = $1
-  AND kind = 'follow_up'
+  AND lifecycle = 'followup_loop'
   AND state IN ('managed', 'pending_remote_create')
 LIMIT 1;
 
@@ -186,7 +222,7 @@ UPDATE contact_task
 SET state = 'completed',
     updated_at = NOW()
 WHERE contact_id = $1
-  AND kind = 'follow_up'
+  AND lifecycle = 'followup_loop'
   AND state IN ('managed', 'pending_remote_create')
 RETURNING *;
 
@@ -197,18 +233,18 @@ RETURNING *;
 -- FollowUpManager consumer when running inside a worker transaction.
 SELECT * FROM contact_task
 WHERE contact_id = $1
-  AND kind = 'follow_up'
+  AND lifecycle = 'followup_loop'
   AND state IN ('managed', 'pending_remote_create')
 LIMIT 1;
 
 -- name: GetContactTaskByIdempotencyKey :one
 -- Partial-index lookup for the local idempotency key used by the
 -- follow-up consumer's crash-safe two-step creation. Matches the
--- partial unique index on (contact_id, kind, idempotency_key)
--- WHERE idempotency_key IS NOT NULL.
+-- partial unique index on (contact_id, idempotency_key)
+-- WHERE lifecycle = 'followup_loop' AND idempotency_key IS NOT NULL.
 SELECT * FROM contact_task
 WHERE contact_id = sqlc.arg('contact_id')
-  AND kind = sqlc.arg('kind')
+  AND lifecycle = 'followup_loop'
   AND idempotency_key = sqlc.arg('idempotency_key');
 
 -- name: CountRiverJobsByContactTask :one

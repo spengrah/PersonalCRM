@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -17,7 +18,7 @@ import (
 // propagating a user's deadline edit on a managed Todoist task back into
 // contact.contact_by. Two layers of correctness are pinned here:
 //
-//   1. Kind guard: the branch only fires when task.Kind == TaskKindCadence
+//   1. Kind guard: the branch only fires when task.Lifecycle == contacttask.LifecycleCadenceDue
 //      so follow-up tasks (which carry an unrelated grace-period deadline)
 //      cannot regress contact_by.
 //   2. Synced-deadline gate: a cadence task whose item.Deadline matches
@@ -54,7 +55,8 @@ func TestProcessItem_FollowUpDeadlineDoesNotOverwriteContactBy(t *testing.T) {
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindFollowUp,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
 		ExternalTaskID: externalID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       followupMetadata,
@@ -120,7 +122,8 @@ func TestProcessItem_LegitimateTodoistEditStillClobbersContactBy(t *testing.T) {
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: externalID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       cadenceMetadata,
@@ -190,7 +193,8 @@ func TestProcessItem_StaleTodoistDeadlineDoesNotClobberContactBy(t *testing.T) {
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: externalID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       cadenceMetadata,
@@ -250,7 +254,8 @@ func TestProcessItem_MissingSyncedDeadlineStillClobbers(t *testing.T) {
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: externalID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{},
@@ -297,7 +302,8 @@ func TestHandleSkipTrigger_AdvancesContactByViaCadenceUpdater(t *testing.T) {
 	_, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{},
@@ -357,7 +363,8 @@ func TestProcessItem_StaleTodoistDeadline_DoubleDeliveryIsIdempotent(t *testing.
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: externalID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       cadenceMetadata,

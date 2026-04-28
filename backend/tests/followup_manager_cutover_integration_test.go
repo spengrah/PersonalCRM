@@ -37,6 +37,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/consumer/consumerjobs"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
@@ -317,7 +318,7 @@ func (e *followUpIntegrationEnv) recordedEnv(
 func (e *followUpIntegrationEnv) countContactTaskRows(t *testing.T, contactID uuid.UUID) int {
 	t.Helper()
 	ctx := context.Background()
-	rows, err := e.taskRepo.ListContactTasksFiltered(ctx, contactID, nil, ptr(todoist.TaskKindFollowUp))
+	rows, err := e.taskRepo.ListContactTasksFiltered(ctx, contactID, nil, nil, ptr(contacttask.LifecycleFollowUpLoop))
 	require.NoError(t, err)
 	return len(rows)
 }
@@ -540,7 +541,7 @@ func TestIntegration_FollowUpManager_DuplicateEventClaimBlocks(t *testing.T) {
 	// consumer returns nil immediately.
 	env.applyInEventTx(t, recorded)
 
-	rows, err := env.taskRepo.ListContactTasksFiltered(ctx, contact.ID, nil, ptr(todoist.TaskKindFollowUp))
+	rows, err := env.taskRepo.ListContactTasksFiltered(ctx, contact.ID, nil, nil, ptr(contacttask.LifecycleFollowUpLoop))
 	require.NoError(t, err)
 	require.Len(t, rows, 1, "replay must not insert a duplicate row — claim dedupe enforcement")
 	assert.Equal(t, first.ID, rows[0].ID, "same row returned on replay")
@@ -614,7 +615,7 @@ func TestIntegration_FollowUpManager_UniqueLiveCollisionRecovers(t *testing.T) {
 	require.NoError(t, txA.Commit(ctx))
 
 	// Only one follow-up row exists.
-	rows, err := env.taskRepo.ListContactTasksFiltered(ctx, contact.ID, nil, ptr(todoist.TaskKindFollowUp))
+	rows, err := env.taskRepo.ListContactTasksFiltered(ctx, contact.ID, nil, nil, ptr(contacttask.LifecycleFollowUpLoop))
 	require.NoError(t, err)
 	require.Len(t, rows, 1, "collision recovery must not insert a duplicate row")
 }

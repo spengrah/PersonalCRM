@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { useCreateActionTask } from '@/hooks/use-contact-tasks'
+import { useCreateManualTask } from '@/hooks/use-contact-tasks'
 import { Button } from '@/components/ui/button'
 import { X, ChevronDown } from 'lucide-react'
 
@@ -18,7 +18,7 @@ export function AddTaskModal({ contactId, contactName, onClose }: AddTaskModalPr
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const createTask = useCreateActionTask()
+  const createTask = useCreateManualTask()
 
   // Focus input on mount
   useEffect(() => {
@@ -49,6 +49,9 @@ export function AddTaskModal({ contactId, contactName, onClose }: AddTaskModalPr
       await createTask.mutateAsync({
         contactId,
         data: {
+          // Hardcoded reach_out for Commit 1 of PR-B; the picker UI in
+          // Commit 3 replaces this with a user choice.
+          kind: 'reach_out',
           text: text.trim(),
           notes: notes.trim() || undefined,
         },

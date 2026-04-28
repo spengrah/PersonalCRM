@@ -149,11 +149,11 @@ func (h *CadenceUpdater) HandleEvent(ctx context.Context, tx pgx.Tx, env *events
 	if err := events.Unmarshal(env, &p); err != nil {
 		return fmt.Errorf("unmarshal interaction.recorded payload: %w", err)
 	}
-	if p.Version != 2 {
+	if p.Version != 2 && p.Version != 3 {
 		logger.Error().
 			Str("event_id", env.ID.String()).
 			Int("version", p.Version).
-			Msg("cadence_updater: rejecting interaction.recorded payload with Version != 2; external producers must emit V2")
+			Msg("cadence_updater: rejecting interaction.recorded payload with Version not in {2, 3}")
 		return nil
 	}
 	if p.PrevCadenceSnapshot == nil {

@@ -29,8 +29,10 @@ func NewContactTaskHandler(contactTaskService *service.ContactTaskService) *Cont
 	}
 }
 
-// CreateActionTaskRequest represents the request to create an action task
-type CreateActionTaskRequest struct {
+// CreateManualTaskRequest represents the request to create a user-picker task.
+// Kind is one of the user-pickable values (reach_out / send / reminder).
+type CreateManualTaskRequest struct {
+	Kind  string `json:"kind" validate:"required,oneof=reach_out send reminder"`
 	Text  string `json:"text" validate:"required,min=1,max=1000"`
 	Notes string `json:"notes,omitempty" validate:"omitempty,max=5000"`
 }
@@ -40,6 +42,7 @@ type ContactTaskResponse struct {
 	ID             string    `json:"id"`
 	ContactID      string    `json:"contact_id"`
 	Kind           string    `json:"kind"`
+	Lifecycle      string    `json:"lifecycle"`
 	ExternalTaskID string    `json:"external_task_id"`
 	Content        string    `json:"content,omitempty"`
 	DueDate        *string   `json:"due_date,omitempty"`
@@ -50,24 +53,25 @@ type ContactTaskResponse struct {
 
 // ListContactTasksQuery represents query parameters for listing tasks
 type ListContactTasksQuery struct {
-	State string `form:"state" validate:"omitempty,oneof=managed completed unmanaged dismissed"`
-	Kind  string `form:"kind" validate:"omitempty,oneof=action cadence follow_up"`
+	State     string `form:"state" validate:"omitempty,oneof=managed completed unmanaged dismissed pending_remote_create"`
+	Kind      string `form:"kind" validate:"omitempty,oneof=reach_out send reminder meet action"`
+	Lifecycle string `form:"lifecycle" validate:"omitempty,oneof=manual cadence_due followup_loop"`
 }
 
-// CreateActionTask creates a new action task for a contact
-// @Summary Create action task
-// @Description Create a new one-off task for a contact using Todoist Quick Add
+// CreateManualTask creates a new user-picker task for a contact.
+// @Summary Create manual task
+// @Description Create a new one-off task for a contact using Todoist Quick Add. Kind must be one of reach_out / send / reminder.
 // @Tags contact-tasks
 // @Accept json
 // @Produce json
 // @Param id path string true "Contact ID"
-// @Param request body CreateActionTaskRequest true "Task creation request"
+// @Param request body CreateManualTaskRequest true "Task creation request"
 // @Success 201 {object} api.APIResponse{data=ContactTaskResponse}
 // @Failure 400 {object} api.APIResponse{error=api.APIError}
 // @Failure 404 {object} api.APIResponse{error=api.APIError}
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /contacts/{id}/tasks [post]
-func (h *ContactTaskHandler) CreateActionTask(c *gin.Context) {
+func (h *ContactTaskHandler) CreateManualTask(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	// Parse contact ID
@@ -78,7 +82,7 @@ func (h *ContactTaskHandler) CreateActionTask(c *gin.Context) {
 	}
 
 	// Bind request
-	var req CreateActionTaskRequest
+	var req CreateManualTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		api.SendValidationError(c, "Invalid request body", err.Error())
 		return
@@ -91,14 +95,19 @@ func (h *ContactTaskHandler) CreateActionTask(c *gin.Context) {
 	}
 
 	// Create task
-	result, err := h.contactTaskService.CreateActionTask(ctx, service.CreateActionTaskRequest{
+	result, err := h.contactTaskService.CreateManualTask(ctx, service.CreateManualTaskRequest{
 		ContactID: contactID,
+		Kind:      req.Kind,
 		Text:      req.Text,
 		Notes:     req.Notes,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			api.SendNotFound(c, "Contact")
+			return
+		}
+		if errors.Is(err, service.ErrInvalidManualKind) {
+			api.SendValidationError(c, "Invalid kind", err.Error())
 			return
 		}
 		// Check for sentinel errors
@@ -118,7 +127,8 @@ func (h *ContactTaskHandler) CreateActionTask(c *gin.Context) {
 	response := ContactTaskResponse{
 		ID:             result.ID.String(),
 		ContactID:      result.ContactID.String(),
-		Kind:           "action",
+		Kind:           result.Kind,
+		Lifecycle:      result.Lifecycle,
 		ExternalTaskID: result.ExternalTaskID,
 		Content:        result.Content,
 		DueDate:        result.DueDate,
@@ -132,12 +142,13 @@ func (h *ContactTaskHandler) CreateActionTask(c *gin.Context) {
 
 // ListContactTasks lists tasks for a contact
 // @Summary List contact tasks
-// @Description List all tasks for a contact with optional filters
+// @Description List all tasks for a contact with optional state, kind, and lifecycle filters.
 // @Tags contact-tasks
 // @Produce json
 // @Param id path string true "Contact ID"
-// @Param state query string false "Filter by state (managed, completed, unmanaged, dismissed)"
-// @Param kind query string false "Filter by kind (action, cadence, follow_up)"
+// @Param state query string false "Filter by state (managed, completed, unmanaged, dismissed, pending_remote_create)"
+// @Param kind query string false "Filter by kind (reach_out, send, reminder, meet, action)"
+// @Param lifecycle query string false "Filter by lifecycle (manual, cadence_due, followup_loop)"
 // @Success 200 {object} api.APIResponse{data=[]ContactTaskResponse}
 // @Failure 400 {object} api.APIResponse{error=api.APIError}
 // @Failure 404 {object} api.APIResponse{error=api.APIError}
@@ -167,16 +178,19 @@ func (h *ContactTaskHandler) ListContactTasks(c *gin.Context) {
 	}
 
 	// Build filters
-	var stateFilter, kindFilter *string
+	var stateFilter, kindFilter, lifecycleFilter *string
 	if query.State != "" {
 		stateFilter = &query.State
 	}
 	if query.Kind != "" {
 		kindFilter = &query.Kind
 	}
+	if query.Lifecycle != "" {
+		lifecycleFilter = &query.Lifecycle
+	}
 
 	// List tasks
-	tasks, err := h.contactTaskService.ListContactTasks(ctx, contactID, stateFilter, kindFilter)
+	tasks, err := h.contactTaskService.ListContactTasks(ctx, contactID, stateFilter, kindFilter, lifecycleFilter)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			api.SendNotFound(c, "Contact")
@@ -243,6 +257,7 @@ func contactTaskToResponse(task repository.ContactTask) ContactTaskResponse {
 		ID:             task.ID.String(),
 		ContactID:      task.ContactID.String(),
 		Kind:           task.Kind,
+		Lifecycle:      task.Lifecycle,
 		ExternalTaskID: task.ExternalTaskID,
 		State:          string(task.State),
 		CreatedAt:      task.CreatedAt,

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -270,7 +271,8 @@ func TestHasPendingFollowUp(t *testing.T) {
 	_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       "todoist",
-		Kind:           "follow_up",
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
 		ExternalTaskID: "test-followup-" + contact.ID.String(),
 		State:          "managed",
 	})
@@ -311,7 +313,8 @@ func TestFollowupFilter(t *testing.T) {
 	_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      contactWithFollowup.ID,
 		Provider:       "todoist",
-		Kind:           "follow_up",
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
 		ExternalTaskID: "test-filter-" + contactWithFollowup.ID.String(),
 		State:          "managed",
 	})
@@ -372,7 +375,8 @@ func TestCompletedCadenceTask_CanBeReplacedByNewOne(t *testing.T) {
 	originalTask, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       "todoist",
-		Kind:           "cadence",
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: "original-cadence-task",
 		State:          "managed",
 	})
@@ -382,7 +386,7 @@ func TestCompletedCadenceTask_CanBeReplacedByNewOne(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify: GetContactTaskByContact finds the completed task
-	found, err := contactTaskRepo.GetContactTaskByContact(ctx, contact.ID, "todoist", "cadence")
+	found, err := contactTaskRepo.GetContactTaskByContactCadenceDue(ctx, contact.ID, "todoist")
 	require.NoError(t, err)
 	assert.Equal(t, repository.ContactTaskStateCompleted, found.State)
 
@@ -394,7 +398,8 @@ func TestCompletedCadenceTask_CanBeReplacedByNewOne(t *testing.T) {
 	newTask, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       "todoist",
-		Kind:           "cadence",
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: "replacement-cadence-task",
 		State:          "managed",
 	})
@@ -403,7 +408,7 @@ func TestCompletedCadenceTask_CanBeReplacedByNewOne(t *testing.T) {
 	assert.Equal(t, "replacement-cadence-task", newTask.ExternalTaskID)
 
 	// Verify: GetContactTaskByContact now returns the new managed task
-	current, err := contactTaskRepo.GetContactTaskByContact(ctx, contact.ID, "todoist", "cadence")
+	current, err := contactTaskRepo.GetContactTaskByContactCadenceDue(ctx, contact.ID, "todoist")
 	require.NoError(t, err)
 	assert.Equal(t, newTask.ID, current.ID)
 	assert.Equal(t, repository.ContactTaskStateManaged, current.State)

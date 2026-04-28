@@ -157,6 +157,7 @@ type ContactTask struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 	IdempotencyKey pgtype.Text        `json:"idempotency_key"`
+	Lifecycle      string             `json:"lifecycle"`
 }
 
 type Event struct {

@@ -10,6 +10,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -129,7 +130,7 @@ func setupServiceTest(t *testing.T) (*service.ContactTaskService, *repository.Co
 	return svc, contact, cleanup
 }
 
-func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
+func TestContactTaskService_CreateManualTask_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -145,8 +146,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Follow up on proposal",
 			Notes:     "",
 		})
@@ -166,8 +168,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Call about project",
 			Notes:     "",
 		})
@@ -184,8 +187,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Task #MyProject",
 			Notes:     "",
 		})
@@ -203,8 +207,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Send email",
 			Notes:     "",
 		})
@@ -231,8 +236,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Test task",
 			Notes:     "Some notes",
 		})
@@ -278,8 +284,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Task that will fail",
 			Notes:     "",
 		})
@@ -310,8 +317,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		resp, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		resp, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Task with due date",
 			Notes:     "",
 		})
@@ -348,8 +356,9 @@ func TestContactTaskService_CRMMarkerFormat(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Marker test",
 			Notes:     "Test notes",
 		})

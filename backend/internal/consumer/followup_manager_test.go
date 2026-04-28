@@ -9,6 +9,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
@@ -499,7 +500,7 @@ func (s *stubFollowUpTaskWriter) UpdateContactTaskExternalIDTx(context.Context, 
 func (s *stubFollowUpTaskWriter) SetContactTaskExternalIDOnlyTx(context.Context, pgx.Tx, uuid.UUID, string) error {
 	panic("stubFollowUpTaskWriter.SetContactTaskExternalIDOnlyTx: not exercised in refresh-path tests")
 }
-func (s *stubFollowUpTaskWriter) GetContactTaskByIdempotencyKeyTx(context.Context, pgx.Tx, uuid.UUID, string, string) (*repository.ContactTask, error) {
+func (s *stubFollowUpTaskWriter) GetContactTaskByIdempotencyKeyTx(context.Context, pgx.Tx, uuid.UUID, string) (*repository.ContactTask, error) {
 	return nil, db.ErrNotFound
 }
 func (s *stubFollowUpTaskWriter) GetContactTaskTx(context.Context, pgx.Tx, uuid.UUID) (*repository.ContactTask, error) {
@@ -542,7 +543,8 @@ func TestFollowUpManager_Refresh_EmitsTwoDecisions(t *testing.T) {
 		pending: &repository.ContactTask{
 			ID:             taskID,
 			ContactID:      contactID,
-			Kind:           todoist.TaskKindFollowUp,
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleFollowUpLoop,
 			State:          repository.ContactTaskStateManaged,
 			ExternalTaskID: "ext-remote-123",
 			Metadata:       map[string]any{"due_date": "2026-01-01"},

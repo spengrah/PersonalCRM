@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/todoist"
@@ -21,7 +22,15 @@ var (
 	ErrNoTodoistAccount     = errors.New("no todoist account connected")
 	ErrTodoistNotConfigured = errors.New("todoist settings not configured")
 	ErrTodoistMissingLabel  = errors.New("todoist settings not configured: missing label")
+	ErrInvalidManualKind    = errors.New("invalid manual task kind")
 )
+
+// ValidManualKinds is the set of user-pickable kinds for CreateManualTask.
+var ValidManualKinds = map[string]bool{
+	contacttask.KindReachOut: true,
+	contacttask.KindSend:     true,
+	contacttask.KindReminder: true,
+}
 
 // ContactTaskService handles business logic for contact tasks
 type ContactTaskService struct {
@@ -76,17 +85,21 @@ func NewContactTaskServiceForTest(
 	}
 }
 
-// CreateActionTaskRequest contains the parameters for creating an action task
-type CreateActionTaskRequest struct {
+// CreateManualTaskRequest contains the parameters for creating a manual task.
+// Kind must be one of the user-pickable values: reach_out / send / reminder.
+type CreateManualTaskRequest struct {
 	ContactID uuid.UUID
+	Kind      string // reach_out | send | reminder
 	Text      string // Quick add text with optional dates, #project, @label, p1-p4
 	Notes     string // Optional notes for the task description
 }
 
-// ActionTaskResponse represents the response for an action task
-type ActionTaskResponse struct {
+// ManualTaskResponse represents the response for a manual task.
+type ManualTaskResponse struct {
 	ID             uuid.UUID `json:"id"`
 	ContactID      uuid.UUID `json:"contact_id"`
+	Kind           string    `json:"kind"`
+	Lifecycle      string    `json:"lifecycle"`
 	ExternalTaskID string    `json:"external_task_id"`
 	Content        string    `json:"content"`
 	DueDate        *string   `json:"due_date,omitempty"`
@@ -95,8 +108,14 @@ type ActionTaskResponse struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
-// CreateActionTask creates a new action task for a contact using Todoist Quick Add
-func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateActionTaskRequest) (*ActionTaskResponse, error) {
+// CreateManualTask creates a new user-picker task for a contact via the
+// Todoist Quick Add API. Always sets Lifecycle = LifecycleManual; Kind is
+// validated against the user-pickable set.
+func (s *ContactTaskService) CreateManualTask(ctx context.Context, req CreateManualTaskRequest) (*ManualTaskResponse, error) {
+	if !ValidManualKinds[req.Kind] {
+		return nil, fmt.Errorf("%w: %q", ErrInvalidManualKind, req.Kind)
+	}
+
 	// Verify contact exists
 	contact, err := s.contactRepo.GetContact(ctx, req.ContactID)
 	if err != nil {
@@ -147,11 +166,14 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 		descBuilder.WriteString("\n\n---\n")
 	}
 
-	// Add CRM marker for sync identification (use json.Marshal for safety)
+	// Add CRM marker for sync identification (use json.Marshal for safety).
+	// Both kind and lifecycle are written; readers that ignore lifecycle
+	// continue to work and the backfill path translates legacy markers.
 	marker := map[string]any{
 		"crm":        true,
 		"contact_id": contact.ID.String(),
-		"kind":       "action",
+		"kind":       req.Kind,
+		"lifecycle":  contacttask.LifecycleManual,
 		"instance":   settings.IntegrationInstanceID,
 	}
 	markerJSON, err := json.Marshal(marker)
@@ -194,23 +216,32 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 		metadata["project_id"] = task.ProjectID
 	}
 
-	// Create contact_task record
+	// Create contact_task record. Lifecycle is always LifecycleManual for
+	// user-picker tasks; Kind matches the validated request kind.
 	contactTask, err := s.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      req.ContactID,
 		Provider:       todoist.SourceName,
-		Kind:           todoist.TaskKindAction,
+		Kind:           req.Kind,
+		Lifecycle:      contacttask.LifecycleManual,
 		ExternalTaskID: task.ID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       metadata,
 	})
 	if err != nil {
+		// Best-effort cleanup: the external Todoist task was created but
+		// the local row didn't land. Delete the orphan so a subsequent
+		// sync tick doesn't try to reconcile it.
+		deleteCmd := todoist.NewItemDeleteCommand(task.ID)
+		_, _ = client.Sync(ctx, "*", []string{}, []todoist.SyncCommand{deleteCmd})
 		return nil, fmt.Errorf("create contact task: %w", err)
 	}
 
 	// Build response
-	response := &ActionTaskResponse{
+	response := &ManualTaskResponse{
 		ID:             contactTask.ID,
 		ContactID:      contactTask.ContactID,
+		Kind:           contactTask.Kind,
+		Lifecycle:      contactTask.Lifecycle,
 		ExternalTaskID: contactTask.ExternalTaskID,
 		Content:        task.Content,
 		ProjectID:      task.ProjectID,
@@ -228,14 +259,14 @@ func (s *ContactTaskService) CreateActionTask(ctx context.Context, req CreateAct
 }
 
 // ListContactTasks lists tasks for a contact with optional filters
-func (s *ContactTaskService) ListContactTasks(ctx context.Context, contactID uuid.UUID, state *string, kind *string) ([]repository.ContactTask, error) {
+func (s *ContactTaskService) ListContactTasks(ctx context.Context, contactID uuid.UUID, state *string, kind *string, lifecycle *string) ([]repository.ContactTask, error) {
 	// Verify contact exists
 	_, err := s.contactRepo.GetContact(ctx, contactID)
 	if err != nil {
 		return nil, fmt.Errorf("get contact: %w", err)
 	}
 
-	return s.contactTaskRepo.ListContactTasksFiltered(ctx, contactID, state, kind)
+	return s.contactTaskRepo.ListContactTasksFiltered(ctx, contactID, state, kind, lifecycle)
 }
 
 // DeleteTaskLink removes the CRM tracking for a task (does not delete from Todoist)

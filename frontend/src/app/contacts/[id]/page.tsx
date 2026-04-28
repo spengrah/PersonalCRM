@@ -91,25 +91,30 @@ export default function ContactDetailPage() {
   const updateContactMutation = useUpdateContact()
   const saveContactNoteMutation = useSaveContactNote()
 
-  // Fetch tasks at page level to start loading in parallel with contact
-  const { data: activeActionTasks = [], isLoading: loadingActiveTasks } = useContactTasks(
+  // Fetch tasks at page level to start loading in parallel with contact.
+  // Post-046, the lifecycle filter is the natural axis: lifecycle=manual
+  // covers all user-pickable tasks AND legacy action rows (which are
+  // backfilled to (action, manual)); lifecycle=followup_loop covers
+  // follow-up tasks created by FollowUpManager.
+  const { data: activeManualTasks = [], isLoading: loadingActiveTasks } = useContactTasks(
     contactId,
     {
       state: 'managed',
-      kind: 'action',
+      lifecycle: 'manual',
     }
   )
-  const { data: completedTasks = [], isLoading: loadingCompletedTasks } = useContactTasks(
+  const { data: completedManualTasks = [], isLoading: loadingCompletedTasks } = useContactTasks(
     contactId,
-    { state: 'completed', kind: 'action' }
+    { state: 'completed', lifecycle: 'manual' }
   )
   const { data: followUpTasks = [] } = useContactTasks(contactId, {
     state: 'managed',
-    kind: 'follow_up',
+    lifecycle: 'followup_loop',
   })
 
-  // Merge active action tasks and follow-up tasks for display
-  const activeTasks = [...followUpTasks, ...activeActionTasks]
+  // Merge active manual tasks and follow-up tasks for display.
+  const activeTasks = [...followUpTasks, ...activeManualTasks]
+  const completedTasks = completedManualTasks
 
   // Build URL preserving list context params
   const buildNavigationUrl = useCallback(

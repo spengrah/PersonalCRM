@@ -124,9 +124,25 @@ interface TaskRowProps {
     due_date?: string
     external_task_id: string
     kind?: string
+    lifecycle?: string
   }
   contactId: string
   completed: boolean
+}
+
+// getBadgeLabel derives the display label from the (kind, lifecycle) pair.
+// Follow-up rows are kind=reach_out + lifecycle=followup_loop; cadence rows
+// are kind=reach_out + lifecycle=cadence_due; everything else uses the kind
+// directly.
+function getBadgeLabel(kind: string | undefined, lifecycle: string | undefined): string {
+  if (kind === 'reach_out' && lifecycle === 'cadence_due') return 'Cadence'
+  if (kind === 'reach_out' && lifecycle === 'followup_loop') return 'Follow-up'
+  if (kind === 'reach_out') return 'Reach out'
+  if (kind === 'send') return 'Send'
+  if (kind === 'reminder') return 'Reminder'
+  if (kind === 'meet') return 'Meet'
+  if (kind === 'action') return 'Action'
+  return kind ?? ''
 }
 
 function TaskRow({ task, contactId, completed }: TaskRowProps) {
@@ -139,12 +155,14 @@ function TaskRow({ task, contactId, completed }: TaskRowProps) {
     }
   }
 
+  const badge = getBadgeLabel(task.kind, task.lifecycle)
+
   return (
     <div className="px-4 py-3 sm:px-6 flex items-center gap-3 group">
       {/* Task icon — follow-up tasks use Clock, others use Circle/CheckCircle */}
       {completed ? (
         <CheckCircle2 className="w-5 h-5 text-gray-400 flex-shrink-0" />
-      ) : task.kind === 'follow_up' ? (
+      ) : task.lifecycle === 'followup_loop' ? (
         <Clock className="w-5 h-5 text-amber-400 flex-shrink-0" />
       ) : (
         <Circle className="w-5 h-5 text-gray-300 flex-shrink-0" />
@@ -158,6 +176,13 @@ function TaskRow({ task, contactId, completed }: TaskRowProps) {
           {cleanTaskContent(task.content)}
         </p>
       </div>
+
+      {/* Kind/lifecycle badge */}
+      {badge ? (
+        <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+          {badge}
+        </span>
+      ) : null}
 
       {/* Due date */}
       <div className="flex-shrink-0">

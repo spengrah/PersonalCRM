@@ -30,6 +30,7 @@ type ContactTask struct {
 	ContactID      uuid.UUID        `json:"contact_id"`
 	Provider       string           `json:"provider"`
 	Kind           string           `json:"kind"`
+	Lifecycle      string           `json:"lifecycle"`
 	ExternalTaskID string           `json:"external_task_id"`
 	State          ContactTaskState `json:"state"`
 	Metadata       map[string]any   `json:"metadata,omitempty"`
@@ -47,11 +48,17 @@ type ContactTaskWithContact struct {
 	LastContacted *time.Time `json:"last_contacted,omitempty"`
 }
 
-// CreateContactTaskRequest holds parameters for creating a contact task
+// CreateContactTaskRequest holds parameters for creating a contact task.
+// Both Kind and Lifecycle are required; the service layer rejects empty
+// values before reaching the repository. The DB-level DEFAULT on lifecycle
+// is a floor for any insert path that bypasses validation; producer paths
+// must set both fields explicitly to avoid silently routing into the
+// (kind=*, lifecycle='manual') cell of the state space.
 type CreateContactTaskRequest struct {
 	ContactID      uuid.UUID      `json:"contact_id"`
 	Provider       string         `json:"provider"`
 	Kind           string         `json:"kind"`
+	Lifecycle      string         `json:"lifecycle"`
 	ExternalTaskID string         `json:"external_task_id"`
 	State          string         `json:"state,omitempty"`
 	Metadata       map[string]any `json:"metadata,omitempty"`
@@ -72,6 +79,7 @@ func convertDbContactTask(dbTask *db.ContactTask) ContactTask {
 	task := ContactTask{
 		Provider:       dbTask.Provider,
 		Kind:           dbTask.Kind,
+		Lifecycle:      dbTask.Lifecycle,
 		ExternalTaskID: dbTask.ExternalTaskID,
 		State:          ContactTaskState(dbTask.State),
 	}
@@ -110,6 +118,7 @@ func convertDbContactTaskWithContact(dbRow *db.ListManagedContactTasksRow) Conta
 		ContactTask: ContactTask{
 			Provider:       dbRow.Provider,
 			Kind:           dbRow.Kind,
+			Lifecycle:      dbRow.Lifecycle,
 			ExternalTaskID: dbRow.ExternalTaskID,
 			State:          ContactTaskState(dbRow.State),
 		},
@@ -166,12 +175,55 @@ func (r *ContactTaskRepository) GetContactTask(ctx context.Context, id uuid.UUID
 	return &task, nil
 }
 
-// GetContactTaskByContact retrieves a contact task by contact, provider, and kind
-func (r *ContactTaskRepository) GetContactTaskByContact(ctx context.Context, contactID uuid.UUID, provider, kind string) (*ContactTask, error) {
-	dbTask, err := r.queries.GetContactTaskByContact(ctx, db.GetContactTaskByContactParams{
+// GetContactTaskByContactCadenceDue retrieves the cadence-due task for a
+// contact+provider. Backed by the partial unique index
+// unique_contact_provider_cadence (lifecycle='cadence_due', no state
+// filter), so at most one row exists.
+func (r *ContactTaskRepository) GetContactTaskByContactCadenceDue(ctx context.Context, contactID uuid.UUID, provider string) (*ContactTask, error) {
+	dbTask, err := r.queries.GetContactTaskByContactCadenceDue(ctx, db.GetContactTaskByContactCadenceDueParams{
 		ContactID: uuidToPgUUID(contactID),
 		Provider:  provider,
-		Kind:      kind,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
+// GetContactTaskByContactFollowUpLive retrieves the live follow-up task
+// for a contact+provider. Backed by the partial unique index
+// idx_contact_task_followup_unique_live (lifecycle='followup_loop' AND
+// state IN live states).
+func (r *ContactTaskRepository) GetContactTaskByContactFollowUpLive(ctx context.Context, contactID uuid.UUID, provider string) (*ContactTask, error) {
+	dbTask, err := r.queries.GetContactTaskByContactFollowUpLive(ctx, db.GetContactTaskByContactFollowUpLiveParams{
+		ContactID: uuidToPgUUID(contactID),
+		Provider:  provider,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
+// GetLegacyActionTaskByContact retrieves the most-recent legacy action
+// task for a contact+provider. Multiple action rows are possible per
+// contact/provider (no uniqueness ever existed); this returns the most
+// recent. The signature is intentionally narrow — callers cannot
+// accidentally pass kind='reach_out' here.
+func (r *ContactTaskRepository) GetLegacyActionTaskByContact(ctx context.Context, contactID uuid.UUID, provider string) (*ContactTask, error) {
+	dbTask, err := r.queries.GetLegacyActionTaskByContact(ctx, db.GetLegacyActionTaskByContactParams{
+		ContactID: uuidToPgUUID(contactID),
+		Provider:  provider,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -235,11 +287,12 @@ func (r *ContactTaskRepository) ListContactTasksByContact(ctx context.Context, c
 }
 
 // ListContactTasksFiltered retrieves contact tasks for a contact with optional filters
-func (r *ContactTaskRepository) ListContactTasksFiltered(ctx context.Context, contactID uuid.UUID, state *string, kind *string) ([]ContactTask, error) {
+func (r *ContactTaskRepository) ListContactTasksFiltered(ctx context.Context, contactID uuid.UUID, state *string, kind *string, lifecycle *string) ([]ContactTask, error) {
 	dbTasks, err := r.queries.ListContactTasksByContactFiltered(ctx, db.ListContactTasksByContactFilteredParams{
 		ContactID: uuidToPgUUID(contactID),
 		State:     stringToPgText(state),
 		Kind:      stringToPgText(kind),
+		Lifecycle: stringToPgText(lifecycle),
 	})
 	if err != nil {
 		return nil, err
@@ -288,6 +341,7 @@ func (r *ContactTaskRepository) CreateContactTask(ctx context.Context, req Creat
 		ContactID:      uuidToPgUUID(req.ContactID),
 		Provider:       req.Provider,
 		Kind:           req.Kind,
+		Lifecycle:      req.Lifecycle,
 		ExternalTaskID: req.ExternalTaskID,
 		State:          state,
 		Metadata:       metadataBytes,
@@ -320,6 +374,7 @@ func (r *ContactTaskRepository) UpsertContactTask(ctx context.Context, req Creat
 		ContactID:      uuidToPgUUID(req.ContactID),
 		Provider:       req.Provider,
 		Kind:           req.Kind,
+		Lifecycle:      req.Lifecycle,
 		ExternalTaskID: req.ExternalTaskID,
 		State:          state,
 		Metadata:       metadataBytes,
@@ -397,12 +452,14 @@ func (r *ContactTaskRepository) DeleteContactTask(ctx context.Context, id uuid.U
 	return r.queries.DeleteContactTask(ctx, uuidToPgUUID(id))
 }
 
-// DeleteContactTaskByContact deletes a contact task by contact, provider, and kind
-func (r *ContactTaskRepository) DeleteContactTaskByContact(ctx context.Context, contactID uuid.UUID, provider, kind string) error {
-	return r.queries.DeleteContactTaskByContact(ctx, db.DeleteContactTaskByContactParams{
+// DeleteContactTaskByContactCadenceDue removes the cadence-due task link
+// for a contact+provider (e.g., when cadence is disabled). The lifecycle
+// predicate matches the post-046 schema; cadence-due rows are unique per
+// (contact_id, provider).
+func (r *ContactTaskRepository) DeleteContactTaskByContactCadenceDue(ctx context.Context, contactID uuid.UUID, provider string) error {
+	return r.queries.DeleteContactTaskByContactCadenceDue(ctx, db.DeleteContactTaskByContactCadenceDueParams{
 		ContactID: uuidToPgUUID(contactID),
 		Provider:  provider,
-		Kind:      kind,
 	})
 }
 
@@ -487,13 +544,14 @@ func (r *ContactTaskRepository) FindPendingFollowUpTx(ctx context.Context, tx pg
 }
 
 // GetContactTaskByIdempotencyKey performs the partial-index lookup on
-// (contact_id, kind, idempotency_key). Used by the crash-safe two-step
-// follow-up creation flow to detect a pre-existing local row before
-// inserting a new one.
-func (r *ContactTaskRepository) GetContactTaskByIdempotencyKey(ctx context.Context, contactID uuid.UUID, kind, key string) (*ContactTask, error) {
+// (contact_id, idempotency_key) WHERE lifecycle='followup_loop'. Used by
+// the crash-safe two-step follow-up creation flow to detect a
+// pre-existing local row before inserting a new one. The lifecycle
+// constraint lives in the partial unique index, so a coincidentally-
+// keyed (reach_out, manual) row will not collide.
+func (r *ContactTaskRepository) GetContactTaskByIdempotencyKey(ctx context.Context, contactID uuid.UUID, key string) (*ContactTask, error) {
 	dbTask, err := r.queries.GetContactTaskByIdempotencyKey(ctx, db.GetContactTaskByIdempotencyKeyParams{
 		ContactID:      uuidToPgUUID(contactID),
-		Kind:           kind,
 		IdempotencyKey: pgtype.Text{String: key, Valid: true},
 	})
 	if err != nil {
@@ -509,14 +567,13 @@ func (r *ContactTaskRepository) GetContactTaskByIdempotencyKey(ctx context.Conte
 // GetContactTaskByIdempotencyKeyTx is the tx-threaded variant of
 // GetContactTaskByIdempotencyKey. Used by the FollowUpManager consumer
 // inside the event-processing tx to detect a prior step-1 insert.
-func (r *ContactTaskRepository) GetContactTaskByIdempotencyKeyTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, kind, key string) (*ContactTask, error) {
+func (r *ContactTaskRepository) GetContactTaskByIdempotencyKeyTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, key string) (*ContactTask, error) {
 	q := r.queries
 	if tx != nil {
 		q = db.New(tx)
 	}
 	dbTask, err := q.GetContactTaskByIdempotencyKey(ctx, db.GetContactTaskByIdempotencyKeyParams{
 		ContactID:      uuidToPgUUID(contactID),
-		Kind:           kind,
 		IdempotencyKey: pgtype.Text{String: key, Valid: true},
 	})
 	if err != nil {
@@ -589,6 +646,7 @@ func (r *ContactTaskRepository) CreateContactTaskTx(ctx context.Context, tx pgx.
 		ContactID:      uuidToPgUUID(req.ContactID),
 		Provider:       req.Provider,
 		Kind:           req.Kind,
+		Lifecycle:      req.Lifecycle,
 		ExternalTaskID: req.ExternalTaskID,
 		State:          state,
 		Metadata:       metadataBytes,

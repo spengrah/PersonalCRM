@@ -12,6 +12,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
@@ -299,7 +300,8 @@ func createFollowUpTask(t *testing.T, env *dismissalTestEnv, contactID uuid.UUID
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contactID,
 		Provider:       SourceName,
-		Kind:           TaskKindFollowUp,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
 		ExternalTaskID: externalID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{"due_date": "2099-01-01"},
@@ -434,7 +436,8 @@ func TestFollowUpDismissal_CadenceTaskUnaffected(t *testing.T) {
 	cadenceTask, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       cadenceMetadata,
@@ -597,7 +600,8 @@ func TestFollowUpDismissal_CadenceDispatchUnchanged(t *testing.T) {
 			_, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 				ContactID:      contact.ID,
 				Provider:       SourceName,
-				Kind:           TaskKindCadence,
+				Kind:           contacttask.KindReachOut,
+				Lifecycle:      contacttask.LifecycleCadenceDue,
 				ExternalTaskID: cadenceExtID,
 				State:          string(repository.ContactTaskStateManaged),
 				Metadata:       map[string]any{"synced_deadline": "2099-01-01"},
@@ -633,7 +637,8 @@ func TestFollowUpDismissal_ActionDispatchUnchanged(t *testing.T) {
 	action, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindAction,
+		Kind:           contacttask.KindAction,
+		Lifecycle:      contacttask.LifecycleManual,
 		ExternalTaskID: actionExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{},
@@ -678,7 +683,7 @@ func assertDismissedAndInvariants(t *testing.T, env *dismissalTestEnv, contactID
 	require.NoError(t, err)
 	followupCount := 0
 	for _, tk := range tasks {
-		if tk.Kind == TaskKindFollowUp {
+		if tk.Lifecycle == contacttask.LifecycleFollowUpLoop {
 			followupCount++
 		}
 	}
@@ -744,7 +749,8 @@ func TestHandleActionTaskTriggers_StateUpdateErrorPropagates_Deleted(t *testing.
 	action, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindAction,
+		Kind:           contacttask.KindAction,
+		Lifecycle:      contacttask.LifecycleManual,
 		ExternalTaskID: actionExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{},
@@ -777,7 +783,8 @@ func TestHandleActionTaskTriggers_StateUpdateErrorPropagates_LabelRemoved(t *tes
 	action, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindAction,
+		Kind:           contacttask.KindAction,
+		Lifecycle:      contacttask.LifecycleManual,
 		ExternalTaskID: actionExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{},
@@ -901,7 +908,8 @@ func TestHandleTaskCompletion_PublishesEventAtomicallyWithStateUpdate(t *testing
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{},
@@ -947,7 +955,8 @@ func TestHandleTaskCompletion_DBFailureRollsBackEventAndState(t *testing.T) {
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{},
@@ -982,7 +991,8 @@ func TestHandleRecurringDetection_StateUpdateErrorPropagates(t *testing.T) {
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{},
@@ -1019,7 +1029,8 @@ func TestHandleSkipTrigger_PublishesEventAtomicallyWithStateAdvance(t *testing.T
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{},
@@ -1078,7 +1089,8 @@ func TestHandleSkipTrigger_DBFailureRollsBackEventAndState(t *testing.T) {
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{},
@@ -1124,7 +1136,8 @@ func TestHandleSkipTrigger_ReplayIsNoOp(t *testing.T) {
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{},
@@ -1183,7 +1196,8 @@ func TestReconcileExistingTask_SkipDriftRecovery(t *testing.T) {
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata: map[string]any{
@@ -1228,7 +1242,8 @@ func TestReconcileExistingTask_SkipDrift_DeferralSuppressesBranch(t *testing.T) 
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata: map[string]any{
