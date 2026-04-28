@@ -421,7 +421,7 @@ func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
 		assert.Less(t, posRecent, posNull, "Non-null should come before null (NULLS LAST) in asc order")
 	})
 
-	t.Run("full list path desc returns ordered rows", func(t *testing.T) {
+	t.Run("full list path with search desc returns ordered rows", func(t *testing.T) {
 		// Exercises SearchContactsSorted (search query + sort, no ids_only).
 		prefix := "SortLRAList"
 		idOld := h.createContact(prefix + " Old Test")
@@ -441,7 +441,7 @@ func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
 		assert.Less(t, posRecent, posOld, "Recent should come before old in desc order")
 	})
 
-	t.Run("full list path asc puts oldest first", func(t *testing.T) {
+	t.Run("full list path with search asc puts oldest first", func(t *testing.T) {
 		// Same as above but ASC; both directions hit the same SQL CASE pair.
 		prefix := "SortLRAListAsc"
 		idOld := h.createContact(prefix + " Old Test")
@@ -459,6 +459,38 @@ func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
 		assert.NotEqual(t, -1, posOld, "Old should appear in full list")
 		assert.NotEqual(t, -1, posRecent, "Recent should appear in full list")
 		assert.Less(t, posOld, posRecent, "Old should come before recent in asc order")
+	})
+
+	t.Run("no-search list path returns rows in sorted order", func(t *testing.T) {
+		// No search query → routes to ListContactsSorted (full) and
+		// ListContactIDsSorted (ids_only). Two contacts with distinct
+		// last_response_at values; we assert relative ordering via
+		// findPosition rather than absolute row index because the shared
+		// test DB carries other contacts with arbitrary dates.
+		idOld := h.createContact("SortLRANoSearch Old Test")
+		idRecent := h.createContact("SortLRANoSearch Recent Test")
+		defer h.deleteContact(idOld)
+		defer h.deleteContact(idRecent)
+
+		h.recordInteraction(idOld, "inbound", "2024-01-01")
+		h.recordInteraction(idRecent, "inbound", "2025-06-01")
+
+		// Full list path (no search): exercises ListContactsSorted. Use a
+		// large limit so both seeded contacts land in the response window.
+		listIDs := h.getListResponseIDs("/api/v1/contacts?sort=last_response_at&order=desc&limit=1000")
+		posRecent := h.findPosition(listIDs, idRecent)
+		posOld := h.findPosition(listIDs, idOld)
+		require.NotEqual(t, -1, posRecent, "Recent should be in full list response")
+		require.NotEqual(t, -1, posOld, "Old should be in full list response")
+		assert.Less(t, posRecent, posOld, "Recent should precede old (desc order, no search)")
+
+		// IDs-only path (no search): exercises ListContactIDsSorted.
+		idsResp := h.getIDsResponse("/api/v1/contacts?ids_only=true&sort=last_response_at&order=desc&limit=1000")
+		posRecentIDs := h.findPosition(idsResp.IDs, idRecent)
+		posOldIDs := h.findPosition(idsResp.IDs, idOld)
+		require.NotEqual(t, -1, posRecentIDs, "Recent should be in ids response")
+		require.NotEqual(t, -1, posOldIDs, "Old should be in ids response")
+		assert.Less(t, posRecentIDs, posOldIDs, "Recent should precede old in ids-only desc order")
 	})
 
 	t.Run("last_response_at sort is accepted by API validation", func(t *testing.T) {
