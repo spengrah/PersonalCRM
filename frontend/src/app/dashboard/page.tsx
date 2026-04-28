@@ -6,7 +6,8 @@ import { CheckCircle, Clock, AlertCircle, User, Plus } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
 import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
-import { useOverdueContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
+import { useOverdueContacts } from '@/hooks/use-contacts'
+import { useCreateInteraction } from '@/hooks/use-interactions'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import {
   formatContactMethodValue,
@@ -18,7 +19,7 @@ import type { ContactMethod, OverdueContact } from '@/types/contact'
 import { clsx } from 'clsx'
 
 function OverdueContactCard({ contact }: { contact: OverdueContact }) {
-  const updateLastContactedMutation = useUpdateLastContacted()
+  const createInteraction = useCreateInteraction()
   const { currentTime } = useAcceleratedTime()
   const { primary, secondary } = getPrimaryAndSecondaryMethods(
     contact.methods,
@@ -28,7 +29,14 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
 
   const handleMarkContacted = async () => {
     try {
-      await updateLastContactedMutation.mutateAsync({ id: contact.id })
+      // The dashboard quick-action preserves the old "Mark as Contacted"
+      // semantic (mutual interaction at current accelerated time). We omit
+      // occurred_at from the payload so the backend stamps the interaction
+      // with accelerated.GetCurrentTime() — see plan §5.4.5.
+      await createInteraction.mutateAsync({
+        contactId: contact.id,
+        data: { direction: 'mutual' },
+      })
     } catch (error) {
       console.error('Error marking as contacted:', error)
     }
@@ -131,7 +139,7 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
           <Button
             size="sm"
             onClick={handleMarkContacted}
-            loading={updateLastContactedMutation.isPending}
+            loading={createInteraction.isPending}
             className="whitespace-nowrap"
           >
             <CheckCircle className="w-4 h-4 mr-2" />

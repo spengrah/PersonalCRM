@@ -358,8 +358,11 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	t.Run("FilterByFollowUp", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?kind=follow_up", nil)
+	t.Run("FilterByFollowUpLifecycle", func(t *testing.T) {
+		// Post-046, follow-up tasks are identified by lifecycle=followup_loop
+		// (kind is reach_out for live follow-up rows). The legacy
+		// ?kind=follow_up filter is no longer valid.
+		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?lifecycle=followup_loop", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -367,9 +370,10 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 		var resp api.APIResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		items := resp.Data.([]interface{})
+		require.NotEmpty(t, items, "should return at least one followup_loop task")
 		for _, item := range items {
 			task := item.(map[string]interface{})
-			assert.Equal(t, "follow_up", task["kind"], "should only return follow_up tasks")
+			assert.Equal(t, "followup_loop", task["lifecycle"], "should only return followup_loop tasks")
 		}
 	})
 
@@ -390,6 +394,15 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 
 	t.Run("InvalidKindRejected", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?kind=invalid", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("LegacyFollowUpKindRejected", func(t *testing.T) {
+		// kind=follow_up is no longer a valid kind enum post-046; the
+		// validator rejects it at the handler boundary.
+		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?kind=follow_up", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Code)

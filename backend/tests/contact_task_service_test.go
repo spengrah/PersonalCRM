@@ -258,7 +258,8 @@ func TestContactTaskService_CreateManualTask_Integration(t *testing.T) {
 		assert.Contains(t, desc, "Some notes")
 		assert.Contains(t, desc, `"crm":true`)
 		assert.Contains(t, desc, `"contact_id"`)
-		assert.Contains(t, desc, `"kind":"action"`)
+		assert.Contains(t, desc, `"kind":"reach_out"`)
+		assert.Contains(t, desc, `"lifecycle":"manual"`)
 	})
 
 	t.Run("deletes task if Sync update fails", func(t *testing.T) {
@@ -376,7 +377,8 @@ func TestContactTaskService_CRMMarkerFormat(t *testing.T) {
 
 		assert.Equal(t, true, marker["crm"])
 		assert.Equal(t, contact.ID.String(), marker["contact_id"])
-		assert.Equal(t, "action", marker["kind"])
+		assert.Equal(t, "reach_out", marker["kind"])
+		assert.Equal(t, "manual", marker["lifecycle"])
 		assert.Equal(t, "instance-789", marker["instance"])
 	})
 }

@@ -730,7 +730,6 @@ func run() int {
 			contacts.GET("/:id", contactHandler.GetContact)
 			contacts.PUT("/:id", contactHandler.UpdateContact)
 			contacts.DELETE("/:id", contactHandler.DeleteContact)
-			contacts.PATCH("/:id/last-contacted", contactHandler.UpdateContactLastContacted)
 			contacts.GET("/:id/interactions", interactionHandler.ListContactInteractions)
 			contacts.POST("/:id/interactions", interactionHandler.CreateInteraction)
 			contacts.GET("/:id/notes", noteHandler.GetContactNotepad)

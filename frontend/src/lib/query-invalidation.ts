@@ -23,8 +23,10 @@ export type DomainEvent =
   | 'contact:created'
   | 'contact:updated'
   | 'contact:deleted'
-  | 'contact:touched' // marked as contacted
+  | 'contact:touched' // marked as contacted (legacy alias kept during PR-B for listener compatibility)
   | 'contact:merged' // merged with another contact
+  // Interaction events
+  | 'interaction:created' // a manual / system interaction was logged
   // Import events
   | 'import:imported' // imported as new contact
   | 'import:linked' // linked to existing contact
@@ -44,13 +46,30 @@ export type DomainEvent =
  * has side effects that modify other domains, those domains must be
  * included in the invalidation rules.
  */
-const invalidationRules: Record<DomainEvent, readonly unknown[][]> = {
+// InvalidationKey is either a static query key array or a factory that
+// builds a per-contact key from the contactId argument supplied to
+// invalidateFor. The factory shape lets us invalidate contactKeys.detail(id)
+// + contactTaskKeys.list(id) on per-contact mutations like
+// interaction:created without burning the whole list cache for every
+// other contact.
+type InvalidationKey = readonly unknown[] | ((contactId: string) => readonly unknown[])
+
+const invalidationRules: Record<DomainEvent, InvalidationKey[]> = {
   // Contact events
   'contact:created': [contactKeys.lists()],
   'contact:updated': [contactKeys.lists()],
   'contact:deleted': [contactKeys.lists()],
   'contact:touched': [contactKeys.lists(), contactKeys.overdue()],
   'contact:merged': [contactKeys.lists(), contactKeys.overdue()],
+
+  // Interaction events — a manual interaction may bump cadence columns,
+  // auto-complete a pending follow-up, or shift the overdue queue.
+  'interaction:created': [
+    contactKeys.lists(),
+    contactKeys.overdue(),
+    (contactId: string) => contactKeys.detail(contactId),
+    (contactId: string) => contactTaskKeys.list(contactId),
+  ],
 
   // Import events
   // Importing creates a new contact, so invalidate both imports and contacts
@@ -74,18 +93,28 @@ const invalidationRules: Record<DomainEvent, readonly unknown[][]> = {
  * Use this instead of calling `queryClient.invalidateQueries()` directly
  * in mutation handlers.
  *
+ * Some rules require a contactId (e.g., `interaction:created` invalidates
+ * contactKeys.detail(contactId)). Static-key rules ignore the second arg.
+ *
  * @example
  * ```typescript
  * onSuccess: (updatedContact) => {
  *   queryClient.setQueryData(contactKeys.detail(updatedContact.id), updatedContact)
  *   invalidateFor('contact:touched')
  * }
+ *
+ * onSuccess: (_resp, vars) => {
+ *   invalidateFor('interaction:created', vars.contactId)
+ * }
  * ```
  */
-export function invalidateFor(event: DomainEvent): void {
+export function invalidateFor(event: DomainEvent, contactId?: string): void {
   const keys = invalidationRules[event]
-  keys.forEach(queryKey => {
-    queryClient.invalidateQueries({ queryKey })
+  keys.forEach(entry => {
+    const queryKey = typeof entry === 'function' ? (contactId ? entry(contactId) : null) : entry
+    if (queryKey) {
+      queryClient.invalidateQueries({ queryKey: queryKey as readonly unknown[] })
+    }
   })
 }
 
