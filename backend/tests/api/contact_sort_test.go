@@ -14,7 +14,7 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
-	_ "personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/repository"
 	_ "personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -46,6 +46,8 @@ func setupContactSortTestRouter(t *testing.T) (*gin.Engine, func()) {
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
 	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
@@ -60,6 +62,7 @@ func setupContactSortTestRouter(t *testing.T) (*gin.Engine, func()) {
 		contacts.PUT("/:id", contactHandler.UpdateContact)
 		contacts.DELETE("/:id", contactHandler.DeleteContact)
 		contacts.PATCH("/:id/last-contacted", contactHandler.UpdateContactLastContacted)
+		contacts.POST("/:id/interactions", interactionHandler.CreateInteraction)
 	}
 
 	cleanup := func() {
@@ -114,6 +117,18 @@ func (h *sortTestHelper) markContacted(id, date string) {
 	require.Equal(h.t, http.StatusOK, w.Code)
 }
 
+// recordInteraction posts a directional interaction so that direction-aware
+// timestamp columns (last_response_at, last_outreach_at) can be seeded.
+// direction must be one of: "outbound", "inbound", "mutual".
+func (h *sortTestHelper) recordInteraction(id, direction, date string) {
+	body := fmt.Sprintf(`{"direction": "%s", "occurred_at": "%s"}`, direction, date)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/contacts/"+id+"/interactions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.router.ServeHTTP(w, req)
+	require.Equal(h.t, http.StatusCreated, w.Code)
+}
+
 func (h *sortTestHelper) deleteContact(id string) {
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/contacts/"+id, nil)
 	w := httptest.NewRecorder()
@@ -140,6 +155,32 @@ func (h *sortTestHelper) getIDsResponse(url string) ContactIDsResponse {
 		}
 	}
 	return resp
+}
+
+// getListResponseIDs requests the full contact list (no ids_only) so the
+// (Search)ContactsSorted SQL paths are exercised, and returns the resulting
+// contact IDs in response order.
+func (h *sortTestHelper) getListResponseIDs(url string) []string {
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	w := httptest.NewRecorder()
+	h.router.ServeHTTP(w, req)
+	require.Equal(h.t, http.StatusOK, w.Code)
+
+	var apiResp api.APIResponse
+	err := json.Unmarshal(w.Body.Bytes(), &apiResp)
+	require.NoError(h.t, err)
+	require.True(h.t, apiResp.Success)
+
+	dataIface, ok := apiResp.Data.([]interface{})
+	require.True(h.t, ok, "expected list response data to be an array")
+
+	ids := make([]string, 0, len(dataIface))
+	for _, item := range dataIface {
+		row, ok := item.(map[string]interface{})
+		require.True(h.t, ok)
+		ids = append(ids, row["id"].(string))
+	}
+	return ids
 }
 
 func (h *sortTestHelper) findPosition(ids []string, target string) int {
@@ -307,5 +348,172 @@ func TestContactSort_ContactBy(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
+	})
+}
+
+func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	router, cleanup := setupContactSortTestRouter(t)
+	defer cleanup()
+
+	h := &sortTestHelper{router: router, t: t}
+
+	t.Run("last_response_at descending sorts most recent first", func(t *testing.T) {
+		// Per-subtest unique prefix so trigram matching from prior runs / sibling
+		// subtests doesn't leak across t.Run blocks (shared DB).
+		prefix := "SortLRAD"
+		idOld := h.createContact(prefix + " Old Test")
+		idRecent := h.createContact(prefix + " Recent Test")
+		idNull := h.createContact(prefix + " Null Test")
+		defer h.deleteContact(idOld)
+		defer h.deleteContact(idRecent)
+		defer h.deleteContact(idNull)
+
+		// Inbound interaction bumps last_response_at (and last_contacted, but we
+		// only assert ordering on last_response_at).
+		h.recordInteraction(idOld, "inbound", "2024-01-01")
+		h.recordInteraction(idRecent, "inbound", "2025-06-01")
+		// idNull intentionally has no interaction → last_response_at IS NULL.
+
+		resp := h.getIDsResponse("/api/v1/contacts?ids_only=true&search=" + prefix + "&sort=last_response_at&order=desc")
+
+		posRecent := h.findPosition(resp.IDs, idRecent)
+		posOld := h.findPosition(resp.IDs, idOld)
+		posNull := h.findPosition(resp.IDs, idNull)
+
+		assert.NotEqual(t, -1, posRecent, "Recent should be in results")
+		assert.NotEqual(t, -1, posOld, "Old should be in results")
+		assert.NotEqual(t, -1, posNull, "Null should be in results")
+		assert.Less(t, posRecent, posOld, "Recent should come before old in desc order")
+		assert.Less(t, posOld, posNull, "Non-null should come before null (NULLS LAST) in desc order")
+	})
+
+	t.Run("last_response_at ascending sorts oldest first NULLS LAST", func(t *testing.T) {
+		prefix := "SortLRAA"
+		idOld := h.createContact(prefix + " Old Test")
+		idRecent := h.createContact(prefix + " Recent Test")
+		idNull := h.createContact(prefix + " Null Test")
+		defer h.deleteContact(idOld)
+		defer h.deleteContact(idRecent)
+		defer h.deleteContact(idNull)
+
+		h.recordInteraction(idOld, "inbound", "2024-01-01")
+		h.recordInteraction(idRecent, "inbound", "2025-06-01")
+
+		resp := h.getIDsResponse("/api/v1/contacts?ids_only=true&search=" + prefix + "&sort=last_response_at&order=asc")
+
+		posOld := h.findPosition(resp.IDs, idOld)
+		posRecent := h.findPosition(resp.IDs, idRecent)
+		posNull := h.findPosition(resp.IDs, idNull)
+
+		assert.NotEqual(t, -1, posOld, "Old should be in results")
+		assert.NotEqual(t, -1, posRecent, "Recent should be in results")
+		assert.NotEqual(t, -1, posNull, "Null should be in results")
+		assert.Less(t, posOld, posRecent, "Old should come before recent in asc order")
+		assert.Less(t, posRecent, posNull, "Non-null should come before null (NULLS LAST) in asc order")
+	})
+
+	t.Run("full list path with search desc returns ordered rows", func(t *testing.T) {
+		// Exercises SearchContactsSorted (search query + sort, no ids_only).
+		prefix := "SortLRAList"
+		idOld := h.createContact(prefix + " Old Test")
+		idRecent := h.createContact(prefix + " Recent Test")
+		defer h.deleteContact(idOld)
+		defer h.deleteContact(idRecent)
+
+		h.recordInteraction(idOld, "inbound", "2024-01-01")
+		h.recordInteraction(idRecent, "inbound", "2025-06-01")
+
+		ids := h.getListResponseIDs("/api/v1/contacts?search=" + prefix + "&sort=last_response_at&order=desc")
+
+		posRecent := h.findPosition(ids, idRecent)
+		posOld := h.findPosition(ids, idOld)
+		assert.NotEqual(t, -1, posRecent, "Recent should appear in full list")
+		assert.NotEqual(t, -1, posOld, "Old should appear in full list")
+		assert.Less(t, posRecent, posOld, "Recent should come before old in desc order")
+	})
+
+	t.Run("full list path with search asc puts oldest first", func(t *testing.T) {
+		// Same as above but ASC; both directions hit the same SQL CASE pair.
+		prefix := "SortLRAListAsc"
+		idOld := h.createContact(prefix + " Old Test")
+		idRecent := h.createContact(prefix + " Recent Test")
+		defer h.deleteContact(idOld)
+		defer h.deleteContact(idRecent)
+
+		h.recordInteraction(idOld, "inbound", "2024-01-01")
+		h.recordInteraction(idRecent, "inbound", "2025-06-01")
+
+		ids := h.getListResponseIDs("/api/v1/contacts?search=" + prefix + "&sort=last_response_at&order=asc")
+
+		posOld := h.findPosition(ids, idOld)
+		posRecent := h.findPosition(ids, idRecent)
+		assert.NotEqual(t, -1, posOld, "Old should appear in full list")
+		assert.NotEqual(t, -1, posRecent, "Recent should appear in full list")
+		assert.Less(t, posOld, posRecent, "Old should come before recent in asc order")
+	})
+
+	t.Run("no-search list path returns rows in sorted order", func(t *testing.T) {
+		// No search query → routes to ListContactsSorted (full) and
+		// ListContactIDsSorted (ids_only). Two contacts with distinct
+		// last_response_at values; we assert relative ordering via
+		// findPosition rather than absolute row index because the shared
+		// test DB carries other contacts with arbitrary dates.
+		idOld := h.createContact("SortLRANoSearch Old Test")
+		idRecent := h.createContact("SortLRANoSearch Recent Test")
+		defer h.deleteContact(idOld)
+		defer h.deleteContact(idRecent)
+
+		h.recordInteraction(idOld, "inbound", "2024-01-01")
+		h.recordInteraction(idRecent, "inbound", "2025-06-01")
+
+		// Full list path (no search): exercises ListContactsSorted. Use a
+		// large limit so both seeded contacts land in the response window.
+		listIDs := h.getListResponseIDs("/api/v1/contacts?sort=last_response_at&order=desc&limit=1000")
+		posRecent := h.findPosition(listIDs, idRecent)
+		posOld := h.findPosition(listIDs, idOld)
+		require.NotEqual(t, -1, posRecent, "Recent should be in full list response")
+		require.NotEqual(t, -1, posOld, "Old should be in full list response")
+		assert.Less(t, posRecent, posOld, "Recent should precede old (desc order, no search)")
+
+		// IDs-only path (no search): exercises ListContactIDsSorted.
+		idsResp := h.getIDsResponse("/api/v1/contacts?ids_only=true&sort=last_response_at&order=desc&limit=1000")
+		posRecentIDs := h.findPosition(idsResp.IDs, idRecent)
+		posOldIDs := h.findPosition(idsResp.IDs, idOld)
+		require.NotEqual(t, -1, posRecentIDs, "Recent should be in ids response")
+		require.NotEqual(t, -1, posOldIDs, "Old should be in ids response")
+		assert.Less(t, posRecentIDs, posOldIDs, "Recent should precede old in ids-only desc order")
+	})
+
+	t.Run("last_response_at sort is accepted by API validation", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?sort=last_response_at&order=desc", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("legacy last_contacted sort still accepted", func(t *testing.T) {
+		// last_contacted remains a valid sort value on the API even though no UI
+		// surface emits it; regression-guard for any external caller still using
+		// the legacy field.
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?sort=last_contacted&order=desc", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("unknown sort field rejected with 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?sort=bogus&order=desc", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 }

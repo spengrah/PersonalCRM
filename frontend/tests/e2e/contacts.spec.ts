@@ -624,7 +624,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(weeklyRow).toBeVisible()
     // The Next Contact cell should contain a date (digits with slashes)
     const weeklyCells = weeklyRow.locator('td')
-    // Next Contact is the 6th column (Name, Cadence, Location, Birthday, Last Contact, Next Contact, Actions)
+    // Next Contact is the 6th column (Name, Cadence, Location, Birthday, Last response, Next Contact, Actions)
     const weeklyNextContact = weeklyCells.nth(5)
     await expect(weeklyNextContact).not.toHaveText('-')
 
@@ -676,6 +676,48 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
 
     // Contact should still be visible after sort toggling
     await expect(page.getByText(`${testApi.prefix}-SortNext Contact`)).toBeVisible()
+  })
+
+  test('should display Last response column header and sort by last_response_at', async ({
+    page,
+  }) => {
+    await testApi.seedContacts([{ full_name: 'SortResp Contact' }])
+
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+
+    // Header text matches the new directionally-correct label.
+    const lastResponseHeader = page.getByRole('columnheader').filter({ hasText: 'Last response' })
+    await expect(lastResponseHeader).toBeVisible()
+    // The legacy "Last Contact" header is gone.
+    await expect(page.getByRole('columnheader').filter({ hasText: /^Last Contact$/i })).toHaveCount(
+      0
+    )
+
+    // Isolate our test contact via search so the sort click reliably
+    // produces a fetch we can listen for.
+    const searchInput = page.getByPlaceholder('Search contacts...')
+    await searchInput.fill(`${testApi.prefix}-SortResp`)
+    await searchInput.press('Enter')
+    await expect(page.getByText(`${testApi.prefix}-SortResp Contact`)).toBeVisible()
+
+    // First click → desc (default direction for last_response_at, matching the
+    // existing cadence-column convention of "most recent first").
+    const descResponse = page.waitForResponse(
+      resp => resp.url().includes('sort=last_response_at') && resp.url().includes('order=desc')
+    )
+    await lastResponseHeader.click()
+    await descResponse
+    await expect(lastResponseHeader.locator('svg')).toBeVisible()
+
+    // Second click → asc.
+    const ascResponse = page.waitForResponse(
+      resp => resp.url().includes('sort=last_response_at') && resp.url().includes('order=asc')
+    )
+    await lastResponseHeader.click()
+    await ascResponse
+
+    await expect(page.getByText(`${testApi.prefix}-SortResp Contact`)).toBeVisible()
   })
 
   test('should show page number buttons and top/bottom pagination when multiple pages exist', async ({

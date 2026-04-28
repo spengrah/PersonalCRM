@@ -25,7 +25,14 @@ import { FORM_CONTROL_WITH_ICON, FORM_SELECT_BASE } from '@/lib/form-classes'
 import { formatDateOnly, formatCadence } from '@/lib/utils'
 import type { Contact, ContactListParams } from '@/types/contact'
 
-type SortField = 'name' | 'location' | 'birthday' | 'last_contacted' | 'contact_by' | 'cadence'
+type SortField =
+  | 'name'
+  | 'location'
+  | 'birthday'
+  | 'last_contacted'
+  | 'last_response_at'
+  | 'contact_by'
+  | 'cadence'
 
 // Default sort configuration
 const DEFAULT_SORT_FIELD: SortField = 'cadence'
@@ -195,11 +202,11 @@ function ContactsTable({
             </th>
             <th
               className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-              onClick={() => onSort('last_contacted')}
+              onClick={() => onSort('last_response_at')}
             >
               <div className="flex items-center">
-                Last Contact
-                {getSortIcon('last_contacted')}
+                Last response
+                {getSortIcon('last_response_at')}
               </div>
             </th>
             <th
@@ -267,13 +274,13 @@ function ContactsTable({
                   : '-'}
               </td>
               <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
-                {contact.last_contacted
-                  ? formatDateOnly(contact.last_contacted, {
+                {contact.last_response_at
+                  ? formatDateOnly(contact.last_response_at, {
                       year: '2-digit',
                       month: 'numeric',
                       day: 'numeric',
                     })
-                  : 'Never'}
+                  : '-'}
               </td>
               <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
                 {contact.cadence && contact.contact_by
@@ -437,12 +444,12 @@ export default function ContactsPage() {
           page: 1, // Reset to first page when sorting
         }
       }
-      // Default sort: cadence/last_contacted → desc (most frequent/recent first)
+      // Default sort: cadence/last_response_at → desc (most frequent/recent first)
       // contact_by/birthday/name/location → asc (soonest due/alphabetical first)
       return {
         ...prev,
         sort: field,
-        order: field === 'cadence' || field === 'last_contacted' ? 'desc' : 'asc',
+        order: field === 'cadence' || field === 'last_response_at' ? 'desc' : 'asc',
         page: 1,
       }
     })

@@ -367,7 +367,7 @@ func TestQueryValidation_Search(t *testing.T) {
 // TestQueryValidation_Sort tests Sort field validation
 func TestQueryValidation_Sort(t *testing.T) {
 	type Query struct {
-		Sort string `validate:"omitempty,oneof=name location birthday last_contacted contact_by cadence"`
+		Sort string `validate:"omitempty,oneof=name location birthday last_contacted last_response_at contact_by cadence"`
 	}
 
 	tests := []struct {
@@ -379,6 +379,7 @@ func TestQueryValidation_Sort(t *testing.T) {
 		{"Valid sort - location", "location", false},
 		{"Valid sort - birthday", "birthday", false},
 		{"Valid sort - last_contacted", "last_contacted", false},
+		{"Valid sort - last_response_at", "last_response_at", false},
 		{"Valid sort - contact_by", "contact_by", false},
 		{"Valid sort - cadence", "cadence", false},
 		{"Empty sort valid", "", false},
