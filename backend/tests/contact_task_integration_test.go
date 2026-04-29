@@ -7,6 +7,7 @@ package tests
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
@@ -691,5 +692,263 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		// Clean up
 		err = contactTaskRepo.DeleteContactTask(ctx, task.ID)
 		require.NoError(t, err)
+	})
+}
+
+// TestContactTask_Migration046_CheckConstraints verifies the post-migration
+// CHECK constraints reject every invalid (kind, lifecycle, kind enum,
+// lifecycle enum) combination at insert time. This is the migration
+// regression-guard: if a code path ever passes an invalid pair through
+// CreateContactTaskRequest, the DB rejects with the named CHECK
+// constraint and the error propagates out cleanly. We assert via the
+// pgconn.PgError ConstraintName so a future schema change that drops
+// or renames a CHECK is caught loudly rather than silently letting
+// invalid rows land.
+func TestContactTask_Migration046_CheckConstraints(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	if err != nil {
+		t.Skipf("Could not connect to database: %v", err)
+	}
+	defer database.Close()
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+
+	now := accelerated.GetCurrentTime()
+	cadence := "weekly"
+	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		FullName:      "Migration046 CHECK Constraints",
+		Cadence:       &cadence,
+		LastContacted: &now,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
+
+	// Composite CHECK rejects every invalid (kind, lifecycle) pair.
+	// Per spec §2: only kind=reach_out participates in all three
+	// lifecycles; every other kind requires lifecycle=manual.
+	invalidPairs := []struct {
+		name      string
+		kind      string
+		lifecycle string
+	}{
+		{"send_cadence_due", "send", "cadence_due"},
+		{"send_followup_loop", "send", "followup_loop"},
+		{"reminder_cadence_due", "reminder", "cadence_due"},
+		{"reminder_followup_loop", "reminder", "followup_loop"},
+		{"meet_cadence_due", "meet", "cadence_due"},
+		{"meet_followup_loop", "meet", "followup_loop"},
+		{"action_cadence_due", "action", "cadence_due"},
+		{"action_followup_loop", "action", "followup_loop"},
+	}
+	for _, c := range invalidPairs {
+		t.Run("composite_check_rejects_"+c.name, func(t *testing.T) {
+			_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+				ContactID:      contact.ID,
+				Provider:       "todoist",
+				Kind:           c.kind,
+				Lifecycle:      c.lifecycle,
+				ExternalTaskID: "check-pair-" + c.name + "-" + uuid.New().String()[:8],
+				State:          "managed",
+			})
+			require.Error(t, err, "(%s, %s) MUST be rejected by composite CHECK", c.kind, c.lifecycle)
+			require.Contains(t, err.Error(), "contact_task_kind_lifecycle_check",
+				"error must name the composite CHECK constraint")
+		})
+	}
+
+	// Kind CHECK rejects unknown kinds.
+	t.Run("kind_check_rejects_unknown", func(t *testing.T) {
+		_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           "bogus_kind",
+			Lifecycle:      "manual",
+			ExternalTaskID: "check-bogus-kind-" + uuid.New().String()[:8],
+			State:          "managed",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "contact_task_kind_check",
+			"error must name the kind CHECK constraint")
+	})
+
+	// Lifecycle CHECK rejects unknown lifecycles. Either the lifecycle
+	// CHECK or the composite CHECK can fire first (Postgres picks the
+	// constraint that fails first; for an unknown lifecycle value with
+	// a known kind, both reject because the unknown value is also not
+	// in any composite pair). Accepting either constraint name keeps
+	// this test robust against Postgres's evaluation order.
+	t.Run("lifecycle_check_rejects_unknown", func(t *testing.T) {
+		_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           "reach_out",
+			Lifecycle:      "bogus_lifecycle",
+			ExternalTaskID: "check-bogus-lc-" + uuid.New().String()[:8],
+			State:          "managed",
+		})
+		require.Error(t, err)
+		errMsg := err.Error()
+		require.True(t,
+			strings.Contains(errMsg, "contact_task_lifecycle_check") ||
+				strings.Contains(errMsg, "contact_task_kind_lifecycle_check"),
+			"error must name a lifecycle-related CHECK constraint, got %q", errMsg)
+	})
+
+	// Pre-migration kind values (cadence / follow_up) are rejected by
+	// the post-migration kind CHECK.
+	for _, legacyKind := range []string{"cadence", "follow_up"} {
+		t.Run("kind_check_rejects_legacy_"+legacyKind, func(t *testing.T) {
+			_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+				ContactID:      contact.ID,
+				Provider:       "todoist",
+				Kind:           legacyKind,
+				Lifecycle:      "manual",
+				ExternalTaskID: "check-legacy-" + legacyKind + "-" + uuid.New().String()[:8],
+				State:          "managed",
+			})
+			require.Error(t, err, "legacy kind=%q MUST be rejected post-046", legacyKind)
+			require.Contains(t, err.Error(), "contact_task_kind_check",
+				"error must name the kind CHECK constraint")
+		})
+	}
+}
+
+// TestContactTask_Migration046_PartialUniqueIndexes verifies the
+// lifecycle-keyed partial unique indexes installed by migration 046:
+//   - unique_contact_provider_cadence: (contact_id, provider) WHERE lifecycle='cadence_due'
+//   - idx_contact_task_followup_unique_live: (contact_id, provider) WHERE lifecycle='followup_loop' AND state IN live
+//
+// These guarantee the GetContactTaskByContactCadenceDue and
+// GetContactTaskByContactFollowUpLive single-row lookups never get a
+// multi-row hit. lifecycle=manual has NO uniqueness — multiple rows
+// per (contact_id, provider) are allowed (intentional, per plan §4.2).
+func TestContactTask_Migration046_PartialUniqueIndexes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	if err != nil {
+		t.Skipf("Could not connect to database: %v", err)
+	}
+	defer database.Close()
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+
+	now := accelerated.GetCurrentTime()
+	cadence := "weekly"
+
+	t.Run("cadence_due_unique_per_contact_provider", func(t *testing.T) {
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName:      "Migration046 Cadence Unique " + uuid.New().String()[:8],
+			Cadence:       &cadence,
+			LastContacted: &now,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
+
+		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
+			ExternalTaskID: "cadence-1-" + uuid.New().String()[:8],
+			State:          "managed",
+		})
+		require.NoError(t, err)
+
+		// Second cadence_due row for same (contact, provider) must fail.
+		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
+			ExternalTaskID: "cadence-2-" + uuid.New().String()[:8],
+			State:          "managed",
+		})
+		require.Error(t, err, "second cadence_due row for same (contact, provider) must violate unique index")
+	})
+
+	t.Run("followup_loop_live_unique_per_contact_provider", func(t *testing.T) {
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName:      "Migration046 FollowUp Unique " + uuid.New().String()[:8],
+			Cadence:       &cadence,
+			LastContacted: &now,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
+
+		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleFollowUpLoop,
+			ExternalTaskID: "followup-1-" + uuid.New().String()[:8],
+			State:          "managed",
+		})
+		require.NoError(t, err)
+
+		// Second live followup_loop row for same (contact, provider) must fail.
+		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleFollowUpLoop,
+			ExternalTaskID: "followup-2-" + uuid.New().String()[:8],
+			State:          "managed",
+		})
+		require.Error(t, err, "second live followup_loop row for same (contact, provider) must violate unique index")
+	})
+
+	t.Run("manual_lifecycle_has_no_uniqueness", func(t *testing.T) {
+		// Two reach_out manual tasks for the same contact/provider are
+		// fine — manual lifecycle is intentionally unconstrained.
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName:      "Migration046 Manual NoUnique " + uuid.New().String()[:8],
+			Cadence:       &cadence,
+			LastContacted: &now,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
+
+		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleManual,
+			ExternalTaskID: "manual-1-" + uuid.New().String()[:8],
+			State:          "managed",
+		})
+		require.NoError(t, err)
+
+		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contact.ID,
+			Provider:       "todoist",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleManual,
+			ExternalTaskID: "manual-2-" + uuid.New().String()[:8],
+			State:          "managed",
+		})
+		require.NoError(t, err, "manual lifecycle has no uniqueness — both inserts must succeed")
 	})
 }

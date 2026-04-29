@@ -1,6 +1,5 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import { getTodayUTC } from './helpers/date-utils'
 
 test.describe('Contacts - TestAPI Seeded @area:contacts', () => {
   let testApi: TestAPI
@@ -273,27 +272,88 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     })
   })
 
-  test('should update Mark as Contacted button behavior', async ({ page }) => {
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Mark Contacted Test',
-      },
-    ])
-
+  test('should log a mutual interaction via the Log Interaction modal default', async ({
+    page,
+  }) => {
+    // The contact-detail header button is now "Log Interaction" (the
+    // old "Mark as Contacted" inline button is gone). The default
+    // direction is mutual, which preserves the old "I just talked to
+    // them" semantic. This test exercises the no-arg default path.
+    const { ids } = await testApi.seedContacts([{ full_name: 'Mark Contacted Default' }])
     const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Mark Contacted Test`
+    const fullName = `${testApi.prefix}-Mark Contacted Default`
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
-    // Click the "Mark as Contacted" button
-    await page.getByRole('button', { name: 'Mark as Contacted' }).click()
+    const responsePromise = page.waitForResponse(
+      resp =>
+        resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
+        resp.request().method() === 'POST'
+    )
+    await page.getByRole('button', { name: 'Log Interaction' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    // Submit without changing the direction (default = mutual) or date.
+    await page.getByRole('button', { name: 'Log' }).click()
+    const response = await responsePromise
+    expect(response.status()).toBe(201)
 
-    // Wait for the update and verify the date is today (UTC date, see getTodayUTC)
-    const todayUtc = getTodayUTC()
-    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    await expect(lastContactedRow.locator('dd span').first()).toContainText(todayUtc)
+    await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 })
+  })
+
+  test('should log an outbound interaction via the Log Interaction modal', async ({ page }) => {
+    // Direction picker accepts mutual / outbound / inbound. Outbound
+    // should NOT bump last_contacted (only last_outreach_at) — we
+    // assert the API response shape rather than UI rendering because
+    // the contact-detail "Recent activity" section omits dates.
+    const { ids } = await testApi.seedContacts([{ full_name: 'Outbound Interaction Test' }])
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Outbound Interaction Test`
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    await page.getByRole('button', { name: 'Log Interaction' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    await page.getByRole('button', { name: 'Outbound' }).click()
+    const responsePromise = page.waitForResponse(
+      resp =>
+        resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
+        resp.request().method() === 'POST'
+    )
+    await page.getByRole('button', { name: 'Log' }).click()
+    const response = await responsePromise
+    expect(response.status()).toBe(201)
+    const body = await response.json()
+    expect(body.success).toBe(true)
+    expect(body.data.direction).toBe('outbound')
+  })
+
+  test('should log an inbound interaction via the Log Interaction modal', async ({ page }) => {
+    const { ids } = await testApi.seedContacts([{ full_name: 'Inbound Interaction Test' }])
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Inbound Interaction Test`
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    await page.getByRole('button', { name: 'Log Interaction' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    await page.getByRole('button', { name: 'Inbound' }).click()
+    const responsePromise = page.waitForResponse(
+      resp =>
+        resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
+        resp.request().method() === 'POST'
+    )
+    await page.getByRole('button', { name: 'Log' }).click()
+    const response = await responsePromise
+    expect(response.status()).toBe(201)
+    const body = await response.json()
+    expect(body.success).toBe(true)
+    expect(body.data.direction).toBe('inbound')
   })
 })
 
