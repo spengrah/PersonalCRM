@@ -43,3 +43,43 @@ detail: |
   The interaction 30-min dedup FindInWindow query was initially using (contact_id, occurred_at ±30min, source) but missing direction. This caused false-positive dedup when a user logged an outbound interaction followed by an inbound interaction on the same contact within 30 minutes - the second call incorrectly returned the first interaction ID despite different directions. Root cause: PR-B added direction selection to manual interactions, but the dedup window wasn't updated to include it. Fix required: (1) Add direction param to FindInteractionInWindow SQL query, (2) Update repository method signatures (FindInWindow, FindInWindowTx), (3) Update all service-layer call sites, (4) Run make sqlc, (5) Add regression test. General principle: When two events can be semantically distinct despite same entity+time (like outbound vs inbound), the dedup window MUST include the distinguishing dimension. When adding semantic columns to tables with existing dedup logic, audit FindInWindow queries and unique constraints.
 actionable: true
 
+---
+timestamp: "2026-04-28T23:03:01.866776"
+type: gotcha
+summary: test-e2e-diff missing e2e-db dependency causes pre-push failures
+detail: |
+  The Makefile target `test-e2e-diff` was missing the `e2e-db` prerequisite that `test-e2e` and `test-e2e-local` have. This caused the pre-push hook to run E2E tests against accumulated DB state instead of a clean DB, leading to flaky failures from test pollution. The fix is adding `e2e-db` as a dependency: `test-e2e-diff: e2e-db`. This was discovered after multiple push failures where tests passed in isolation but failed in the full pre-push suite.
+actionable: true
+
+---
+timestamp: "2026-04-28T23:03:01.866776"
+type: gotcha
+summary: E2E parallel workers see each other's candidates in modal navigation
+detail: |
+  When E2E tests seed external contacts and open the import/link modal, parallel workers' seeded data can cause the modal to open showing a different worker's candidate (e.g., '2 of 4' pagination indicator). Tests that assert on modal content without first navigating to the correct candidate will fail intermittently. Solution: call `navigateModalToCandidate(page, handle)` after opening the modal and before making assertions, to ensure the test's own candidate is visible. The helper uses prev/next navigation to find the right candidate regardless of initial position.
+actionable: true
+
+---
+timestamp: "2026-04-28T23:03:01.866776"
+type: architecture
+summary: ResizeObserver needed for layout measurements under parallel load
+detail: |
+  Overflow detection that relies on scrollHeight vs clientHeight in a mount-time useEffect can fail under parallel E2E load: the initial measurement reads dimensions before fonts/styles fully settle, and if deps (contactNote?.body, notesExpanded) don't change, the measurement never re-runs. Fix: wrap the measurement in a ResizeObserver that fires whenever the element's size changes, ensuring late-settling layout triggers remeasurement. This pattern applies to any UI feature that measures DOM dimensions for conditional rendering (show more buttons, truncation affordances, etc).
+actionable: true
+
+---
+timestamp: "2026-04-28T23:03:01.866776"
+type: rule
+summary: "Apply existing gotcha: verify test failures against main before treating as regression"
+detail: |
+  The session correctly applied the existing rule 'Test failures during PR rebase work — verify against main first; pre-existing failures are not regressions'. When the notes overflow test failed during pre-push, the agent checked out `origin/main` version of the file and confirmed the test also failed there, proving it was a pre-existing flake rather than a PR regression. This saved time by avoiding debugging changes that didn't cause the failure. The rule was followed exactly as documented, demonstrating it's clear and effective.
+actionable: false
+
+---
+timestamp: "2026-04-28T23:03:01.866776"
+type: documentation_gap
+summary: Dedup-window dimension principle not documented before this session
+detail: |
+  The core principle 'dedup time-window queries must include ALL semantically-significant dimensions, not just entity + time' was discovered during this session when interaction dedup missed `direction` in its key, causing false-positive dedup (outbound followed by inbound within 30min collapsed). The agent added it as a gotcha to core.md and a learning file, but it wasn't in project docs before. This is a NEW principle that should be emphasized: when adding semantic columns to tables with existing dedup logic (FindInWindow queries, unique constraints), audit whether those columns should be part of the dedup key. The gap was that this wasn't obvious from existing dedup query examples.
+actionable: true
+
