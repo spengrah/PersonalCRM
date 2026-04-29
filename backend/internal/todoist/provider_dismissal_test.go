@@ -935,6 +935,108 @@ func TestHandleTaskCompletion_PublishesEventAtomicallyWithStateUpdate(t *testing
 	assert.Equal(t, "todoist", pubs[0].Source)
 	assert.Equal(t, task.ID.String(), pubs[0].SourceID)
 	assert.Equal(t, events.KindTaskCompleted, pubs[0].Kind)
+
+	// Decoded payload: kind=reach_out → direction=outbound,
+	// SuppressFollowUp=false (zero polarity preserves follow-up
+	// spawning for reach_out completions).
+	var p events.TaskCompletedPayload
+	require.NoError(t, events.Unmarshal(pubs[0], &p))
+	assert.Equal(t, "reach_out", p.TaskKind)
+	assert.Equal(t, repository.InteractionDirectionOutbound, p.Direction)
+	assert.False(t, p.SuppressFollowUp,
+		"reach_out completion MUST NOT suppress follow-up spawning")
+}
+
+// TestHandleTaskCompletion_KindSend_SetsSuppressFollowUpTrue is the
+// load-bearing integration test for the kind=send pipeline. A user-
+// created (send, manual) task completion must publish a task.completed
+// payload with direction=outbound AND SuppressFollowUp=true so the
+// downstream FollowUpManager short-circuits without creating a
+// follow-up row. This is the single behavioral cell distinguishing
+// send from reach_out.
+func TestHandleTaskCompletion_KindSend_SetsSuppressFollowUpTrue(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	cadenceStr := "monthly"
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "CompleteSend " + uuid.New().String()[:8],
+		Cadence:  &cadenceStr,
+	})
+	require.NoError(t, err)
+
+	sendExtID := "td-send-" + uuid.New().String()[:8]
+	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           contacttask.KindSend,
+		Lifecycle:      contacttask.LifecycleManual,
+		ExternalTaskID: sendExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata:       map[string]any{},
+	})
+	require.NoError(t, err)
+
+	r := env.provider.handleTaskCompletion(env.ctx, SyncItem{
+		ID:      sendExtID,
+		Checked: true,
+	}, task, contact, env.settings, env.accountID)
+	require.NoError(t, r.Err)
+	assert.True(t, r.Processed)
+
+	pubs := env.bus.Published()
+	require.Len(t, pubs, 1)
+	var p events.TaskCompletedPayload
+	require.NoError(t, events.Unmarshal(pubs[0], &p))
+	assert.Equal(t, "send", p.TaskKind)
+	assert.Equal(t, repository.InteractionDirectionOutbound, p.Direction)
+	assert.True(t, p.SuppressFollowUp,
+		"send completion MUST set SuppressFollowUp=true so FollowUpManager skips")
+}
+
+// TestHandleTaskCompletion_KindReminder_NoEventPublished asserts the
+// reminder short-circuit: a (reminder, manual) task completion
+// transitions the row to 'completed' but publishes NO event (no
+// interaction row, no cadence math, no follow-up). Reminders are
+// local-only.
+func TestHandleTaskCompletion_KindReminder_NoEventPublished(t *testing.T) {
+	env, cleanup := setupDismissalTest(t)
+	defer cleanup()
+
+	cadenceStr := "monthly"
+	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
+		FullName: "CompleteReminder " + uuid.New().String()[:8],
+		Cadence:  &cadenceStr,
+	})
+	require.NoError(t, err)
+
+	reminderExtID := "td-rem-" + uuid.New().String()[:8]
+	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       SourceName,
+		Kind:           contacttask.KindReminder,
+		Lifecycle:      contacttask.LifecycleManual,
+		ExternalTaskID: reminderExtID,
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata:       map[string]any{},
+	})
+	require.NoError(t, err)
+
+	r := env.provider.handleTaskCompletion(env.ctx, SyncItem{
+		ID:      reminderExtID,
+		Checked: true,
+	}, task, contact, env.settings, env.accountID)
+	require.NoError(t, r.Err)
+	assert.True(t, r.Processed)
+
+	// State transitioned to completed.
+	reloaded, err := env.contactTaskRepo.GetContactTask(env.ctx, task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.ContactTaskStateCompleted, reloaded.State)
+
+	// No event published — reminder completion is local-only.
+	pubs := env.bus.Published()
+	require.Empty(t, pubs, "reminder completion MUST NOT publish a task.completed event")
 }
 
 // TestHandleTaskCompletion_DBFailureRollsBackEventAndState verifies that a

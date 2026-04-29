@@ -646,7 +646,7 @@ func run() int {
 	}
 
 	// Initialize handlers
-	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
+	contactHandler := handlers.NewContactHandler(contactService)
 	noteHandler := handlers.NewNoteHandler(noteService)
 	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)

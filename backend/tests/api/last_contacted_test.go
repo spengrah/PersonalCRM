@@ -53,7 +53,7 @@ func setupLastContactedTestRouter(t *testing.T) (*gin.Engine, func()) {
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
+	contactHandler := handlers.NewContactHandler(contactService)
 	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 
 	router := gin.New()
@@ -155,10 +155,10 @@ func TestPostInteraction_DirectionMutual_BumpsLastContacted(t *testing.T) {
 	assert.Less(t, delta, 5*time.Second, "last_contacted should be ~now")
 }
 
-// TestPostInteraction_DirectionOutbound_DoesNotBumpLastContacted asserts the
-// direction-aware semantics that replace the old timestamp-only update:
-// outbound interactions no longer touch last_contacted (per spec §2 of
-// the contact timestamp semantics learnings).
+// TestPostInteraction_DirectionOutbound_DoesNotBumpLastContacted asserts
+// the direction-aware semantics that replace the old timestamp-only
+// update: outbound interactions advance last_outreach_at only and MUST
+// NOT touch last_contacted (last_contacted tracks incoming/mutual only).
 //
 // Note: contact creation initializes last_contacted to the create-time
 // timestamp (handler default). The assertion compares pre- and post-

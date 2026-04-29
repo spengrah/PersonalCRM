@@ -58,28 +58,20 @@ func (d DateOnly) MarshalJSON() ([]byte, error) {
 	return json.Marshal(d.Format("2006-01-02"))
 }
 
-// ContactHandler handles contact-related HTTP requests.
-//
-// manualHandler is currently unused — its only caller (an
-// UpdateContactLastContacted handler) was removed when the
-// POST /contacts/:id/interactions endpoint owned by InteractionHandler
-// became the sole manual-interaction surface. The field is retained on
-// the struct so the constructor signature stays stable for the existing
-// call-site inventory; a follow-up cleanup can drop the parameter
-// entirely.
+// ContactHandler handles contact-related HTTP requests. Manual
+// interactions are owned by InteractionHandler
+// (POST /contacts/:id/interactions); ContactHandler does not need a
+// reference to the manual-interaction pipeline.
 type ContactHandler struct {
 	contactService *service.ContactService
 	validator      *validator.Validate
-	manualHandler  *service.ManualInteractionHandler //nolint:unused // see struct doc
 }
 
-// NewContactHandler creates a new contact handler. manualHandler is
-// currently unused (see ContactHandler doc).
-func NewContactHandler(contactService *service.ContactService, manualHandler *service.ManualInteractionHandler) *ContactHandler {
+// NewContactHandler creates a new contact handler.
+func NewContactHandler(contactService *service.ContactService) *ContactHandler {
 	return &ContactHandler{
 		contactService: contactService,
 		validator:      validator.New(),
-		manualHandler:  manualHandler,
 	}
 }
 

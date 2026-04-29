@@ -54,7 +54,7 @@ func setupDirectionAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactTask
 
 	cfg2 := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg2)
-	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
+	contactHandler := handlers.NewContactHandler(contactService)
 	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 
 	// Create a minimal contact task service for the handler (no real Todoist)

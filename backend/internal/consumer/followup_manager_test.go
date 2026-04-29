@@ -412,7 +412,8 @@ func TestFollowUpManager_SuppressFollowUp_FalseDispatches(t *testing.T) {
 // TestFollowUpManager_SuppressFollowUp_TelegramPathIgnored confirms
 // SuppressFollowUp is task.completed-only — telegram outbound payloads
 // (where the field is always zero) still progress past the suppress
-// gate. Cross-source preservation per spec §7.
+// gate so a telegram outbound message followed by no inbound reply
+// still spawns a follow-up.
 func TestFollowUpManager_SuppressFollowUp_TelegramPathIgnored(t *testing.T) {
 	h, _, inters, observed := newUnitFollowUp(FollowUpModeCutover)
 	inters.hasResp = true // land in a post-suppress skip branch

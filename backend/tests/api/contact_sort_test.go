@@ -45,7 +45,7 @@ func setupContactSortTestRouter(t *testing.T) (*gin.Engine, func()) {
 
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
-	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
+	contactHandler := handlers.NewContactHandler(contactService)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 

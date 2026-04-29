@@ -932,8 +932,9 @@ func (p *CadenceSyncProvider) handleFollowUpDismissal(
 // handleManualDismissal transitions a manual-lifecycle task (kind in
 // reach_out / send / reminder) to state='dismissed' when the user
 // removes/deletes/unlabels it in Todoist. No interaction row, no event,
-// no successor task. Distinct from legacy action's `unmanaged` semantics
-// per spec §2 Decision row "Legacy `action` row dismissal semantics."
+// no successor task. This differs from the legacy action-row dismissal
+// (which transitions to 'unmanaged' to preserve historical behavior for
+// pre-046 ad-hoc tasks).
 //
 // No ItemClose is enqueued — the dismissal trigger is "user deleted /
 // unlabelled / removed deadline in Todoist", so there is nothing to

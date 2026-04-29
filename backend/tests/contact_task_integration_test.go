@@ -736,8 +736,8 @@ func TestContactTask_Migration046_CheckConstraints(t *testing.T) {
 	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
 
 	// Composite CHECK rejects every invalid (kind, lifecycle) pair.
-	// Per spec §2: only kind=reach_out participates in all three
-	// lifecycles; every other kind requires lifecycle=manual.
+	// Only kind=reach_out participates in all three lifecycles; every
+	// other kind requires lifecycle=manual.
 	invalidPairs := []struct {
 		name      string
 		kind      string

@@ -46,7 +46,7 @@ func setupInteractionTestRouter(t *testing.T) (*gin.Engine, func()) {
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
+	contactHandler := handlers.NewContactHandler(contactService)
 	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 
 	router := gin.New()
