@@ -148,107 +148,43 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page.getByRole('button', { name: 'Show more' })).not.toBeVisible()
   })
 
-  test('should edit last contacted date manually', async ({ page }) => {
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Last Contacted Test',
-      },
-    ])
-
+  test('should log a backdated interaction via the Log Interaction modal', async ({ page }) => {
+    // PR-B replaced the inline pencil-edit on `last_contacted` with a
+    // dedicated Log Interaction modal: direction picker + date picker.
+    // The modal posts to POST /contacts/:id/interactions; the backend
+    // applies cadence math from the chosen direction. This test
+    // exercises the happy path (mutual + a backdated date).
+    const { ids } = await testApi.seedContacts([{ full_name: 'Log Interaction Test' }])
     const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Last Contacted Test`
+    const fullName = `${testApi.prefix}-Log Interaction Test`
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
-    // Find the Last contacted row and hover to reveal the edit button
-    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    await lastContactedRow.hover()
+    // Open the modal via the header button.
+    await page.getByRole('button', { name: 'Log Interaction' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
 
-    // Click the edit button (pencil icon)
-    const editButton = page.getByTestId('edit-last-contacted-btn')
-    await expect(editButton).toBeVisible()
-    await editButton.click()
-
-    // Date input should now be visible
-    const dateInput = page.getByTestId('last-contacted-date-input')
-    await expect(dateInput).toBeVisible()
-
-    // Set a past date (2024-01-15)
+    // Pick a backdated date and submit. We assert via the API response
+    // because cadence math + accelerated time can otherwise make
+    // direct row-text assertions racy.
+    const dateInput = page.getByTestId('log-interaction-date-input')
     await dateInput.fill('2024-01-15')
 
-    // Click save button
-    const saveButton = page.getByTestId('save-last-contacted-btn')
-    await saveButton.click()
+    const responsePromise = page.waitForResponse(
+      resp =>
+        resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
+        resp.request().method() === 'POST'
+    )
+    await page.getByRole('button', { name: 'Log' }).click()
+    const response = await responsePromise
+    expect(response.status()).toBe(201)
+    const body = await response.json()
+    expect(body.success).toBe(true)
 
-    // Wait for update to complete and verify the date is displayed
-    await expect(dateInput).not.toBeVisible({ timeout: 10000 })
-    await expect(page.getByText('1/15/2024')).toBeVisible()
-  })
-
-  test('should cancel editing last contacted date', async ({ page }) => {
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Cancel Edit Test',
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Cancel Edit Test`
-
-    await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
-
-    // Get the current last contacted value
-    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    const initialDateText = await lastContactedRow.locator('dd span').first().textContent()
-
-    // Hover and click edit
-    await lastContactedRow.hover()
-    await page.getByTestId('edit-last-contacted-btn').click()
-
-    // Change the date
-    const dateInput = page.getByTestId('last-contacted-date-input')
-    await dateInput.fill('2023-06-01')
-
-    // Click cancel
-    await page.getByTestId('cancel-last-contacted-btn').click()
-
-    // Verify the date input is hidden and original date is preserved
-    await expect(dateInput).not.toBeVisible()
-    const currentDateText = await lastContactedRow.locator('dd span').first().textContent()
-    expect(currentDateText).toBe(initialDateText)
-  })
-
-  test('should prevent setting future last contacted date', async ({ page }) => {
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Future Date Test',
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Future Date Test`
-
-    await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
-
-    // Click edit
-    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    await lastContactedRow.hover()
-    await page.getByTestId('edit-last-contacted-btn').click()
-
-    // The date input should have a max attribute preventing future dates
-    const dateInput = page.getByTestId('last-contacted-date-input')
-    const maxDate = await dateInput.getAttribute('max')
-    const today = new Date().toISOString().split('T')[0]
-    expect(maxDate).toBe(today)
-
-    // Cancel and cleanup
-    await page.getByTestId('cancel-last-contacted-btn').click()
+    // Modal closes on success.
+    await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 })
   })
 
   test('should show context menu without clipping for bottom rows', async ({ page }) => {

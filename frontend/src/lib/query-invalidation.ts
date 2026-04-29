@@ -64,11 +64,16 @@ const invalidationRules: Record<DomainEvent, InvalidationKey[]> = {
 
   // Interaction events — a manual interaction may bump cadence columns,
   // auto-complete a pending follow-up, or shift the overdue queue.
+  // Use contactTaskKeys.forContact (3-element prefix) so React Query
+  // matches every filtered variant for the contact; passing
+  // contactTaskKeys.list(contactId) here would push a 4th `undefined`
+  // slot that React Query treats as a literal mismatch against keys
+  // carrying real filter params.
   'interaction:created': [
     contactKeys.lists(),
     contactKeys.overdue(),
     (contactId: string) => contactKeys.detail(contactId),
-    (contactId: string) => contactTaskKeys.list(contactId),
+    (contactId: string) => contactTaskKeys.forContact(contactId),
   ],
 
   // Import events

@@ -2,6 +2,7 @@ package consumer
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -239,6 +240,35 @@ func TestHandleEvent_V2MissingSnapshot_Rejected(t *testing.T) {
 	})
 	require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env))
 	require.Zero(t, claims.calls)
+}
+
+// TestHandleEvent_AcceptsV2AndV3 confirms both the existing V2 payload
+// and the post-PR-B V3 payload (which adds SuppressFollowUp) are
+// accepted by the cadence dispatcher. CadenceUpdater ignores
+// SuppressFollowUp itself — it only matters to FollowUpManager — but
+// the version check must pass for V3 so cadence math still fires.
+//
+// Uses claimedResult=false to short-circuit the no-op branch (we only
+// need to confirm dispatch reaches the claim attempt; the actual write
+// path is exercised by integration tests).
+func TestHandleEvent_AcceptsV2AndV3(t *testing.T) {
+	for _, version := range []int{2, 3} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			h, claims, _ := newUnitUpdater(CadenceModeCutover)
+			claims.claimedResult = false // short-circuit: no write attempt
+			env := mustRecordedEnv(t, events.InteractionRecordedPayload{
+				Version:             version,
+				ContactID:           uuid.New(),
+				Direction:           repository.InteractionDirectionMutual,
+				OccurredAt:          time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+				Source:              repository.InteractionSourceTelegram,
+				PrevCadenceSnapshot: &events.CadenceFieldsSnapshot{},
+			})
+			require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env))
+			require.Equal(t, 1, claims.calls,
+				"V%d payload must reach the claim attempt", version)
+		})
+	}
 }
 
 func TestHandleEvent_AlreadyClaimed_NoOp(t *testing.T) {

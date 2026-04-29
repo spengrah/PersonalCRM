@@ -49,7 +49,14 @@ export const syncKeys = {
 export const contactTaskKeys = {
   all: ['contact-tasks'] as const,
   lists: () => [...contactTaskKeys.all, 'list'] as const,
-  list: (contactId: string, params?: { state?: string; kind?: string }) =>
+  // forContact returns a 3-element prefix that prefix-matches every
+  // filtered variant for a given contact (state / kind / lifecycle
+  // combinations all live under this prefix). Use this for invalidation
+  // — passing `list(contactId)` with no params would push an explicit
+  // `undefined` 4th slot, which React Query treats as a strict literal
+  // and would NOT prefix-match real filtered keys.
+  forContact: (contactId: string) => [...contactTaskKeys.lists(), contactId] as const,
+  list: (contactId: string, params?: { state?: string; kind?: string; lifecycle?: string }) =>
     [...contactTaskKeys.lists(), contactId, params] as const,
 }
 

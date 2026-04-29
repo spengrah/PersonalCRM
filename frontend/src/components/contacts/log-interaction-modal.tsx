@@ -26,11 +26,17 @@ function todayString(): string {
 }
 
 export function LogInteractionModal({ contactId, contactName, onClose }: LogInteractionModalProps) {
+  const today = todayString()
   const [direction, setDirection] = useState<InteractionDirection>('mutual')
-  const [date, setDate] = useState<string>('')
+  // Default the visible value to today (per spec §5 wireframe). userChangedDate
+  // tracks whether the user explicitly picked a different value: if false at
+  // submit, we omit occurred_at from the payload so the backend stamps the
+  // interaction with accelerated.GetCurrentTime() instead of the browser's
+  // wall-clock midnight (plan §5.4.3 time-source decision).
+  const [date, setDate] = useState<string>(today)
+  const [userChangedDate, setUserChangedDate] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const initialFocusRef = useRef<HTMLButtonElement>(null)
-  const today = todayString()
 
   const createInteraction = useCreateInteraction()
 
@@ -55,10 +61,13 @@ export function LogInteractionModal({ contactId, contactName, onClose }: LogInte
     // Build the request body. Omit occurred_at entirely if the user did
     // not change the date — this lets the backend stamp the interaction
     // with accelerated.GetCurrentTime(), which is the right thing in dev
-    // mode where the wall clock and accelerated clock can drift.
-    const body = date
-      ? { direction, occurred_at: new Date(date + 'T00:00:00Z').toISOString() }
-      : { direction }
+    // mode where the wall clock and accelerated clock can drift. When the
+    // user explicitly picks a date, send it (the YYYY-MM-DD value is
+    // converted to a UTC midnight timestamp for the API).
+    const body =
+      userChangedDate && date
+        ? { direction, occurred_at: new Date(date + 'T00:00:00Z').toISOString() }
+        : { direction }
 
     try {
       await createInteraction.mutateAsync({ contactId, data: body })
@@ -153,13 +162,15 @@ export function LogInteractionModal({ contactId, contactName, onClose }: LogInte
                 type="date"
                 value={date}
                 max={today}
-                placeholder={today}
-                onChange={e => setDate(e.target.value)}
+                onChange={e => {
+                  setDate(e.target.value)
+                  setUserChangedDate(true)
+                }}
                 className="block rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm text-gray-900"
                 data-testid="log-interaction-date-input"
               />
               <p className="mt-1 text-xs text-gray-500">
-                Leave empty to use the current time. Cannot be in the future.
+                Defaults to today. Cannot be in the future.
               </p>
             </div>
 

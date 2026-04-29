@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -131,13 +132,30 @@ func newUnitFollowUp(mode string) (*FollowUpManager, *stubFollowUpTaskReader, *s
 // may be empty to test the no-cadence skip path.
 func buildRecordedEnv(t *testing.T, contactID uuid.UUID, direction, source string, occurredAt time.Time, cadenceStr string) *events.Envelope {
 	t.Helper()
+	return buildRecordedEnvVersion(t, 2, contactID, direction, source, occurredAt, cadenceStr, false)
+}
+
+// buildRecordedEnvVersion constructs an interaction.recorded envelope at
+// an explicit payload version with optional SuppressFollowUp. Used by
+// the V3 / SuppressFollowUp tests; V2 callers go through buildRecordedEnv.
+func buildRecordedEnvVersion(
+	t *testing.T,
+	version int,
+	contactID uuid.UUID,
+	direction, source string,
+	occurredAt time.Time,
+	cadenceStr string,
+	suppressFollowUp bool,
+) *events.Envelope {
+	t.Helper()
 	payload := events.InteractionRecordedPayload{
-		Version:       2,
-		ContactID:     contactID,
-		InteractionID: uuid.New(),
-		Direction:     direction,
-		OccurredAt:    occurredAt,
-		Source:        source,
+		Version:          version,
+		ContactID:        contactID,
+		InteractionID:    uuid.New(),
+		Direction:        direction,
+		OccurredAt:       occurredAt,
+		Source:           source,
+		SuppressFollowUp: suppressFollowUp,
 	}
 	if cadenceStr != "" {
 		payload.PrevCadenceValue = &cadenceStr
@@ -310,6 +328,104 @@ func TestFollowUpManager_V1PayloadRejected(t *testing.T) {
 	_, err = h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err, "V1 payload is logged but not returned as error")
 	require.Empty(t, *observed)
+}
+
+// TestFollowUpManager_AcceptsV2AndV3 confirms both V2 and V3 payloads
+// dispatch past the version gate. V3 is the post-PR-B shape (gains
+// SuppressFollowUp); V2 retains backward compatibility for in-flight
+// events written by the pre-PR-B binary. We use the no-cadence skip
+// branch (empty cadence string) because it's the earliest skip beyond
+// the SuppressFollowUp short-circuit and the version gate, so the
+// observed decision proves the dispatcher accepted the version.
+func TestFollowUpManager_AcceptsV2AndV3(t *testing.T) {
+	for _, version := range []int{2, 3} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			h, _, _, observed := newUnitFollowUp(FollowUpModeCutover)
+			env := buildRecordedEnvVersion(t, version, uuid.New(),
+				repository.InteractionDirectionOutbound,
+				repository.InteractionSourceTelegram,
+				accelerated.GetCurrentTime(),
+				"" /* no cadence -> skips at guard 0 */, false)
+
+			_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+			require.NoError(t, err)
+			require.Len(t, *observed, 1,
+				"V%d payload must produce exactly one decision", version)
+			require.Equal(t, repository.FollowUpActionSkip, (*observed)[0].Action,
+				"V%d payload must dispatch past the version gate (no-cadence skip)", version)
+			// Crucially: the SuppressFollowUp skip-reason MUST NOT fire
+			// for these payloads — SuppressFollowUp=false on both.
+			require.Empty(t, (*observed)[0].SkipReason,
+				"V%d no-cadence skip must NOT carry the suppressed reason", version)
+		})
+	}
+}
+
+// TestFollowUpManager_SuppressFollowUp_TrueEarlyReturns asserts the
+// load-bearing SuppressFollowUp polarity for the kind=send path. When
+// true, the manager must short-circuit BEFORE the cadence/backdate/
+// out-of-order/has-response guards fire and emit a skip decision with
+// the suppressed reason. Polarity is "zero=do-not-suppress" so a V1/V2
+// payload (where the field decodes to false) still spawns follow-ups.
+func TestFollowUpManager_SuppressFollowUp_TrueEarlyReturns(t *testing.T) {
+	h, tasks, inters, observed := newUnitFollowUp(FollowUpModeCutover)
+	env := buildRecordedEnvVersion(t, 3, uuid.New(),
+		repository.InteractionDirectionOutbound,
+		repository.InteractionSourceTodoist,
+		accelerated.GetCurrentTime(), "weekly", true /* suppress */)
+
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, 0, tasks.calls,
+		"SuppressFollowUp=true must short-circuit before task lookup")
+	require.Equal(t, 0, inters.calls,
+		"SuppressFollowUp=true must short-circuit before interaction lookup")
+	require.Len(t, *observed, 1, "must emit exactly one skip decision")
+	d := (*observed)[0]
+	require.Equal(t, repository.FollowUpActionSkip, d.Action)
+	require.Equal(t, repository.FollowUpSkipReasonSuppressed, d.SkipReason)
+}
+
+// TestFollowUpManager_SuppressFollowUp_FalseDispatches confirms the
+// inverse: SuppressFollowUp=false (the polarity-safe default) does NOT
+// short-circuit on the suppressed reason. We use the out-of-order skip
+// branch (a later inbound response exists) to land in a known
+// post-suppression decision without exercising the create path.
+func TestFollowUpManager_SuppressFollowUp_FalseDispatches(t *testing.T) {
+	h, _, inters, observed := newUnitFollowUp(FollowUpModeCutover)
+	inters.hasResp = true // out-of-order skip branch
+	env := buildRecordedEnvVersion(t, 3, uuid.New(),
+		repository.InteractionDirectionOutbound,
+		repository.InteractionSourceTodoist,
+		accelerated.GetCurrentTime(), "weekly", false /* do not suppress */)
+
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, 1, inters.calls,
+		"SuppressFollowUp=false must reach the out-of-order guard")
+	require.Len(t, *observed, 1)
+	require.Equal(t, repository.FollowUpActionSkip, (*observed)[0].Action)
+	require.Equal(t, repository.FollowUpSkipReasonOutOfOrder, (*observed)[0].SkipReason,
+		"skip reason must be out-of-order, not suppressed, when SuppressFollowUp=false")
+}
+
+// TestFollowUpManager_SuppressFollowUp_TelegramPathIgnored confirms
+// SuppressFollowUp is task.completed-only — telegram outbound payloads
+// (where the field is always zero) still progress past the suppress
+// gate. Cross-source preservation per spec §7.
+func TestFollowUpManager_SuppressFollowUp_TelegramPathIgnored(t *testing.T) {
+	h, _, inters, observed := newUnitFollowUp(FollowUpModeCutover)
+	inters.hasResp = true // land in a post-suppress skip branch
+	env := buildRecordedEnvVersion(t, 3, uuid.New(),
+		repository.InteractionDirectionOutbound,
+		repository.InteractionSourceTelegram,
+		accelerated.GetCurrentTime(), "weekly", false)
+
+	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	require.NoError(t, err)
+	require.Len(t, *observed, 1)
+	require.NotEqual(t, repository.FollowUpSkipReasonSuppressed, (*observed)[0].SkipReason,
+		"telegram path must never carry suppressed skip reason")
 }
 
 // -----------------------------------------------------------------------------

@@ -361,6 +361,72 @@ func TestMarshalUnmarshal_InteractionRecorded_V2(t *testing.T) {
 	require.Equal(t, "weekly", *decoded.PrevCadenceValue)
 }
 
+// TestMarshalUnmarshal_InteractionRecorded_V3 asserts the post-PR-B
+// payload shape carries SuppressFollowUp through the wire format.
+// Polarity is zero=do-not-suppress so a missing field decodes safely as
+// false; explicit true is set only by the Todoist provider for
+// kind=send completions.
+func TestMarshalUnmarshal_InteractionRecorded_V3(t *testing.T) {
+	original := InteractionRecordedPayload{
+		Version:          3,
+		ContactID:        uuid.New(),
+		InteractionID:    uuid.New(),
+		Direction:        "outbound",
+		OccurredAt:       time.Date(2026, 4, 10, 20, 0, 0, 0, time.UTC),
+		Source:           "todoist",
+		SuppressFollowUp: true,
+	}
+	raw, err := Marshal(KindInteractionRecorded, original)
+	require.NoError(t, err)
+	env := &Envelope{Kind: KindInteractionRecorded, Payload: raw}
+	var decoded InteractionRecordedPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.Equal(t, 3, decoded.Version)
+	require.True(t, decoded.SuppressFollowUp,
+		"V3 SuppressFollowUp must round-trip as true")
+}
+
+// TestInteractionRecordedPayload_V2Decode_DefaultsSuppressFollowUpFalse
+// is the load-bearing polarity test (plan §6.3): a V2 envelope (no
+// suppress_follow_up field) must decode with SuppressFollowUp=false so
+// existing in-flight events continue to spawn follow-ups.
+func TestInteractionRecordedPayload_V2Decode_DefaultsSuppressFollowUpFalse(t *testing.T) {
+	v2Payload := `{
+		"version": 2,
+		"contact_id": "00000000-0000-0000-0000-000000000001",
+		"interaction_id": "00000000-0000-0000-0000-000000000002",
+		"direction": "mutual",
+		"occurred_at": "2026-04-10T20:00:00Z",
+		"source": "telegram"
+	}`
+	env := &Envelope{Kind: KindInteractionRecorded, Payload: json.RawMessage(v2Payload)}
+	var decoded InteractionRecordedPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.False(t, decoded.SuppressFollowUp,
+		"V2 payload missing suppress_follow_up MUST decode false (zero=do-not-suppress)")
+}
+
+// TestTaskCompletedPayload_V1Decode_DefaultsSuppressFollowUpFalse is
+// the V1 task.completed analogue: a pre-PR-B envelope decodes with
+// SuppressFollowUp=false. Companion to the V2 InteractionRecorded test
+// above; together they establish that the polarity-safe default holds
+// across both upstream and downstream payload migrations.
+func TestTaskCompletedPayload_V1Decode_DefaultsSuppressFollowUpFalse(t *testing.T) {
+	v1Payload := `{
+		"version": 1,
+		"contact_id": "00000000-0000-0000-0000-000000000001",
+		"task_id": "task-abc",
+		"task_kind": "cadence",
+		"completed_at": "2026-04-10T16:00:00Z",
+		"direction": "mutual"
+	}`
+	env := &Envelope{Kind: KindTaskCompleted, Payload: json.RawMessage(v1Payload)}
+	var decoded TaskCompletedPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.False(t, decoded.SuppressFollowUp,
+		"V1 task.completed missing suppress_follow_up MUST decode false")
+}
+
 // TestMarshalUnmarshal_InteractionRecorded_V1BackCompat asserts that a
 // PR 5/6-era Version=1 payload (no PrevCadenceSnapshot / PrevCadenceValue)
 // still unmarshals cleanly — the new fields are nil. The PR 7 consumer

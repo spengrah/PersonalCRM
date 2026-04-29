@@ -99,10 +99,13 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     const markContactedButton = contactCard.getByRole('button', { name: /Mark as Contacted/i })
     await expect(markContactedButton).toBeVisible()
 
+    // Post-PR-B the dashboard "Mark as Contacted" quick action posts
+    // to POST /interactions {direction:"mutual"} (the legacy PATCH
+    // /last-contacted endpoint was removed).
     const markContactedResponse = page.waitForResponse(
       response =>
-        response.request().method() === 'PATCH' &&
-        response.url().includes(`/api/v1/contacts/${overdueContactId}/last-contacted`)
+        response.request().method() === 'POST' &&
+        response.url().includes(`/api/v1/contacts/${overdueContactId}/interactions`)
     )
 
     // Click "Mark as Contacted"

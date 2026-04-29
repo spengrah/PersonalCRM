@@ -60,19 +60,20 @@ func (d DateOnly) MarshalJSON() ([]byte, error) {
 
 // ContactHandler handles contact-related HTTP requests.
 //
-// Post-PR-6 (cutover): PATCH /contacts/:id/last-contacted goes through
-// manualHandler (the same service-layer helper POST uses) so both manual
-// UI flows share a single tx + publish + consumer path. manualHandler
-// nil ⇒ PATCH returns 503.
+// manualHandler is currently unused — its only caller was
+// UpdateContactLastContacted, which was removed in PR-B in favor of the
+// dedicated POST /contacts/:id/interactions endpoint owned by
+// InteractionHandler. The field is retained on the struct so the
+// constructor signature stays stable for the existing call-site
+// inventory; a follow-up cleanup PR can drop the parameter entirely.
 type ContactHandler struct {
 	contactService *service.ContactService
 	validator      *validator.Validate
-	manualHandler  *service.ManualInteractionHandler
+	manualHandler  *service.ManualInteractionHandler //nolint:unused // see struct doc
 }
 
-// NewContactHandler creates a new contact handler. manualHandler may be
-// nil (mode=off/shadow post-cutover) — PATCH last-contacted returns 503
-// in that case.
+// NewContactHandler creates a new contact handler. manualHandler is
+// currently unused (see ContactHandler doc).
 func NewContactHandler(contactService *service.ContactService, manualHandler *service.ManualInteractionHandler) *ContactHandler {
 	return &ContactHandler{
 		contactService: contactService,
