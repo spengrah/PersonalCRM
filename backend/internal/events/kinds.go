@@ -131,11 +131,12 @@ type CalendarDeclinedPayload struct {
 }
 
 // TaskCompletedPayload is the payload for KindTaskCompleted. Direction
-// distinguishes outbound vs mutual completion semantics (per spec §3.4.5
-// publisher hooks).
+// distinguishes outbound vs mutual completion semantics: reach_out and
+// send completions emit "outbound"; legacy action / meet tasks emit
+// "mutual" to preserve historical interaction semantics.
 //
-// V2 (post-046) adds SuppressFollowUp: when true the InteractionRecorder
-// propagates the flag to InteractionRecordedPayload V3 so FollowUpManager
+// V2 adds SuppressFollowUp: when true the InteractionRecorder propagates
+// the flag to InteractionRecordedPayload V3 so FollowUpManager
 // short-circuits without spawning a successor follow-up. Polarity is
 // "zero=safe": the zero value (false) preserves the legacy spawn-a-
 // follow-up default; only kind=send completions emit true.
