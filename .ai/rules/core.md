@@ -113,6 +113,8 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | E2E `getByText` in strict mode with non-unique values | Use `.first()` or scope to specific row when DB may contain multiple matches from previous runs |
 | `make test-e2e-local GREP="..."` ignored | Use `PLAYWRIGHT_GREP="..." make test-e2e-local` (Makefile expects environment variable, not Make variable) |
 | `bunx playwright test` directly fails with 401 | Use `make test-e2e-diff` or `make test-e2e-local` which set up API keys and environment |
+| `make test-e2e-diff` missing clean DB in pre-push | `test-e2e-diff` target needs `e2e-db` prerequisite like `test-e2e` and `test-e2e-local` have. Without it, pre-push hook runs E2E tests against accumulated DB state instead of clean DB, causing flaky failures from test pollution |
+| E2E parallel workers see each other's candidates in import/link modal | When E2E tests seed external contacts and open the import/link modal, parallel workers' seeded data can cause the modal to open showing a different worker's candidate (e.g., '2 of 4' pagination). Tests asserting on modal content without first navigating to the correct candidate will fail intermittently. Call `navigateModalToCandidate(page, handle)` after opening modal and before assertions to ensure test's own candidate is visible |
 | Replacing JSONB metadata wholesale on update | Read existing metadata first, modify keys, then write back - prevents losing other keys |
 | Empty if blocks with only comments | Staticcheck SA9003 flags empty branches - remove block entirely or add actual code |
 | New API module with custom URL construction | Use shared `apiClient` from `lib/api-client.ts` - include `/api/v1` in endpoint paths |
