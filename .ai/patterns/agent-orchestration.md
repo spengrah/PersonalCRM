@@ -64,3 +64,15 @@ Agent addressable? ──YES──→ Agent still running, wait
 ↓ NO
 Safe to re-spawn
 ```
+
+## Agent Sequencing
+
+When orchestrating multi-agent workflows (architect → implementer → reviewer):
+
+**Sequence:** architect (plan) → implementer → reviewer → implementer addresses findings → loop
+
+**Never:** Dispatch reviewer in parallel with implementer — it reviews pre-change state and misses problems introduced by the new code.
+
+**When to parallelize:** Only for independent tasks that don't review each other's work (e.g., backend API + frontend UI for different features).
+
+Source: `feedback_id_agents_orchestration.md` memory
