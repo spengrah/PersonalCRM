@@ -243,10 +243,10 @@ func TestHandleEvent_V2MissingSnapshot_Rejected(t *testing.T) {
 }
 
 // TestHandleEvent_AcceptsV2AndV3 confirms both the existing V2 payload
-// and the post-PR-B V3 payload (which adds SuppressFollowUp) are
-// accepted by the cadence dispatcher. CadenceUpdater ignores
-// SuppressFollowUp itself — it only matters to FollowUpManager — but
-// the version check must pass for V3 so cadence math still fires.
+// and the V3 payload (which carries SuppressFollowUp) are accepted by
+// the cadence dispatcher. CadenceUpdater ignores SuppressFollowUp
+// itself — it only matters to FollowUpManager — but the version check
+// must pass for V3 so cadence math still fires.
 //
 // Uses claimedResult=false to short-circuit the no-op branch (we only
 // need to confirm dispatch reaches the claim attempt; the actual write

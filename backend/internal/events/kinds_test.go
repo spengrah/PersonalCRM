@@ -361,11 +361,11 @@ func TestMarshalUnmarshal_InteractionRecorded_V2(t *testing.T) {
 	require.Equal(t, "weekly", *decoded.PrevCadenceValue)
 }
 
-// TestMarshalUnmarshal_InteractionRecorded_V3 asserts the post-PR-B
-// payload shape carries SuppressFollowUp through the wire format.
-// Polarity is zero=do-not-suppress so a missing field decodes safely as
-// false; explicit true is set only by the Todoist provider for
-// kind=send completions.
+// TestMarshalUnmarshal_InteractionRecorded_V3 asserts the V3 payload
+// shape carries SuppressFollowUp through the wire format. Polarity is
+// zero=do-not-suppress so a missing field decodes safely as false;
+// explicit true is set only by the Todoist provider for kind=send
+// completions.
 func TestMarshalUnmarshal_InteractionRecorded_V3(t *testing.T) {
 	original := InteractionRecordedPayload{
 		Version:          3,
@@ -407,10 +407,11 @@ func TestInteractionRecordedPayload_V2Decode_DefaultsSuppressFollowUpFalse(t *te
 }
 
 // TestTaskCompletedPayload_V1Decode_DefaultsSuppressFollowUpFalse is
-// the V1 task.completed analogue: a pre-PR-B envelope decodes with
-// SuppressFollowUp=false. Companion to the V2 InteractionRecorded test
-// above; together they establish that the polarity-safe default holds
-// across both upstream and downstream payload migrations.
+// the V1 task.completed analogue: a legacy envelope (no
+// suppress_follow_up field) decodes with SuppressFollowUp=false.
+// Companion to the V2 InteractionRecorded test above; together they
+// establish that the polarity-safe default holds across both upstream
+// and downstream payload migrations.
 func TestTaskCompletedPayload_V1Decode_DefaultsSuppressFollowUpFalse(t *testing.T) {
 	v1Payload := `{
 		"version": 1,

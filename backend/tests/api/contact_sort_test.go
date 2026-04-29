@@ -107,9 +107,9 @@ func (h *sortTestHelper) createContactWithCadence(name, cadence string) string {
 	return contactData["id"].(string)
 }
 
-// markContacted seeds last_contacted by posting a mutual interaction at
-// the given occurred_at. Replaces the legacy PATCH /contacts/:id/last-contacted
-// endpoint which was removed in PR-B.
+// markContacted seeds last_contacted by posting a mutual interaction
+// at the given occurred_at. Replaces the legacy PATCH
+// /contacts/:id/last-contacted endpoint, which is no longer registered.
 func (h *sortTestHelper) markContacted(id, date string) {
 	// Date is YYYY-MM-DD; convert to RFC3339 by appending T00:00:00Z.
 	occurredAt := date + "T00:00:00Z"

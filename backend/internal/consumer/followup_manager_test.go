@@ -331,12 +331,12 @@ func TestFollowUpManager_V1PayloadRejected(t *testing.T) {
 }
 
 // TestFollowUpManager_AcceptsV2AndV3 confirms both V2 and V3 payloads
-// dispatch past the version gate. V3 is the post-PR-B shape (gains
-// SuppressFollowUp); V2 retains backward compatibility for in-flight
-// events written by the pre-PR-B binary. We use the no-cadence skip
-// branch (empty cadence string) because it's the earliest skip beyond
-// the SuppressFollowUp short-circuit and the version gate, so the
-// observed decision proves the dispatcher accepted the version.
+// dispatch past the version gate. V3 carries SuppressFollowUp; V2
+// retains backward compatibility for in-flight events written by an
+// older binary. We use the no-cadence skip branch (empty cadence
+// string) because it's the earliest skip beyond the SuppressFollowUp
+// short-circuit and the version gate, so the observed decision proves
+// the dispatcher accepted the version.
 func TestFollowUpManager_AcceptsV2AndV3(t *testing.T) {
 	for _, version := range []int{2, 3} {
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {

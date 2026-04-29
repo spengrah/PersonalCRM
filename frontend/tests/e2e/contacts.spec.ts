@@ -149,8 +149,8 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   })
 
   test('should log a backdated interaction via the Log Interaction modal', async ({ page }) => {
-    // PR-B replaced the inline pencil-edit on `last_contacted` with a
-    // dedicated Log Interaction modal: direction picker + date picker.
+    // The Log Interaction modal (direction picker + date picker)
+    // replaces the previous inline pencil-edit on `last_contacted`.
     // The modal posts to POST /contacts/:id/interactions; the backend
     // applies cadence math from the chosen direction. This test
     // exercises the happy path (mutual + a backdated date).

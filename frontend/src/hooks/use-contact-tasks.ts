@@ -18,9 +18,9 @@ export function useContactTasks(
   })
 }
 
-// Create manual (user-picker) task mutation. Kind defaults to "reach_out"
-// in callers that don't yet expose the picker UI; the AddTaskModal kind
-// picker (PR-B Commit 3) replaces that hardcoded default.
+// Create manual (user-picker) task mutation. Callers must supply
+// `kind` (one of reach_out / send / reminder); see AddTaskModal for
+// the UI surface that picks one.
 export function useCreateManualTask() {
   return useMutation({
     mutationFn: ({ contactId, data }: { contactId: string; data: CreateManualTaskRequest }) =>

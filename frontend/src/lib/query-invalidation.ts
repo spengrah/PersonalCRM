@@ -23,7 +23,7 @@ export type DomainEvent =
   | 'contact:created'
   | 'contact:updated'
   | 'contact:deleted'
-  | 'contact:touched' // marked as contacted (legacy alias kept during PR-B for listener compatibility)
+  | 'contact:touched' // marked as contacted (legacy alias preserved for existing listener compatibility)
   | 'contact:merged' // merged with another contact
   // Interaction events
   | 'interaction:created' // a manual / system interaction was logged

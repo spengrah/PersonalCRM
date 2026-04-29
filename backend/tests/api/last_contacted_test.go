@@ -1,7 +1,7 @@
-// Tests covering the manual interaction logger surface that replaced the
-// legacy PATCH /contacts/:id/last-contacted endpoint (PR-B). The legacy
-// endpoint is gone; the regression test below confirms it returns 404 so
-// any stranded clients fail loudly. The other tests exercise the
+// Tests covering the manual interaction logger surface that replaced
+// the legacy PATCH /contacts/:id/last-contacted endpoint. The legacy
+// endpoint is gone; the regression test below confirms it returns 404
+// so any stranded clients fail loudly. The other tests exercise the
 // equivalent semantics now exposed via POST /contacts/:id/interactions
 // (direction=mutual matches the old "Mark as Contacted" behaviour).
 package api

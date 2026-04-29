@@ -60,12 +60,13 @@ func (d DateOnly) MarshalJSON() ([]byte, error) {
 
 // ContactHandler handles contact-related HTTP requests.
 //
-// manualHandler is currently unused — its only caller was
-// UpdateContactLastContacted, which was removed in PR-B in favor of the
-// dedicated POST /contacts/:id/interactions endpoint owned by
-// InteractionHandler. The field is retained on the struct so the
-// constructor signature stays stable for the existing call-site
-// inventory; a follow-up cleanup PR can drop the parameter entirely.
+// manualHandler is currently unused — its only caller (an
+// UpdateContactLastContacted handler) was removed when the
+// POST /contacts/:id/interactions endpoint owned by InteractionHandler
+// became the sole manual-interaction surface. The field is retained on
+// the struct so the constructor signature stays stable for the existing
+// call-site inventory; a follow-up cleanup can drop the parameter
+// entirely.
 type ContactHandler struct {
 	contactService *service.ContactService
 	validator      *validator.Validate

@@ -148,9 +148,9 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
 
     // Go to contact detail and log a mutual interaction via the modal.
-    // Post-PR-B the header button is "Log Interaction" (not "Mark as
-    // Contacted") and posts to POST /interactions instead of the
-    // deleted PATCH /last-contacted endpoint.
+    // The header button is "Log Interaction" (not "Mark as Contacted")
+    // and posts to POST /interactions instead of the legacy PATCH
+    // /last-contacted endpoint.
     await page.goto(`/contacts/${contactId}`)
     await expect(page.getByRole('heading', { name: contactName, level: 2 })).toBeVisible()
 
@@ -177,8 +177,8 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     const contactName = `${testApi.prefix}-Overdue Test Contact`
 
     // Log a mutual interaction via the API (replaces the deleted PATCH
-    // /last-contacted endpoint). Post-PR-B all "Mark as Contacted"
-    // surfaces route through POST /interactions {direction:"mutual"}.
+    // /last-contacted endpoint). All "Mark as Contacted" surfaces
+    // route through POST /interactions {direction:"mutual"}.
     const interactionResponse = await request.post(
       `${API_BASE_URL}/api/v1/contacts/${contactId}/interactions`,
       {
