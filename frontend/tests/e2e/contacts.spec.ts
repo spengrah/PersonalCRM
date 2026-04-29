@@ -1,6 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import { getTodayUTC } from './helpers/date-utils'
+
+// API configuration for direct backend assertions in E2E tests.
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
+const API_HEADERS = {
+  'X-API-Key': API_KEY,
+  'Content-Type': 'application/json',
+}
 
 test.describe('Contacts - TestAPI Seeded @area:contacts', () => {
   let testApi: TestAPI
@@ -148,107 +155,43 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page.getByRole('button', { name: 'Show more' })).not.toBeVisible()
   })
 
-  test('should edit last contacted date manually', async ({ page }) => {
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Last Contacted Test',
-      },
-    ])
-
+  test('should log a backdated interaction via the Log Interaction modal', async ({ page }) => {
+    // The Log Interaction modal (direction picker + date picker)
+    // replaces the previous inline pencil-edit on `last_contacted`.
+    // The modal posts to POST /contacts/:id/interactions; the backend
+    // applies cadence math from the chosen direction. This test
+    // exercises the happy path (mutual + a backdated date).
+    const { ids } = await testApi.seedContacts([{ full_name: 'Log Interaction Test' }])
     const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Last Contacted Test`
+    const fullName = `${testApi.prefix}-Log Interaction Test`
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
-    // Find the Last contacted row and hover to reveal the edit button
-    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    await lastContactedRow.hover()
+    // Open the modal via the header button.
+    await page.getByRole('button', { name: 'Log Interaction' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
 
-    // Click the edit button (pencil icon)
-    const editButton = page.getByTestId('edit-last-contacted-btn')
-    await expect(editButton).toBeVisible()
-    await editButton.click()
-
-    // Date input should now be visible
-    const dateInput = page.getByTestId('last-contacted-date-input')
-    await expect(dateInput).toBeVisible()
-
-    // Set a past date (2024-01-15)
+    // Pick a backdated date and submit. We assert via the API response
+    // because cadence math + accelerated time can otherwise make
+    // direct row-text assertions racy.
+    const dateInput = page.getByTestId('log-interaction-date-input')
     await dateInput.fill('2024-01-15')
 
-    // Click save button
-    const saveButton = page.getByTestId('save-last-contacted-btn')
-    await saveButton.click()
+    const responsePromise = page.waitForResponse(
+      resp =>
+        resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
+        resp.request().method() === 'POST'
+    )
+    await page.getByRole('button', { name: 'Log', exact: true }).click()
+    const response = await responsePromise
+    expect(response.status()).toBe(201)
+    const body = await response.json()
+    expect(body.success).toBe(true)
 
-    // Wait for update to complete and verify the date is displayed
-    await expect(dateInput).not.toBeVisible({ timeout: 10000 })
-    await expect(page.getByText('1/15/2024')).toBeVisible()
-  })
-
-  test('should cancel editing last contacted date', async ({ page }) => {
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Cancel Edit Test',
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Cancel Edit Test`
-
-    await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
-
-    // Get the current last contacted value
-    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    const initialDateText = await lastContactedRow.locator('dd span').first().textContent()
-
-    // Hover and click edit
-    await lastContactedRow.hover()
-    await page.getByTestId('edit-last-contacted-btn').click()
-
-    // Change the date
-    const dateInput = page.getByTestId('last-contacted-date-input')
-    await dateInput.fill('2023-06-01')
-
-    // Click cancel
-    await page.getByTestId('cancel-last-contacted-btn').click()
-
-    // Verify the date input is hidden and original date is preserved
-    await expect(dateInput).not.toBeVisible()
-    const currentDateText = await lastContactedRow.locator('dd span').first().textContent()
-    expect(currentDateText).toBe(initialDateText)
-  })
-
-  test('should prevent setting future last contacted date', async ({ page }) => {
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Future Date Test',
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Future Date Test`
-
-    await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
-
-    // Click edit
-    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    await lastContactedRow.hover()
-    await page.getByTestId('edit-last-contacted-btn').click()
-
-    // The date input should have a max attribute preventing future dates
-    const dateInput = page.getByTestId('last-contacted-date-input')
-    const maxDate = await dateInput.getAttribute('max')
-    const today = new Date().toISOString().split('T')[0]
-    expect(maxDate).toBe(today)
-
-    // Cancel and cleanup
-    await page.getByTestId('cancel-last-contacted-btn').click()
+    // Modal closes on success.
+    await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 })
   })
 
   test('should show context menu without clipping for bottom rows', async ({ page }) => {
@@ -337,27 +280,143 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     })
   })
 
-  test('should update Mark as Contacted button behavior', async ({ page }) => {
+  test('should log a mutual interaction via the Log Interaction modal default', async ({
+    page,
+    request,
+  }) => {
+    // Mutual bumps both last_contacted and last_response_at AND
+    // last_outreach_at, and recomputes contact_by from cadence. This
+    // is the default-direction path of the Log Interaction modal,
+    // preserving the old "I just talked to them" semantic.
     const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Mark Contacted Test',
-      },
+      { full_name: 'Mark Contacted Default', cadence: 'weekly' },
     ])
-
     const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Mark Contacted Test`
+    const fullName = `${testApi.prefix}-Mark Contacted Default`
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
-    // Click the "Mark as Contacted" button
-    await page.getByRole('button', { name: 'Mark as Contacted' }).click()
+    const responsePromise = page.waitForResponse(
+      resp =>
+        resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
+        resp.request().method() === 'POST'
+    )
+    await page.getByRole('button', { name: 'Log Interaction' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    // Submit without changing the direction (default = mutual) or date.
+    await page.getByRole('button', { name: 'Log', exact: true }).click()
+    const response = await responsePromise
+    expect(response.status()).toBe(201)
+    expect((await response.json()).data.direction).toBe('mutual')
 
-    // Wait for the update and verify the date is today (UTC date, see getTodayUTC)
-    const todayUtc = getTodayUTC()
-    const lastContactedRow = page.locator('dt:has-text("Last contacted")').locator('..')
-    await expect(lastContactedRow.locator('dd span').first()).toContainText(todayUtc)
+    await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 })
+
+    // Mutual bumps last_response_at + last_outreach_at; both must be
+    // populated after the interaction.
+    const afterResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(afterResp.ok()).toBeTruthy()
+    const afterContact = (await afterResp.json()).data
+    expect(afterContact.last_response_at).toBeTruthy()
+    expect(afterContact.last_outreach_at).toBeTruthy()
+  })
+
+  test('should log an outbound interaction via the Log Interaction modal', async ({
+    page,
+    request,
+  }) => {
+    // Outbound bumps last_outreach_at only — last_contacted stays at
+    // its create-time value (handler sets it to now() on contact create).
+    const { ids } = await testApi.seedContacts([{ full_name: 'Outbound Interaction Test' }])
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Outbound Interaction Test`
+
+    // Capture last_contacted BEFORE the interaction so we can assert
+    // outbound did not bump it.
+    const beforeResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(beforeResp.ok()).toBeTruthy()
+    const beforeContact = (await beforeResp.json()).data
+    const lastContactedBefore = beforeContact.last_contacted
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    await page.getByRole('button', { name: 'Log Interaction' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    await page.getByRole('button', { name: 'Outbound' }).click()
+    const responsePromise = page.waitForResponse(
+      resp =>
+        resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
+        resp.request().method() === 'POST'
+    )
+    await page.getByRole('button', { name: 'Log', exact: true }).click()
+    const response = await responsePromise
+    expect(response.status()).toBe(201)
+    const body = await response.json()
+    expect(body.data.direction).toBe('outbound')
+
+    // Re-fetch the contact and assert direction-aware cadence updates:
+    //   - last_outreach_at advanced (outbound writes this column)
+    //   - last_contacted unchanged (outbound MUST NOT bump it)
+    //   - last_response_at unchanged (no inbound)
+    const afterResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(afterResp.ok()).toBeTruthy()
+    const afterContact = (await afterResp.json()).data
+    expect(afterContact.last_outreach_at).toBeTruthy()
+    expect(afterContact.last_contacted).toBe(lastContactedBefore)
+  })
+
+  test('should log an inbound interaction via the Log Interaction modal', async ({
+    page,
+    request,
+  }) => {
+    // Inbound bumps last_contacted + last_response_at; does NOT bump
+    // last_outreach_at (inbound is the response, not the outreach).
+    const { ids } = await testApi.seedContacts([{ full_name: 'Inbound Interaction Test' }])
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Inbound Interaction Test`
+
+    const beforeResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(beforeResp.ok()).toBeTruthy()
+    const beforeContact = (await beforeResp.json()).data
+    const lastOutreachBefore = beforeContact.last_outreach_at ?? null
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    await page.getByRole('button', { name: 'Log Interaction' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    await page.getByRole('button', { name: 'Inbound' }).click()
+    const responsePromise = page.waitForResponse(
+      resp =>
+        resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
+        resp.request().method() === 'POST'
+    )
+    await page.getByRole('button', { name: 'Log', exact: true }).click()
+    const response = await responsePromise
+    expect(response.status()).toBe(201)
+    const body = await response.json()
+    expect(body.data.direction).toBe('inbound')
+
+    // last_response_at populated; last_outreach_at unchanged.
+    const afterResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(afterResp.ok()).toBeTruthy()
+    const afterContact = (await afterResp.json()).data
+    expect(afterContact.last_response_at).toBeTruthy()
+    expect(afterContact.last_outreach_at ?? null).toBe(lastOutreachBefore)
   })
 })
 

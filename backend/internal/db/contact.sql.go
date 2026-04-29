@@ -18,8 +18,8 @@ WHERE deleted_at IS NULL
        ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
   AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
 `
 
 type CountContactsParams struct {
@@ -46,8 +46,8 @@ WHERE c.deleted_at IS NULL
        ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3)
 `
 
@@ -310,8 +310,8 @@ WHERE deleted_at IS NULL
        ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
   AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
 `
 
 type ListContactIDsParams struct {
@@ -347,8 +347,8 @@ WHERE deleted_at IS NULL
        ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
   AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
 ORDER BY
   CASE WHEN $3 = 'name' AND $4 = 'asc' THEN full_name END ASC,
   CASE WHEN $3 = 'name' AND $4 = 'desc' THEN full_name END DESC,
@@ -413,8 +413,8 @@ WHERE deleted_at IS NULL
        ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
   AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
 LIMIT $4 OFFSET $3
 `
 
@@ -476,8 +476,8 @@ WHERE deleted_at IS NULL
        ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
        ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
   AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
 ORDER BY
   CASE WHEN $3 = 'name' AND $4 = 'asc' THEN full_name END ASC,
   CASE WHEN $3 = 'name' AND $4 = 'desc' THEN full_name END DESC,
@@ -712,8 +712,8 @@ WHERE c.deleted_at IS NULL
        ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3)
 ORDER BY ts_rank(
   to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
@@ -760,8 +760,8 @@ WHERE c.deleted_at IS NULL
        ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3)
 ORDER BY
   CASE WHEN $4 = 'name' AND $5 = 'asc' THEN c.full_name END ASC,
@@ -834,8 +834,8 @@ WHERE c.deleted_at IS NULL
        ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3)
 ORDER BY ts_rank(
   to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
@@ -906,8 +906,8 @@ WHERE c.deleted_at IS NULL
        ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.kind = 'follow_up' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3)
 ORDER BY
   CASE WHEN $4 = 'name' AND $5 = 'asc' THEN c.full_name END ASC,

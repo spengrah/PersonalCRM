@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -30,7 +31,8 @@ func createCadenceTask(t *testing.T, env *dismissalTestEnv, contactID uuid.UUID,
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contactID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: externalID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       metadata,
@@ -80,7 +82,7 @@ func TestReconcile_CloseCadenceTaskOnOutreachWithPendingFollowUp(t *testing.T) {
 
 	// Assert: no new cadence task row created for this contact (the completed one
 	// still exists but no replacement was created).
-	_, lookupErr := env.contactTaskRepo.GetContactTaskByContact(env.ctx, contact.ID, SourceName, TaskKindCadence)
+	_, lookupErr := env.contactTaskRepo.GetContactTaskByContactCadenceDue(env.ctx, contact.ID, SourceName)
 	require.NoError(t, lookupErr, "completed cadence task row should still exist")
 
 	// Assert: cadence task state is completed.
@@ -356,7 +358,7 @@ func TestCloseOnOutreach_NilLastOutreachAt(t *testing.T) {
 	assert.Nil(t, commands, "closeOnOutreach must return nil when LastOutreachAt is nil")
 
 	// Verify task is still managed.
-	_, findErr := env.contactTaskRepo.GetContactTaskByContact(env.ctx, contact.ID, SourceName, TaskKindCadence)
+	_, findErr := env.contactTaskRepo.GetContactTaskByContactCadenceDue(env.ctx, contact.ID, SourceName)
 	require.NoError(t, findErr, "cadence task must still exist as managed")
 
 	// Clean up — soft-delete the contact so it doesn't pollute other tests.

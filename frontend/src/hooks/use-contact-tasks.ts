@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { contactTasksApi } from '@/lib/contact-tasks-api'
 import { contactTaskKeys, invalidateFor } from '@/lib/query-invalidation'
-import type { ContactTaskListParams, CreateActionTaskRequest } from '@/types/contact-task'
+import type { ContactTaskListParams, CreateManualTaskRequest } from '@/types/contact-task'
 
 // List tasks for a contact
 export function useContactTasks(
@@ -18,10 +18,12 @@ export function useContactTasks(
   })
 }
 
-// Create action task mutation
-export function useCreateActionTask() {
+// Create manual (user-picker) task mutation. Callers must supply
+// `kind` (one of reach_out / send / reminder); see AddTaskModal for
+// the UI surface that picks one.
+export function useCreateManualTask() {
   return useMutation({
-    mutationFn: ({ contactId, data }: { contactId: string; data: CreateActionTaskRequest }) =>
+    mutationFn: ({ contactId, data }: { contactId: string; data: CreateManualTaskRequest }) =>
       contactTasksApi.createTask(contactId, data),
     onSuccess: () => {
       invalidateFor('task:created')

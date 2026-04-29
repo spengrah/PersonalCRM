@@ -28,6 +28,7 @@ import (
 
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/consumer/consumerjobs"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/todoist"
@@ -168,7 +169,8 @@ func (e *createWorkerEnv) seedPendingTask(t *testing.T) *repository.ContactTask 
 		task, createErr = e.taskRepo.CreateContactTaskTx(ctx, tx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       todoist.SourceName,
-			Kind:           todoist.TaskKindFollowUp,
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleFollowUpLoop,
 			ExternalTaskID: "",
 			State:          string(repository.ContactTaskStatePendingRemoteCreate),
 			Metadata:       metadata,

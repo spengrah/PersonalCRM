@@ -13,6 +13,7 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -53,7 +54,7 @@ func setupDirectionAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactTask
 
 	cfg2 := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg2)
-	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
+	contactHandler := handlers.NewContactHandler(contactService)
 	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 
 	// Create a minimal contact task service for the handler (no real Todoist)
@@ -201,7 +202,8 @@ func TestContactAPI_HasPendingFollowup(t *testing.T) {
 		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      id,
 			Provider:       "todoist",
-			Kind:           "follow_up",
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      contacttask.LifecycleFollowUpLoop,
 			ExternalTaskID: "test-followup-api-" + contactID,
 			State:          "managed",
 		})
@@ -273,7 +275,8 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 	_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      id,
 		Provider:       "todoist",
-		Kind:           "follow_up",
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
 		ExternalTaskID: "test-filter-api-" + contactID,
 		State:          "managed",
 	})
@@ -336,7 +339,8 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      id,
 		Provider:       "todoist",
-		Kind:           "follow_up",
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
 		ExternalTaskID: "test-kind-followup-" + contactID,
 		State:          "managed",
 		Metadata:       map[string]any{"content": "Follow up: Test", "due_date": "2026-04-10"},
@@ -346,15 +350,19 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      id,
 		Provider:       "todoist",
-		Kind:           "action",
+		Kind:           contacttask.KindAction,
+		Lifecycle:      contacttask.LifecycleManual,
 		ExternalTaskID: "test-kind-action-" + contactID,
 		State:          "managed",
 		Metadata:       map[string]any{"content": "Action task"},
 	})
 	require.NoError(t, err)
 
-	t.Run("FilterByFollowUp", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?kind=follow_up", nil)
+	t.Run("FilterByFollowUpLifecycle", func(t *testing.T) {
+		// Post-046, follow-up tasks are identified by lifecycle=followup_loop
+		// (kind is reach_out for live follow-up rows). The legacy
+		// ?kind=follow_up filter is no longer valid.
+		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?lifecycle=followup_loop", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -362,9 +370,10 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 		var resp api.APIResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		items := resp.Data.([]interface{})
+		require.NotEmpty(t, items, "should return at least one followup_loop task")
 		for _, item := range items {
 			task := item.(map[string]interface{})
-			assert.Equal(t, "follow_up", task["kind"], "should only return follow_up tasks")
+			assert.Equal(t, "followup_loop", task["lifecycle"], "should only return followup_loop tasks")
 		}
 	})
 
@@ -385,6 +394,15 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 
 	t.Run("InvalidKindRejected", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?kind=invalid", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("LegacyFollowUpKindRejected", func(t *testing.T) {
+		// kind=follow_up is no longer a valid kind enum post-046; the
+		// validator rejects it at the handler boundary.
+		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?kind=follow_up", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Code)

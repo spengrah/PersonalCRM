@@ -545,7 +545,7 @@ func (s *ContactService) RecordInteractionTx(
 			return &RecordInteractionResult{Interaction: existing, IsReplay: true}, nil
 		}
 	} else {
-		existing, err := s.interactionRepo.FindInWindowTx(ctx, tx, req.ContactID, req.Source, req.OccurredAt, 30*time.Minute)
+		existing, err := s.interactionRepo.FindInWindowTx(ctx, tx, req.ContactID, req.Source, req.Direction, req.OccurredAt, 30*time.Minute)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
 			return nil, fmt.Errorf("check existing interaction in window: %w", err)
 		}

@@ -646,7 +646,7 @@ func run() int {
 	}
 
 	// Initialize handlers
-	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
+	contactHandler := handlers.NewContactHandler(contactService)
 	noteHandler := handlers.NewNoteHandler(noteService)
 	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
@@ -730,7 +730,6 @@ func run() int {
 			contacts.GET("/:id", contactHandler.GetContact)
 			contacts.PUT("/:id", contactHandler.UpdateContact)
 			contacts.DELETE("/:id", contactHandler.DeleteContact)
-			contacts.PATCH("/:id/last-contacted", contactHandler.UpdateContactLastContacted)
 			contacts.GET("/:id/interactions", interactionHandler.ListContactInteractions)
 			contacts.POST("/:id/interactions", interactionHandler.CreateInteraction)
 			contacts.GET("/:id/notes", noteHandler.GetContactNotepad)
@@ -843,10 +842,10 @@ func run() int {
 			// Add identity route to contacts
 			contacts.GET("/:id/identities", identityHandler.ListIdentitiesForContact)
 
-			// Add contact task routes (action tasks) if Todoist is configured
+			// Add contact task routes (manual tasks) if Todoist is configured
 			if contactTaskHandler != nil {
 				contacts.GET("/:id/tasks", contactTaskHandler.ListContactTasks)
-				contacts.POST("/:id/tasks", contactTaskHandler.CreateActionTask)
+				contacts.POST("/:id/tasks", contactTaskHandler.CreateManualTask)
 				contacts.DELETE("/:id/tasks/:taskId", contactTaskHandler.DeleteTaskLink)
 			}
 

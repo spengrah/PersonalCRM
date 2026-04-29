@@ -29,11 +29,10 @@ type manualInteractionBus interface {
 }
 
 // ManualInteractionHandler orchestrates the cutover-mode publish + inline
-// consumer invocation for a manual-UI interaction. Called by both the
-// InteractionHandler (POST /contacts/:id/interactions) and the
-// ContactHandler (PATCH /contacts/:id/last-contacted).
+// consumer invocation for a manual-UI interaction. Called by
+// InteractionHandler (POST /contacts/:id/interactions).
 //
-// Flow (plan Decision 1):
+// Flow:
 //  1. Build interaction.manual envelope from the handler args.
 //  2. Open a pgx.Tx on the application pool.
 //  3. bus.PublishTx — inserts the event row (no river job enqueued; the

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { useCreateActionTask } from '@/hooks/use-contact-tasks'
+import { useCreateManualTask } from '@/hooks/use-contact-tasks'
 import { Button } from '@/components/ui/button'
 import { X, ChevronDown } from 'lucide-react'
 
@@ -11,14 +11,17 @@ interface AddTaskModalProps {
   onClose: () => void
 }
 
+type TaskKind = 'reach_out' | 'send' | 'reminder'
+
 export function AddTaskModal({ contactId, contactName, onClose }: AddTaskModalProps) {
+  const [kind, setKind] = useState<TaskKind>('reach_out')
   const [text, setText] = useState('')
   const [notes, setNotes] = useState('')
   const [showNotes, setShowNotes] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const createTask = useCreateActionTask()
+  const createTask = useCreateManualTask()
 
   // Focus input on mount
   useEffect(() => {
@@ -49,6 +52,7 @@ export function AddTaskModal({ contactId, contactName, onClose }: AddTaskModalPr
       await createTask.mutateAsync({
         contactId,
         data: {
+          kind,
           text: text.trim(),
           notes: notes.trim() || undefined,
         },
@@ -58,6 +62,12 @@ export function AddTaskModal({ contactId, contactName, onClose }: AddTaskModalPr
       setError(err instanceof Error ? err.message : 'Failed to create task')
     }
   }
+
+  const kindOptions: { value: TaskKind; label: string }[] = [
+    { value: 'reach_out', label: 'Reach out' },
+    { value: 'send', label: 'Send' },
+    { value: 'reminder', label: 'Reminder' },
+  ]
 
   return (
     <div
@@ -81,6 +91,38 @@ export function AddTaskModal({ contactId, contactName, onClose }: AddTaskModalPr
         {/* Form */}
         <form onSubmit={handleSubmit}>
           <div className="px-4 py-4 space-y-4">
+            {/* Kind picker */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+              <div className="inline-flex rounded-md shadow-sm" role="group" aria-label="Task type">
+                {kindOptions.map((opt, idx) => {
+                  const isSelected = kind === opt.value
+                  const base =
+                    'inline-flex items-center px-3 py-2 text-sm font-medium border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:z-10'
+                  const position =
+                    idx === 0
+                      ? 'rounded-l-md'
+                      : idx === kindOptions.length - 1
+                        ? 'rounded-r-md -ml-px'
+                        : '-ml-px'
+                  const tone = isSelected
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      aria-pressed={isSelected}
+                      onClick={() => setKind(opt.value)}
+                      className={`${base} ${position} ${tone}`}
+                    >
+                      {opt.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
             {/* Task text input */}
             <div>
               <input

@@ -11,7 +11,6 @@ import {
   usePrefetchContact,
   useUpdateContact,
   useDeleteContact,
-  useUpdateLastContacted,
 } from '@/hooks/use-contacts'
 import { useContactNote, useSaveContactNote } from '@/hooks/use-contact-note'
 import { useContactTasks } from '@/hooks/use-contact-tasks'
@@ -24,12 +23,9 @@ import {
   MessageCircle,
   MapPin,
   Calendar,
-  Clock,
   ChevronDown,
-  Pencil,
-  Check,
-  X,
   GitMerge,
+  X,
 } from 'lucide-react'
 import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
 import { Meetings } from '@/components/contacts/meetings'
@@ -42,6 +38,7 @@ import {
 import type { ContactFormData } from '@/lib/validations/contact'
 import { MergeContactModal } from '@/components/contacts/merge-contact-modal'
 import { TasksSection } from '@/components/contacts/tasks-section'
+import { LogInteractionModal } from '@/components/contacts/log-interaction-modal'
 
 export default function ContactDetailPage() {
   const params = useParams()
@@ -53,9 +50,8 @@ export default function ContactDetailPage() {
   const [isEditing, setIsEditing] = useState(action === 'edit')
   const [notesExpanded, setNotesExpanded] = useState(false)
   const [notesOverflowing, setNotesOverflowing] = useState(false)
-  const [isEditingLastContacted, setIsEditingLastContacted] = useState(false)
-  const [lastContactedDate, setLastContactedDate] = useState('')
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(action === 'merge')
+  const [isLogModalOpen, setIsLogModalOpen] = useState(false)
 
   // Clear the action param from URL after consuming it (prevents re-triggering on refresh)
   useEffect(() => {
@@ -91,25 +87,30 @@ export default function ContactDetailPage() {
   const updateContactMutation = useUpdateContact()
   const saveContactNoteMutation = useSaveContactNote()
 
-  // Fetch tasks at page level to start loading in parallel with contact
-  const { data: activeActionTasks = [], isLoading: loadingActiveTasks } = useContactTasks(
+  // Fetch tasks at page level to start loading in parallel with contact.
+  // Post-046, the lifecycle filter is the natural axis: lifecycle=manual
+  // covers all user-pickable tasks AND legacy action rows (which are
+  // backfilled to (action, manual)); lifecycle=followup_loop covers
+  // follow-up tasks created by FollowUpManager.
+  const { data: activeManualTasks = [], isLoading: loadingActiveTasks } = useContactTasks(
     contactId,
     {
       state: 'managed',
-      kind: 'action',
+      lifecycle: 'manual',
     }
   )
-  const { data: completedTasks = [], isLoading: loadingCompletedTasks } = useContactTasks(
+  const { data: completedManualTasks = [], isLoading: loadingCompletedTasks } = useContactTasks(
     contactId,
-    { state: 'completed', kind: 'action' }
+    { state: 'completed', lifecycle: 'manual' }
   )
   const { data: followUpTasks = [] } = useContactTasks(contactId, {
     state: 'managed',
-    kind: 'follow_up',
+    lifecycle: 'followup_loop',
   })
 
-  // Merge active action tasks and follow-up tasks for display
-  const activeTasks = [...followUpTasks, ...activeActionTasks]
+  // Merge active manual tasks and follow-up tasks for display.
+  const activeTasks = [...followUpTasks, ...activeManualTasks]
+  const completedTasks = completedManualTasks
 
   // Build URL preserving list context params
   const buildNavigationUrl = useCallback(
@@ -193,15 +194,24 @@ export default function ContactDetailPage() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isEditing, router, buildNavigationUrl])
 
-  // Detect if notes content overflows the 4-line clamp
+  // Detect if notes content overflows the 4-line clamp. ResizeObserver
+  // re-measures whenever the container's box changes — the initial
+  // mount measurement can read scrollHeight=0 before fonts/styles
+  // settle, leaving notesOverflowing false until the deps change.
   useEffect(() => {
-    if (notesRef.current && !notesExpanded) {
-      const isOverflowing = notesRef.current.scrollHeight > notesRef.current.clientHeight
-      setNotesOverflowing(isOverflowing)
+    const el = notesRef.current
+    if (!el || notesExpanded) return
+
+    const measure = () => {
+      setNotesOverflowing(el.scrollHeight > el.clientHeight)
     }
+    measure()
+
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
   }, [contactNote?.body, notesExpanded])
   const deleteContactMutation = useDeleteContact()
-  const updateLastContactedMutation = useUpdateLastContacted()
 
   const handleUpdateContact = async (data: ContactFormData) => {
     try {
@@ -228,48 +238,8 @@ export default function ContactDetailPage() {
     }
   }
 
-  const handleMarkAsContacted = async () => {
-    try {
-      await updateLastContactedMutation.mutateAsync({ id: contactId })
-    } catch {
-      // Error handled by TanStack Query error state
-    }
-  }
-
-  const handleEditLastContacted = () => {
-    // Initialize with current last contacted date or empty
-    if (contact?.last_contacted) {
-      const date = new Date(contact.last_contacted)
-      setLastContactedDate(date.toISOString().split('T')[0])
-    } else {
-      setLastContactedDate('')
-    }
-    setIsEditingLastContacted(true)
-  }
-
-  const handleSaveLastContacted = async () => {
-    if (!lastContactedDate) return
-
-    // Validate date is not in the future
-    const selectedDate = new Date(lastContactedDate)
-    const today = new Date()
-    today.setHours(23, 59, 59, 999) // End of today
-    if (selectedDate > today) {
-      alert('Last contacted date cannot be in the future')
-      return
-    }
-
-    try {
-      await updateLastContactedMutation.mutateAsync({ id: contactId, date: lastContactedDate })
-      setIsEditingLastContacted(false)
-    } catch {
-      // Error handled by TanStack Query error state
-    }
-  }
-
-  const handleCancelEditLastContacted = () => {
-    setIsEditingLastContacted(false)
-    setLastContactedDate('')
+  const handleOpenLogModal = () => {
+    setIsLogModalOpen(true)
   }
 
   if (isLoading) {
@@ -404,14 +374,9 @@ export default function ContactDetailPage() {
             </h2>
           </div>
           <div className="mt-4 flex space-x-3 md:mt-0 md:ml-4">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleMarkAsContacted}
-              loading={updateLastContactedMutation.isPending}
-            >
+            <Button variant="outline" size="sm" onClick={handleOpenLogModal}>
               <MessageCircle className="w-4 h-4 mr-2" />
-              Mark as Contacted
+              Log Interaction
             </Button>
             <Button variant="outline" size="sm" onClick={() => setIsEditing(true)}>
               <Edit className="w-4 h-4 mr-2" />
@@ -524,93 +489,41 @@ export default function ContactDetailPage() {
               )}
 
               <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                <dt className="text-sm font-medium text-gray-500">Last contacted</dt>
-                <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                  {isEditingLastContacted ? (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="date"
-                        value={lastContactedDate}
-                        onChange={e => setLastContactedDate(e.target.value)}
-                        max={new Date().toISOString().split('T')[0]}
-                        className="block rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                        data-testid="last-contacted-date-input"
-                      />
-                      <button
-                        onClick={handleSaveLastContacted}
-                        disabled={!lastContactedDate || updateLastContactedMutation.isPending}
-                        className="inline-flex items-center p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Save"
-                        data-testid="save-last-contacted-btn"
-                      >
-                        <Check className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={handleCancelEditLastContacted}
-                        disabled={updateLastContactedMutation.isPending}
-                        className="inline-flex items-center p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded disabled:opacity-50"
-                        title="Cancel"
-                        data-testid="cancel-last-contacted-btn"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center group">
-                      <Clock className="w-4 h-4 mr-2 text-gray-400" />
-                      <span>
-                        {contact.last_contacted
-                          ? formatDateOnly(contact.last_contacted, {
-                              year: 'numeric',
-                              month: 'numeric',
-                              day: 'numeric',
-                            })
-                          : 'Never'}
+                <dt className="text-sm font-medium text-gray-500">Recent activity</dt>
+                <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2 space-y-1">
+                  {contact.last_outreach_at ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-gray-400" title="Last outreach">
+                        &#8599;
                       </span>
-                      <button
-                        onClick={handleEditLastContacted}
-                        className="ml-2 p-1 text-gray-400 hover:text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Edit last contacted date"
-                        data-testid="edit-last-contacted-btn"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                      </button>
+                      <span>Last outreach: {formatRelativeTime(contact.last_outreach_at)}</span>
                     </div>
-                  )}
+                  ) : null}
+                  {contact.last_response_at ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-gray-400" title="Last response">
+                        &#8601;
+                      </span>
+                      <span>Last response: {formatRelativeTime(contact.last_response_at)}</span>
+                      {contact.has_pending_followup && (
+                        <span className="ml-2 text-amber-600" title="Awaiting reply">
+                          &#9888; Awaiting reply
+                        </span>
+                      )}
+                    </div>
+                  ) : contact.has_pending_followup ? (
+                    <div className="flex items-center gap-1.5 text-amber-600">
+                      <span title="Awaiting reply">&#9888;</span>
+                      <span>Awaiting reply</span>
+                    </div>
+                  ) : null}
+                  {!contact.last_outreach_at &&
+                    !contact.last_response_at &&
+                    !contact.has_pending_followup && (
+                      <span className="text-gray-500">No recent activity</span>
+                    )}
                 </dd>
               </div>
-
-              {(contact.last_outreach_at ||
-                contact.last_response_at ||
-                contact.has_pending_followup) && (
-                <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                  <dt className="text-sm font-medium text-gray-500">Direction signals</dt>
-                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2 space-y-1">
-                    {contact.last_outreach_at && (
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-gray-400" title="Last outreach">
-                          &#8599;
-                        </span>
-                        <span>Last outreach: {formatRelativeTime(contact.last_outreach_at)}</span>
-                      </div>
-                    )}
-                    {contact.last_response_at && (
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-gray-400" title="Last response">
-                          &#8601;
-                        </span>
-                        <span>Last response: {formatRelativeTime(contact.last_response_at)}</span>
-                      </div>
-                    )}
-                    {contact.has_pending_followup && (
-                      <div className="flex items-center gap-1.5 text-amber-600">
-                        <span title="Awaiting reply">&#9888;</span>
-                        <span>Awaiting reply</span>
-                      </div>
-                    )}
-                  </dd>
-                </div>
-              )}
 
               <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
                 <dt className="text-sm font-medium text-gray-500">Created</dt>
@@ -699,6 +612,15 @@ export default function ContactDetailPage() {
             setMergeMessage({ type: 'error', text: message })
             setTimeout(() => setMergeMessage(null), 5000)
           }}
+        />
+      )}
+
+      {/* Log Interaction Modal */}
+      {isLogModalOpen && contact && (
+        <LogInteractionModal
+          contactId={contactId}
+          contactName={contact.full_name}
+          onClose={() => setIsLogModalOpen(false)}
         />
       )}
     </div>

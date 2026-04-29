@@ -28,10 +28,6 @@ export interface ContactIDsParams {
   followup_filter?: 'has_followup' | 'no_followup'
 }
 
-export interface UpdateLastContactedRequest {
-  last_contacted?: string // ISO 8601 date string (YYYY-MM-DD)
-}
-
 export const contactsApi = {
   // Get all contacts
   getContacts: async (params: ContactListParams = {}): Promise<ContactsListResponse> => {
@@ -74,14 +70,6 @@ export const contactsApi = {
   // Delete contact (soft delete)
   deleteContact: async (id: string): Promise<void> => {
     return apiClient.delete<void>(`/api/v1/contacts/${id}`)
-  },
-
-  // Update last contacted
-  // If date is provided, sets last_contacted to that date
-  // If date is omitted, sets last_contacted to current time
-  updateLastContacted: async (id: string, date?: string): Promise<Contact> => {
-    const body: UpdateLastContactedRequest = date ? { last_contacted: date } : {}
-    return apiClient.patch<Contact>(`/api/v1/contacts/${id}/last-contacted`, body)
   },
 
   // Get overdue contacts

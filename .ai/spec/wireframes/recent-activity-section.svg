@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="660" viewBox="0 0 1400 660" role="img" aria-labelledby="title desc">
+  <title id="title">Recent activity section wireframe</title>
+  <desc id="desc">Desktop and mobile wireframes for the Recent activity row in a contact information card, showing last outreach, last response, and the conditional inline awaiting reply indicator.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#9ca3af" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .card { fill: #ffffff; stroke: #737373; stroke-width: 1.25; }
+      .faintRow { fill: #fafafa; }
+      .rule { stroke: #d4d4d4; stroke-width: 1; }
+      .hintLine { stroke: #9ca3af; stroke-width: 1; fill: none; marker-end: url(#arrow); }
+      .sectionLabel { font: 700 14px system-ui, sans-serif; letter-spacing: 0; fill: #525252; }
+      .cardTitle { font: 600 18px system-ui, sans-serif; fill: #171717; }
+      .rowLabel { font: 600 15px system-ui, sans-serif; fill: #262626; }
+      .rowLabelMuted { font: 600 15px system-ui, sans-serif; fill: #737373; }
+      .text { font: 14px system-ui, sans-serif; fill: #262626; }
+      .signal { font: 14px system-ui, sans-serif; fill: #262626; }
+      .signalMobileLabel { font: 14px system-ui, sans-serif; fill: #262626; }
+      .signalMobileValue { font: 14px system-ui, sans-serif; fill: #404040; }
+      .awaiting { font: 600 14px system-ui, sans-serif; fill: #b45309; }
+      .annotation { font: italic 13px system-ui, sans-serif; fill: #9ca3af; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1400" height="660"/>
+
+  <text class="sectionLabel" x="60" y="54">DESKTOP / TABLET</text>
+  <text class="sectionLabel" x="1010" y="54">MOBILE</text>
+
+  <!-- Desktop contact information card -->
+  <rect class="card" x="60" y="82" width="850" height="480" rx="8"/>
+  <text class="cardTitle" x="92" y="122">Contact Information</text>
+  <line class="rule" x1="60" y1="150" x2="910" y2="150"/>
+
+  <rect class="faintRow" x="60" y="151" width="850" height="66"/>
+  <text class="rowLabelMuted" x="92" y="191">Full name</text>
+  <text class="text" x="375" y="191">Contact A</text>
+  <line class="rule" x1="60" y1="217" x2="910" y2="217"/>
+
+  <rect class="faintRow" x="60" y="218" width="850" height="66"/>
+  <text class="rowLabelMuted" x="92" y="258">Contact methods</text>
+  <rect x="375" y="244" width="290" height="14" rx="3" fill="#e5e5e5"/>
+  <line class="rule" x1="60" y1="284" x2="910" y2="284"/>
+
+  <rect class="faintRow" x="60" y="285" width="850" height="66"/>
+  <text class="rowLabelMuted" x="92" y="325">Contact cadence</text>
+  <text class="text" x="375" y="325">Monthly</text>
+  <line class="rule" x1="60" y1="351" x2="910" y2="351"/>
+
+  <!-- Recent activity row -->
+  <rect x="60" y="352" width="850" height="132" fill="#ffffff"/>
+  <text class="rowLabel" x="92" y="394">Recent activity</text>
+  <text class="signal" x="375" y="393">↗ Last outreach: 3 days ago</text>
+  <text class="signal" x="375" y="425">
+    <tspan>↙ Last response: Apr 28, 2026</tspan>
+    <tspan class="awaiting" dx="18">⚠ Awaiting reply</tspan>
+  </text>
+  <line class="rule" x1="60" y1="484" x2="910" y2="484"/>
+
+  <rect class="faintRow" x="60" y="485" width="850" height="77"/>
+  <text class="rowLabelMuted" x="92" y="529">Created</text>
+  <text class="text" x="375" y="529">Apr 1, 2026</text>
+
+  <!-- Desktop annotations -->
+  <path class="hintLine" d="M842 392 C770 392 675 392 555 392"/>
+  <text class="annotation" x="856" y="384">Two equal-weight</text>
+  <text class="annotation" x="856" y="402">directional signals only</text>
+
+  <path class="hintLine" d="M842 422 C770 422 690 422 630 422"/>
+  <text class="annotation" x="856" y="421">Awaiting-reply is inline and</text>
+  <text class="annotation" x="856" y="439">conditional on has_pending_followup</text>
+
+  <path class="hintLine" d="M315 425 C338 425 356 425 375 425"/>
+  <text class="annotation" x="105" y="419">Read-only summary:</text>
+  <text class="annotation" x="105" y="437">no pencil or buttons</text>
+
+  <!-- Mobile recent activity card portion -->
+  <rect class="card" x="1010" y="82" width="330" height="480" rx="8"/>
+  <text class="cardTitle" x="1032" y="122">Contact Information</text>
+  <line class="rule" x1="1010" y1="150" x2="1340" y2="150"/>
+
+  <rect class="faintRow" x="1010" y="151" width="330" height="52"/>
+  <text class="rowLabelMuted" x="1032" y="182">Contact cadence</text>
+  <text class="text" x="1212" y="182">Monthly</text>
+  <line class="rule" x1="1010" y1="203" x2="1340" y2="203"/>
+
+  <rect x="1010" y="204" width="330" height="280" fill="#ffffff"/>
+  <text class="rowLabel" x="1032" y="242">Recent activity</text>
+
+  <text class="signalMobileLabel" x="1032" y="294">↗ Last outreach</text>
+  <text class="signalMobileValue" x="1032" y="321">3 days ago</text>
+
+  <text class="signalMobileLabel" x="1032" y="378">↙ Last response</text>
+  <text class="signalMobileValue" x="1032" y="405">
+    <tspan>Apr 28, 2026</tspan>
+    <tspan class="awaiting" dx="14">⚠ Awaiting reply</tspan>
+  </text>
+  <text class="annotation" x="1032" y="441">Badge may wrap beside the date</text>
+  <text class="annotation" x="1032" y="459">when horizontal room is tight</text>
+  <line class="rule" x1="1010" y1="484" x2="1340" y2="484"/>
+
+  <rect class="faintRow" x="1010" y="485" width="330" height="77"/>
+  <text class="rowLabelMuted" x="1032" y="529">Created</text>
+  <text class="text" x="1212" y="529">Apr 1, 2026</text>
+
+  <!-- Mobile annotations -->
+  <path class="hintLine" d="M1008 320 C972 320 944 320 920 320"/>
+  <text class="annotation" x="748" y="314">Mobile keeps the same</text>
+  <text class="annotation" x="748" y="332">two stacked signals</text>
+
+  <path class="hintLine" d="M1008 404 C964 404 942 404 920 404"/>
+  <text class="annotation" x="746" y="398">Amber remains reserved</text>
+  <text class="annotation" x="746" y="416">for awaiting reply only</text>
+</svg>

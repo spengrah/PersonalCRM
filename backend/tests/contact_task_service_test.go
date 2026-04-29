@@ -10,6 +10,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -129,7 +130,7 @@ func setupServiceTest(t *testing.T) (*service.ContactTaskService, *repository.Co
 	return svc, contact, cleanup
 }
 
-func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
+func TestContactTaskService_CreateManualTask_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -145,8 +146,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Follow up on proposal",
 			Notes:     "",
 		})
@@ -166,8 +168,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Call about project",
 			Notes:     "",
 		})
@@ -184,8 +187,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Task #MyProject",
 			Notes:     "",
 		})
@@ -203,8 +207,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Send email",
 			Notes:     "",
 		})
@@ -231,8 +236,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Test task",
 			Notes:     "Some notes",
 		})
@@ -252,7 +258,8 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 		assert.Contains(t, desc, "Some notes")
 		assert.Contains(t, desc, `"crm":true`)
 		assert.Contains(t, desc, `"contact_id"`)
-		assert.Contains(t, desc, `"kind":"action"`)
+		assert.Contains(t, desc, `"kind":"reach_out"`)
+		assert.Contains(t, desc, `"lifecycle":"manual"`)
 	})
 
 	t.Run("deletes task if Sync update fails", func(t *testing.T) {
@@ -278,8 +285,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Task that will fail",
 			Notes:     "",
 		})
@@ -310,8 +318,9 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 			return mock
 		})
 
-		resp, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		resp, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Task with due date",
 			Notes:     "",
 		})
@@ -321,6 +330,90 @@ func TestContactTaskService_CreateActionTask_Integration(t *testing.T) {
 		assert.Equal(t, "proj-abc", resp.ProjectID)
 		require.NotNil(t, resp.DueDate)
 		assert.Equal(t, "2025-12-31", *resp.DueDate)
+	})
+
+	// Direction-aware kind tests: the service accepts the three
+	// user-pickable kinds (reach_out, send, reminder); each sets
+	// lifecycle=manual via the composite CHECK contract.
+	t.Run("creates kind=send manual task", func(t *testing.T) {
+		mock := &mockTodoistClient{
+			quickAddFunc: func(ctx context.Context, text string, note string) (*todoist.QuickAddTask, error) {
+				return &todoist.QuickAddTask{
+					ID:        "task-send-" + uuid.New().String()[:8],
+					ProjectID: "proj-send",
+					Content:   text,
+				}, nil
+			},
+		}
+		svc.SetTodoistClientFactory(func(accessToken string) todoist.Client {
+			return mock
+		})
+
+		resp, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
+			ContactID: contact.ID,
+			Kind:      contacttask.KindSend,
+			Text:      "Send book to friend",
+			Notes:     "",
+		})
+		require.NoError(t, err)
+		assert.Contains(t, resp.ExternalTaskID, "task-send-")
+
+		// Marker JSON must record kind=send + lifecycle=manual so the
+		// downstream Todoist completion path can route on kind correctly.
+		require.Len(t, mock.syncCalls, 1)
+		desc, ok := mock.syncCalls[0].Commands[0].Args["description"].(string)
+		require.True(t, ok)
+		assert.Contains(t, desc, `"kind":"send"`)
+		assert.Contains(t, desc, `"lifecycle":"manual"`)
+	})
+
+	t.Run("creates kind=reminder manual task", func(t *testing.T) {
+		mock := &mockTodoistClient{
+			quickAddFunc: func(ctx context.Context, text string, note string) (*todoist.QuickAddTask, error) {
+				return &todoist.QuickAddTask{
+					ID:        "task-reminder-" + uuid.New().String()[:8],
+					ProjectID: "proj-rem",
+					Content:   text,
+				}, nil
+			},
+		}
+		svc.SetTodoistClientFactory(func(accessToken string) todoist.Client {
+			return mock
+		})
+
+		resp, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
+			ContactID: contact.ID,
+			Kind:      contacttask.KindReminder,
+			Text:      "Remember birthday next week",
+			Notes:     "",
+		})
+		require.NoError(t, err)
+		assert.Contains(t, resp.ExternalTaskID, "task-reminder-")
+
+		require.Len(t, mock.syncCalls, 1)
+		desc, ok := mock.syncCalls[0].Commands[0].Args["description"].(string)
+		require.True(t, ok)
+		assert.Contains(t, desc, `"kind":"reminder"`)
+		assert.Contains(t, desc, `"lifecycle":"manual"`)
+	})
+
+	t.Run("rejects invalid kind", func(t *testing.T) {
+		mock := &mockTodoistClient{}
+		svc.SetTodoistClientFactory(func(accessToken string) todoist.Client {
+			return mock
+		})
+
+		// Service-layer validation must reject unknown kinds before
+		// reaching Todoist or the DB. Legacy values like "cadence" or
+		// "follow_up" are not valid as user-pickable kinds.
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
+			ContactID: contact.ID,
+			Kind:      "cadence",
+			Text:      "Should fail",
+			Notes:     "",
+		})
+		require.Error(t, err, "service must reject legacy kind=cadence")
+		assert.Empty(t, mock.quickAddCalls, "Todoist API must NOT be called for invalid kind")
 	})
 }
 
@@ -348,8 +441,9 @@ func TestContactTaskService_CRMMarkerFormat(t *testing.T) {
 			return mock
 		})
 
-		_, err := svc.CreateActionTask(ctx, service.CreateActionTaskRequest{
+		_, err := svc.CreateManualTask(ctx, service.CreateManualTaskRequest{
 			ContactID: contact.ID,
+			Kind:      contacttask.KindReachOut,
 			Text:      "Marker test",
 			Notes:     "Test notes",
 		})
@@ -367,7 +461,8 @@ func TestContactTaskService_CRMMarkerFormat(t *testing.T) {
 
 		assert.Equal(t, true, marker["crm"])
 		assert.Equal(t, contact.ID.String(), marker["contact_id"])
-		assert.Equal(t, "action", marker["kind"])
+		assert.Equal(t, "reach_out", marker["kind"])
+		assert.Equal(t, "manual", marker["lifecycle"])
 		assert.Equal(t, "instance-789", marker["instance"])
 	})
 }

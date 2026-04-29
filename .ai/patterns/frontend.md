@@ -50,6 +50,45 @@ function ContactPage({ id }: Props) {
 
 ---
 
+## DOM Measurement Pattern (ResizeObserver)
+
+Use ResizeObserver for layout measurements that depend on dynamic content or run under parallel E2E load:
+
+```typescript
+// ❌ WRONG - Mount-time measurement can race with layout settling
+useEffect(() => {
+  if (ref.current) {
+    const hasOverflow = ref.current.scrollHeight > ref.current.clientHeight
+    setShowExpand(hasOverflow)
+  }
+}, [contactNote?.body, isExpanded]) // Won't re-run if deps don't change
+
+// ✅ CORRECT - ResizeObserver fires whenever element size changes
+useEffect(() => {
+  const element = ref.current
+  if (!element) return
+
+  const observer = new ResizeObserver(() => {
+    const hasOverflow = element.scrollHeight > element.clientHeight
+    setShowExpand(hasOverflow)
+  })
+
+  observer.observe(element)
+  return () => observer.disconnect()
+}, []) // No deps - observer handles all size changes
+```
+
+**When to use:**
+- Overflow detection (show more buttons, truncation affordances)
+- Dynamic height calculations
+- Conditional rendering based on element dimensions
+- E2E tests with parallel workers (fonts/styles may settle late)
+
+**Why it matters:**
+Initial measurements in mount-time useEffect can read dimensions before fonts/styles fully settle. If dependencies don't change after mount, the measurement never re-runs, leaving stale decisions. ResizeObserver ensures late-settling layout triggers remeasurement.
+
+---
+
 ## Loading Pattern
 
 ```typescript
@@ -357,6 +396,43 @@ import clsx from 'clsx'
   Click me
 </button>
 ```
+
+## DOM Measurement Pattern with ResizeObserver
+
+For features that measure DOM dimensions for conditional rendering (show more buttons, overflow detection, truncation), use ResizeObserver to handle layout settling under load:
+
+```typescript
+// ✅ CORRECT - ResizeObserver remeasures when layout settles
+useEffect(() => {
+  const element = elementRef.current
+  if (!element) return
+
+  const observer = new ResizeObserver(() => {
+    const hasOverflow = element.scrollHeight > element.clientHeight
+    setShowExpandButton(hasOverflow)
+  })
+
+  observer.observe(element)
+  return () => observer.disconnect()
+}, [contactNote?.body, isExpanded]) // Re-observe when content changes
+
+// ❌ WRONG - Mount-time measurement misses late-settling layout
+useEffect(() => {
+  const element = elementRef.current
+  if (!element) return
+
+  const hasOverflow = element.scrollHeight > element.clientHeight
+  setShowExpandButton(hasOverflow)
+}, [contactNote?.body, isExpanded])
+// Problem: Fonts/styles may not be fully applied yet, causing incorrect measurement
+```
+
+**Why ResizeObserver is needed:**
+- Under parallel E2E load or slow networks, initial measurements can read dimensions before fonts/styles fully settle
+- If deps don't change, the measurement never re-runs
+- ResizeObserver fires whenever element size changes, catching late layout updates
+
+---
 
 ## Date Formatting Pattern
 

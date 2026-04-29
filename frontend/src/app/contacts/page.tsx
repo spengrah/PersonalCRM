@@ -17,7 +17,8 @@ import {
   GitMerge,
   ListFilter,
 } from 'lucide-react'
-import { useContacts, useUpdateLastContacted } from '@/hooks/use-contacts'
+import { useContacts } from '@/hooks/use-contacts'
+import { useCreateInteraction } from '@/hooks/use-interactions'
 import { Button } from '@/components/ui/button'
 import { Pagination } from '@/components/ui/pagination'
 import { Navigation } from '@/components/layout/navigation'
@@ -59,7 +60,7 @@ function ContactsTable({
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({})
   const buttonRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
-  const updateLastContacted = useUpdateLastContacted()
+  const createInteraction = useCreateInteraction()
 
   const setButtonRef = useCallback((id: string, el: HTMLButtonElement | null) => {
     if (el) {
@@ -99,7 +100,13 @@ function ContactsTable({
   const handleMarkAsContacted = async (e: React.MouseEvent, contactId: string) => {
     e.stopPropagation() // Prevent row click
     try {
-      await updateLastContacted.mutateAsync({ id: contactId })
+      // Quick-action: log a mutual interaction at current (accelerated)
+      // time. Direction defaults to mutual; omitting occurred_at lets
+      // the backend stamp the interaction itself.
+      await createInteraction.mutateAsync({
+        contactId,
+        data: { direction: 'mutual' },
+      })
       setOpenDropdown(null)
     } catch (error) {
       console.error('Failed to mark as contacted:', error)
@@ -372,10 +379,10 @@ function ContactsTable({
                             tabIndex={-1}
                             onClick={e => handleMarkAsContacted(e, contact.id)}
                             className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
-                            disabled={updateLastContacted.isPending}
+                            disabled={createInteraction.isPending}
                           >
                             <CheckCircle className="w-4 h-4 mr-2" />
-                            {updateLastContacted.isPending ? 'Marking...' : 'Mark as Contacted'}
+                            {createInteraction.isPending ? 'Marking...' : 'Mark as Contacted'}
                           </button>
                           <button
                             role="menuitem"

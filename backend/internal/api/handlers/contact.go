@@ -58,26 +58,20 @@ func (d DateOnly) MarshalJSON() ([]byte, error) {
 	return json.Marshal(d.Format("2006-01-02"))
 }
 
-// ContactHandler handles contact-related HTTP requests.
-//
-// Post-PR-6 (cutover): PATCH /contacts/:id/last-contacted goes through
-// manualHandler (the same service-layer helper POST uses) so both manual
-// UI flows share a single tx + publish + consumer path. manualHandler
-// nil ⇒ PATCH returns 503.
+// ContactHandler handles contact-related HTTP requests. Manual
+// interactions are owned by InteractionHandler
+// (POST /contacts/:id/interactions); ContactHandler does not need a
+// reference to the manual-interaction pipeline.
 type ContactHandler struct {
 	contactService *service.ContactService
 	validator      *validator.Validate
-	manualHandler  *service.ManualInteractionHandler
 }
 
-// NewContactHandler creates a new contact handler. manualHandler may be
-// nil (mode=off/shadow post-cutover) — PATCH last-contacted returns 503
-// in that case.
-func NewContactHandler(contactService *service.ContactService, manualHandler *service.ManualInteractionHandler) *ContactHandler {
+// NewContactHandler creates a new contact handler.
+func NewContactHandler(contactService *service.ContactService) *ContactHandler {
 	return &ContactHandler{
 		contactService: contactService,
 		validator:      validator.New(),
-		manualHandler:  manualHandler,
 	}
 }
 
@@ -169,13 +163,6 @@ type ContactMethodRequest struct {
 	Type      string `json:"type" validate:"required,oneof=email phone telegram discord twitter signal gchat whatsapp" example:"email"`
 	Value     string `json:"value" validate:"required,max=255" example:"john.doe@example.com"`
 	IsPrimary bool   `json:"is_primary" example:"true"`
-}
-
-// UpdateLastContactedRequest represents the request to update last contacted date
-// @Description Update last contacted date request
-type UpdateLastContactedRequest struct {
-	// LastContacted is the date to set. If omitted or null, current time is used.
-	LastContacted *DateOnly `json:"last_contacted,omitempty" example:"2024-01-15"`
 }
 
 // Helper function to convert repository contact to response
@@ -584,94 +571,6 @@ func (h *ContactHandler) DeleteContact(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
-}
-
-// UpdateContactLastContacted updates the last contacted date for a contact
-// @Summary Update last contacted date
-// @Description Update when a contact was last contacted. If no date is provided, current time is used.
-// @Tags contacts
-// @Accept json
-// @Produce json
-// @Param id path string true "Contact ID" format(uuid)
-// @Param request body UpdateLastContactedRequest false "Last contacted date (optional)"
-// @Success 200 {object} api.APIResponse "Last contacted date updated successfully"
-// @Failure 400 {object} api.APIResponse{error=api.APIError} "Invalid contact ID or date"
-// @Failure 404 {object} api.APIResponse{error=api.APIError} "Contact not found"
-// @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
-// @Router /contacts/{id}/last-contacted [patch]
-func (h *ContactHandler) UpdateContactLastContacted(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
-		return
-	}
-
-	var req UpdateLastContactedRequest
-	// Allow empty body (for backwards compatibility with "Mark as Contacted" button)
-	if c.Request.ContentLength > 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			api.SendValidationError(c, "Invalid request body", err.Error())
-			return
-		}
-	}
-
-	// Determine the date to use
-	var lastContacted *time.Time
-	if req.LastContacted != nil && req.LastContacted.Time != nil {
-		// Validate that the date is not in the future
-		now := accelerated.GetCurrentTime()
-		if req.LastContacted.After(now) {
-			api.SendValidationError(c, "Invalid date", "Last contacted date cannot be in the future")
-			return
-		}
-		lastContacted = req.LastContacted.Time
-	}
-
-	if h.manualHandler == nil {
-		api.SendError(c, http.StatusServiceUnavailable, "interactions.disabled",
-			"Interaction recording is disabled",
-			"Set EVENT_BUS_INTERACTION_MODE=cutover to enable.")
-		return
-	}
-
-	// Determine the occurredAt for the manual interaction. PATCH's
-	// "empty body" path uses current time — preserved for backward compat
-	// with the "Mark as Contacted" button.
-	occurredAt := accelerated.GetCurrentTime()
-	if lastContacted != nil {
-		occurredAt = *lastContacted
-	}
-
-	// Run the unified publish + inline-consumer flow. The consumer writes
-	// the interaction row (source=manual, direction=mutual by default),
-	// applies cadence updates, and emits interaction.recorded — all inside
-	// one tx. The resulting contact row has the updated last_contacted /
-	// contact_by fields.
-	if _, err := h.manualHandler.Run(c.Request.Context(), id, repository.InteractionDirectionMutual, occurredAt, ""); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to update last contacted date")
-		return
-	}
-
-	// Refetch the contact so the response carries the updated fields. The
-	// additional round-trip matches today's UpdateContactLastContacted
-	// service method's refetch pattern.
-	updatedContact, err := h.contactService.GetContact(c.Request.Context(), id)
-	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to load updated contact")
-		return
-	}
-
-	response := contactToResponse(updatedContact)
-	api.SendSuccess(c, http.StatusOK, response, nil)
 }
 
 // ListOverdueContacts retrieves contacts that are overdue for contact

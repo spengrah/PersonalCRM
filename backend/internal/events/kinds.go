@@ -131,15 +131,23 @@ type CalendarDeclinedPayload struct {
 }
 
 // TaskCompletedPayload is the payload for KindTaskCompleted. Direction
-// distinguishes cadence vs action task completion semantics (per spec
-// §3.4.5 publisher hooks).
+// distinguishes outbound vs mutual completion semantics: reach_out and
+// send completions emit "outbound"; legacy action / meet tasks emit
+// "mutual" to preserve historical interaction semantics.
+//
+// V2 adds SuppressFollowUp: when true the InteractionRecorder propagates
+// the flag to InteractionRecordedPayload V3 so FollowUpManager
+// short-circuits without spawning a successor follow-up. Polarity is
+// "zero=safe": the zero value (false) preserves the legacy spawn-a-
+// follow-up default; only kind=send completions emit true.
 type TaskCompletedPayload struct {
-	Version     int       `json:"version"`
-	ContactID   uuid.UUID `json:"contact_id"`
-	TaskID      string    `json:"task_id"`   // external provider id (e.g., todoist)
-	TaskKind    string    `json:"task_kind"` // "cadence" | "follow_up" | "action"
-	CompletedAt time.Time `json:"completed_at"`
-	Direction   string    `json:"direction"` // "outbound" | "mutual"
+	Version          int       `json:"version"`
+	ContactID        uuid.UUID `json:"contact_id"`
+	TaskID           string    `json:"task_id"`   // external provider id (e.g., todoist)
+	TaskKind         string    `json:"task_kind"` // post-046: reach_out | send | reminder | meet | action
+	CompletedAt      time.Time `json:"completed_at"`
+	Direction        string    `json:"direction"`                    // "outbound" | "mutual"
+	SuppressFollowUp bool      `json:"suppress_follow_up,omitempty"` // V2+; zero=do-not-suppress
 }
 
 // TaskSkippedPayload is the payload for KindTaskSkipped.
@@ -214,6 +222,14 @@ type InteractionRecordedPayload struct {
 	// cadence edit between emit and consume doesn't cause divergence.
 	// Nil on V1 payloads and when the contact has no cadence set.
 	PrevCadenceValue *string `json:"prev_cadence_value,omitempty"`
+
+	// SuppressFollowUp is propagated from TaskCompletedPayload V2 by
+	// InteractionRecorder. When true, FollowUpManager short-circuits
+	// without spawning a successor follow-up. Polarity matches the
+	// upstream payload: zero (false) = "do not suppress" = legacy
+	// spawn-a-follow-up. Only kind=send completions set this to true.
+	// V3+; on V1/V2 payloads it decodes to false.
+	SuppressFollowUp bool `json:"suppress_follow_up,omitempty"`
 }
 
 // CadenceFieldsSnapshot is the four-cadence-column snapshot embedded in

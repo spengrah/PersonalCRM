@@ -21,12 +21,14 @@ const (
 	FollowUpActionSkip     = "skip"
 )
 
-// FollowUpSkipReason enumerates the three guard-class skip reasons the
-// manager distinguishes on outbound skips. Non-guard-class skips
-// (no-cadence outbound, no-pending inbound/mutual) carry an empty
-// reason.
+// FollowUpSkipReason enumerates the guard-class skip reasons the manager
+// distinguishes on outbound skips. Non-guard-class skips (no-cadence
+// outbound, no-pending inbound/mutual) carry an empty reason.
 const (
 	FollowUpSkipReasonBackdated        = "backdated"
 	FollowUpSkipReasonOutOfOrder       = "out_of_order"
 	FollowUpSkipReasonDuplicatePending = "duplicate_pending"
+	// FollowUpSkipReasonSuppressed fires when InteractionRecordedPayload.SuppressFollowUp
+	// is true (set by Todoist provider for kind=send completions).
+	FollowUpSkipReasonSuppressed = "suppress_follow_up"
 )

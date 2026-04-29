@@ -351,6 +351,12 @@ test.describe('Imports Features @area:imports', () => {
       // Modal opens in import mode (mode toggle is visible).
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
+      // Modal has internal pagination across candidates — under parallel
+      // workers it can open on a different worker's candidate. Navigate to
+      // ours by display name (which falls back to the handle for
+      // username-only candidates).
+      await navigateModalToCandidate(page, handle)
+
       // Contact Methods section shows the @handle as a selectable method row —
       // NOT "No contact methods available". The row carries the handle as its
       // visible value and defaults to selected.
@@ -390,6 +396,11 @@ test.describe('Imports Features @area:imports', () => {
 
       const candidateCard = page.locator('[class*="border-gray-200"]').filter({ hasText: handle })
       await candidateCard.getByRole('button', { name: /Link/i }).click()
+
+      // Modal has internal pagination across candidates — under parallel
+      // workers it can open on a different worker's candidate. Navigate to
+      // ours by display name (handle is the display-name fallback).
+      await navigateModalToCandidate(page, handle)
 
       // Switch to Link mode
       await page.getByRole('button', { name: 'Link to Existing', exact: true }).click()

@@ -1,7 +1,7 @@
 import { apiClient } from './api-client'
 import type {
   ContactTask,
-  CreateActionTaskRequest,
+  CreateManualTaskRequest,
   ContactTaskListParams,
 } from '@/types/contact-task'
 
@@ -11,8 +11,8 @@ export const contactTasksApi = {
     return apiClient.get<ContactTask[]>(`/api/v1/contacts/${contactId}/tasks`, params)
   },
 
-  // Create an action task
-  async createTask(contactId: string, data: CreateActionTaskRequest): Promise<ContactTask> {
+  // Create a manual (user-picker) task — kind in {reach_out, send, reminder}.
+  async createTask(contactId: string, data: CreateManualTaskRequest): Promise<ContactTask> {
     return apiClient.post<ContactTask>(`/api/v1/contacts/${contactId}/tasks`, data)
   },
 

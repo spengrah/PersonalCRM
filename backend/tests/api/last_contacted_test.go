@@ -1,9 +1,16 @@
+// Tests covering the manual interaction logger surface that replaced
+// the legacy PATCH /contacts/:id/last-contacted endpoint. The legacy
+// endpoint is gone; the regression test below confirms it returns 404
+// so any stranded clients fail loudly. The other tests exercise the
+// equivalent semantics now exposed via POST /contacts/:id/interactions
+// (direction=mutual matches the old "Mark as Contacted" behaviour).
 package api
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,10 +22,10 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
-	_ "personal-crm/backend/internal/repository"
-	_ "personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/repository"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +37,6 @@ func setupLastContactedTestRouter(t *testing.T) (*gin.Engine, func()) {
 	ctx := context.Background()
 	databaseURL := os.Getenv("DATABASE_URL")
 
-	// Migrations are applied once by TestMain.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
 		MaxConns:          config.DefaultDBMaxConns,
@@ -46,7 +52,9 @@ func setupLastContactedTestRouter(t *testing.T) (*gin.Engine, func()) {
 
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
-	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contactHandler := handlers.NewContactHandler(contactService)
+	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
@@ -59,7 +67,7 @@ func setupLastContactedTestRouter(t *testing.T) (*gin.Engine, func()) {
 		contacts.POST("", contactHandler.CreateContact)
 		contacts.GET("/:id", contactHandler.GetContact)
 		contacts.DELETE("/:id", contactHandler.DeleteContact)
-		contacts.PATCH("/:id/last-contacted", contactHandler.UpdateContactLastContacted)
+		contacts.POST("/:id/interactions", interactionHandler.CreateInteraction)
 	}
 
 	cleanup := func() {
@@ -69,340 +77,12 @@ func setupLastContactedTestRouter(t *testing.T) (*gin.Engine, func()) {
 	return router, cleanup
 }
 
-func TestUpdateLastContacted_WithPastDate(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	router, cleanup := setupLastContactedTestRouter(t)
-	defer cleanup()
-
-	// Create a test contact
+// createContactForTest is a thin helper that POSTs a contact and returns its ID.
+func createContactForTest(t *testing.T, router *gin.Engine, fullName string) string {
+	t.Helper()
+	cadence := "weekly"
 	createReq := handlers.CreateContactRequest{
-		FullName: "Last Contacted Test User",
-		Methods: []handlers.ContactMethodRequest{
-			{
-				Type:  "email",
-				Value: "lastcontacted@example.com",
-			},
-		},
-	}
-	jsonBody, _ := json.Marshal(createReq)
-	req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
-	req.Header.Set("Content-Type", "application/json")
-
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code)
-
-	var createResponse api.APIResponse
-	err := json.Unmarshal(w.Body.Bytes(), &createResponse)
-	require.NoError(t, err)
-	contactData := createResponse.Data.(map[string]interface{})
-	contactID := contactData["id"].(string)
-
-	defer func() {
-		// Cleanup
-		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
-		deleteW := httptest.NewRecorder()
-		router.ServeHTTP(deleteW, deleteReq)
-	}()
-
-	t.Run("UpdateLastContacted_WithPastDate_Success", func(t *testing.T) {
-		pastDate := "2024-01-15"
-		updateReq := handlers.UpdateLastContactedRequest{
-			LastContacted: &handlers.DateOnly{},
-		}
-		// Parse and set the date
-		parsedTime, _ := time.Parse("2006-01-02", pastDate)
-		updateReq.LastContacted.Time = &parsedTime
-
-		jsonBody, _ := json.Marshal(updateReq)
-		req, _ := http.NewRequest("PATCH", "/api/v1/contacts/"+contactID+"/last-contacted", bytes.NewBuffer(jsonBody))
-		req.Header.Set("Content-Type", "application/json")
-
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var response api.APIResponse
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
-		assert.True(t, response.Success)
-
-		// Verify the last_contacted was updated
-		data := response.Data.(map[string]interface{})
-		lastContacted := data["last_contacted"].(string)
-		assert.Contains(t, lastContacted, "2024-01-15")
-	})
-
-	t.Run("UpdateLastContacted_WithTodayDate_Success", func(t *testing.T) {
-		today := accelerated.GetCurrentTime().Format("2006-01-02")
-		updateReq := handlers.UpdateLastContactedRequest{
-			LastContacted: &handlers.DateOnly{},
-		}
-		parsedTime, _ := time.Parse("2006-01-02", today)
-		updateReq.LastContacted.Time = &parsedTime
-
-		jsonBody, _ := json.Marshal(updateReq)
-		req, _ := http.NewRequest("PATCH", "/api/v1/contacts/"+contactID+"/last-contacted", bytes.NewBuffer(jsonBody))
-		req.Header.Set("Content-Type", "application/json")
-
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var response api.APIResponse
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
-		assert.True(t, response.Success)
-	})
-}
-
-func TestUpdateLastContacted_WithFutureDate(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	router, cleanup := setupLastContactedTestRouter(t)
-	defer cleanup()
-
-	// Create a test contact
-	createReq := handlers.CreateContactRequest{
-		FullName: "Future Date Test User",
-		Methods: []handlers.ContactMethodRequest{
-			{
-				Type:  "email",
-				Value: "futuredate@example.com",
-			},
-		},
-	}
-	jsonBody, _ := json.Marshal(createReq)
-	req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
-	req.Header.Set("Content-Type", "application/json")
-
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code)
-
-	var createResponse api.APIResponse
-	err := json.Unmarshal(w.Body.Bytes(), &createResponse)
-	require.NoError(t, err)
-	contactData := createResponse.Data.(map[string]interface{})
-	contactID := contactData["id"].(string)
-
-	defer func() {
-		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
-		deleteW := httptest.NewRecorder()
-		router.ServeHTTP(deleteW, deleteReq)
-	}()
-
-	t.Run("UpdateLastContacted_WithFutureDate_Fails", func(t *testing.T) {
-		futureDate := accelerated.GetCurrentTime().AddDate(0, 0, 7).Format("2006-01-02")
-		updateReq := handlers.UpdateLastContactedRequest{
-			LastContacted: &handlers.DateOnly{},
-		}
-		parsedTime, _ := time.Parse("2006-01-02", futureDate)
-		updateReq.LastContacted.Time = &parsedTime
-
-		jsonBody, _ := json.Marshal(updateReq)
-		req, _ := http.NewRequest("PATCH", "/api/v1/contacts/"+contactID+"/last-contacted", bytes.NewBuffer(jsonBody))
-		req.Header.Set("Content-Type", "application/json")
-
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-
-		var response api.APIResponse
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
-		assert.False(t, response.Success)
-		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
-		assert.Contains(t, response.Error.Details, "future")
-	})
-}
-
-func TestUpdateLastContacted_WithoutDate(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	router, cleanup := setupLastContactedTestRouter(t)
-	defer cleanup()
-
-	// Create a test contact
-	createReq := handlers.CreateContactRequest{
-		FullName: "No Date Test User",
-		Methods: []handlers.ContactMethodRequest{
-			{
-				Type:  "email",
-				Value: "nodate@example.com",
-			},
-		},
-	}
-	jsonBody, _ := json.Marshal(createReq)
-	req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(jsonBody))
-	req.Header.Set("Content-Type", "application/json")
-
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code)
-
-	var createResponse api.APIResponse
-	err := json.Unmarshal(w.Body.Bytes(), &createResponse)
-	require.NoError(t, err)
-	contactData := createResponse.Data.(map[string]interface{})
-	contactID := contactData["id"].(string)
-
-	defer func() {
-		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
-		deleteW := httptest.NewRecorder()
-		router.ServeHTTP(deleteW, deleteReq)
-	}()
-
-	t.Run("UpdateLastContacted_EmptyBody_UsesCurrentTime", func(t *testing.T) {
-		// Send empty body - should use current time
-		req, _ := http.NewRequest("PATCH", "/api/v1/contacts/"+contactID+"/last-contacted", nil)
-		req.Header.Set("Content-Type", "application/json")
-
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var response api.APIResponse
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
-		assert.True(t, response.Success)
-
-		// Verify the last_contacted was updated to approximately now
-		data := response.Data.(map[string]interface{})
-		lastContacted := data["last_contacted"].(string)
-		parsedTime, _ := time.Parse(time.RFC3339, lastContacted)
-		now := accelerated.GetCurrentTime()
-		// Should be within 1 minute of now
-		assert.WithinDuration(t, now, parsedTime, time.Minute)
-	})
-
-	t.Run("UpdateLastContacted_EmptyJSON_UsesCurrentTime", func(t *testing.T) {
-		// Send empty JSON object - should use current time
-		jsonBody, _ := json.Marshal(map[string]interface{}{})
-		req, _ := http.NewRequest("PATCH", "/api/v1/contacts/"+contactID+"/last-contacted", bytes.NewBuffer(jsonBody))
-		req.Header.Set("Content-Type", "application/json")
-
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var response api.APIResponse
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
-		assert.True(t, response.Success)
-	})
-}
-
-func TestUpdateLastContacted_NonExistentContact(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	router, cleanup := setupLastContactedTestRouter(t)
-	defer cleanup()
-
-	t.Run("UpdateLastContacted_NonExistentContact_Returns404", func(t *testing.T) {
-		// Use a non-nil UUID. The zero UUID trips the consumer's
-		// "contact_id unresolved" guard (plan Decision 4) before reaching
-		// the DB check; we want the DB-level not-found path here.
-		nonExistentID := "550e8400-e29b-41d4-a716-446655440098"
-		pastDate := "2024-01-15"
-		updateReq := handlers.UpdateLastContactedRequest{
-			LastContacted: &handlers.DateOnly{},
-		}
-		parsedTime, _ := time.Parse("2006-01-02", pastDate)
-		updateReq.LastContacted.Time = &parsedTime
-
-		jsonBody, _ := json.Marshal(updateReq)
-		req, _ := http.NewRequest("PATCH", "/api/v1/contacts/"+nonExistentID+"/last-contacted", bytes.NewBuffer(jsonBody))
-		req.Header.Set("Content-Type", "application/json")
-
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusNotFound, w.Code)
-
-		var response api.APIResponse
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
-		assert.False(t, response.Success)
-		assert.Equal(t, "NOT_FOUND", response.Error.Code)
-	})
-
-	t.Run("UpdateLastContacted_InvalidUUID_Returns400", func(t *testing.T) {
-		req, _ := http.NewRequest("PATCH", "/api/v1/contacts/not-a-uuid/last-contacted", nil)
-		req.Header.Set("Content-Type", "application/json")
-
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-
-		var response api.APIResponse
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
-		assert.False(t, response.Success)
-		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
-	})
-}
-
-func TestUpdateLastContacted_PreservesOtherContactData(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	router, cleanup := setupLastContactedTestRouter(t)
-	defer cleanup()
-
-	// Create a test contact with various fields
-	location := "San Francisco"
-	cadence := "monthly"
-	createReq := handlers.CreateContactRequest{
-		FullName: "Data Preservation Test",
-		Methods: []handlers.ContactMethodRequest{
-			{
-				Type:  "email",
-				Value: "preservation@example.com",
-			},
-		},
-		Location: &location,
+		FullName: fullName,
 		Cadence:  &cadence,
 	}
 	jsonBody, _ := json.Marshal(createReq)
@@ -411,48 +91,153 @@ func TestUpdateLastContacted_PreservesOtherContactData(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code)
+	require.Equal(t, http.StatusCreated, w.Code, "create contact: %s", w.Body.String())
 
 	var createResponse api.APIResponse
-	err := json.Unmarshal(w.Body.Bytes(), &createResponse)
-	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &createResponse))
 	contactData := createResponse.Data.(map[string]interface{})
 	contactID := contactData["id"].(string)
 
-	defer func() {
+	t.Cleanup(func() {
 		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
 		deleteW := httptest.NewRecorder()
 		router.ServeHTTP(deleteW, deleteReq)
-	}()
-
-	t.Run("UpdateLastContacted_PreservesOtherFields", func(t *testing.T) {
-		pastDate := "2024-06-15"
-		updateReq := handlers.UpdateLastContactedRequest{
-			LastContacted: &handlers.DateOnly{},
-		}
-		parsedTime, _ := time.Parse("2006-01-02", pastDate)
-		updateReq.LastContacted.Time = &parsedTime
-
-		jsonBody, _ := json.Marshal(updateReq)
-		req, _ := http.NewRequest("PATCH", "/api/v1/contacts/"+contactID+"/last-contacted", bytes.NewBuffer(jsonBody))
-		req.Header.Set("Content-Type", "application/json")
-
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		var response api.APIResponse
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
-		assert.True(t, response.Success)
-
-		// Verify all fields are preserved
-		data := response.Data.(map[string]interface{})
-		assert.Equal(t, "Data Preservation Test", data["full_name"])
-		assert.Equal(t, "San Francisco", data["location"])
-		// Note: notes are now stored in a separate note table, not on the contact
-		assert.Equal(t, "monthly", data["cadence"])
-		assert.Contains(t, data["last_contacted"].(string), "2024-06-15")
 	})
+
+	return contactID
+}
+
+// TestPostInteraction_DirectionMutual_BumpsLastContacted is the primary
+// replacement for the old "Mark as Contacted" PATCH semantics.
+// direction=mutual updates last_contacted via the manual interaction
+// pipeline (publish -> InteractionRecorder -> CadenceUpdater all in one tx).
+func TestPostInteraction_DirectionMutual_BumpsLastContacted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	router, cleanup := setupLastContactedTestRouter(t)
+	defer cleanup()
+
+	contactID := createContactForTest(t, router, "PostInteraction Mutual")
+
+	// Empty body -> direction defaults to mutual; backend uses
+	// accelerated.GetCurrentTime() for occurred_at.
+	req, _ := http.NewRequest("POST", "/api/v1/contacts/"+contactID+"/interactions", bytes.NewBufferString(`{"direction":"mutual"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code, "post interaction: %s", w.Body.String())
+
+	// Refetch the contact and verify last_contacted advanced.
+	getReq, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
+	getW := httptest.NewRecorder()
+	router.ServeHTTP(getW, getReq)
+	require.Equal(t, http.StatusOK, getW.Code)
+
+	var resp api.APIResponse
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &resp))
+	data := resp.Data.(map[string]interface{})
+	require.NotNil(t, data["last_contacted"], "last_contacted must be populated after a mutual interaction")
+
+	// last_contacted should be roughly 'now' (within 5 seconds of accelerated time).
+	parsed, err := time.Parse(time.RFC3339, data["last_contacted"].(string))
+	require.NoError(t, err)
+	now := accelerated.GetCurrentTime()
+	delta := now.Sub(parsed)
+	if delta < 0 {
+		delta = -delta
+	}
+	assert.Less(t, delta, 5*time.Second, "last_contacted should be ~now")
+}
+
+// TestPostInteraction_DirectionOutbound_DoesNotBumpLastContacted asserts
+// the direction-aware semantics that replace the old timestamp-only
+// update: outbound interactions advance last_outreach_at only and MUST
+// NOT touch last_contacted (last_contacted tracks incoming/mutual only).
+//
+// Note: contact creation initializes last_contacted to the create-time
+// timestamp (handler default). The assertion compares pre- and post-
+// interaction values to confirm the outbound interaction did NOT advance
+// last_contacted, NOT that last_contacted is nil.
+func TestPostInteraction_DirectionOutbound_DoesNotBumpLastContacted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	router, cleanup := setupLastContactedTestRouter(t)
+	defer cleanup()
+
+	contactID := createContactForTest(t, router, "PostInteraction Outbound")
+
+	// Capture last_contacted at creation time.
+	getReq0, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
+	getW0 := httptest.NewRecorder()
+	router.ServeHTTP(getW0, getReq0)
+	require.Equal(t, http.StatusOK, getW0.Code)
+	var resp0 api.APIResponse
+	require.NoError(t, json.Unmarshal(getW0.Body.Bytes(), &resp0))
+	data0 := resp0.Data.(map[string]interface{})
+	lcAtCreate, _ := data0["last_contacted"].(string)
+
+	// Sleep briefly so the interaction's occurred_at is strictly after
+	// the contact's created-time last_contacted, ensuring "no bump"
+	// asserts a real invariant.
+	time.Sleep(50 * time.Millisecond)
+
+	body := []byte(`{"direction":"outbound"}`)
+	req, _ := http.NewRequest("POST", "/api/v1/contacts/"+contactID+"/interactions", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code, "post interaction: %s", w.Body.String())
+
+	getReq, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
+	getW := httptest.NewRecorder()
+	router.ServeHTTP(getW, getReq)
+	require.Equal(t, http.StatusOK, getW.Code)
+
+	var resp api.APIResponse
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &resp))
+	data := resp.Data.(map[string]interface{})
+
+	// Outbound must NOT advance last_contacted.
+	lcAfter, _ := data["last_contacted"].(string)
+	assert.Equal(t, lcAtCreate, lcAfter, "outbound interaction must not bump last_contacted")
+
+	// last_outreach_at should advance instead.
+	require.NotNil(t, data["last_outreach_at"], "last_outreach_at must be populated after an outbound interaction")
+}
+
+// TestRemovedEndpoint_PatchLastContacted_Returns404 locks down the legacy
+// PATCH /contacts/:id/last-contacted endpoint removal: stranded clients
+// must see a clean 404 (gin's default no-route response) rather than
+// silent success or an unexpected handler match.
+func TestRemovedEndpoint_PatchLastContacted_Returns404(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	router, cleanup := setupLastContactedTestRouter(t)
+	defer cleanup()
+
+	contactID := uuid.New().String()
+	url := fmt.Sprintf("/api/v1/contacts/%s/last-contacted", contactID)
+	req, _ := http.NewRequest("PATCH", url, bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// gin returns 404 for unregistered routes by default.
+	assert.Equal(t, http.StatusNotFound, w.Code, "PATCH /contacts/:id/last-contacted must be removed; got body=%s", w.Body.String())
 }

@@ -218,8 +218,8 @@ test-e2e-local: e2e-db
 	if [ -f "$(REPO_ROOT)/frontend/.env.local.bak" ]; then mv "$(REPO_ROOT)/frontend/.env.local.bak" "$(REPO_ROOT)/frontend/.env.local"; fi; \
 	exit $$EXIT_CODE
 
-test-e2e-diff:
-	@node "$(REPO_ROOT)/scripts/run-e2e-local.mjs"
+test-e2e-diff: e2e-db
+	@PLAYWRIGHT_WORKERS=1 node "$(REPO_ROOT)/scripts/run-e2e-local.mjs"
 
 e2e-db:
 	@bash "$(REPO_ROOT)/scripts/ensure-postgres-for-tests.sh"

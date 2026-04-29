@@ -45,7 +45,7 @@ func setupContactSortTestRouter(t *testing.T) (*gin.Engine, func()) {
 
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
-	contactHandler := handlers.NewContactHandler(contactService, manualHandler)
+	contactHandler := handlers.NewContactHandler(contactService)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
 
@@ -61,7 +61,6 @@ func setupContactSortTestRouter(t *testing.T) (*gin.Engine, func()) {
 		contacts.GET("", contactHandler.ListContacts)
 		contacts.PUT("/:id", contactHandler.UpdateContact)
 		contacts.DELETE("/:id", contactHandler.DeleteContact)
-		contacts.PATCH("/:id/last-contacted", contactHandler.UpdateContactLastContacted)
 		contacts.POST("/:id/interactions", interactionHandler.CreateInteraction)
 	}
 
@@ -108,13 +107,18 @@ func (h *sortTestHelper) createContactWithCadence(name, cadence string) string {
 	return contactData["id"].(string)
 }
 
+// markContacted seeds last_contacted by posting a mutual interaction
+// at the given occurred_at. Replaces the legacy PATCH
+// /contacts/:id/last-contacted endpoint, which is no longer registered.
 func (h *sortTestHelper) markContacted(id, date string) {
-	body := fmt.Sprintf(`{"last_contacted": "%s"}`, date)
-	req := httptest.NewRequest(http.MethodPatch, "/api/v1/contacts/"+id+"/last-contacted", bytes.NewBufferString(body))
+	// Date is YYYY-MM-DD; convert to RFC3339 by appending T00:00:00Z.
+	occurredAt := date + "T00:00:00Z"
+	body := fmt.Sprintf(`{"direction": "mutual", "occurred_at": "%s"}`, occurredAt)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/contacts/"+id+"/interactions", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.router.ServeHTTP(w, req)
-	require.Equal(h.t, http.StatusOK, w.Code)
+	require.Equal(h.t, http.StatusCreated, w.Code)
 }
 
 // recordInteraction posts a directional interaction so that direction-aware

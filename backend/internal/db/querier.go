@@ -109,8 +109,10 @@ type Querier interface {
 	// Delete a note for a contact by category
 	DeleteContactNoteByCategory(ctx context.Context, arg DeleteContactNoteByCategoryParams) error
 	DeleteContactTask(ctx context.Context, id pgtype.UUID) error
-	// Delete task link for a contact+provider+kind (e.g., when cadence is disabled)
-	DeleteContactTaskByContact(ctx context.Context, arg DeleteContactTaskByContactParams) error
+	// Delete the cadence-due task link for a contact+provider (e.g., when
+	// cadence is disabled). Uses the lifecycle predicate to match the
+	// post-046 schema.
+	DeleteContactTaskByContactCadenceDue(ctx context.Context, arg DeleteContactTaskByContactCadenceDueParams) error
 	// Delete all tasks for a provider (e.g., when disconnecting Todoist)
 	DeleteContactTasksByProvider(ctx context.Context, provider string) error
 	// Test data management queries
@@ -205,7 +207,10 @@ type Querier interface {
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
 	// Find an existing interaction by contact, source, and source_ref (for deduplication)
 	FindInteractionBySourceRef(ctx context.Context, arg FindInteractionBySourceRefParams) (*Interaction, error)
-	// Find an existing manual interaction within a time window (for manual deduplication)
+	// Find an existing manual interaction within a time window for a given
+	// direction (for manual deduplication). Direction is part of the dedup
+	// key so a user logging outbound then inbound for the same contact
+	// within the window correctly produces two separate rows.
 	FindInteractionInWindow(ctx context.Context, arg FindInteractionInWindowParams) (*Interaction, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	// Find a pending follow-up task for a contact. Matches both 'managed'
@@ -239,14 +244,20 @@ type Querier interface {
 	GetContactTags(ctx context.Context, contactID pgtype.UUID) ([]*Tag, error)
 	// Contact Task Queries (for Todoist cadence sync)
 	GetContactTask(ctx context.Context, id pgtype.UUID) (*ContactTask, error)
-	// Get the task for a specific contact+provider+kind combination
-	GetContactTaskByContact(ctx context.Context, arg GetContactTaskByContactParams) (*ContactTask, error)
+	// Look up the cadence-due task for a contact+provider. Backed by the
+	// partial unique index unique_contact_provider_cadence
+	// (lifecycle='cadence_due', no state filter), so at most one row exists.
+	GetContactTaskByContactCadenceDue(ctx context.Context, arg GetContactTaskByContactCadenceDueParams) (*ContactTask, error)
+	// Look up the live follow-up task for a contact+provider. Backed by the
+	// partial unique index idx_contact_task_followup_unique_live
+	// (lifecycle='followup_loop' AND state IN live states).
+	GetContactTaskByContactFollowUpLive(ctx context.Context, arg GetContactTaskByContactFollowUpLiveParams) (*ContactTask, error)
 	// Look up a task by its external provider ID
 	GetContactTaskByExternalID(ctx context.Context, arg GetContactTaskByExternalIDParams) (*ContactTask, error)
 	// Partial-index lookup for the local idempotency key used by the
 	// follow-up consumer's crash-safe two-step creation. Matches the
-	// partial unique index on (contact_id, kind, idempotency_key)
-	// WHERE idempotency_key IS NOT NULL.
+	// partial unique index on (contact_id, idempotency_key)
+	// WHERE lifecycle = 'followup_loop' AND idempotency_key IS NOT NULL.
 	GetContactTaskByIdempotencyKey(ctx context.Context, arg GetContactTaskByIdempotencyKeyParams) (*ContactTask, error)
 	// Find a task by its pending temp ID in metadata (for mapping temp IDs to real Todoist IDs)
 	GetContactTaskByPendingTempID(ctx context.Context, arg GetContactTaskByPendingTempIDParams) (*ContactTask, error)
@@ -262,6 +273,10 @@ type Querier interface {
 	GetIdentityByIdentifier(ctx context.Context, arg GetIdentityByIdentifierParams) (*ExternalIdentity, error)
 	// Interaction queries
 	GetInteraction(ctx context.Context, id pgtype.UUID) (*Interaction, error)
+	// Legacy lookup for action-kind rows (no new creator path; preserved for
+	// pre-migration rows). Multiple action rows are possible per
+	// contact/provider; this returns the most recent.
+	GetLegacyActionTaskByContact(ctx context.Context, arg GetLegacyActionTaskByContactParams) (*ContactTask, error)
 	// Note queries
 	GetNote(ctx context.Context, id pgtype.UUID) (*Note, error)
 	// OAuth Credential Queries
@@ -334,7 +349,7 @@ type Querier interface {
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
 	// List all tasks for a contact
 	ListContactTasksByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
-	// List tasks for a contact with optional state and kind filters
+	// List tasks for a contact with optional state, kind, and lifecycle filters
 	ListContactTasksByContactFiltered(ctx context.Context, arg ListContactTasksByContactFilteredParams) ([]*ContactTask, error)
 	// List all tasks for a provider (optionally filtered by state)
 	ListContactTasksByProvider(ctx context.Context, arg ListContactTasksByProviderParams) ([]*ContactTask, error)

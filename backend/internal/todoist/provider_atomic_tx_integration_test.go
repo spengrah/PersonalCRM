@@ -12,6 +12,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer/consumerjobs"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
@@ -328,7 +329,8 @@ func createManagedCadenceTask(t *testing.T, env *atomicTxTestEnv, namePrefix str
 	task, err := env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: extID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata:       map[string]any{},
@@ -1030,7 +1032,8 @@ func TestSync_StaleTodoistDeadline_OutreachRecovery(t *testing.T) {
 	_, err = env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata: map[string]any{
@@ -1127,7 +1130,8 @@ func TestSync_StaleTodoistDeadline_CRMDriftPath(t *testing.T) {
 	_, err = env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata: map[string]any{
@@ -1235,7 +1239,8 @@ func TestProcessItem_DeadlineEditTxFailure_RollsBackAndSurfacesErr(t *testing.T)
 	_, err = env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata: map[string]any{
@@ -1327,7 +1332,8 @@ func TestSync_LegitimateTodoistEdit_SameTickReconcileIsNotSpuriousCloseCreate(t 
 	_, err = env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
 		ContactID:      contact.ID,
 		Provider:       SourceName,
-		Kind:           TaskKindCadence,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
 		ExternalTaskID: cadenceExtID,
 		State:          string(repository.ContactTaskStateManaged),
 		Metadata: map[string]any{

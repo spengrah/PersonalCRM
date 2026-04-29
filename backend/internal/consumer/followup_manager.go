@@ -13,6 +13,7 @@ import (
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer/consumerjobs"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
@@ -96,7 +97,7 @@ type followUpTaskWriter interface {
 	UpdateContactTaskMetadataTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, metadata map[string]any) (*repository.ContactTask, error)
 	UpdateContactTaskExternalIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, externalTaskID string) (*repository.ContactTask, error)
 	SetContactTaskExternalIDOnlyTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, externalTaskID string) error
-	GetContactTaskByIdempotencyKeyTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, kind, key string) (*repository.ContactTask, error)
+	GetContactTaskByIdempotencyKeyTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, key string) (*repository.ContactTask, error)
 	GetContactTaskTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.ContactTask, error)
 }
 
@@ -317,11 +318,11 @@ func (h *FollowUpManager) HandleEvent(ctx context.Context, tx pgx.Tx, env *event
 	if err := events.Unmarshal(env, &p); err != nil {
 		return nil, fmt.Errorf("unmarshal interaction.recorded payload: %w", err)
 	}
-	if p.Version != 2 {
+	if p.Version != 2 && p.Version != 3 {
 		logger.Error().
 			Str("event_id", env.ID.String()).
 			Int("version", p.Version).
-			Msg("followup_manager: rejecting interaction.recorded payload with Version != 2; external producers must emit V2")
+			Msg("followup_manager: rejecting interaction.recorded payload with Version not in {2, 3}")
 		return nil, nil
 	}
 
@@ -421,6 +422,15 @@ func (h *FollowUpManager) handleOutbound(
 	ctx context.Context, tx pgx.Tx, env *events.Envelope,
 	p events.InteractionRecordedPayload, cadenceStr string,
 ) (func(context.Context), error) {
+	// SuppressFollowUp short-circuit (V3+). Set true by Todoist provider
+	// when the completed task is kind=send. Polarity: zero=do-not-suppress
+	// preserves the legacy behavior, so V1/V2 payloads (where the field
+	// decodes to false) still spawn a follow-up.
+	if p.SuppressFollowUp {
+		h.emit(Decision{Action: repository.FollowUpActionSkip, SkipReason: repository.FollowUpSkipReasonSuppressed})
+		return nil, nil
+	}
+
 	// Guard 0 (implicit): no cadence → no follow-up. Matches direct-path
 	// behavior (early-return when contact.Cadence is nil).
 	days := watchdogDaysForCadenceStr(cadenceStr, h.watchdog)
@@ -494,7 +504,7 @@ func (h *FollowUpManager) applyCreate(
 	// a queued worker, or duplicate inline call). If the idempotency-key
 	// row already exists, we have nothing to do: the caller lost the
 	// race and the winner's step-2 worker will finalize.
-	if existing, err := h.taskWriter.GetContactTaskByIdempotencyKeyTx(ctx, tx, p.ContactID, todoist.TaskKindFollowUp, idemKey); err != nil {
+	if existing, err := h.taskWriter.GetContactTaskByIdempotencyKeyTx(ctx, tx, p.ContactID, idemKey); err != nil {
 		if !errors.Is(err, db.ErrNotFound) {
 			return nil, fmt.Errorf("check idempotency key: %w", err)
 		}
@@ -540,7 +550,8 @@ func (h *FollowUpManager) applyCreate(
 	marker := map[string]any{
 		"crm":        true,
 		"contact_id": p.ContactID.String(),
-		"kind":       todoist.TaskKindFollowUp,
+		"kind":       contacttask.KindReachOut,
+		"lifecycle":  contacttask.LifecycleFollowUpLoop,
 		"instance":   settings.IntegrationInstanceID,
 	}
 	markerJSON, err := json.Marshal(marker)
@@ -571,7 +582,8 @@ func (h *FollowUpManager) applyCreate(
 	newTask, err := h.taskWriter.CreateContactTaskTx(ctx, sp, repository.CreateContactTaskRequest{
 		ContactID:      p.ContactID,
 		Provider:       todoist.SourceName,
-		Kind:           todoist.TaskKindFollowUp,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
 		ExternalTaskID: "",
 		State:          string(repository.ContactTaskStatePendingRemoteCreate),
 		Metadata:       metadata,
