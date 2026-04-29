@@ -194,12 +194,22 @@ export default function ContactDetailPage() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isEditing, router, buildNavigationUrl])
 
-  // Detect if notes content overflows the 4-line clamp
+  // Detect if notes content overflows the 4-line clamp. ResizeObserver
+  // re-measures whenever the container's box changes — the initial
+  // mount measurement can read scrollHeight=0 before fonts/styles
+  // settle, leaving notesOverflowing false until the deps change.
   useEffect(() => {
-    if (notesRef.current && !notesExpanded) {
-      const isOverflowing = notesRef.current.scrollHeight > notesRef.current.clientHeight
-      setNotesOverflowing(isOverflowing)
+    const el = notesRef.current
+    if (!el || notesExpanded) return
+
+    const measure = () => {
+      setNotesOverflowing(el.scrollHeight > el.clientHeight)
     }
+    measure()
+
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
   }, [contactNote?.body, notesExpanded])
   const deleteContactMutation = useDeleteContact()
 
