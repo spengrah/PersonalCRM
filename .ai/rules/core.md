@@ -241,4 +241,5 @@ Cross-cutting concerns that require checking multiple locations:
 | Scheduled job changes | Scheduler section in `.ai/guides/architecture.md` |
 | New sortable contact field | 4 SQL sorted queries + handler oneof + `SortField` type + `ContactListParams.sort` |
 | New contact list filter param | 10 SQL queries + repo params + service count calls + handler query struct + frontend types + API client + contacts page + detail page listContext |
+| Semantic column to table with dedup logic | All FindInWindow queries (add param), unique constraints, repository signatures, service call sites, `make sqlc`, regression test for false-positive case |
 | New type or worker referenced from `cmd/crm-api/main.go` | Inline into `main.go` (single-file build convention). If inlining isn't feasible, update ALL build sites to package form `./cmd/crm-api`: `.github/workflows/ci.yml`, `Makefile` (6+ targets), `frontend/playwright.config.ts` webServer |

@@ -71,6 +71,38 @@ GROUP BY cadence
 ORDER BY count DESC;
 ```
 
+## Deduplication Window Queries
+
+When implementing time-window deduplication (e.g., "find if this event already exists within ±30 minutes"), the WHERE clause must include ALL semantically-significant dimensions, not just entity + time.
+
+**Example:** An interaction dedup query needs:
+- Entity (contact_id)
+- Time window (occurred_at BETWEEN @start AND @end)
+- Source (to distinguish manual vs automated)
+- **Direction** (to distinguish outbound vs inbound)
+
+**Why:** Without all dimensions, false positives occur. A user logging an outbound interaction followed by an inbound interaction on the same contact within 30 minutes would incorrectly match the first interaction despite different directions.
+
+**Pattern:**
+```sql
+-- name: FindInteractionInWindow :one
+SELECT * FROM interaction
+WHERE contact_id = $1
+  AND occurred_at BETWEEN $2 AND $3
+  AND source = $4
+  AND direction = $5  -- Don't forget semantic dimensions!
+  AND deleted_at IS NULL
+LIMIT 1;
+```
+
+**Cross-cutting impact:** When adding a semantic column to a table with existing dedup logic:
+1. Audit all FindInWindow queries to include the new dimension
+2. Update unique constraints if applicable
+3. Update repository method signatures
+4. Update all service-layer call sites
+5. Run `make sqlc`
+6. Add regression test for the false-positive case
+
 ## Key Rules
 
 1. **Always filter soft deletes:** `WHERE deleted_at IS NULL`
@@ -78,6 +110,7 @@ ORDER BY count DESC;
 3. **Use `:one`, `:many`, or `:exec`:** Match return type to query
 4. **Return `*` for mutations:** Use `RETURNING *` for creates/updates
 5. **Add indexes:** For foreign keys and commonly queried fields
+6. **Include all semantic dimensions in dedup queries:** Entity + time is not enough if events can differ in other meaningful ways
 
 ## Regenerating Code
 
