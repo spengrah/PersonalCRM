@@ -29,10 +29,10 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
 
   const handleMarkContacted = async () => {
     try {
-      // The dashboard quick-action preserves the old "Mark as Contacted"
-      // semantic (mutual interaction at current accelerated time). We omit
-      // occurred_at from the payload so the backend stamps the interaction
-      // with accelerated.GetCurrentTime() — see plan §5.4.5.
+      // Dashboard quick-action: mutual interaction at the current
+      // accelerated time. Omitting occurred_at lets the backend stamp
+      // the interaction with accelerated.GetCurrentTime() instead of
+      // the browser's wall-clock value.
       await createInteraction.mutateAsync({
         contactId: contact.id,
         data: { direction: 'mutual' },

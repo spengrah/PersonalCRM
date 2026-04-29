@@ -15,8 +15,9 @@ interface LogInteractionModalProps {
 // today returns a YYYY-MM-DD string from the browser's wall clock for the
 // date input's `max` attribute (cosmetic guard — the backend rejects future
 // occurred_at regardless). When the user does NOT change the date input we
-// omit occurred_at from the payload entirely so the backend can use
-// accelerated.GetCurrentTime() — see plan §5.4.3 time-source decision.
+// omit occurred_at from the payload entirely so the backend can stamp it
+// with accelerated.GetCurrentTime() — important in dev mode where the
+// browser's wall clock and the backend's accelerated clock can drift.
 function todayString(): string {
   const d = new Date()
   const yyyy = d.getFullYear()
@@ -28,11 +29,11 @@ function todayString(): string {
 export function LogInteractionModal({ contactId, contactName, onClose }: LogInteractionModalProps) {
   const today = todayString()
   const [direction, setDirection] = useState<InteractionDirection>('mutual')
-  // Default the visible value to today (per spec §5 wireframe). userChangedDate
-  // tracks whether the user explicitly picked a different value: if false at
-  // submit, we omit occurred_at from the payload so the backend stamps the
-  // interaction with accelerated.GetCurrentTime() instead of the browser's
-  // wall-clock midnight (plan §5.4.3 time-source decision).
+  // Default the visible value to today. userChangedDate tracks whether
+  // the user explicitly picked a different value: if false at submit, we
+  // omit occurred_at from the payload so the backend stamps the
+  // interaction with accelerated.GetCurrentTime() instead of the
+  // browser's wall-clock midnight.
   const [date, setDate] = useState<string>(today)
   const [userChangedDate, setUserChangedDate] = useState(false)
   const [error, setError] = useState<string | null>(null)

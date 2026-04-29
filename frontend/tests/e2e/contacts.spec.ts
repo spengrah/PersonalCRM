@@ -274,12 +274,15 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
   test('should log a mutual interaction via the Log Interaction modal default', async ({
     page,
+    request,
   }) => {
-    // The contact-detail header button is now "Log Interaction" (the
-    // old "Mark as Contacted" inline button is gone). The default
-    // direction is mutual, which preserves the old "I just talked to
-    // them" semantic. This test exercises the no-arg default path.
-    const { ids } = await testApi.seedContacts([{ full_name: 'Mark Contacted Default' }])
+    // Mutual bumps both last_contacted and last_response_at AND
+    // last_outreach_at, and recomputes contact_by from cadence. This
+    // is the default-direction path of the Log Interaction modal,
+    // preserving the old "I just talked to them" semantic.
+    const { ids } = await testApi.seedContacts([
+      { full_name: 'Mark Contacted Default', cadence: 'weekly' },
+    ])
     const contactId = ids[0]
     const fullName = `${testApi.prefix}-Mark Contacted Default`
 
@@ -298,18 +301,35 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.getByRole('button', { name: 'Log' }).click()
     const response = await responsePromise
     expect(response.status()).toBe(201)
+    expect((await response.json()).data.direction).toBe('mutual')
 
     await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 })
+
+    // Mutual bumps last_response_at + last_outreach_at; both must be
+    // populated after the interaction.
+    const afterResp = await request.get(`/api/v1/contacts/${contactId}`)
+    expect(afterResp.ok()).toBeTruthy()
+    const afterContact = (await afterResp.json()).data
+    expect(afterContact.last_response_at).toBeTruthy()
+    expect(afterContact.last_outreach_at).toBeTruthy()
   })
 
-  test('should log an outbound interaction via the Log Interaction modal', async ({ page }) => {
-    // Direction picker accepts mutual / outbound / inbound. Outbound
-    // should NOT bump last_contacted (only last_outreach_at) — we
-    // assert the API response shape rather than UI rendering because
-    // the contact-detail "Recent activity" section omits dates.
+  test('should log an outbound interaction via the Log Interaction modal', async ({
+    page,
+    request,
+  }) => {
+    // Outbound bumps last_outreach_at only — last_contacted stays at
+    // its create-time value (handler sets it to now() on contact create).
     const { ids } = await testApi.seedContacts([{ full_name: 'Outbound Interaction Test' }])
     const contactId = ids[0]
     const fullName = `${testApi.prefix}-Outbound Interaction Test`
+
+    // Capture last_contacted BEFORE the interaction so we can assert
+    // outbound did not bump it.
+    const beforeResp = await request.get(`/api/v1/contacts/${contactId}`)
+    expect(beforeResp.ok()).toBeTruthy()
+    const beforeContact = (await beforeResp.json()).data
+    const lastContactedBefore = beforeContact.last_contacted
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -327,14 +347,33 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const response = await responsePromise
     expect(response.status()).toBe(201)
     const body = await response.json()
-    expect(body.success).toBe(true)
     expect(body.data.direction).toBe('outbound')
+
+    // Re-fetch the contact and assert direction-aware cadence updates:
+    //   - last_outreach_at advanced (outbound writes this column)
+    //   - last_contacted unchanged (outbound MUST NOT bump it)
+    //   - last_response_at unchanged (no inbound)
+    const afterResp = await request.get(`/api/v1/contacts/${contactId}`)
+    expect(afterResp.ok()).toBeTruthy()
+    const afterContact = (await afterResp.json()).data
+    expect(afterContact.last_outreach_at).toBeTruthy()
+    expect(afterContact.last_contacted).toBe(lastContactedBefore)
   })
 
-  test('should log an inbound interaction via the Log Interaction modal', async ({ page }) => {
+  test('should log an inbound interaction via the Log Interaction modal', async ({
+    page,
+    request,
+  }) => {
+    // Inbound bumps last_contacted + last_response_at; does NOT bump
+    // last_outreach_at (inbound is the response, not the outreach).
     const { ids } = await testApi.seedContacts([{ full_name: 'Inbound Interaction Test' }])
     const contactId = ids[0]
     const fullName = `${testApi.prefix}-Inbound Interaction Test`
+
+    const beforeResp = await request.get(`/api/v1/contacts/${contactId}`)
+    expect(beforeResp.ok()).toBeTruthy()
+    const beforeContact = (await beforeResp.json()).data
+    const lastOutreachBefore = beforeContact.last_outreach_at ?? null
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -352,8 +391,14 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const response = await responsePromise
     expect(response.status()).toBe(201)
     const body = await response.json()
-    expect(body.success).toBe(true)
     expect(body.data.direction).toBe('inbound')
+
+    // last_response_at populated; last_outreach_at unchanged.
+    const afterResp = await request.get(`/api/v1/contacts/${contactId}`)
+    expect(afterResp.ok()).toBeTruthy()
+    const afterContact = (await afterResp.json()).data
+    expect(afterContact.last_response_at).toBeTruthy()
+    expect(afterContact.last_outreach_at ?? null).toBe(lastOutreachBefore)
   })
 })
 

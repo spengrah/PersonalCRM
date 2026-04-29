@@ -833,7 +833,7 @@ func TestContactTask_Migration046_CheckConstraints(t *testing.T) {
 // These guarantee the GetContactTaskByContactCadenceDue and
 // GetContactTaskByContactFollowUpLive single-row lookups never get a
 // multi-row hit. lifecycle=manual has NO uniqueness — multiple rows
-// per (contact_id, provider) are allowed (intentional, per plan §4.2).
+// per (contact_id, provider) are allowed (intentional design choice).
 func TestContactTask_Migration046_PartialUniqueIndexes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
