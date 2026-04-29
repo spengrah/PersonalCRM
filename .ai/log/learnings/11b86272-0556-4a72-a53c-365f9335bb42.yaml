@@ -1,0 +1,32 @@
+---
+timestamp: "2026-04-28T19:33:50.407394"
+type: gotcha
+summary: User tool rejection during async agent spawn doesn't mean spawn failed
+detail: |
+  When spawning an agent with run_in_background or async mode, user interruption/rejection of the tool call doesn't necessarily prevent the agent from launching. The agent may start in the background before the rejection is processed. Before re-spawning, check git history (log, reflog) and working tree state for unexpected commits or changes that indicate the agent is already working. Re-spawning without checking creates duplicate concurrent work.
+actionable: true
+
+---
+timestamp: "2026-04-28T19:33:50.407394"
+type: gotcha
+summary: Agent names become unaddressable immediately after agent terminates
+detail: |
+  SendMessage to an agent by name only works while the agent is actively running. Once an agent completes or terminates, attempts to SendMessage return 'No agent named X is currently addressable' even if the agent successfully completed work. To check if an agent is still running, try SendMessage with a status check - if it fails with 'not addressable,' examine git history and filesystem artifacts to determine if the agent completed work before deciding to re-spawn.
+actionable: true
+
+---
+timestamp: "2026-04-28T19:33:50.407394"
+type: distinction
+summary: Two failure modes for agent spawns require different responses
+detail: |
+  Distinguish between (1) spawn never started: no commits, clean working tree, re-spawn is safe; versus (2) spawn started but terminated: has commits/changes on the target branch, re-spawning creates duplicate work. Always run `git log` and `git reflog` to check for unexpected commits before re-spawning an agent. Look for commits with timestamps/authors that don't match your actions. The reflog pattern 'refs/heads/BRANCH@{N}: commit: MESSAGE' followed by work you didn't initiate indicates a background agent already ran.
+actionable: true
+
+---
+timestamp: "2026-04-28T19:33:50.407394"
+type: documentation_gap
+summary: No guidance on verifying async agent spawn success after interruption
+detail: |
+  When a user interrupts an agent spawn, there's no documented procedure for determining whether the spawn succeeded in the background. The orchestrator in this session initially couldn't tell implementer-b had launched until examining reflog timestamps. Should add to agent orchestration patterns: (1) After spawn interruption, immediately check git reflog and branch state; (2) Look for commits with recent timestamps from unfamiliar authors; (3) Try SendMessage status check before assuming spawn failed. Without this, orchestrators waste time investigating 'who is the other worker' when it was their own interrupted spawn.
+actionable: true
+
