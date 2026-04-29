@@ -1,6 +1,14 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
+// API configuration for direct backend assertions in E2E tests.
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
+const API_HEADERS = {
+  'X-API-Key': API_KEY,
+  'Content-Type': 'application/json',
+}
+
 test.describe('Contacts - TestAPI Seeded @area:contacts', () => {
   let testApi: TestAPI
 
@@ -176,7 +184,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
         resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
         resp.request().method() === 'POST'
     )
-    await page.getByRole('button', { name: 'Log' }).click()
+    await page.getByRole('button', { name: 'Log', exact: true }).click()
     const response = await responsePromise
     expect(response.status()).toBe(201)
     const body = await response.json()
@@ -298,7 +306,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.getByRole('button', { name: 'Log Interaction' }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
     // Submit without changing the direction (default = mutual) or date.
-    await page.getByRole('button', { name: 'Log' }).click()
+    await page.getByRole('button', { name: 'Log', exact: true }).click()
     const response = await responsePromise
     expect(response.status()).toBe(201)
     expect((await response.json()).data.direction).toBe('mutual')
@@ -307,7 +315,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     // Mutual bumps last_response_at + last_outreach_at; both must be
     // populated after the interaction.
-    const afterResp = await request.get(`/api/v1/contacts/${contactId}`)
+    const afterResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
     expect(afterResp.ok()).toBeTruthy()
     const afterContact = (await afterResp.json()).data
     expect(afterContact.last_response_at).toBeTruthy()
@@ -326,7 +336,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     // Capture last_contacted BEFORE the interaction so we can assert
     // outbound did not bump it.
-    const beforeResp = await request.get(`/api/v1/contacts/${contactId}`)
+    const beforeResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
     expect(beforeResp.ok()).toBeTruthy()
     const beforeContact = (await beforeResp.json()).data
     const lastContactedBefore = beforeContact.last_contacted
@@ -343,7 +355,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
         resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
         resp.request().method() === 'POST'
     )
-    await page.getByRole('button', { name: 'Log' }).click()
+    await page.getByRole('button', { name: 'Log', exact: true }).click()
     const response = await responsePromise
     expect(response.status()).toBe(201)
     const body = await response.json()
@@ -353,7 +365,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     //   - last_outreach_at advanced (outbound writes this column)
     //   - last_contacted unchanged (outbound MUST NOT bump it)
     //   - last_response_at unchanged (no inbound)
-    const afterResp = await request.get(`/api/v1/contacts/${contactId}`)
+    const afterResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
     expect(afterResp.ok()).toBeTruthy()
     const afterContact = (await afterResp.json()).data
     expect(afterContact.last_outreach_at).toBeTruthy()
@@ -370,7 +384,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const contactId = ids[0]
     const fullName = `${testApi.prefix}-Inbound Interaction Test`
 
-    const beforeResp = await request.get(`/api/v1/contacts/${contactId}`)
+    const beforeResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
     expect(beforeResp.ok()).toBeTruthy()
     const beforeContact = (await beforeResp.json()).data
     const lastOutreachBefore = beforeContact.last_outreach_at ?? null
@@ -387,14 +403,16 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
         resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
         resp.request().method() === 'POST'
     )
-    await page.getByRole('button', { name: 'Log' }).click()
+    await page.getByRole('button', { name: 'Log', exact: true }).click()
     const response = await responsePromise
     expect(response.status()).toBe(201)
     const body = await response.json()
     expect(body.data.direction).toBe('inbound')
 
     // last_response_at populated; last_outreach_at unchanged.
-    const afterResp = await request.get(`/api/v1/contacts/${contactId}`)
+    const afterResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
     expect(afterResp.ok()).toBeTruthy()
     const afterContact = (await afterResp.json()).data
     expect(afterContact.last_response_at).toBeTruthy()

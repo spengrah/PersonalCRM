@@ -161,7 +161,7 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     )
     await page.getByRole('button', { name: /Log Interaction/i }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
-    await page.getByRole('button', { name: 'Log' }).click()
+    await page.getByRole('button', { name: 'Log', exact: true }).click()
     await responsePromise
 
     // Verify via API the contact is no longer overdue (mutual + cadence
