@@ -219,7 +219,7 @@ test-e2e-local: e2e-db
 	exit $$EXIT_CODE
 
 test-e2e-diff: e2e-db
-	@node "$(REPO_ROOT)/scripts/run-e2e-local.mjs"
+	@PLAYWRIGHT_WORKERS=1 node "$(REPO_ROOT)/scripts/run-e2e-local.mjs"
 
 e2e-db:
 	@bash "$(REPO_ROOT)/scripts/ensure-postgres-for-tests.sh"
