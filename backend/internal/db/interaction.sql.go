@@ -95,27 +95,33 @@ func (q *Queries) FindInteractionBySourceRef(ctx context.Context, arg FindIntera
 const FindInteractionInWindow = `-- name: FindInteractionInWindow :one
 SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction FROM interaction
 WHERE contact_id = $1
-  AND source = $4
+  AND source = $2
+  AND direction = $3
   AND deleted_at IS NULL
-  AND occurred_at BETWEEN $2 AND $3
+  AND occurred_at BETWEEN $4 AND $5
 ORDER BY occurred_at DESC
 LIMIT 1
 `
 
 type FindInteractionInWindowParams struct {
-	ContactID    pgtype.UUID        `json:"contact_id"`
-	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
-	OccurredAt_2 pgtype.Timestamptz `json:"occurred_at_2"`
-	Source       string             `json:"source"`
+	ContactID   pgtype.UUID        `json:"contact_id"`
+	Source      string             `json:"source"`
+	Direction   string             `json:"direction"`
+	WindowStart pgtype.Timestamptz `json:"window_start"`
+	WindowEnd   pgtype.Timestamptz `json:"window_end"`
 }
 
-// Find an existing manual interaction within a time window (for manual deduplication)
+// Find an existing manual interaction within a time window for a given
+// direction (for manual deduplication). Direction is part of the dedup
+// key so a user logging outbound then inbound for the same contact
+// within the window correctly produces two separate rows.
 func (q *Queries) FindInteractionInWindow(ctx context.Context, arg FindInteractionInWindowParams) (*Interaction, error) {
 	row := q.db.QueryRow(ctx, FindInteractionInWindow,
 		arg.ContactID,
-		arg.OccurredAt,
-		arg.OccurredAt_2,
 		arg.Source,
+		arg.Direction,
+		arg.WindowStart,
+		arg.WindowEnd,
 	)
 	var i Interaction
 	err := row.Scan(

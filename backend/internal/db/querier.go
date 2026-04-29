@@ -207,7 +207,10 @@ type Querier interface {
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
 	// Find an existing interaction by contact, source, and source_ref (for deduplication)
 	FindInteractionBySourceRef(ctx context.Context, arg FindInteractionBySourceRefParams) (*Interaction, error)
-	// Find an existing manual interaction within a time window (for manual deduplication)
+	// Find an existing manual interaction within a time window for a given
+	// direction (for manual deduplication). Direction is part of the dedup
+	// key so a user logging outbound then inbound for the same contact
+	// within the window correctly produces two separate rows.
 	FindInteractionInWindow(ctx context.Context, arg FindInteractionInWindowParams) (*Interaction, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	// Find a pending follow-up task for a contact. Matches both 'managed'

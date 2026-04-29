@@ -222,16 +222,21 @@ func (r *InteractionRepository) FindBySourceRef(ctx context.Context, contactID u
 	return &interaction, nil
 }
 
-// FindInWindow finds an existing interaction within a time window for a contact and source
-func (r *InteractionRepository) FindInWindow(ctx context.Context, contactID uuid.UUID, source string, occurredAt time.Time, window time.Duration) (*Interaction, error) {
+// FindInWindow finds an existing interaction within a time window for a
+// contact, source, and direction. Direction is part of the dedup key
+// because the manual logger lets users record any direction — an
+// outbound recorded just before an inbound for the same contact must
+// NOT collapse to a single row.
+func (r *InteractionRepository) FindInWindow(ctx context.Context, contactID uuid.UUID, source, direction string, occurredAt time.Time, window time.Duration) (*Interaction, error) {
 	windowStart := occurredAt.Add(-window)
 	windowEnd := occurredAt.Add(window)
 
 	dbInteraction, err := r.queries.FindInteractionInWindow(ctx, db.FindInteractionInWindowParams{
-		ContactID:    uuidToPgUUID(contactID),
-		OccurredAt:   pgtype.Timestamptz{Time: windowStart, Valid: true},
-		OccurredAt_2: pgtype.Timestamptz{Time: windowEnd, Valid: true},
-		Source:       source,
+		ContactID:   uuidToPgUUID(contactID),
+		Source:      source,
+		Direction:   direction,
+		WindowStart: pgtype.Timestamptz{Time: windowStart, Valid: true},
+		WindowEnd:   pgtype.Timestamptz{Time: windowEnd, Valid: true},
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -339,15 +344,16 @@ func (r *InteractionRepository) FindBySourceRefTx(ctx context.Context, tx pgx.Tx
 
 // FindInWindowTx is the tx-threaded variant of FindInWindow. Used by the
 // consumer for manual-kind dedup.
-func (r *InteractionRepository) FindInWindowTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, source string, occurredAt time.Time, window time.Duration) (*Interaction, error) {
+func (r *InteractionRepository) FindInWindowTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, source, direction string, occurredAt time.Time, window time.Duration) (*Interaction, error) {
 	windowStart := occurredAt.Add(-window)
 	windowEnd := occurredAt.Add(window)
 
 	dbInteraction, err := db.New(tx).FindInteractionInWindow(ctx, db.FindInteractionInWindowParams{
-		ContactID:    uuidToPgUUID(contactID),
-		OccurredAt:   pgtype.Timestamptz{Time: windowStart, Valid: true},
-		OccurredAt_2: pgtype.Timestamptz{Time: windowEnd, Valid: true},
-		Source:       source,
+		ContactID:   uuidToPgUUID(contactID),
+		Source:      source,
+		Direction:   direction,
+		WindowStart: pgtype.Timestamptz{Time: windowStart, Valid: true},
+		WindowEnd:   pgtype.Timestamptz{Time: windowEnd, Valid: true},
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

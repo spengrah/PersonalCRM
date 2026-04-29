@@ -38,12 +38,16 @@ WHERE contact_id = $1 AND source = $2 AND source_ref = $3 AND deleted_at IS NULL
 LIMIT 1;
 
 -- name: FindInteractionInWindow :one
--- Find an existing manual interaction within a time window (for manual deduplication)
+-- Find an existing manual interaction within a time window for a given
+-- direction (for manual deduplication). Direction is part of the dedup
+-- key so a user logging outbound then inbound for the same contact
+-- within the window correctly produces two separate rows.
 SELECT * FROM interaction
-WHERE contact_id = $1
-  AND source = $4
+WHERE contact_id = sqlc.arg(contact_id)
+  AND source = sqlc.arg(source)
+  AND direction = sqlc.arg(direction)
   AND deleted_at IS NULL
-  AND occurred_at BETWEEN $2 AND $3
+  AND occurred_at BETWEEN sqlc.arg(window_start) AND sqlc.arg(window_end)
 ORDER BY occurred_at DESC
 LIMIT 1;
 

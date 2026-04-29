@@ -445,6 +445,35 @@ func TestIntegration_ManualHandler_DedupWithinWindow(t *testing.T) {
 	require.Len(t, rows, 1)
 }
 
+// TestIntegration_ManualHandler_DifferentDirectionsDoNotDedup asserts
+// that two manual writes within the 30-min window but with different
+// directions create TWO separate interaction rows. The dedup key
+// includes direction so a user logging outbound then inbound for the
+// same contact in quick succession does not collapse to one row — the
+// inbound must take effect (bumping last_response_at + last_contacted)
+// independently of the outbound (which only bumped last_outreach_at).
+func TestIntegration_ManualHandler_DifferentDirectionsDoNotDedup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	env := newConsumerTestEnv(t, ctx)
+
+	contactID := env.newContact(t, "manual-direction-dedup")
+	occurredAt := time.Date(2026, 4, 10, 12, 30, 0, 0, time.UTC)
+
+	outbound, err := env.manualHandler.Run(ctx, contactID, repository.InteractionDirectionOutbound, occurredAt, "outbound")
+	require.NoError(t, err)
+
+	inbound, err := env.manualHandler.Run(ctx, contactID, repository.InteractionDirectionInbound, occurredAt.Add(3*time.Minute), "inbound")
+	require.NoError(t, err)
+	require.NotEqual(t, outbound.ID, inbound.ID, "different directions within window must produce two rows, not dedup")
+
+	rows, err := env.interactionRepo.ListContactInteractions(ctx, contactID, 10, 0)
+	require.NoError(t, err)
+	require.Len(t, rows, 2, "two distinct rows expected (one per direction)")
+}
+
 // TestIntegration_MissingContact_ConsumerReturnsNotFound asserts unresolved
 // contact_ids surface as db.ErrNotFound (wrapped), per spec §3.4.1.
 func TestIntegration_MissingContact_ConsumerReturnsNotFound(t *testing.T) {
