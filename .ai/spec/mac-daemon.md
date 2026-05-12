@@ -128,7 +128,10 @@ The pairing token model means there's no admin/bootstrap key in widespread use �
   This **eliminates the cross-batch burst fragmentation problem in steady state**: when message B arrives in a later poll than message A and A's interaction already exists, the extend path picks B up into A's interaction. Concurrency between the aggregator and the InteractionRecorder introduces a narrower race (B arrives between aggregator-publish and InteractionRecorder-commit) which is resolved by the explicit `claimed_at` claim mechanism on the create path — see "Race mechanics" under Event flow.
 - **Edits / deletes / reactions:** acknowledged out of scope for v1. chat.db represents reactions (tapbacks) as `associated_message_*` columns on a new message row; edits update existing rows (post-iOS 16). A `MAX(ROWID)` cursor sees new rows but not mutations to old rows. v1 stored content reflects message state at first ingestion. v2 adds a "mutation scan" reader that scans recent rows (last N days) for `date_edited`/`is_deleted` changes.
 - **Permission:** Full Disk Access.
-- **Discovery:** none. All participants expected to exist via `icloud_contacts` / `gcontacts`. Unmatched messages stay in staging with `matched_contact_id = NULL`; `messages_rematch` worker picks them up retroactively when contact methods later appear.
+- **Discovery role:** none. The `messages` source is purely an *interaction* source; all senders must already exist as CRM `contact_method` rows (populated by `icloud_contacts`, `gcontacts`, or manual entry). Unlike Telegram (where the handle space is platform-local and the source legitimately doubles as a discovery surface), iMessage/SMS senders are phone numbers and emails — identifiers that any contact source can already supply, so re-using Messages.app as a discovery surface produces zero unique signal and a lot of spam/business/shortcode noise.
+- **Sender filtering:** the daemon filters chat.db senders against the Pi's canonicalized phone/email identifier set **before** forwarding any message. Only rows whose sender resolves to a known `contact_method` are emitted as `raw_message.*` events. Senders that are not in the CRM — spam, businesses, shortcodes, one-time confirmations, unsaved numbers — never leave the Mac. This subsumes the prior plan's `messages_rematch` worker (no staged-but-unmatched rows exist) and eliminates the need for separate content-pattern or org-name heuristics.
+- **Identifier set source:** `GET /api/v1/host/:id/known-identifiers` returns `{phones: [...], emails: [...]}` from every `contact_method` row in the CRM, canonicalized via the existing `identity/normalize.go` rules (E.164 phones, lowercased emails). The daemon refreshes on every heartbeat tick (~60s) and caches the response. Cross-source by design — phones added via iCloud, Google Contacts, manual entry, or any future source flow through the same endpoint.
+- **Cold-start race recovery (30-day backwards scan):** when a `known-identifiers` refresh yields a newly-added identifier (computed by set-diff against the daemon's previous cache), the daemon performs a one-time backwards scan of chat.db over the last **30 days** for that sender's `handle.id` and forwards any matching rows. The 30-day window covers the "friend-of-a-friend met in a group chat, contact information saved after the fact" case: their prior messages get backdated into the CRM as soon as they appear in `contact_method`. Idempotency comes from the existing event-log `(source, source_id)` dedup — overlap with messages already forwarded via the live cursor is absorbed safely.
 
 #### `whatsapp`
 
@@ -420,9 +423,10 @@ The 5 sources register in `ProviderRegistry` with new `Strategy=push` (added to 
 #### Per-source rematch workers
 
 Mirror Telegram's pattern. Run on `contact_method.created` (for phone/email-derived sources) and on `external_contact.upserted` (with `match_status=matched`) (for `anarlog_humans` → `anarlog_sessions` chain):
-- `messages_rematch` — on `contact_method.created` with type phone/email
 - `whatsapp_rematch` — on `contact_method.created` with type phone or whatsapp
 - `anarlog_sessions_rematch` — on `external_contact.upserted` (with `match_status=matched`) for source=anarlog_humans
+
+**No `messages_rematch` worker.** Messages-source filtering happens **on the Mac daemon** (see "Sender filtering" + "Cold-start race recovery" under the `messages` source description). The daemon never forwards unmatched senders, so no staged-but-unmatched rows exist on the Pi to rematch. New `contact_method` rows are picked up by the daemon's next `known-identifiers` refresh, which triggers a 30-day backwards scan of chat.db for the newly-known sender. If WhatsApp later adopts the same daemon-side filter pattern, its rematch worker becomes redundant too.
 
 #### Endpoints
 
@@ -432,6 +436,7 @@ POST   /api/v1/host/:id/heartbeat                  # rich status update; updates
 GET    /api/v1/host/:id/sync/:source/cursor        # daemon fetches {cursor, epoch, backfill_complete} for a source
 POST   /api/v1/host/:id/sync/:source/cursor        # daemon commits new cursor after successful event push
 GET    /api/v1/host/:id/sync/:source/known-ids     # returns [{source_id, last_content_hash}] for entities the Pi has for this (host, source). Used for tombstone reconciliation (entity in Pi-set but absent from daemon scan → daemon emits external_contact.deleted with previous content hash) and for delete source_id determinism (daemon uses the returned last_content_hash to build the deterministic delete source_id).
+GET    /api/v1/host/:id/known-identifiers          # returns {phones: [...], emails: [...]} — canonicalized identifier set across ALL contact_method rows in the CRM (cross-source by design). Used by the `messages` source for daemon-side sender filtering: only senders matching this set are forwarded as raw_message.* events. Cold-start race handled via daemon-side 30-day backwards scan on newly-known identifiers — see "Sender filtering" + "Cold-start race recovery" under the `messages` source in section 2.
 POST   /api/v1/ingest/events                       # existing endpoint, used by daemon for all data events; contract unchanged
 GET    /api/v1/host/:id                            # for Pi UI
 DELETE /api/v1/host/:id                            # user uninstall path; cascades source state
@@ -445,6 +450,7 @@ DELETE /api/v1/host/:id                            # user uninstall path; cascad
    - `GET  /api/v1/host/:id/sync/:source/cursor`
    - `POST /api/v1/host/:id/sync/:source/cursor`
    - `GET  /api/v1/host/:id/sync/:source/known-ids`
+   - `GET  /api/v1/host/:id/known-identifiers`
    - `POST /api/v1/ingest/events` (when `X-Mac-Host-ID` header is present)
    - Middleware reads `X-Mac-Host-ID` header and Bearer token; looks up `mac_host` by ID; verifies `api_key_revoked_at IS NULL`; validates token against `api_key_hash` (constant-time bcrypt compare); for `:id` parameter routes, asserts URL `:id` matches `X-Mac-Host-ID`.
 3. **Admin/UI routes** — authenticated by the existing global `APIKeyMiddleware` (the Pi UI's existing auth surface):
@@ -603,6 +609,7 @@ Validates the trickiest cross-cutting concerns (FDA permission, container allowl
 - **Aggregator River job scheduling:** new River job kind `MessagingAggregateForContact(contact_id, source)`. Uniqueness key = (contact_id, source). When ingest stages new rows, it enqueues this job; if a job with the same key is already pending/running, the enqueue is a no-op (River's built-in dedup). Each job processes all **eligible** rows for that (contact, source) pair — the claim-aware filter `processed_at IS NULL AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')`. The job exits when no eligible rows remain; rows currently claimed by a pending create-event are intentionally skipped and will be drained by Stage 3's post-commit re-enqueue (or by stale-claim recovery if Stage 3 fails). This ensures per-contact serialization across batches.
 - **InteractionRecorder generalization:** the existing consumer is extended to use `StagingRepo.MarkProcessed(ctx, source, ids, interaction_id)` — a new source-neutral repository method that dispatches to the right per-source staging table. Today the consumer directly calls `telegram_message.MarkMessagesProcessed`; the refactor replaces this with the dispatching method without changing the consumer's flow semantics.
 - `interaction.source` CHECK constraint migration: add `messages`
+- **`GET /api/v1/host/:id/known-identifiers` endpoint:** returns `{phones: [...], emails: [...]}` — canonicalized phone/email identifier set across ALL contact_method rows (cross-source by design). Used by the `messages` source for daemon-side sender filtering. Body added in this phase; see "Sender filtering" + "Cold-start race recovery" under the `messages` source in section 2 for the daemon-side consumption contract.
 - `external_sync_state.strategy` CHECK constraint migration: add `push`
 - New Mac settings page in Next.js frontend
 
@@ -610,9 +617,11 @@ Validates the trickiest cross-cutting concerns (FDA permission, container allowl
 - chat.db reader (GRDB.swift, read-only)
 - `messages_message` staging table (unique on `guid`) + migration + sqlc queries + repository
 - Event publisher: `raw_message.received` / `raw_message.sent` events to `/api/v1/ingest/events` (Pi-side aggregator transforms into aggregated `message.received`/`message.sent`)
-- `messages_rematch` worker on `contact_method.created`
-- Backfill to 2026-01-01 with `backfill_cursor` pattern
-- Identity matching via existing matcher with generic `phone`/`email` types
+- **Daemon-side `known-identifiers` filter:** the daemon fetches `GET /known-identifiers` on every heartbeat, caches the response, and only forwards chat.db rows whose sender matches a known phone/email. Non-matched senders never leave the Mac.
+- **30-day backwards scan on newly-known identifiers:** when a `known-identifiers` refresh diff shows new identifiers, the daemon performs a one-time chat.db scan over the last 30 days for those senders and forwards any matches; `(source, source_id)` event-log dedup absorbs overlap with live-cursor emissions.
+- Backfill to 2026-01-01 with `backfill_cursor` pattern (filter applies — only matched senders forwarded)
+- Identity matching: Pi-side uses existing matcher with generic `phone`/`email` types; effectively trivial since the daemon pre-filters, but kept as a defence-in-depth fallback
+- No `messages_rematch` worker on the Pi — daemon-side filter + backwards scan replaces it
 - Group-chat attribution: sender-only interactions (no per-participant)
 - Edits/deletes/reactions: accepted as v1 limitation; documented in plan
 

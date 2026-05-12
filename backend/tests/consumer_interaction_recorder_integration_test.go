@@ -177,7 +177,10 @@ func newConsumerTestEnv(t *testing.T, ctx context.Context) *consumerTestEnv {
 		false,
 	)
 	contactService.SetCadenceUpdater(cadenceUpdater)
-	recorder = consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater, nil)
+	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
+		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
+	})
+	recorder = consumer.NewInteractionRecorder(contactService, stagingRegistry, bus, cadenceUpdater, nil)
 
 	manualHandler := service.NewManualInteractionHandler(database.Pool, bus, recorder)
 

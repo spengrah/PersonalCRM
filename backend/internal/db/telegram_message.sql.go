@@ -11,6 +11,85 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const BackdateTelegramMessageClaim = `-- name: BackdateTelegramMessageClaim :exec
+UPDATE telegram_message
+SET claimed_at = NOW() - INTERVAL '10 minutes'
+WHERE id = ANY($1::uuid[])
+`
+
+// Test-only helper: ages the claim past the 5-minute TTL without
+// touching time.Now()/accelerated.GetCurrentTime() (the claim filter
+// uses NOW(), so the test must rewrite the DB clock for those rows).
+// Production code MUST NOT call this.
+func (q *Queries) BackdateTelegramMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, BackdateTelegramMessageClaim, messageIds)
+	return err
+}
+
+const ClaimTelegramMessages = `-- name: ClaimTelegramMessages :many
+UPDATE telegram_message
+SET claimed_at = NOW(),
+    claimed_session_ref = $1
+WHERE id = ANY($2::uuid[])
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+RETURNING id
+`
+
+type ClaimTelegramMessagesParams struct {
+	SessionRef pgtype.Text   `json:"session_ref"`
+	MessageIds []pgtype.UUID `json:"message_ids"`
+}
+
+// Race-safe conditional claim: only writes claim columns on rows still
+// eligible per the same filter the unprocessed-list queries use. Returns
+// the row IDs actually claimed (RETURNING id) so the caller can detect
+// partial claims and roll back.
+func (q *Queries) ClaimTelegramMessages(ctx context.Context, arg ClaimTelegramMessagesParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, ClaimTelegramMessages, arg.SessionRef, arg.MessageIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ClearTelegramMessageStaleClaim = `-- name: ClearTelegramMessageStaleClaim :exec
+UPDATE telegram_message
+SET claimed_at = NULL,
+    claimed_session_ref = NULL
+WHERE id = ANY($1::uuid[])
+  AND claimed_session_ref = $2
+  AND processed_at IS NULL
+  AND deleted_at IS NULL
+`
+
+type ClearTelegramMessageStaleClaimParams struct {
+	MessageIds         []pgtype.UUID `json:"message_ids"`
+	ExpectedSessionRef pgtype.Text   `json:"expected_session_ref"`
+}
+
+// Defensive recovery branch: clears claim columns for rows still
+// carrying the expected stale session_ref but for which no event-log row
+// could be found. Scoped to that exact stale ref to avoid clobbering a
+// freshly-claimed row by a parallel worker.
+func (q *Queries) ClearTelegramMessageStaleClaim(ctx context.Context, arg ClearTelegramMessageStaleClaimParams) error {
+	_, err := q.db.Exec(ctx, ClearTelegramMessageStaleClaim, arg.MessageIds, arg.ExpectedSessionRef)
+	return err
+}
+
 const CountTelegramMessagesByChat = `-- name: CountTelegramMessagesByChat :many
 SELECT telegram_chat_id, COUNT(*) as message_count
 FROM telegram_message
@@ -272,7 +351,7 @@ func (q *Queries) GetPeerEntityByUserID(ctx context.Context, peerUserID pgtype.I
 }
 
 const GetTelegramMessage = `-- name: GetTelegramMessage :one
-SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved FROM telegram_message
+SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved, claimed_at, claimed_session_ref FROM telegram_message
 WHERE telegram_chat_id = $1
   AND telegram_message_id = $2
   AND deleted_at IS NULL
@@ -309,6 +388,8 @@ func (q *Queries) GetTelegramMessage(ctx context.Context, arg GetTelegramMessage
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.PeerEntityResolved,
+		&i.ClaimedAt,
+		&i.ClaimedSessionRef,
 	)
 	return &i, err
 }
@@ -393,7 +474,7 @@ func (q *Queries) ListDistinctUnmatchedPeers(ctx context.Context) ([]*ListDistin
 }
 
 const ListTelegramMessagesByChatUnprocessed = `-- name: ListTelegramMessagesByChatUnprocessed :many
-SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved FROM telegram_message
+SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved, claimed_at, claimed_session_ref FROM telegram_message
 WHERE telegram_chat_id = $1
   AND processed_at IS NULL
   AND deleted_at IS NULL
@@ -432,6 +513,8 @@ func (q *Queries) ListTelegramMessagesByChatUnprocessed(ctx context.Context, tel
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.PeerEntityResolved,
+			&i.ClaimedAt,
+			&i.ClaimedSessionRef,
 		); err != nil {
 			return nil, err
 		}
@@ -448,9 +531,13 @@ SELECT DISTINCT matched_contact_id
 FROM telegram_message
 WHERE matched_contact_id IS NOT NULL
   AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
   AND deleted_at IS NULL
 `
 
+// Distinct contact IDs with at least one eligible (unprocessed AND
+// unclaimed-or-stale) row. Used by AggregateAll batch mode after backfill
+// and by the periodic aggregation sweeper.
 func (q *Queries) ListUnprocessedContactIDs(ctx context.Context) ([]pgtype.UUID, error) {
 	rows, err := q.db.Query(ctx, ListUnprocessedContactIDs)
 	if err != nil {
@@ -472,9 +559,10 @@ func (q *Queries) ListUnprocessedContactIDs(ctx context.Context) ([]pgtype.UUID,
 }
 
 const ListUnprocessedTelegramMessagesByContact = `-- name: ListUnprocessedTelegramMessagesByContact :many
-SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved FROM telegram_message
+SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved, claimed_at, claimed_session_ref FROM telegram_message
 WHERE matched_contact_id = $1
   AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
   AND deleted_at IS NULL
 ORDER BY telegram_chat_id, sent_at
 `
@@ -511,6 +599,8 @@ func (q *Queries) ListUnprocessedTelegramMessagesByContact(ctx context.Context, 
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.PeerEntityResolved,
+			&i.ClaimedAt,
+			&i.ClaimedSessionRef,
 		); err != nil {
 			return nil, err
 		}
@@ -523,10 +613,11 @@ func (q *Queries) ListUnprocessedTelegramMessagesByContact(ctx context.Context, 
 }
 
 const ListUnprocessedTelegramMessagesByContactAndChat = `-- name: ListUnprocessedTelegramMessagesByContactAndChat :many
-SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved FROM telegram_message
+SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved, claimed_at, claimed_session_ref FROM telegram_message
 WHERE matched_contact_id = $1
   AND telegram_chat_id = $2
   AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
   AND deleted_at IS NULL
 ORDER BY sent_at
 `
@@ -536,6 +627,9 @@ type ListUnprocessedTelegramMessagesByContactAndChatParams struct {
 	TelegramChatID   int64       `json:"telegram_chat_id"`
 }
 
+// Claim-aware filter: rows not yet processed AND not currently claimed
+// (or whose claim has aged past the 5-minute TTL). The TTL is inlined
+// because spec §3 Race Mechanics fixes it at 5 minutes.
 func (q *Queries) ListUnprocessedTelegramMessagesByContactAndChat(ctx context.Context, arg ListUnprocessedTelegramMessagesByContactAndChatParams) ([]*TelegramMessage, error) {
 	rows, err := q.db.Query(ctx, ListUnprocessedTelegramMessagesByContactAndChat, arg.MatchedContactID, arg.TelegramChatID)
 	if err != nil {
@@ -568,6 +662,8 @@ func (q *Queries) ListUnprocessedTelegramMessagesByContactAndChat(ctx context.Co
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.PeerEntityResolved,
+			&i.ClaimedAt,
+			&i.ClaimedSessionRef,
 		); err != nil {
 			return nil, err
 		}
@@ -582,7 +678,9 @@ func (q *Queries) ListUnprocessedTelegramMessagesByContactAndChat(ctx context.Co
 const MarkTelegramMessagesProcessed = `-- name: MarkTelegramMessagesProcessed :exec
 UPDATE telegram_message
 SET processed_at = NOW(),
-    interaction_id = $1
+    interaction_id = $1,
+    claimed_at = NULL,
+    claimed_session_ref = NULL
 WHERE id = ANY($2::uuid[])
   AND deleted_at IS NULL
 `
@@ -592,9 +690,61 @@ type MarkTelegramMessagesProcessedParams struct {
 	MessageIds    []pgtype.UUID `json:"message_ids"`
 }
 
+// Non-tx variant used by the engine's extend/promote/bridge paths only,
+// which do not publish events and do not claim rows. Clearing the claim
+// columns lets a future pass see the row as "done" rather than "claimed".
 func (q *Queries) MarkTelegramMessagesProcessed(ctx context.Context, arg MarkTelegramMessagesProcessedParams) error {
 	_, err := q.db.Exec(ctx, MarkTelegramMessagesProcessed, arg.InteractionID, arg.MessageIds)
 	return err
+}
+
+const MarkTelegramMessagesProcessedForSession = `-- name: MarkTelegramMessagesProcessedForSession :execrows
+UPDATE telegram_message
+SET processed_at = NOW(),
+    interaction_id = $1,
+    claimed_at = NULL,
+    claimed_session_ref = NULL
+WHERE id = ANY($2::uuid[])
+  AND (claimed_session_ref = $3 OR claimed_session_ref IS NULL)
+  AND processed_at IS NULL
+  AND deleted_at IS NULL
+`
+
+type MarkTelegramMessagesProcessedForSessionParams struct {
+	InteractionID pgtype.UUID   `json:"interaction_id"`
+	MessageIds    []pgtype.UUID `json:"message_ids"`
+	SessionRef    pgtype.Text   `json:"session_ref"`
+}
+
+// Tx-bound variant. Used by InteractionRecorder consumer when
+// processing a create-path event. Defends against the stale
+// boundary-shift race: a stranded old-event consumer running LATER
+// than the newer-event consumer cannot overwrite rows already
+// processed by the newer event, because the predicate rejects rows
+// whose claimed_session_ref differs from this consumer's session.
+//
+// The predicate ALSO accepts rows that were never claimed
+// (claimed_session_ref IS NULL): the non-tx publish path (test mode,
+// AggregateForContactBatch callers) leaves rows unclaimed, and
+// there's no risk of cross-event overwrite when the row has not yet
+// been processed by anyone. The defense is specifically against
+// claimed-for-OTHER-session rows.
+//
+// Returns rows affected so the caller can distinguish three cases:
+//   - affected == len(message_ids): happy path.
+//   - affected == 0 on a fresh write: the predicate filtered
+//     everything out (boundary-shift race). The caller MUST roll
+//     back the tx so the freshly-inserted interaction does not
+//     commit as a phantom duplicate. River retries handle the race.
+//   - affected == 0 on a replay (res.IsReplay=true): expected — the
+//     rows were already linked to res.Interaction.ID on the original
+//     attempt; processed_at IS NOT NULL now filters them out.
+func (q *Queries) MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, MarkTelegramMessagesProcessedForSession, arg.InteractionID, arg.MessageIds, arg.SessionRef)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const SoftDeleteTelegramChannelMessages = `-- name: SoftDeleteTelegramChannelMessages :exec
@@ -667,7 +817,7 @@ ON CONFLICT (telegram_chat_id, telegram_message_id) DO UPDATE SET
     -- An authoritative update (resolved=true) must "stick" — never let a
     -- subsequent sparse re-ingest of the same message id downgrade the row.
     peer_entity_resolved = telegram_message.peer_entity_resolved OR EXCLUDED.peer_entity_resolved
-RETURNING id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved
+RETURNING id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved, claimed_at, claimed_session_ref
 `
 
 type UpsertTelegramMessageParams struct {
@@ -732,6 +882,8 @@ func (q *Queries) UpsertTelegramMessage(ctx context.Context, arg UpsertTelegramM
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.PeerEntityResolved,
+		&i.ClaimedAt,
+		&i.ClaimedSessionRef,
 	)
 	return &i, err
 }

@@ -13,6 +13,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -45,11 +46,18 @@ type AggregationEngine struct {
 // error — equivalent to the off/shadow modes documented in
 // EventBusConfig (spec §3.9).
 //
-// CRITICAL: a nil *events.Bus is converted to the untyped-nil
-// aggregation.EventPublisher interface value explicitly. Assigning a
-// typed-nil pointer to an interface variable produces a non-nil
-// interface, which would silently bypass the engine's publisher==nil
-// guard.
+// CRITICAL: nil *events.Bus / nil aggregation.TxBeginner /
+// nil aggregation.ConsumerJobEnqueuer must be converted to the
+// untyped-nil interface value explicitly. Assigning a typed-nil
+// pointer to an interface variable produces a non-nil interface, which
+// would silently bypass the engine's nil-guards.
+//
+// pool is the TxBeginner for the engine's atomic claim+publish step.
+// Pass nil to fall back to the legacy non-tx publish path (test mode).
+//
+// enqueuer is the ConsumerJobEnqueuer for stale-claim recovery (River-
+// backed in production; nil in tests that don't exercise the recovery
+// path).
 func NewAggregationEngine(
 	burstWindowHours, replyBridgeHours int,
 	messageRepo *repository.TelegramMessageRepository,
@@ -57,6 +65,8 @@ func NewAggregationEngine(
 	promoter interactionPromoter,
 	extender interactionExtender,
 	eventBus *events.Bus,
+	pool aggregation.TxBeginner,
+	enqueuer aggregation.ConsumerJobEnqueuer,
 ) *AggregationEngine {
 	adapter := telegramAdapter{}
 	store := &telegramMessageStoreAdapter{repo: messageRepo}
@@ -65,6 +75,14 @@ func NewAggregationEngine(
 	var pub aggregation.EventPublisher
 	if eventBus != nil {
 		pub = eventBus
+	}
+
+	// EventLookup is satisfied by *events.Bus.FindEventBySource via the
+	// busEventLookup adapter — declared as a typed nil so the engine
+	// guard correctly sees nil when eventBus is nil.
+	var lookup aggregation.EventLookup
+	if eventBus != nil {
+		lookup = &busEventLookup{bus: eventBus}
 	}
 
 	eng := aggregation.NewEngine(
@@ -76,6 +94,9 @@ func NewAggregationEngine(
 		pub,
 		burstWindowHours,
 		replyBridgeHours,
+		pool,
+		lookup,
+		enqueuer,
 	)
 	return &AggregationEngine{engine: eng}
 }
@@ -203,23 +224,56 @@ func (a *telegramMessageStoreAdapter) MarkProcessed(ctx context.Context, message
 	return a.repo.MarkMessagesProcessed(ctx, messageIDs, interactionID)
 }
 
+func (a *telegramMessageStoreAdapter) ClaimRowsTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, sessionRef string) ([]uuid.UUID, error) {
+	return a.repo.ClaimMessagesTx(ctx, tx, messageIDs, sessionRef)
+}
+
+func (a *telegramMessageStoreAdapter) ClearStaleClaimTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, expectedSessionRef string) error {
+	return a.repo.ClearStaleClaimTx(ctx, tx, messageIDs, expectedSessionRef)
+}
+
 // mapTelegramMessage projects a repository.TelegramMessage into the
 // source-neutral aggregation.Message. Preserving InteractionID is
-// critical for cross-batch explicit reply bridging.
+// critical for cross-batch explicit reply bridging. ClaimedAt /
+// ClaimedSessionRef are required for stale-claim / boundary-shift
+// recovery detection (spec §3 Race Mechanics).
 func mapTelegramMessage(m repository.TelegramMessage) aggregation.Message {
 	out := aggregation.Message{
-		ID:            m.ID,
-		ChatID:        strconv.FormatInt(m.TelegramChatID, 10),
-		IsOutgoing:    m.IsOutgoing,
-		SentAt:        m.SentAt,
-		ExternalID:    strconv.Itoa(int(m.TelegramMessageID)),
-		InteractionID: m.InteractionID,
+		ID:                m.ID,
+		ChatID:            strconv.FormatInt(m.TelegramChatID, 10),
+		IsOutgoing:        m.IsOutgoing,
+		SentAt:            m.SentAt,
+		ExternalID:        strconv.Itoa(int(m.TelegramMessageID)),
+		InteractionID:     m.InteractionID,
+		ClaimedAt:         m.ClaimedAt,
+		ClaimedSessionRef: m.ClaimedSessionRef,
 	}
 	if m.ReplyToMsgID != nil {
 		s := strconv.Itoa(int(*m.ReplyToMsgID))
 		out.ReplyTargetID = &s
 	}
 	return out
+}
+
+// busEventLookup adapts *events.Bus to the aggregation.EventLookup
+// interface. (uuid.Nil, false, nil) on db.ErrNotFound; (id, true, nil)
+// on hit; non-nil error on infrastructure failure.
+//
+// Lives in the telegram package (not the shared aggregation package)
+// because the aggregation package must not import `db` or
+// `repository`. The same pattern repeats for any future per-source
+// shim (messages, whatsapp).
+type busEventLookup struct{ bus *events.Bus }
+
+func (l *busEventLookup) FindEventBySourceRef(ctx context.Context, source, sourceID string) (uuid.UUID, bool, error) {
+	env, err := l.bus.FindEventBySource(ctx, source, sourceID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return uuid.Nil, false, nil
+		}
+		return uuid.Nil, false, err
+	}
+	return env.ID, true, nil
 }
 
 // interactionFinderAdapter wraps *repository.InteractionRepository and

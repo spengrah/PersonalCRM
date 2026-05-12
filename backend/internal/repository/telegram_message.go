@@ -13,6 +13,12 @@ import (
 )
 
 // TelegramMessage represents a stored Telegram message.
+//
+// ClaimedAt / ClaimedSessionRef carry the row's claim state (spec §3
+// Race Mechanics). Set by the aggregator's create path when the row is
+// included in a session about to be published; cleared by
+// InteractionRecorder when Stage 3 commits OR by ClearStaleClaim when
+// the engine detects a stranded claim.
 type TelegramMessage struct {
 	ID                uuid.UUID
 	TelegramMessageID int32
@@ -33,6 +39,8 @@ type TelegramMessage struct {
 	MatchedContactID  *uuid.UUID
 	InteractionID     *uuid.UUID
 	ProcessedAt       *time.Time
+	ClaimedAt         *time.Time
+	ClaimedSessionRef *string
 	DeletedAt         *time.Time
 	CreatedAt         time.Time
 }
@@ -118,6 +126,12 @@ func convertDbTelegramMessage(m *db.TelegramMessage) TelegramMessage {
 	}
 	if m.ProcessedAt.Valid {
 		msg.ProcessedAt = &m.ProcessedAt.Time
+	}
+	if m.ClaimedAt.Valid {
+		msg.ClaimedAt = &m.ClaimedAt.Time
+	}
+	if m.ClaimedSessionRef.Valid {
+		msg.ClaimedSessionRef = &m.ClaimedSessionRef.String
 	}
 	if m.DeletedAt.Valid {
 		msg.DeletedAt = &m.DeletedAt.Time
@@ -306,7 +320,10 @@ func (r *TelegramMessageRepository) UpdateMessageContact(ctx context.Context, pe
 	})
 }
 
-// MarkMessagesProcessed sets processed_at and interaction_id on messages.
+// MarkMessagesProcessed sets processed_at + interaction_id AND clears
+// claim columns. Non-tx variant; used by the engine's extend/promote/
+// bridge paths only (those paths do not claim rows or publish events,
+// so no session-scope predicate is needed).
 func (r *TelegramMessageRepository) MarkMessagesProcessed(ctx context.Context, messageIDs []uuid.UUID, interactionID uuid.UUID) error {
 	pgIDs := make([]pgtype.UUID, len(messageIDs))
 	for i, id := range messageIDs {
@@ -318,11 +335,97 @@ func (r *TelegramMessageRepository) MarkMessagesProcessed(ctx context.Context, m
 	})
 }
 
-// MarkMessagesProcessedTx is the tx-threaded variant of MarkMessagesProcessed.
-// Used by InteractionRecorder.HandleEvent so the telegram_message.interaction_id
+// MarkMessagesProcessedTx is the tx-bound variant. Used by
+// InteractionRecorder.HandleEvent so the telegram_message.interaction_id
 // FK write shares the same tx as the interaction insert (spec §3.4.1
-// atomicity contract; plan Decision 10).
-func (r *TelegramMessageRepository) MarkMessagesProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID) error {
+// atomicity contract).
+//
+// The SQL predicate scopes the update to rows whose
+// claimed_session_ref matches sessionRef OR is NULL — defending
+// against the stale boundary-shift race (claimed_session_ref =
+// 'other-ref' rejects the update) while still working when the engine
+// took the non-tx publish path (NULL claimed_session_ref).
+//
+// Returns the number of rows actually updated. The caller (consumer)
+// distinguishes the cases: zero affected on a fresh write means the
+// predicate filtered everything out (boundary-shift race) and the
+// consumer rolls back the whole tx to prevent a phantom-duplicate
+// interaction from committing; zero affected on a replay is expected
+// (rows were already linked to the existing interaction on the
+// original attempt).
+func (r *TelegramMessageRepository) MarkMessagesProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) (int64, error) {
+	if len(messageIDs) == 0 {
+		return 0, nil
+	}
+	pgIDs := make([]pgtype.UUID, len(messageIDs))
+	for i, id := range messageIDs {
+		pgIDs[i] = uuidToPgUUID(id)
+	}
+	return db.New(tx).MarkTelegramMessagesProcessedForSession(ctx, db.MarkTelegramMessagesProcessedForSessionParams{
+		InteractionID: uuidToPgUUID(interactionID),
+		MessageIds:    pgIDs,
+		SessionRef:    pgtype.Text{String: sessionRef, Valid: true},
+	})
+}
+
+// ClaimMessages writes claim columns on rows still eligible. Non-tx
+// variant; used by tests / batch scripts. Returns the IDs actually
+// claimed (RETURNING id).
+func (r *TelegramMessageRepository) ClaimMessages(ctx context.Context, messageIDs []uuid.UUID, sessionRef string) ([]uuid.UUID, error) {
+	if len(messageIDs) == 0 {
+		return nil, nil
+	}
+	pgIDs := make([]pgtype.UUID, len(messageIDs))
+	for i, id := range messageIDs {
+		pgIDs[i] = uuidToPgUUID(id)
+	}
+	claimed, err := r.queries.ClaimTelegramMessages(ctx, db.ClaimTelegramMessagesParams{
+		SessionRef: pgtype.Text{String: sessionRef, Valid: true},
+		MessageIds: pgIDs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uuid.UUID, 0, len(claimed))
+	for _, id := range claimed {
+		if id.Valid {
+			out = append(out, uuid.UUID(id.Bytes))
+		}
+	}
+	return out, nil
+}
+
+// ClaimMessagesTx is the tx-bound variant of ClaimMessages. Used by the
+// aggregator engine's create path. Returns IDs actually claimed; caller
+// compares against requested-IDs to detect partial-claim races.
+func (r *TelegramMessageRepository) ClaimMessagesTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, sessionRef string) ([]uuid.UUID, error) {
+	if len(messageIDs) == 0 {
+		return nil, nil
+	}
+	pgIDs := make([]pgtype.UUID, len(messageIDs))
+	for i, id := range messageIDs {
+		pgIDs[i] = uuidToPgUUID(id)
+	}
+	claimed, err := db.New(tx).ClaimTelegramMessages(ctx, db.ClaimTelegramMessagesParams{
+		SessionRef: pgtype.Text{String: sessionRef, Valid: true},
+		MessageIds: pgIDs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uuid.UUID, 0, len(claimed))
+	for _, id := range claimed {
+		if id.Valid {
+			out = append(out, uuid.UUID(id.Bytes))
+		}
+	}
+	return out, nil
+}
+
+// ClearStaleClaimTx clears claim columns for rows still carrying the
+// expected stale session_ref. Used by the engine's defensive recovery
+// branch when FindEventBySource returned no row for the claimed session.
+func (r *TelegramMessageRepository) ClearStaleClaimTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, expectedSessionRef string) error {
 	if len(messageIDs) == 0 {
 		return nil
 	}
@@ -330,10 +433,39 @@ func (r *TelegramMessageRepository) MarkMessagesProcessedTx(ctx context.Context,
 	for i, id := range messageIDs {
 		pgIDs[i] = uuidToPgUUID(id)
 	}
-	return db.New(tx).MarkTelegramMessagesProcessed(ctx, db.MarkTelegramMessagesProcessedParams{
-		InteractionID: uuidToPgUUID(interactionID),
-		MessageIds:    pgIDs,
+	return db.New(tx).ClearTelegramMessageStaleClaim(ctx, db.ClearTelegramMessageStaleClaimParams{
+		MessageIds:         pgIDs,
+		ExpectedSessionRef: pgtype.Text{String: expectedSessionRef, Valid: true},
 	})
+}
+
+// BackdateClaim is a test-only helper that ages the claim_at on the
+// given rows past the 5-minute TTL. Production code MUST NOT call this.
+func (r *TelegramMessageRepository) BackdateClaim(ctx context.Context, messageIDs []uuid.UUID) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	pgIDs := make([]pgtype.UUID, len(messageIDs))
+	for i, id := range messageIDs {
+		pgIDs[i] = uuidToPgUUID(id)
+	}
+	return r.queries.BackdateTelegramMessageClaim(ctx, pgIDs)
+}
+
+// TelegramStagingProcessor adapts *TelegramMessageRepository to the
+// source-neutral StagingProcessor interface. Concrete instance is
+// created in main.go and passed to the registry.
+type TelegramStagingProcessor struct{ repo *TelegramMessageRepository }
+
+// NewTelegramStagingProcessor builds the telegram-source staging
+// processor adapter.
+func NewTelegramStagingProcessor(repo *TelegramMessageRepository) *TelegramStagingProcessor {
+	return &TelegramStagingProcessor{repo: repo}
+}
+
+// MarkProcessedTx implements StagingProcessor.
+func (p *TelegramStagingProcessor) MarkProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) (int64, error) {
+	return p.repo.MarkMessagesProcessedTx(ctx, tx, messageIDs, interactionID, sessionRef)
 }
 
 // ListUnprocessedContactIDs returns distinct contact IDs with unprocessed messages.

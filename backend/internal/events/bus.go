@@ -245,3 +245,17 @@ func (b *Bus) PublishTx(ctx context.Context, tx pgx.Tx, env *Envelope) error {
 func (b *Bus) GetEvent(ctx context.Context, id uuid.UUID) (*Envelope, error) {
 	return b.eventRepo.GetEvent(ctx, id)
 }
+
+// FindEventBySource looks up an event by its (source, source_id) pair.
+// Returns db.ErrNotFound when no row matches. Used by the aggregator's
+// stale-claim recovery path: when the engine sees an already-published
+// event for a session's deterministic sourceRef, it re-enqueues a
+// consumer job against the existing event row rather than
+// re-publishing (event-log dedup would suppress re-publish).
+//
+// Thin passthrough to b.eventRepo.FindEventBySource — exposed on the
+// Bus so the aggregation package can depend on *events.Bus rather than
+// importing the repository package directly.
+func (b *Bus) FindEventBySource(ctx context.Context, source, sourceID string) (*Envelope, error) {
+	return b.eventRepo.FindEventBySource(ctx, source, sourceID)
+}

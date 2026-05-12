@@ -82,6 +82,8 @@ func setupAggregationTest(t *testing.T) (
 		messageRepo, interactionRepo,
 		contactService, contactService,
 		bus,
+		nil, // pool: non-tx publish fallback (test mode)
+		nil, // enqueuer: stale-claim recovery disabled
 	)
 
 	// Clean up test messages from previous runs

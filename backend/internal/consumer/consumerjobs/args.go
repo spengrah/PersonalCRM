@@ -19,8 +19,18 @@ import (
 // minimal (just the event id) matches spec §3.3: worker fetches the full
 // envelope via bus.GetEvent at dequeue time rather than serializing the
 // whole payload into the river job row.
+//
+// EventID carries the `river:"unique"` tag so the aggregator's stale-
+// claim recovery path (which enqueues with UniqueOpts{ByArgs: true})
+// dedupes repeated recovery enqueues against the same event into one
+// in-flight job. The publish-side enqueue (from
+// events.consumerJobsForKind) does NOT pass UniqueOpts, so the tag is
+// a no-op there — only the recovery path consults it. Default ByState
+// (Pending/Scheduled/Available/Running/Retryable) excludes `discarded`,
+// so a permanently-failing consumer's MaxAttempts exhaustion
+// eventually frees a fresh recovery slot.
 type InteractionRecorderJobArgs struct {
-	EventID uuid.UUID `json:"event_id"`
+	EventID uuid.UUID `json:"event_id" river:"unique"`
 }
 
 // Kind returns the river job-kind identifier used for registration and

@@ -12,6 +12,7 @@ import (
 	"personal-crm/backend/internal/crypto"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/messaging/aggregation"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -77,6 +78,14 @@ type TelegramManager struct {
 }
 
 // NewTelegramManager creates the manager and its embedded AuthSessionManager.
+//
+// pool is the TxBeginner passed through to the shared aggregation
+// engine for the atomic claim+publish create path. Pass nil to fall
+// back to the legacy non-tx publish path (test mode).
+//
+// enqueuer is the ConsumerJobEnqueuer for stale-claim recovery
+// (River-backed in production; nil in tests that don't exercise the
+// recovery path).
 func NewTelegramManager(
 	sessionRepo *repository.TelegramSessionRepository,
 	updateStateRepo *repository.TelegramUpdateStateRepository,
@@ -94,6 +103,8 @@ func NewTelegramManager(
 	promoter interactionPromoter,
 	extender interactionExtender,
 	eventBus *events.Bus,
+	pool aggregation.TxBeginner,
+	enqueuer aggregation.ConsumerJobEnqueuer,
 ) *TelegramManager {
 	peerMatcher := NewPeerMatcher(identityService, messageRepo, externalContactRepo, enricher, cfg.DiscoveryMinMessages)
 	aggregationEngine := NewAggregationEngine(
@@ -101,6 +112,8 @@ func NewTelegramManager(
 		messageRepo, interactionRepo,
 		promoter, extender,
 		eventBus,
+		pool,
+		enqueuer,
 	)
 
 	m := &TelegramManager{

@@ -18,6 +18,7 @@ const (
 	InteractionSourceGCal     = "gcal"
 	InteractionSourceTodoist  = "todoist"
 	InteractionSourceTelegram = "telegram"
+	InteractionSourceMessages = "messages"
 )
 
 // Interaction direction constants

@@ -289,6 +289,28 @@ type MacHostPairingToken struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
+type MessagesMessage struct {
+	ID                pgtype.UUID        `json:"id"`
+	Guid              string             `json:"guid"`
+	ChatGuid          string             `json:"chat_guid"`
+	PeerHandle        string             `json:"peer_handle"`
+	PeerNormalized    pgtype.Text        `json:"peer_normalized"`
+	Text              pgtype.Text        `json:"text"`
+	MessageType       string             `json:"message_type"`
+	SentAt            pgtype.Timestamptz `json:"sent_at"`
+	IsOutgoing        bool               `json:"is_outgoing"`
+	IsGroupChat       bool               `json:"is_group_chat"`
+	ReplyToGuid       pgtype.Text        `json:"reply_to_guid"`
+	MatchedContactID  pgtype.UUID        `json:"matched_contact_id"`
+	InteractionID     pgtype.UUID        `json:"interaction_id"`
+	MacHostID         pgtype.UUID        `json:"mac_host_id"`
+	ProcessedAt       pgtype.Timestamptz `json:"processed_at"`
+	ClaimedAt         pgtype.Timestamptz `json:"claimed_at"`
+	ClaimedSessionRef pgtype.Text        `json:"claimed_session_ref"`
+	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
 type Note struct {
 	ID        pgtype.UUID        `json:"id"`
 	ContactID pgtype.UUID        `json:"contact_id"`
@@ -399,6 +421,8 @@ type TelegramMessage struct {
 	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	PeerEntityResolved bool               `json:"peer_entity_resolved"`
+	ClaimedAt          pgtype.Timestamptz `json:"claimed_at"`
+	ClaimedSessionRef  pgtype.Text        `json:"claimed_session_ref"`
 }
 
 type TelegramSession struct {
