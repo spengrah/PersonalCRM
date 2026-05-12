@@ -271,6 +271,55 @@ func TestMacHostAuth_RateLimit_ResetsOnSuccess(t *testing.T) {
 	}
 }
 
+func TestMacHostAuth_SuccessDoesNotConsumeToken(t *testing.T) {
+	// A valid daemon presenting the correct key after burst-1 of
+	// failures must STILL be allowed through. This regression test
+	// guards the "successful auth does not consume a rate-limit
+	// token" property required for legitimate operators who typo
+	// their key once or twice before pasting the right one.
+	id := uuid.New()
+	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{
+		id: {ID: id, APIKeyHash: "expected"},
+	}}
+	cmp := &countingComparator{}
+	cfg := MacHostAuthLimiterConfig{
+		FailedAuthsPerMinute: 5,
+		Burst:                5,
+		MaxEntries:           10,
+	}
+	r := newMacAuthTestRouter(t, repo, cmp.Compare, cfg)
+
+	// Burst-1 (4) failures with the wrong key. Each consumes a token.
+	for i := 0; i < 4; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("X-Mac-Host-ID", id.String())
+		req.Header.Set("Authorization", "Bearer wrong")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		require.Equal(t, http.StatusUnauthorized, w.Code, "failure attempt %d", i+1)
+	}
+
+	// One token left — a correct bearer must succeed AND not consume
+	// it. After this, the daemon should still have at least one
+	// failure budget before 429.
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("X-Mac-Host-ID", id.String())
+	req.Header.Set("Authorization", "Bearer expected")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "valid auth after burst-1 failures must succeed")
+
+	// Limiter is reset on success — burst should be replenished.
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("X-Mac-Host-ID", id.String())
+		req.Header.Set("Authorization", "Bearer wrong")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		require.Equal(t, http.StatusUnauthorized, w.Code, "post-success attempt %d", i+1)
+	}
+}
+
 func TestMacHostAuth_LRU_EvictsLeastRecent(t *testing.T) {
 	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{}}
 	cmp := &countingComparator{}

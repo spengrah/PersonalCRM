@@ -88,20 +88,37 @@ func newMacHostAuthLimiter(cfg MacHostAuthLimiterConfig) *macHostAuthLimiter {
 	}
 }
 
-// allow returns true when an attempt may proceed for host_id. Each
-// non-allow call consumes a token; on miss the host is blocked until
-// the next refill tick. A successful auth should call reset(id) to
-// drop the per-host limiter so accumulated failures don't penalize a
-// freshly-paired host.
-func (m *macHostAuthLimiter) allow(id uuid.UUID) bool {
+// canProceed returns true when an attempt may proceed for host_id
+// WITHOUT consuming a token. Used as a pre-bcrypt gate: a host that
+// has run out of failure tokens is rejected with 429 before paying
+// the bcrypt cost. Successful auths do not consume tokens, so a
+// brief flurry of typos by a legitimate operator with the correct
+// key still gets through.
+func (m *macHostAuthLimiter) canProceed(id uuid.UUID) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	lim := m.getOrCreateLocked(id)
-	return lim.Allow()
+	// Tokens() floors at 0 but advance()s the internal clock so the
+	// peek reflects the current bucket state. Use 1.0 as the threshold
+	// because Allow() = AllowN(now, 1).
+	return lim.Tokens() >= 1.0
+}
+
+// recordFailure consumes a token from host_id's bucket. Called only
+// when an auth attempt actually fails the bcrypt comparison (or the
+// host lookup returns ErrNotFound).
+func (m *macHostAuthLimiter) recordFailure(id uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lim := m.getOrCreateLocked(id)
+	// Allow returns false if no tokens — but the pre-check already
+	// gated on that, so we discard the return.
+	_ = lim.Allow()
 }
 
 // reset removes the limiter entry for host_id. Called after a
-// successful auth.
+// successful auth so accumulated failures from a now-rotated key
+// don't penalize the legitimate daemon.
 func (m *macHostAuthLimiter) reset(id uuid.UUID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -266,7 +283,11 @@ func macHostAuthMiddleware(
 		}
 
 		// Rate-limit BEFORE bcrypt to cap CPU work on brute-force.
-		if !limiter.allow(hostID) {
+		// canProceed peeks the limiter without consuming a token, so
+		// a valid daemon with the correct key is never blocked by
+		// previous failures from the SAME host_id. Tokens are only
+		// consumed on the failure paths below via recordFailure.
+		if !limiter.canProceed(hostID) {
 			abortAuth(c, http.StatusTooManyRequests, "RATE_LIMITED", "too many failed auth attempts for this host")
 			return
 		}
@@ -274,6 +295,7 @@ func macHostAuthMiddleware(
 		host, err := repo.GetActiveHostByID(c.Request.Context(), hostID)
 		if err != nil {
 			if errors.Is(err, db.ErrNotFound) {
+				limiter.recordFailure(hostID)
 				abortAuth(c, http.StatusUnauthorized, "UNKNOWN_HOST", "host not found or revoked")
 				return
 			}
@@ -282,15 +304,16 @@ func macHostAuthMiddleware(
 		}
 
 		if err := compare([]byte(host.APIKeyHash), []byte(bearer)); err != nil {
+			limiter.recordFailure(hostID)
 			abortAuth(c, http.StatusUnauthorized, "INVALID_KEY", "invalid API key")
 			return
 		}
 
 		// :id param consistency check (when present on the route).
+		// This is an authorization failure, not authentication, so
+		// it doesn't consume a rate-limit token.
 		if idParam := c.Param("id"); idParam != "" {
 			if idParam != hostID.String() {
-				// Authentication succeeded but the daemon's bearer is
-				// not scoped to the requested host. 403, not 401.
 				abortAuth(c, http.StatusForbidden, "WRONG_HOST_ID", "X-Mac-Host-ID does not match route :id")
 				return
 			}

@@ -107,9 +107,23 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 
 	t.Cleanup(func() {
 		// Hard-delete rows so the singleton index is empty for the next
-		// test. mac_host has no deleted_at column.
+		// test. mac_host has no deleted_at column. We also sweep any
+		// strategy='push' external_sync_state rows the cursor-commit
+		// flow has created — without this, the migration test's
+		// 048-down guard fires on leftover push rows from earlier
+		// tests in the same `go test` invocation.
 		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		// Look up sync states, drop any with strategy='push'. (No
+		// dedicated test-only delete-by-strategy query; the list
+		// iteration is bounded by table size and only runs at
+		// teardown.)
+		states, _ := database.Queries.ListSyncStates(cleanCtx)
+		for _, s := range states {
+			if s.Strategy == "push" {
+				_ = database.Queries.DeleteSyncState(cleanCtx, s.ID)
+			}
+		}
 		_, _ = database.Queries.DeleteAllMacHosts(cleanCtx)
 		_, _ = database.Queries.DeleteAllPairingTokens(cleanCtx)
 		database.Close()
@@ -254,24 +268,27 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	require.Equal(t, pair.CursorEpoch, *baseConflict.CurrentEpoch)
 	require.NotNil(t, baseConflict.CurrentCursor)
 
-	// 6. Commit cursor with good base → 200.
+	// 6. Commit cursor with good base + backfill_complete=true → 200.
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+pair.HostID.String()+"/sync/messages/cursor", hostHeaders, map[string]any{
-		"cursor":       "cursor-v1",
-		"base_cursor":  "",
-		"cursor_epoch": pair.CursorEpoch,
+		"cursor":            "cursor-v1",
+		"base_cursor":       "",
+		"cursor_epoch":      pair.CursorEpoch,
+		"backfill_complete": true,
 	})
 	require.Equal(t, http.StatusOK, w.Code, "expected 200; body: %s", w.Body.String())
 
-	// 7. GET cursor → returns committed value.
+	// 7. GET cursor → returns committed value AND backfill_complete.
 	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+pair.HostID.String()+"/sync/messages/cursor", hostHeaders, nil)
 	require.Equal(t, http.StatusOK, w.Code)
 	var cur struct {
-		Cursor      string `json:"cursor"`
-		CursorEpoch int64  `json:"cursor_epoch"`
+		Cursor           string `json:"cursor"`
+		CursorEpoch      int64  `json:"cursor_epoch"`
+		BackfillComplete bool   `json:"backfill_complete"`
 	}
 	readData(t, w, &cur)
 	require.Equal(t, "cursor-v1", cur.Cursor)
 	require.Equal(t, pair.CursorEpoch, cur.CursorEpoch)
+	require.True(t, cur.BackfillComplete, "backfill_complete must echo the daemon's commit value")
 
 	// 8. Fast-forward: commit again with the previous cursor as base.
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+pair.HostID.String()+"/sync/messages/cursor", hostHeaders, map[string]any{
@@ -298,8 +315,8 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	// External_sync_state rows for the host should now be gone.
-	cursor, err := env.syncRepo.GetMacHostSyncCursor(context.Background(), "messages", pair.HostID)
-	require.ErrorIs(t, err, db.ErrNotFound, "cursor rows must be deleted on revoke; got cursor=%q err=%v", cursor, err)
+	cursorRow, cursorErr := env.syncRepo.GetMacHostSyncCursor(context.Background(), "messages", pair.HostID)
+	require.ErrorIs(t, cursorErr, db.ErrNotFound, "cursor rows must be deleted on revoke; got cursor=%v err=%v", cursorRow, cursorErr)
 
 	// 11. Daemon's next heartbeat → 401.
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+pair.HostID.String()+"/heartbeat", hostHeaders, map[string]any{

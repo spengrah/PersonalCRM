@@ -13,6 +13,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/logger"
+	"personal-crm/backend/internal/mac"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -58,6 +59,12 @@ var ErrHostAlreadyPaired = errors.New("another Mac host is already paired; revok
 // handler is the primary input-validation layer; this is a defence-in-
 // depth path for direct service-layer callers.
 var ErrPairingValidation = errors.New("pairing input validation failed")
+
+// ErrUnknownPushSource is returned by CommitCursor / GetCursor when
+// the supplied source is not in mac.AllowedPushSources. Handler maps
+// to 400 (validation error). Defence-in-depth — the HTTP handler is
+// the primary gate.
+var ErrUnknownPushSource = errors.New("unknown push source")
 
 // MacHostService owns business logic for pairing, heartbeat, cursor
 // commit, and revoke-cascade. Stateless aside from the constructor-
@@ -136,17 +143,16 @@ func (s *MacHostService) PairWithToken(
 		return nil, fmt.Errorf("%w: hostname is required", ErrPairingValidation)
 	}
 
-	apiKey, apiKeyHash, err := mintAPIKey(s.bcryptCost)
-	if err != nil {
-		return nil, fmt.Errorf("mint api key: %w", err)
-	}
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin pair tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Validate the token BEFORE minting an API key — bcrypt is ~50ms
+	// at cost=10 and we don't want every garbage POST to pay that
+	// cost. The token lookup is a single indexed SELECT FOR UPDATE
+	// which is cheap.
 	token, err := s.tokenRepo.GetTokenByHashForUpdateTx(ctx, tx, hashPairingToken(plaintextToken))
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
@@ -159,6 +165,11 @@ func (s *MacHostService) PairWithToken(
 	}
 	if !token.ExpiresAt.After(accelerated.GetCurrentTime()) {
 		return nil, ErrPairingTokenExpired
+	}
+
+	apiKey, apiKeyHash, err := mintAPIKey(s.bcryptCost)
+	if err != nil {
+		return nil, fmt.Errorf("mint api key: %w", err)
 	}
 
 	host, err := s.hostRepo.CreateHostTx(ctx, tx, hostname, daemonVersion, protocolVersion, apiKeyHash)
@@ -195,15 +206,24 @@ func (s *MacHostService) Heartbeat(ctx context.Context, hostID uuid.UUID, payloa
 
 // CommitCursor wraps SyncRepository.CommitMacHostCursor. Returns the
 // repository's typed errors directly so handlers can map them to
-// status codes.
+// status codes. Defence-in-depth: rejects sources outside the
+// AllowedPushSources allowlist even if a non-HTTP caller reaches the
+// service.
 func (s *MacHostService) CommitCursor(ctx context.Context, params repository.CommitMacHostCursorParams) error {
+	if !mac.IsAllowedPushSource(params.Source) {
+		return fmt.Errorf("%w: unknown push source %q", ErrUnknownPushSource, params.Source)
+	}
 	return s.syncRepo.CommitMacHostCursor(ctx, params)
 }
 
 // GetCursor returns the cursor for (source, hostID). Returns
 // db.ErrNotFound if no cursor has been committed yet — handler treats
-// that as an empty cursor + current cursor_epoch.
-func (s *MacHostService) GetCursor(ctx context.Context, source string, hostID uuid.UUID) (string, error) {
+// that as an empty cursor + current cursor_epoch. Defence-in-depth:
+// rejects sources outside the AllowedPushSources allowlist.
+func (s *MacHostService) GetCursor(ctx context.Context, source string, hostID uuid.UUID) (*repository.MacHostCursor, error) {
+	if !mac.IsAllowedPushSource(source) {
+		return nil, fmt.Errorf("%w: unknown push source %q", ErrUnknownPushSource, source)
+	}
 	return s.syncRepo.GetMacHostSyncCursor(ctx, source, hostID)
 }
 

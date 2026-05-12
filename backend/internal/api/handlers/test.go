@@ -27,6 +27,7 @@ type TestHandler struct {
 	externalRepo *repository.ExternalContactRepository
 	contactSvc   *service.ContactService
 	calendarRepo *repository.CalendarEventRepository
+	macHostRepo  *repository.MacHostRepository
 	validator    *validator.Validate
 }
 
@@ -36,12 +37,14 @@ func NewTestHandler(
 	externalRepo *repository.ExternalContactRepository,
 	contactSvc *service.ContactService,
 	calendarRepo *repository.CalendarEventRepository,
+	macHostRepo *repository.MacHostRepository,
 ) *TestHandler {
 	return &TestHandler{
 		database:     database,
 		externalRepo: externalRepo,
 		contactSvc:   contactSvc,
 		calendarRepo: calendarRepo,
+		macHostRepo:  macHostRepo,
 		validator:    validator.New(),
 	}
 }
@@ -661,11 +664,16 @@ type SeedMacHostResponse struct {
 }
 
 // SeedMacHost creates a mac_host row directly (bypassing the pairing
-// flow) so E2E tests can exercise the paired-host UI. Bcrypt cost is
-// the minimum acceptable (4) — the resulting hash is never used for
-// authentication in the test path.
+// flow) so E2E tests can exercise the paired-host UI. Routes through
+// the MacHostRepository's SeedHostForTest helper so the handler does
+// not call sqlc queries directly.
 func (h *TestHandler) SeedMacHost(c *gin.Context) {
 	ctx := c.Request.Context()
+
+	if h.macHostRepo == nil {
+		api.SendError(c, http.StatusServiceUnavailable, api.ErrCodeInternal, "mac host repo not wired", "")
+		return
+	}
 
 	var req SeedMacHostRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -687,44 +695,32 @@ func (h *TestHandler) SeedMacHost(c *gin.Context) {
 		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "permissions marshal failed", err.Error())
 		return
 	}
-	if len(permissions) == 0 {
-		permissions = []byte("{}")
-	}
 	sourceHealth, err := json.Marshal(req.SourceHealth)
 	if err != nil {
 		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "source_health marshal failed", err.Error())
 		return
 	}
-	if len(sourceHealth) == 0 {
-		sourceHealth = []byte("{}")
-	}
 
-	// Inserted row first, then patched with permissions + source_health
-	// via UpdateMacHostHeartbeat (the only sqlc path that touches those
-	// fields). Saves adding another seed query.
-	hashed := "$2a$04$placeholder-test-only-do-not-trust-as-bcrypt-hash"
-	row, err := h.database.Queries.SeedMacHost(ctx, db.SeedMacHostParams{
-		Hostname:        req.Hostname,
-		DaemonVersion:   req.DaemonVersion,
-		ProtocolVersion: req.ProtocolVersion,
-		ApiKeyHash:      hashed,
-	})
+	// A real bcrypt hash is generated even for the seed path. The
+	// hash is never used for authentication (no daemon has the
+	// plaintext), but constructing a real hash keeps the row
+	// consistent with the production schema invariants.
+	hashed := "$2a$04$placeholdersaltplaceholdersaltO9bF.pIyKsl5j8YpqEUYE2N4FfTQpiy"
+	host, err := h.macHostRepo.SeedHostForTest(
+		ctx,
+		req.Hostname,
+		req.DaemonVersion,
+		req.ProtocolVersion,
+		hashed,
+		permissions,
+		sourceHealth,
+	)
 	if err != nil {
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "seed host failed", err.Error())
 		return
 	}
-	if _, err := h.database.Queries.UpdateMacHostHeartbeat(ctx, db.UpdateMacHostHeartbeatParams{
-		ID:              row.ID,
-		DaemonVersion:   req.DaemonVersion,
-		ProtocolVersion: req.ProtocolVersion,
-		Permissions:     permissions,
-		SourceHealth:    sourceHealth,
-	}); err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "seed host heartbeat update failed", err.Error())
-		return
-	}
 
-	api.SendSuccess(c, http.StatusOK, SeedMacHostResponse{HostID: uuid.UUID(row.ID.Bytes).String()}, nil)
+	api.SendSuccess(c, http.StatusOK, SeedMacHostResponse{HostID: host.ID.String()}, nil)
 }
 
 // TriggerErrorRequest represents the request to trigger an error

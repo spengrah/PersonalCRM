@@ -26,7 +26,7 @@ type MacHostService interface {
 	PairWithToken(ctx context.Context, plaintextToken, hostname, daemonVersion string, protocolVersion int32) (*service.PairResult, error)
 	Heartbeat(ctx context.Context, hostID uuid.UUID, payload repository.HeartbeatPayload) (*repository.MacHost, error)
 	CommitCursor(ctx context.Context, params repository.CommitMacHostCursorParams) error
-	GetCursor(ctx context.Context, source string, hostID uuid.UUID) (string, error)
+	GetCursor(ctx context.Context, source string, hostID uuid.UUID) (*repository.MacHostCursor, error)
 	ListActiveHosts(ctx context.Context) ([]*repository.MacHost, error)
 	GetHost(ctx context.Context, id uuid.UUID) (*repository.MacHost, error)
 	RevokeHost(ctx context.Context, id uuid.UUID) error
@@ -139,7 +139,14 @@ func (h *MacHostHandler) Pair(c *gin.Context) {
 		case errors.Is(err, service.ErrPairingTokenInvalid),
 			errors.Is(err, service.ErrPairingTokenAlreadyUsed),
 			errors.Is(err, service.ErrPairingTokenExpired):
-			api.SendError(c, http.StatusGone, "PAIRING_TOKEN_INVALID", err.Error(), "")
+			// Return a single opaque error code + message for all
+			// token-state failures so the wire response cannot be
+			// used to distinguish invalid / consumed / expired. The
+			// daemon's recovery path (mint a fresh token) is the same
+			// in every case. Log the specific reason server-side for
+			// operator debugging.
+			logger.Info().Err(err).Msg("pair: pairing token rejected")
+			api.SendError(c, http.StatusGone, "PAIRING_TOKEN_INVALID", "pairing token invalid", "")
 			return
 		case errors.Is(err, service.ErrHostAlreadyPaired):
 			api.SendError(c, http.StatusConflict, "HOST_ALREADY_PAIRED", err.Error(), "")
@@ -230,10 +237,13 @@ func (h *MacHostHandler) Heartbeat(c *gin.Context) {
 	}, nil)
 }
 
-// cursorResponse is the GET cursor body.
+// cursorResponse is the GET cursor body. backfill_complete echoes the
+// last value the daemon committed; defaults to false when no commit
+// has happened yet. Opaque to the Pi — the daemon owns the semantics.
 type cursorResponse struct {
-	Cursor      string `json:"cursor"`
-	CursorEpoch int64  `json:"cursor_epoch"`
+	Cursor           string `json:"cursor"`
+	CursorEpoch      int64  `json:"cursor_epoch"`
+	BackfillComplete bool   `json:"backfill_complete"`
 }
 
 // GetCursor returns the cursor stored for (host, source). Empty string
@@ -249,23 +259,33 @@ func (h *MacHostHandler) GetCursor(c *gin.Context) {
 		api.SendValidationError(c, "source is required", "")
 		return
 	}
-	cursor, err := h.svc.GetCursor(c.Request.Context(), source, host.ID)
+	if !mac.IsAllowedPushSource(source) {
+		api.SendValidationError(c, "unknown push source", "")
+		return
+	}
+	cur, err := h.svc.GetCursor(c.Request.Context(), source, host.ID)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
 		logger.Error().Err(err).Msg("get cursor: failed")
 		api.SendInternalError(c, "get cursor failed")
 		return
 	}
-	api.SendSuccess(c, http.StatusOK, cursorResponse{
-		Cursor:      cursor,
+	resp := cursorResponse{
 		CursorEpoch: host.CursorEpoch,
-	}, nil)
+	}
+	if cur != nil {
+		resp.Cursor = cur.Cursor
+		resp.BackfillComplete = cur.BackfillComplete
+	}
+	api.SendSuccess(c, http.StatusOK, resp, nil)
 }
 
-// commitCursorRequest is the cursor-commit body.
+// commitCursorRequest is the cursor-commit body. backfill_complete is
+// opaque to the Pi but echoed back on GET — daemon-owned semantic.
 type commitCursorRequest struct {
-	Cursor      string `json:"cursor"`
-	BaseCursor  string `json:"base_cursor"`
-	CursorEpoch int64  `json:"cursor_epoch"`
+	Cursor           string `json:"cursor"`
+	BaseCursor       string `json:"base_cursor"`
+	CursorEpoch      int64  `json:"cursor_epoch"`
+	BackfillComplete bool   `json:"backfill_complete"`
 }
 
 // commitCursorConflict is the 409 response shape. Both
@@ -290,17 +310,22 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 		api.SendValidationError(c, "source is required", "")
 		return
 	}
+	if !mac.IsAllowedPushSource(source) {
+		api.SendValidationError(c, "unknown push source", "")
+		return
+	}
 	var req commitCursorRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		api.SendValidationError(c, "Invalid commit body", err.Error())
 		return
 	}
 	err := h.svc.CommitCursor(c.Request.Context(), repository.CommitMacHostCursorParams{
-		HostID:       host.ID,
-		Source:       source,
-		BaseCursor:   req.BaseCursor,
-		NewCursor:    req.Cursor,
-		ClaimedEpoch: req.CursorEpoch,
+		HostID:           host.ID,
+		Source:           source,
+		BaseCursor:       req.BaseCursor,
+		NewCursor:        req.Cursor,
+		ClaimedEpoch:     req.CursorEpoch,
+		BackfillComplete: req.BackfillComplete,
 	})
 	if err == nil {
 		api.SendSuccess(c, http.StatusOK, gin.H{"ok": true}, nil)
@@ -309,6 +334,10 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 
 	if errors.Is(err, db.ErrNotFound) {
 		api.SendError(c, http.StatusUnauthorized, "UNKNOWN_HOST", "host not found or revoked", "")
+		return
+	}
+	if errors.Is(err, service.ErrUnknownPushSource) {
+		api.SendValidationError(c, "unknown push source", "")
 		return
 	}
 
@@ -350,6 +379,15 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 // because empty IDs is the expected response on a fresh Pi. The body
 // will be filled in once the external_contact consumer ships.
 func (h *MacHostHandler) KnownIDs(c *gin.Context) {
+	source := c.Param("source")
+	if source == "" {
+		api.SendValidationError(c, "source is required", "")
+		return
+	}
+	if !mac.IsAllowedPushSource(source) {
+		api.SendValidationError(c, "unknown push source", "")
+		return
+	}
 	api.SendSuccess(c, http.StatusOK, gin.H{"ids": []string{}}, nil)
 }
 

@@ -149,23 +149,34 @@ WHERE source = @source
 -- First-commit insert path. ON CONFLICT DO NOTHING handles the
 -- concurrent-first-write race: the loser gets zero rows, re-reads the
 -- now-committed state, and surfaces ErrCursorBaseMismatch with the
--- winner's cursor.
+-- winner's cursor. backfill_complete is stored as a JSONB key on the
+-- metadata column — see the cursor wire contract in the handler.
 INSERT INTO external_sync_state
-    (source, account_id, enabled, status, strategy, sync_cursor, next_sync_at)
-VALUES (@source, @account_id, TRUE, 'idle', 'push', @new_cursor, NULL)
+    (source, account_id, enabled, status, strategy, sync_cursor, next_sync_at, metadata)
+VALUES (
+    @source, @account_id, TRUE, 'idle', 'push', @new_cursor, NULL,
+    jsonb_build_object('backfill_complete', @backfill_complete::boolean)
+)
 ON CONFLICT (source, COALESCE(account_id, '')) DO NOTHING
-RETURNING id, sync_cursor;
+RETURNING id, sync_cursor, metadata;
 
 -- name: UpdateMacHostSyncCursor :one
 -- CAS-style update: only updates when sync_cursor matches base_cursor.
 -- Zero rows returned means another writer slipped in between the
 -- planning read and this update; the caller re-reads and surfaces 409.
+-- metadata.backfill_complete is rewritten on every successful commit.
 UPDATE external_sync_state
 SET sync_cursor = @new_cursor,
+    metadata    = jsonb_set(
+        COALESCE(metadata, '{}'::jsonb),
+        '{backfill_complete}',
+        to_jsonb(@backfill_complete::boolean),
+        TRUE
+    ),
     updated_at  = NOW()
 WHERE id = @id
   AND COALESCE(sync_cursor, '') = @base_cursor::text
-RETURNING id, sync_cursor;
+RETURNING id, sync_cursor, metadata;
 
 -- name: DeleteMacHostSyncStates :execrows
 -- Cascade-on-revoke: when a host is uninstalled, drop its push-cursor

@@ -732,34 +732,63 @@ func (e *ErrCursorBaseMismatch) Error() string {
 	return fmt.Sprintf("cursor base mismatch: server has %q", e.CurrentCursor)
 }
 
-// GetMacHostSyncCursor returns the cursor stored for (source, hostID).
-// Returns db.ErrNotFound if no row has been committed yet — handler
-// treats that as an empty cursor.
-func (r *SyncRepository) GetMacHostSyncCursor(ctx context.Context, source string, hostID uuid.UUID) (string, error) {
+// MacHostCursor is the value returned by GetMacHostSyncCursor — cursor
+// text (opaque to the Pi) plus the daemon-supplied backfill_complete
+// flag stored alongside it in metadata.
+type MacHostCursor struct {
+	Cursor           string
+	BackfillComplete bool
+}
+
+// GetMacHostSyncCursor returns the cursor + backfill_complete stored
+// for (source, hostID). Returns db.ErrNotFound if no row has been
+// committed yet — handler treats that as an empty cursor.
+func (r *SyncRepository) GetMacHostSyncCursor(ctx context.Context, source string, hostID uuid.UUID) (*MacHostCursor, error) {
 	row, err := r.queries.GetMacHostSyncState(ctx, db.GetMacHostSyncStateParams{
 		Source:    source,
 		AccountID: hostID.String(),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", db.ErrNotFound
+			return nil, db.ErrNotFound
 		}
-		return "", fmt.Errorf("get mac_host sync cursor: %w", err)
+		return nil, fmt.Errorf("get mac_host sync cursor: %w", err)
 	}
-	if !row.SyncCursor.Valid {
-		return "", nil
+	out := &MacHostCursor{
+		BackfillComplete: extractBackfillComplete(row.Metadata),
 	}
-	return row.SyncCursor.String, nil
+	if row.SyncCursor.Valid {
+		out.Cursor = row.SyncCursor.String
+	}
+	return out, nil
+}
+
+// extractBackfillComplete reads the boolean from external_sync_state.metadata
+// JSONB. Missing keys / unexpected types default to false (matches the
+// daemon's first-poll state).
+func extractBackfillComplete(metadata []byte) bool {
+	if len(metadata) == 0 {
+		return false
+	}
+	var m map[string]any
+	if err := json.Unmarshal(metadata, &m); err != nil {
+		return false
+	}
+	if v, ok := m["backfill_complete"].(bool); ok {
+		return v
+	}
+	return false
 }
 
 // CommitMacHostCursorParams carries the inputs for the three-stage
 // transactional CAS implemented by CommitMacHostCursor.
 type CommitMacHostCursorParams struct {
-	HostID       uuid.UUID
-	Source       string
-	BaseCursor   string // caller's snapshot of the cursor before this commit
-	NewCursor    string // cursor to install
-	ClaimedEpoch int64  // daemon's local cursor_epoch
+	HostID           uuid.UUID
+	Source           string
+	BaseCursor       string // caller's snapshot of the cursor before this commit
+	NewCursor        string // cursor to install
+	ClaimedEpoch     int64  // daemon's local cursor_epoch
+	BackfillComplete bool   // daemon's claim about backfill state
 }
 
 // CommitMacHostCursor performs the three-stage transactional CAS for
@@ -848,9 +877,10 @@ func (r *SyncRepository) CommitMacHostCursor(ctx context.Context, params CommitM
 		// concurrent-first-write race without aborting the tx (no
 		// 23505 raised).
 		inserted, insErr := q.InsertMacHostSyncCursor(ctx, db.InsertMacHostSyncCursorParams{
-			Source:    params.Source,
-			AccountID: pgtype.Text{String: params.HostID.String(), Valid: true},
-			NewCursor: pgtype.Text{String: params.NewCursor, Valid: true},
+			Source:           params.Source,
+			AccountID:        pgtype.Text{String: params.HostID.String(), Valid: true},
+			NewCursor:        pgtype.Text{String: params.NewCursor, Valid: true},
+			BackfillComplete: params.BackfillComplete,
 		})
 		if insErr != nil && !errors.Is(insErr, pgx.ErrNoRows) {
 			return fmt.Errorf("insert mac_host cursor row: %w", insErr)
@@ -881,9 +911,10 @@ func (r *SyncRepository) CommitMacHostCursor(ctx context.Context, params CommitM
 	}
 
 	updated, err := q.UpdateMacHostSyncCursor(ctx, db.UpdateMacHostSyncCursorParams{
-		NewCursor:  pgtype.Text{String: params.NewCursor, Valid: true},
-		ID:         existing.ID,
-		BaseCursor: params.BaseCursor,
+		NewCursor:        pgtype.Text{String: params.NewCursor, Valid: true},
+		ID:               existing.ID,
+		BaseCursor:       params.BaseCursor,
+		BackfillComplete: params.BackfillComplete,
 	})
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("update mac_host cursor: %w", err)

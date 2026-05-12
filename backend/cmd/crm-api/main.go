@@ -962,7 +962,7 @@ func run() int {
 				logger.Info().Msg("calendar handler initialized for testing (no OAuth)")
 			}
 
-			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService, testCalendarRepo)
+			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService, testCalendarRepo, macHostRepo)
 			testRoutes := v1.Group("/test")
 			{
 				testRoutes.POST("/seed/contacts", testHandler.SeedContacts)

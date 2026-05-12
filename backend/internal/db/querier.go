@@ -23,8 +23,9 @@ type Querier interface {
 	// Decision 6) so the scheduler race is avoided at the source.
 	AppendMatchedContact(ctx context.Context, arg AppendMatchedContactParams) error
 	BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error
-	// Admin operation (not exposed in PR1). Bumps cursor_epoch so the daemon
-	// discards its local cursor cache on next heartbeat.
+	// Admin operation. Bumps cursor_epoch so the daemon discards its
+	// local cursor cache on next heartbeat. Currently used only by the
+	// repository layer; no admin endpoint is wired to it yet.
 	BumpMacHostCursorEpoch(ctx context.Context, id pgtype.UUID) (int64, error)
 	// Mark all pending follow-up tasks as completed for a contact (when a
 	// response arrives). Matches the same live-state set as FindPendingFollowUp
@@ -378,7 +379,8 @@ type Querier interface {
 	// First-commit insert path. ON CONFLICT DO NOTHING handles the
 	// concurrent-first-write race: the loser gets zero rows, re-reads the
 	// now-committed state, and surfaces ErrCursorBaseMismatch with the
-	// winner's cursor.
+	// winner's cursor. backfill_complete is stored as a JSONB key on the
+	// metadata column — see the cursor wire contract in the handler.
 	InsertMacHostSyncCursor(ctx context.Context, arg InsertMacHostSyncCursorParams) (*InsertMacHostSyncCursorRow, error)
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
@@ -635,6 +637,7 @@ type Querier interface {
 	// CAS-style update: only updates when sync_cursor matches base_cursor.
 	// Zero rows returned means another writer slipped in between the
 	// planning read and this update; the caller re-reads and surfaces 409.
+	// metadata.backfill_complete is rewritten on every successful commit.
 	UpdateMacHostSyncCursor(ctx context.Context, arg UpdateMacHostSyncCursorParams) (*UpdateMacHostSyncCursorRow, error)
 	// Update the matched contact IDs for an event
 	UpdateMatchedContacts(ctx context.Context, arg UpdateMatchedContactsParams) (*CalendarEvent, error)

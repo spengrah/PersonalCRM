@@ -285,6 +285,54 @@ func (r *MacHostRepository) GetCursorEpochForCommitTx(ctx context.Context, tx pg
 	return out, nil
 }
 
+// SeedHostForTest is a test-only helper that creates a host AND
+// patches permissions / source_health in one shot — production code
+// never calls this (the pairing flow + the daemon's heartbeat are
+// the real writers). Surfaced on the repository so callers don't
+// reach into the sqlc layer directly.
+//
+// Keeping this in the repository (not the service) is deliberate:
+// the pairing-token flow is the only valid production path for
+// creating a host, and the service refuses to bypass it. Tests need
+// a fixture helper that bypasses the pairing flow, which is a
+// legitimate repository-level operation.
+func (r *MacHostRepository) SeedHostForTest(
+	ctx context.Context,
+	hostname, daemonVersion string,
+	protocolVersion int32,
+	apiKeyHash string,
+	permissions, sourceHealth json.RawMessage,
+) (*MacHost, error) {
+	if len(permissions) == 0 {
+		permissions = json.RawMessage("{}")
+	}
+	if len(sourceHealth) == 0 {
+		sourceHealth = json.RawMessage("{}")
+	}
+	row, err := r.queries.SeedMacHost(ctx, db.SeedMacHostParams{
+		Hostname:        hostname,
+		DaemonVersion:   daemonVersion,
+		ProtocolVersion: protocolVersion,
+		ApiKeyHash:      apiKeyHash,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("seed mac_host: %w", err)
+	}
+	// Patch permissions + source_health via the heartbeat path — the
+	// seed query only sets defaults for those JSONB columns.
+	patched, err := r.queries.UpdateMacHostHeartbeat(ctx, db.UpdateMacHostHeartbeatParams{
+		ID:              row.ID,
+		DaemonVersion:   daemonVersion,
+		ProtocolVersion: protocolVersion,
+		Permissions:     permissions,
+		SourceHealth:    sourceHealth,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("seed mac_host heartbeat patch: %w", err)
+	}
+	return convertDbMacHost(patched), nil
+}
+
 // MacHostPairingTokenRepository handles pairing-token persistence.
 type MacHostPairingTokenRepository struct {
 	queries db.Querier

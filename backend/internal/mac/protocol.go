@@ -15,3 +15,23 @@ const ProtocolVersion int32 = 1
 // receives 412 Precondition Failed and is expected to upgrade. Bumped
 // manually as the contract evolves.
 const MinProtocolVersion int32 = 1
+
+// AllowedPushSources is the allowlist of `:source` path-param values
+// accepted by the cursor commit + get endpoints. Sources outside this
+// set are rejected with 400 before any DB write happens — this
+// prevents a daemon from creating a `strategy='push'` row keyed on a
+// poll-strategy source name (e.g. "gcontacts"), which would then sit
+// in external_sync_state with no provider matching it. New sources
+// are added here as their consumers ship.
+var AllowedPushSources = map[string]struct{}{
+	"messages":        {},
+	"icloud_contacts": {},
+}
+
+// IsAllowedPushSource returns true when the supplied source is a known
+// daemon-push source. Used by handlers to validate the `:source`
+// path param before touching the database.
+func IsAllowedPushSource(source string) bool {
+	_, ok := AllowedPushSources[source]
+	return ok
+}

@@ -58,8 +58,9 @@ WHERE id = $1
 FOR UPDATE;
 
 -- name: BumpMacHostCursorEpoch :one
--- Admin operation (not exposed in PR1). Bumps cursor_epoch so the daemon
--- discards its local cursor cache on next heartbeat.
+-- Admin operation. Bumps cursor_epoch so the daemon discards its
+-- local cursor cache on next heartbeat. Currently used only by the
+-- repository layer; no admin endpoint is wired to it yet.
 UPDATE mac_host
 SET cursor_epoch = cursor_epoch + 1
 WHERE id = $1 AND api_key_revoked_at IS NULL
