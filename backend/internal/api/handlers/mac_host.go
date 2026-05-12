@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"time"
 
@@ -91,6 +92,19 @@ func toMacHostView(h *repository.MacHost) MacHostView {
 	}
 }
 
+// remoteIP returns the raw IP portion of the request's RemoteAddr,
+// stripping the port. This intentionally ignores X-Forwarded-For and
+// any other client-supplied headers — gin's ClientIP() trusts those
+// by default and an attacker on the Tailnet could spoof them to
+// bypass per-IP rate limits on unauthenticated endpoints.
+func remoteIP(c *gin.Context) string {
+	addr := c.Request.RemoteAddr
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
+
 // pairRequest is the Pair endpoint body.
 type pairRequest struct {
 	PairingToken    string `json:"pairing_token"`
@@ -110,7 +124,13 @@ type pairResponse struct {
 // Pair is the un-authenticated pairing endpoint. Rate-limited per
 // source IP to prevent Tailnet-side token-guessing fishing.
 func (h *MacHostHandler) Pair(c *gin.Context) {
-	if h.pairingLimiter != nil && !h.pairingLimiter.Allow(c.ClientIP()) {
+	// Use the raw RemoteAddr (NOT c.ClientIP()) for rate-limiting:
+	// gin's ClientIP() respects X-Forwarded-For by default unless
+	// trusted proxies are configured, so an attacker on the Tailnet
+	// could rotate the header to bypass the 10/min limit. The Pi
+	// terminates the TCP connection from the daemon directly so the
+	// RemoteAddr is the authoritative source.
+	if h.pairingLimiter != nil && !h.pairingLimiter.Allow(remoteIP(c)) {
 		api.SendError(c, http.StatusTooManyRequests, "RATE_LIMITED", "too many pairing attempts", "")
 		return
 	}
