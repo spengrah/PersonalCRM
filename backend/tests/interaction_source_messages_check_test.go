@@ -43,7 +43,17 @@ func TestInteraction_SourceCheckAcceptsMessages(t *testing.T) {
 		FullName: "Test Source CHECK " + suffix,
 	})
 	require.NoError(t, err)
-	defer func() { _ = contactRepo.SoftDeleteContact(ctx, contact.ID) }()
+	// Hard-delete any messages-source rows we've inserted before
+	// closing the DB handle. The down migration in 049 refuses to
+	// drop the interaction_source_check while any row uses
+	// source='messages' (data-loss guard), so an interaction left
+	// over from this test would later trip TestMacHostMigrations on
+	// the shared CI DB. Soft-delete is not enough — the guard counts
+	// rows regardless of deleted_at.
+	defer func() {
+		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceMessages, "messages-test-%")
+		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
+	}()
 
 	ref := "messages-test-" + suffix
 	interaction, err := interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
