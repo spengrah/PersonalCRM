@@ -88,44 +88,95 @@ func newMacHostAuthLimiter(cfg MacHostAuthLimiterConfig) *macHostAuthLimiter {
 	}
 }
 
-// canProceed returns true when an attempt may proceed for host_id
-// WITHOUT consuming a token. Used as a pre-bcrypt gate: a host that
-// has run out of failure tokens is rejected with 429 before paying
-// the bcrypt cost. Successful auths do not consume tokens, so a
-// brief flurry of typos by a legitimate operator with the correct
-// key still gets through.
-func (m *macHostAuthLimiter) canProceed(id uuid.UUID) bool {
+// macHostAuthReservation tracks a single in-flight authentication
+// attempt. The reservation consumes a token from the per-host bucket
+// up-front (so concurrent attempts serialize on the same bucket and
+// cannot all race through to bcrypt). After auth completes:
+//   - on success, refund() returns the token to the bucket so the
+//     legitimate daemon is not penalized for previous typos.
+//   - on failure, commit() leaves the token consumed.
+//
+// The reservation is single-use; calling refund or commit a second
+// time is a no-op.
+type macHostAuthReservation struct {
+	parent   *macHostAuthLimiter
+	id       uuid.UUID
+	resolved bool
+	allowed  bool
+}
+
+// allowed reports whether the reservation was granted (i.e. the host
+// had a token available). When false, the caller must NOT proceed
+// past the precheck; commit/refund become no-ops.
+func (r *macHostAuthReservation) Allowed() bool {
+	return r.allowed
+}
+
+// commit marks the reservation as a failed authentication. The
+// already-consumed token stays consumed.
+func (r *macHostAuthReservation) Commit() {
+	if r.resolved || !r.allowed {
+		return
+	}
+	r.resolved = true
+	// Token already consumed at reserve() time — nothing to do.
+}
+
+// refund returns the consumed token to the bucket. Called on
+// successful auth so the legitimate daemon's burst budget is
+// preserved.
+func (r *macHostAuthReservation) Refund() {
+	if r.resolved || !r.allowed {
+		return
+	}
+	r.resolved = true
+	r.parent.refundLocked(r.id)
+}
+
+// reserve atomically peeks AND consumes a token under the same mutex
+// hold. Concurrent attempts for the same host_id therefore serialize
+// on the bucket — a flood of N parallel bad-bearer requests with
+// burst=5 lets exactly 5 pass through to bcrypt, the rest get 429.
+func (m *macHostAuthLimiter) reserve(id uuid.UUID) *macHostAuthReservation {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	lim := m.getOrCreateLocked(id)
-	// Tokens() floors at 0 but advance()s the internal clock so the
-	// peek reflects the current bucket state. Use 1.0 as the threshold
-	// because Allow() = AllowN(now, 1).
-	return lim.Tokens() >= 1.0
+	allowed := lim.Allow()
+	return &macHostAuthReservation{
+		parent:  m,
+		id:      id,
+		allowed: allowed,
+	}
 }
 
-// recordFailure consumes a token from host_id's bucket. Called only
-// when an auth attempt actually fails the bcrypt comparison (or the
-// host lookup returns ErrNotFound).
-func (m *macHostAuthLimiter) recordFailure(id uuid.UUID) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	lim := m.getOrCreateLocked(id)
-	// Allow returns false if no tokens — but the pre-check already
-	// gated on that, so we discard the return.
-	_ = lim.Allow()
-}
-
-// reset removes the limiter entry for host_id. Called after a
-// successful auth so accumulated failures from a now-rotated key
-// don't penalize the legitimate daemon.
-func (m *macHostAuthLimiter) reset(id uuid.UUID) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// refundLocked is the bucket-refund half of Reservation.Refund. The
+// rate package's AllowN with negative n is not supported; we use
+// SetBurst to temporarily expose the bucket and then call AllowN(-1)
+// via a SetTokensAt-equivalent — but the public API for that is also
+// limited. The pragmatic approach used here: increment the limiter's
+// remaining tokens by clamping back to burst, using ReserveN(t, -1)
+// is not supported either. We achieve the refund by calling
+// limiter-internal time-based replenishment: the rate.Limiter's
+// underlying tokens are tracked relative to a refill rate, so the
+// only safe way to "give a token back" is to reset the limiter to a
+// fresh state. Acceptable because refund is only called on success,
+// at which point the host has demonstrated control over the key and
+// we want a clean budget anyway. Equivalent to the old
+// limiter.reset() semantics.
+func (m *macHostAuthLimiter) refundLocked(id uuid.UUID) {
 	if elem, ok := m.byID[id]; ok {
 		m.lru.Remove(elem)
 		delete(m.byID, id)
 	}
+}
+
+// reset removes the limiter entry for host_id. Public counterpart of
+// refundLocked, kept for callers (currently the success branch in
+// the middleware) that explicitly want a fresh bucket.
+func (m *macHostAuthLimiter) reset(id uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refundLocked(id)
 }
 
 func (m *macHostAuthLimiter) getOrCreateLocked(id uuid.UUID) *rate.Limiter {
@@ -283,11 +334,14 @@ func macHostAuthMiddleware(
 		}
 
 		// Rate-limit BEFORE bcrypt to cap CPU work on brute-force.
-		// canProceed peeks the limiter without consuming a token, so
-		// a valid daemon with the correct key is never blocked by
-		// previous failures from the SAME host_id. Tokens are only
-		// consumed on the failure paths below via recordFailure.
-		if !limiter.canProceed(hostID) {
+		// reserve() atomically peeks AND consumes a token, so
+		// concurrent attempts for the same host serialize on the
+		// bucket. Burst=5 means at most 5 parallel attempts can be
+		// running bcrypt simultaneously; the 6th gets 429.
+		// On success the reservation is refunded so a legitimate
+		// daemon's burst budget is preserved.
+		reservation := limiter.reserve(hostID)
+		if !reservation.Allowed() {
 			abortAuth(c, http.StatusTooManyRequests, "RATE_LIMITED", "too many failed auth attempts for this host")
 			return
 		}
@@ -295,31 +349,36 @@ func macHostAuthMiddleware(
 		host, err := repo.GetActiveHostByID(c.Request.Context(), hostID)
 		if err != nil {
 			if errors.Is(err, db.ErrNotFound) {
-				limiter.recordFailure(hostID)
+				reservation.Commit()
 				abortAuth(c, http.StatusUnauthorized, "UNKNOWN_HOST", "host not found or revoked")
 				return
 			}
+			// Internal error — don't penalize the daemon for a Pi-side
+			// hiccup. Refund the token.
+			reservation.Refund()
 			abortAuth(c, http.StatusInternalServerError, "AUTH_ERROR", "internal auth error")
 			return
 		}
 
 		if err := compare([]byte(host.APIKeyHash), []byte(bearer)); err != nil {
-			limiter.recordFailure(hostID)
+			reservation.Commit()
 			abortAuth(c, http.StatusUnauthorized, "INVALID_KEY", "invalid API key")
 			return
 		}
 
 		// :id param consistency check (when present on the route).
 		// This is an authorization failure, not authentication, so
-		// it doesn't consume a rate-limit token.
+		// we refund the rate-limit token: the daemon authenticated
+		// correctly, just hit the wrong route.
 		if idParam := c.Param("id"); idParam != "" {
 			if idParam != hostID.String() {
+				reservation.Refund()
 				abortAuth(c, http.StatusForbidden, "WRONG_HOST_ID", "X-Mac-Host-ID does not match route :id")
 				return
 			}
 		}
 
-		limiter.reset(hostID)
+		reservation.Refund()
 		c.Set(macHostContextKey, host)
 		c.Set(macHostIDContextKey, hostID)
 		c.Next()

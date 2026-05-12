@@ -40,6 +40,19 @@ func TestMacHostMigrations(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	// Gated by LONG_TESTS because this test mutates the shared
+	// integration DB schema (rolls down to migration 046, applies
+	// 047/048, then rolls forward again). `go test ./...` runs
+	// packages in parallel by default, and during the brief window
+	// when the schema is rolled down, other integration packages
+	// hitting the same DATABASE_URL would see a missing mac_host
+	// table or other partially-migrated state. CI's
+	// `make test-integration` (LONG_TESTS=1) runs this test
+	// explicitly; the default `test-integration-fast` target skips
+	// it.
+	if os.Getenv("LONG_TESTS") == "" {
+		t.Skip("LONG_TESTS not set; this test mutates shared schema")
+	}
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
@@ -70,13 +83,13 @@ func TestMacHostMigrations(t *testing.T) {
 		}
 	})
 
-	// Step 1: roll DOWN to 046 so we can re-apply 047 + 048 from scratch.
+	// Roll down to 046 so we can re-apply 047 + 048 from scratch.
 	mig, err := newMigrator(databaseURL)
 	require.NoError(t, err)
 	require.NoError(t, mig.Migrate(46), "migrate to 046")
 	closeMigrator(t, mig)
 
-	// Step 2: 047 up — tables exist, singleton index enforces one row.
+	// Apply 047 — tables exist, singleton index enforces one row.
 	mig, err = newMigrator(databaseURL)
 	require.NoError(t, err)
 	require.NoError(t, mig.Steps(1), "047 up")
@@ -104,7 +117,7 @@ func TestMacHostMigrations(t *testing.T) {
 	})
 	require.Error(t, err, "second non-revoked host must violate the singleton index")
 
-	// Step 3: 048 up — push strategy accepted.
+	// Apply 048 — push strategy accepted.
 	mig, err = newMigrator(databaseURL)
 	require.NoError(t, err)
 	require.NoError(t, mig.Steps(1), "048 up")
@@ -121,10 +134,10 @@ func TestMacHostMigrations(t *testing.T) {
 	})
 	require.NoError(t, err, "push strategy must be accepted after 048 up")
 
-	// Step 4: 048 down with a live push row → guard raises. The
-	// migrate library marks the migration as "dirty" on failure;
-	// call Force(48) to clear that flag so subsequent up/down
-	// steps proceed cleanly.
+	// 048 down with a live push row → guard raises. The migrate
+	// library marks the migration as "dirty" on failure; call
+	// Force(48) to clear that flag so subsequent up/down steps
+	// proceed cleanly.
 	mig, err = newMigrator(databaseURL)
 	require.NoError(t, err)
 	downErr := mig.Steps(-1)
@@ -132,7 +145,7 @@ func TestMacHostMigrations(t *testing.T) {
 	require.NoError(t, mig.Force(48), "clear dirty migration flag")
 	closeMigrator(t, mig)
 
-	// Step 5: delete the push row, then 048 down succeeds.
+	// Delete the push row, then 048 down succeeds.
 	states, err := database.Queries.ListSyncStates(ctx)
 	require.NoError(t, err)
 	for _, s := range states {
@@ -145,7 +158,7 @@ func TestMacHostMigrations(t *testing.T) {
 	require.NoError(t, mig.Steps(-1), "048 down with no push rows must succeed")
 	closeMigrator(t, mig)
 
-	// Step 6: inserting a push row must now be rejected.
+	// Inserting a push row must now be rejected.
 	_, err = database.Queries.SeedExternalSyncState(ctx, db.SeedExternalSyncStateParams{
 		Source:     "mig-push-after-down",
 		AccountID:  pgtype.Text{Valid: false},
@@ -156,12 +169,12 @@ func TestMacHostMigrations(t *testing.T) {
 	})
 	require.Error(t, err, "push strategy must be rejected after 048 down")
 
-	// Step 7: clean leftover hosts before 047 down (the migration drops
-	// the tables; no data integrity required, but keeps the cleanup
+	// Clean leftover hosts before 047 down (the migration drops the
+	// tables; no data integrity required, but keeps the cleanup
 	// path simple).
 	_, _ = database.Queries.DeleteAllMacHosts(ctx)
 
-	// Step 8: 047 down — tables dropped.
+	// 047 down — tables dropped.
 	mig, err = newMigrator(databaseURL)
 	require.NoError(t, err)
 	require.NoError(t, mig.Steps(-1), "047 down")

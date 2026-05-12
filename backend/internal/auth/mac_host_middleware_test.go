@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -269,6 +270,59 @@ func TestMacHostAuth_RateLimit_ResetsOnSuccess(t *testing.T) {
 		r.ServeHTTP(w, req)
 		require.Equal(t, http.StatusUnauthorized, w.Code, "post-reset attempt %d", i+1)
 	}
+}
+
+func TestMacHostAuth_ConcurrentBadBearersDoNotAllPassRateLimit(t *testing.T) {
+	// A flood of parallel bad-bearer requests for the SAME host must
+	// not all reach bcrypt. With burst=3, at most 3 requests should
+	// invoke the comparator; the remaining 7 should get 429.
+	id := uuid.New()
+	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{
+		id: {ID: id, APIKeyHash: "expected"},
+	}}
+	cmp := &countingComparator{}
+	cfg := MacHostAuthLimiterConfig{
+		FailedAuthsPerMinute: 3,
+		Burst:                3,
+		MaxEntries:           10,
+	}
+	r := newMacAuthTestRouter(t, repo, cmp.Compare, cfg)
+
+	const N = 10
+	var wg sync.WaitGroup
+	codes := make([]int, N)
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req.Header.Set("X-Mac-Host-ID", id.String())
+			req.Header.Set("Authorization", "Bearer wrong")
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			codes[i] = w.Code
+		}()
+	}
+	wg.Wait()
+
+	var unauth, rateLimited int
+	for _, code := range codes {
+		switch code {
+		case http.StatusUnauthorized:
+			unauth++
+		case http.StatusTooManyRequests:
+			rateLimited++
+		default:
+			t.Fatalf("unexpected status %d", code)
+		}
+	}
+	require.LessOrEqual(t, unauth, cfg.Burst,
+		"at most burst=%d bcrypt-running attempts; got %d unauth + %d 429",
+		cfg.Burst, unauth, rateLimited)
+	require.Equal(t, N-unauth, rateLimited, "the remainder must be rate-limited")
+	require.LessOrEqual(t, int(cmp.calls.Load()), cfg.Burst,
+		"bcrypt must be called at most burst times under concurrent flood")
 }
 
 func TestMacHostAuth_SuccessDoesNotConsumeToken(t *testing.T) {
