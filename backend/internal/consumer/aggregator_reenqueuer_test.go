@@ -72,8 +72,8 @@ func TestAggregatorReenqueuerRegistry_UnknownSourceIsLoggedNoop(t *testing.T) {
 	assert.NoError(t, err, "unknown source must NOT error")
 }
 
-// TestNoopAggregatorReenqueuer_AlwaysReturnsNil locks the messages-source
-// PR3 contract: the no-op entry tolerates every input and never errors.
+// TestNoopAggregatorReenqueuer_AlwaysReturnsNil confirms the no-op
+// reenqueuer tolerates every input and never errors.
 func TestNoopAggregatorReenqueuer_AlwaysReturnsNil(t *testing.T) {
 	r := NoopAggregatorReenqueuer{}
 	assert.NoError(t, r.Reenqueue(context.Background(), &events.Envelope{}, uuid.New()))
