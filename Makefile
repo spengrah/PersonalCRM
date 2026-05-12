@@ -273,7 +273,13 @@ test-integration-slow:
 # standalone rather than as part of `go test ./tests/...`, which would
 # otherwise run it in parallel with other integration packages against
 # the same DATABASE_URL and break them when the schema is rolled down.
-test-mac-host-migrations: e2e-db
+#
+# NOTE: no `e2e-db` prerequisite — the migration test resets the
+# schema itself, and the prerequisite would conflict with CI's
+# Postgres service (different user, port already in use). Local
+# developers should ensure their DB exists before running this
+# target.
+test-mac-host-migrations:
 	@echo "Running Mac host migration test (isolated)..."
 	@cd backend && \
 		DATABASE_URL="$(TEST_DATABASE_URL)" \
