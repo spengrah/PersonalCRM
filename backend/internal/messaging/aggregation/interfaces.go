@@ -105,8 +105,8 @@ type MessageStore interface {
 
 	// MarkProcessed sets processed_at and interaction_id on the rows.
 	// The adapter wraps the per-source equivalent query. Non-tx by
-	// design; the consumer's tx-bound MarkProcessed dispatch remains
-	// source-specific and is not part of this interface in PR2.
+	// design; the consumer's tx-bound MarkProcessed dispatch is not
+	// part of this interface (it remains source-specific).
 	MarkProcessed(ctx context.Context, messageIDs []uuid.UUID, interactionID uuid.UUID) error
 }
 

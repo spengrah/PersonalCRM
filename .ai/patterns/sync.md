@@ -50,9 +50,9 @@ Each source provides a thin adapter in its package that:
    bus is configured — typed-nil concrete pointers (`(*events.Bus)(nil)`)
    bypass the engine's `publisher == nil` guard.
 
-Telegram's `*telegram.AggregationEngine` is the only caller as of PR2; it is
-now a thin shim around the shared engine, preserving its exported signature
-so manager/handlers/rematch wiring and integration tests compile unchanged.
+Telegram's `*telegram.AggregationEngine` is currently the only caller; it is
+a thin shim around the shared engine, preserving its exported signature so
+manager/handlers/rematch wiring and integration tests compile unchanged.
 
 The `MessageStore` ordering contract requires adapters to emit rows ordered
 by `SentAt ASC`; the engine sorts defensively, but adapters should keep the

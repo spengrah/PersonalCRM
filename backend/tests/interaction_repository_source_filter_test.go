@@ -19,12 +19,11 @@ import (
 )
 
 // TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceFilter
-// exercises the new source-neutral interaction lookup queries against a real
-// database to prove the source parameter is honoured. PR2 does NOT widen the
-// interaction.source CHECK constraint, so the test mixes two already-allowed
-// sources (telegram + gcal) to verify the filter at the SQL level. PR3 can
-// extend coverage to the messages source once that value is added to the
-// CHECK list.
+// exercises the source-neutral interaction lookup queries against a real
+// database to prove the source parameter is honoured. The test mixes two
+// already-allowed sources (telegram + gcal) to verify the filter at the SQL
+// level; future migrations can widen the interaction.source CHECK list and
+// extend this coverage.
 func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceFilter(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
