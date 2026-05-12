@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
@@ -48,7 +49,7 @@ func TestPairingTokenJanitor_DeletesExpired(t *testing.T) {
 
 	// Seed 3 expired + 2 active tokens. Use unique hashes so the unique
 	// constraint isn't violated.
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	seedToken := func(suffix string, expires time.Time) {
 		hashBytes := sha256.Sum256([]byte("janitor-test-" + suffix))
 		_, err := database.Queries.SeedPairingToken(ctx, db.SeedPairingTokenParams{

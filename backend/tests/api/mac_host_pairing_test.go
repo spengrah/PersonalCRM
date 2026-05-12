@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
@@ -172,7 +173,7 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	}
 	readData(t, w, &tokenResp)
 	require.NotEmpty(t, tokenResp.Token)
-	require.True(t, tokenResp.ExpiresAt.After(time.Now()))
+	require.True(t, tokenResp.ExpiresAt.After(accelerated.GetCurrentTime()))
 
 	// 2. Daemon pairs with the token.
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{

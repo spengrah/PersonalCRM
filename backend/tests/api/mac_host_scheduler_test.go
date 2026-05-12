@@ -131,5 +131,5 @@ func TestSyncService_ListDueAccounts_ExcludesPushStrategy(t *testing.T) {
 }
 
 func nowSuffix() string {
-	return time.Now().UTC().Format("20060102150405.000000000")
+	return accelerated.GetCurrentTime().UTC().Format("20060102150405.000000000")
 }
