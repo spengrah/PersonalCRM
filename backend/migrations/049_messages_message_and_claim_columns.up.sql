@@ -114,8 +114,8 @@ CREATE INDEX idx_messages_message_not_deleted
 -- ============================================================================
 -- Existing constraint (migration 031): CHECK (source IN ('manual', 'gcal',
 -- 'todoist', 'telegram')). This migration adds 'messages' only; 'whatsapp'
--- and 'anarlog_sessions' are deferred to their own future spec changes
--- per the Mac daemon Phase 1 scope.
+-- and 'anarlog_sessions' are deferred — each will need its own migration
+-- when its ingest path is added.
 ALTER TABLE interaction DROP CONSTRAINT interaction_source_check;
 ALTER TABLE interaction ADD CONSTRAINT interaction_source_check
     CHECK (source IN ('manual', 'gcal', 'todoist', 'telegram', 'messages'));
