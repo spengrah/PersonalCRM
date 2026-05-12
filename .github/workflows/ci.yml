@@ -104,6 +104,14 @@ jobs:
           API_KEY: test-api-key-for-ci
         run: make test-integration-fast
 
+      - name: Run Mac host migration test (isolated)
+        env:
+          TEST_DATABASE_URL: postgres://crm_user_test:test_password@localhost:5432/personal_crm_test?sslmode=disable
+          NODE_ENV: test
+          SESSION_SECRET: test-session-secret-for-ci
+          API_KEY: test-api-key-for-ci
+        run: make test-mac-host-migrations
+
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
