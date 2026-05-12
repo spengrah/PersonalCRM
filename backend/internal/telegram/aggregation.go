@@ -40,9 +40,9 @@ type AggregationEngine struct {
 }
 
 // NewAggregationEngine constructs the telegram facade over the shared
-// aggregator. eventBus is required in cutover (default post-PR-6).
-// Passing a nil *events.Bus makes the engine's session-create path
-// return an error — equivalent to the off/shadow modes documented in
+// aggregator. eventBus is required when cutover is enabled. Passing a
+// nil *events.Bus makes the engine's session-create path return an
+// error — equivalent to the off/shadow modes documented in
 // EventBusConfig (spec §3.9).
 //
 // CRITICAL: a nil *events.Bus is converted to the untyped-nil
