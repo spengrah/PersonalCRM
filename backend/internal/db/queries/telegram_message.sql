@@ -203,3 +203,13 @@ WHERE peer_user_id = @peer_user_id
 
 -- GetTelegramMessageByReplyTo removed: identical to GetTelegramMessage.
 -- Use GetMessage repo method for reply resolution.
+
+-- name: HardDeleteTelegramMessagesByChatIDRange :exec
+-- Test-only: hard-deletes telegram_message rows whose telegram_chat_id
+-- falls in [lo, hi]. Used by integration tests to cleanly purge per-run
+-- chat ID ranges so soft-deleted rows from prior runs do not resurrect
+-- on the next UpsertTelegramMessage call (UpsertTelegramMessage does
+-- not clear deleted_at on conflict).
+DELETE FROM telegram_message
+WHERE telegram_chat_id >= sqlc.arg(lo)
+  AND telegram_chat_id <= sqlc.arg(hi);

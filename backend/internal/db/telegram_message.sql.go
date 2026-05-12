@@ -313,6 +313,30 @@ func (q *Queries) GetTelegramMessage(ctx context.Context, arg GetTelegramMessage
 	return &i, err
 }
 
+const HardDeleteTelegramMessagesByChatIDRange = `-- name: HardDeleteTelegramMessagesByChatIDRange :exec
+
+DELETE FROM telegram_message
+WHERE telegram_chat_id >= $1
+  AND telegram_chat_id <= $2
+`
+
+type HardDeleteTelegramMessagesByChatIDRangeParams struct {
+	Lo int64 `json:"lo"`
+	Hi int64 `json:"hi"`
+}
+
+// GetTelegramMessageByReplyTo removed: identical to GetTelegramMessage.
+// Use GetMessage repo method for reply resolution.
+// Test-only: hard-deletes telegram_message rows whose telegram_chat_id
+// falls in [lo, hi]. Used by integration tests to cleanly purge per-run
+// chat ID ranges so soft-deleted rows from prior runs do not resurrect
+// on the next UpsertTelegramMessage call (UpsertTelegramMessage does
+// not clear deleted_at on conflict).
+func (q *Queries) HardDeleteTelegramMessagesByChatIDRange(ctx context.Context, arg HardDeleteTelegramMessagesByChatIDRangeParams) error {
+	_, err := q.db.Exec(ctx, HardDeleteTelegramMessagesByChatIDRange, arg.Lo, arg.Hi)
+	return err
+}
+
 const ListDistinctUnmatchedPeers = `-- name: ListDistinctUnmatchedPeers :many
 SELECT DISTINCT ON (peer_user_id)
     peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone

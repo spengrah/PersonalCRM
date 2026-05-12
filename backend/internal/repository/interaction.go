@@ -288,6 +288,72 @@ func (r *InteractionRepository) FindRecentTelegramInteraction(ctx context.Contex
 	return &interaction, nil
 }
 
+// FindRecentInteractionBySourceAndDirection is the source-neutral version of
+// FindRecentTelegramInteraction. The shared aggregator
+// (backend/internal/messaging/aggregation) uses this for same-direction
+// coalescing across sources (telegram, messages, whatsapp).
+func (r *InteractionRepository) FindRecentInteractionBySourceAndDirection(
+	ctx context.Context,
+	contactID uuid.UUID,
+	source, direction, sourceRefPrefix string,
+	windowStart, windowEnd time.Time,
+) (*Interaction, error) {
+	dbInteraction, err := r.queries.FindRecentInteractionBySourceAndDirection(ctx, db.FindRecentInteractionBySourceAndDirectionParams{
+		ContactID:       uuidToPgUUID(contactID),
+		Source:          source,
+		Direction:       direction,
+		SourceRefPrefix: pgtype.Text{String: sourceRefPrefix, Valid: true},
+		WindowStart:     pgtype.Timestamptz{Time: windowStart, Valid: true},
+		WindowEnd:       pgtype.Timestamptz{Time: windowEnd, Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
+// FindRecentOutboundInteractionBySource is the source-neutral version of
+// FindRecentOutboundTelegramInteraction. Used by the shared aggregator for
+// time-based reply bridging on inbound sessions.
+func (r *InteractionRepository) FindRecentOutboundInteractionBySource(
+	ctx context.Context,
+	contactID uuid.UUID,
+	source, sourceRefPrefix string,
+	windowStart, windowEnd time.Time,
+) (*Interaction, error) {
+	dbInteraction, err := r.queries.FindRecentOutboundInteractionBySource(ctx, db.FindRecentOutboundInteractionBySourceParams{
+		ContactID:       uuidToPgUUID(contactID),
+		Source:          source,
+		SourceRefPrefix: pgtype.Text{String: sourceRefPrefix, Valid: true},
+		WindowStart:     pgtype.Timestamptz{Time: windowStart, Valid: true},
+		WindowEnd:       pgtype.Timestamptz{Time: windowEnd, Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
+// HardDeleteInteractionsBySourceRefPrefix is a test-only helper that
+// hard-deletes interactions whose source matches and source_ref begins
+// with prefix. Used by integration tests for per-run cleanup; soft-delete
+// is unsafe because the (source, source_ref) partial unique index would
+// otherwise block re-inserts on subsequent runs.
+func (r *InteractionRepository) HardDeleteInteractionsBySourceRefPrefix(ctx context.Context, source, sourceRefPrefix string) error {
+	return r.queries.HardDeleteInteractionsBySourceRefPrefix(ctx, db.HardDeleteInteractionsBySourceRefPrefixParams{
+		Source:          source,
+		SourceRefPrefix: pgtype.Text{String: sourceRefPrefix, Valid: true},
+	})
+}
+
 // UpdateInteractionTimestamp extends an existing interaction's occurred_at and description.
 func (r *InteractionRepository) UpdateInteractionTimestamp(ctx context.Context, id uuid.UUID, occurredAt time.Time, description *string) (*Interaction, error) {
 	dbInteraction, err := r.queries.UpdateInteractionTimestamp(ctx, db.UpdateInteractionTimestampParams{

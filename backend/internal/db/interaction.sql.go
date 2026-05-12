@@ -138,6 +138,103 @@ func (q *Queries) FindInteractionInWindow(ctx context.Context, arg FindInteracti
 	return &i, err
 }
 
+const FindRecentInteractionBySourceAndDirection = `-- name: FindRecentInteractionBySourceAndDirection :one
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction FROM interaction
+WHERE contact_id = $1
+  AND source = $2
+  AND direction = $3
+  AND source_ref LIKE $4
+  AND occurred_at >= $5
+  AND occurred_at <= $6
+  AND deleted_at IS NULL
+ORDER BY occurred_at DESC
+LIMIT 1
+`
+
+type FindRecentInteractionBySourceAndDirectionParams struct {
+	ContactID       pgtype.UUID        `json:"contact_id"`
+	Source          string             `json:"source"`
+	Direction       string             `json:"direction"`
+	SourceRefPrefix pgtype.Text        `json:"source_ref_prefix"`
+	WindowStart     pgtype.Timestamptz `json:"window_start"`
+	WindowEnd       pgtype.Timestamptz `json:"window_end"`
+}
+
+// Source-neutral generalization of FindRecentTelegramInteraction.
+// Used by the shared aggregator (backend/internal/messaging/aggregation)
+// for same-direction coalescing. source_ref_prefix should include
+// trailing % for LIKE match.
+func (q *Queries) FindRecentInteractionBySourceAndDirection(ctx context.Context, arg FindRecentInteractionBySourceAndDirectionParams) (*Interaction, error) {
+	row := q.db.QueryRow(ctx, FindRecentInteractionBySourceAndDirection,
+		arg.ContactID,
+		arg.Source,
+		arg.Direction,
+		arg.SourceRefPrefix,
+		arg.WindowStart,
+		arg.WindowEnd,
+	)
+	var i Interaction
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Source,
+		&i.SourceRef,
+		&i.OccurredAt,
+		&i.Description,
+		&i.CreatedAt,
+		&i.DeletedAt,
+		&i.Direction,
+	)
+	return &i, err
+}
+
+const FindRecentOutboundInteractionBySource = `-- name: FindRecentOutboundInteractionBySource :one
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction FROM interaction
+WHERE contact_id = $1
+  AND source = $2
+  AND direction = 'outbound'
+  AND source_ref LIKE $3
+  AND occurred_at >= $4
+  AND occurred_at <= $5
+  AND deleted_at IS NULL
+ORDER BY occurred_at DESC
+LIMIT 1
+`
+
+type FindRecentOutboundInteractionBySourceParams struct {
+	ContactID       pgtype.UUID        `json:"contact_id"`
+	Source          string             `json:"source"`
+	SourceRefPrefix pgtype.Text        `json:"source_ref_prefix"`
+	WindowStart     pgtype.Timestamptz `json:"window_start"`
+	WindowEnd       pgtype.Timestamptz `json:"window_end"`
+}
+
+// Source-neutral generalization of FindRecentOutboundTelegramInteraction.
+// Used by the shared aggregator for time-based reply bridging on inbound
+// sessions.
+func (q *Queries) FindRecentOutboundInteractionBySource(ctx context.Context, arg FindRecentOutboundInteractionBySourceParams) (*Interaction, error) {
+	row := q.db.QueryRow(ctx, FindRecentOutboundInteractionBySource,
+		arg.ContactID,
+		arg.Source,
+		arg.SourceRefPrefix,
+		arg.WindowStart,
+		arg.WindowEnd,
+	)
+	var i Interaction
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Source,
+		&i.SourceRef,
+		&i.OccurredAt,
+		&i.Description,
+		&i.CreatedAt,
+		&i.DeletedAt,
+		&i.Direction,
+	)
+	return &i, err
+}
+
 const FindRecentOutboundTelegramInteraction = `-- name: FindRecentOutboundTelegramInteraction :one
 SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction FROM interaction
 WHERE contact_id = $1
@@ -249,6 +346,27 @@ func (q *Queries) GetInteraction(ctx context.Context, id pgtype.UUID) (*Interact
 		&i.Direction,
 	)
 	return &i, err
+}
+
+const HardDeleteInteractionsBySourceRefPrefix = `-- name: HardDeleteInteractionsBySourceRefPrefix :exec
+DELETE FROM interaction
+WHERE source = $1
+  AND source_ref LIKE $2
+`
+
+type HardDeleteInteractionsBySourceRefPrefixParams struct {
+	Source          string      `json:"source"`
+	SourceRefPrefix pgtype.Text `json:"source_ref_prefix"`
+}
+
+// Test-only: hard-deletes interactions whose source matches and source_ref
+// begins with prefix. Used by integration tests to purge per-run rows
+// cleanly; soft-delete is unsafe because the (source, source_ref) partial
+// unique constraint would block a same-source_ref re-insert on the next
+// test run even with deleted_at set.
+func (q *Queries) HardDeleteInteractionsBySourceRefPrefix(ctx context.Context, arg HardDeleteInteractionsBySourceRefPrefixParams) error {
+	_, err := q.db.Exec(ctx, HardDeleteInteractionsBySourceRefPrefix, arg.Source, arg.SourceRefPrefix)
+	return err
 }
 
 const HasResponseAfter = `-- name: HasResponseAfter :one
