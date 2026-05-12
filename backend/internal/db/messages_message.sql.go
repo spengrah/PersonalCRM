@@ -362,9 +362,12 @@ type MarkMessagesMessagesProcessedForSessionParams struct {
 // of cross-event overwrite when the row has not yet been processed by
 // anyone.
 //
-// Returns rows affected so the consumer can log a warning when zero
-// rows matched (race detected); the interaction insert itself dedupes
-// via (source, source_ref).
+// Returns rows affected. The consumer distinguishes three cases:
+//   - affected == len(message_ids): happy path.
+//   - affected == 0 on a fresh write: predicate filtered everything
+//     out (boundary-shift race). Caller MUST roll back the tx.
+//   - affected == 0 on a replay: expected; rows were already linked
+//     to the existing interaction on the original attempt.
 func (q *Queries) MarkMessagesMessagesProcessedForSession(ctx context.Context, arg MarkMessagesMessagesProcessedForSessionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, MarkMessagesMessagesProcessedForSession, arg.InteractionID, arg.MessageIds, arg.SessionRef)
 	if err != nil {

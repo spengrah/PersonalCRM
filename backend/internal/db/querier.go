@@ -556,9 +556,12 @@ type Querier interface {
 	// of cross-event overwrite when the row has not yet been processed by
 	// anyone.
 	//
-	// Returns rows affected so the consumer can log a warning when zero
-	// rows matched (race detected); the interaction insert itself dedupes
-	// via (source, source_ref).
+	// Returns rows affected. The consumer distinguishes three cases:
+	//   - affected == len(message_ids): happy path.
+	//   - affected == 0 on a fresh write: predicate filtered everything
+	//     out (boundary-shift race). Caller MUST roll back the tx.
+	//   - affected == 0 on a replay: expected; rows were already linked
+	//     to the existing interaction on the original attempt.
 	MarkMessagesMessagesProcessedForSession(ctx context.Context, arg MarkMessagesMessagesProcessedForSessionParams) (int64, error)
 	MarkPairingTokenConsumed(ctx context.Context, arg MarkPairingTokenConsumedParams) (*MacHostPairingToken, error)
 	// Non-tx variant used by the engine's extend/promote/bridge paths only,
@@ -579,11 +582,15 @@ type Querier interface {
 	// been processed by anyone. The defense is specifically against
 	// claimed-for-OTHER-session rows.
 	//
-	// Returns rows affected so the caller can log a warning when the
-	// predicate filtered everything out (stale consumer re-delivery /
-	// race detected): the interaction insert itself dedupes via
-	// (source, source_ref) so a 0-row mark is safe, but ops visibility
-	// matters.
+	// Returns rows affected so the caller can distinguish three cases:
+	//   - affected == len(message_ids): happy path.
+	//   - affected == 0 on a fresh write: the predicate filtered
+	//     everything out (boundary-shift race). The caller MUST roll
+	//     back the tx so the freshly-inserted interaction does not
+	//     commit as a phantom duplicate. River retries handle the race.
+	//   - affected == 0 on a replay (res.IsReplay=true): expected — the
+	//     rows were already linked to res.Interaction.ID on the original
+	//     attempt; processed_at IS NOT NULL now filters them out.
 	MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) (int64, error)
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array

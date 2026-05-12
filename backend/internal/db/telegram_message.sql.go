@@ -730,11 +730,15 @@ type MarkTelegramMessagesProcessedForSessionParams struct {
 // been processed by anyone. The defense is specifically against
 // claimed-for-OTHER-session rows.
 //
-// Returns rows affected so the caller can log a warning when the
-// predicate filtered everything out (stale consumer re-delivery /
-// race detected): the interaction insert itself dedupes via
-// (source, source_ref) so a 0-row mark is safe, but ops visibility
-// matters.
+// Returns rows affected so the caller can distinguish three cases:
+//   - affected == len(message_ids): happy path.
+//   - affected == 0 on a fresh write: the predicate filtered
+//     everything out (boundary-shift race). The caller MUST roll
+//     back the tx so the freshly-inserted interaction does not
+//     commit as a phantom duplicate. River retries handle the race.
+//   - affected == 0 on a replay (res.IsReplay=true): expected — the
+//     rows were already linked to res.Interaction.ID on the original
+//     attempt; processed_at IS NOT NULL now filters them out.
 func (q *Queries) MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, MarkTelegramMessagesProcessedForSession, arg.InteractionID, arg.MessageIds, arg.SessionRef)
 	if err != nil {

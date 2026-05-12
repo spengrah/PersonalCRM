@@ -346,10 +346,13 @@ func (r *TelegramMessageRepository) MarkMessagesProcessed(ctx context.Context, m
 // 'other-ref' rejects the update) while still working when the engine
 // took the non-tx publish path (NULL claimed_session_ref).
 //
-// Returns the number of rows actually updated so the caller can log
-// a warning when zero rows matched (race detected; the interaction
-// itself dedupes via (source, source_ref) so this is safe but
-// noteworthy).
+// Returns the number of rows actually updated. The caller (consumer)
+// distinguishes the cases: zero affected on a fresh write means the
+// predicate filtered everything out (boundary-shift race) and the
+// consumer rolls back the whole tx to prevent a phantom-duplicate
+// interaction from committing; zero affected on a replay is expected
+// (rows were already linked to the existing interaction on the
+// original attempt).
 func (r *TelegramMessageRepository) MarkMessagesProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) (int64, error) {
 	if len(messageIDs) == 0 {
 		return 0, nil

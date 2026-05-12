@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -87,6 +88,10 @@ type stubTGRepo struct {
 	lastMessageIDs  []uuid.UUID
 	lastSource      string
 	lastSessionRef  string
+	// forceAffected overrides the default len(messageIDs) return when
+	// non-nil. Used to simulate the boundary-shift race where the
+	// SQL predicate matched zero rows.
+	forceAffected *int64
 }
 
 func (s *stubTGRepo) MarkProcessedTx(_ context.Context, _ pgx.Tx, source string, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) (int64, error) {
@@ -97,6 +102,9 @@ func (s *stubTGRepo) MarkProcessedTx(_ context.Context, _ pgx.Tx, source string,
 	s.lastSessionRef = sessionRef
 	if s.markErr != nil {
 		return 0, s.markErr
+	}
+	if s.forceAffected != nil {
+		return *s.forceAffected, nil
 	}
 	return int64(len(messageIDs)), nil
 }
@@ -537,6 +545,68 @@ func TestHandleEvent_MarkProcessedFailure_RollsBack(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "mark staging messages processed")
 	require.Zero(t, b.publishCalls, "publish must not run after mark-processed fails")
+}
+
+// TestHandleEvent_MarkProcessedZeroRows_FreshWrite_RollsBack exercises
+// the boundary-shift race defense: on a fresh write (IsReplay=false),
+// zero rows affected on MarkProcessedTx means another session won the
+// race for these rows; the consumer must error so the whole tx rolls
+// back, preventing a phantom-duplicate interaction.
+func TestHandleEvent_MarkProcessedZeroRows_FreshWrite_RollsBack(t *testing.T) {
+	cid := uuid.New()
+	msgID := uuid.New()
+	rec, _, tg, b, _ := newRecorderWithStubs()
+	// Simulate boundary-shift: predicate filtered everything out.
+	zero := int64(0)
+	tg.forceAffected = &zero
+
+	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
+		Version:           1,
+		ContactID:         &cid,
+		PeerRef:           "tg:1:2",
+		MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		ExternalMessageID: "tg:1:2:zero-fresh",
+		MessageIDs:        []uuid.UUID{msgID},
+	})
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "matched zero rows")
+	require.Zero(t, b.publishCalls, "interaction.recorded must not fire when staging mark matched zero rows on fresh write")
+}
+
+// TestHandleEvent_MarkProcessedZeroRows_Replay_Tolerated covers the
+// replay path: when RecordInteractionTx returns IsReplay=true, the
+// rows were already linked to the existing interaction on the original
+// attempt; zero rows affected is expected and the consumer must NOT
+// roll back (interaction.recorded is already skipped via the
+// res.IsReplay short-circuit further below).
+func TestHandleEvent_MarkProcessedZeroRows_Replay_Tolerated(t *testing.T) {
+	cid := uuid.New()
+	msgID := uuid.New()
+	existing := &repository.Interaction{
+		ID:        uuid.New(),
+		ContactID: cid,
+		Source:    repository.InteractionSourceTelegram,
+	}
+	rec, w, tg, b, _ := newRecorderWithStubs()
+	w.existing = existing // → IsReplay=true
+	zero := int64(0)
+	tg.forceAffected = &zero // replay → 0 rows affected because processed_at != NULL
+
+	env := mustEnv(t, events.KindMessageReceived, events.MessageReceivedPayload{
+		Version:           1,
+		ContactID:         &cid,
+		PeerRef:           "tg:1:2",
+		MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		ExternalMessageID: "tg:1:2:zero-replay",
+		MessageIDs:        []uuid.UUID{msgID},
+	})
+	interaction, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err, "replay with zero affected must NOT error")
+	require.NotNil(t, interaction)
+	assert.Equal(t, existing.ID, interaction.ID)
+	assert.Nil(t, postCommit, "replay returns nil postCommit so re-delivery doesn't re-fire side effects")
+	require.Zero(t, b.publishCalls, "replay skips interaction.recorded emit")
 }
 
 func TestHandleEvent_PublishFailure_ReturnsError(t *testing.T) {
