@@ -85,12 +85,16 @@ type stubTGRepo struct {
 	markErr         error
 	lastInteraction uuid.UUID
 	lastMessageIDs  []uuid.UUID
+	lastSource      string
+	lastSessionRef  string
 }
 
-func (s *stubTGRepo) MarkMessagesProcessedTx(_ context.Context, _ pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID) error {
+func (s *stubTGRepo) MarkProcessedTx(_ context.Context, _ pgx.Tx, source string, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) error {
 	s.calls++
+	s.lastSource = source
 	s.lastMessageIDs = messageIDs
 	s.lastInteraction = interactionID
+	s.lastSessionRef = sessionRef
 	return s.markErr
 }
 
@@ -528,7 +532,7 @@ func TestHandleEvent_MarkProcessedFailure_RollsBack(t *testing.T) {
 	})
 	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "mark telegram messages processed")
+	require.Contains(t, err.Error(), "mark staging messages processed")
 	require.Zero(t, b.publishCalls, "publish must not run after mark-processed fails")
 }
 

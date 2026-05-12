@@ -8,6 +8,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // Message is the source-neutral row the aggregator consumes. The
@@ -20,14 +21,21 @@ import (
 // the referenced outgoing message produced." It is required at the
 // shared layer; without it cross-batch explicit reply bridging silently
 // fails.
+//
+// ClaimedAt / ClaimedSessionRef carry the row's claim state (spec §3
+// Race Mechanics). The engine reads these to detect stale-claim
+// recovery / boundary-shift scenarios without re-querying the staging
+// table. Per-source adapters populate them from the underlying row.
 type Message struct {
-	ID            uuid.UUID
-	ChatID        string     // source-neutral chat scope key (numeric stringified for sources with numeric chat IDs, opaque guid for sources like Apple Messages)
-	IsOutgoing    bool       // direction at the row level
-	SentAt        time.Time  // wall clock of the message
-	ReplyTargetID *string    // opaque source-defined "external message id" of the referenced message; nil if not a reply
-	ExternalID    string     // opaque per-source "first message id" used in source_ref; comparison-by-equality only
-	InteractionID *uuid.UUID // FK to interaction once processed; nil for unprocessed rows
+	ID                uuid.UUID
+	ChatID            string     // source-neutral chat scope key (numeric stringified for sources with numeric chat IDs, opaque guid for sources like Apple Messages)
+	IsOutgoing        bool       // direction at the row level
+	SentAt            time.Time  // wall clock of the message
+	ReplyTargetID     *string    // opaque source-defined "external message id" of the referenced message; nil if not a reply
+	ExternalID        string     // opaque per-source "first message id" used in source_ref; comparison-by-equality only
+	InteractionID     *uuid.UUID // FK to interaction once processed; nil for unprocessed rows
+	ClaimedAt         *time.Time // nil = unclaimed; non-nil = row carries a (possibly stale) claim
+	ClaimedSessionRef *string    // nil = unclaimed; non-nil = the sourceRef the row was claimed for
 }
 
 // SourceAdapter binds a source-name to the aggregator. Concrete adapters
@@ -103,11 +111,70 @@ type MessageStore interface {
 	// error only on infrastructure failure.
 	GetMessageByReplyTarget(ctx context.Context, chatID, replyTargetID string) (Message, bool, error)
 
-	// MarkProcessed sets processed_at and interaction_id on the rows.
-	// The adapter wraps the per-source equivalent query. Non-tx by
-	// design; the consumer's tx-bound MarkProcessed dispatch is not
-	// part of this interface (it remains source-specific).
+	// MarkProcessed sets processed_at and interaction_id on the rows
+	// AND clears claim columns. Non-tx variant; used by the engine's
+	// extend/promote/bridge paths only (those paths do not claim
+	// rows or publish events, so no session-scope predicate is needed).
 	MarkProcessed(ctx context.Context, messageIDs []uuid.UUID, interactionID uuid.UUID) error
+
+	// ClaimRowsTx writes claimed_at = NOW() and claimed_session_ref =
+	// sessionRef on rows that are STILL eligible at write time
+	// (unprocessed AND unclaimed-or-stale AND not soft-deleted).
+	// Returns the IDs actually claimed; caller MUST compare against the
+	// requested set to detect partial claims and roll back the tx when
+	// the sets differ. Called inside the engine's create-path tx;
+	// commits atomically with the event publish via the same tx.
+	ClaimRowsTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, sessionRef string) (claimed []uuid.UUID, err error)
+
+	// MarkProcessedTx sets processed_at and interaction_id AND clears
+	// the claim columns atomically. Called by InteractionRecorder
+	// inside the consumer's interaction-insert tx — not by the engine.
+	//
+	// sessionRef is the event's source_ref. The SQL predicate
+	// restricts the update to rows still claimed for this exact
+	// session: `claimed_session_ref = sessionRef AND processed_at IS
+	// NULL`. This prevents a stranded old-event consumer from
+	// overwriting rows already processed by a newer-event consumer
+	// (the boundary-shift race).
+	MarkProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) error
+
+	// ClearStaleClaimTx is the recovery-defensive branch. Clears claim
+	// columns for rows whose claimed_session_ref still matches the
+	// expected stale ref but for which no event-log row could be found
+	// (spec §3 "claimed_session_ref exists but no event log row
+	// matches" case). Called inside a tx opened by the engine.
+	ClearStaleClaimTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, expectedSessionRef string) error
+}
+
+// TxBeginner lets the engine open a tx around the atomic
+// claim-rows-then-publish step in the create path. Satisfied by
+// *pgxpool.Pool (its BeginTx returns pgx.Tx, error).
+type TxBeginner interface {
+	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
+}
+
+// EventLookup finds an existing event by (source, source_id) so the
+// engine can decide whether to re-publish vs. re-enqueue against an
+// existing event during stale-claim recovery.
+//
+// Returns (uuid.Nil, false, nil) when no row matches; (id, true, nil)
+// on hit; non-nil error only on infrastructure failure.
+type EventLookup interface {
+	FindEventBySourceRef(ctx context.Context, source, sourceID string) (eventID uuid.UUID, found bool, err error)
+}
+
+// ConsumerJobEnqueuer queues a fresh InteractionRecorder job against an
+// existing event row. Used during stale-claim recovery when the engine
+// detects an event already exists for the session's sourceRef —
+// re-publishing would be dedup-rejected.
+//
+// Implementations MUST configure River UniqueOpts so repeated recovery
+// enqueues for the same eventID coalesce into one in-flight job (the
+// default ByState set excludes `discarded`, which lets a permanently-
+// failing consumer's MaxAttempts exhaustion eventually free up a fresh
+// retry slot).
+type ConsumerJobEnqueuer interface {
+	EnqueueInteractionRecorderJob(ctx context.Context, eventID uuid.UUID) error
 }
 
 // InteractionFinder locates a "recent matching interaction" for the
@@ -170,4 +237,10 @@ type InteractionExtender interface {
 // telegram contract).
 type EventPublisher interface {
 	Publish(ctx context.Context, env *events.Envelope) error
+	// PublishTx publishes within an existing tx. Used by the engine's
+	// claim+publish atomic create path. The non-tx Publish remains for
+	// test fakes / fall-back wiring that doesn't exercise the claim
+	// path (the engine selects which to use based on whether
+	// TxBeginner was wired).
+	PublishTx(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
 }

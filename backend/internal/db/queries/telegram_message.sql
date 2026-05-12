@@ -55,10 +55,14 @@ WHERE deleted_at IS NULL
 GROUP BY telegram_chat_id;
 
 -- name: ListUnprocessedTelegramMessagesByContactAndChat :many
+-- Claim-aware filter: rows not yet processed AND not currently claimed
+-- (or whose claim has aged past the 5-minute TTL). The TTL is inlined
+-- because spec §3 Race Mechanics fixes it at 5 minutes.
 SELECT * FROM telegram_message
 WHERE matched_contact_id = @matched_contact_id
   AND telegram_chat_id = @telegram_chat_id
   AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
   AND deleted_at IS NULL
 ORDER BY sent_at;
 
@@ -66,6 +70,7 @@ ORDER BY sent_at;
 SELECT * FROM telegram_message
 WHERE matched_contact_id = @matched_contact_id
   AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
   AND deleted_at IS NULL
 ORDER BY telegram_chat_id, sent_at;
 
@@ -97,17 +102,78 @@ WHERE peer_user_id = @peer_user_id
   AND deleted_at IS NULL;
 
 -- name: MarkTelegramMessagesProcessed :exec
+-- Non-tx variant used by the engine's extend/promote/bridge paths only,
+-- which do not publish events and do not claim rows. Clearing the claim
+-- columns lets a future pass see the row as "done" rather than "claimed".
 UPDATE telegram_message
 SET processed_at = NOW(),
-    interaction_id = @interaction_id
+    interaction_id = @interaction_id,
+    claimed_at = NULL,
+    claimed_session_ref = NULL
 WHERE id = ANY(@message_ids::uuid[])
   AND deleted_at IS NULL;
 
+-- name: MarkTelegramMessagesProcessedForSession :exec
+-- Tx-bound, session-scoped variant. Used by InteractionRecorder when
+-- processing a create-path event. The WHERE clause prevents a stranded
+-- old-event consumer from overwriting rows already processed by a newer
+-- event (boundary-shift race): only rows still claimed for THIS session
+-- AND not yet processed are updated.
+UPDATE telegram_message
+SET processed_at = NOW(),
+    interaction_id = @interaction_id,
+    claimed_at = NULL,
+    claimed_session_ref = NULL
+WHERE id = ANY(@message_ids::uuid[])
+  AND claimed_session_ref = @session_ref
+  AND processed_at IS NULL
+  AND deleted_at IS NULL;
+
+-- name: ClaimTelegramMessages :many
+-- Race-safe conditional claim: only writes claim columns on rows still
+-- eligible per the same filter the unprocessed-list queries use. Returns
+-- the row IDs actually claimed (RETURNING id) so the caller can detect
+-- partial claims and roll back.
+UPDATE telegram_message
+SET claimed_at = NOW(),
+    claimed_session_ref = @session_ref
+WHERE id = ANY(@message_ids::uuid[])
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+RETURNING id;
+
+-- name: ClearTelegramMessageStaleClaim :exec
+-- Defensive recovery branch: clears claim columns for rows still
+-- carrying the expected stale session_ref but for which no event-log row
+-- could be found. Scoped to that exact stale ref to avoid clobbering a
+-- freshly-claimed row by a parallel worker.
+UPDATE telegram_message
+SET claimed_at = NULL,
+    claimed_session_ref = NULL
+WHERE id = ANY(@message_ids::uuid[])
+  AND claimed_session_ref = @expected_session_ref
+  AND processed_at IS NULL
+  AND deleted_at IS NULL;
+
+-- name: BackdateTelegramMessageClaim :exec
+-- Test-only helper: ages the claim past the 5-minute TTL without
+-- touching time.Now()/accelerated.GetCurrentTime() (the claim filter
+-- uses NOW(), so the test must rewrite the DB clock for those rows).
+-- Production code MUST NOT call this.
+UPDATE telegram_message
+SET claimed_at = NOW() - INTERVAL '10 minutes'
+WHERE id = ANY(@message_ids::uuid[]);
+
 -- name: ListUnprocessedContactIDs :many
+-- Distinct contact IDs with at least one eligible (unprocessed AND
+-- unclaimed-or-stale) row. Used by AggregateAll batch mode after backfill
+-- and by the periodic aggregation sweeper.
 SELECT DISTINCT matched_contact_id
 FROM telegram_message
 WHERE matched_contact_id IS NOT NULL
   AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
   AND deleted_at IS NULL;
 
 -- name: CountTelegramMessagesByPeer :many

@@ -24,7 +24,16 @@ import (
 func TestNewAggregationEngine_AcceptsNilEventBus(t *testing.T) {
 	// Pure construction: no method invoked, so nil concrete repos are
 	// safe. The shim simply wraps them in adapter structs.
-	e := NewAggregationEngine(2, 48, nil, nil, nil, nil, nil)
+	e := NewAggregationEngine(2, 48, nil, nil, nil, nil, nil, nil, nil)
+	require.NotNil(t, e)
+	require.NotNil(t, e.engine)
+}
+
+// TestNewAggregationEngine_AcceptsNilPool covers the PR3 shim
+// invariant: passing a nil TxBeginner falls back to the pre-PR3 non-tx
+// publish path inside the shared engine. Pure construction.
+func TestNewAggregationEngine_AcceptsNilPool(t *testing.T) {
+	e := NewAggregationEngine(2, 48, nil, nil, nil, nil, nil, nil, nil)
 	require.NotNil(t, e)
 	require.NotNil(t, e.engine)
 }

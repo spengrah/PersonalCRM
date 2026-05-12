@@ -384,6 +384,8 @@ func TestRematch_TelegramUsernameMatch(t *testing.T) {
 		messageRepo, env.interactionRepo,
 		env.contactSvc, env.contactSvc,
 		env.bus,
+		nil, // pool: non-tx publish fallback (test mode)
+		nil, // enqueuer: stale-claim recovery disabled
 	)
 	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))
 
@@ -512,6 +514,8 @@ func registerTelegramHandlers(t *testing.T, env *rematchTestEnv) *repository.Tel
 		messageRepo, env.interactionRepo,
 		env.contactSvc, env.contactSvc,
 		env.bus,
+		nil, // pool: non-tx publish fallback (test mode)
+		nil, // enqueuer: stale-claim recovery disabled
 	)
 	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))
 	env.rematchSvc.Register(tgpkg.NewPhoneRematchHandler(messageRepo, peerMatcher, aggregationEngine))
@@ -686,6 +690,8 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 		messageRepo, env.interactionRepo,
 		env.contactSvc, env.contactSvc,
 		env.bus,
+		nil, // pool: non-tx publish fallback (test mode)
+		nil, // enqueuer: stale-claim recovery disabled
 	)
 	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))
 

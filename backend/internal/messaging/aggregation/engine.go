@@ -10,6 +10,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -26,6 +27,11 @@ func sortBySentAt(msgs []Message) {
 // Engine processes per-source staging-message rows into interaction
 // records. Created per source — concurrent engines for telegram +
 // messages + whatsapp share no mutable state.
+//
+// txBeginner / eventLookup / consumerEnqueuer are nil-safe: when any is
+// nil, the engine takes a fall-back path that does not exercise the
+// claim mechanism. This keeps PR2's unit-test fakes working unchanged.
+// Production wiring passes all three.
 type Engine struct {
 	adapter   SourceAdapter
 	store     MessageStore
@@ -33,6 +39,10 @@ type Engine struct {
 	promoter  InteractionPromoter
 	extender  InteractionExtender
 	publisher EventPublisher
+
+	txBeginner       TxBeginner          // nil → non-tx Publish fallback (test mode)
+	eventLookup      EventLookup         // nil → stale-claim recovery degrades to warn-and-yield
+	consumerEnqueuer ConsumerJobEnqueuer // nil → stale-claim recovery degrades to warn-and-yield
 
 	burstWindowHours int
 	replyBridgeHours int
@@ -44,6 +54,11 @@ type Engine struct {
 // configured (see EventPublisher doc). The Engine guards on
 // publisher == nil inside the session create path; a typed-nil concrete
 // pointer would silently bypass that guard.
+//
+// txBeginner, eventLookup, consumerEnqueuer are optional. When all
+// three are nil, the engine takes the pre-PR3 non-tx publish path —
+// this keeps the shared-package unit-test fakes working unchanged.
+// Production wiring passes all three.
 func NewEngine(
 	adapter SourceAdapter,
 	store MessageStore,
@@ -52,6 +67,9 @@ func NewEngine(
 	extender InteractionExtender,
 	publisher EventPublisher,
 	burstWindowHours, replyBridgeHours int,
+	txBeginner TxBeginner,
+	eventLookup EventLookup,
+	consumerEnqueuer ConsumerJobEnqueuer,
 ) *Engine {
 	return &Engine{
 		adapter:          adapter,
@@ -60,6 +78,9 @@ func NewEngine(
 		promoter:         promoter,
 		extender:         extender,
 		publisher:        publisher,
+		txBeginner:       txBeginner,
+		eventLookup:      eventLookup,
+		consumerEnqueuer: consumerEnqueuer,
 		burstWindowHours: burstWindowHours,
 		replyBridgeHours: replyBridgeHours,
 	}
@@ -290,6 +311,15 @@ func (e *Engine) tryExplicitReplyBridge(ctx context.Context, contactID uuid.UUID
 // handles the interaction-row write inside a single tx that also marks
 // the source's staging rows processed.
 //
+// Three gates (spec §3 Race Mechanics):
+//  1. Fresh rows (no ClaimedAt): atomic claim+publish inside a tx.
+//  2. Recovery (any row's ClaimedSessionRef == computed sourceRef): an
+//     event already exists; look it up and re-enqueue a consumer job
+//     against it (do NOT re-publish — event-log dedup would suppress).
+//  3. Boundary shift (some row's ClaimedSessionRef differs from the
+//     computed sourceRef AND is stale per TTL): clear the stale claim
+//     scope, then proceed with the normal fresh-rows claim+publish.
+//
 // Returns an error when publisher is the nil interface — mode=off/
 // shadow is effectively broken post-cutover and the publisher refuses
 // to silently drop the interaction.
@@ -299,14 +329,162 @@ func (e *Engine) createInteractionForSession(ctx context.Context, contactID uuid
 	}
 	sourceRef := sess.sourceRef(e.adapter)
 	desc := sess.description(e.adapter)
-	if pubErr := e.publishForSession(ctx, contactID, sess, sourceRef, &desc); pubErr != nil {
-		return fmt.Errorf("publish %s interaction event: %w", e.adapter.SourceName(), pubErr)
+	env, err := e.buildEnvelope(contactID, sess, sourceRef, &desc)
+	if err != nil {
+		return err
+	}
+
+	// Fall-back path: when no TxBeginner is wired, take the legacy
+	// non-tx publish path. Used by shared-package unit tests and any
+	// mode that hasn't opted into the claim mechanism. Tests rely on
+	// this to keep the engine_test.go fakes working without DB-shaped
+	// tx plumbing.
+	if e.txBeginner == nil {
+		if pubErr := e.publisher.Publish(ctx, env); pubErr != nil {
+			return fmt.Errorf("publish %s interaction event: %w", e.adapter.SourceName(), pubErr)
+		}
+		return nil
+	}
+
+	// Gate 2: recovery pass. Any row whose ClaimedSessionRef matches
+	// the just-computed sourceRef tells us the session was previously
+	// claimed but Stage 3 never completed. Look up the existing event
+	// and re-enqueue a consumer job — re-publishing would be
+	// dedup-rejected by the event-log unique index.
+	if sess.isStaleRecovery(sourceRef) {
+		return e.handleStaleRecovery(ctx, sess, sourceRef)
+	}
+
+	// Gate 3: boundary-shift pass. Some row carries a stale
+	// ClaimedSessionRef that does NOT match the current sourceRef
+	// (e.g. an earlier inbound arrived out-of-order, shifting the
+	// session boundary). Clear the stale claim columns scoped to that
+	// stale ref so a parallel worker's freshly-claimed row is not
+	// clobbered, then fall through to the fresh-rows claim+publish.
+	if stale := sess.staleBoundaryShiftRefs(sourceRef); len(stale) > 0 {
+		if err := e.clearStaleBoundaryShiftClaims(ctx, sess, stale); err != nil {
+			return err
+		}
+	}
+
+	// Gate 1: fresh rows. Open a tx, conditionally claim rows still
+	// eligible, publish atomically. Rolled back on any failure /
+	// partial-claim race.
+	tx, err := e.txBeginner.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("aggregation: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit per pgx idiom
+
+	requested := sess.messageIDs()
+	claimed, err := e.store.ClaimRowsTx(ctx, tx, requested, sourceRef)
+	if err != nil {
+		return fmt.Errorf("aggregation: claim rows: %w", err)
+	}
+	if !sameIDSet(claimed, requested) {
+		// Partial claim — another worker raced us. Roll back; the next
+		// aggregator pass will re-derive sessions from whatever's still
+		// eligible.
+		log.Info().
+			Str("source", e.adapter.SourceName()).
+			Str("source_ref", sourceRef).
+			Int("requested", len(requested)).
+			Int("claimed", len(claimed)).
+			Msg("aggregation: partial claim; rolling back and yielding to racing worker")
+		return nil
+	}
+
+	if err := e.publisher.PublishTx(ctx, tx, env); err != nil {
+		return fmt.Errorf("aggregation: publish tx: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("aggregation: commit tx: %w", err)
 	}
 	return nil
 }
 
-// publishForSession emits the message.received / message.sent event
-// for a freshly-created interaction. Mutual sessions carry
+// handleStaleRecovery is taken when the session's rows show a prior
+// claim for the same sourceRef. Per spec §3, do NOT re-publish (event-
+// log dedup would suppress); look up the existing event and re-enqueue
+// a consumer job against it. The recovery enqueue is bounded by River
+// UniqueOpts so repeated stale passes coalesce into one in-flight job.
+func (e *Engine) handleStaleRecovery(ctx context.Context, sess msgSession, sourceRef string) error {
+	if e.eventLookup == nil || e.consumerEnqueuer == nil {
+		log.Warn().
+			Str("source", e.adapter.SourceName()).
+			Str("source_ref", sourceRef).
+			Msg("aggregation: stale-claim recovery skipped; lookup/enqueuer not wired")
+		return nil
+	}
+	eventID, found, err := e.eventLookup.FindEventBySourceRef(ctx, e.adapter.SourceName(), sourceRef)
+	if err != nil {
+		return fmt.Errorf("aggregation: event lookup for stale-claim recovery: %w", err)
+	}
+	if !found {
+		// Spec §3 defensive: claim_session_ref exists but no event
+		// matches. Treat as unclaimed — clear the stale claim columns
+		// and let the next pass re-publish.
+		return e.clearStaleClaimAndYield(ctx, sess, sourceRef)
+	}
+	log.Warn().
+		Str("source", e.adapter.SourceName()).
+		Str("source_ref", sourceRef).
+		Str("event_id", eventID.String()).
+		Msg("aggregation: stale-claim recovery — re-enqueuing consumer job")
+	if err := e.consumerEnqueuer.EnqueueInteractionRecorderJob(ctx, eventID); err != nil {
+		return fmt.Errorf("aggregation: re-enqueue interaction recorder job: %w", err)
+	}
+	return nil
+}
+
+// clearStaleClaimAndYield clears the claim columns for rows whose
+// ClaimedSessionRef still equals the supplied stale ref. Used by the
+// defensive recovery branch (FindEventBySource returned no row). The
+// next aggregator pass will see rows as unclaimed and proceed normally.
+func (e *Engine) clearStaleClaimAndYield(ctx context.Context, sess msgSession, staleRef string) error {
+	tx, err := e.txBeginner.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("aggregation: begin tx for stale-claim clear: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := e.store.ClearStaleClaimTx(ctx, tx, sess.messageIDs(), staleRef); err != nil {
+		return fmt.Errorf("aggregation: clear stale claim: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("aggregation: commit stale-claim clear: %w", err)
+	}
+	return nil
+}
+
+// clearStaleBoundaryShiftClaims clears claim columns for rows whose
+// ClaimedSessionRef equals any of the supplied stale refs (boundary-
+// shift case). One tx per stale ref so each ClearStaleClaimTx call has
+// a single expectedSessionRef scope.
+func (e *Engine) clearStaleBoundaryShiftClaims(ctx context.Context, sess msgSession, staleRefs []string) error {
+	ids := sess.messageIDs()
+	for _, ref := range staleRefs {
+		tx, err := e.txBeginner.BeginTx(ctx, pgx.TxOptions{})
+		if err != nil {
+			return fmt.Errorf("aggregation: begin tx for boundary-shift clear: %w", err)
+		}
+		if err := e.store.ClearStaleClaimTx(ctx, tx, ids, ref); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("aggregation: clear boundary-shift claim: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("aggregation: commit boundary-shift clear: %w", err)
+		}
+		log.Warn().
+			Str("source", e.adapter.SourceName()).
+			Str("stale_ref", ref).
+			Msg("aggregation: cleared stale boundary-shift claim")
+	}
+	return nil
+}
+
+// buildEnvelope formats the message.received / message.sent event for
+// a freshly-created interaction. Mutual sessions carry
 // Direction="mutual" in the payload so the consumer can write a
 // matching mutual row.
 //
@@ -316,13 +494,12 @@ func (e *Engine) createInteractionForSession(ctx context.Context, contactID uuid
 //   - mutual session   → KindMessageReceived (Direction="mutual")
 //
 // SourceID = sourceRef so publisher-idempotency dedupes retries.
-func (e *Engine) publishForSession(
-	ctx context.Context,
+func (e *Engine) buildEnvelope(
 	contactID uuid.UUID,
 	sess msgSession,
 	sourceRef string,
 	description *string,
-) error {
+) (*events.Envelope, error) {
 	cid := contactID
 	messageAt := sess.lastSentAt()
 
@@ -339,7 +516,7 @@ func (e *Engine) publishForSession(
 		kind = events.KindMessageReceived
 		payloadDirection = repository.InteractionDirectionMutual
 	default:
-		return fmt.Errorf("unexpected session direction %q", sess.direction)
+		return nil, fmt.Errorf("unexpected session direction %q", sess.direction)
 	}
 
 	peerRef := e.adapter.PeerRef(sess.chatID)
@@ -373,15 +550,42 @@ func (e *Engine) publishForSession(
 		raw, marshalErr = msg, err
 	}
 	if marshalErr != nil {
-		return fmt.Errorf("marshal %s: %w", kind, marshalErr)
+		return nil, fmt.Errorf("marshal %s: %w", kind, marshalErr)
 	}
 
-	env := &events.Envelope{
+	return &events.Envelope{
 		Source:     e.adapter.SourceName(),
 		SourceID:   sourceRef,
 		Kind:       kind,
 		Payload:    raw,
 		ObservedAt: messageAt,
+	}, nil
+}
+
+// sameIDSet reports whether a and b contain the same UUIDs
+// (order-independent). Used by createInteractionForSession to detect
+// partial-claim races.
+func sameIDSet(a, b []uuid.UUID) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	return e.publisher.Publish(ctx, env)
+	if len(a) == 0 {
+		return true
+	}
+	m := make(map[uuid.UUID]int, len(a))
+	for _, id := range a {
+		m[id]++
+	}
+	for _, id := range b {
+		m[id]--
+		if m[id] < 0 {
+			return false
+		}
+	}
+	for _, c := range m {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
 }

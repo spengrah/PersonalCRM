@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	stdsync "sync"
 	"syscall"
 	"time"
 
@@ -52,6 +53,7 @@ import (
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	swaggerFiles "github.com/swaggo/files"
@@ -151,6 +153,43 @@ func (r *followUpSettingsRef) fn() consumer.TodoistSettingsFunc {
 	}
 }
 
+// deferredAggregatorReenqueuer is a thread-safe holder that the
+// InteractionRecorderWorker is constructed against before the
+// Telegram aggregation engine exists. The cfg.Features.EnableTelegramSync
+// branch calls .set once telegramManager is built; until then the
+// holder dispatches every Reenqueue call to a logged-warn no-op.
+//
+// Satisfies consumer.AggregatorReenqueuer (via the holder pointer);
+// safe to pass to the worker constructor before the inner registry
+// is wired.
+type deferredAggregatorReenqueuer struct {
+	mu    stdsync.RWMutex
+	inner consumer.AggregatorReenqueuer
+}
+
+// set installs the concrete reenqueuer. May be called once after the
+// Telegram aggregation engine exists.
+func (d *deferredAggregatorReenqueuer) set(inner consumer.AggregatorReenqueuer) {
+	d.mu.Lock()
+	d.inner = inner
+	d.mu.Unlock()
+}
+
+// Reenqueue implements consumer.AggregatorReenqueuer. Falls back to a
+// logged-warn no-op when the inner registry has not been wired yet
+// (e.g. cfg.Features.EnableTelegramSync is false).
+func (d *deferredAggregatorReenqueuer) Reenqueue(ctx context.Context, env *events.Envelope, contactID uuid.UUID) error {
+	d.mu.RLock()
+	inner := d.inner
+	d.mu.RUnlock()
+	if inner == nil {
+		log.Printf("aggregator-reenqueuer: registry not yet wired; skipping (source=%s contact=%s)",
+			env.Source, contactID.String())
+		return nil
+	}
+	return inner.Reenqueue(ctx, env, contactID)
+}
+
 func main() {
 	// Run the server body in a helper so its defers (database.Close,
 	// telegramManager.Stop, riverClient.Stop, shutdown-ctx cancel) all
@@ -243,6 +282,35 @@ func run() int {
 	// processed in the same tx as the interaction insert).
 	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
 
+	// Messages staging repo (Mac daemon — PR3 spec §3). The ingest
+	// path that writes into messages_message lands in PR4; the repo
+	// is wired here so the InteractionRecorder's staging registry
+	// can dispatch source="messages" mark-processed calls correctly
+	// once PR4's writer is live.
+	messagesMessageRepo := repository.NewMessagesMessageRepository(database.Queries)
+
+	// Source-neutral staging registry — InteractionRecorder dispatches
+	// MarkProcessedTx by env.Source to the right repository. Unknown
+	// sources are a logged warning (not an error) so non-message kinds
+	// continue to bypass the registry without erroring.
+	stagingRegistry := repository.NewStagingProcessorRegistry(
+		map[string]repository.StagingProcessor{
+			repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
+			repository.InteractionSourceMessages: repository.NewMessagesStagingProcessor(messagesMessageRepo),
+		},
+	)
+
+	// Aggregator reenqueuer holder. The Telegram entry needs the
+	// Telegram aggregation engine, which is constructed later (inside
+	// the cfg.Features.EnableTelegramSync branch). The worker is
+	// constructed earlier, so we wrap the registry in a deferred
+	// pointer that the Telegram branch fills in once the engine
+	// exists. When Telegram is disabled the registry's telegram entry
+	// stays unset and the consumer's reenqueue degrades to "no entry
+	// registered for source" (logged warn) — safe, the consumer's
+	// interaction has already committed.
+	aggregatorReenqueuerHolder := &deferredAggregatorReenqueuer{}
+
 	// CadenceUpdater must be constructed BEFORE InteractionRecorder so
 	// the recorder can inline-invoke it after bus.PublishTx on fresh
 	// writes. Wired here even though its worker is registered further
@@ -307,7 +375,7 @@ func run() int {
 	// event_consumer_claim.
 	interactionRecorder := consumer.NewInteractionRecorder(
 		contactService,
-		telegramMessageRepo,
+		stagingRegistry,
 		eventBus,
 		cadenceUpdater,
 		followUpManager,
@@ -318,7 +386,12 @@ func run() int {
 	// present with mode=off costs nothing (no events route to it when
 	// pubBus is nil). Mode gating happens at the publisher sites via
 	// pubBus and at the manual-handler level via manualHandler.
-	river.AddWorker(riverWorkers, consumer.NewInteractionRecorderWorker(eventBus, database.Pool, interactionRecorder))
+	//
+	// aggregatorReenqueuerHolder is wired in here; the actual telegram
+	// entry is filled by the cfg.Features.EnableTelegramSync branch
+	// further down. Until that branch runs (or in test/no-telegram
+	// modes), the holder dispatches to a logged-warn no-op.
+	river.AddWorker(riverWorkers, consumer.NewInteractionRecorderWorker(eventBus, database.Pool, interactionRecorder, aggregatorReenqueuerHolder))
 
 	// Interaction-mode wiring gate. Cutover is the normal operating
 	// posture; off is the emergency-override retained so rollback can
@@ -604,6 +677,13 @@ func run() int {
 			logger.Fatal().Err(err).Msg("failed to initialize Telegram encryptor (TOKEN_ENCRYPTION_KEY required)")
 		}
 
+		// River-backed stale-claim recovery enqueuer. Uses UniqueOpts
+		// {ByArgs: true} paired with the InteractionRecorderJobArgs.EventID
+		// `river:"unique"` tag so repeated recovery enqueues against the
+		// same event coalesce into one in-flight job (spec §3 Race
+		// Mechanics).
+		tgRecoveryEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(riverClient)
+
 		telegramManager = tgpkg.NewTelegramManager(
 			telegramSessionRepo,
 			telegramUpdateStateRepo,
@@ -621,12 +701,26 @@ func run() int {
 			contactService,
 			contactService,
 			pubBus,
+			database.Pool,
+			tgRecoveryEnqueuer,
 		)
 
 		if err := telegramManager.Start(ctx); err != nil {
 			logger.Warn().Err(err).Msg("failed to start Telegram connection")
 		}
 		defer telegramManager.Stop()
+
+		// Wire the per-source aggregator reenqueuer registry now that
+		// the Telegram engine exists. The InteractionRecorderWorker
+		// holds the deferred holder; this assignment makes the
+		// post-commit reenqueue path live for telegram-source events.
+		// Messages source is a no-op until PR4 wires its ingest path.
+		aggregatorReenqueuerHolder.set(consumer.NewAggregatorReenqueuerRegistry(
+			map[string]consumer.AggregatorReenqueuer{
+				repository.InteractionSourceTelegram: consumer.NewTelegramAggregatorReenqueuer(telegramManager.AggregationEngine()),
+				repository.InteractionSourceMessages: consumer.NoopAggregatorReenqueuer{},
+			},
+		))
 
 		telegramHandler = handlers.NewTelegramHandler(telegramManager)
 

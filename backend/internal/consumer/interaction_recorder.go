@@ -64,11 +64,29 @@ type eventBusTx interface {
 	GetEvent(ctx context.Context, id uuid.UUID) (*events.Envelope, error)
 }
 
-// telegramMessageMarker is the subset of *repository.TelegramMessageRepository
-// the consumer depends on for the message.* path. Nullable in the constructor —
-// non-telegram kinds bypass it.
-type telegramMessageMarker interface {
-	MarkMessagesProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID) error
+// stagingProcessor is the source-neutral seam between the consumer and
+// per-source staging tables. Satisfied by
+// *repository.StagingProcessorRegistry which dispatches by source name
+// to the per-source repository's MarkMessagesProcessedTx. Nullable in
+// the constructor — non-message kinds bypass it.
+//
+// sessionRef is the event's source_ref. The underlying SQL scopes the
+// update to rows still claimed for that exact session, defending
+// against the stale boundary-shift race (spec §3 Race Mechanics).
+type stagingProcessor interface {
+	MarkProcessedTx(ctx context.Context, tx pgx.Tx, source string, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) error
+}
+
+// aggregatorReenqueuer dispatches a post-commit aggregator pass for the
+// just-processed (source, contactID). Used to drain rows that arrived
+// in the Stage 2 → Stage 3 window — those rows are unclaimed by the
+// time the consumer commits, and the post-commit hook is what picks
+// them up before the next external aggregation trigger.
+//
+// Implementations live in the consumer package
+// (consumer.AggregatorReenqueuerRegistry).
+type aggregatorReenqueuer interface {
+	Reenqueue(ctx context.Context, env *events.Envelope, contactID uuid.UUID) error
 }
 
 // cadenceDispatcher is the subset of *CadenceUpdater the recorder needs
@@ -99,15 +117,15 @@ type followUpDispatcher interface {
 // event finds the claim row and returns nil without mutating contact
 // state — closing the queued-worker replay hole for manual corrections.
 type InteractionRecorder struct {
-	writer              interactionWriter
-	telegramMessageRepo telegramMessageMarker
-	bus                 eventBusTx
-	cadence             cadenceDispatcher
-	followUp            followUpDispatcher
+	writer   interactionWriter
+	staging  stagingProcessor
+	bus      eventBusTx
+	cadence  cadenceDispatcher
+	followUp followUpDispatcher
 }
 
-// NewInteractionRecorder builds the consumer. telegramMessageRepo may
-// be nil for test environments that don't exercise message.* kinds.
+// NewInteractionRecorder builds the consumer. staging may be nil for
+// test environments that don't exercise message.* kinds.
 // cadence MUST be non-nil in production wiring — the inline cadence
 // apply is the seam that closes the queued-worker replay hole for
 // manual corrections. followUp is inline-invoked post-publish so the
@@ -116,17 +134,17 @@ type InteractionRecorder struct {
 // about cadence / follow-up pass nil stubs.
 func NewInteractionRecorder(
 	writer interactionWriter,
-	telegramMessageRepo telegramMessageMarker,
+	staging stagingProcessor,
 	bus eventBusTx,
 	cadence cadenceDispatcher,
 	followUp followUpDispatcher,
 ) *InteractionRecorder {
 	return &InteractionRecorder{
-		writer:              writer,
-		telegramMessageRepo: telegramMessageRepo,
-		bus:                 bus,
-		cadence:             cadence,
-		followUp:            followUp,
+		writer:   writer,
+		staging:  staging,
+		bus:      bus,
+		cadence:  cadence,
+		followUp: followUp,
 	}
 }
 
@@ -176,16 +194,23 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		return nil, nil, fmt.Errorf("record interaction tx: %w", err)
 	}
 
-	// Mark telegram messages processed inside the SAME tx as the
-	// interaction insert so the telegram_message.interaction_id FK
-	// write is atomic with the row it references. Runs on BOTH
-	// fresh-write and replay paths — matches the telegram publisher's
-	// pre-cutover behavior of always calling MarkMessagesProcessed
-	// after RecordInteraction, regardless of dedup-hit.
+	// Mark staging rows processed inside the SAME tx as the
+	// interaction insert so the staging.interaction_id FK write is
+	// atomic with the row it references. Runs on BOTH fresh-write and
+	// replay paths — matches the telegram publisher's pre-cutover
+	// behavior of always calling MarkMessagesProcessed after
+	// RecordInteraction, regardless of dedup-hit.
+	//
+	// Dispatches on env.Source so message.* events from any source
+	// (telegram today, messages in PR4) route to the right registry
+	// entry. env.SourceID is the deterministic per-session source_ref;
+	// threading it into MarkProcessedTx scopes the SQL update to rows
+	// still claimed for THIS session — defends against the stale
+	// boundary-shift race (spec §3 Race Mechanics).
 	if env.Kind == events.KindMessageReceived || env.Kind == events.KindMessageSent {
-		if msgIDs, extractErr := extractTelegramMessageIDs(env); extractErr == nil && len(msgIDs) > 0 && r.telegramMessageRepo != nil && res.Interaction != nil {
-			if markErr := r.telegramMessageRepo.MarkMessagesProcessedTx(ctx, tx, msgIDs, res.Interaction.ID); markErr != nil {
-				return nil, nil, fmt.Errorf("mark telegram messages processed: %w", markErr)
+		if msgIDs, extractErr := extractMessageIDs(env); extractErr == nil && len(msgIDs) > 0 && r.staging != nil && res.Interaction != nil {
+			if markErr := r.staging.MarkProcessedTx(ctx, tx, env.Source, msgIDs, res.Interaction.ID, env.SourceID); markErr != nil {
+				return nil, nil, fmt.Errorf("mark staging messages processed: %w", markErr)
 			}
 		}
 	}
@@ -288,7 +313,11 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 		if direction == "" {
 			direction = repository.InteractionDirectionInbound
 		}
-		return makeTelegramRequest(p.ContactID, p.ExternalMessageID, p.MessageAt, p.Description, direction), direction, false, nil
+		req, err := makeMessageRequest(env.Source, p.ContactID, p.ExternalMessageID, p.MessageAt, p.Description, direction)
+		if err != nil {
+			return repository.RecordInteractionRequest{}, "", false, err
+		}
+		return req, direction, false, nil
 
 	case events.KindMessageSent:
 		var p events.MessageSentPayload
@@ -302,7 +331,11 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 		if direction == "" {
 			direction = repository.InteractionDirectionOutbound
 		}
-		return makeTelegramRequest(p.ContactID, p.ExternalMessageID, p.MessageAt, p.Description, direction), direction, false, nil
+		req, err := makeMessageRequest(env.Source, p.ContactID, p.ExternalMessageID, p.MessageAt, p.Description, direction)
+		if err != nil {
+			return repository.RecordInteractionRequest{}, "", false, err
+		}
+		return req, direction, false, nil
 
 	case events.KindCalendarAttended:
 		var p events.CalendarAttendedPayload
@@ -387,10 +420,11 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 	return repository.RecordInteractionRequest{}, "", false, fmt.Errorf("unsupported kind %q", env.Kind)
 }
 
-// extractTelegramMessageIDs pulls the MessageIDs slice from the envelope
+// extractMessageIDs pulls the MessageIDs slice from the envelope
 // payload for message.* kinds. Returns empty slice on non-message kinds
 // (safe for all callers) and an error on malformed payload JSON.
-func extractTelegramMessageIDs(env *events.Envelope) ([]uuid.UUID, error) {
+// Source-neutral: the payload's MessageIDs field is source-agnostic.
+func extractMessageIDs(env *events.Envelope) ([]uuid.UUID, error) {
 	switch env.Kind {
 	case events.KindMessageReceived:
 		var p events.MessageReceivedPayload
@@ -408,9 +442,19 @@ func extractTelegramMessageIDs(env *events.Envelope) ([]uuid.UUID, error) {
 	return nil, nil
 }
 
-// makeTelegramRequest builds the RecordInteractionRequest for message.*
+// makeMessageRequest builds the RecordInteractionRequest for message.*
 // kinds. Shared by message.received and message.sent extract branches.
-func makeTelegramRequest(contactID *uuid.UUID, externalMessageID string, messageAt time.Time, description *string, direction string) repository.RecordInteractionRequest {
+// `source` is propagated from env.Source so a `source="messages"` event
+// produces a `source="messages"` interaction row (P0 invariant: the
+// message event's source name flows end-to-end). Allowlists
+// {telegram, messages} for defense-in-depth — the CHECK constraint on
+// interaction.source is the durable contract, but this catches a bad
+// publisher before the DB write attempts.
+func makeMessageRequest(source string, contactID *uuid.UUID, externalMessageID string, messageAt time.Time, description *string, direction string) (repository.RecordInteractionRequest, error) {
+	if source != repository.InteractionSourceTelegram && source != repository.InteractionSourceMessages {
+		return repository.RecordInteractionRequest{}, fmt.Errorf("unsupported message source %q (allowed: %s, %s)",
+			source, repository.InteractionSourceTelegram, repository.InteractionSourceMessages)
+	}
 	var cid uuid.UUID
 	if contactID != nil {
 		cid = *contactID
@@ -421,12 +465,12 @@ func makeTelegramRequest(contactID *uuid.UUID, externalMessageID string, message
 	}
 	return repository.RecordInteractionRequest{
 		ContactID:   cid,
-		Source:      repository.InteractionSourceTelegram,
+		Source:      source,
 		SourceRef:   ref,
 		OccurredAt:  messageAt,
 		Description: description,
 		Direction:   direction,
-	}
+	}, nil
 }
 
 // marshalRecordedPayload builds the JSON payload for the
@@ -470,20 +514,30 @@ func marshalRecordedPayload(
 
 // InteractionRecorderWorker is the river worker that dispatches queued
 // InteractionRecorderJobArgs to InteractionRecorder.HandleEvent.
+//
+// reenqueuer is an optional post-commit hook for the per-source
+// aggregator. After a fresh interaction commits, the worker calls
+// reenqueuer.Reenqueue(ctx, env, contactID) so rows that arrived in
+// the Stage 2 → Stage 3 window are picked up before the next external
+// aggregation trigger. nil disables the hook (test mode).
 type InteractionRecorderWorker struct {
 	river.WorkerDefaults[consumerjobs.InteractionRecorderJobArgs]
-	bus      eventBusTx
-	pool     *pgxpool.Pool
-	recorder *InteractionRecorder
+	bus        eventBusTx
+	pool       *pgxpool.Pool
+	recorder   *InteractionRecorder
+	reenqueuer aggregatorReenqueuer
 }
 
 // NewInteractionRecorderWorker wires the worker to the concrete bus, the
-// application pgxpool, and the consumer instance.
-func NewInteractionRecorderWorker(bus eventBusTx, pool *pgxpool.Pool, recorder *InteractionRecorder) *InteractionRecorderWorker {
+// application pgxpool, the consumer instance, and (optionally) the
+// post-commit aggregator reenqueuer. reenqueuer may be nil — tests and
+// modes that don't run an aggregator pass nil safely.
+func NewInteractionRecorderWorker(bus eventBusTx, pool *pgxpool.Pool, recorder *InteractionRecorder, reenqueuer aggregatorReenqueuer) *InteractionRecorderWorker {
 	return &InteractionRecorderWorker{
-		bus:      bus,
-		pool:     pool,
-		recorder: recorder,
+		bus:        bus,
+		pool:       pool,
+		recorder:   recorder,
+		reenqueuer: reenqueuer,
 	}
 }
 
@@ -491,19 +545,23 @@ func NewInteractionRecorderWorker(bus eventBusTx, pool *pgxpool.Pool, recorder *
 // fresh tx, and invokes HandleEvent. On error river will retry per
 // MaxAttempts (set to 5 via InsertOpts in events.consumerJobsForKind).
 // After the tx commits, invokes the recorder's returned postCommit
-// closure (best-effort follow-up manager invocation).
+// closure (best-effort follow-up manager invocation) followed by the
+// per-source aggregator reenqueue (best-effort; logged warn on
+// failure, does NOT roll back the interaction).
 func (w *InteractionRecorderWorker) Work(ctx context.Context, j *river.Job[consumerjobs.InteractionRecorderJobArgs]) error {
 	env, err := w.bus.GetEvent(ctx, j.Args.EventID)
 	if err != nil {
 		return fmt.Errorf("fetch event %s: %w", j.Args.EventID, err)
 	}
 	var postCommit func(context.Context)
+	var interactionRow *repository.Interaction
 	err = pgx.BeginTxFunc(ctx, w.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		_, pc, handleErr := w.recorder.HandleEvent(ctx, tx, env)
+		interaction, pc, handleErr := w.recorder.HandleEvent(ctx, tx, env)
 		if handleErr != nil {
 			return handleErr
 		}
 		postCommit = pc
+		interactionRow = interaction
 		return nil
 	})
 	if err != nil {
@@ -511,6 +569,18 @@ func (w *InteractionRecorderWorker) Work(ctx context.Context, j *river.Job[consu
 	}
 	if postCommit != nil {
 		postCommit(ctx)
+	}
+	// Post-commit aggregator reenqueue. Best-effort: a failure here
+	// does NOT roll back the interaction (already committed); the
+	// stale-claim recovery path is the durable backstop.
+	if w.reenqueuer != nil && interactionRow != nil &&
+		(env.Kind == events.KindMessageReceived || env.Kind == events.KindMessageSent) {
+		if rqErr := w.reenqueuer.Reenqueue(ctx, env, interactionRow.ContactID); rqErr != nil {
+			logger.Warn().Err(rqErr).
+				Str("source", env.Source).
+				Str("contact_id", interactionRow.ContactID.String()).
+				Msg("recorder: aggregator re-enqueue failed; relying on stale-claim recovery")
+		}
 	}
 	return nil
 }

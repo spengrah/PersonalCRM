@@ -22,11 +22,37 @@ type Querier interface {
 	// records interactions directly for past events (see rematch plan Design
 	// Decision 6) so the scheduler race is avoided at the source.
 	AppendMatchedContact(ctx context.Context, arg AppendMatchedContactParams) error
+	// Test-only helper: ages the claim past the 5-minute TTL. Production
+	// code MUST NOT call this.
+	BackdateMessagesMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error
+	// Test-only helper: ages the claim past the 5-minute TTL without
+	// touching time.Now()/accelerated.GetCurrentTime() (the claim filter
+	// uses NOW(), so the test must rewrite the DB clock for those rows).
+	// Production code MUST NOT call this.
+	BackdateTelegramMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error
 	BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error
 	// Admin operation. Bumps cursor_epoch so the daemon discards its
 	// local cursor cache on next heartbeat. Currently used only by the
 	// repository layer; no admin endpoint is wired to it yet.
 	BumpMacHostCursorEpoch(ctx context.Context, id pgtype.UUID) (int64, error)
+	// Race-safe conditional claim — same predicate shape as
+	// ClaimTelegramMessages. Returns the IDs actually claimed so the engine
+	// can detect partial claims.
+	ClaimMessagesMessages(ctx context.Context, arg ClaimMessagesMessagesParams) ([]pgtype.UUID, error)
+	// Race-safe conditional claim: only writes claim columns on rows still
+	// eligible per the same filter the unprocessed-list queries use. Returns
+	// the row IDs actually claimed (RETURNING id) so the caller can detect
+	// partial claims and roll back.
+	ClaimTelegramMessages(ctx context.Context, arg ClaimTelegramMessagesParams) ([]pgtype.UUID, error)
+	// Defensive recovery branch: clears claim columns for rows still
+	// carrying the expected stale session_ref. Used when the engine
+	// detected a recovery pass but FindEventBySource returned no row.
+	ClearMessagesMessageStaleClaim(ctx context.Context, arg ClearMessagesMessageStaleClaimParams) error
+	// Defensive recovery branch: clears claim columns for rows still
+	// carrying the expected stale session_ref but for which no event-log row
+	// could be found. Scoped to that exact stale ref to avoid clobbering a
+	// freshly-claimed row by a parallel worker.
+	ClearTelegramMessageStaleClaim(ctx context.Context, arg ClearTelegramMessageStaleClaimParams) error
 	// Mark all pending follow-up tasks as completed for a contact (when a
 	// response arrives). Matches the same live-state set as FindPendingFollowUp
 	// so an inbound arriving while the create worker is mid-flight still
@@ -324,6 +350,13 @@ type Querier interface {
 	// db.ErrNotFound as "no cursor committed yet" and surfaces an empty
 	// cursor + the host's current cursor_epoch.
 	GetMacHostSyncState(ctx context.Context, arg GetMacHostSyncStateParams) (*ExternalSyncState, error)
+	// Lookup by guid (primary external identifier). Used by reply-target
+	// resolution.
+	GetMessagesMessage(ctx context.Context, guid string) (*MessagesMessage, error)
+	// Source-neutral analog of GetTelegramMessage for the aggregator's
+	// explicit-reply-bridge path. chat_guid is included for scoping
+	// selectivity.
+	GetMessagesMessageByReplyTarget(ctx context.Context, arg GetMessagesMessageByReplyTargetParams) (*MessagesMessage, error)
 	// Note queries
 	GetNote(ctx context.Context, id pgtype.UUID) (*Note, error)
 	// OAuth Credential Queries
@@ -375,6 +408,12 @@ type Querier interface {
 	// unique constraint would block a same-source_ref re-insert on the next
 	// test run even with deleted_at set.
 	HardDeleteInteractionsBySourceRefPrefix(ctx context.Context, arg HardDeleteInteractionsBySourceRefPrefixParams) error
+	// Test-only helper (mirrors HardDeleteTelegramMessagesByChatIDRange).
+	// Cleanup needs hard-delete because the upsert does not clear deleted_at
+	// on conflict, so soft-deleted rows would resurrect as phantoms on the
+	// next run. Scoped by mac_host_id so tests can pass a fresh mac_host UUID
+	// per run and clean only their own rows.
+	HardDeleteMessagesMessagesByMacHost(ctx context.Context, macHostID pgtype.UUID) error
 	// GetTelegramMessageByReplyTo removed: identical to GetTelegramMessage.
 	// Use GetMessage repo method for reply resolution.
 	// Test-only: hard-deletes telegram_message rows whose telegram_chat_id
@@ -485,8 +524,18 @@ type Querier interface {
 	ListTelegramMessagesByChatUnprocessed(ctx context.Context, telegramChatID int64) ([]*TelegramMessage, error)
 	ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	ListUnmatchedIdentities(ctx context.Context, arg ListUnmatchedIdentitiesParams) ([]*ExternalIdentity, error)
+	// Distinct contact IDs with at least one eligible (unprocessed AND
+	// unclaimed-or-stale) row. Used by AggregateAll batch mode after backfill
+	// and by the periodic aggregation sweeper.
 	ListUnprocessedContactIDs(ctx context.Context) ([]pgtype.UUID, error)
+	ListUnprocessedMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*MessagesMessage, error)
+	ListUnprocessedMessagesByContactAndChat(ctx context.Context, arg ListUnprocessedMessagesByContactAndChatParams) ([]*MessagesMessage, error)
+	// Claim-aware filter — same predicate shape as telegram_message.
+	ListUnprocessedMessagesContactIDs(ctx context.Context) ([]pgtype.UUID, error)
 	ListUnprocessedTelegramMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*TelegramMessage, error)
+	// Claim-aware filter: rows not yet processed AND not currently claimed
+	// (or whose claim has aged past the 5-minute TTL). The TTL is inlined
+	// because spec §3 Race Mechanics fixes it at 5 minutes.
 	ListUnprocessedTelegramMessagesByContactAndChat(ctx context.Context, arg ListUnprocessedTelegramMessagesByContactAndChatParams) ([]*TelegramMessage, error)
 	// List upcoming calendar events for a specific contact
 	ListUpcomingEventsForContact(ctx context.Context, arg ListUpcomingEventsForContactParams) ([]*CalendarEvent, error)
@@ -494,8 +543,27 @@ type Querier interface {
 	ListUpcomingEventsWithContacts(ctx context.Context, arg ListUpcomingEventsWithContactsParams) ([]*CalendarEvent, error)
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
+	// Non-tx variant. Mirror of MarkTelegramMessagesProcessed — used by the
+	// engine's extend/promote/bridge paths only; no session-scope predicate
+	// needed because those paths do not publish events.
+	MarkMessagesMessagesProcessed(ctx context.Context, arg MarkMessagesMessagesProcessedParams) error
+	// Tx-bound, session-scoped variant. Mirror of
+	// MarkTelegramMessagesProcessedForSession — used by InteractionRecorder
+	// consumer when processing a create-path event. The
+	// claimed_session_ref + processed_at predicate defends against the
+	// stale boundary-shift race.
+	MarkMessagesMessagesProcessedForSession(ctx context.Context, arg MarkMessagesMessagesProcessedForSessionParams) error
 	MarkPairingTokenConsumed(ctx context.Context, arg MarkPairingTokenConsumedParams) (*MacHostPairingToken, error)
+	// Non-tx variant used by the engine's extend/promote/bridge paths only,
+	// which do not publish events and do not claim rows. Clearing the claim
+	// columns lets a future pass see the row as "done" rather than "claimed".
 	MarkTelegramMessagesProcessed(ctx context.Context, arg MarkTelegramMessagesProcessedParams) error
+	// Tx-bound, session-scoped variant. Used by InteractionRecorder when
+	// processing a create-path event. The WHERE clause prevents a stranded
+	// old-event consumer from overwriting rows already processed by a newer
+	// event (boundary-shift race): only rows still claimed for THIS session
+	// AND not yet processed are updated.
+	MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) error
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement
@@ -699,6 +767,10 @@ type Querier interface {
 	UpsertContactTask(ctx context.Context, arg UpsertContactTaskParams) (*ContactTask, error)
 	UpsertExternalContact(ctx context.Context, arg UpsertExternalContactParams) (*ExternalContact, error)
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
+	// Insert with no-op on guid conflict. peer_normalized and matched_contact_id
+	// come from the Pi ingest service identity-match path. mac_host_id is
+	// provenance — multi-host dedup is by guid, not by host.
+	UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesMessageParams) (*MessagesMessage, error)
 	// Insert or update an OAuth credential
 	UpsertOAuthCredential(ctx context.Context, arg UpsertOAuthCredentialParams) (*OauthCredential, error)
 	// Used by ChannelAccessHasher — only updates access_hash, preserves existing pts.

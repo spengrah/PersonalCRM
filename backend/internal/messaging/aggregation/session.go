@@ -51,6 +51,47 @@ func (s msgSession) description(adapter SourceAdapter) string {
 	return adapter.Description(s.direction, len(s.messages))
 }
 
+// isStaleRecovery reports whether ANY row in the session has a
+// ClaimedSessionRef equal to the engine's computed sourceRef. True
+// means the session matches a previously-claimed-but-unprocessed
+// session — the engine should look up the existing event and re-enqueue
+// rather than re-publishing (event-log dedup would suppress re-publish).
+func (s msgSession) isStaleRecovery(sourceRef string) bool {
+	for _, m := range s.messages {
+		if m.ClaimedSessionRef != nil && *m.ClaimedSessionRef == sourceRef {
+			return true
+		}
+	}
+	return false
+}
+
+// staleBoundaryShiftRefs returns the distinct non-empty
+// ClaimedSessionRef values present on session rows whose ref does NOT
+// match the supplied sourceRef. These represent the "boundary-shift"
+// recovery case: rows previously claimed for an older session, picked
+// up now under a new session boundary (e.g. an earlier inbound message
+// arrived out of order). The engine must clear those stale claims
+// before claiming the rows under the new sourceRef.
+func (s msgSession) staleBoundaryShiftRefs(sourceRef string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, m := range s.messages {
+		if m.ClaimedSessionRef == nil {
+			continue
+		}
+		v := *m.ClaimedSessionRef
+		if v == "" || v == sourceRef {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
 // groupIntoBursts groups consecutive same-direction messages within the
 // burst window.
 func (e *Engine) groupIntoBursts(msgs []Message, chatID string) []burst {

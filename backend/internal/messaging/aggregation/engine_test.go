@@ -15,6 +15,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,14 +73,33 @@ type fakeStore struct {
 	byContactAndChat      map[string][]Message // key: contactID.String()+"|"+chatID
 	byReplyTarget         map[string]Message   // key: chatID+"|"+replyTargetID
 	markProcessedCalls    []markProcessedCall
+	markProcessedTxCalls  []markProcessedTxCall
+	clearStaleClaimCalls  []clearStaleClaimCall
 
 	// listUnprocessedByContactErr controls injection points for negative tests.
 	listUnprocessedByContactErr error
+
+	// claimRowsTxErr / claimRowsTxFn allow tests to inject claim failure
+	// or partial-claim semantics. When both are nil, the default is
+	// full-claim success.
+	claimRowsTxErr error
+	claimRowsTxFn  func(requested []uuid.UUID) ([]uuid.UUID, error)
 }
 
 type markProcessedCall struct {
 	messageIDs    []uuid.UUID
 	interactionID uuid.UUID
+}
+
+type markProcessedTxCall struct {
+	messageIDs    []uuid.UUID
+	interactionID uuid.UUID
+	sessionRef    string
+}
+
+type clearStaleClaimCall struct {
+	messageIDs         []uuid.UUID
+	expectedSessionRef string
 }
 
 func newFakeStore() *fakeStore {
@@ -114,6 +134,39 @@ func (s *fakeStore) MarkProcessed(_ context.Context, messageIDs []uuid.UUID, int
 	s.markProcessedCalls = append(s.markProcessedCalls, markProcessedCall{
 		messageIDs:    append([]uuid.UUID(nil), messageIDs...),
 		interactionID: interactionID,
+	})
+	return nil
+}
+
+// ClaimRowsTx default: full claim success (returns the requested IDs).
+// Tests can override by replacing the field below or wrapping the store.
+func (s *fakeStore) ClaimRowsTx(_ context.Context, _ pgx.Tx, messageIDs []uuid.UUID, _ string) ([]uuid.UUID, error) {
+	if s.claimRowsTxErr != nil {
+		return nil, s.claimRowsTxErr
+	}
+	if s.claimRowsTxFn != nil {
+		return s.claimRowsTxFn(messageIDs)
+	}
+	return append([]uuid.UUID(nil), messageIDs...), nil
+}
+
+// MarkProcessedTx default: capture and return nil. The session-ref
+// parameter is captured so tests can assert the recorder threaded
+// env.SourceID through correctly.
+func (s *fakeStore) MarkProcessedTx(_ context.Context, _ pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) error {
+	s.markProcessedTxCalls = append(s.markProcessedTxCalls, markProcessedTxCall{
+		messageIDs:    append([]uuid.UUID(nil), messageIDs...),
+		interactionID: interactionID,
+		sessionRef:    sessionRef,
+	})
+	return nil
+}
+
+// ClearStaleClaimTx default: capture and return nil.
+func (s *fakeStore) ClearStaleClaimTx(_ context.Context, _ pgx.Tx, messageIDs []uuid.UUID, expectedSessionRef string) error {
+	s.clearStaleClaimCalls = append(s.clearStaleClaimCalls, clearStaleClaimCall{
+		messageIDs:         append([]uuid.UUID(nil), messageIDs...),
+		expectedSessionRef: expectedSessionRef,
 	})
 	return nil
 }
@@ -221,11 +274,26 @@ func (e *fakeExtender) ExtendInteraction(_ context.Context, interactionID, conta
 }
 
 type fakePublisher struct {
-	mu        sync.Mutex
-	envelopes []events.Envelope
+	mu           sync.Mutex
+	envelopes    []events.Envelope
+	publishErr   error
+	publishTxErr error
 }
 
 func (p *fakePublisher) Publish(_ context.Context, env *events.Envelope) error {
+	if p.publishErr != nil {
+		return p.publishErr
+	}
+	p.mu.Lock()
+	p.envelopes = append(p.envelopes, *env)
+	p.mu.Unlock()
+	return nil
+}
+
+func (p *fakePublisher) PublishTx(_ context.Context, _ pgx.Tx, env *events.Envelope) error {
+	if p.publishTxErr != nil {
+		return p.publishTxErr
+	}
 	p.mu.Lock()
 	p.envelopes = append(p.envelopes, *env)
 	p.mu.Unlock()
@@ -465,7 +533,7 @@ func TestEngine_FakeSource_AggregateForContactBatch_CreatesEvents(t *testing.T) 
 	store.byContact[contactID] = msgs
 
 	publisher := &fakePublisher{}
-	engine := NewEngine(adapter, store, &fakeFinder{}, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48)
+	engine := NewEngine(adapter, store, &fakeFinder{}, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48, nil, nil, nil)
 
 	require.NoError(t, engine.AggregateForContactBatch(ctx, contactID))
 
@@ -504,7 +572,7 @@ func TestEngine_FakeSource_AggregateForContact_TimeBridgePromotesToMutual(t *tes
 	extender := &fakeExtender{}
 	publisher := &fakePublisher{}
 
-	engine := NewEngine(adapter, store, finder, promoter, extender, publisher, 2, 48)
+	engine := NewEngine(adapter, store, finder, promoter, extender, publisher, 2, 48, nil, nil, nil)
 	require.NoError(t, engine.AggregateForContact(ctx, contactID, "chatA"))
 
 	require.Len(t, promoter.calls, 1)
@@ -540,7 +608,7 @@ func TestEngine_FakeSource_AggregateForContact_ExtendPathExtendsSameDirection(t 
 	extender := &fakeExtender{}
 	publisher := &fakePublisher{}
 
-	engine := NewEngine(adapter, store, finder, promoter, extender, publisher, 2, 48)
+	engine := NewEngine(adapter, store, finder, promoter, extender, publisher, 2, 48, nil, nil, nil)
 	require.NoError(t, engine.AggregateForContact(ctx, contactID, "chatA"))
 
 	require.Len(t, extender.calls, 1)
@@ -603,7 +671,7 @@ func TestEngine_FakeSource_ExplicitReplyBridge(t *testing.T) {
 	promoter := &fakePromoter{}
 	publisher := &fakePublisher{}
 
-	engine := NewEngine(adapter, store, finder, promoter, &fakeExtender{}, publisher, 2, 48)
+	engine := NewEngine(adapter, store, finder, promoter, &fakeExtender{}, publisher, 2, 48, nil, nil, nil)
 	require.NoError(t, engine.AggregateForContact(ctx, contactID, "chatA"))
 
 	require.Len(t, promoter.calls, 1)
@@ -631,7 +699,7 @@ func TestEngine_FakeSource_NoMatch_PublishesCreateEvent(t *testing.T) {
 	}
 	publisher := &fakePublisher{}
 
-	engine := NewEngine(adapter, store, finder, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48)
+	engine := NewEngine(adapter, store, finder, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48, nil, nil, nil)
 	require.NoError(t, engine.AggregateForContact(ctx, contactID, "chatA"))
 
 	require.Len(t, publisher.envelopes, 1)
@@ -659,7 +727,7 @@ func TestEngine_FakeSource_NilPublisher_Errors(t *testing.T) {
 		},
 	}
 
-	engine := NewEngine(fakeAdapter{name: "fakesrc"}, newFakeStore(), &fakeFinder{}, &fakePromoter{}, &fakeExtender{}, nil, 2, 48)
+	engine := NewEngine(fakeAdapter{name: "fakesrc"}, newFakeStore(), &fakeFinder{}, &fakePromoter{}, &fakeExtender{}, nil, 2, 48, nil, nil, nil)
 	err := engine.createInteractionForSession(ctx, contactID, sess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publisher")
@@ -684,7 +752,7 @@ func TestEngine_TelegramShape_SourceRefMatchesLegacyFormat(t *testing.T) {
 	store.byContact[contactID] = msgs
 
 	publisher := &fakePublisher{}
-	engine := NewEngine(adapter, store, &fakeFinder{}, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48)
+	engine := NewEngine(adapter, store, &fakeFinder{}, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48, nil, nil, nil)
 
 	require.NoError(t, engine.AggregateForContactBatch(ctx, contactID))
 	require.Len(t, publisher.envelopes, 1)
@@ -713,7 +781,7 @@ func TestEngine_FakeSource_FinderReceivesAdapterPrefix(t *testing.T) {
 		findRecentBySourceAndDirErr: db.ErrNotFound,
 	}
 
-	engine := NewEngine(adapter, store, finder, &fakePromoter{}, &fakeExtender{}, &fakePublisher{}, 2, 48)
+	engine := NewEngine(adapter, store, finder, &fakePromoter{}, &fakeExtender{}, &fakePublisher{}, 2, 48, nil, nil, nil)
 	require.NoError(t, engine.AggregateForContact(ctx, contactID, "chatA"))
 
 	finder.mu.Lock()
@@ -752,7 +820,7 @@ func TestEngine_FakeSource_AggregateAll_SwallowsPerContactErrors(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	engine := NewEngine(adapter, erroringStore, &fakeFinder{}, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48)
+	engine := NewEngine(adapter, erroringStore, &fakeFinder{}, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48, nil, nil, nil)
 	require.NoError(t, engine.AggregateAll(ctx))
 	// goodContactID's batch produced one published event despite the
 	// failingContactID error.
@@ -781,4 +849,285 @@ func (s *perContactErroringStore) GetMessageByReplyTarget(ctx context.Context, c
 }
 func (s *perContactErroringStore) MarkProcessed(ctx context.Context, messageIDs []uuid.UUID, interactionID uuid.UUID) error {
 	return s.inner.MarkProcessed(ctx, messageIDs, interactionID)
+}
+func (s *perContactErroringStore) ClaimRowsTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, sessionRef string) ([]uuid.UUID, error) {
+	return s.inner.ClaimRowsTx(ctx, tx, messageIDs, sessionRef)
+}
+func (s *perContactErroringStore) MarkProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) error {
+	return s.inner.MarkProcessedTx(ctx, tx, messageIDs, interactionID, sessionRef)
+}
+func (s *perContactErroringStore) ClearStaleClaimTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, expectedSessionRef string) error {
+	return s.inner.ClearStaleClaimTx(ctx, tx, messageIDs, expectedSessionRef)
+}
+
+// --- PR3 claim-mechanism tests -----------------------------------------
+
+// fakeTx records commit/rollback so tests can assert tx lifecycle.
+// Embeds pgx.Tx for interface compliance; the methods we don't override
+// will nil-deref if called — none of our test paths touch them.
+type fakeTx struct {
+	pgx.Tx
+	commitErr error
+	commits   int
+	rollbacks int
+}
+
+func (t *fakeTx) Commit(_ context.Context) error {
+	t.commits++
+	return t.commitErr
+}
+
+func (t *fakeTx) Rollback(_ context.Context) error {
+	t.rollbacks++
+	return nil
+}
+
+// fakeTxBeginner returns a fresh fakeTx per BeginTx call.
+type fakeTxBeginner struct {
+	last *fakeTx
+	err  error
+}
+
+func (b *fakeTxBeginner) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+	tx := &fakeTx{}
+	b.last = tx
+	return tx, nil
+}
+
+// fakeEventLookup records calls and dispenses pre-seeded results.
+type fakeEventLookup struct {
+	calls     int
+	found     bool
+	eventID   uuid.UUID
+	lookupErr error
+}
+
+func (f *fakeEventLookup) FindEventBySourceRef(_ context.Context, _, _ string) (uuid.UUID, bool, error) {
+	f.calls++
+	if f.lookupErr != nil {
+		return uuid.Nil, false, f.lookupErr
+	}
+	return f.eventID, f.found, nil
+}
+
+// fakeConsumerEnqueuer records EnqueueInteractionRecorderJob calls.
+type fakeConsumerEnqueuer struct {
+	calls      int
+	lastID     uuid.UUID
+	enqueueErr error
+}
+
+func (f *fakeConsumerEnqueuer) EnqueueInteractionRecorderJob(_ context.Context, eventID uuid.UUID) error {
+	f.calls++
+	f.lastID = eventID
+	if f.enqueueErr != nil {
+		return f.enqueueErr
+	}
+	return nil
+}
+
+// TestEngine_ClaimPath_CommitsAtomically asserts the steady-state
+// gate-1 path: with TxBeginner wired and a fresh session, the engine
+// claims rows, publishes via PublishTx, and commits the tx.
+func TestEngine_ClaimPath_CommitsAtomically(t *testing.T) {
+	ctx := context.Background()
+	base := accelerated.GetCurrentTime()
+	contactID := uuid.New()
+
+	adapter := fakeAdapter{name: "fakesrc"}
+	store := newFakeStore()
+	msgs := []Message{
+		{ID: uuid.New(), ChatID: "chatA", ExternalID: "m1", IsOutgoing: false, SentAt: base},
+	}
+	store.byContactAndChat[contactID.String()+"|chatA"] = msgs
+
+	publisher := &fakePublisher{}
+	beginner := &fakeTxBeginner{}
+	finder := &fakeFinder{
+		findRecentOutboundErr:       db.ErrNotFound,
+		findRecentBySourceAndDirErr: db.ErrNotFound,
+	}
+
+	engine := NewEngine(adapter, store, finder, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48, beginner, nil, nil)
+	require.NoError(t, engine.AggregateForContact(ctx, contactID, "chatA"))
+
+	require.Len(t, publisher.envelopes, 1, "PublishTx was invoked")
+	require.NotNil(t, beginner.last)
+	assert.Equal(t, 1, beginner.last.commits, "tx committed exactly once")
+}
+
+// TestEngine_ClaimPath_PartialClaimRollsBack covers the gate-1 race
+// guard: when ClaimRowsTx returns a strict subset of the requested
+// IDs, the engine rolls back and yields without publishing.
+func TestEngine_ClaimPath_PartialClaimRollsBack(t *testing.T) {
+	ctx := context.Background()
+	base := accelerated.GetCurrentTime()
+	contactID := uuid.New()
+
+	adapter := fakeAdapter{name: "fakesrc"}
+	store := newFakeStore()
+	store.byContactAndChat[contactID.String()+"|chatA"] = []Message{
+		{ID: uuid.New(), ChatID: "chatA", ExternalID: "m1", IsOutgoing: false, SentAt: base},
+		{ID: uuid.New(), ChatID: "chatA", ExternalID: "m2", IsOutgoing: false, SentAt: base.Add(time.Minute)},
+	}
+	// Inject partial-claim: claim returns only the first requested ID.
+	store.claimRowsTxFn = func(req []uuid.UUID) ([]uuid.UUID, error) {
+		if len(req) == 0 {
+			return nil, nil
+		}
+		return []uuid.UUID{req[0]}, nil
+	}
+
+	publisher := &fakePublisher{}
+	beginner := &fakeTxBeginner{}
+	finder := &fakeFinder{
+		findRecentOutboundErr:       db.ErrNotFound,
+		findRecentBySourceAndDirErr: db.ErrNotFound,
+	}
+
+	engine := NewEngine(adapter, store, finder, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48, beginner, nil, nil)
+	require.NoError(t, engine.AggregateForContact(ctx, contactID, "chatA"))
+
+	assert.Empty(t, publisher.envelopes, "PublishTx skipped on partial claim")
+	require.NotNil(t, beginner.last)
+	assert.Equal(t, 0, beginner.last.commits, "tx never committed")
+	assert.GreaterOrEqual(t, beginner.last.rollbacks, 1, "tx rolled back")
+}
+
+// TestEngine_StaleRecovery_LooksUpEventAndEnqueues exercises gate 2:
+// when at least one row's ClaimedSessionRef matches the computed
+// sourceRef, the engine consults EventLookup and (on hit) enqueues an
+// InteractionRecorder job via ConsumerJobEnqueuer — without publishing
+// a duplicate event.
+func TestEngine_StaleRecovery_LooksUpEventAndEnqueues(t *testing.T) {
+	ctx := context.Background()
+	base := accelerated.GetCurrentTime()
+	contactID := uuid.New()
+	existingEventID := uuid.New()
+
+	adapter := fakeAdapter{name: "fakesrc"}
+	store := newFakeStore()
+	// SourceRef the adapter will compute for this session: "fakesrc:chatA:m1".
+	staleRef := "fakesrc:chatA:m1"
+	staleTime := base.Add(-10 * time.Minute)
+	store.byContactAndChat[contactID.String()+"|chatA"] = []Message{
+		{
+			ID: uuid.New(), ChatID: "chatA", ExternalID: "m1", IsOutgoing: false, SentAt: base,
+			ClaimedAt: &staleTime, ClaimedSessionRef: &staleRef,
+		},
+	}
+
+	publisher := &fakePublisher{}
+	beginner := &fakeTxBeginner{}
+	lookup := &fakeEventLookup{found: true, eventID: existingEventID}
+	enqueuer := &fakeConsumerEnqueuer{}
+	finder := &fakeFinder{
+		findRecentOutboundErr:       db.ErrNotFound,
+		findRecentBySourceAndDirErr: db.ErrNotFound,
+	}
+
+	engine := NewEngine(adapter, store, finder, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48, beginner, lookup, enqueuer)
+	require.NoError(t, engine.AggregateForContact(ctx, contactID, "chatA"))
+
+	assert.Empty(t, publisher.envelopes, "recovery path does NOT re-publish")
+	assert.Equal(t, 1, lookup.calls, "engine consulted EventLookup")
+	assert.Equal(t, 1, enqueuer.calls, "engine enqueued consumer job")
+	assert.Equal(t, existingEventID, enqueuer.lastID, "enqueued against the existing event")
+}
+
+// TestEngine_StaleRecovery_NoEventClearsClaim exercises the defensive
+// branch: claim_session_ref is non-NULL but FindEventBySource returns
+// no row. The engine should clear the stale claim and yield (next pass
+// will treat rows as unclaimed).
+func TestEngine_StaleRecovery_NoEventClearsClaim(t *testing.T) {
+	ctx := context.Background()
+	base := accelerated.GetCurrentTime()
+	contactID := uuid.New()
+
+	adapter := fakeAdapter{name: "fakesrc"}
+	store := newFakeStore()
+	staleRef := "fakesrc:chatA:m1"
+	staleTime := base.Add(-10 * time.Minute)
+	store.byContactAndChat[contactID.String()+"|chatA"] = []Message{
+		{
+			ID: uuid.New(), ChatID: "chatA", ExternalID: "m1", IsOutgoing: false, SentAt: base,
+			ClaimedAt: &staleTime, ClaimedSessionRef: &staleRef,
+		},
+	}
+
+	publisher := &fakePublisher{}
+	beginner := &fakeTxBeginner{}
+	lookup := &fakeEventLookup{found: false} // defensive case
+	enqueuer := &fakeConsumerEnqueuer{}
+	finder := &fakeFinder{
+		findRecentOutboundErr:       db.ErrNotFound,
+		findRecentBySourceAndDirErr: db.ErrNotFound,
+	}
+
+	engine := NewEngine(adapter, store, finder, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48, beginner, lookup, enqueuer)
+	require.NoError(t, engine.AggregateForContact(ctx, contactID, "chatA"))
+
+	assert.Empty(t, publisher.envelopes)
+	assert.Equal(t, 0, enqueuer.calls, "no enqueue when event not found")
+	require.Len(t, store.clearStaleClaimCalls, 1, "engine cleared the stale claim")
+	assert.Equal(t, staleRef, store.clearStaleClaimCalls[0].expectedSessionRef)
+}
+
+// TestEngine_NoTxBeginnerFallsBackToNonTxPublish covers the
+// compatibility path: passing nil TxBeginner keeps the pre-PR3
+// non-tx Publish behavior so existing tests (and any future
+// no-DB modes) continue to work.
+func TestEngine_NoTxBeginnerFallsBackToNonTxPublish(t *testing.T) {
+	ctx := context.Background()
+	base := accelerated.GetCurrentTime()
+	contactID := uuid.New()
+
+	adapter := fakeAdapter{name: "fakesrc"}
+	store := newFakeStore()
+	store.byContactAndChat[contactID.String()+"|chatA"] = []Message{
+		{ID: uuid.New(), ChatID: "chatA", ExternalID: "m1", IsOutgoing: false, SentAt: base},
+	}
+	publisher := &fakePublisher{}
+	finder := &fakeFinder{
+		findRecentOutboundErr:       db.ErrNotFound,
+		findRecentBySourceAndDirErr: db.ErrNotFound,
+	}
+
+	engine := NewEngine(adapter, store, finder, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48, nil, nil, nil)
+	require.NoError(t, engine.AggregateForContact(ctx, contactID, "chatA"))
+	require.Len(t, publisher.envelopes, 1, "non-tx Publish path produced one envelope")
+}
+
+// TestSameIDSet covers the partial-claim helper.
+func TestSameIDSet(t *testing.T) {
+	a := uuid.New()
+	b := uuid.New()
+	c := uuid.New()
+
+	assert.True(t, sameIDSet([]uuid.UUID{a, b}, []uuid.UUID{b, a}), "order-independent")
+	assert.True(t, sameIDSet(nil, nil), "two empty sets are equal")
+	assert.True(t, sameIDSet([]uuid.UUID{}, nil), "empty slice == nil slice")
+	assert.False(t, sameIDSet([]uuid.UUID{a, b}, []uuid.UUID{a}), "different lengths")
+	assert.False(t, sameIDSet([]uuid.UUID{a, b}, []uuid.UUID{a, c}), "different members")
+}
+
+// TestSessionIsStaleRecovery locks the per-row recovery-detection
+// invariant.
+func TestSessionIsStaleRecovery(t *testing.T) {
+	ref := "fakesrc:chatA:m1"
+	other := "other:ref"
+	sess := msgSession{
+		messages: []Message{
+			{ClaimedSessionRef: &other},
+			{ClaimedSessionRef: &ref},
+		},
+	}
+	assert.True(t, sess.isStaleRecovery(ref))
+	assert.False(t, sess.isStaleRecovery("missing"))
+
+	sess2 := msgSession{messages: []Message{{}, {}}} // no claims
+	assert.False(t, sess2.isStaleRecovery(ref))
 }

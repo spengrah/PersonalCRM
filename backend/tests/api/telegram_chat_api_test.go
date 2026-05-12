@@ -96,6 +96,8 @@ func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramCha
 		contactService,
 		contactService,
 		nil,
+		nil, // pool: non-tx publish fallback (test mode)
+		nil, // enqueuer: stale-claim recovery disabled
 	)
 
 	handler := handlers.NewTelegramHandler(manager)

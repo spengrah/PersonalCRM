@@ -80,8 +80,11 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 	// wrapper / UpdateContact cadence-edit) reach the sole writer in
 	// these tests.
 	contactService.SetCadenceUpdater(cadenceUpdater)
-	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater, nil)
-	shim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder)
+	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
+		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
+	})
+	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry, bus, cadenceUpdater, nil)
+	shim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 
 	manualHandler := service.NewManualInteractionHandler(database.Pool, bus, recorder)
 

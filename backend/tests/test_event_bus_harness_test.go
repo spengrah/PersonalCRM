@@ -97,9 +97,12 @@ func setupTestEventBus(
 	// wrapper / UpdateContact cadence-edit) work in these async
 	// integration tests.
 	contactService.SetCadenceUpdater(cadenceUpdater)
-	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater, nil)
+	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
+		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
+	})
+	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry, bus, cadenceUpdater, nil)
 	// Fill the shim's real worker now that bus + recorder exist.
-	shim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder)
+	shim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 
 	// IMPORTANT: pass the OUTER ctx (not a timeout-derived one) to Start.
 	// River derives its fetch/work context from whatever Start() receives;
@@ -174,8 +177,11 @@ func setupTestEventBusWithRematch(
 		false,
 	)
 	contactService.SetCadenceUpdater(cadenceUpdater)
-	recorder := consumer.NewInteractionRecorder(contactService, telegramMessageRepo, bus, cadenceUpdater, nil)
-	interactionShim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder)
+	stagingRegistry2 := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
+		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
+	})
+	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry2, bus, cadenceUpdater, nil)
+	interactionShim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 
 	rematchDispatcher := consumer.NewRematchDispatcher(rematchSvc)
 	rematchShim.real = consumer.NewRematchDispatcherWorker(bus, database.Pool, rematchDispatcher)
