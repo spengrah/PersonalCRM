@@ -130,6 +130,53 @@ WHERE id = $1;
 DELETE FROM external_sync_state
 WHERE account_id IS NOT NULL AND account_id = $1;
 
+-- Mac-daemon push-cursor queries (see backend/internal/repository/mac_host.go).
+-- Cursors for push providers live in external_sync_state keyed by
+-- (source, account_id) where account_id = mac_host.id. cursor_epoch is
+-- read from mac_host (see GetMacHostCursorEpoch) — the row lock there
+-- serializes concurrent commits for the same host.
+
+-- name: GetMacHostSyncState :one
+-- Returns the push-cursor row for (source, host_id). The handler treats
+-- db.ErrNotFound as "no cursor committed yet" and surfaces an empty
+-- cursor + the host's current cursor_epoch.
+SELECT * FROM external_sync_state
+WHERE source = @source
+  AND COALESCE(account_id, '') = @account_id::text
+  AND strategy = 'push';
+
+-- name: InsertMacHostSyncCursor :one
+-- First-commit insert path. ON CONFLICT DO NOTHING handles the
+-- concurrent-first-write race: the loser gets zero rows, re-reads the
+-- now-committed state, and surfaces ErrCursorBaseMismatch with the
+-- winner's cursor.
+INSERT INTO external_sync_state
+    (source, account_id, enabled, status, strategy, sync_cursor, next_sync_at)
+VALUES (@source, @account_id, TRUE, 'idle', 'push', @new_cursor, NULL)
+ON CONFLICT (source, COALESCE(account_id, '')) DO NOTHING
+RETURNING id, sync_cursor;
+
+-- name: UpdateMacHostSyncCursor :one
+-- CAS-style update: only updates when sync_cursor matches base_cursor.
+-- Zero rows returned means another writer slipped in between the
+-- planning read and this update; the caller re-reads and surfaces 409.
+UPDATE external_sync_state
+SET sync_cursor = @new_cursor,
+    updated_at  = NOW()
+WHERE id = @id
+  AND COALESCE(sync_cursor, '') = @base_cursor::text
+RETURNING id, sync_cursor;
+
+-- name: DeleteMacHostSyncStates :execrows
+-- Cascade-on-revoke: when a host is uninstalled, drop its push-cursor
+-- rows. Filters by strategy='push' so OAuth-driven rows that happen to
+-- share an account_id string can never be deleted by this path (defence
+-- in depth; account_id collisions between Mac UUIDs and OAuth account
+-- emails are not possible by format but the explicit strategy filter
+-- locks the contract).
+DELETE FROM external_sync_state
+WHERE strategy = 'push' AND COALESCE(account_id, '') = @account_id::text;
+
 -- External Sync Log Queries
 
 -- name: CreateSyncLog :one

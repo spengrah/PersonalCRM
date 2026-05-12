@@ -95,10 +95,22 @@ func (s *SyncService) ListDueAccounts(ctx context.Context) ([]repository.DueAcco
 	}
 	accounts := make([]repository.DueAccount, 0, len(all))
 	for _, acct := range all {
-		if _, ok := s.registry.Get(acct.Source); !ok {
+		provider, ok := s.registry.Get(acct.Source)
+		if !ok {
 			logger.Debug().
 				Str("source", acct.Source).
 				Msg("scheduler tick: no provider registered; skipping due account")
+			continue
+		}
+		// Push-strategy providers (Mac daemon's Messages, iCloud Contacts;
+		// readers ship in later PRs) commit cursors via daemon-side
+		// endpoints rather than the scheduler tick. Skip them so a stale
+		// next_sync_at doesn't enqueue a no-op job whose worker would
+		// have nothing to do.
+		if provider.Config().Strategy == repository.SyncStrategyPush {
+			logger.Debug().
+				Str("source", acct.Source).
+				Msg("scheduler tick: push-strategy provider; skipping due account")
 			continue
 		}
 		accounts = append(accounts, acct)

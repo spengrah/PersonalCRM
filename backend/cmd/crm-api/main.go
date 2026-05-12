@@ -652,6 +652,39 @@ func run() int {
 	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
 	rematchHandler := handlers.NewRematchHandler(rematchService, contactService)
 
+	// Mac-daemon host management. Wires the pairing flow, heartbeat,
+	// cursor protocol, and admin revoke. The pairing endpoint is
+	// unauthenticated (token-gated) so it lives on the bare router; the
+	// daemon endpoints live behind MacHostAuthMiddleware (sibling
+	// /api/v1 group); the admin endpoints live behind the existing
+	// global API-key middleware.
+	macHostRepo := repository.NewMacHostRepository(database.Queries)
+	pairingTokenRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
+	// Mac cursor commit needs a tx — use the pool-wired SyncRepository.
+	macSyncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+	macHostService := service.NewMacHostService(
+		macHostRepo,
+		pairingTokenRepo,
+		macSyncRepo,
+		database.Pool,
+		0, // default bcrypt cost
+	)
+	pairingIPLimiter := auth.NewPairingIPRateLimiter()
+	macHostHandler := handlers.NewMacHostHandler(macHostService, pairingIPLimiter)
+
+	// Register the pairing-token janitor periodic job (5 min). Worker
+	// registered unconditionally; the periodic-job inserter triggers it
+	// on the same River client. See
+	// backend/internal/scheduler/pairing_token_janitor_worker.go.
+	river.AddWorker(riverWorkers, scheduler.NewPairingTokenJanitorWorker(pairingTokenRepo))
+	riverClient.PeriodicJobs().Add(river.NewPeriodicJob(
+		river.PeriodicInterval(5*time.Minute),
+		func() (river.JobArgs, *river.InsertOpts) {
+			return scheduler.PairingTokenJanitorArgs{}, nil
+		},
+		&river.PeriodicJobOpts{RunOnStart: true},
+	))
+
 	// Build the River worker set, periodic-job list, and client. The
 	// scheduler-tick + sync-provider-account workers are only registered
 	// when external sync is enabled and we have a real syncService —
@@ -717,6 +750,26 @@ func run() int {
 		}
 	}
 
+	// Mac-daemon pairing endpoint — un-authenticated (token-gated +
+	// IP rate-limited). Registered directly on the router so it does NOT
+	// inherit the global API-key middleware. See
+	// backend/internal/api/handlers/mac_host.go for the rate-limit
+	// details.
+	router.POST("/api/v1/host", macHostHandler.Pair)
+
+	// Mac-daemon authenticated routes — host-bearer-key middleware,
+	// NOT the global API key. Sibling group with the same prefix as
+	// v1 below; gin's radix-tree router distinguishes by full path so
+	// the two groups coexist cleanly.
+	macDaemon := router.Group("/api/v1")
+	macDaemon.Use(auth.MacHostAuthMiddleware(macHostRepo, auth.DefaultPasswordComparator, auth.DefaultMacHostAuthLimiterConfig()))
+	{
+		macDaemon.POST("/host/:id/heartbeat", macHostHandler.Heartbeat)
+		macDaemon.GET("/host/:id/sync/:source/cursor", macHostHandler.GetCursor)
+		macDaemon.POST("/host/:id/sync/:source/cursor", macHostHandler.CommitCursor)
+		macDaemon.GET("/host/:id/sync/:source/known-ids", macHostHandler.KnownIDs)
+	}
+
 	// API routes
 	v1 := router.Group("/api/v1")
 	v1.Use(auth.APIKeyMiddleware(cfg))
@@ -758,6 +811,16 @@ func run() int {
 		{
 			system.GET("/time", systemHandler.GetSystemTime)
 			system.POST("/time/acceleration", systemHandler.SetTimeAcceleration)
+		}
+
+		// Mac-daemon admin routes (under global API key middleware).
+		// Pairing-token mint + revoke + list/get for the Mac settings UI.
+		macAdmin := v1.Group("/host")
+		{
+			macAdmin.GET("", macHostHandler.ListHosts)
+			macAdmin.GET("/:id", macHostHandler.GetHostAdmin)
+			macAdmin.DELETE("/:id", macHostHandler.DeleteHost)
+			macAdmin.POST("/pairing-token", macHostHandler.CreatePairingToken)
 		}
 
 		// OAuth routes (feature-flagged with external sync)

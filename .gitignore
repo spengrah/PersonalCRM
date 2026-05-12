@@ -322,6 +322,15 @@ site/
 *password*
 *token*
 
+# Source files whose names include "token" because of legitimate domain
+# concepts (e.g., pairing tokens, OAuth tokens). The wildcard above is a
+# defense-in-depth heuristic, not a hard rule — explicitly allow tracked
+# source files in repository/handler/worker layers.
+!backend/**/*token*.go
+!backend/**/*token*.sql
+!frontend/**/*token*.ts
+!frontend/**/*token*.tsx
+
 # Ignore local configuration overrides
 *.local.*
 local.*

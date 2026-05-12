@@ -33,6 +33,33 @@ func (q *Queries) CountExternalContactsByDisplayNamePrefix(ctx context.Context, 
 	return count, err
 }
 
+const DeleteAllMacHosts = `-- name: DeleteAllMacHosts :execrows
+DELETE FROM mac_host
+`
+
+// Test teardown — hard delete so the singleton index is empty for the
+// next test. mac_host has no deleted_at column, so soft-delete is not
+// an option.
+func (q *Queries) DeleteAllMacHosts(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteAllMacHosts)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const DeleteAllPairingTokens = `-- name: DeleteAllPairingTokens :execrows
+DELETE FROM mac_host_pairing_token
+`
+
+func (q *Queries) DeleteAllPairingTokens(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteAllPairingTokens)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const DeleteCalendarEventsByGcalEventIdPrefix = `-- name: DeleteCalendarEventsByGcalEventIdPrefix :execrows
 DELETE FROM calendar_event WHERE gcal_event_id LIKE $1 || '%'
 `
@@ -130,4 +157,124 @@ func (q *Queries) DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUs
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const SeedExternalSyncState = `-- name: SeedExternalSyncState :one
+INSERT INTO external_sync_state
+    (source, account_id, enabled, status, strategy, next_sync_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, source, account_id, enabled, status, strategy, last_sync_at, last_successful_sync_at, next_sync_at, sync_cursor, error_message, error_count, metadata, created_at, updated_at
+`
+
+type SeedExternalSyncStateParams struct {
+	Source     string             `json:"source"`
+	AccountID  pgtype.Text        `json:"account_id"`
+	Enabled    bool               `json:"enabled"`
+	Status     string             `json:"status"`
+	Strategy   string             `json:"strategy"`
+	NextSyncAt pgtype.Timestamptz `json:"next_sync_at"`
+}
+
+// Seeds an external_sync_state row at caller-supplied next_sync_at.
+// Used by scheduler-exclusion tests to plant a push-strategy row whose
+// next_sync_at is due, then assert ListDueAccounts skips it.
+func (q *Queries) SeedExternalSyncState(ctx context.Context, arg SeedExternalSyncStateParams) (*ExternalSyncState, error) {
+	row := q.db.QueryRow(ctx, SeedExternalSyncState,
+		arg.Source,
+		arg.AccountID,
+		arg.Enabled,
+		arg.Status,
+		arg.Strategy,
+		arg.NextSyncAt,
+	)
+	var i ExternalSyncState
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.AccountID,
+		&i.Enabled,
+		&i.Status,
+		&i.Strategy,
+		&i.LastSyncAt,
+		&i.LastSuccessfulSyncAt,
+		&i.NextSyncAt,
+		&i.SyncCursor,
+		&i.ErrorMessage,
+		&i.ErrorCount,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}
+
+const SeedMacHost = `-- name: SeedMacHost :one
+
+INSERT INTO mac_host (hostname, daemon_version, protocol_version, api_key_hash)
+VALUES ($1, $2, $3, $4)
+RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at
+`
+
+type SeedMacHostParams struct {
+	Hostname        string `json:"hostname"`
+	DaemonVersion   string `json:"daemon_version"`
+	ProtocolVersion int32  `json:"protocol_version"`
+	ApiKeyHash      string `json:"api_key_hash"`
+}
+
+// Mac host test helpers — per .ai/rules/core.md rule 2 (no raw SQL in
+// Go test fixtures), test setup uses these instead of pool.Exec.
+// Inserts a host with caller-supplied hostname + bcrypted api_key_hash.
+// Used by integration tests that need to bypass the pairing flow.
+func (q *Queries) SeedMacHost(ctx context.Context, arg SeedMacHostParams) (*MacHost, error) {
+	row := q.db.QueryRow(ctx, SeedMacHost,
+		arg.Hostname,
+		arg.DaemonVersion,
+		arg.ProtocolVersion,
+		arg.ApiKeyHash,
+	)
+	var i MacHost
+	err := row.Scan(
+		&i.ID,
+		&i.Hostname,
+		&i.DaemonVersion,
+		&i.ProtocolVersion,
+		&i.LastHeartbeatAt,
+		&i.Permissions,
+		&i.SourceHealth,
+		&i.CursorEpoch,
+		&i.ApiKeyHash,
+		&i.ApiKeyRevokedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}
+
+const SeedPairingToken = `-- name: SeedPairingToken :one
+INSERT INTO mac_host_pairing_token (token_hash, expires_at)
+VALUES ($1, $2)
+RETURNING id, token_hash, expires_at, consumed_at, consumed_host_id, created_at
+`
+
+type SeedPairingTokenParams struct {
+	TokenHash string             `json:"token_hash"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+}
+
+// Inserts a pairing token with caller-supplied hash + expiry. Tests use
+// this to seed expired tokens (cannot mint via the real Create path
+// because the service enforces a forward-only TTL).
+func (q *Queries) SeedPairingToken(ctx context.Context, arg SeedPairingTokenParams) (*MacHostPairingToken, error) {
+	row := q.db.QueryRow(ctx, SeedPairingToken, arg.TokenHash, arg.ExpiresAt)
+	var i MacHostPairingToken
+	err := row.Scan(
+		&i.ID,
+		&i.TokenHash,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.ConsumedHostID,
+		&i.CreatedAt,
+	)
+	return &i, err
 }
