@@ -705,7 +705,7 @@ SET processed_at = NOW(),
     claimed_at = NULL,
     claimed_session_ref = NULL
 WHERE id = ANY($2::uuid[])
-  AND claimed_session_ref = $3
+  AND (claimed_session_ref = $3 OR claimed_session_ref IS NULL)
   AND processed_at IS NULL
   AND deleted_at IS NULL
 `
@@ -716,11 +716,19 @@ type MarkTelegramMessagesProcessedForSessionParams struct {
 	SessionRef    pgtype.Text   `json:"session_ref"`
 }
 
-// Tx-bound, session-scoped variant. Used by InteractionRecorder when
-// processing a create-path event. The WHERE clause prevents a stranded
-// old-event consumer from overwriting rows already processed by a newer
-// event (boundary-shift race): only rows still claimed for THIS session
-// AND not yet processed are updated.
+// Tx-bound variant. Used by InteractionRecorder consumer when
+// processing a create-path event. Defends against the stale
+// boundary-shift race: a stranded old-event consumer running LATER
+// than the newer-event consumer cannot overwrite rows already
+// processed by the newer event, because the predicate rejects rows
+// whose claimed_session_ref differs from this consumer's session.
+//
+// The predicate ALSO accepts rows that were never claimed
+// (claimed_session_ref IS NULL): the non-tx publish path (test mode,
+// AggregateForContactBatch pre-PR3 callers) leaves rows unclaimed,
+// and there's no risk of cross-event overwrite when the row has not
+// yet been processed by anyone. The defense is specifically against
+// claimed-for-OTHER-session rows.
 func (q *Queries) MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) error {
 	_, err := q.db.Exec(ctx, MarkTelegramMessagesProcessedForSession, arg.InteractionID, arg.MessageIds, arg.SessionRef)
 	return err

@@ -342,7 +342,7 @@ SET processed_at = NOW(),
     claimed_at = NULL,
     claimed_session_ref = NULL
 WHERE id = ANY($2::uuid[])
-  AND claimed_session_ref = $3
+  AND (claimed_session_ref = $3 OR claimed_session_ref IS NULL)
   AND processed_at IS NULL
   AND deleted_at IS NULL
 `
@@ -353,11 +353,14 @@ type MarkMessagesMessagesProcessedForSessionParams struct {
 	SessionRef    pgtype.Text   `json:"session_ref"`
 }
 
-// Tx-bound, session-scoped variant. Mirror of
-// MarkTelegramMessagesProcessedForSession — used by InteractionRecorder
-// consumer when processing a create-path event. The
-// claimed_session_ref + processed_at predicate defends against the
-// stale boundary-shift race.
+// Tx-bound variant. Mirror of MarkTelegramMessagesProcessedForSession —
+// used by InteractionRecorder consumer when processing a create-path
+// event. The predicate rejects rows whose claimed_session_ref differs
+// from this consumer's session (boundary-shift defense) but ALSO
+// accepts rows that were never claimed (claimed_session_ref IS NULL):
+// the non-tx publish path leaves rows unclaimed, and there's no risk
+// of cross-event overwrite when the row has not yet been processed by
+// anyone.
 func (q *Queries) MarkMessagesMessagesProcessedForSession(ctx context.Context, arg MarkMessagesMessagesProcessedForSessionParams) error {
 	_, err := q.db.Exec(ctx, MarkMessagesMessagesProcessedForSession, arg.InteractionID, arg.MessageIds, arg.SessionRef)
 	return err

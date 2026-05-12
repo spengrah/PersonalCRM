@@ -547,22 +547,33 @@ type Querier interface {
 	// engine's extend/promote/bridge paths only; no session-scope predicate
 	// needed because those paths do not publish events.
 	MarkMessagesMessagesProcessed(ctx context.Context, arg MarkMessagesMessagesProcessedParams) error
-	// Tx-bound, session-scoped variant. Mirror of
-	// MarkTelegramMessagesProcessedForSession — used by InteractionRecorder
-	// consumer when processing a create-path event. The
-	// claimed_session_ref + processed_at predicate defends against the
-	// stale boundary-shift race.
+	// Tx-bound variant. Mirror of MarkTelegramMessagesProcessedForSession —
+	// used by InteractionRecorder consumer when processing a create-path
+	// event. The predicate rejects rows whose claimed_session_ref differs
+	// from this consumer's session (boundary-shift defense) but ALSO
+	// accepts rows that were never claimed (claimed_session_ref IS NULL):
+	// the non-tx publish path leaves rows unclaimed, and there's no risk
+	// of cross-event overwrite when the row has not yet been processed by
+	// anyone.
 	MarkMessagesMessagesProcessedForSession(ctx context.Context, arg MarkMessagesMessagesProcessedForSessionParams) error
 	MarkPairingTokenConsumed(ctx context.Context, arg MarkPairingTokenConsumedParams) (*MacHostPairingToken, error)
 	// Non-tx variant used by the engine's extend/promote/bridge paths only,
 	// which do not publish events and do not claim rows. Clearing the claim
 	// columns lets a future pass see the row as "done" rather than "claimed".
 	MarkTelegramMessagesProcessed(ctx context.Context, arg MarkTelegramMessagesProcessedParams) error
-	// Tx-bound, session-scoped variant. Used by InteractionRecorder when
-	// processing a create-path event. The WHERE clause prevents a stranded
-	// old-event consumer from overwriting rows already processed by a newer
-	// event (boundary-shift race): only rows still claimed for THIS session
-	// AND not yet processed are updated.
+	// Tx-bound variant. Used by InteractionRecorder consumer when
+	// processing a create-path event. Defends against the stale
+	// boundary-shift race: a stranded old-event consumer running LATER
+	// than the newer-event consumer cannot overwrite rows already
+	// processed by the newer event, because the predicate rejects rows
+	// whose claimed_session_ref differs from this consumer's session.
+	//
+	// The predicate ALSO accepts rows that were never claimed
+	// (claimed_session_ref IS NULL): the non-tx publish path (test mode,
+	// AggregateForContactBatch pre-PR3 callers) leaves rows unclaimed,
+	// and there's no risk of cross-event overwrite when the row has not
+	// yet been processed by anyone. The defense is specifically against
+	// claimed-for-OTHER-session rows.
 	MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) error
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array

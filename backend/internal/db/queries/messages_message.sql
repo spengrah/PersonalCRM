@@ -75,18 +75,21 @@ WHERE id = ANY(@message_ids::uuid[])
   AND deleted_at IS NULL;
 
 -- name: MarkMessagesMessagesProcessedForSession :exec
--- Tx-bound, session-scoped variant. Mirror of
--- MarkTelegramMessagesProcessedForSession — used by InteractionRecorder
--- consumer when processing a create-path event. The
--- claimed_session_ref + processed_at predicate defends against the
--- stale boundary-shift race.
+-- Tx-bound variant. Mirror of MarkTelegramMessagesProcessedForSession —
+-- used by InteractionRecorder consumer when processing a create-path
+-- event. The predicate rejects rows whose claimed_session_ref differs
+-- from this consumer's session (boundary-shift defense) but ALSO
+-- accepts rows that were never claimed (claimed_session_ref IS NULL):
+-- the non-tx publish path leaves rows unclaimed, and there's no risk
+-- of cross-event overwrite when the row has not yet been processed by
+-- anyone.
 UPDATE messages_message
 SET processed_at = NOW(),
     interaction_id = @interaction_id,
     claimed_at = NULL,
     claimed_session_ref = NULL
 WHERE id = ANY(@message_ids::uuid[])
-  AND claimed_session_ref = @session_ref
+  AND (claimed_session_ref = @session_ref OR claimed_session_ref IS NULL)
   AND processed_at IS NULL
   AND deleted_at IS NULL;
 
