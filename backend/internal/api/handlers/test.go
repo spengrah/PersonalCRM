@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -640,6 +641,90 @@ func (h *TestHandler) Cleanup(c *gin.Context) {
 		DeletedExternalContacts: deletedExternal,
 		DeletedCalendarEvents:   deletedCalEvents,
 	}, nil)
+}
+
+// SeedMacHostRequest is the payload for /test/seed/mac-hosts. It
+// creates a paired host row directly so E2E tests can exercise the
+// paired-state UI without going through the real pairing flow (the
+// daemon-side pairing token + key are not available to the browser).
+type SeedMacHostRequest struct {
+	Hostname        string         `json:"hostname"`
+	DaemonVersion   string         `json:"daemon_version,omitempty"`
+	ProtocolVersion int32          `json:"protocol_version,omitempty"`
+	Permissions     map[string]any `json:"permissions,omitempty"`
+	SourceHealth    map[string]any `json:"source_health,omitempty"`
+}
+
+// SeedMacHostResponse echoes the generated host id.
+type SeedMacHostResponse struct {
+	HostID string `json:"host_id"`
+}
+
+// SeedMacHost creates a mac_host row directly (bypassing the pairing
+// flow) so E2E tests can exercise the paired-host UI. Bcrypt cost is
+// the minimum acceptable (4) — the resulting hash is never used for
+// authentication in the test path.
+func (h *TestHandler) SeedMacHost(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var req SeedMacHostRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid request body", err.Error())
+		return
+	}
+	if req.Hostname == "" {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "hostname is required", "")
+		return
+	}
+	if req.DaemonVersion == "" {
+		req.DaemonVersion = "test-seed"
+	}
+	if req.ProtocolVersion == 0 {
+		req.ProtocolVersion = 1
+	}
+	permissions, err := json.Marshal(req.Permissions)
+	if err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "permissions marshal failed", err.Error())
+		return
+	}
+	if len(permissions) == 0 {
+		permissions = []byte("{}")
+	}
+	sourceHealth, err := json.Marshal(req.SourceHealth)
+	if err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "source_health marshal failed", err.Error())
+		return
+	}
+	if len(sourceHealth) == 0 {
+		sourceHealth = []byte("{}")
+	}
+
+	// Inserted row first, then patched with permissions + source_health
+	// via UpdateMacHostHeartbeat (the only sqlc path that touches those
+	// fields). Saves adding another seed query.
+	hashed := "$2a$04$placeholder-test-only-do-not-trust-as-bcrypt-hash"
+	row, err := h.database.Queries.SeedMacHost(ctx, db.SeedMacHostParams{
+		Hostname:        req.Hostname,
+		DaemonVersion:   req.DaemonVersion,
+		ProtocolVersion: req.ProtocolVersion,
+		ApiKeyHash:      hashed,
+	})
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "seed host failed", err.Error())
+		return
+	}
+	if _, err := h.database.Queries.UpdateMacHostHeartbeat(ctx, db.UpdateMacHostHeartbeatParams{
+		ID:              row.ID,
+		DaemonVersion:   req.DaemonVersion,
+		ProtocolVersion: req.ProtocolVersion,
+		Permissions:     permissions,
+		SourceHealth:    sourceHealth,
+	}); err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "seed host heartbeat update failed", err.Error())
+		return
+	}
+
+	api.SendSuccess(c, http.StatusOK, SeedMacHostResponse{HostID: uuid.UUID(row.ID.Bytes).String()}, nil)
 }
 
 // TriggerErrorRequest represents the request to trigger an error

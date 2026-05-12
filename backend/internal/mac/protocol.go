@@ -13,6 +13,5 @@ const ProtocolVersion int32 = 1
 // MinProtocolVersion is the minimum daemon protocol_version the Pi
 // will accept on heartbeat. A daemon advertising a value below this
 // receives 412 Precondition Failed and is expected to upgrade. Bumped
-// manually as the contract evolves; keeping it at 1 in PR1 means any
-// PR1+ daemon is accepted.
+// manually as the contract evolves.
 const MinProtocolVersion int32 = 1

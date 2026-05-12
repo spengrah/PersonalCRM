@@ -180,6 +180,8 @@ export default function MacSettingsPage() {
                               </dd>
                             </div>
                           </dl>
+                          <PermissionsBadges permissions={host.permissions} />
+                          <SourceHealthTable health={host.source_health} />
                         </div>
                         <Button
                           variant="outline"
@@ -316,6 +318,101 @@ function ConfirmDeleteModal({ isPending, onCancel, onConfirm }: ConfirmDeleteMod
           </Button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// Known permission keys the daemon advertises in heartbeat. Unknown
+// keys are listed as text so the operator can see what the daemon
+// reported even if the schema evolves before the UI catches up.
+const KNOWN_PERMISSIONS: Record<string, string> = {
+  fda: 'Full Disk Access',
+  contacts: 'Contacts',
+  files_anarlog: 'Files (Anarlog)',
+}
+
+interface PermissionsBadgesProps {
+  permissions: Record<string, unknown>
+}
+
+function PermissionsBadges({ permissions }: PermissionsBadgesProps) {
+  const entries = Object.entries(permissions || {})
+  if (entries.length === 0) return null
+  return (
+    <div className="mt-3" data-testid="permissions-badges">
+      <p className="text-xs font-medium text-gray-700 mb-1">Permissions</p>
+      <div className="flex flex-wrap gap-2">
+        {entries.map(([key, value]) => {
+          const granted = Boolean(value)
+          const label = KNOWN_PERMISSIONS[key] ?? key
+          return (
+            <span
+              key={key}
+              className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${
+                granted
+                  ? 'bg-green-50 text-green-800 border-green-200'
+                  : 'bg-gray-100 text-gray-600 border-gray-200'
+              }`}
+            >
+              {label}: {granted ? 'granted' : 'denied'}
+            </span>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+interface SourceHealthEntry {
+  last_pushed_at?: string
+  observed_cursor?: string
+  pushed_cursor?: string
+  last_error?: string
+  [key: string]: unknown
+}
+
+interface SourceHealthTableProps {
+  health: Record<string, unknown>
+}
+
+function SourceHealthTable({ health }: SourceHealthTableProps) {
+  const entries = Object.entries(health || {})
+  if (entries.length === 0) return null
+  return (
+    <div className="mt-3" data-testid="source-health">
+      <p className="text-xs font-medium text-gray-700 mb-1">Source health</p>
+      <table className="w-full text-xs border border-gray-200 rounded">
+        <thead className="bg-gray-50 text-gray-700">
+          <tr>
+            <th className="text-left px-2 py-1 font-medium">Source</th>
+            <th className="text-left px-2 py-1 font-medium">Last pushed</th>
+            <th className="text-left px-2 py-1 font-medium">Cursor</th>
+            <th className="text-left px-2 py-1 font-medium">Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map(([source, raw]) => {
+            const entry =
+              typeof raw === 'object' && raw !== null
+                ? (raw as SourceHealthEntry)
+                : ({} as SourceHealthEntry)
+            return (
+              <tr key={source} className="border-t border-gray-100">
+                <td className="px-2 py-1 font-mono">{source}</td>
+                <td className="px-2 py-1 text-gray-700">
+                  {entry.last_pushed_at ? new Date(entry.last_pushed_at).toLocaleString() : '—'}
+                </td>
+                <td className="px-2 py-1 font-mono text-gray-700 truncate max-w-xs">
+                  {entry.pushed_cursor ?? entry.observed_cursor ?? '—'}
+                </td>
+                <td className="px-2 py-1 text-red-700">
+                  {entry.last_error && entry.last_error !== '' ? entry.last_error : ''}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }

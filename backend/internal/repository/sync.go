@@ -705,10 +705,12 @@ func (r *SyncRepository) EnqueueAccountSyncIfNotInFlight(
 
 // ErrCursorEpochMismatch is returned by CommitMacHostCursor when the
 // caller-supplied epoch differs from the host's current cursor_epoch.
-// The handler maps this to 409 with current_epoch in the body so the
-// daemon can refetch its cursor cache.
+// The handler maps this to 409 with both current_epoch and
+// current_cursor in the body so the daemon can fully reconcile its
+// local cache in a single response.
 type ErrCursorEpochMismatch struct {
-	ServerEpoch int64
+	ServerEpoch   int64
+	CurrentCursor string
 }
 
 func (e *ErrCursorEpochMismatch) Error() string {
@@ -718,10 +720,12 @@ func (e *ErrCursorEpochMismatch) Error() string {
 // ErrCursorBaseMismatch is returned by CommitMacHostCursor when the
 // caller-supplied base_cursor differs from the cursor currently stored
 // on the row (or when the daemon claims no row exists but one does).
-// The handler maps this to 409 with current_cursor in the body so the
-// daemon can rebase against the server's value.
+// The handler maps this to 409 with both current_cursor and
+// current_epoch in the body so the daemon can rebase against the
+// server's value.
 type ErrCursorBaseMismatch struct {
 	CurrentCursor string
+	CurrentEpoch  int64
 }
 
 func (e *ErrCursorBaseMismatch) Error() string {
@@ -805,11 +809,11 @@ func (r *SyncRepository) CommitMacHostCursor(ctx context.Context, params CommitM
 		// inside the tx prevents committing a cursor for a revoked host.
 		return db.ErrNotFound
 	}
-	if epochRow.CursorEpoch != params.ClaimedEpoch {
-		return &ErrCursorEpochMismatch{ServerEpoch: epochRow.CursorEpoch}
-	}
+	serverEpoch := epochRow.CursorEpoch
 
-	// Stage A: read the existing cursor row (if any).
+	// Stage A: read the existing cursor row (if any) — needed for both
+	// the happy path (Stage C base check) AND the error path (so 409
+	// responses can include the current_cursor alongside current_epoch).
 	existing, err := q.GetMacHostSyncState(ctx, db.GetMacHostSyncStateParams{
 		Source:    params.Source,
 		AccountID: params.HostID.String(),
@@ -817,11 +821,27 @@ func (r *SyncRepository) CommitMacHostCursor(ctx context.Context, params CommitM
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("read mac_host cursor row: %w", err)
 	}
+	currentCursor := ""
+	cursorRowFound := err == nil
+	if cursorRowFound && existing.SyncCursor.Valid {
+		currentCursor = existing.SyncCursor.String
+	}
 
-	if errors.Is(err, pgx.ErrNoRows) {
+	// Epoch check AFTER the cursor read so the 409 body can include both.
+	if serverEpoch != params.ClaimedEpoch {
+		return &ErrCursorEpochMismatch{
+			ServerEpoch:   serverEpoch,
+			CurrentCursor: currentCursor,
+		}
+	}
+
+	if !cursorRowFound {
 		// No existing row — daemon must have claimed base_cursor="".
 		if params.BaseCursor != "" {
-			return &ErrCursorBaseMismatch{CurrentCursor: ""}
+			return &ErrCursorBaseMismatch{
+				CurrentCursor: "",
+				CurrentEpoch:  serverEpoch,
+			}
 		}
 
 		// Stage B: INSERT path. ON CONFLICT DO NOTHING handles the
@@ -838,31 +858,26 @@ func (r *SyncRepository) CommitMacHostCursor(ctx context.Context, params CommitM
 		if insErr != nil || inserted == nil {
 			// Concurrent writer won the first-insert race. Re-read to
 			// surface the winner's cursor. The re-read uses the same
-			// (READ COMMITTED) tx; the concurrent writer has committed
+			// READ COMMITTED tx; the concurrent writer has committed
 			// — its row is visible to us now.
-			latest, reReadErr := q.GetMacHostSyncState(ctx, db.GetMacHostSyncStateParams{
-				Source:    params.Source,
-				AccountID: params.HostID.String(),
-			})
+			current, reReadErr := readCursorForConflict(ctx, q, params)
 			if reReadErr != nil {
-				return fmt.Errorf("re-read mac_host cursor row after first-write race: %w", reReadErr)
+				return reReadErr
 			}
-			current := ""
-			if latest.SyncCursor.Valid {
-				current = latest.SyncCursor.String
+			return &ErrCursorBaseMismatch{
+				CurrentCursor: current,
+				CurrentEpoch:  serverEpoch,
 			}
-			return &ErrCursorBaseMismatch{CurrentCursor: current}
 		}
 		return tx.Commit(ctx)
 	}
 
 	// Existing row — Stage C: predicate-conditional UPDATE.
-	currentCursor := ""
-	if existing.SyncCursor.Valid {
-		currentCursor = existing.SyncCursor.String
-	}
 	if currentCursor != params.BaseCursor {
-		return &ErrCursorBaseMismatch{CurrentCursor: currentCursor}
+		return &ErrCursorBaseMismatch{
+			CurrentCursor: currentCursor,
+			CurrentEpoch:  serverEpoch,
+		}
 	}
 
 	updated, err := q.UpdateMacHostSyncCursor(ctx, db.UpdateMacHostSyncCursorParams{
@@ -876,20 +891,36 @@ func (r *SyncRepository) CommitMacHostCursor(ctx context.Context, params CommitM
 	if err != nil || updated == nil {
 		// Zero rows updated: another writer slipped in between Stage A's
 		// read and our UPDATE. Re-read and surface 409 with the latest.
-		latest, reReadErr := q.GetMacHostSyncState(ctx, db.GetMacHostSyncStateParams{
-			Source:    params.Source,
-			AccountID: params.HostID.String(),
-		})
+		current, reReadErr := readCursorForConflict(ctx, q, params)
 		if reReadErr != nil {
-			return fmt.Errorf("re-read mac_host cursor after CAS miss: %w", reReadErr)
+			return reReadErr
 		}
-		current := ""
-		if latest.SyncCursor.Valid {
-			current = latest.SyncCursor.String
+		return &ErrCursorBaseMismatch{
+			CurrentCursor: current,
+			CurrentEpoch:  serverEpoch,
 		}
-		return &ErrCursorBaseMismatch{CurrentCursor: current}
 	}
 	return tx.Commit(ctx)
+}
+
+// readCursorForConflict re-reads the cursor row inside the same tx
+// after a race-loss and returns the current cursor string (or "" when
+// no row is present). Surfaces only conflict-readable values.
+func readCursorForConflict(ctx context.Context, q db.Querier, params CommitMacHostCursorParams) (string, error) {
+	latest, err := q.GetMacHostSyncState(ctx, db.GetMacHostSyncStateParams{
+		Source:    params.Source,
+		AccountID: params.HostID.String(),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("re-read mac_host cursor after CAS miss: %w", err)
+	}
+	if !latest.SyncCursor.Valid {
+		return "", nil
+	}
+	return latest.SyncCursor.String, nil
 }
 
 // DeleteMacHostSyncStatesTx removes all push-strategy external_sync_state

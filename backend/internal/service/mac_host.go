@@ -53,6 +53,12 @@ var ErrPairingTokenAlreadyUsed = errors.New("pairing token already used")
 // rejects a second pairing. Handler maps to 409.
 var ErrHostAlreadyPaired = errors.New("another Mac host is already paired; revoke it first or uninstall the existing daemon")
 
+// ErrPairingValidation is returned when an input field is missing or
+// malformed (e.g. empty hostname). Handler maps to 400. The HTTP
+// handler is the primary input-validation layer; this is a defence-in-
+// depth path for direct service-layer callers.
+var ErrPairingValidation = errors.New("pairing input validation failed")
+
 // MacHostService owns business logic for pairing, heartbeat, cursor
 // commit, and revoke-cascade. Stateless aside from the constructor-
 // injected dependencies — safe to share across requests.
@@ -127,7 +133,7 @@ func (s *MacHostService) PairWithToken(
 		return nil, ErrPairingTokenInvalid
 	}
 	if hostname == "" {
-		return nil, fmt.Errorf("hostname is required")
+		return nil, fmt.Errorf("%w: hostname is required", ErrPairingValidation)
 	}
 
 	apiKey, apiKeyHash, err := mintAPIKey(s.bcryptCost)
@@ -220,9 +226,8 @@ func (s *MacHostService) GetHost(ctx context.Context, id uuid.UUID) (*repository
 //
 // The cascade is required because the singleton mac_host index only
 // considers live (non-revoked) hosts — leaving a stale cursor row
-// behind would block re-pairing under a different host UUID when
-// re-pair semantics evolve (PR1 doesn't support re-pair under the
-// same UUID, but the cleanup is still the right shape).
+// behind would block re-pairing under a different host UUID once
+// re-pair semantics evolve.
 func (s *MacHostService) RevokeHost(ctx context.Context, id uuid.UUID) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

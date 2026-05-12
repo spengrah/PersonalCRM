@@ -81,27 +81,18 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 	router.Use(api.LoggingMiddleware())
 	router.Use(api.CORSMiddleware(cfg.CORS))
 
-	// Pairing endpoint — public.
-	router.POST("/api/v1/host", macHandler.Pair)
-	// Daemon-auth routes.
-	macDaemon := router.Group("/api/v1")
-	macDaemon.Use(auth.MacHostAuthMiddleware(hostRepo, auth.DefaultPasswordComparator, auth.DefaultMacHostAuthLimiterConfig()))
-	{
-		macDaemon.POST("/host/:id/heartbeat", macHandler.Heartbeat)
-		macDaemon.GET("/host/:id/sync/:source/cursor", macHandler.GetCursor)
-		macDaemon.POST("/host/:id/sync/:source/cursor", macHandler.CommitCursor)
-		macDaemon.GET("/host/:id/sync/:source/known-ids", macHandler.KnownIDs)
-	}
-	// Admin routes — global API key.
+	// Use the same route-registration helpers that main.go calls so the
+	// tests cover the production routing surface (route ordering +
+	// middleware splits + path-trie conflicts) rather than a parallel
+	// hand-built router that can drift.
+	handlers.RegisterMacHostRoutes(router, handlers.MacHostRouteDeps{
+		HostRepo:    hostRepo,
+		Handler:     macHandler,
+		AuthLimiter: auth.DefaultMacHostAuthLimiterConfig(),
+	})
 	v1 := router.Group("/api/v1")
 	v1.Use(auth.APIKeyMiddleware(cfg))
-	{
-		macAdmin := v1.Group("/host")
-		macAdmin.GET("", macHandler.ListHosts)
-		macAdmin.GET("/:id", macHandler.GetHostAdmin)
-		macAdmin.DELETE("/:id", macHandler.DeleteHost)
-		macAdmin.POST("/pairing-token", macHandler.CreatePairingToken)
-	}
+	handlers.RegisterMacHostAdminRoutes(v1, macHandler)
 
 	env := &macHostTestEnv{
 		router:     router,
@@ -158,6 +149,33 @@ func readData(t *testing.T, w *httptest.ResponseRecorder, out any) {
 	require.NoError(t, json.Unmarshal(envelope.Data, out))
 }
 
+// cursorConflictBody mirrors the 409 response shape — error.code +
+// data.current_cursor + data.current_epoch are all asserted.
+type cursorConflictBody struct {
+	Code          string
+	CurrentCursor *string
+	CurrentEpoch  *int64
+}
+
+func parseConflict(t *testing.T, w *httptest.ResponseRecorder) cursorConflictBody {
+	t.Helper()
+	var raw struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+		Data struct {
+			CurrentCursor *string `json:"current_cursor,omitempty"`
+			CurrentEpoch  *int64  `json:"current_epoch,omitempty"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&raw), "decode conflict body")
+	return cursorConflictBody{
+		Code:          raw.Error.Code,
+		CurrentCursor: raw.Data.CurrentCursor,
+		CurrentEpoch:  raw.Data.CurrentEpoch,
+	}
+}
+
 func TestMacHost_FullPairingFlow(t *testing.T) {
 	env := setupMacHostEnv(t)
 
@@ -208,21 +226,33 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
-	// 4. Commit cursor with bad epoch → 409.
+	// 4. Commit cursor with bad epoch → 409 with BOTH current_cursor and
+	// current_epoch in the body so the daemon can reconcile fully.
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+pair.HostID.String()+"/sync/messages/cursor", hostHeaders, map[string]any{
 		"cursor":       "abc",
 		"base_cursor":  "",
 		"cursor_epoch": 999,
 	})
 	require.Equal(t, http.StatusConflict, w.Code, "expected 409 for bad epoch; body: %s", w.Body.String())
+	epochConflict := parseConflict(t, w)
+	require.Equal(t, "EPOCH_MISMATCH", epochConflict.Code)
+	require.NotNil(t, epochConflict.CurrentEpoch)
+	require.Equal(t, pair.CursorEpoch, *epochConflict.CurrentEpoch)
+	require.NotNil(t, epochConflict.CurrentCursor, "current_cursor must be present even on epoch mismatch")
 
-	// 5. Commit cursor with bad base → 409.
+	// 5. Commit cursor with bad base → 409 with BOTH current_cursor and
+	// current_epoch in the body.
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+pair.HostID.String()+"/sync/messages/cursor", hostHeaders, map[string]any{
 		"cursor":       "abc",
 		"base_cursor":  "wrong-base",
 		"cursor_epoch": pair.CursorEpoch,
 	})
 	require.Equal(t, http.StatusConflict, w.Code, "expected 409 for bad base; body: %s", w.Body.String())
+	baseConflict := parseConflict(t, w)
+	require.Equal(t, "BASE_CURSOR_MISMATCH", baseConflict.Code)
+	require.NotNil(t, baseConflict.CurrentEpoch)
+	require.Equal(t, pair.CursorEpoch, *baseConflict.CurrentEpoch)
+	require.NotNil(t, baseConflict.CurrentCursor)
 
 	// 6. Commit cursor with good base → 200.
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+pair.HostID.String()+"/sync/messages/cursor", hostHeaders, map[string]any{
@@ -298,6 +328,35 @@ func TestMacHost_PairingToken_Unknown(t *testing.T) {
 		"protocol_version": 1,
 	})
 	require.Equal(t, http.StatusGone, w.Code, "unknown token must be 410, body: %s", w.Body.String())
+}
+
+func TestMacHost_Pair_MissingHostname_400(t *testing.T) {
+	env := setupMacHostEnv(t)
+
+	// Mint a real token via the service so we know the only validation
+	// gate left is the hostname check.
+	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	require.NoError(t, err)
+
+	w := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
+		"pairing_token":    plain,
+		"hostname":         "",
+		"daemon_version":   "0.1.0",
+		"protocol_version": 1,
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code, "empty hostname must surface 400, body: %s", w.Body.String())
+}
+
+func TestMacHost_Pair_MissingToken_400(t *testing.T) {
+	env := setupMacHostEnv(t)
+
+	w := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
+		"pairing_token":    "",
+		"hostname":         "host",
+		"daemon_version":   "0.1.0",
+		"protocol_version": 1,
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code, "empty token must surface 400, body: %s", w.Body.String())
 }
 
 func TestMacHost_Singleton_SecondPairBlocked(t *testing.T) {

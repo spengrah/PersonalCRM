@@ -750,25 +750,15 @@ func run() int {
 		}
 	}
 
-	// Mac-daemon pairing endpoint — un-authenticated (token-gated +
-	// IP rate-limited). Registered directly on the router so it does NOT
-	// inherit the global API-key middleware. See
-	// backend/internal/api/handlers/mac_host.go for the rate-limit
-	// details.
-	router.POST("/api/v1/host", macHostHandler.Pair)
-
-	// Mac-daemon authenticated routes — host-bearer-key middleware,
-	// NOT the global API key. Sibling group with the same prefix as
-	// v1 below; gin's radix-tree router distinguishes by full path so
-	// the two groups coexist cleanly.
-	macDaemon := router.Group("/api/v1")
-	macDaemon.Use(auth.MacHostAuthMiddleware(macHostRepo, auth.DefaultPasswordComparator, auth.DefaultMacHostAuthLimiterConfig()))
-	{
-		macDaemon.POST("/host/:id/heartbeat", macHostHandler.Heartbeat)
-		macDaemon.GET("/host/:id/sync/:source/cursor", macHostHandler.GetCursor)
-		macDaemon.POST("/host/:id/sync/:source/cursor", macHostHandler.CommitCursor)
-		macDaemon.GET("/host/:id/sync/:source/known-ids", macHostHandler.KnownIDs)
-	}
+	// Mac-daemon public + host-auth routes (Pair + heartbeat + cursor +
+	// known-ids). Registered via the shared helper so integration tests
+	// exercise the same code path. Admin routes are registered later
+	// inside the global-API-key-protected v1 group.
+	handlers.RegisterMacHostRoutes(router, handlers.MacHostRouteDeps{
+		HostRepo:    macHostRepo,
+		Handler:     macHostHandler,
+		AuthLimiter: auth.DefaultMacHostAuthLimiterConfig(),
+	})
 
 	// API routes
 	v1 := router.Group("/api/v1")
@@ -815,13 +805,7 @@ func run() int {
 
 		// Mac-daemon admin routes (under global API key middleware).
 		// Pairing-token mint + revoke + list/get for the Mac settings UI.
-		macAdmin := v1.Group("/host")
-		{
-			macAdmin.GET("", macHostHandler.ListHosts)
-			macAdmin.GET("/:id", macHostHandler.GetHostAdmin)
-			macAdmin.DELETE("/:id", macHostHandler.DeleteHost)
-			macAdmin.POST("/pairing-token", macHostHandler.CreatePairingToken)
-		}
+		handlers.RegisterMacHostAdminRoutes(v1, macHostHandler)
 
 		// OAuth routes (feature-flagged with external sync)
 		if oauthHandler != nil {
@@ -985,6 +969,7 @@ func run() int {
 				testRoutes.POST("/seed/external-contacts", testHandler.SeedExternalContacts)
 				testRoutes.POST("/seed/overdue-contacts", testHandler.SeedOverdueContacts)
 				testRoutes.POST("/seed/calendar-events", testHandler.SeedCalendarEvents)
+				testRoutes.POST("/seed/mac-hosts", testHandler.SeedMacHost)
 				testRoutes.POST("/cleanup", testHandler.Cleanup)
 				testRoutes.POST("/trigger-error", testHandler.TriggerError)
 			}

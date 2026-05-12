@@ -120,8 +120,16 @@ func (h *MacHostHandler) Pair(c *gin.Context) {
 		api.SendValidationError(c, "Invalid request body", err.Error())
 		return
 	}
+	if req.PairingToken == "" {
+		api.SendValidationError(c, "pairing_token is required", "")
+		return
+	}
+	if req.Hostname == "" {
+		api.SendValidationError(c, "hostname is required", "")
+		return
+	}
 	if req.ProtocolVersion == 0 {
-		// Default to 1 when daemon omits — same backward-compat as the heartbeat path.
+		// Default when daemon omits — same backward-compat as the heartbeat path.
 		req.ProtocolVersion = mac.ProtocolVersion
 	}
 
@@ -135,6 +143,10 @@ func (h *MacHostHandler) Pair(c *gin.Context) {
 			return
 		case errors.Is(err, service.ErrHostAlreadyPaired):
 			api.SendError(c, http.StatusConflict, "HOST_ALREADY_PAIRED", err.Error(), "")
+			return
+		case errors.Is(err, service.ErrPairingValidation):
+			// Defence-in-depth for paths that bypass the handler check.
+			api.SendValidationError(c, err.Error(), "")
 			return
 		}
 		logger.Error().Err(err).Msg("pair handler: unexpected error")
@@ -303,26 +315,28 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 	var epochErr *repository.ErrCursorEpochMismatch
 	if errors.As(err, &epochErr) {
 		epoch := epochErr.ServerEpoch
+		cur := epochErr.CurrentCursor
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
 			"success": false,
 			"error": gin.H{
 				"code":    "EPOCH_MISMATCH",
 				"message": "cursor epoch mismatch",
 			},
-			"data": commitCursorConflict{CurrentEpoch: &epoch},
+			"data": commitCursorConflict{CurrentCursor: &cur, CurrentEpoch: &epoch},
 		})
 		return
 	}
 	var baseErr *repository.ErrCursorBaseMismatch
 	if errors.As(err, &baseErr) {
 		cur := baseErr.CurrentCursor
+		epoch := baseErr.CurrentEpoch
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
 			"success": false,
 			"error": gin.H{
 				"code":    "BASE_CURSOR_MISMATCH",
 				"message": "cursor base mismatch",
 			},
-			"data": commitCursorConflict{CurrentCursor: &cur},
+			"data": commitCursorConflict{CurrentCursor: &cur, CurrentEpoch: &epoch},
 		})
 		return
 	}
@@ -331,10 +345,10 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 	api.SendInternalError(c, "commit cursor failed")
 }
 
-// KnownIDs is the stub endpoint described in §"D4 KnownIDs stub" of the
-// plan. PR1 returns an empty list — daemon code is forward-compatible
-// because empty IDs is the expected response on a fresh Pi anyway.
-// PR5 (external_contact consumer) fills the body in.
+// KnownIDs is a stub for the daemon's external-contact synchronisation
+// surface. Returns an empty list — daemon code is forward-compatible
+// because empty IDs is the expected response on a fresh Pi. The body
+// will be filled in once the external_contact consumer ships.
 func (h *MacHostHandler) KnownIDs(c *gin.Context) {
 	api.SendSuccess(c, http.StatusOK, gin.H{"ids": []string{}}, nil)
 }

@@ -1,5 +1,5 @@
--- Down migration: revert the strategy CHECK to the pre-PR1 three-value
--- form. The guard ensures we do not drop the constraint while live data
+-- Down migration: revert the strategy CHECK to the three-value form.
+-- The guard ensures we do not drop the constraint while live data
 -- still uses the 'push' value. Operators rolling back partial deploys
 -- must first DELETE the push rows (typically by uninstalling the Mac
 -- daemon via the admin UI, which cascades the rows).

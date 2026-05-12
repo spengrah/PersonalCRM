@@ -201,7 +201,7 @@ export default function SettingsPage() {
             <TelegramSection />
           </Suspense>
 
-          {/* Mac Daemon (Phase 1) */}
+          {/* Mac Daemon */}
           <section className="bg-white rounded-lg shadow-sm border p-6">
             <div className="flex items-center space-x-3 mb-4">
               <Cpu className="w-6 h-6 text-blue-600" />
