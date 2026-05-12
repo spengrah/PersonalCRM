@@ -33,13 +33,6 @@ These rules apply to all AI agents working on this project.
 Git pre-push hooks run automatically and may block push:
 
 - **Tests**: Runs lint and all test suites. Push blocked if tests fail.
-- **Learnings**: Extracts session learnings. If new learnings found, push blocked with instructions to review and apply them.
-
-When push is blocked by learnings extraction:
-1. Read the new learnings in `.ai/log/learnings/`
-2. For each actionable learning, decide if/where to apply it
-3. Commit any applied changes plus the learnings files
-4. Push again
 
 ## Code Review Approval Criteria
 
