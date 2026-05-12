@@ -13,4 +13,4 @@ git config core.hooksPath scripts/hooks
 echo "Git hooks configured."
 echo "  hooks path: scripts/hooks/"
 echo "  pre-commit: auto-formats Go and frontend files"
-echo "  pre-push: lint, tests, learnings extraction"
+echo "  pre-push: lint, tests"

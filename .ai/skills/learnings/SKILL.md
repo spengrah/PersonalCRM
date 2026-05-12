@@ -1,10 +1,12 @@
 ---
 name: learnings
-description: Extract learnings from current session before push or session end
+description: "[DORMANT] Manual learnings extraction. No longer auto-invoked by push hooks or session end. The corpus in .ai/log/learnings/ is preserved as a historical archive. Files and extract script remain available if invoked explicitly."
 allowed-tools: Bash Read Edit Glob Skill
 ---
 
-# Extract Session Learnings
+# Extract Session Learnings (Dormant)
+
+**Status:** This skill is no longer auto-invoked. The pre-push hook does not run extraction, and agents should not invoke it as part of normal workflow. The `.ai/log/learnings/*.yaml` corpus is preserved for historical reference. Files in this directory and `extract-learnings.sh` remain in place for manual use only.
 
 Capture insights so problems become patterns, mistakes become rules, techniques become skills.
 
