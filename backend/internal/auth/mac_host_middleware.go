@@ -130,7 +130,9 @@ func (r *macHostAuthReservation) Refund() {
 		return
 	}
 	r.resolved = true
-	r.parent.refundLocked(r.id)
+	r.parent.mu.Lock()
+	defer r.parent.mu.Unlock()
+	r.parent.removeEntryLocked(r.id)
 }
 
 // reserve atomically peeks AND consumes a token under the same mutex
@@ -149,21 +151,15 @@ func (m *macHostAuthLimiter) reserve(id uuid.UUID) *macHostAuthReservation {
 	}
 }
 
-// refundLocked is the bucket-refund half of Reservation.Refund. The
-// rate package's AllowN with negative n is not supported; we use
-// SetBurst to temporarily expose the bucket and then call AllowN(-1)
-// via a SetTokensAt-equivalent — but the public API for that is also
-// limited. The pragmatic approach used here: increment the limiter's
-// remaining tokens by clamping back to burst, using ReserveN(t, -1)
-// is not supported either. We achieve the refund by calling
-// limiter-internal time-based replenishment: the rate.Limiter's
-// underlying tokens are tracked relative to a refill rate, so the
-// only safe way to "give a token back" is to reset the limiter to a
-// fresh state. Acceptable because refund is only called on success,
-// at which point the host has demonstrated control over the key and
-// we want a clean budget anyway. Equivalent to the old
-// limiter.reset() semantics.
-func (m *macHostAuthLimiter) refundLocked(id uuid.UUID) {
+// removeEntryLocked drops the limiter entry for id. Caller must
+// hold mu. The rate package does not expose "give a token back"
+// directly (Allow/AllowN consume forward only; ReserveN with
+// negative n is unsupported). Dropping the entry is equivalent to
+// returning the daemon to a fresh-bucket state, which is the
+// semantically right thing on successful auth — the daemon has
+// demonstrated control over the key, so accumulated failures
+// shouldn't bias the next bucket.
+func (m *macHostAuthLimiter) removeEntryLocked(id uuid.UUID) {
 	if elem, ok := m.byID[id]; ok {
 		m.lru.Remove(elem)
 		delete(m.byID, id)
@@ -171,12 +167,12 @@ func (m *macHostAuthLimiter) refundLocked(id uuid.UUID) {
 }
 
 // reset removes the limiter entry for host_id. Public counterpart of
-// refundLocked, kept for callers (currently the success branch in
-// the middleware) that explicitly want a fresh bucket.
+// removeEntryLocked, kept for callers (currently tests) that
+// explicitly want a fresh bucket.
 func (m *macHostAuthLimiter) reset(id uuid.UUID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.refundLocked(id)
+	m.removeEntryLocked(id)
 }
 
 func (m *macHostAuthLimiter) getOrCreateLocked(id uuid.UUID) *rate.Limiter {

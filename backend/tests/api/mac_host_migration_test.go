@@ -40,18 +40,26 @@ func TestMacHostMigrations(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	// Gated by LONG_TESTS because this test mutates the shared
-	// integration DB schema (rolls down to migration 046, applies
-	// 047/048, then rolls forward again). `go test ./...` runs
-	// packages in parallel by default, and during the brief window
-	// when the schema is rolled down, other integration packages
-	// hitting the same DATABASE_URL would see a missing mac_host
-	// table or other partially-migrated state. CI's
-	// `make test-integration` (LONG_TESTS=1) runs this test
-	// explicitly; the default `test-integration-fast` target skips
-	// it.
-	if os.Getenv("LONG_TESTS") == "" {
-		t.Skip("LONG_TESTS not set; this test mutates shared schema")
+	// Gated by MAC_HOST_MIGRATION_TEST because this test mutates the
+	// shared integration DB schema (rolls down to migration 046,
+	// applies 047/048, then rolls forward again). `go test ./...`
+	// runs packages in parallel by default, and during the brief
+	// window when the schema is rolled down, other integration
+	// packages hitting the same DATABASE_URL would see a missing
+	// mac_host table or other partially-migrated state.
+	//
+	// LONG_TESTS=1 is not enough on its own — the Makefile's
+	// test-integration target runs `go test ./tests/...
+	// ./internal/todoist/...` which puts these packages in parallel
+	// scope. Run this test by itself with:
+	//
+	//   DATABASE_URL=... MAC_HOST_MIGRATION_TEST=1 go test \
+	//     -run TestMacHostMigrations ./tests/api/...
+	//
+	// The CI workflow that wants to exercise it should invoke it
+	// directly (not as part of `go test ./tests/...`).
+	if os.Getenv("MAC_HOST_MIGRATION_TEST") == "" {
+		t.Skip("MAC_HOST_MIGRATION_TEST not set; this test mutates shared schema and must run in isolation")
 	}
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
