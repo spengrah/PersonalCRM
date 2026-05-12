@@ -30,8 +30,8 @@ func sortBySentAt(msgs []Message) {
 //
 // txBeginner / eventLookup / consumerEnqueuer are nil-safe: when any is
 // nil, the engine takes a fall-back path that does not exercise the
-// claim mechanism. This keeps PR2's unit-test fakes working unchanged.
-// Production wiring passes all three.
+// claim mechanism. This keeps shared-package unit-test fakes working
+// without DB-shaped tx plumbing. Production wiring passes all three.
 type Engine struct {
 	adapter   SourceAdapter
 	store     MessageStore

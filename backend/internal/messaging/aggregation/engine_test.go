@@ -860,7 +860,7 @@ func (s *perContactErroringStore) ClearStaleClaimTx(ctx context.Context, tx pgx.
 	return s.inner.ClearStaleClaimTx(ctx, tx, messageIDs, expectedSessionRef)
 }
 
-// --- PR3 claim-mechanism tests -----------------------------------------
+// --- claim-mechanism tests --------------------------------------------
 
 // fakeTx records commit/rollback so tests can assert tx lifecycle.
 // Embeds pgx.Tx for interface compliance; the methods we don't override
@@ -1077,7 +1077,7 @@ func TestEngine_StaleRecovery_NoEventClearsClaim(t *testing.T) {
 }
 
 // TestEngine_NoTxBeginnerFallsBackToNonTxPublish covers the
-// compatibility path: passing nil TxBeginner keeps the pre-PR3
+// compatibility path: passing nil TxBeginner keeps the legacy
 // non-tx Publish behavior so existing tests (and any future
 // no-DB modes) continue to work.
 func TestEngine_NoTxBeginnerFallsBackToNonTxPublish(t *testing.T) {

@@ -29,9 +29,9 @@ func TestNewAggregationEngine_AcceptsNilEventBus(t *testing.T) {
 	require.NotNil(t, e.engine)
 }
 
-// TestNewAggregationEngine_AcceptsNilPool covers the PR3 shim
-// invariant: passing a nil TxBeginner falls back to the pre-PR3 non-tx
-// publish path inside the shared engine. Pure construction.
+// TestNewAggregationEngine_AcceptsNilPool covers the shim invariant:
+// passing a nil TxBeginner falls back to the legacy non-tx publish
+// path inside the shared engine. Pure construction.
 func TestNewAggregationEngine_AcceptsNilPool(t *testing.T) {
 	e := NewAggregationEngine(2, 48, nil, nil, nil, nil, nil, nil, nil)
 	require.NotNil(t, e)

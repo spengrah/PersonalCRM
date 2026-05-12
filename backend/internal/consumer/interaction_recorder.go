@@ -216,19 +216,27 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 			if markErr != nil {
 				return nil, nil, fmt.Errorf("mark staging messages processed: %w", markErr)
 			}
-			// Zero-rows-affected with a non-empty msgIDs list signals
-			// the predicate filtered everything out — either rows were
-			// claimed for a different session (stale boundary-shift)
-			// or already processed. The interaction insert itself
-			// dedupes via (source, source_ref), so this is safe but
-			// noteworthy for ops visibility.
-			if affected == 0 {
-				logger.Warn().
-					Str("source", env.Source).
-					Str("source_id", env.SourceID).
-					Int("requested", len(msgIDs)).
-					Str("interaction_id", res.Interaction.ID.String()).
-					Msg("recorder: staging mark-processed matched zero rows; possible cross-session race")
+			// Zero-rows-affected with a non-empty msgIDs list on a
+			// FRESH write means the predicate filtered everything out
+			// (rows were claimed for a different session under a new
+			// computed sourceRef, or already processed by another
+			// consumer running in parallel). Without rollback we'd
+			// commit a phantom interaction with no staging rows
+			// backing it — a duplicate of whatever the other session
+			// already produced. Returning an error rolls back the
+			// whole tx; River will retry, and by then either the
+			// other session has won (we'll dedup on retry) or its
+			// claim has aged out (we'll win and the rows will be
+			// available again).
+			//
+			// Replay (res.IsReplay) is a different shape: the rows
+			// were already linked to res.Interaction.ID on the
+			// original attempt, so `processed_at IS NOT NULL` filters
+			// them out on retry — zero affected is expected. Replay
+			// short-circuits below before this check is reached.
+			if affected == 0 && !res.IsReplay {
+				return nil, nil, fmt.Errorf("recorder: staging mark-processed matched zero rows for source=%s source_id=%s (cross-session race; tx rolled back to let other writer win)",
+					env.Source, env.SourceID)
 			}
 		}
 	}

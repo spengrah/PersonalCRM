@@ -16,10 +16,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestInteraction_SourceCheckAcceptsMessages locks in the PR3 CHECK
+// TestInteraction_SourceCheckAcceptsMessages locks in the CHECK
 // extension: an interaction with source="messages" inserts successfully.
-// Per the spec scope this PR is the migration that lifts the constraint
-// from {manual, gcal, todoist, telegram} to also include 'messages'.
+// The migration lifts the interaction_source_check constraint from
+// {manual, gcal, todoist, telegram} to also include 'messages'.
 func TestInteraction_SourceCheckAcceptsMessages(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -58,10 +58,9 @@ func TestInteraction_SourceCheckAcceptsMessages(t *testing.T) {
 }
 
 // TestInteraction_SourceCheckRejectsWhatsapp confirms the scope
-// boundary: 'whatsapp' is NOT yet in the CHECK list (deferred to a
-// future spec PR per .ai/log/plan/mac-daemon-phase-1-pr1-pi-foundation.md).
-// Acts as a regression guard against accidentally widening the CHECK
-// beyond PR3's plan.
+// boundary: 'whatsapp' is NOT in the CHECK list. Acts as a regression
+// guard against accidentally widening the CHECK beyond the currently
+// supported source set.
 func TestInteraction_SourceCheckRejectsWhatsapp(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
