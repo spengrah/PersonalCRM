@@ -473,4 +473,16 @@ func (r *TelegramMessageRepository) CountMessagesByPeerID(ctx context.Context, p
 	return count, nil
 }
 
+// HardDeleteByChatIDRange is a test-only helper that hard-deletes
+// telegram_message rows whose telegram_chat_id falls in [lo, hi].
+// Integration tests use this for per-run cleanup; soft-delete is unsafe
+// because UpsertTelegramMessage does not clear deleted_at on conflict,
+// so soft-deleted rows would resurrect as phantoms on subsequent runs.
+func (r *TelegramMessageRepository) HardDeleteByChatIDRange(ctx context.Context, lo, hi int64) error {
+	return r.queries.HardDeleteTelegramMessagesByChatIDRange(ctx, db.HardDeleteTelegramMessagesByChatIDRangeParams{
+		Lo: lo,
+		Hi: hi,
+	})
+}
+
 // int32ToPgInt4 already defined in telegram_chat_config.go

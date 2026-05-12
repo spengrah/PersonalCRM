@@ -243,6 +243,15 @@ type Querier interface {
 	// two-step creation is visible to this guard. Used by the
 	// FollowUpManager consumer when running inside a worker transaction.
 	FindPendingFollowUpTx(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error)
+	// Source-neutral generalization of FindRecentTelegramInteraction.
+	// Used by the shared aggregator (backend/internal/messaging/aggregation)
+	// for same-direction coalescing. source_ref_prefix should include
+	// trailing % for LIKE match.
+	FindRecentInteractionBySourceAndDirection(ctx context.Context, arg FindRecentInteractionBySourceAndDirectionParams) (*Interaction, error)
+	// Source-neutral generalization of FindRecentOutboundTelegramInteraction.
+	// Used by the shared aggregator for time-based reply bridging on inbound
+	// sessions.
+	FindRecentOutboundInteractionBySource(ctx context.Context, arg FindRecentOutboundInteractionBySourceParams) (*Interaction, error)
 	// Find the most recent outbound telegram interaction for a contact in a specific chat
 	// within a time window. source_ref_prefix should include trailing % for LIKE match.
 	FindRecentOutboundTelegramInteraction(ctx context.Context, arg FindRecentOutboundTelegramInteractionParams) (*Interaction, error)
@@ -354,6 +363,26 @@ type Querier interface {
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
+	// Test-only: hard-deletes event rows whose (source, source_id) match the
+	// given source and a LIKE-prefix on source_id. Used by integration tests
+	// to purge per-run event envelopes so a re-run does not collide on the
+	// (source, source_id) partial unique. The event log is otherwise
+	// append-only; production code MUST NOT call this.
+	HardDeleteEventsBySourceAndSourceIDPrefix(ctx context.Context, arg HardDeleteEventsBySourceAndSourceIDPrefixParams) error
+	// Test-only: hard-deletes interactions whose source matches and source_ref
+	// begins with prefix. Used by integration tests to purge per-run rows
+	// cleanly; soft-delete is unsafe because the (source, source_ref) partial
+	// unique constraint would block a same-source_ref re-insert on the next
+	// test run even with deleted_at set.
+	HardDeleteInteractionsBySourceRefPrefix(ctx context.Context, arg HardDeleteInteractionsBySourceRefPrefixParams) error
+	// GetTelegramMessageByReplyTo removed: identical to GetTelegramMessage.
+	// Use GetMessage repo method for reply resolution.
+	// Test-only: hard-deletes telegram_message rows whose telegram_chat_id
+	// falls in [lo, hi]. Used by integration tests to cleanly purge per-run
+	// chat ID ranges so soft-deleted rows from prior runs do not resurrect
+	// on the next UpsertTelegramMessage call (UpsertTelegramMessage does
+	// not clear deleted_at on conflict).
+	HardDeleteTelegramMessagesByChatIDRange(ctx context.Context, arg HardDeleteTelegramMessagesByChatIDRangeParams) error
 	HasEnrichmentForField(ctx context.Context, arg HasEnrichmentForFieldParams) (bool, error)
 	// Returns TRUE if any later inbound/mutual interaction exists for the
 	// contact after the given outreach time. Used by the FollowUpManager's

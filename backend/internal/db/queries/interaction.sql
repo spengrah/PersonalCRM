@@ -79,6 +79,47 @@ WHERE contact_id = sqlc.arg(contact_id)
 ORDER BY occurred_at DESC
 LIMIT 1;
 
+-- name: FindRecentInteractionBySourceAndDirection :one
+-- Source-neutral generalization of FindRecentTelegramInteraction.
+-- Used by the shared aggregator (backend/internal/messaging/aggregation)
+-- for same-direction coalescing. source_ref_prefix should include
+-- trailing % for LIKE match.
+SELECT * FROM interaction
+WHERE contact_id = sqlc.arg(contact_id)
+  AND source = sqlc.arg(source)
+  AND direction = sqlc.arg(direction)
+  AND source_ref LIKE sqlc.arg(source_ref_prefix)
+  AND occurred_at >= sqlc.arg(window_start)
+  AND occurred_at <= sqlc.arg(window_end)
+  AND deleted_at IS NULL
+ORDER BY occurred_at DESC
+LIMIT 1;
+
+-- name: FindRecentOutboundInteractionBySource :one
+-- Source-neutral generalization of FindRecentOutboundTelegramInteraction.
+-- Used by the shared aggregator for time-based reply bridging on inbound
+-- sessions.
+SELECT * FROM interaction
+WHERE contact_id = sqlc.arg(contact_id)
+  AND source = sqlc.arg(source)
+  AND direction = 'outbound'
+  AND source_ref LIKE sqlc.arg(source_ref_prefix)
+  AND occurred_at >= sqlc.arg(window_start)
+  AND occurred_at <= sqlc.arg(window_end)
+  AND deleted_at IS NULL
+ORDER BY occurred_at DESC
+LIMIT 1;
+
+-- name: HardDeleteInteractionsBySourceRefPrefix :exec
+-- Test-only: hard-deletes interactions whose source matches and source_ref
+-- begins with prefix. Used by integration tests to purge per-run rows
+-- cleanly; soft-delete is unsafe because the (source, source_ref) partial
+-- unique constraint would block a same-source_ref re-insert on the next
+-- test run even with deleted_at set.
+DELETE FROM interaction
+WHERE source = sqlc.arg(source)
+  AND source_ref LIKE sqlc.arg(source_ref_prefix);
+
 -- name: UpdateInteractionTimestamp :one
 -- Extend an existing interaction's occurred_at and description (incremental coalescing)
 UPDATE interaction

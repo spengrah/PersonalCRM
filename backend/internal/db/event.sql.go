@@ -104,6 +104,27 @@ func (q *Queries) GetEvent(ctx context.Context, id pgtype.UUID) (*Event, error) 
 	return &i, err
 }
 
+const HardDeleteEventsBySourceAndSourceIDPrefix = `-- name: HardDeleteEventsBySourceAndSourceIDPrefix :exec
+DELETE FROM event
+WHERE source = $1
+  AND source_id LIKE $2
+`
+
+type HardDeleteEventsBySourceAndSourceIDPrefixParams struct {
+	Source         string      `json:"source"`
+	SourceIDPrefix pgtype.Text `json:"source_id_prefix"`
+}
+
+// Test-only: hard-deletes event rows whose (source, source_id) match the
+// given source and a LIKE-prefix on source_id. Used by integration tests
+// to purge per-run event envelopes so a re-run does not collide on the
+// (source, source_id) partial unique. The event log is otherwise
+// append-only; production code MUST NOT call this.
+func (q *Queries) HardDeleteEventsBySourceAndSourceIDPrefix(ctx context.Context, arg HardDeleteEventsBySourceAndSourceIDPrefixParams) error {
+	_, err := q.db.Exec(ctx, HardDeleteEventsBySourceAndSourceIDPrefix, arg.Source, arg.SourceIDPrefix)
+	return err
+}
+
 const InsertEvent = `-- name: InsertEvent :one
 
 INSERT INTO event (id, source, source_id, kind, payload, observed_at)

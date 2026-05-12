@@ -26,6 +26,40 @@ transactional CAS lives in `SyncRepository.CommitMacHostCursor`.
 
 ---
 
+## Shared Message Aggregation (`messaging/aggregation`)
+
+Per-source message staging tables (`telegram_message` today; `messages_message`,
+`whatsapp_message` in later PRs) feed a single source-parametric burst/session
+aggregator at `backend/internal/messaging/aggregation`. The shared engine
+implements the burst → session → interaction pipeline (groupIntoBursts,
+resolveSessions, time-based + explicit reply bridging, same-direction
+coalescing) and depends only on interfaces — `SourceAdapter`, `MessageStore`,
+`InteractionFinder`, `InteractionPromoter`, `InteractionExtender`,
+`EventPublisher`.
+
+Each source provides a thin adapter in its package that:
+
+1. Implements `SourceAdapter` (returns the `interaction.source` constant,
+   formats `source_ref`/`peer_ref` strings, builds description labels).
+2. Implements `MessageStore` by wrapping its per-source staging repository
+   and mapping rows into the source-neutral `aggregation.Message` struct.
+   The staging-row → Message mapping MUST carry `InteractionID` through so
+   cross-batch explicit reply bridging works.
+3. Constructs `aggregation.Engine` via `aggregation.NewEngine(...)`. The
+   `EventPublisher` argument MUST be the untyped-nil interface when no
+   bus is configured — typed-nil concrete pointers (`(*events.Bus)(nil)`)
+   bypass the engine's `publisher == nil` guard.
+
+Telegram's `*telegram.AggregationEngine` is currently the only caller; it is
+a thin shim around the shared engine, preserving its exported signature so
+manager/handlers/rematch wiring and integration tests compile unchanged.
+
+The `MessageStore` ordering contract requires adapters to emit rows ordered
+by `SentAt ASC`; the engine sorts defensively, but adapters should keep the
+`ORDER BY sent_at` idiom that the Telegram sqlc queries already use.
+
+---
+
 ## Normalize External Schemas at the Boundary
 
 Fix external API quirks where data enters the system, not in business logic.

@@ -2,53 +2,54 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/messaging/aggregation"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
-// interactionPromoter promotes outbound → mutual. Satisfied by *service.ContactService.
-// Used by the coalescing and reply-bridge paths — not migrated in PR 6
-// cutover because these operations MODIFY an existing interaction row
-// (no create) and have no event-kind peer in the spec's 10 kinds
-// (plan Decision 3).
+// interactionPromoter promotes outbound → mutual. Satisfied by
+// *service.ContactService via Go's structural typing. Re-declared here
+// for the shim's NewAggregationEngine signature; the shared package
+// declares its own equivalent interface (aggregation.InteractionPromoter).
 type interactionPromoter interface {
 	PromoteInteractionToMutual(ctx context.Context, interactionID, contactID uuid.UUID, replyAt time.Time) error
 }
 
-// interactionExtender extends an existing interaction. Satisfied by *service.ContactService.
-// Same rationale as interactionPromoter — out of PR 6 scope (plan Decision 3).
+// interactionExtender extends an existing interaction. Satisfied by
+// *service.ContactService via Go's structural typing.
 type interactionExtender interface {
 	ExtendInteraction(ctx context.Context, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) error
 }
 
-// AggregationEngine processes raw telegram_message rows into interaction records.
-// Post-PR-6 (cutover): new interaction creation runs through the event
-// bus — createInteractionForSession only publishes message.received /
-// message.sent events; the async InteractionRecorder consumer writes the
-// interaction row and marks telegram_messages processed inside its tx.
+// AggregationEngine is the telegram-side facade for the shared
+// aggregation engine (backend/internal/messaging/aggregation). The
+// exported method signatures match the pre-refactor type byte-for-byte
+// so manager.go, handlers.go, rematch.go, integration tests, and
+// cmd/crm-api wiring compile unchanged.
 type AggregationEngine struct {
-	burstWindowHours int
-	replyBridgeHours int
-	messageRepo      *repository.TelegramMessageRepository
-	interactionRepo  *repository.InteractionRepository
-	promoter         interactionPromoter
-	extender         interactionExtender
-	// eventBus is required in cutover mode. When nil, createInteractionForSession
-	// returns an error — off/shadow modes are effective no-ops post-cutover
-	// (spec §3.9; plan Decision 6).
-	eventBus *events.Bus
+	engine *aggregation.Engine
 }
 
-// NewAggregationEngine creates a new aggregation engine. eventBus is
-// required in cutover (default post-PR-6). Passing nil makes
-// createInteractionForSession a no-op error path (equivalent to the
-// off/shadow modes documented in EventBusConfig).
+// NewAggregationEngine constructs the telegram facade over the shared
+// aggregator. eventBus is required when cutover is enabled. Passing a
+// nil *events.Bus makes the engine's session-create path return an
+// error — equivalent to the off/shadow modes documented in
+// EventBusConfig (spec §3.9).
+//
+// CRITICAL: a nil *events.Bus is converted to the untyped-nil
+// aggregation.EventPublisher interface value explicitly. Assigning a
+// typed-nil pointer to an interface variable produces a non-nil
+// interface, which would silently bypass the engine's publisher==nil
+// guard.
 func NewAggregationEngine(
 	burstWindowHours, replyBridgeHours int,
 	messageRepo *repository.TelegramMessageRepository,
@@ -57,468 +58,196 @@ func NewAggregationEngine(
 	extender interactionExtender,
 	eventBus *events.Bus,
 ) *AggregationEngine {
-	return &AggregationEngine{
-		burstWindowHours: burstWindowHours,
-		replyBridgeHours: replyBridgeHours,
-		messageRepo:      messageRepo,
-		interactionRepo:  interactionRepo,
-		promoter:         promoter,
-		extender:         extender,
-		eventBus:         eventBus,
+	adapter := telegramAdapter{}
+	store := &telegramMessageStoreAdapter{repo: messageRepo}
+	finder := &interactionFinderAdapter{repo: interactionRepo}
+
+	var pub aggregation.EventPublisher
+	if eventBus != nil {
+		pub = eventBus
 	}
+
+	eng := aggregation.NewEngine(
+		adapter,
+		store,
+		finder,
+		promoter,
+		extender,
+		pub,
+		burstWindowHours,
+		replyBridgeHours,
+	)
+	return &AggregationEngine{engine: eng}
 }
 
-// burst groups consecutive same-direction messages within a time window.
-type burst struct {
-	direction string // "outbound" or "inbound"
-	messages  []repository.TelegramMessage
-	chatID    int64
+// AggregateAll processes all contacts with unprocessed telegram messages.
+func (e *AggregationEngine) AggregateAll(ctx context.Context) error {
+	return e.engine.AggregateAll(ctx)
 }
 
-func (b burst) firstMsgID() int32      { return b.messages[0].TelegramMessageID }
-func (b burst) firstSentAt() time.Time { return b.messages[0].SentAt }
-
-// msgSession is a resolved aggregation unit — may be a single burst or merged bursts.
-type msgSession struct {
-	direction string // "outbound", "inbound", or "mutual"
-	messages  []repository.TelegramMessage
-	chatID    int64
-	firstMsg  int32 // telegram_message_id of the first message (for source_ref)
+// AggregateForContactBatch processes all unprocessed telegram messages
+// for a single contact (no extend/bridge — create-path only).
+func (e *AggregationEngine) AggregateForContactBatch(ctx context.Context, contactID uuid.UUID) error {
+	return e.engine.AggregateForContactBatch(ctx, contactID)
 }
 
-func (s msgSession) sourceRef() string {
-	return fmt.Sprintf("tg:%d:%d", s.chatID, s.firstMsg)
+// AggregateForContact processes unprocessed messages for a specific
+// contact+chat in incremental mode. chatID stays int64 at the telegram
+// boundary; the shim stringifies before delegating to the shared
+// engine.
+func (e *AggregationEngine) AggregateForContact(ctx context.Context, contactID uuid.UUID, chatID int64) error {
+	return e.engine.AggregateForContact(ctx, contactID, strconv.FormatInt(chatID, 10))
 }
 
-func (s msgSession) lastSentAt() time.Time { return s.messages[len(s.messages)-1].SentAt }
+// --- adapters --------------------------------------------------------
 
-func (s msgSession) messageIDs() []uuid.UUID {
-	ids := make([]uuid.UUID, len(s.messages))
-	for i, m := range s.messages {
-		ids[i] = m.ID
-	}
-	return ids
+// telegramAdapter binds the source-name and formatting hooks for
+// Telegram. Wire format ("tg:<chatID>:<firstMsgID>") preserved
+// byte-for-byte from the pre-refactor msgSession.sourceRef.
+type telegramAdapter struct{}
+
+func (telegramAdapter) SourceName() string {
+	return repository.InteractionSourceTelegram
 }
 
-func (s msgSession) description() string {
+func (telegramAdapter) SourceRef(chatID, firstExternalID string) string {
+	return "tg:" + chatID + ":" + firstExternalID
+}
+
+func (telegramAdapter) SourceRefPrefix(chatID string) string {
+	return "tg:" + chatID + ":%"
+}
+
+func (telegramAdapter) PeerRef(chatID string) string {
+	return "tg:" + chatID
+}
+
+func (telegramAdapter) Description(direction string, msgCount int) string {
 	label := "exchange"
-	switch s.direction {
+	switch direction {
 	case repository.InteractionDirectionOutbound:
 		label = "outreach"
 	case repository.InteractionDirectionInbound:
 		label = "response"
 	}
-	return fmt.Sprintf("Telegram %s (%d messages)", label, len(s.messages))
+	return fmt.Sprintf("Telegram %s (%d messages)", label, msgCount)
 }
 
-// AggregateAll processes all contacts with unprocessed messages (batch mode).
-// Used after backfill. Pre-resolves outbound+inbound into mutual before calling RecordInteraction.
-func (e *AggregationEngine) AggregateAll(ctx context.Context) error {
-	contactIDs, err := e.messageRepo.ListUnprocessedContactIDs(ctx)
+// telegramMessageStoreAdapter wraps *repository.TelegramMessageRepository
+// and exposes the source-neutral aggregation.MessageStore surface.
+// Maps repository.TelegramMessage rows into aggregation.Message rows
+// row-by-row.
+type telegramMessageStoreAdapter struct {
+	repo *repository.TelegramMessageRepository
+}
+
+func (a *telegramMessageStoreAdapter) ListUnprocessedContactIDs(ctx context.Context) ([]uuid.UUID, error) {
+	return a.repo.ListUnprocessedContactIDs(ctx)
+}
+
+func (a *telegramMessageStoreAdapter) ListUnprocessedByContact(ctx context.Context, contactID uuid.UUID) ([]aggregation.Message, error) {
+	rows, err := a.repo.ListUnprocessedByContact(ctx, contactID)
 	if err != nil {
-		return fmt.Errorf("list unprocessed contact IDs: %w", err)
+		return nil, err
 	}
-
-	if len(contactIDs) == 0 {
-		return nil
+	out := make([]aggregation.Message, len(rows))
+	for i := range rows {
+		out[i] = mapTelegramMessage(rows[i])
 	}
-
-	interactionsCreated := 0
-	for _, contactID := range contactIDs {
-		n, err := e.aggregateBatch(ctx, contactID)
-		if err != nil {
-			log.Warn().Err(err).Str("contact_id", contactID.String()).Msg("telegram: batch aggregation failed for contact")
-			continue
-		}
-		interactionsCreated += n
-	}
-
-	log.Info().Int("contacts", len(contactIDs)).Int("interactions", interactionsCreated).Msg("telegram: batch aggregation complete")
-	return nil
+	return out, nil
 }
 
-// AggregateForContactBatch processes all unprocessed messages for a single contact in batch mode.
-// Used after import/link to aggregate newly-matched messages without scanning all contacts.
-func (e *AggregationEngine) AggregateForContactBatch(ctx context.Context, contactID uuid.UUID) error {
-	_, err := e.aggregateBatch(ctx, contactID)
-	return err
-}
-
-// aggregateBatch processes all unprocessed messages for a contact in batch mode.
-func (e *AggregationEngine) aggregateBatch(ctx context.Context, contactID uuid.UUID) (int, error) {
-	msgs, err := e.messageRepo.ListUnprocessedByContact(ctx, contactID)
+func (a *telegramMessageStoreAdapter) ListUnprocessedByContactAndChat(ctx context.Context, contactID uuid.UUID, chatID string) ([]aggregation.Message, error) {
+	parsedChat, err := strconv.ParseInt(chatID, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("list unprocessed messages: %w", err)
+		// Telegram chat IDs are int64 in storage; a non-parseable string
+		// here would mean a caller passed a non-numeric chat ID. Log and
+		// return empty (no unprocessed messages) — equivalent to "no
+		// rows" rather than crashing.
+		log.Warn().Err(err).Str("chat_id", chatID).Msg("telegram: aggregation chat_id is not int64-parseable; returning no rows")
+		return nil, nil
 	}
-	if len(msgs) == 0 {
-		return 0, nil
-	}
-
-	// Partition by chat
-	chatMsgs := partitionByChat(msgs)
-	interactionsCreated := 0
-
-	for chatID, chatMessages := range chatMsgs {
-		// Group into bursts
-		bursts := e.groupIntoBursts(chatMessages, chatID)
-
-		// Resolve bursts into sessions (merge outbound+inbound into mutual where applicable)
-		sessions := e.resolveSessions(bursts)
-
-		// Create interactions for each session
-		for _, sess := range sessions {
-			if err := e.createInteractionForSession(ctx, contactID, sess); err != nil {
-				log.Warn().Err(err).Int64("chat_id", chatID).Msg("telegram: failed to create interaction for session")
-				continue
-			}
-			interactionsCreated++
-		}
-	}
-
-	return interactionsCreated, nil
-}
-
-// AggregateForContact processes unprocessed messages for a specific contact+chat (incremental mode).
-func (e *AggregationEngine) AggregateForContact(ctx context.Context, contactID uuid.UUID, chatID int64) error {
-	msgs, err := e.messageRepo.ListUnprocessedByContactAndChat(ctx, contactID, chatID)
+	rows, err := a.repo.ListUnprocessedByContactAndChat(ctx, contactID, parsedChat)
 	if err != nil {
-		return fmt.Errorf("list unprocessed messages: %w", err)
+		return nil, err
 	}
-	if len(msgs) == 0 {
-		return nil
+	out := make([]aggregation.Message, len(rows))
+	for i := range rows {
+		out[i] = mapTelegramMessage(rows[i])
 	}
-
-	// Group into bursts
-	bursts := e.groupIntoBursts(msgs, chatID)
-
-	// Resolve into sessions (same logic as batch)
-	sessions := e.resolveSessions(bursts)
-
-	sourceRefPrefix := fmt.Sprintf("tg:%d:%%", chatID)
-	now := msgs[len(msgs)-1].SentAt // use latest message time as upper bound
-
-	for _, sess := range sessions {
-		// Check explicit reply bridging first
-		if sess.direction == repository.InteractionDirectionInbound || sess.direction == repository.InteractionDirectionMutual {
-			if bridged := e.tryExplicitReplyBridge(ctx, contactID, sess); bridged {
-				continue
-			}
-		}
-
-		// Check time-based reply bridging for inbound sessions
-		if sess.direction == repository.InteractionDirectionInbound {
-			windowStart := sess.messages[0].SentAt.Add(-time.Duration(e.replyBridgeHours) * time.Hour)
-			existing, err := e.interactionRepo.FindRecentOutboundTelegramInteraction(
-				ctx, contactID, sourceRefPrefix, windowStart, sess.messages[0].SentAt,
-			)
-			if err == nil {
-				// Promote outbound → mutual
-				if err := e.promoter.PromoteInteractionToMutual(ctx, existing.ID, contactID, sess.lastSentAt()); err != nil {
-					log.Warn().Err(err).Msg("telegram: failed to promote interaction to mutual")
-				} else {
-					if err := e.messageRepo.MarkMessagesProcessed(ctx, sess.messageIDs(), existing.ID); err != nil {
-						log.Warn().Err(err).Msg("telegram: failed to mark messages processed after promotion")
-					}
-					continue
-				}
-			}
-		}
-
-		// Check same-direction coalescing (burst window)
-		// For mutual sessions: check if there's an outbound interaction to promote
-		// rather than extend, since ExtendInteraction doesn't update direction.
-		if sess.direction == repository.InteractionDirectionMutual {
-			windowStart := sess.messages[0].SentAt.Add(-time.Duration(e.burstWindowHours) * time.Hour)
-			existing, err := e.interactionRepo.FindRecentTelegramInteraction(
-				ctx, contactID, repository.InteractionDirectionOutbound, sourceRefPrefix, windowStart, now,
-			)
-			if err == nil {
-				// Promote outbound → mutual (updates direction + contact fields)
-				if err := e.promoter.PromoteInteractionToMutual(ctx, existing.ID, contactID, sess.lastSentAt()); err != nil {
-					log.Warn().Err(err).Msg("telegram: failed to promote interaction to mutual during coalescing")
-				} else {
-					if err := e.messageRepo.MarkMessagesProcessed(ctx, sess.messageIDs(), existing.ID); err != nil {
-						log.Warn().Err(err).Msg("telegram: failed to mark messages processed after promotion")
-					}
-					continue
-				}
-			}
-			// No outbound to promote — fall through to create new mutual interaction
-		} else {
-			// Same-direction coalescing: extend the existing interaction
-			windowStart := sess.messages[0].SentAt.Add(-time.Duration(e.burstWindowHours) * time.Hour)
-			existing, err := e.interactionRepo.FindRecentTelegramInteraction(
-				ctx, contactID, sess.direction, sourceRefPrefix, windowStart, now,
-			)
-			if err == nil {
-				desc := sess.description()
-				if err := e.extender.ExtendInteraction(ctx, existing.ID, contactID, sess.direction, sess.lastSentAt(), &desc); err != nil {
-					log.Warn().Err(err).Msg("telegram: failed to extend interaction")
-				} else {
-					if err := e.messageRepo.MarkMessagesProcessed(ctx, sess.messageIDs(), existing.ID); err != nil {
-						log.Warn().Err(err).Msg("telegram: failed to mark messages processed after extension")
-					}
-					continue
-				}
-			}
-		}
-
-		// Create new interaction
-		if err := e.createInteractionForSession(ctx, contactID, sess); err != nil {
-			log.Warn().Err(err).Int64("chat_id", chatID).Msg("telegram: failed to create interaction for session")
-		}
-	}
-
-	return nil
+	return out, nil
 }
 
-// tryExplicitReplyBridge checks if any inbound message has reply_to_msg_id pointing
-// to an outgoing message with an interaction_id. Bridges regardless of time gap.
-func (e *AggregationEngine) tryExplicitReplyBridge(ctx context.Context, contactID uuid.UUID, sess msgSession) bool {
-	for _, msg := range sess.messages {
-		if msg.ReplyToMsgID == nil {
-			continue
-		}
-		// Resolve the referenced message
-		referenced, err := e.messageRepo.GetMessage(ctx, sess.chatID, *msg.ReplyToMsgID)
-		if err != nil {
-			continue // message not found or error
-		}
-		// Check if it's outgoing and has an interaction_id
-		if !referenced.IsOutgoing || referenced.InteractionID == nil {
-			continue
-		}
-		// Verify the interaction is outbound telegram
-		existing, err := e.interactionRepo.GetInteraction(ctx, *referenced.InteractionID)
-		if err != nil || existing.Source != repository.InteractionSourceTelegram || existing.Direction != repository.InteractionDirectionOutbound {
-			continue
-		}
-		// Promote to mutual
-		if err := e.promoter.PromoteInteractionToMutual(ctx, existing.ID, contactID, sess.lastSentAt()); err != nil {
-			log.Warn().Err(err).Msg("telegram: failed to promote interaction via explicit reply")
-			continue
-		}
-		if err := e.messageRepo.MarkMessagesProcessed(ctx, sess.messageIDs(), existing.ID); err != nil {
-			log.Warn().Err(err).Msg("telegram: failed to mark messages processed after explicit reply bridge")
-		}
-		return true
+func (a *telegramMessageStoreAdapter) GetMessageByReplyTarget(ctx context.Context, chatID, replyTargetID string) (aggregation.Message, bool, error) {
+	parsedChat, err := strconv.ParseInt(chatID, 10, 64)
+	if err != nil {
+		log.Warn().Err(err).Str("chat_id", chatID).Msg("telegram: reply-target chat_id is not int64-parseable; treating as not-found")
+		return aggregation.Message{}, false, nil
 	}
-	return false
+	parsedMsg, err := strconv.Atoi(replyTargetID)
+	if err != nil {
+		log.Warn().Err(err).Str("reply_target_id", replyTargetID).Msg("telegram: reply-target msg_id is not int32-parseable; treating as not-found")
+		return aggregation.Message{}, false, nil
+	}
+	row, err := a.repo.GetMessage(ctx, parsedChat, int32(parsedMsg))
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return aggregation.Message{}, false, nil
+		}
+		return aggregation.Message{}, false, err
+	}
+	return mapTelegramMessage(*row), true, nil
 }
 
-// createInteractionForSession publishes a message.received / message.sent
-// event for a session. In cutover (post-PR-6) the async
-// InteractionRecorder consumer handles the write inside a single tx that
-// also marks the telegram_message rows processed (plan Decisions 7 + 10).
-//
-// Returns an error when eventBus is nil — mode=off/shadow is effectively
-// broken post-cutover (spec §3.9; the direct path has been removed).
-func (e *AggregationEngine) createInteractionForSession(ctx context.Context, contactID uuid.UUID, sess msgSession) error {
-	if e.eventBus == nil {
-		return fmt.Errorf("telegram: cutover wiring requires eventBus; publisher refusing to drop interaction (mode=off/shadow is post-cutover broken per spec §3.9)")
-	}
-	sourceRef := sess.sourceRef()
-	desc := sess.description()
-	if pubErr := e.publishForSession(ctx, contactID, sess, sourceRef, &desc); pubErr != nil {
-		return fmt.Errorf("publish telegram interaction event: %w", pubErr)
-	}
-	// Note: MarkMessagesProcessed is NOT called here. The consumer's
-	// InteractionRecorder.HandleEvent marks the messages processed inside
-	// the same tx as the interaction insert — gives us atomicity between
-	// the interaction row and the telegram_message.interaction_id FK
-	// (plan Decision 10).
-	return nil
+func (a *telegramMessageStoreAdapter) MarkProcessed(ctx context.Context, messageIDs []uuid.UUID, interactionID uuid.UUID) error {
+	return a.repo.MarkMessagesProcessed(ctx, messageIDs, interactionID)
 }
 
-// publishForSession emits the message.received / message.sent event
-// corresponding to a freshly-created telegram interaction. Fresh-mutual
-// sessions carry Direction="mutual" in the payload so the consumer can
-// write a matching mutual row (plan Decision 6).
-//
-// Kind selection:
-//   - inbound session  → KindMessageReceived
-//   - outbound session → KindMessageSent
-//   - mutual session   → KindMessageReceived (arbitrary; the payload's
-//     Direction field carries the authoritative direction)
-//
-// SourceID = sourceRef so publisher-idempotency dedupes retries.
-func (e *AggregationEngine) publishForSession(
+// mapTelegramMessage projects a repository.TelegramMessage into the
+// source-neutral aggregation.Message. Preserving InteractionID is
+// critical for cross-batch explicit reply bridging.
+func mapTelegramMessage(m repository.TelegramMessage) aggregation.Message {
+	out := aggregation.Message{
+		ID:            m.ID,
+		ChatID:        strconv.FormatInt(m.TelegramChatID, 10),
+		IsOutgoing:    m.IsOutgoing,
+		SentAt:        m.SentAt,
+		ExternalID:    strconv.Itoa(int(m.TelegramMessageID)),
+		InteractionID: m.InteractionID,
+	}
+	if m.ReplyToMsgID != nil {
+		s := strconv.Itoa(int(*m.ReplyToMsgID))
+		out.ReplyTargetID = &s
+	}
+	return out
+}
+
+// interactionFinderAdapter wraps *repository.InteractionRepository and
+// exposes the source-neutral aggregation.InteractionFinder surface.
+// Lives in the telegram package (not the repository package) so the
+// repository type stays free of aggregation-package imports.
+type interactionFinderAdapter struct {
+	repo *repository.InteractionRepository
+}
+
+func (a *interactionFinderAdapter) FindRecentBySourceAndDirection(
 	ctx context.Context,
 	contactID uuid.UUID,
-	sess msgSession,
-	sourceRef string,
-	description *string,
-) error {
-	cid := contactID
-	messageAt := sess.lastSentAt()
-
-	var kind events.Kind
-	var payloadDirection string
-	switch sess.direction {
-	case repository.InteractionDirectionOutbound:
-		kind = events.KindMessageSent
-		payloadDirection = ""
-	case repository.InteractionDirectionInbound:
-		kind = events.KindMessageReceived
-		payloadDirection = ""
-	case repository.InteractionDirectionMutual:
-		kind = events.KindMessageReceived
-		payloadDirection = repository.InteractionDirectionMutual
-	default:
-		return fmt.Errorf("unexpected session direction %q", sess.direction)
-	}
-
-	// Build payload. Kind-specific type so events.Marshal validates the
-	// kind↔payload pairing. MessageIDs carries the telegram_message UUIDs
-	// so the consumer can mark them processed inside the interaction-insert
-	// tx (plan Decision 10).
-	msgIDs := sess.messageIDs()
-	var raw []byte
-	var marshalErr error
-	switch kind {
-	case events.KindMessageReceived:
-		msg, err := events.Marshal(kind, events.MessageReceivedPayload{
-			Version:           1,
-			ContactID:         &cid,
-			PeerRef:           fmt.Sprintf("tg:%d", sess.chatID),
-			MessageAt:         messageAt,
-			Description:       description,
-			ExternalMessageID: sourceRef,
-			Direction:         payloadDirection,
-			MessageIDs:        msgIDs,
-		})
-		raw, marshalErr = msg, err
-	case events.KindMessageSent:
-		msg, err := events.Marshal(kind, events.MessageSentPayload{
-			Version:           1,
-			ContactID:         &cid,
-			PeerRef:           fmt.Sprintf("tg:%d", sess.chatID),
-			MessageAt:         messageAt,
-			Description:       description,
-			ExternalMessageID: sourceRef,
-			Direction:         payloadDirection,
-			MessageIDs:        msgIDs,
-		})
-		raw, marshalErr = msg, err
-	}
-	if marshalErr != nil {
-		return fmt.Errorf("marshal %s: %w", kind, marshalErr)
-	}
-
-	env := &events.Envelope{
-		Source:     repository.InteractionSourceTelegram,
-		SourceID:   sourceRef,
-		Kind:       kind,
-		Payload:    raw,
-		ObservedAt: messageAt,
-	}
-	return e.eventBus.Publish(ctx, env)
+	source, direction, sourceRefPrefix string,
+	windowStart, windowEnd time.Time,
+) (*repository.Interaction, error) {
+	return a.repo.FindRecentInteractionBySourceAndDirection(ctx, contactID, source, direction, sourceRefPrefix, windowStart, windowEnd)
 }
 
-// groupIntoBursts groups consecutive same-direction messages within the burst window.
-func (e *AggregationEngine) groupIntoBursts(msgs []repository.TelegramMessage, chatID int64) []burst {
-	if len(msgs) == 0 {
-		return nil
-	}
-
-	var bursts []burst
-	current := burst{
-		direction: msgDirection(msgs[0]),
-		messages:  []repository.TelegramMessage{msgs[0]},
-		chatID:    chatID,
-	}
-
-	for i := 1; i < len(msgs); i++ {
-		dir := msgDirection(msgs[i])
-		gap := msgs[i].SentAt.Sub(msgs[i-1].SentAt)
-
-		if dir != current.direction || gap > time.Duration(e.burstWindowHours)*time.Hour {
-			bursts = append(bursts, current)
-			current = burst{
-				direction: dir,
-				messages:  []repository.TelegramMessage{msgs[i]},
-				chatID:    chatID,
-			}
-		} else {
-			current.messages = append(current.messages, msgs[i])
-		}
-	}
-	bursts = append(bursts, current)
-	return bursts
+func (a *interactionFinderAdapter) FindRecentOutboundBySource(
+	ctx context.Context,
+	contactID uuid.UUID,
+	source, sourceRefPrefix string,
+	windowStart, windowEnd time.Time,
+) (*repository.Interaction, error) {
+	return a.repo.FindRecentOutboundInteractionBySource(ctx, contactID, source, sourceRefPrefix, windowStart, windowEnd)
 }
 
-// resolveSessions merges bursts into sessions, applying reply bridging for batch mode.
-func (e *AggregationEngine) resolveSessions(bursts []burst) []msgSession {
-	if len(bursts) == 0 {
-		return nil
-	}
-
-	var sessions []msgSession
-
-	for i := 0; i < len(bursts); i++ {
-		b := bursts[i]
-
-		// Check if this inbound burst should bridge with the previous outbound session
-		if b.direction == repository.InteractionDirectionInbound && len(sessions) > 0 {
-			prev := &sessions[len(sessions)-1]
-			if prev.direction == repository.InteractionDirectionOutbound && prev.chatID == b.chatID {
-				shouldBridge := false
-
-				// Time-based bridging
-				gap := b.firstSentAt().Sub(prev.lastSentAt())
-				if gap <= time.Duration(e.replyBridgeHours)*time.Hour {
-					shouldBridge = true
-				}
-
-				// Explicit reply bridging
-				if !shouldBridge {
-					for _, msg := range b.messages {
-						if msg.ReplyToMsgID != nil {
-							for _, prevMsg := range prev.messages {
-								if prevMsg.TelegramMessageID == *msg.ReplyToMsgID {
-									shouldBridge = true
-									break
-								}
-							}
-							if shouldBridge {
-								break
-							}
-						}
-					}
-				}
-
-				if shouldBridge {
-					// Merge into mutual session
-					prev.direction = repository.InteractionDirectionMutual
-					prev.messages = append(prev.messages, b.messages...)
-					continue
-				}
-			}
-		}
-
-		sessions = append(sessions, msgSession{
-			direction: b.direction,
-			messages:  b.messages,
-			chatID:    b.chatID,
-			firstMsg:  b.firstMsgID(),
-		})
-	}
-
-	return sessions
-}
-
-// partitionByChat groups messages by telegram_chat_id.
-func partitionByChat(msgs []repository.TelegramMessage) map[int64][]repository.TelegramMessage {
-	result := make(map[int64][]repository.TelegramMessage)
-	for _, m := range msgs {
-		result[m.TelegramChatID] = append(result[m.TelegramChatID], m)
-	}
-	return result
-}
-
-func msgDirection(msg repository.TelegramMessage) string {
-	if msg.IsOutgoing {
-		return repository.InteractionDirectionOutbound
-	}
-	return repository.InteractionDirectionInbound
+func (a *interactionFinderAdapter) GetInteraction(ctx context.Context, id uuid.UUID) (*repository.Interaction, error) {
+	return a.repo.GetInteraction(ctx, id)
 }

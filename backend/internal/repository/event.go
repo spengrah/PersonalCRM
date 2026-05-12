@@ -138,6 +138,19 @@ func (r *EventRepository) FindEventBySource(ctx context.Context, source, sourceI
 	return convertDbEvent(row), nil
 }
 
+// HardDeleteEventsBySourceAndSourceIDPrefix removes event rows whose
+// (source, source_id) match the given source and a LIKE-prefix on
+// source_id. Test-only helper for integration tests that publish
+// per-run event envelopes — a soft-delete is not possible because the
+// event log is append-only and the (source, source_id) partial unique
+// must be cleared between test runs. Production code MUST NOT call this.
+func (r *EventRepository) HardDeleteEventsBySourceAndSourceIDPrefix(ctx context.Context, source, sourceIDPrefix string) error {
+	return r.queries.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, db.HardDeleteEventsBySourceAndSourceIDPrefixParams{
+		Source:         source,
+		SourceIDPrefix: pgtype.Text{String: sourceIDPrefix, Valid: true},
+	})
+}
+
 // CountRematchDispatcherJobs returns the number of river_job rows of
 // kind "rematch_dispatcher" whose args JSON matches the given
 // (contactID, rematchJobID) tuple. Test-only helper for rematch dedup

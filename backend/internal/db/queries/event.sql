@@ -39,6 +39,16 @@ LIMIT 1;
 -- deleted_at filter is needed.
 SELECT COUNT(*) FROM event WHERE source = @source;
 
+-- name: HardDeleteEventsBySourceAndSourceIDPrefix :exec
+-- Test-only: hard-deletes event rows whose (source, source_id) match the
+-- given source and a LIKE-prefix on source_id. Used by integration tests
+-- to purge per-run event envelopes so a re-run does not collide on the
+-- (source, source_id) partial unique. The event log is otherwise
+-- append-only; production code MUST NOT call this.
+DELETE FROM event
+WHERE source = @source
+  AND source_id LIKE @source_id_prefix;
+
 -- name: CountRematchDispatcherJobsByContactAndJob :one
 -- Test-only count of river_job rows for the rematch_dispatcher kind
 -- whose args JSON contains the given (contact_id, rematch_job_id)
