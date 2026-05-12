@@ -80,3 +80,10 @@ export const rematchKeys = {
   all: ['rematch'] as const,
   job: (jobId: string) => [...rematchKeys.all, 'job', jobId] as const,
 }
+
+// Mac host query keys (paired Mac daemon hosts).
+export const macHostKeys = {
+  all: ['mac-hosts'] as const,
+  list: () => [...macHostKeys.all, 'list'] as const,
+  detail: (id: string) => [...macHostKeys.all, 'detail', id] as const,
+}

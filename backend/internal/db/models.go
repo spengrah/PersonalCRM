@@ -265,6 +265,30 @@ type Interaction struct {
 	Direction   string             `json:"direction"`
 }
 
+type MacHost struct {
+	ID              pgtype.UUID        `json:"id"`
+	Hostname        string             `json:"hostname"`
+	DaemonVersion   string             `json:"daemon_version"`
+	ProtocolVersion int32              `json:"protocol_version"`
+	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
+	Permissions     []byte             `json:"permissions"`
+	SourceHealth    []byte             `json:"source_health"`
+	CursorEpoch     int64              `json:"cursor_epoch"`
+	ApiKeyHash      string             `json:"api_key_hash"`
+	ApiKeyRevokedAt pgtype.Timestamptz `json:"api_key_revoked_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type MacHostPairingToken struct {
+	ID             pgtype.UUID        `json:"id"`
+	TokenHash      string             `json:"token_hash"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt     pgtype.Timestamptz `json:"consumed_at"`
+	ConsumedHostID pgtype.UUID        `json:"consumed_host_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type Note struct {
 	ID        pgtype.UUID        `json:"id"`
 	ContactID pgtype.UUID        `json:"contact_id"`

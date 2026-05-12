@@ -28,3 +28,12 @@ type SyncProviderAccountArgs struct {
 // Kind implements river.JobArgs. The literal string 'sync_provider_account'
 // is matched by CountInFlightSyncJobs; keep them in lockstep.
 func (SyncProviderAccountArgs) Kind() string { return "sync_provider_account" }
+
+// PairingTokenJanitorArgs are the args for the periodic
+// PairingTokenJanitorWorker. The worker holds no state; the args type
+// is intentionally empty so the periodic-job scheduler can insert it
+// without per-tick parameter resolution.
+type PairingTokenJanitorArgs struct{}
+
+// Kind implements river.JobArgs.
+func (PairingTokenJanitorArgs) Kind() string { return "pairing_token_janitor" }

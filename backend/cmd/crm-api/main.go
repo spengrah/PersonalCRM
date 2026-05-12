@@ -652,6 +652,39 @@ func run() int {
 	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
 	rematchHandler := handlers.NewRematchHandler(rematchService, contactService)
 
+	// Mac-daemon host management. Wires the pairing flow, heartbeat,
+	// cursor protocol, and admin revoke. The pairing endpoint is
+	// unauthenticated (token-gated) so it lives on the bare router; the
+	// daemon endpoints live behind MacHostAuthMiddleware (sibling
+	// /api/v1 group); the admin endpoints live behind the existing
+	// global API-key middleware.
+	macHostRepo := repository.NewMacHostRepository(database.Queries)
+	pairingTokenRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
+	// Mac cursor commit needs a tx — use the pool-wired SyncRepository.
+	macSyncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+	macHostService := service.NewMacHostService(
+		macHostRepo,
+		pairingTokenRepo,
+		macSyncRepo,
+		database.Pool,
+		0, // default bcrypt cost
+	)
+	pairingIPLimiter := auth.NewPairingIPRateLimiter()
+	macHostHandler := handlers.NewMacHostHandler(macHostService, pairingIPLimiter)
+
+	// Register the pairing-token janitor periodic job (5 min). Worker
+	// registered unconditionally; the periodic-job inserter triggers it
+	// on the same River client. See
+	// backend/internal/scheduler/pairing_token_janitor_worker.go.
+	river.AddWorker(riverWorkers, scheduler.NewPairingTokenJanitorWorker(pairingTokenRepo))
+	riverClient.PeriodicJobs().Add(river.NewPeriodicJob(
+		river.PeriodicInterval(5*time.Minute),
+		func() (river.JobArgs, *river.InsertOpts) {
+			return scheduler.PairingTokenJanitorArgs{}, nil
+		},
+		&river.PeriodicJobOpts{RunOnStart: true},
+	))
+
 	// Build the River worker set, periodic-job list, and client. The
 	// scheduler-tick + sync-provider-account workers are only registered
 	// when external sync is enabled and we have a real syncService —
@@ -717,6 +750,16 @@ func run() int {
 		}
 	}
 
+	// Mac-daemon public + host-auth routes (Pair + heartbeat + cursor +
+	// known-ids). Registered via the shared helper so integration tests
+	// exercise the same code path. Admin routes are registered later
+	// inside the global-API-key-protected v1 group.
+	handlers.RegisterMacHostRoutes(router, handlers.MacHostRouteDeps{
+		HostRepo:    macHostRepo,
+		Handler:     macHostHandler,
+		AuthLimiter: auth.DefaultMacHostAuthLimiterConfig(),
+	})
+
 	// API routes
 	v1 := router.Group("/api/v1")
 	v1.Use(auth.APIKeyMiddleware(cfg))
@@ -759,6 +802,10 @@ func run() int {
 			system.GET("/time", systemHandler.GetSystemTime)
 			system.POST("/time/acceleration", systemHandler.SetTimeAcceleration)
 		}
+
+		// Mac-daemon admin routes (under global API key middleware).
+		// Pairing-token mint + revoke + list/get for the Mac settings UI.
+		handlers.RegisterMacHostAdminRoutes(v1, macHostHandler)
 
 		// OAuth routes (feature-flagged with external sync)
 		if oauthHandler != nil {
@@ -915,13 +962,14 @@ func run() int {
 				logger.Info().Msg("calendar handler initialized for testing (no OAuth)")
 			}
 
-			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService, testCalendarRepo)
+			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService, testCalendarRepo, macHostRepo)
 			testRoutes := v1.Group("/test")
 			{
 				testRoutes.POST("/seed/contacts", testHandler.SeedContacts)
 				testRoutes.POST("/seed/external-contacts", testHandler.SeedExternalContacts)
 				testRoutes.POST("/seed/overdue-contacts", testHandler.SeedOverdueContacts)
 				testRoutes.POST("/seed/calendar-events", testHandler.SeedCalendarEvents)
+				testRoutes.POST("/seed/mac-hosts", testHandler.SeedMacHost)
 				testRoutes.POST("/cleanup", testHandler.Cleanup)
 				testRoutes.POST("/trigger-error", testHandler.TriggerError)
 			}

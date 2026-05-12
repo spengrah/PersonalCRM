@@ -335,6 +335,14 @@ v1 := router.Group("/api/v1")
 | | `/export` | POST | SystemHandler | Export data |
 | | `/import` | POST | SystemHandler | Import data |
 | **Ingest** | `/ingest/events` | POST | IngestHandler | Batched event ingestion (gated by `EVENT_BUS_INGEST_ENABLED`) |
+| **Mac Daemon (public)** | `/host` | POST | MacHostHandler | Daemon pairs with a token — rate-limited per source IP, no auth |
+| **Mac Daemon (host auth)** | `/host/:id/heartbeat` | POST | MacHostHandler | Periodic daemon heartbeat — `Authorization: Bearer <host-key>` + `X-Mac-Host-ID` |
+| | `/host/:id/sync/:source/cursor` | GET | MacHostHandler | Read push-cursor for (host, source) |
+| | `/host/:id/sync/:source/cursor` | POST | MacHostHandler | Commit push-cursor (three-stage CAS) |
+| | `/host/:id/sync/:source/known-ids` | GET | MacHostHandler | Known external-contact IDs stub (PR5 fills body) |
+| **Mac Daemon (admin)** | `/host` | GET | MacHostHandler | List paired hosts |
+| | `/host/:id` | GET/DELETE | MacHostHandler | Get / revoke host (delete cascades push-cursor rows) |
+| | `/host/pairing-token` | POST | MacHostHandler | Mint single-use pairing token (10-min TTL) |
 
 Routes defined in `backend/cmd/crm-api/main.go`.
 

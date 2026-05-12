@@ -638,6 +638,30 @@ New providers require three steps in main.go:
 
 See Google Calendar or Todoist providers as reference implementations.
 
+### Mac Daemon push providers (Phase 1)
+
+Phase 1 introduces a Mac-side daemon that pushes data to the Pi via a
+new family of authenticated endpoints under `/api/v1/host/...`. The
+Pi-side surface in PR1 is:
+
+- `mac_host` table — one row per paired Mac (singleton index on
+  non-revoked rows in v1).
+- `mac_host_pairing_token` table — short-lived single-use tokens used
+  during the bootstrap pair flow.
+- `external_sync_state.strategy` extended with `'push'` (migration
+  048). Push-strategy rows are skipped by the scheduler tick.
+- `MacHostAuthMiddleware` — separate from the global API-key
+  middleware. The daemon authenticates with
+  `Authorization: Bearer <host-key>` + `X-Mac-Host-ID: <uuid>`.
+- Three-stage transactional CAS (`SyncRepository.CommitMacHostCursor`)
+  for cursor commits: epoch check, then insert-or-update, then
+  re-read on race. Returns 409 with `current_cursor` / `current_epoch`
+  on mismatch so the daemon can rebase.
+
+Subsequent PRs add the Swift daemon, source readers (Messages, iCloud
+Contacts), the aggregator extraction, and the new event kinds. See
+`.ai/spec/mac-daemon.md` for the full phase spec.
+
 ---
 
 ## Event Bus and Consumers

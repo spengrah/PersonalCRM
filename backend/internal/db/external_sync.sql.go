@@ -227,6 +227,25 @@ func (q *Queries) CreateSyncState(ctx context.Context, arg CreateSyncStateParams
 	return &i, err
 }
 
+const DeleteMacHostSyncStates = `-- name: DeleteMacHostSyncStates :execrows
+DELETE FROM external_sync_state
+WHERE strategy = 'push' AND COALESCE(account_id, '') = $1::text
+`
+
+// Cascade-on-revoke: when a host is uninstalled, drop its push-cursor
+// rows. Filters by strategy='push' so OAuth-driven rows that happen to
+// share an account_id string can never be deleted by this path (defence
+// in depth; account_id collisions between Mac UUIDs and OAuth account
+// emails are not possible by format but the explicit strategy filter
+// locks the contract).
+func (q *Queries) DeleteMacHostSyncStates(ctx context.Context, accountID string) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteMacHostSyncStates, accountID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const DeleteOldSyncLogs = `-- name: DeleteOldSyncLogs :exec
 DELETE FROM external_sync_log
 WHERE created_at < $1
@@ -255,6 +274,50 @@ WHERE account_id IS NOT NULL AND account_id = $1
 func (q *Queries) DeleteSyncStatesByAccountID(ctx context.Context, accountID pgtype.Text) error {
 	_, err := q.db.Exec(ctx, DeleteSyncStatesByAccountID, accountID)
 	return err
+}
+
+const GetMacHostSyncState = `-- name: GetMacHostSyncState :one
+
+SELECT id, source, account_id, enabled, status, strategy, last_sync_at, last_successful_sync_at, next_sync_at, sync_cursor, error_message, error_count, metadata, created_at, updated_at FROM external_sync_state
+WHERE source = $1
+  AND COALESCE(account_id, '') = $2::text
+  AND strategy = 'push'
+`
+
+type GetMacHostSyncStateParams struct {
+	Source    string `json:"source"`
+	AccountID string `json:"account_id"`
+}
+
+// Mac-daemon push-cursor queries (see backend/internal/repository/mac_host.go).
+// Cursors for push providers live in external_sync_state keyed by
+// (source, account_id) where account_id = mac_host.id. cursor_epoch is
+// read from mac_host (see GetMacHostCursorEpoch) — the row lock there
+// serializes concurrent commits for the same host.
+// Returns the push-cursor row for (source, host_id). The handler treats
+// db.ErrNotFound as "no cursor committed yet" and surfaces an empty
+// cursor + the host's current cursor_epoch.
+func (q *Queries) GetMacHostSyncState(ctx context.Context, arg GetMacHostSyncStateParams) (*ExternalSyncState, error) {
+	row := q.db.QueryRow(ctx, GetMacHostSyncState, arg.Source, arg.AccountID)
+	var i ExternalSyncState
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.AccountID,
+		&i.Enabled,
+		&i.Status,
+		&i.Strategy,
+		&i.LastSyncAt,
+		&i.LastSuccessfulSyncAt,
+		&i.NextSyncAt,
+		&i.SyncCursor,
+		&i.ErrorMessage,
+		&i.ErrorCount,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
 }
 
 const GetSyncLog = `-- name: GetSyncLog :one
@@ -343,6 +406,47 @@ func (q *Queries) GetSyncStateBySource(ctx context.Context, arg GetSyncStateBySo
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
+	return &i, err
+}
+
+const InsertMacHostSyncCursor = `-- name: InsertMacHostSyncCursor :one
+INSERT INTO external_sync_state
+    (source, account_id, enabled, status, strategy, sync_cursor, next_sync_at, metadata)
+VALUES (
+    $1, $2, TRUE, 'idle', 'push', $3, NULL,
+    jsonb_build_object('backfill_complete', $4::boolean)
+)
+ON CONFLICT (source, COALESCE(account_id, '')) DO NOTHING
+RETURNING id, sync_cursor, metadata
+`
+
+type InsertMacHostSyncCursorParams struct {
+	Source           string      `json:"source"`
+	AccountID        pgtype.Text `json:"account_id"`
+	NewCursor        pgtype.Text `json:"new_cursor"`
+	BackfillComplete bool        `json:"backfill_complete"`
+}
+
+type InsertMacHostSyncCursorRow struct {
+	ID         pgtype.UUID `json:"id"`
+	SyncCursor pgtype.Text `json:"sync_cursor"`
+	Metadata   []byte      `json:"metadata"`
+}
+
+// First-commit insert path. ON CONFLICT DO NOTHING handles the
+// concurrent-first-write race: the loser gets zero rows, re-reads the
+// now-committed state, and surfaces ErrCursorBaseMismatch with the
+// winner's cursor. backfill_complete is stored as a JSONB key on the
+// metadata column — see the cursor wire contract in the handler.
+func (q *Queries) InsertMacHostSyncCursor(ctx context.Context, arg InsertMacHostSyncCursorParams) (*InsertMacHostSyncCursorRow, error) {
+	row := q.db.QueryRow(ctx, InsertMacHostSyncCursor,
+		arg.Source,
+		arg.AccountID,
+		arg.NewCursor,
+		arg.BackfillComplete,
+	)
+	var i InsertMacHostSyncCursorRow
+	err := row.Scan(&i.ID, &i.SyncCursor, &i.Metadata)
 	return &i, err
 }
 
@@ -563,6 +667,50 @@ func (q *Queries) ListSyncStates(ctx context.Context) ([]*ExternalSyncState, err
 		return nil, err
 	}
 	return items, nil
+}
+
+const UpdateMacHostSyncCursor = `-- name: UpdateMacHostSyncCursor :one
+UPDATE external_sync_state
+SET sync_cursor = $1,
+    metadata    = jsonb_set(
+        COALESCE(metadata, '{}'::jsonb),
+        '{backfill_complete}',
+        to_jsonb($2::boolean),
+        TRUE
+    ),
+    updated_at  = NOW()
+WHERE id = $3
+  AND COALESCE(sync_cursor, '') = $4::text
+RETURNING id, sync_cursor, metadata
+`
+
+type UpdateMacHostSyncCursorParams struct {
+	NewCursor        pgtype.Text `json:"new_cursor"`
+	BackfillComplete bool        `json:"backfill_complete"`
+	ID               pgtype.UUID `json:"id"`
+	BaseCursor       string      `json:"base_cursor"`
+}
+
+type UpdateMacHostSyncCursorRow struct {
+	ID         pgtype.UUID `json:"id"`
+	SyncCursor pgtype.Text `json:"sync_cursor"`
+	Metadata   []byte      `json:"metadata"`
+}
+
+// CAS-style update: only updates when sync_cursor matches base_cursor.
+// Zero rows returned means another writer slipped in between the
+// planning read and this update; the caller re-reads and surfaces 409.
+// metadata.backfill_complete is rewritten on every successful commit.
+func (q *Queries) UpdateMacHostSyncCursor(ctx context.Context, arg UpdateMacHostSyncCursorParams) (*UpdateMacHostSyncCursorRow, error) {
+	row := q.db.QueryRow(ctx, UpdateMacHostSyncCursor,
+		arg.NewCursor,
+		arg.BackfillComplete,
+		arg.ID,
+		arg.BaseCursor,
+	)
+	var i UpdateMacHostSyncCursorRow
+	err := row.Scan(&i.ID, &i.SyncCursor, &i.Metadata)
+	return &i, err
 }
 
 const UpdateSyncStateCursor = `-- name: UpdateSyncStateCursor :exec

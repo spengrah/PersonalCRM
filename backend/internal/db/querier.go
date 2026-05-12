@@ -23,6 +23,10 @@ type Querier interface {
 	// Decision 6) so the scheduler race is avoided at the source.
 	AppendMatchedContact(ctx context.Context, arg AppendMatchedContactParams) error
 	BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error
+	// Admin operation. Bumps cursor_epoch so the daemon discards its
+	// local cursor cache on next heartbeat. Currently used only by the
+	// repository layer; no admin endpoint is wired to it yet.
+	BumpMacHostCursorEpoch(ctx context.Context, id pgtype.UUID) (int64, error)
 	// Mark all pending follow-up tasks as completed for a contact (when a
 	// response arrives). Matches the same live-state set as FindPendingFollowUp
 	// so an inbound arriving while the create worker is mid-flight still
@@ -93,9 +97,13 @@ type Querier interface {
 	CreateContactTaskWithIdempotencyKey(ctx context.Context, arg CreateContactTaskWithIdempotencyKeyParams) (*ContactTask, error)
 	CreateEnrichment(ctx context.Context, arg CreateEnrichmentParams) (*ContactEnrichment, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
+	// mac_host queries.
+	CreateMacHost(ctx context.Context, arg CreateMacHostParams) (*MacHost, error)
 	CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error)
 	// Create a note with a specific created_at timestamp (for migrations)
 	CreateNoteWithTimestamp(ctx context.Context, arg CreateNoteWithTimestampParams) (*Note, error)
+	// mac_host_pairing_token queries.
+	CreatePairingToken(ctx context.Context, arg CreatePairingTokenParams) (*MacHostPairingToken, error)
 	// External Sync Log Queries
 	CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error)
 	CreateSyncState(ctx context.Context, arg CreateSyncStateParams) (*ExternalSyncState, error)
@@ -103,6 +111,11 @@ type Querier interface {
 	// Remove duplicate contact IDs that may result from merge
 	// Uses subquery with DISTINCT to rebuild the array without duplicates
 	DeduplicateCalendarEventContacts(ctx context.Context, targetContactID pgtype.UUID) error
+	// Test teardown — hard delete so the singleton index is empty for the
+	// next test. mac_host has no deleted_at column, so soft-delete is not
+	// an option.
+	DeleteAllMacHosts(ctx context.Context) (int64, error)
+	DeleteAllPairingTokens(ctx context.Context) (int64, error)
 	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteCalendarEventsByTitlePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
@@ -133,6 +146,7 @@ type Querier interface {
 	DeleteEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) error
 	// Delete all events for a Google account (used when revoking access)
 	DeleteEventsByAccount(ctx context.Context, googleAccountID string) error
+	DeleteExpiredPairingTokens(ctx context.Context) (int64, error)
 	DeleteExternalContact(ctx context.Context, id pgtype.UUID) error
 	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error
@@ -140,6 +154,13 @@ type Querier interface {
 	DeleteExternalIdentitiesBySourceID(ctx context.Context, sourceID pgtype.Text) (int64, error)
 	DeleteIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) error
 	DeleteIdentity(ctx context.Context, id pgtype.UUID) error
+	// Cascade-on-revoke: when a host is uninstalled, drop its push-cursor
+	// rows. Filters by strategy='push' so OAuth-driven rows that happen to
+	// share an account_id string can never be deleted by this path (defence
+	// in depth; account_id collisions between Mac UUIDs and OAuth account
+	// emails are not possible by format but the explicit strategy filter
+	// locks the contract).
+	DeleteMacHostSyncStates(ctx context.Context, accountID string) (int64, error)
 	DeleteNote(ctx context.Context, id pgtype.UUID) error
 	// Delete an OAuth credential by ID
 	DeleteOAuthCredential(ctx context.Context, id pgtype.UUID) error
@@ -233,6 +254,9 @@ type Querier interface {
 	// Uses UNNEST to expand input arrays and LATERAL join to find matches per candidate.
 	// Returns results grouped by candidate_id with matches ordered by similarity.
 	FindSimilarContactsBatch(ctx context.Context, arg FindSimilarContactsBatchParams) ([]*FindSimilarContactsBatchRow, error)
+	// Used by MacHostAuthMiddleware. Filters revoked hosts so a revoked
+	// daemon's bearer key cannot authenticate.
+	GetActiveMacHostByID(ctx context.Context, id pgtype.UUID) (*MacHost, error)
 	// Look up an event by its Google Calendar ID
 	GetCalendarEventByGcalID(ctx context.Context, arg GetCalendarEventByGcalIDParams) (*CalendarEvent, error)
 	// Look up an event by its UUID
@@ -277,6 +301,20 @@ type Querier interface {
 	// pre-migration rows). Multiple action rows are possible per
 	// contact/provider; this returns the most recent.
 	GetLegacyActionTaskByContact(ctx context.Context, arg GetLegacyActionTaskByContactParams) (*ContactTask, error)
+	GetMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error)
+	// Reads the host's cursor_epoch with a row lock. Used by the cursor
+	// commit path to serialize concurrent commits per host and to bind
+	// the epoch read against the cursor read in the same tx.
+	GetMacHostCursorEpoch(ctx context.Context, id pgtype.UUID) (*GetMacHostCursorEpochRow, error)
+	// Mac-daemon push-cursor queries (see backend/internal/repository/mac_host.go).
+	// Cursors for push providers live in external_sync_state keyed by
+	// (source, account_id) where account_id = mac_host.id. cursor_epoch is
+	// read from mac_host (see GetMacHostCursorEpoch) — the row lock there
+	// serializes concurrent commits for the same host.
+	// Returns the push-cursor row for (source, host_id). The handler treats
+	// db.ErrNotFound as "no cursor committed yet" and surfaces an empty
+	// cursor + the host's current cursor_epoch.
+	GetMacHostSyncState(ctx context.Context, arg GetMacHostSyncStateParams) (*ExternalSyncState, error)
 	// Note queries
 	GetNote(ctx context.Context, id pgtype.UUID) (*Note, error)
 	// OAuth Credential Queries
@@ -286,6 +324,9 @@ type Querier interface {
 	GetOAuthCredentialByID(ctx context.Context, id pgtype.UUID) (*OauthCredential, error)
 	// Get non-sensitive credential info for display
 	GetOAuthCredentialStatus(ctx context.Context, id pgtype.UUID) (*GetOAuthCredentialStatusRow, error)
+	// Locks the row so the consume path serializes against concurrent
+	// consume attempts for the same token.
+	GetPairingTokenByHashForUpdate(ctx context.Context, tokenHash string) (*MacHostPairingToken, error)
 	// Returns the best-known entity data for a given peer_user_id, used by the
 	// live-message handler to backfill sparse entity data from the gotd/td
 	// dispatcher before upserting the new message. Does NOT filter on
@@ -335,7 +376,14 @@ type Querier interface {
 	// already holds the claim. Callers treat 0 as "someone else wrote this
 	// event; return nil without mutating state".
 	InsertEventConsumerClaim(ctx context.Context, arg InsertEventConsumerClaimParams) (int64, error)
+	// First-commit insert path. ON CONFLICT DO NOTHING handles the
+	// concurrent-first-write race: the loser gets zero rows, re-reads the
+	// now-committed state, and surfaces ErrCursorBaseMismatch with the
+	// winner's cursor. backfill_complete is stored as a JSONB key on the
+	// metadata column — see the cursor wire contract in the handler.
+	InsertMacHostSyncCursor(ctx context.Context, arg InsertMacHostSyncCursorParams) (*InsertMacHostSyncCursorRow, error)
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
+	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
 	ListAllUnmatchedExternalContacts(ctx context.Context, arg ListAllUnmatchedExternalContactsParams) ([]*ExternalContact, error)
@@ -386,6 +434,7 @@ type Querier interface {
 	ListExternalContactsForCRMContact(ctx context.Context, crmContactID pgtype.UUID) ([]*ExternalContact, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
 	ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error)
+	ListMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all managed tasks for a provider (for reconciliation)
 	ListManagedContactTasks(ctx context.Context, provider string) ([]*ListManagedContactTasksRow, error)
 	// List non-sensitive credential info for all credentials of a provider
@@ -416,12 +465,14 @@ type Querier interface {
 	ListUpcomingEventsWithContacts(ctx context.Context, arg ListUpcomingEventsWithContactsParams) ([]*CalendarEvent, error)
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
+	MarkPairingTokenConsumed(ctx context.Context, arg MarkPairingTokenConsumedParams) (*MacHostPairingToken, error)
 	MarkTelegramMessagesProcessed(ctx context.Context, arg MarkTelegramMessagesProcessedParams) error
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement
 	ReplaceContactInCalendarEvents(ctx context.Context, arg ReplaceContactInCalendarEventsParams) error
 	ResetTelegramChatConfigBackfill(ctx context.Context, telegramChatID int64) error
+	RevokeMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error)
 	// Lightweight query returning only IDs with search for navigation
 	SearchContactIDs(ctx context.Context, arg SearchContactIDsParams) ([]pgtype.UUID, error)
 	// Lightweight query returning only IDs with search and sorting for navigation
@@ -429,6 +480,19 @@ type Querier interface {
 	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error)
 	SearchContactsSorted(ctx context.Context, arg SearchContactsSortedParams) ([]*Contact, error)
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
+	// Seeds an external_sync_state row at caller-supplied next_sync_at.
+	// Used by scheduler-exclusion tests to plant a push-strategy row whose
+	// next_sync_at is due, then assert ListDueAccounts skips it.
+	SeedExternalSyncState(ctx context.Context, arg SeedExternalSyncStateParams) (*ExternalSyncState, error)
+	// Mac host test helpers — per .ai/rules/core.md rule 2 (no raw SQL in
+	// Go test fixtures), test setup uses these instead of pool.Exec.
+	// Inserts a host with caller-supplied hostname + bcrypted api_key_hash.
+	// Used by integration tests that need to bypass the pairing flow.
+	SeedMacHost(ctx context.Context, arg SeedMacHostParams) (*MacHost, error)
+	// Inserts a pairing token with caller-supplied hash + expiry. Tests use
+	// this to seed expired tokens (cannot mint via the real Create path
+	// because the service enforces a forward-only TTL).
+	SeedPairingToken(ctx context.Context, arg SeedPairingTokenParams) (*MacHostPairingToken, error)
 	SetContactMethodPrimary(ctx context.Context, arg SetContactMethodPrimaryParams) error
 	// Persist external_task_id on a row without touching state. Used by the
 	// close-while-pending race path: the create worker enters on a row that
@@ -569,6 +633,12 @@ type Querier interface {
 	UpdateInteractionDirection(ctx context.Context, arg UpdateInteractionDirectionParams) (*Interaction, error)
 	// Extend an existing interaction's occurred_at and description (incremental coalescing)
 	UpdateInteractionTimestamp(ctx context.Context, arg UpdateInteractionTimestampParams) (*Interaction, error)
+	UpdateMacHostHeartbeat(ctx context.Context, arg UpdateMacHostHeartbeatParams) (*MacHost, error)
+	// CAS-style update: only updates when sync_cursor matches base_cursor.
+	// Zero rows returned means another writer slipped in between the
+	// planning read and this update; the caller re-reads and surfaces 409.
+	// metadata.backfill_complete is rewritten on every successful commit.
+	UpdateMacHostSyncCursor(ctx context.Context, arg UpdateMacHostSyncCursorParams) (*UpdateMacHostSyncCursorRow, error)
 	// Update the matched contact IDs for an event
 	UpdateMatchedContacts(ctx context.Context, arg UpdateMatchedContactsParams) (*CalendarEvent, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)

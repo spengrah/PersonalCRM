@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher
+.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -47,6 +47,7 @@ help:
 	@echo "  test-integration      - Run all backend integration tests"
 	@echo "  test-integration-fast - Run backend integration tests without LONG_TESTS"
 	@echo "  test-integration-slow - Run only LONG_TESTS-gated backend integration tests"
+	@echo "  test-mac-host-migrations - Run Mac host migration test in isolation (mutates shared schema)"
 	@echo "  test-frontend         - Run frontend unit tests"
 	@echo "  test-e2e              - Run Playwright E2E tests"
 	@echo "  test-e2e-local        - Run Playwright E2E tests (honors PLAYWRIGHT_GREP)"
@@ -265,6 +266,25 @@ test-integration:
 test-integration-slow:
 	@echo "Running backend slow integration tests..."
 	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test ./tests/... -v -run '$(BACKEND_SLOW_TESTS_REGEX)'
+
+# Mac host migration test — runs in isolation because it mutates the
+# shared integration DB schema (rolls down to 046 and back up). The
+# MAC_HOST_MIGRATION_TEST gate forces this test to be invoked
+# standalone rather than as part of `go test ./tests/...`, which would
+# otherwise run it in parallel with other integration packages against
+# the same DATABASE_URL and break them when the schema is rolled down.
+#
+# NOTE: no `e2e-db` prerequisite — the migration test resets the
+# schema itself, and the prerequisite would conflict with CI's
+# Postgres service (different user, port already in use). Local
+# developers should ensure their DB exists before running this
+# target.
+test-mac-host-migrations:
+	@echo "Running Mac host migration test (isolated)..."
+	@cd backend && \
+		DATABASE_URL="$(TEST_DATABASE_URL)" \
+		MAC_HOST_MIGRATION_TEST=1 \
+		go test -count=1 -run TestMacHostMigrations ./tests/api/... -v
 
 test-frontend:
 	@echo "Running frontend tests..."

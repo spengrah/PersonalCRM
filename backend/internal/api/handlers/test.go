@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -26,6 +27,7 @@ type TestHandler struct {
 	externalRepo *repository.ExternalContactRepository
 	contactSvc   *service.ContactService
 	calendarRepo *repository.CalendarEventRepository
+	macHostRepo  *repository.MacHostRepository
 	validator    *validator.Validate
 }
 
@@ -35,12 +37,14 @@ func NewTestHandler(
 	externalRepo *repository.ExternalContactRepository,
 	contactSvc *service.ContactService,
 	calendarRepo *repository.CalendarEventRepository,
+	macHostRepo *repository.MacHostRepository,
 ) *TestHandler {
 	return &TestHandler{
 		database:     database,
 		externalRepo: externalRepo,
 		contactSvc:   contactSvc,
 		calendarRepo: calendarRepo,
+		macHostRepo:  macHostRepo,
 		validator:    validator.New(),
 	}
 }
@@ -640,6 +644,83 @@ func (h *TestHandler) Cleanup(c *gin.Context) {
 		DeletedExternalContacts: deletedExternal,
 		DeletedCalendarEvents:   deletedCalEvents,
 	}, nil)
+}
+
+// SeedMacHostRequest is the payload for /test/seed/mac-hosts. It
+// creates a paired host row directly so E2E tests can exercise the
+// paired-state UI without going through the real pairing flow (the
+// daemon-side pairing token + key are not available to the browser).
+type SeedMacHostRequest struct {
+	Hostname        string         `json:"hostname"`
+	DaemonVersion   string         `json:"daemon_version,omitempty"`
+	ProtocolVersion int32          `json:"protocol_version,omitempty"`
+	Permissions     map[string]any `json:"permissions,omitempty"`
+	SourceHealth    map[string]any `json:"source_health,omitempty"`
+}
+
+// SeedMacHostResponse echoes the generated host id.
+type SeedMacHostResponse struct {
+	HostID string `json:"host_id"`
+}
+
+// SeedMacHost creates a mac_host row directly (bypassing the pairing
+// flow) so E2E tests can exercise the paired-host UI. Routes through
+// the MacHostRepository's SeedHostForTest helper so the handler does
+// not call sqlc queries directly.
+func (h *TestHandler) SeedMacHost(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	if h.macHostRepo == nil {
+		api.SendError(c, http.StatusServiceUnavailable, api.ErrCodeInternal, "mac host repo not wired", "")
+		return
+	}
+
+	var req SeedMacHostRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid request body", err.Error())
+		return
+	}
+	if req.Hostname == "" {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "hostname is required", "")
+		return
+	}
+	if req.DaemonVersion == "" {
+		req.DaemonVersion = "test-seed"
+	}
+	if req.ProtocolVersion == 0 {
+		req.ProtocolVersion = 1
+	}
+	permissions, err := json.Marshal(req.Permissions)
+	if err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "permissions marshal failed", err.Error())
+		return
+	}
+	sourceHealth, err := json.Marshal(req.SourceHealth)
+	if err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "source_health marshal failed", err.Error())
+		return
+	}
+
+	// A real bcrypt hash is generated even for the seed path. The
+	// hash is never used for authentication (no daemon has the
+	// plaintext), but constructing a real hash keeps the row
+	// consistent with the production schema invariants.
+	hashed := "$2a$04$placeholdersaltplaceholdersaltO9bF.pIyKsl5j8YpqEUYE2N4FfTQpiy"
+	host, err := h.macHostRepo.SeedHostForTest(
+		ctx,
+		req.Hostname,
+		req.DaemonVersion,
+		req.ProtocolVersion,
+		hashed,
+		permissions,
+		sourceHealth,
+	)
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "seed host failed", err.Error())
+		return
+	}
+
+	api.SendSuccess(c, http.StatusOK, SeedMacHostResponse{HostID: host.ID.String()}, nil)
 }
 
 // TriggerErrorRequest represents the request to trigger an error

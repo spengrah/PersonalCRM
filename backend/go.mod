@@ -19,8 +19,10 @@ require (
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.0
 	github.com/swaggo/swag v1.16.6
+	golang.org/x/crypto v0.49.0
 	golang.org/x/oauth2 v0.34.0
 	golang.org/x/text v0.36.0
+	golang.org/x/time v0.14.0
 	google.golang.org/api v0.258.0
 )
 
@@ -102,7 +104,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
 	golang.org/x/arch v0.8.0 // indirect
-	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090 // indirect
 	golang.org/x/mod v0.34.0 // indirect
 	golang.org/x/net v0.52.0 // indirect

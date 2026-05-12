@@ -62,6 +62,11 @@ const (
 	SyncStrategyContactDriven SyncStrategy = "contact_driven"
 	SyncStrategyFetchAll      SyncStrategy = "fetch_all"
 	SyncStrategyFetchFiltered SyncStrategy = "fetch_filtered"
+	// SyncStrategyPush is used by Mac-daemon push providers (Messages,
+	// iCloud Contacts; readers ship in later PRs). Push-strategy rows are
+	// not polled by the scheduler — the service layer skips them at the
+	// ListDueAccounts boundary.
+	SyncStrategyPush SyncStrategy = "push"
 )
 
 // SyncState represents the current state of a sync source
@@ -686,4 +691,276 @@ func (r *SyncRepository) EnqueueAccountSyncIfNotInFlight(
 		return false, fmt.Errorf("commit enqueue tx: %w", err)
 	}
 	return true, nil
+}
+
+// Mac-daemon push-cursor methods.
+//
+// Push providers (Mac daemon's Messages, iCloud Contacts) commit their
+// cursor via the daemon-side endpoints rather than the scheduler-tick
+// loop. Cursors live in external_sync_state — one row per
+// (source, account_id) where account_id is the mac_host.id stringified.
+// cursor_epoch lives on mac_host (per-host concept; bumped on Pi
+// restore) and is read in the same tx as the cursor commit with a row
+// lock on mac_host.
+
+// ErrCursorEpochMismatch is returned by CommitMacHostCursor when the
+// caller-supplied epoch differs from the host's current cursor_epoch.
+// The handler maps this to 409 with both current_epoch and
+// current_cursor in the body so the daemon can fully reconcile its
+// local cache in a single response.
+type ErrCursorEpochMismatch struct {
+	ServerEpoch   int64
+	CurrentCursor string
+}
+
+func (e *ErrCursorEpochMismatch) Error() string {
+	return fmt.Sprintf("cursor epoch mismatch: server has %d", e.ServerEpoch)
+}
+
+// ErrCursorBaseMismatch is returned by CommitMacHostCursor when the
+// caller-supplied base_cursor differs from the cursor currently stored
+// on the row (or when the daemon claims no row exists but one does).
+// The handler maps this to 409 with both current_cursor and
+// current_epoch in the body so the daemon can rebase against the
+// server's value.
+type ErrCursorBaseMismatch struct {
+	CurrentCursor string
+	CurrentEpoch  int64
+}
+
+func (e *ErrCursorBaseMismatch) Error() string {
+	return fmt.Sprintf("cursor base mismatch: server has %q", e.CurrentCursor)
+}
+
+// MacHostCursor is the value returned by GetMacHostSyncCursor — cursor
+// text (opaque to the Pi) plus the daemon-supplied backfill_complete
+// flag stored alongside it in metadata.
+type MacHostCursor struct {
+	Cursor           string
+	BackfillComplete bool
+}
+
+// GetMacHostSyncCursor returns the cursor + backfill_complete stored
+// for (source, hostID). Returns db.ErrNotFound if no row has been
+// committed yet — handler treats that as an empty cursor.
+func (r *SyncRepository) GetMacHostSyncCursor(ctx context.Context, source string, hostID uuid.UUID) (*MacHostCursor, error) {
+	row, err := r.queries.GetMacHostSyncState(ctx, db.GetMacHostSyncStateParams{
+		Source:    source,
+		AccountID: hostID.String(),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, fmt.Errorf("get mac_host sync cursor: %w", err)
+	}
+	out := &MacHostCursor{
+		BackfillComplete: extractBackfillComplete(row.Metadata),
+	}
+	if row.SyncCursor.Valid {
+		out.Cursor = row.SyncCursor.String
+	}
+	return out, nil
+}
+
+// extractBackfillComplete reads the boolean from external_sync_state.metadata
+// JSONB. Missing keys / unexpected types default to false (matches the
+// daemon's first-poll state).
+func extractBackfillComplete(metadata []byte) bool {
+	if len(metadata) == 0 {
+		return false
+	}
+	var m map[string]any
+	if err := json.Unmarshal(metadata, &m); err != nil {
+		return false
+	}
+	if v, ok := m["backfill_complete"].(bool); ok {
+		return v
+	}
+	return false
+}
+
+// CommitMacHostCursorParams carries the inputs for the three-stage
+// transactional CAS implemented by CommitMacHostCursor.
+type CommitMacHostCursorParams struct {
+	HostID           uuid.UUID
+	Source           string
+	BaseCursor       string // caller's snapshot of the cursor before this commit
+	NewCursor        string // cursor to install
+	ClaimedEpoch     int64  // daemon's local cursor_epoch
+	BackfillComplete bool   // daemon's claim about backfill state
+}
+
+// CommitMacHostCursor performs the three-stage transactional CAS for
+// committing a push-strategy cursor:
+//
+//	Stage A: lock mac_host row, read host_epoch + revocation status,
+//	         read the existing cursor row (if any). Branch on
+//	         (epoch match, row presence, base match).
+//	Stage B: INSERT path when no cursor row exists. Uses ON CONFLICT
+//	         DO NOTHING to handle the concurrent-first-write race —
+//	         loser re-reads inside the same tx and surfaces 409.
+//	Stage C: UPDATE path when a cursor row exists. Predicate-conditional
+//	         update with sync_cursor = base_cursor; zero rows returned
+//	         means a concurrent writer slipped in.
+//
+// Returns:
+//
+//	nil                              — commit succeeded
+//	db.ErrNotFound                   — host id missing or revoked
+//	*ErrCursorEpochMismatch          — epoch mismatch
+//	*ErrCursorBaseMismatch           — base mismatch (or first-write race)
+//	other errors                     — wrapped DB errors
+func (r *SyncRepository) CommitMacHostCursor(ctx context.Context, params CommitMacHostCursorParams) error {
+	if r.pool == nil {
+		return errors.New("CommitMacHostCursor requires a pool; use NewSyncRepositoryWithPool")
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin commit-cursor tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	q := db.New(tx)
+
+	// Stage A: lock host + read epoch.
+	epochRow, err := q.GetMacHostCursorEpoch(ctx, uuidToPgUUID(params.HostID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.ErrNotFound
+		}
+		return fmt.Errorf("read host cursor_epoch: %w", err)
+	}
+	if epochRow.ApiKeyRevokedAt.Valid {
+		// Revoked between auth check and commit. The middleware would
+		// have caught this at the next request, but defending in depth
+		// inside the tx prevents committing a cursor for a revoked host.
+		return db.ErrNotFound
+	}
+	serverEpoch := epochRow.CursorEpoch
+
+	// Stage A: read the existing cursor row (if any) — needed for both
+	// the happy path (Stage C base check) AND the error path (so 409
+	// responses can include the current_cursor alongside current_epoch).
+	existing, err := q.GetMacHostSyncState(ctx, db.GetMacHostSyncStateParams{
+		Source:    params.Source,
+		AccountID: params.HostID.String(),
+	})
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("read mac_host cursor row: %w", err)
+	}
+	currentCursor := ""
+	cursorRowFound := err == nil
+	if cursorRowFound && existing.SyncCursor.Valid {
+		currentCursor = existing.SyncCursor.String
+	}
+
+	// Epoch check AFTER the cursor read so the 409 body can include both.
+	if serverEpoch != params.ClaimedEpoch {
+		return &ErrCursorEpochMismatch{
+			ServerEpoch:   serverEpoch,
+			CurrentCursor: currentCursor,
+		}
+	}
+
+	if !cursorRowFound {
+		// No existing row — daemon must have claimed base_cursor="".
+		if params.BaseCursor != "" {
+			return &ErrCursorBaseMismatch{
+				CurrentCursor: "",
+				CurrentEpoch:  serverEpoch,
+			}
+		}
+
+		// Stage B: INSERT path. ON CONFLICT DO NOTHING handles the
+		// concurrent-first-write race without aborting the tx (no
+		// 23505 raised).
+		inserted, insErr := q.InsertMacHostSyncCursor(ctx, db.InsertMacHostSyncCursorParams{
+			Source:           params.Source,
+			AccountID:        pgtype.Text{String: params.HostID.String(), Valid: true},
+			NewCursor:        pgtype.Text{String: params.NewCursor, Valid: true},
+			BackfillComplete: params.BackfillComplete,
+		})
+		if insErr != nil && !errors.Is(insErr, pgx.ErrNoRows) {
+			return fmt.Errorf("insert mac_host cursor row: %w", insErr)
+		}
+		if insErr != nil || inserted == nil {
+			// Concurrent writer won the first-insert race. Re-read to
+			// surface the winner's cursor. The re-read uses the same
+			// READ COMMITTED tx; the concurrent writer has committed
+			// — its row is visible to us now.
+			current, reReadErr := readCursorForConflict(ctx, q, params)
+			if reReadErr != nil {
+				return reReadErr
+			}
+			return &ErrCursorBaseMismatch{
+				CurrentCursor: current,
+				CurrentEpoch:  serverEpoch,
+			}
+		}
+		return tx.Commit(ctx)
+	}
+
+	// Existing row — Stage C: predicate-conditional UPDATE.
+	if currentCursor != params.BaseCursor {
+		return &ErrCursorBaseMismatch{
+			CurrentCursor: currentCursor,
+			CurrentEpoch:  serverEpoch,
+		}
+	}
+
+	updated, err := q.UpdateMacHostSyncCursor(ctx, db.UpdateMacHostSyncCursorParams{
+		NewCursor:        pgtype.Text{String: params.NewCursor, Valid: true},
+		ID:               existing.ID,
+		BaseCursor:       params.BaseCursor,
+		BackfillComplete: params.BackfillComplete,
+	})
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("update mac_host cursor: %w", err)
+	}
+	if err != nil || updated == nil {
+		// Zero rows updated: another writer slipped in between Stage A's
+		// read and our UPDATE. Re-read and surface 409 with the latest.
+		current, reReadErr := readCursorForConflict(ctx, q, params)
+		if reReadErr != nil {
+			return reReadErr
+		}
+		return &ErrCursorBaseMismatch{
+			CurrentCursor: current,
+			CurrentEpoch:  serverEpoch,
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// readCursorForConflict re-reads the cursor row inside the same tx
+// after a race-loss and returns the current cursor string (or "" when
+// no row is present). Surfaces only conflict-readable values.
+func readCursorForConflict(ctx context.Context, q db.Querier, params CommitMacHostCursorParams) (string, error) {
+	latest, err := q.GetMacHostSyncState(ctx, db.GetMacHostSyncStateParams{
+		Source:    params.Source,
+		AccountID: params.HostID.String(),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("re-read mac_host cursor after CAS miss: %w", err)
+	}
+	if !latest.SyncCursor.Valid {
+		return "", nil
+	}
+	return latest.SyncCursor.String, nil
+}
+
+// DeleteMacHostSyncStatesTx removes all push-strategy external_sync_state
+// rows for the given host inside the caller-supplied tx. Used by the
+// delete-host handler so revoke + cursor-cleanup are atomic.
+func (r *SyncRepository) DeleteMacHostSyncStatesTx(ctx context.Context, tx pgx.Tx, hostID uuid.UUID) (int64, error) {
+	n, err := db.New(tx).DeleteMacHostSyncStates(ctx, hostID.String())
+	if err != nil {
+		return 0, fmt.Errorf("delete mac_host sync states: %w", err)
+	}
+	return n, nil
 }
