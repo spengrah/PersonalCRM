@@ -548,7 +548,7 @@ Same message landing on two Macs is deduplicated at the staging-table unique con
 ```json
 {
   "host_id": "uuid",
-  "hostname": "spencer-mbp",
+  "hostname": "<mac-hostname>",
   "daemon_version": "0.3.1",
   "protocol_version": 1,
   "cursor_epoch": 42,

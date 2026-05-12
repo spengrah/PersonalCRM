@@ -31,6 +31,7 @@ import (
 func TestAggregation_IncrementalInboundCoalesce(t *testing.T) {
 	messageRepo, interactionRepo, contactRepo, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
+	eventRepo := repository.NewEventRepository(database.Queries)
 
 	const testStripe = 1
 	seed := uint64((accelerated.GetCurrentTime().UnixNano() & 0x1FFFFF) << 11)
@@ -48,8 +49,10 @@ func TestAggregation_IncrementalInboundCoalesce(t *testing.T) {
 		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceTelegram, sourceRefPrefix)
 		// Event rows are dedup-keyed on (source, source_id). Clean any
 		// envelopes the create-path may have emitted under this test's
-		// source_ref prefix so a re-run does not collide.
-		_, _ = database.Pool.Exec(ctx, "DELETE FROM event WHERE source = 'telegram' AND source_id LIKE $1", sourceRefPrefix)
+		// source_ref prefix so a re-run does not collide on the partial
+		// unique. Uses the test-only sqlc-backed wrapper to comply with
+		// the "no raw SQL in Go" rule.
+		_ = eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, repository.InteractionSourceTelegram, sourceRefPrefix)
 	})
 
 	contact := createTestContact(t, contactRepo, fmt.Sprintf("Inbound Coalesce %d", seed))
@@ -57,7 +60,7 @@ func TestAggregation_IncrementalInboundCoalesce(t *testing.T) {
 
 	t0 := accelerated.GetCurrentTime().Add(-2 * time.Hour).Truncate(time.Microsecond)
 
-	// Step 1: seed a baseline inbound interaction directly. Use the
+	// Seed a baseline inbound interaction directly. Use the
 	// repository's CreateInteraction so we can capture the ID for
 	// assertions, and so we don't rely on the publisher path here.
 	baseline, err := interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
@@ -73,13 +76,13 @@ func TestAggregation_IncrementalInboundCoalesce(t *testing.T) {
 	preCount, err := interactionRepo.CountContactInteractions(ctx, contact.ID)
 	require.NoError(t, err)
 
-	// Step 2: insert an unprocessed inbound staging row in the same
-	// chat, inside the burst window (30 min later).
+	// Insert an unprocessed inbound staging row in the same chat,
+	// inside the burst window (30 min later).
 	extendTime := t0.Add(30 * time.Minute)
 	insertTestMessage(t, messageRepo, msgIDBase+1, chatID, false /*outgoing*/, extendTime, &contact.ID, peerUserID)
 
-	// Step 3: aggregate — the engine should hit the inbound-extend
-	// branch and call ExtendInteraction on the baseline.
+	// Aggregate — the engine should hit the inbound-extend branch and
+	// call ExtendInteraction on the baseline.
 	err = engine.AggregateForContact(ctx, contact.ID, chatID)
 	require.NoError(t, err)
 
@@ -100,8 +103,8 @@ func TestAggregation_IncrementalInboundCoalesce(t *testing.T) {
 	assert.Equal(t, "Telegram response (1 messages)", *got.Description,
 		"description must follow the preserved Telegram format")
 
-	// Step 4: the staging row should now be processed and linked to
-	// the baseline interaction.
+	// The staging row should now be processed and linked to the
+	// baseline interaction.
 	unprocessed, err := messageRepo.ListUnprocessedByContact(ctx, contact.ID)
 	require.NoError(t, err)
 	assert.Empty(t, unprocessed, "extend path must mark staging rows processed")
@@ -113,11 +116,10 @@ func TestAggregation_IncrementalInboundCoalesce(t *testing.T) {
 	assert.Equal(t, baselineID, *stagedRow.InteractionID,
 		"extend path must link the staging row to the baseline interaction")
 
-	// Step 5: the extend path must NOT publish a message.received event
-	// for the extending message's source_ref (would-be source_ref is
-	// based on msgIDBase+1). Use FindEventBySource for a targeted query
-	// — avoids cross-query counts on the shared DB.
-	eventRepo := repository.NewEventRepository(database.Queries)
+	// The extend path must NOT publish a message.received event for
+	// the extending message's source_ref (would-be source_ref is based
+	// on msgIDBase+1). Use FindEventBySource for a targeted query —
+	// avoids cross-query counts on the shared DB.
 	wouldBeRef := fmt.Sprintf("tg:%d:%d", chatID, msgIDBase+1)
 	_, err = eventRepo.FindEventBySource(ctx, repository.InteractionSourceTelegram, wouldBeRef)
 	require.Error(t, err, "extend path must not publish a create event for the inbound extension")

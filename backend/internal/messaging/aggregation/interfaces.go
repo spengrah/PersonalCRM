@@ -78,6 +78,15 @@ type SourceAdapter interface {
 // chat IDs while the underlying per-source repositories use their own
 // row types and typed chat IDs. The wrapper does the row-by-row
 // conversion and any ID type translation.
+//
+// ORDERING CONTRACT: ListUnprocessedByContact and
+// ListUnprocessedByContactAndChat SHOULD return rows ordered by
+// SentAt ascending. Burst/session derivation depends on chronological
+// adjacency; the engine sorts defensively to absorb minor adapter
+// drift, but adapters that emit grossly out-of-order rows will pay an
+// O(N log N) sort tax on every aggregation. Telegram's existing sqlc
+// queries already ORDER BY sent_at — preserve that idiom in future
+// adapters.
 type MessageStore interface {
 	ListUnprocessedContactIDs(ctx context.Context) ([]uuid.UUID, error)
 	ListUnprocessedByContact(ctx context.Context, contactID uuid.UUID) ([]Message, error)

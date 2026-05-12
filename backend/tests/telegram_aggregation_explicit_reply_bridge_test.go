@@ -40,6 +40,7 @@ import (
 func TestAggregation_IncrementalExplicitReplyBridge_CrossBatch(t *testing.T) {
 	messageRepo, interactionRepo, contactRepo, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
+	eventRepo := repository.NewEventRepository(database.Queries)
 
 	const testStripe = 2
 	seed := uint64((accelerated.GetCurrentTime().UnixNano() & 0x1FFFFF) << 11)
@@ -55,7 +56,10 @@ func TestAggregation_IncrementalExplicitReplyBridge_CrossBatch(t *testing.T) {
 	t.Cleanup(func() {
 		_ = messageRepo.HardDeleteByChatIDRange(ctx, chatID, chatID)
 		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceTelegram, sourceRefPrefix)
-		_, _ = database.Pool.Exec(ctx, "DELETE FROM event WHERE source = 'telegram' AND source_id LIKE $1", sourceRefPrefix)
+		// Event rows are dedup-keyed on (source, source_id); purge
+		// per-run envelopes via the test-only sqlc-backed wrapper so a
+		// re-run does not collide on the partial unique.
+		_ = eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, repository.InteractionSourceTelegram, sourceRefPrefix)
 	})
 
 	contact := createTestContact(t, contactRepo, fmt.Sprintf("Explicit Reply Bridge %d", seed))
@@ -66,8 +70,8 @@ func TestAggregation_IncrementalExplicitReplyBridge_CrossBatch(t *testing.T) {
 	t0 := accelerated.GetCurrentTime().Add(-100 * time.Hour).Truncate(time.Microsecond)
 	replyAt := t0.Add(90 * time.Hour)
 
-	// Step 1: create the outbound interaction directly (so we can
-	// capture its ID and link the staging row deterministically).
+	// Create the outbound interaction directly (so we can capture its
+	// ID and link the staging row deterministically).
 	outboundIA, err := interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
 		ContactID:  contact.ID,
 		Source:     repository.InteractionSourceTelegram,
@@ -78,17 +82,16 @@ func TestAggregation_IncrementalExplicitReplyBridge_CrossBatch(t *testing.T) {
 	require.NoError(t, err)
 	outboundInteractionID := outboundIA.ID
 
-	// Step 2: insert the outbound staging row and mark it processed
-	// pointing at the outbound interaction. Now it is NOT in the
-	// unprocessed batch — only the inbound reply will appear in the
-	// next AggregateForContact call, forcing the cross-batch
+	// Insert the outbound staging row and mark it processed pointing
+	// at the outbound interaction. Now it is NOT in the unprocessed
+	// batch — only the inbound reply will appear in the next
+	// AggregateForContact call, forcing the cross-batch
 	// tryExplicitReplyBridge path.
 	outboundMsg := insertTestMessage(t, messageRepo, msgIDBase, chatID, true /*outgoing*/, t0, &contact.ID, peerUserID)
 	require.NoError(t, messageRepo.MarkMessagesProcessed(ctx, []uuid.UUID{outboundMsg.ID}, outboundInteractionID))
 
-	// Step 3: insert the inbound staging row with reply_to_msg_id
-	// pointing to the outbound's TelegramMessageID. >48h after the
-	// outbound.
+	// Insert the inbound staging row with reply_to_msg_id pointing to
+	// the outbound's TelegramMessageID, >48h after the outbound.
 	replyToID := msgIDBase
 	text := "explicit reply"
 	_, err = messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
@@ -108,9 +111,9 @@ func TestAggregation_IncrementalExplicitReplyBridge_CrossBatch(t *testing.T) {
 	preCount, err := interactionRepo.CountContactInteractions(ctx, contact.ID)
 	require.NoError(t, err)
 
-	// Step 4: aggregate. The outbound staging row is processed and
-	// invisible to the unprocessed list. The inbound row, alone in the
-	// batch, forms an inbound session whose ReplyTargetID matches the
+	// Aggregate. The outbound staging row is processed and invisible
+	// to the unprocessed list. The inbound row, alone in the batch,
+	// forms an inbound session whose ReplyTargetID matches the
 	// processed outbound's ExternalID via the shared engine's
 	// tryExplicitReplyBridge path — which reads Message.InteractionID
 	// off the referenced row to find the existing outbound interaction
@@ -141,7 +144,6 @@ func TestAggregation_IncrementalExplicitReplyBridge_CrossBatch(t *testing.T) {
 	// And no message.received event was published for the inbound's
 	// would-be source_ref (the promote path consumes the message
 	// rather than going through the publisher).
-	eventRepo := repository.NewEventRepository(database.Queries)
 	wouldBeRef := fmt.Sprintf("tg:%d:%d", chatID, msgIDBase+1)
 	_, err = eventRepo.FindEventBySource(ctx, repository.InteractionSourceTelegram, wouldBeRef)
 	require.Error(t, err)

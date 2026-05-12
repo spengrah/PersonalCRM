@@ -363,6 +363,12 @@ type Querier interface {
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
+	// Test-only: hard-deletes event rows whose (source, source_id) match the
+	// given source and a LIKE-prefix on source_id. Used by integration tests
+	// to purge per-run event envelopes so a re-run does not collide on the
+	// (source, source_id) partial unique. The event log is otherwise
+	// append-only; production code MUST NOT call this.
+	HardDeleteEventsBySourceAndSourceIDPrefix(ctx context.Context, arg HardDeleteEventsBySourceAndSourceIDPrefixParams) error
 	// Test-only: hard-deletes interactions whose source matches and source_ref
 	// begins with prefix. Used by integration tests to purge per-run rows
 	// cleanly; soft-delete is unsafe because the (source, source_ref) partial

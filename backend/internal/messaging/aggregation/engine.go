@@ -3,6 +3,7 @@ package aggregation
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"personal-crm/backend/internal/events"
@@ -11,6 +12,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
+
+// sortBySentAt sorts msgs by SentAt ascending in place. The MessageStore
+// contract requires adapters to emit sorted rows; this defensive sort
+// absorbs minor adapter drift so the burst/session derivation can
+// safely assume chronological adjacency.
+func sortBySentAt(msgs []Message) {
+	sort.SliceStable(msgs, func(i, j int) bool {
+		return msgs[i].SentAt.Before(msgs[j].SentAt)
+	})
+}
 
 // Engine processes per-source staging-message rows into interaction
 // records. Created per source — concurrent engines for telegram +
@@ -113,6 +124,11 @@ func (e *Engine) aggregateBatch(ctx context.Context, contactID uuid.UUID) (int, 
 	interactionsCreated := 0
 
 	for chatID, chatMessages := range chatMsgs {
+		// Defensive sort: the MessageStore contract requires sorted
+		// rows, but partitionByChat preserves input order so a
+		// noisy adapter that emits unsorted batches would corrupt
+		// bursts here. The sort is in-place and stable.
+		sortBySentAt(chatMessages)
 		bursts := e.groupIntoBursts(chatMessages, chatID)
 		sessions := e.resolveSessions(bursts)
 
@@ -144,6 +160,11 @@ func (e *Engine) AggregateForContact(ctx context.Context, contactID uuid.UUID, c
 	if len(msgs) == 0 {
 		return nil
 	}
+
+	// Defensive sort: MessageStore contract requires sorted rows; we
+	// re-sort to absorb adapter drift before deriving bursts/sessions
+	// that depend on chronological adjacency.
+	sortBySentAt(msgs)
 
 	bursts := e.groupIntoBursts(msgs, chatID)
 	sessions := e.resolveSessions(bursts)
