@@ -2,13 +2,27 @@
 
 ## Registered Sync Providers
 
-| Provider | Source Name | File |
-|----------|-------------|------|
-| Google Contacts | `gcontacts` | `backend/internal/google/contacts.go` |
-| Google Calendar | `gcal` | `backend/internal/google/calendar.go` |
-| Todoist | `todoist` | `backend/internal/todoist/provider.go` |
+| Provider | Source Name | Strategy | File |
+|----------|-------------|----------|------|
+| Google Contacts | `gcontacts` | `contact_driven` | `backend/internal/google/contacts.go` |
+| Google Calendar | `gcal` | `contact_driven` | `backend/internal/google/calendar.go` |
+| Todoist | `todoist` | `fetch_all` | `backend/internal/todoist/provider.go` |
 
 Providers are registered in `backend/cmd/crm-api/main.go` via `providerRegistry.Register()`.
+
+### Sync Strategies
+
+| Strategy | Polled by scheduler? | Cursor commits | Used by |
+|----------|---------------------|----------------|---------|
+| `contact_driven` | yes | provider.Sync writes via UpdateSyncStateSuccess | gcontacts, gcal |
+| `fetch_all` | yes | same | todoist |
+| `fetch_filtered` | yes | same | reserved |
+| `push` | **no** (skipped by `SyncService.ListDueAccounts`) | daemon commits via `POST /api/v1/host/:id/sync/:source/cursor` | Mac daemon push providers (PRs 4+) |
+
+Push-strategy rows live in `external_sync_state` keyed by
+`(source, account_id)` where `account_id = mac_host.id`. The daemon owns
+the cursor JSON shape; the Pi treats it as opaque TEXT. The three-stage
+transactional CAS lives in `SyncRepository.CommitMacHostCursor`.
 
 ---
 
