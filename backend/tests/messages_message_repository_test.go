@@ -144,10 +144,24 @@ func TestMessagesMessageRepository_ListUnprocessedByContact_ExcludesProcessed(t 
 	ctx, repo, contactRepo, hostID, cleanup := setupMessagesMessageTest(t)
 	defer cleanup()
 
+	databaseURL := os.Getenv("DATABASE_URL")
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	defer database.Close()
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+
 	suffix := randomSuffix(t)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "Test Excl Proc " + suffix})
 	require.NoError(t, err)
-	defer func() { _ = contactRepo.SoftDeleteContact(ctx, contact.ID) }()
+	defer func() {
+		// Hard-delete the interaction we'll insert so it doesn't trip
+		// the migration test's data-loss guard (see
+		// interaction_source_messages_check_test.go for the same pattern).
+		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceMessages, "msgs-excl-proc-%")
+		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
+	}()
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	msg, err := repo.UpsertMessage(ctx, repository.UpsertMessagesMessageParams{
@@ -162,23 +176,33 @@ func TestMessagesMessageRepository_ListUnprocessedByContact_ExcludesProcessed(t 
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 
-	// Mark processed → excluded.
-	interactionID := uuid.New()
-	// We need a real interaction row for the FK. Create one via repo? Simpler:
-	// use MarkMessagesProcessed with a NULL-equivalent uuid is rejected. Use
-	// uuid.Nil → FK violation. So just verify the filter excludes a row
-	// whose processed_at is non-NULL by setting processed_at via a
-	// minimal in-test path: we lack a public setter, but the engine
-	// uses MarkMessagesProcessed only with a valid interaction. For
-	// the filter assertion, the easier path is to claim+mark via the
-	// session-scoped tx variant against a real interaction; skip that
-	// here and instead verify via a different vector: use BackdateClaim
-	// on an unclaimed row, then verify that a claimed-fresh row is
-	// excluded. We test "excludes processed" only when interaction
-	// machinery is wired — covered by the aggregator integration test.
-	// For repo-level, exclusion of CLAIMED rows is the primary signal.
-	_ = msg
-	_ = interactionID
+	// Create a real interaction so the staging row's interaction_id FK
+	// constraint is satisfied when MarkMessagesProcessed sets it.
+	ref := "msgs-excl-proc-" + suffix
+	interaction, err := interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
+		ContactID:  contact.ID,
+		Source:     repository.InteractionSourceMessages,
+		SourceRef:  &ref,
+		OccurredAt: sentAt,
+		Direction:  repository.InteractionDirectionInbound,
+	})
+	require.NoError(t, err)
+
+	// Mark processed (non-tx variant; no session scope needed for
+	// processed-row filter testing).
+	require.NoError(t, repo.MarkMessagesProcessed(ctx, []uuid.UUID{msg.ID}, interaction.ID))
+
+	// Processed row → excluded from the unprocessed-by-contact list.
+	list, err = repo.ListUnprocessedByContact(ctx, contact.ID)
+	require.NoError(t, err)
+	assert.Empty(t, list, "processed row must be excluded from unprocessed list")
+
+	// Verify the row state on disk.
+	got, err := repo.GetMessage(ctx, "guid-proc-"+suffix)
+	require.NoError(t, err)
+	require.NotNil(t, got.ProcessedAt)
+	require.NotNil(t, got.InteractionID)
+	assert.Equal(t, interaction.ID, *got.InteractionID)
 }
 
 func TestMessagesMessageRepository_ListUnprocessedByContact_ExcludesActiveClaim(t *testing.T) {
