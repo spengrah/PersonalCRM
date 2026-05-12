@@ -16,18 +16,24 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
   })
 
   test('opens pairing modal with a token when Pair new Mac is clicked', async ({ page }) => {
+    // Wait for the initial GET /host response BEFORE clicking — this
+    // proves React Query has mounted on the page and hydration is
+    // complete, otherwise the click handler can fire against an
+    // unhydrated tree and silently drop the event.
+    const initialListPromise = page.waitForResponse(
+      resp => resp.url().endsWith('/api/v1/host') && resp.request().method() === 'GET',
+      { timeout: 15_000 }
+    )
     await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
-    // Wait for the empty-state heading to confirm React has hydrated
-    // before clicking — under turbopack dev compile the click handler
-    // can miss if dispatched against an unhydrated tree.
-    await expect(page.getByRole('heading', { name: 'Mac Daemon' })).toBeVisible({
-      timeout: 10_000,
-    })
+    await initialListPromise
+
+    // Wait for the empty-state to confirm the list query resolved + render
+    // pass completed.
+    await expect(page.getByText('No Mac hosts paired')).toBeVisible({ timeout: 10_000 })
+
     const pairButton = page.getByRole('button', { name: 'Pair new Mac' })
     await expect(pairButton).toBeVisible()
 
-    // Wait for the pairing-token POST to fire so flakes on hydration
-    // races surface as response failures, not silent click misses.
     const tokenResponsePromise = page.waitForResponse(
       resp =>
         resp.url().includes('/api/v1/host/pairing-token') && resp.request().method() === 'POST',
