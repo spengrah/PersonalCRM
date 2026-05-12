@@ -17,15 +17,30 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
 
   test('opens pairing modal with a token when Pair new Mac is clicked', async ({ page }) => {
     await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
+    // Wait for the empty-state heading to confirm React has hydrated
+    // before clicking — under turbopack dev compile the click handler
+    // can miss if dispatched against an unhydrated tree.
+    await expect(page.getByRole('heading', { name: 'Mac Daemon' })).toBeVisible({
+      timeout: 10_000,
+    })
+    const pairButton = page.getByRole('button', { name: 'Pair new Mac' })
+    await expect(pairButton).toBeVisible()
 
-    await page.getByRole('button', { name: 'Pair new Mac' }).click()
+    // Wait for the pairing-token POST to fire so flakes on hydration
+    // races surface as response failures, not silent click misses.
+    const tokenResponsePromise = page.waitForResponse(
+      resp =>
+        resp.url().includes('/api/v1/host/pairing-token') && resp.request().method() === 'POST',
+      { timeout: 10_000 }
+    )
+    await pairButton.click()
+    const resp = await tokenResponsePromise
+    expect(resp.status()).toBe(200)
 
     // Modal is rendered as a dialog with the matching aria-label.
     const dialog = page.getByRole('dialog', { name: 'Pair new Mac' })
     await expect(dialog).toBeVisible({ timeout: 5_000 })
 
-    // The token is shown in a code block (or "Generating..." if the
-    // request is in-flight; we wait for the code element to appear).
     const tokenCode = page.getByTestId('pairing-token-value')
     await expect(tokenCode).toBeVisible({ timeout: 10_000 })
     await expect(tokenCode).not.toBeEmpty()
