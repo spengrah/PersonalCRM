@@ -81,7 +81,7 @@ type TelegramManager struct {
 //
 // pool is the TxBeginner passed through to the shared aggregation
 // engine for the atomic claim+publish create path. Pass nil to fall
-// back to the pre-PR3 non-tx publish path (test mode).
+// back to the legacy non-tx publish path (test mode).
 //
 // enqueuer is the ConsumerJobEnqueuer for stale-claim recovery
 // (River-backed in production; nil in tests that don't exercise the

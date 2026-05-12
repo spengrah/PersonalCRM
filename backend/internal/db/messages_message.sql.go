@@ -335,7 +335,7 @@ func (q *Queries) MarkMessagesMessagesProcessed(ctx context.Context, arg MarkMes
 	return err
 }
 
-const MarkMessagesMessagesProcessedForSession = `-- name: MarkMessagesMessagesProcessedForSession :exec
+const MarkMessagesMessagesProcessedForSession = `-- name: MarkMessagesMessagesProcessedForSession :execrows
 UPDATE messages_message
 SET processed_at = NOW(),
     interaction_id = $1,
@@ -361,9 +361,16 @@ type MarkMessagesMessagesProcessedForSessionParams struct {
 // the non-tx publish path leaves rows unclaimed, and there's no risk
 // of cross-event overwrite when the row has not yet been processed by
 // anyone.
-func (q *Queries) MarkMessagesMessagesProcessedForSession(ctx context.Context, arg MarkMessagesMessagesProcessedForSessionParams) error {
-	_, err := q.db.Exec(ctx, MarkMessagesMessagesProcessedForSession, arg.InteractionID, arg.MessageIds, arg.SessionRef)
-	return err
+//
+// Returns rows affected so the consumer can log a warning when zero
+// rows matched (race detected); the interaction insert itself dedupes
+// via (source, source_ref).
+func (q *Queries) MarkMessagesMessagesProcessedForSession(ctx context.Context, arg MarkMessagesMessagesProcessedForSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, MarkMessagesMessagesProcessedForSession, arg.InteractionID, arg.MessageIds, arg.SessionRef)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const UpsertMessagesMessage = `-- name: UpsertMessagesMessage :one

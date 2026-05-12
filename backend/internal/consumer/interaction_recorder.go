@@ -73,8 +73,10 @@ type eventBusTx interface {
 // sessionRef is the event's source_ref. The underlying SQL scopes the
 // update to rows still claimed for that exact session, defending
 // against the stale boundary-shift race (spec §3 Race Mechanics).
+// Returns rows actually updated so the consumer can log a warning
+// when zero rows matched (race detected).
 type stagingProcessor interface {
-	MarkProcessedTx(ctx context.Context, tx pgx.Tx, source string, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) error
+	MarkProcessedTx(ctx context.Context, tx pgx.Tx, source string, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) (int64, error)
 }
 
 // aggregatorReenqueuer dispatches a post-commit aggregator pass for the
@@ -202,15 +204,31 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	// RecordInteraction, regardless of dedup-hit.
 	//
 	// Dispatches on env.Source so message.* events from any source
-	// (telegram today, messages in PR4) route to the right registry
-	// entry. env.SourceID is the deterministic per-session source_ref;
+	// (telegram today, messages once the Mac daemon ingest writer is
+	// live) route to the right registry entry. env.SourceID is the
+	// deterministic per-session source_ref;
 	// threading it into MarkProcessedTx scopes the SQL update to rows
 	// still claimed for THIS session — defends against the stale
 	// boundary-shift race (spec §3 Race Mechanics).
 	if env.Kind == events.KindMessageReceived || env.Kind == events.KindMessageSent {
 		if msgIDs, extractErr := extractMessageIDs(env); extractErr == nil && len(msgIDs) > 0 && r.staging != nil && res.Interaction != nil {
-			if markErr := r.staging.MarkProcessedTx(ctx, tx, env.Source, msgIDs, res.Interaction.ID, env.SourceID); markErr != nil {
+			affected, markErr := r.staging.MarkProcessedTx(ctx, tx, env.Source, msgIDs, res.Interaction.ID, env.SourceID)
+			if markErr != nil {
 				return nil, nil, fmt.Errorf("mark staging messages processed: %w", markErr)
+			}
+			// Zero-rows-affected with a non-empty msgIDs list signals
+			// the predicate filtered everything out — either rows were
+			// claimed for a different session (stale boundary-shift)
+			// or already processed. The interaction insert itself
+			// dedupes via (source, source_ref), so this is safe but
+			// noteworthy for ops visibility.
+			if affected == 0 {
+				logger.Warn().
+					Str("source", env.Source).
+					Str("source_id", env.SourceID).
+					Int("requested", len(msgIDs)).
+					Str("interaction_id", res.Interaction.ID.String()).
+					Msg("recorder: staging mark-processed matched zero rows; possible cross-session race")
 			}
 		}
 	}

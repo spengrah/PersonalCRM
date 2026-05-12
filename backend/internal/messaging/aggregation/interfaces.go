@@ -126,23 +126,12 @@ type MessageStore interface {
 	// commits atomically with the event publish via the same tx.
 	ClaimRowsTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, sessionRef string) (claimed []uuid.UUID, err error)
 
-	// MarkProcessedTx sets processed_at and interaction_id AND clears
-	// the claim columns atomically. Called by InteractionRecorder
-	// inside the consumer's interaction-insert tx — not by the engine.
-	//
-	// sessionRef is the event's source_ref. The SQL predicate
-	// restricts the update to rows still claimed for this exact
-	// session: `claimed_session_ref = sessionRef AND processed_at IS
-	// NULL`. This prevents a stranded old-event consumer from
-	// overwriting rows already processed by a newer-event consumer
-	// (the boundary-shift race).
-	MarkProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) error
-
 	// ClearStaleClaimTx is the recovery-defensive branch. Clears claim
 	// columns for rows whose claimed_session_ref still matches the
 	// expected stale ref but for which no event-log row could be found
-	// (spec §3 "claimed_session_ref exists but no event log row
-	// matches" case). Called inside a tx opened by the engine.
+	// (spec §3 defensive case), and for the boundary-shift case (rows
+	// claimed for an older session under a new computed sourceRef).
+	// Called inside a tx opened by the engine.
 	ClearStaleClaimTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, expectedSessionRef string) error
 }
 

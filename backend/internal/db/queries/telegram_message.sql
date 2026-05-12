@@ -113,7 +113,7 @@ SET processed_at = NOW(),
 WHERE id = ANY(@message_ids::uuid[])
   AND deleted_at IS NULL;
 
--- name: MarkTelegramMessagesProcessedForSession :exec
+-- name: MarkTelegramMessagesProcessedForSession :execrows
 -- Tx-bound variant. Used by InteractionRecorder consumer when
 -- processing a create-path event. Defends against the stale
 -- boundary-shift race: a stranded old-event consumer running LATER
@@ -123,10 +123,16 @@ WHERE id = ANY(@message_ids::uuid[])
 --
 -- The predicate ALSO accepts rows that were never claimed
 -- (claimed_session_ref IS NULL): the non-tx publish path (test mode,
--- AggregateForContactBatch pre-PR3 callers) leaves rows unclaimed,
--- and there's no risk of cross-event overwrite when the row has not
--- yet been processed by anyone. The defense is specifically against
+-- AggregateForContactBatch callers) leaves rows unclaimed, and
+-- there's no risk of cross-event overwrite when the row has not yet
+-- been processed by anyone. The defense is specifically against
 -- claimed-for-OTHER-session rows.
+--
+-- Returns rows affected so the caller can log a warning when the
+-- predicate filtered everything out (stale consumer re-delivery /
+-- race detected): the interaction insert itself dedupes via
+-- (source, source_ref) so a 0-row mark is safe, but ops visibility
+-- matters.
 UPDATE telegram_message
 SET processed_at = NOW(),
     interaction_id = @interaction_id,

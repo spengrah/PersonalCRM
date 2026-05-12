@@ -282,11 +282,11 @@ func run() int {
 	// processed in the same tx as the interaction insert).
 	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
 
-	// Messages staging repo (Mac daemon — PR3 spec §3). The ingest
-	// path that writes into messages_message lands in PR4; the repo
-	// is wired here so the InteractionRecorder's staging registry
-	// can dispatch source="messages" mark-processed calls correctly
-	// once PR4's writer is live.
+	// Messages staging repo (Mac daemon spec §3). Wired here so the
+	// InteractionRecorder's staging registry can dispatch
+	// source="messages" mark-processed calls correctly once the Mac
+	// daemon ingest writer is live; until then the table has no rows
+	// and the registry entry is dormant.
 	messagesMessageRepo := repository.NewMessagesMessageRepository(database.Queries)
 
 	// Source-neutral staging registry — InteractionRecorder dispatches
@@ -714,7 +714,7 @@ func run() int {
 		// the Telegram engine exists. The InteractionRecorderWorker
 		// holds the deferred holder; this assignment makes the
 		// post-commit reenqueue path live for telegram-source events.
-		// Messages source is a no-op until PR4 wires its ingest path.
+		// Messages source is a no-op until the Mac daemon ingest writer is live.
 		aggregatorReenqueuerHolder.set(consumer.NewAggregatorReenqueuerRegistry(
 			map[string]consumer.AggregatorReenqueuer{
 				repository.InteractionSourceTelegram: consumer.NewTelegramAggregatorReenqueuer(telegramManager.AggregationEngine()),

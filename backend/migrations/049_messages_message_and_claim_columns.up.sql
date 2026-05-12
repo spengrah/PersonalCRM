@@ -1,6 +1,8 @@
 -- 049_messages_message_and_claim_columns.up.sql
--- Phase 1 PR3: messages_message staging table + claim columns on
--- telegram_message + interaction.source CHECK extension.
+-- Mac daemon: messages_message staging table + claim columns on
+-- telegram_message + interaction.source CHECK extended to include
+-- 'messages'. Spec: .ai/spec/mac-daemon.md §3 New tables, §3 Race
+-- mechanics, §5 Failure modes.
 
 -- ============================================================================
 -- 1. Claim columns on telegram_message (additive; existing rows backfill NULL)
@@ -111,9 +113,9 @@ CREATE INDEX idx_messages_message_not_deleted
 -- 3. interaction.source CHECK extension: add 'messages'
 -- ============================================================================
 -- Existing constraint (migration 031): CHECK (source IN ('manual', 'gcal',
--- 'todoist', 'telegram')). PR3 adds 'messages' only; 'whatsapp' and
--- 'anarlog_sessions' deferred to their own future spec PRs per the Phase 1
--- PR sequence (.ai/log/plan/mac-daemon-phase-1-pr1-pi-foundation.md).
+-- 'todoist', 'telegram')). This migration adds 'messages' only; 'whatsapp'
+-- and 'anarlog_sessions' are deferred to their own future spec changes
+-- per the Mac daemon Phase 1 scope.
 ALTER TABLE interaction DROP CONSTRAINT interaction_source_check;
 ALTER TABLE interaction ADD CONSTRAINT interaction_source_check
     CHECK (source IN ('manual', 'gcal', 'todoist', 'telegram', 'messages'));

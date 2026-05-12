@@ -36,7 +36,7 @@ DROP TABLE IF EXISTS messages_message;
 -- 1. Revert telegram_message claim columns + indexes.
 DROP INDEX IF EXISTS idx_telegram_message_stale_claim;
 DROP INDEX IF EXISTS idx_telegram_message_unprocessed_eligible;
--- Re-create the pre-PR3 unprocessed index (matches migration 032).
+-- Re-create the original unprocessed index (matches migration 032).
 CREATE INDEX idx_telegram_message_unprocessed ON telegram_message(matched_contact_id, sent_at)
     WHERE processed_at IS NULL AND matched_contact_id IS NOT NULL;
 ALTER TABLE telegram_message DROP COLUMN claimed_session_ref;

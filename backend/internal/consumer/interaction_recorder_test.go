@@ -89,13 +89,16 @@ type stubTGRepo struct {
 	lastSessionRef  string
 }
 
-func (s *stubTGRepo) MarkProcessedTx(_ context.Context, _ pgx.Tx, source string, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) error {
+func (s *stubTGRepo) MarkProcessedTx(_ context.Context, _ pgx.Tx, source string, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) (int64, error) {
 	s.calls++
 	s.lastSource = source
 	s.lastMessageIDs = messageIDs
 	s.lastInteraction = interactionID
 	s.lastSessionRef = sessionRef
-	return s.markErr
+	if s.markErr != nil {
+		return 0, s.markErr
+	}
+	return int64(len(messageIDs)), nil
 }
 
 type stubBus struct {

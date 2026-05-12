@@ -555,7 +555,11 @@ type Querier interface {
 	// the non-tx publish path leaves rows unclaimed, and there's no risk
 	// of cross-event overwrite when the row has not yet been processed by
 	// anyone.
-	MarkMessagesMessagesProcessedForSession(ctx context.Context, arg MarkMessagesMessagesProcessedForSessionParams) error
+	//
+	// Returns rows affected so the consumer can log a warning when zero
+	// rows matched (race detected); the interaction insert itself dedupes
+	// via (source, source_ref).
+	MarkMessagesMessagesProcessedForSession(ctx context.Context, arg MarkMessagesMessagesProcessedForSessionParams) (int64, error)
 	MarkPairingTokenConsumed(ctx context.Context, arg MarkPairingTokenConsumedParams) (*MacHostPairingToken, error)
 	// Non-tx variant used by the engine's extend/promote/bridge paths only,
 	// which do not publish events and do not claim rows. Clearing the claim
@@ -570,11 +574,17 @@ type Querier interface {
 	//
 	// The predicate ALSO accepts rows that were never claimed
 	// (claimed_session_ref IS NULL): the non-tx publish path (test mode,
-	// AggregateForContactBatch pre-PR3 callers) leaves rows unclaimed,
-	// and there's no risk of cross-event overwrite when the row has not
-	// yet been processed by anyone. The defense is specifically against
+	// AggregateForContactBatch callers) leaves rows unclaimed, and
+	// there's no risk of cross-event overwrite when the row has not yet
+	// been processed by anyone. The defense is specifically against
 	// claimed-for-OTHER-session rows.
-	MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) error
+	//
+	// Returns rows affected so the caller can log a warning when the
+	// predicate filtered everything out (stale consumer re-delivery /
+	// race detected): the interaction insert itself dedupes via
+	// (source, source_ref) so a 0-row mark is safe, but ops visibility
+	// matters.
+	MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) (int64, error)
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement

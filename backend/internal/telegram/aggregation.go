@@ -53,7 +53,7 @@ type AggregationEngine struct {
 // would silently bypass the engine's nil-guards.
 //
 // pool is the TxBeginner for the engine's atomic claim+publish step.
-// Pass nil to fall back to the pre-PR3 non-tx publish path (test mode).
+// Pass nil to fall back to the legacy non-tx publish path (test mode).
 //
 // enqueuer is the ConsumerJobEnqueuer for stale-claim recovery (River-
 // backed in production; nil in tests that don't exercise the recovery
@@ -226,10 +226,6 @@ func (a *telegramMessageStoreAdapter) MarkProcessed(ctx context.Context, message
 
 func (a *telegramMessageStoreAdapter) ClaimRowsTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, sessionRef string) ([]uuid.UUID, error) {
 	return a.repo.ClaimMessagesTx(ctx, tx, messageIDs, sessionRef)
-}
-
-func (a *telegramMessageStoreAdapter) MarkProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) error {
-	return a.repo.MarkMessagesProcessedTx(ctx, tx, messageIDs, interactionID, sessionRef)
 }
 
 func (a *telegramMessageStoreAdapter) ClearStaleClaimTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, expectedSessionRef string) error {

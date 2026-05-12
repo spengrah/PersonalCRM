@@ -250,14 +250,18 @@ func (r *MessagesMessageRepository) MarkMessagesProcessed(ctx context.Context, m
 	})
 }
 
-// MarkMessagesProcessedTx is the tx-bound, session-scoped variant. The
-// SQL WHERE clause includes `claimed_session_ref = sessionRef AND
-// processed_at IS NULL`, so a stranded old-event consumer cannot
-// overwrite rows already processed by a newer-event consumer (the
-// boundary-shift race).
-func (r *MessagesMessageRepository) MarkMessagesProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) error {
+// MarkMessagesProcessedTx is the tx-bound variant. The SQL predicate
+// scopes the update to rows whose claimed_session_ref matches
+// sessionRef OR is NULL — defending against the stale boundary-shift
+// race (claimed_session_ref = 'other-ref' rejects the update) while
+// still working when the engine took the non-tx publish path
+// (NULL claimed_session_ref).
+//
+// Returns the number of rows actually updated so the caller can log
+// a warning when zero rows matched.
+func (r *MessagesMessageRepository) MarkMessagesProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) (int64, error) {
 	if len(messageIDs) == 0 {
-		return nil
+		return 0, nil
 	}
 	pgIDs := make([]pgtype.UUID, len(messageIDs))
 	for i, id := range messageIDs {
@@ -375,6 +379,6 @@ func NewMessagesStagingProcessor(repo *MessagesMessageRepository) *MessagesStagi
 }
 
 // MarkProcessedTx implements StagingProcessor.
-func (p *MessagesStagingProcessor) MarkProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) error {
+func (p *MessagesStagingProcessor) MarkProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) (int64, error) {
 	return p.repo.MarkMessagesProcessedTx(ctx, tx, messageIDs, interactionID, sessionRef)
 }

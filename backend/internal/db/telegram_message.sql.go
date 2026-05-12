@@ -698,7 +698,7 @@ func (q *Queries) MarkTelegramMessagesProcessed(ctx context.Context, arg MarkTel
 	return err
 }
 
-const MarkTelegramMessagesProcessedForSession = `-- name: MarkTelegramMessagesProcessedForSession :exec
+const MarkTelegramMessagesProcessedForSession = `-- name: MarkTelegramMessagesProcessedForSession :execrows
 UPDATE telegram_message
 SET processed_at = NOW(),
     interaction_id = $1,
@@ -725,13 +725,22 @@ type MarkTelegramMessagesProcessedForSessionParams struct {
 //
 // The predicate ALSO accepts rows that were never claimed
 // (claimed_session_ref IS NULL): the non-tx publish path (test mode,
-// AggregateForContactBatch pre-PR3 callers) leaves rows unclaimed,
-// and there's no risk of cross-event overwrite when the row has not
-// yet been processed by anyone. The defense is specifically against
+// AggregateForContactBatch callers) leaves rows unclaimed, and
+// there's no risk of cross-event overwrite when the row has not yet
+// been processed by anyone. The defense is specifically against
 // claimed-for-OTHER-session rows.
-func (q *Queries) MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) error {
-	_, err := q.db.Exec(ctx, MarkTelegramMessagesProcessedForSession, arg.InteractionID, arg.MessageIds, arg.SessionRef)
-	return err
+//
+// Returns rows affected so the caller can log a warning when the
+// predicate filtered everything out (stale consumer re-delivery /
+// race detected): the interaction insert itself dedupes via
+// (source, source_ref) so a 0-row mark is safe, but ops visibility
+// matters.
+func (q *Queries) MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, MarkTelegramMessagesProcessedForSession, arg.InteractionID, arg.MessageIds, arg.SessionRef)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const SoftDeleteTelegramChannelMessages = `-- name: SoftDeleteTelegramChannelMessages :exec

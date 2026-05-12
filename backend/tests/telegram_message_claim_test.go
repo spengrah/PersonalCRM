@@ -185,3 +185,150 @@ func TestTelegramMessageRepository_ClaimMessages_PartialClaim(t *testing.T) {
 	require.Len(t, claimed, 1)
 	assert.Equal(t, m2.ID, claimed[0])
 }
+
+// TestTelegramMessageRepository_MarkProcessedTx_RejectsOtherSession
+// covers the boundary-shift defense: a row claimed for session "A"
+// cannot be processed by a stale consumer running for session "B".
+// MarkProcessedTx returns 0 rows affected when the predicate filters
+// out everything.
+func TestTelegramMessageRepository_MarkProcessedTx_RejectsOtherSession(t *testing.T) {
+	ctx, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
+	defer cleanup()
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	defer database.Close()
+
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+	msg, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 80006, TelegramChatID: chatID, ChatType: "private",
+		MessageType: "text", SentAt: sentAt, IsOutgoing: false, PeerUserID: ptrInt64(55555),
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.UpdateMessageContact(ctx, *msg.PeerUserID, contact.ID))
+
+	// Row is claimed for session "tg:claimed-by-other".
+	_, err = repo.ClaimMessages(ctx, []uuid.UUID{msg.ID}, "tg:claimed-by-other")
+	require.NoError(t, err)
+
+	// Stale consumer for session "tg:stale-session" tries to mark it
+	// processed. The predicate rejects (claimed_session_ref != ours
+	// AND IS NOT NULL).
+	interactionID := uuid.New() // synthetic — we won't insert a real interaction; just need a non-nil UUID
+	tx, err := database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	affected, err := repo.MarkMessagesProcessedTx(ctx, tx, []uuid.UUID{msg.ID}, interactionID, "tg:stale-session")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+	assert.Equal(t, int64(0), affected, "stale consumer must not mark rows claimed for another session")
+
+	// Row still claimed for the original session.
+	got, err := repo.GetMessage(ctx, chatID, 80006)
+	require.NoError(t, err)
+	require.NotNil(t, got.ClaimedSessionRef)
+	assert.Equal(t, "tg:claimed-by-other", *got.ClaimedSessionRef)
+	assert.Nil(t, got.ProcessedAt, "stale consumer did not commit a processed_at")
+}
+
+// TestTelegramMessageRepository_MarkProcessedTx_AcceptsOwnSession
+// confirms the consumer can process rows it claimed for its own
+// session.
+func TestTelegramMessageRepository_MarkProcessedTx_AcceptsOwnSession(t *testing.T) {
+	ctx, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
+	defer cleanup()
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	defer database.Close()
+
+	// Create a real interaction so the FK constraint is satisfied.
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	suffix := randomSuffix(t)
+	ref := "tg:own:" + suffix
+	interaction, err := interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
+		ContactID: contact.ID, Source: repository.InteractionSourceTelegram,
+		SourceRef: &ref, OccurredAt: accelerated.GetCurrentTime().Truncate(time.Microsecond),
+		Direction: repository.InteractionDirectionInbound,
+	})
+	require.NoError(t, err)
+
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+	msg, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 80007, TelegramChatID: chatID, ChatType: "private",
+		MessageType: "text", SentAt: sentAt, IsOutgoing: false, PeerUserID: ptrInt64(66666),
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.UpdateMessageContact(ctx, *msg.PeerUserID, contact.ID))
+
+	sessionRef := "tg:own-session:" + suffix
+	_, err = repo.ClaimMessages(ctx, []uuid.UUID{msg.ID}, sessionRef)
+	require.NoError(t, err)
+
+	tx, err := database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	affected, err := repo.MarkMessagesProcessedTx(ctx, tx, []uuid.UUID{msg.ID}, interaction.ID, sessionRef)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+	assert.Equal(t, int64(1), affected, "consumer processes its own-session row")
+
+	got, err := repo.GetMessage(ctx, chatID, 80007)
+	require.NoError(t, err)
+	require.NotNil(t, got.ProcessedAt)
+	require.NotNil(t, got.InteractionID)
+	assert.Equal(t, interaction.ID, *got.InteractionID)
+	assert.Nil(t, got.ClaimedAt, "claim cleared on mark-processed")
+	assert.Nil(t, got.ClaimedSessionRef)
+}
+
+// TestTelegramMessageRepository_MarkProcessedTx_AcceptsNullClaim
+// confirms the predicate's OR-IS-NULL branch: a row that was never
+// claimed (engine took the non-tx publish path / test mode) is still
+// markable by the consumer.
+func TestTelegramMessageRepository_MarkProcessedTx_AcceptsNullClaim(t *testing.T) {
+	ctx, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
+	defer cleanup()
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	defer database.Close()
+
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	suffix := randomSuffix(t)
+	ref := "tg:null-claim:" + suffix
+	interaction, err := interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
+		ContactID: contact.ID, Source: repository.InteractionSourceTelegram,
+		SourceRef: &ref, OccurredAt: accelerated.GetCurrentTime().Truncate(time.Microsecond),
+		Direction: repository.InteractionDirectionInbound,
+	})
+	require.NoError(t, err)
+
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+	msg, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+		TelegramMessageID: 80008, TelegramChatID: chatID, ChatType: "private",
+		MessageType: "text", SentAt: sentAt, IsOutgoing: false, PeerUserID: ptrInt64(77777),
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.UpdateMessageContact(ctx, *msg.PeerUserID, contact.ID))
+
+	// Row is NOT claimed — claimed_session_ref IS NULL. The predicate's
+	// OR-IS-NULL clause must accept it.
+	tx, err := database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	affected, err := repo.MarkMessagesProcessedTx(ctx, tx, []uuid.UUID{msg.ID}, interaction.ID, "tg:any-ref")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+	assert.Equal(t, int64(1), affected, "unclaimed row accepted by predicate's OR-IS-NULL branch")
+
+	got, err := repo.GetMessage(ctx, chatID, 80008)
+	require.NoError(t, err)
+	require.NotNil(t, got.ProcessedAt)
+}

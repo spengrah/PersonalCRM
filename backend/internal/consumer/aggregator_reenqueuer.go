@@ -56,8 +56,8 @@ func (r *AggregatorReenqueuerRegistry) Reenqueue(ctx context.Context, env *event
 }
 
 // NoopAggregatorReenqueuer is a no-op implementation used by sources
-// whose aggregator wiring is not yet live (PR3: messages source — the
-// ingest path lands in PR4 so no messages_message rows can exist yet).
+// whose aggregator wiring is not yet live. Returning nil on every call
+// lets the registry stay populated without enqueueing real work.
 type NoopAggregatorReenqueuer struct{}
 
 // Reenqueue implements AggregatorReenqueuer. Always returns nil.

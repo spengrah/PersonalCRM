@@ -74,7 +74,7 @@ SET processed_at = NOW(),
 WHERE id = ANY(@message_ids::uuid[])
   AND deleted_at IS NULL;
 
--- name: MarkMessagesMessagesProcessedForSession :exec
+-- name: MarkMessagesMessagesProcessedForSession :execrows
 -- Tx-bound variant. Mirror of MarkTelegramMessagesProcessedForSession —
 -- used by InteractionRecorder consumer when processing a create-path
 -- event. The predicate rejects rows whose claimed_session_ref differs
@@ -83,6 +83,10 @@ WHERE id = ANY(@message_ids::uuid[])
 -- the non-tx publish path leaves rows unclaimed, and there's no risk
 -- of cross-event overwrite when the row has not yet been processed by
 -- anyone.
+--
+-- Returns rows affected so the consumer can log a warning when zero
+-- rows matched (race detected); the interaction insert itself dedupes
+-- via (source, source_ref).
 UPDATE messages_message
 SET processed_at = NOW(),
     interaction_id = @interaction_id,

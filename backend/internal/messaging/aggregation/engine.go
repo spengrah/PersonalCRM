@@ -56,7 +56,7 @@ type Engine struct {
 // pointer would silently bypass that guard.
 //
 // txBeginner, eventLookup, consumerEnqueuer are optional. When all
-// three are nil, the engine takes the pre-PR3 non-tx publish path —
+// three are nil, the engine takes the legacy non-tx publish path —
 // this keeps the shared-package unit-test fakes working unchanged.
 // Production wiring passes all three.
 func NewEngine(
@@ -355,28 +355,37 @@ func (e *Engine) createInteractionForSession(ctx context.Context, contactID uuid
 		return e.handleStaleRecovery(ctx, sess, sourceRef)
 	}
 
-	// Gate 3: boundary-shift pass. Some row carries a stale
-	// ClaimedSessionRef that does NOT match the current sourceRef
-	// (e.g. an earlier inbound arrived out-of-order, shifting the
-	// session boundary). Clear the stale claim columns scoped to that
-	// stale ref so a parallel worker's freshly-claimed row is not
-	// clobbered, then fall through to the fresh-rows claim+publish.
-	if stale := sess.staleBoundaryShiftRefs(sourceRef); len(stale) > 0 {
-		if err := e.clearStaleBoundaryShiftClaims(ctx, sess, stale); err != nil {
-			return err
-		}
-	}
+	// Gates 1 + 3: open one tx that wraps both the boundary-shift
+	// clear AND the conditional claim+publish. Doing them in the same
+	// tx closes the race where a stranded old-event consumer could
+	// grab a freshly-cleared row before our new claim writes — the
+	// MarkProcessedForSession predicate accepts NULL claimed_session_ref
+	// so an uncommitted-clear-then-failed-claim window would let the
+	// stale consumer mark the rows under the old interaction.
+	requested := sess.messageIDs()
+	staleRefs := sess.staleBoundaryShiftRefs(sourceRef)
 
-	// Gate 1: fresh rows. Open a tx, conditionally claim rows still
-	// eligible, publish atomically. Rolled back on any failure /
-	// partial-claim race.
 	tx, err := e.txBeginner.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("aggregation: begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit per pgx idiom
 
-	requested := sess.messageIDs()
+	// Gate 3 (in-tx): clear stale boundary-shift claims first so the
+	// subsequent ClaimRowsTx sees the rows as unclaimed. Scoped to
+	// each stale ref so we don't clobber a parallel worker's
+	// freshly-claimed row.
+	for _, ref := range staleRefs {
+		if err := e.store.ClearStaleClaimTx(ctx, tx, requested, ref); err != nil {
+			return fmt.Errorf("aggregation: clear boundary-shift claim: %w", err)
+		}
+		log.Warn().
+			Str("source", e.adapter.SourceName()).
+			Str("stale_ref", ref).
+			Msg("aggregation: cleared stale boundary-shift claim in-tx")
+	}
+
+	// Gate 1: conditional claim against the (possibly just-cleared) rows.
 	claimed, err := e.store.ClaimRowsTx(ctx, tx, requested, sourceRef)
 	if err != nil {
 		return fmt.Errorf("aggregation: claim rows: %w", err)
@@ -453,32 +462,6 @@ func (e *Engine) clearStaleClaimAndYield(ctx context.Context, sess msgSession, s
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("aggregation: commit stale-claim clear: %w", err)
-	}
-	return nil
-}
-
-// clearStaleBoundaryShiftClaims clears claim columns for rows whose
-// ClaimedSessionRef equals any of the supplied stale refs (boundary-
-// shift case). One tx per stale ref so each ClearStaleClaimTx call has
-// a single expectedSessionRef scope.
-func (e *Engine) clearStaleBoundaryShiftClaims(ctx context.Context, sess msgSession, staleRefs []string) error {
-	ids := sess.messageIDs()
-	for _, ref := range staleRefs {
-		tx, err := e.txBeginner.BeginTx(ctx, pgx.TxOptions{})
-		if err != nil {
-			return fmt.Errorf("aggregation: begin tx for boundary-shift clear: %w", err)
-		}
-		if err := e.store.ClearStaleClaimTx(ctx, tx, ids, ref); err != nil {
-			_ = tx.Rollback(ctx)
-			return fmt.Errorf("aggregation: clear boundary-shift claim: %w", err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("aggregation: commit boundary-shift clear: %w", err)
-		}
-		log.Warn().
-			Str("source", e.adapter.SourceName()).
-			Str("stale_ref", ref).
-			Msg("aggregation: cleared stale boundary-shift claim")
 	}
 	return nil
 }
