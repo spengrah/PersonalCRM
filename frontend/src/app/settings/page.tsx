@@ -1,7 +1,8 @@
 'use client'
 
 import { Suspense, useState } from 'react'
-import { Download, Upload, Settings, Database, Shield, Clock } from 'lucide-react'
+import Link from 'next/link'
+import { Download, Upload, Settings, Database, Shield, Clock, Cpu } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
 import { GoogleAccountsSection } from '@/components/settings/google-accounts-section'
@@ -199,6 +200,24 @@ export default function SettingsPage() {
           >
             <TelegramSection />
           </Suspense>
+
+          {/* Mac Daemon (Phase 1) */}
+          <section className="bg-white rounded-lg shadow-sm border p-6">
+            <div className="flex items-center space-x-3 mb-4">
+              <Cpu className="w-6 h-6 text-blue-600" />
+              <h2 className="text-xl font-semibold text-gray-900">Mac Daemon</h2>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">
+              Pair a Mac to sync iMessage and iCloud Contacts directly from macOS. Pairing tokens
+              are minted on the Mac Daemon page; daemon source readers ship in subsequent releases.
+            </p>
+            <Link
+              href="/settings/mac"
+              className="inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-800"
+            >
+              Manage paired Macs →
+            </Link>
+          </section>
 
           {/* Data Backup & Restore */}
           <section className="bg-white rounded-lg shadow-sm border p-6">

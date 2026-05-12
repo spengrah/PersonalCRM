@@ -62,6 +62,10 @@
     "tags": ["@area:settings"]
   },
   {
+    "pattern": "^frontend/tests/e2e/settings-mac\\.spec\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
     "pattern": "^frontend/tests/e2e/navigation\\.spec\\.ts$",
     "tags": ["@area:navigation"]
   },
@@ -149,6 +153,14 @@
   },
   {
     "pattern": "^frontend/src/hooks/use-sync-states\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/hooks/use-mac-hosts\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/lib/mac-hosts-api\\.ts$",
     "tags": ["@area:settings"]
   },
   {
