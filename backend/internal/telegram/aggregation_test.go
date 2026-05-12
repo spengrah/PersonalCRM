@@ -1,10 +1,10 @@
 package telegram
 
 import (
+	"strconv"
 	"testing"
-	"time"
 
-	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/messaging/aggregation"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -12,225 +12,80 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func makeMsg(id int32, chatID int64, outgoing bool, sentAt time.Time) repository.TelegramMessage {
-	return repository.TelegramMessage{
+// TestNewAggregationEngine_AcceptsNilEventBus is a defensive shim-level
+// smoke test that confirms the explicit "if bus != nil { pub = bus }"
+// nil-iface conversion is wired correctly. Without it, passing a nil
+// *events.Bus would defeat the engine's publisher==nil guard.
+//
+// The behavioural contract (createInteractionForSession returns the
+// publisher-required error when publisher is the nil interface value)
+// is locked in by TestEngine_FakeSource_NilPublisher_Errors in the
+// shared package.
+func TestNewAggregationEngine_AcceptsNilEventBus(t *testing.T) {
+	// Pure construction: no method invoked, so nil concrete repos are
+	// safe. The shim simply wraps them in adapter structs.
+	e := NewAggregationEngine(2, 48, nil, nil, nil, nil, nil)
+	require.NotNil(t, e)
+	require.NotNil(t, e.engine)
+}
+
+// TestTelegramAdapter_WireFormat locks in the Telegram-specific
+// source_ref / peer_ref / description bytes. The shared package has a
+// telegramShapedAdapter test (TestSessionKey_Stability_TelegramShape)
+// that asserts the same on a private copy; this test ensures the
+// production telegramAdapter (which is the one wired into
+// NewAggregationEngine) also produces the contract bytes.
+func TestTelegramAdapter_WireFormat(t *testing.T) {
+	a := telegramAdapter{}
+	assert.Equal(t, repository.InteractionSourceTelegram, a.SourceName())
+	assert.Equal(t, "tg:12345:50001", a.SourceRef("12345", "50001"))
+	assert.Equal(t, "tg:12345:%", a.SourceRefPrefix("12345"))
+	assert.Equal(t, "tg:12345", a.PeerRef("12345"))
+	assert.Equal(t, "Telegram outreach (3 messages)", a.Description(repository.InteractionDirectionOutbound, 3))
+	assert.Equal(t, "Telegram response (1 messages)", a.Description(repository.InteractionDirectionInbound, 1))
+	assert.Equal(t, "Telegram exchange (5 messages)", a.Description(repository.InteractionDirectionMutual, 5))
+}
+
+// TestMapTelegramMessage covers the row-mapping helper. The critical
+// invariant is that InteractionID flows through — without it, the
+// cross-batch explicit reply bridge silently fails.
+func TestMapTelegramMessage(t *testing.T) {
+	reply := int32(42)
+	interactionID := uuid.New()
+	src := repository.TelegramMessage{
 		ID:                uuid.New(),
-		TelegramMessageID: id,
-		TelegramChatID:    chatID,
-		IsOutgoing:        outgoing,
-		SentAt:            sentAt,
-	}
-}
-
-func TestGroupIntoBursts_SingleOutbound(t *testing.T) {
-	e := &AggregationEngine{burstWindowHours: 2}
-	base := accelerated.GetCurrentTime()
-	msgs := []repository.TelegramMessage{
-		makeMsg(1, 100, true, base),
-		makeMsg(2, 100, true, base.Add(10*time.Minute)),
-		makeMsg(3, 100, true, base.Add(30*time.Minute)),
+		TelegramMessageID: 9001,
+		TelegramChatID:    8675309,
+		IsOutgoing:        true,
+		ReplyToMsgID:      &reply,
+		InteractionID:     &interactionID,
 	}
 
-	bursts := e.groupIntoBursts(msgs, 100)
-	require.Len(t, bursts, 1)
-	assert.Equal(t, repository.InteractionDirectionOutbound, bursts[0].direction)
-	assert.Len(t, bursts[0].messages, 3)
-}
+	got := mapTelegramMessage(src)
+	assert.Equal(t, src.ID, got.ID)
+	assert.Equal(t, strconv.FormatInt(src.TelegramChatID, 10), got.ChatID)
+	assert.True(t, got.IsOutgoing)
+	assert.Equal(t, strconv.Itoa(int(src.TelegramMessageID)), got.ExternalID)
+	require.NotNil(t, got.ReplyTargetID)
+	assert.Equal(t, strconv.Itoa(int(reply)), *got.ReplyTargetID)
+	require.NotNil(t, got.InteractionID)
+	assert.Equal(t, interactionID, *got.InteractionID)
 
-func TestGroupIntoBursts_SingleInbound(t *testing.T) {
-	e := &AggregationEngine{burstWindowHours: 2}
-	base := accelerated.GetCurrentTime()
-	msgs := []repository.TelegramMessage{
-		makeMsg(1, 100, false, base),
-		makeMsg(2, 100, false, base.Add(5*time.Minute)),
+	// Nil reply / nil interaction.
+	src2 := repository.TelegramMessage{
+		ID:                uuid.New(),
+		TelegramMessageID: 1,
+		TelegramChatID:    2,
+		IsOutgoing:        false,
 	}
-
-	bursts := e.groupIntoBursts(msgs, 100)
-	require.Len(t, bursts, 1)
-	assert.Equal(t, repository.InteractionDirectionInbound, bursts[0].direction)
+	got2 := mapTelegramMessage(src2)
+	assert.Nil(t, got2.ReplyTargetID)
+	assert.Nil(t, got2.InteractionID)
 }
 
-func TestGroupIntoBursts_SplitByGap(t *testing.T) {
-	e := &AggregationEngine{burstWindowHours: 2}
-	base := accelerated.GetCurrentTime()
-	msgs := []repository.TelegramMessage{
-		makeMsg(1, 100, true, base),
-		makeMsg(2, 100, true, base.Add(3*time.Hour)), // >2h gap
-	}
-
-	bursts := e.groupIntoBursts(msgs, 100)
-	require.Len(t, bursts, 2)
-}
-
-func TestGroupIntoBursts_DirectionChangeSplits(t *testing.T) {
-	e := &AggregationEngine{burstWindowHours: 2}
-	base := accelerated.GetCurrentTime()
-	msgs := []repository.TelegramMessage{
-		makeMsg(1, 100, true, base),
-		makeMsg(2, 100, false, base.Add(5*time.Minute)), // direction change
-	}
-
-	bursts := e.groupIntoBursts(msgs, 100)
-	require.Len(t, bursts, 2)
-	assert.Equal(t, repository.InteractionDirectionOutbound, bursts[0].direction)
-	assert.Equal(t, repository.InteractionDirectionInbound, bursts[1].direction)
-}
-
-func TestResolveSessions_ReplyBridgeWithin48h(t *testing.T) {
-	e := &AggregationEngine{burstWindowHours: 2, replyBridgeHours: 48}
-	base := accelerated.GetCurrentTime()
-
-	bursts := []burst{
-		{
-			direction: repository.InteractionDirectionOutbound,
-			messages: []repository.TelegramMessage{
-				makeMsg(1, 100, true, base),
-				makeMsg(2, 100, true, base.Add(5*time.Minute)),
-			},
-			chatID: 100,
-		},
-		{
-			direction: repository.InteractionDirectionInbound,
-			messages: []repository.TelegramMessage{
-				makeMsg(3, 100, false, base.Add(1*time.Hour)), // within 48h
-			},
-			chatID: 100,
-		},
-	}
-
-	sessions := e.resolveSessions(bursts)
-	require.Len(t, sessions, 1)
-	assert.Equal(t, repository.InteractionDirectionMutual, sessions[0].direction)
-	assert.Len(t, sessions[0].messages, 3)
-}
-
-func TestResolveSessions_ReplyBridgeExpired(t *testing.T) {
-	e := &AggregationEngine{burstWindowHours: 2, replyBridgeHours: 48}
-	base := accelerated.GetCurrentTime()
-
-	bursts := []burst{
-		{
-			direction: repository.InteractionDirectionOutbound,
-			messages: []repository.TelegramMessage{
-				makeMsg(1, 100, true, base),
-			},
-			chatID: 100,
-		},
-		{
-			direction: repository.InteractionDirectionInbound,
-			messages: []repository.TelegramMessage{
-				makeMsg(2, 100, false, base.Add(49*time.Hour)), // >48h gap
-			},
-			chatID: 100,
-		},
-	}
-
-	sessions := e.resolveSessions(bursts)
-	require.Len(t, sessions, 2) // not bridged
-}
-
-func TestResolveSessions_ExplicitReplyBridges(t *testing.T) {
-	e := &AggregationEngine{burstWindowHours: 2, replyBridgeHours: 48}
-	base := accelerated.GetCurrentTime()
-
-	replyTo := int32(1)
-	bursts := []burst{
-		{
-			direction: repository.InteractionDirectionOutbound,
-			messages: []repository.TelegramMessage{
-				makeMsg(1, 100, true, base),
-			},
-			chatID: 100,
-		},
-		{
-			direction: repository.InteractionDirectionInbound,
-			messages: []repository.TelegramMessage{
-				{
-					ID:                uuid.New(),
-					TelegramMessageID: 2,
-					TelegramChatID:    100,
-					IsOutgoing:        false,
-					SentAt:            base.Add(72 * time.Hour), // >48h gap
-					ReplyToMsgID:      &replyTo,                 // explicit reply to msg 1
-				},
-			},
-			chatID: 100,
-		},
-	}
-
-	sessions := e.resolveSessions(bursts)
-	require.Len(t, sessions, 1) // bridged via explicit reply
-	assert.Equal(t, repository.InteractionDirectionMutual, sessions[0].direction)
-}
-
-func TestSessionKey_Stability(t *testing.T) {
-	sess := msgSession{
-		chatID:   12345,
-		firstMsg: 50001,
-	}
-	assert.Equal(t, "tg:12345:50001", sess.sourceRef())
-}
-
-func TestResolveSessions_ChatScoped(t *testing.T) {
-	e := &AggregationEngine{burstWindowHours: 2, replyBridgeHours: 48}
-	base := accelerated.GetCurrentTime()
-
-	// Messages from same contact in different chats should NOT merge
-	bursts := []burst{
-		{
-			direction: repository.InteractionDirectionOutbound,
-			messages:  []repository.TelegramMessage{makeMsg(1, 100, true, base)},
-			chatID:    100,
-		},
-		{
-			direction: repository.InteractionDirectionOutbound,
-			messages:  []repository.TelegramMessage{makeMsg(2, 200, true, base.Add(5*time.Minute))},
-			chatID:    200,
-		},
-	}
-
-	sessions := e.resolveSessions(bursts)
-	require.Len(t, sessions, 2) // separate chats = separate sessions
-}
-
-func TestResolveSessions_CrossChatNoBridge(t *testing.T) {
-	e := &AggregationEngine{burstWindowHours: 2, replyBridgeHours: 48}
-	base := accelerated.GetCurrentTime()
-
-	// Outbound in chat 100, inbound in chat 200 — should NOT bridge even within 48h
-	bursts := []burst{
-		{
-			direction: repository.InteractionDirectionOutbound,
-			messages:  []repository.TelegramMessage{makeMsg(1, 100, true, base)},
-			chatID:    100,
-		},
-		{
-			direction: repository.InteractionDirectionInbound,
-			messages:  []repository.TelegramMessage{makeMsg(2, 200, false, base.Add(1*time.Hour))},
-			chatID:    200,
-		},
-	}
-
-	sessions := e.resolveSessions(bursts)
-	require.Len(t, sessions, 2) // different chats — no bridging
-	assert.Equal(t, repository.InteractionDirectionOutbound, sessions[0].direction)
-	assert.Equal(t, repository.InteractionDirectionInbound, sessions[1].direction)
-}
-
-func TestPartitionByChat(t *testing.T) {
-	now := accelerated.GetCurrentTime()
-	msgs := []repository.TelegramMessage{
-		makeMsg(1, 100, true, now),
-		makeMsg(2, 200, true, now),
-		makeMsg(3, 100, false, now),
-	}
-
-	result := partitionByChat(msgs)
-	assert.Len(t, result[100], 2)
-	assert.Len(t, result[200], 1)
-}
-
-func TestMsgDirection(t *testing.T) {
-	assert.Equal(t, repository.InteractionDirectionOutbound, msgDirection(repository.TelegramMessage{IsOutgoing: true}))
-	assert.Equal(t, repository.InteractionDirectionInbound, msgDirection(repository.TelegramMessage{IsOutgoing: false}))
-}
+// Compile-time guard: telegramMessageStoreAdapter satisfies
+// aggregation.MessageStore and interactionFinderAdapter satisfies
+// aggregation.InteractionFinder. The test references the interface
+// types so go vet flags mismatches at build time.
+var _ aggregation.MessageStore = (*telegramMessageStoreAdapter)(nil)
+var _ aggregation.InteractionFinder = (*interactionFinderAdapter)(nil)
