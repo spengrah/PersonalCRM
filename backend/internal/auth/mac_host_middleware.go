@@ -166,15 +166,6 @@ func (m *macHostAuthLimiter) removeEntryLocked(id uuid.UUID) {
 	}
 }
 
-// reset removes the limiter entry for host_id. Public counterpart of
-// removeEntryLocked, kept for callers (currently tests) that
-// explicitly want a fresh bucket.
-func (m *macHostAuthLimiter) reset(id uuid.UUID) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.removeEntryLocked(id)
-}
-
 func (m *macHostAuthLimiter) getOrCreateLocked(id uuid.UUID) *rate.Limiter {
 	if elem, ok := m.byID[id]; ok {
 		m.lru.MoveToFront(elem)
