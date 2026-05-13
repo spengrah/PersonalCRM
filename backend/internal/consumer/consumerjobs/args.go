@@ -97,6 +97,41 @@ type TodoistFollowUpRefreshJobArgs struct {
 // refresh retry jobs.
 func (TodoistFollowUpRefreshJobArgs) Kind() string { return "todoist_followup_refresh" }
 
+// MessagingAggregateForContactArgs is enqueued by the ingest service
+// after a batch of raw_message.* events lands. The worker drives the
+// chat-aware aggregation engine over all unprocessed chats for the
+// (contactID, source) pair.
+//
+// ContactID + Source carry the `river:"unique"` tag so River's
+// UniqueOpts{ByArgs: true} dedupes concurrent enqueues for the same
+// pair into one in-flight job. Default ByState (Pending/Scheduled/
+// Available/Running/Retryable) is intentional — completed jobs do
+// NOT block re-enqueue, so a subsequent batch arriving after the
+// previous worker finished still triggers a fresh aggregation pass.
+//
+// JSON tag names ("contact_id" / "source") are load-bearing for
+// River's args-hash uniqueness; do not rename without auditing all
+// consumers/tests that decode the args.
+type MessagingAggregateForContactArgs struct {
+	ContactID uuid.UUID `json:"contact_id" river:"unique"`
+	Source    string    `json:"source"     river:"unique"`
+}
+
+// Kind returns the river job-kind identifier for messaging aggregate
+// jobs.
+func (MessagingAggregateForContactArgs) Kind() string { return "messaging_aggregate_for_contact" }
+
+// MessagingAggregateSweeperArgs is the periodic sweep job. The worker
+// lists all contacts with unprocessed messages_message rows and
+// enqueues a MessagingAggregateForContactArgs per contact, relying on
+// UniqueOpts to dedupe against in-flight jobs. Bounds the worst-case
+// stranded-row latency at the sweep interval. The worker holds no
+// state; the args type is intentionally empty.
+type MessagingAggregateSweeperArgs struct{}
+
+// Kind returns the river job-kind identifier for the sweeper.
+func (MessagingAggregateSweeperArgs) Kind() string { return "messaging_aggregate_sweeper" }
+
 // RematchDispatcherJobArgs carries the event id + dedup-arg fields that
 // the RematchDispatcher worker processes. ContactID and RematchJobID
 // are duplicated from the event payload and carry the river:"unique"

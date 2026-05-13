@@ -186,6 +186,25 @@ func (r *IdentityRepository) GetByIdentifier(ctx context.Context, idType identit
 	return &ident, nil
 }
 
+// GetByIdentifierTx is the tx-bound variant of GetByIdentifier. Used
+// by IdentityService.MatchOrCreateTx so the identity lookup runs in
+// the caller's transaction.
+func (r *IdentityRepository) GetByIdentifierTx(ctx context.Context, tx pgx.Tx, idType identity.IdentifierType, identifier, source string) (*ExternalIdentity, error) {
+	dbIdentity, err := db.New(tx).GetIdentityByIdentifier(ctx, db.GetIdentityByIdentifierParams{
+		IdentifierType: string(idType),
+		Identifier:     identifier,
+		Source:         source,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	ident := convertDbIdentity(dbIdentity)
+	return &ident, nil
+}
+
 // FindByIdentifier finds all identities matching the given identifier and type (across sources)
 func (r *IdentityRepository) FindByIdentifier(ctx context.Context, idType identity.IdentifierType, identifier string) ([]ExternalIdentity, error) {
 	dbIdentities, err := r.queries.FindIdentitiesByIdentifier(ctx, db.FindIdentitiesByIdentifierParams{
@@ -206,13 +225,38 @@ func (r *IdentityRepository) FindByIdentifier(ctx context.Context, idType identi
 
 // Upsert creates or updates an identity
 func (r *IdentityRepository) Upsert(ctx context.Context, req UpsertIdentityRequest) (*ExternalIdentity, error) {
+	dbIdentity, err := r.queries.UpsertIdentity(ctx, buildUpsertIdentityParams(req))
+	if err != nil {
+		return nil, err
+	}
+
+	ident := convertDbIdentity(dbIdentity)
+	return &ident, nil
+}
+
+// UpsertTx is the tx-bound variant of Upsert. Used by
+// IdentityService.MatchOrCreateTx so the identity row commits atomically
+// with the caller's other writes (e.g., the staging-row insert in the
+// ingest hot path).
+func (r *IdentityRepository) UpsertTx(ctx context.Context, tx pgx.Tx, req UpsertIdentityRequest) (*ExternalIdentity, error) {
+	dbIdentity, err := db.New(tx).UpsertIdentity(ctx, buildUpsertIdentityParams(req))
+	if err != nil {
+		return nil, err
+	}
+	ident := convertDbIdentity(dbIdentity)
+	return &ident, nil
+}
+
+// buildUpsertIdentityParams centralizes the pgtype conversion shared
+// between the tx and non-tx upsert paths. Keeping this in one place
+// ensures both variants stay in lockstep.
+func buildUpsertIdentityParams(req UpsertIdentityRequest) db.UpsertIdentityParams {
 	params := db.UpsertIdentityParams{
 		Identifier:     req.Identifier,
 		IdentifierType: string(req.IdentifierType),
 		Source:         req.Source,
 	}
 
-	// Set optional fields
 	if req.RawIdentifier != nil {
 		params.RawIdentifier = pgtype.Text{String: *req.RawIdentifier, Valid: true}
 	}
@@ -238,13 +282,7 @@ func (r *IdentityRepository) Upsert(ctx context.Context, req UpsertIdentityReque
 		params.MessageCount = pgtype.Int4{Int32: req.MessageCount, Valid: true}
 	}
 
-	dbIdentity, err := r.queries.UpsertIdentity(ctx, params)
-	if err != nil {
-		return nil, err
-	}
-
-	ident := convertDbIdentity(dbIdentity)
-	return &ident, nil
+	return params
 }
 
 // LinkToContact links an identity to a contact
@@ -372,6 +410,24 @@ func (r *IdentityRepository) FindContactMethodsByValue(ctx context.Context, type
 		matches[i] = convertDbContactMethodMatch(row)
 	}
 
+	return matches, nil
+}
+
+// FindContactMethodsByValueTx is the tx-bound variant of
+// FindContactMethodsByValue. Used by IdentityService.MatchOrCreateTx
+// so the contact-method search runs in the caller's transaction.
+func (r *IdentityRepository) FindContactMethodsByValueTx(ctx context.Context, tx pgx.Tx, types []string, normalizedValue string) ([]ContactMethodMatch, error) {
+	rows, err := db.New(tx).FindMethodsByNormalizedValue(ctx, db.FindMethodsByNormalizedValueParams{
+		Column1:         types,
+		ValueNormalized: normalizedValue,
+	})
+	if err != nil {
+		return nil, err
+	}
+	matches := make([]ContactMethodMatch, len(rows))
+	for i, row := range rows {
+		matches[i] = convertDbContactMethodMatch(row)
+	}
 	return matches, nil
 }
 

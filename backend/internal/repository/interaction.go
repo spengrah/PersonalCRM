@@ -303,7 +303,7 @@ func (r *InteractionRepository) FindRecentInteractionBySourceAndDirection(
 		ContactID:       uuidToPgUUID(contactID),
 		Source:          source,
 		Direction:       direction,
-		SourceRefPrefix: pgtype.Text{String: sourceRefPrefix, Valid: true},
+		SourceRefPrefix: sourceRefPrefix,
 		WindowStart:     pgtype.Timestamptz{Time: windowStart, Valid: true},
 		WindowEnd:       pgtype.Timestamptz{Time: windowEnd, Valid: true},
 	})
@@ -329,7 +329,7 @@ func (r *InteractionRepository) FindRecentOutboundInteractionBySource(
 	dbInteraction, err := r.queries.FindRecentOutboundInteractionBySource(ctx, db.FindRecentOutboundInteractionBySourceParams{
 		ContactID:       uuidToPgUUID(contactID),
 		Source:          source,
-		SourceRefPrefix: pgtype.Text{String: sourceRefPrefix, Valid: true},
+		SourceRefPrefix: sourceRefPrefix,
 		WindowStart:     pgtype.Timestamptz{Time: windowStart, Valid: true},
 		WindowEnd:       pgtype.Timestamptz{Time: windowEnd, Valid: true},
 	})

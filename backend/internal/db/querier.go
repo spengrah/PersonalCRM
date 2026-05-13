@@ -273,10 +273,26 @@ type Querier interface {
 	// Used by the shared aggregator (backend/internal/messaging/aggregation)
 	// for same-direction coalescing. source_ref_prefix should include
 	// trailing % for LIKE match.
+	//
+	// The ESCAPE clause lets adapters whose source-ref segments may
+	// contain `_` or `%` (e.g., Apple Messages chat.guid values like
+	// "iMessage;-;_chat-uuid_") supply their own escape character `\`
+	// without false-matching unrelated rows. Numeric-only chat IDs
+	// (Telegram) pass through unchanged since they never contain LIKE
+	// wildcards.
+	//
+	// The explicit ::text cast on the bind variable keeps sqlc inferring
+	// pgtype.Text for the parameter; without it the ESCAPE clause causes
+	// sqlc to fall back to []byte (Postgres treats the LIKE pattern as
+	// bytea-compatible in that form). Plain LIKE-on-text behavior is what
+	// the existing callers expect.
 	FindRecentInteractionBySourceAndDirection(ctx context.Context, arg FindRecentInteractionBySourceAndDirectionParams) (*Interaction, error)
 	// Source-neutral generalization of FindRecentOutboundTelegramInteraction.
 	// Used by the shared aggregator for time-based reply bridging on inbound
 	// sessions.
+	//
+	// ESCAPE clause: same rationale as FindRecentInteractionBySourceAndDirection.
+	// See that query for the ::text cast rationale.
 	FindRecentOutboundInteractionBySource(ctx context.Context, arg FindRecentOutboundInteractionBySourceParams) (*Interaction, error)
 	// Find the most recent outbound telegram interaction for a contact in a specific chat
 	// within a time window. source_ref_prefix should include trailing % for LIKE match.
@@ -515,6 +531,12 @@ type Querier interface {
 	// List past events that haven't updated last_contacted yet
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
+	// Lists rows with matched_contact_id IS NULL — i.e., rows that the
+	// ingest service accepted into staging but couldn't match to a contact
+	// at the time. The crm-admin --messages-rematch-stranded command
+	// iterates this list to retroactively match rows after a contact_method
+	// is added.
+	ListStrandedMessagesMessages(ctx context.Context) ([]*MessagesMessage, error)
 	ListSyncLogsByState(ctx context.Context, arg ListSyncLogsByStateParams) ([]*ExternalSyncLog, error)
 	ListSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListTags(ctx context.Context) ([]*Tag, error)
@@ -530,6 +552,12 @@ type Querier interface {
 	ListUnprocessedContactIDs(ctx context.Context) ([]pgtype.UUID, error)
 	ListUnprocessedMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*MessagesMessage, error)
 	ListUnprocessedMessagesByContactAndChat(ctx context.Context, arg ListUnprocessedMessagesByContactAndChatParams) ([]*MessagesMessage, error)
+	// Distinct chat_guid values for a contact with at least one eligible
+	// (unprocessed AND unclaimed-or-stale) staging row. Used by the
+	// messaging aggregator worker to drive per-chat AggregateForContact
+	// invocations — the chat-aware path is what preserves the engine's
+	// extend/bridge/coalesce contract (see spec §3 "Stage 2 — Aggregator").
+	ListUnprocessedMessagesChatsByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]string, error)
 	// Claim-aware filter — same predicate shape as telegram_message.
 	ListUnprocessedMessagesContactIDs(ctx context.Context) ([]pgtype.UUID, error)
 	ListUnprocessedTelegramMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*TelegramMessage, error)
@@ -764,6 +792,11 @@ type Querier interface {
 	// planning read and this update; the caller re-reads and surfaces 409.
 	// metadata.backfill_complete is rewritten on every successful commit.
 	UpdateMacHostSyncCursor(ctx context.Context, arg UpdateMacHostSyncCursorParams) (*UpdateMacHostSyncCursorRow, error)
+	// Sets matched_contact_id + peer_normalized on a single stranded row.
+	// Scoped to rows that are still unmatched + unprocessed so a
+	// concurrent ingest path (a never-stranding daemon push for a peer
+	// that just got matched) cannot be overwritten by this admin path.
+	UpdateMatchedContactForStrandedMessage(ctx context.Context, arg UpdateMatchedContactForStrandedMessageParams) error
 	// Update the matched contact IDs for an event
 	UpdateMatchedContacts(ctx context.Context, arg UpdateMatchedContactsParams) (*CalendarEvent, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
