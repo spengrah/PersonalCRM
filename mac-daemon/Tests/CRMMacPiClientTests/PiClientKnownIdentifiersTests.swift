@@ -24,7 +24,7 @@ final class PiClientKnownIdentifiersTests: XCTestCase {
     func testKnownIdentifiers401Propagates() async throws {
         let data = try loadFixture("heartbeat_401")
         let script = MockTransportScript([.respond(status: 401, data: data)])
-        await assertThrows(client(script).knownIdentifiers(auth: auth)) { error in
+        await assertThrows({ try await client(script).knownIdentifiers(auth: auth) }) { error in
             guard case PiClientError.authenticationRevoked = error else {
                 XCTFail("got \(error)")
                 return

@@ -27,8 +27,8 @@ final class PiClientPairTests: XCTestCase {
     func testPair410MapsToPairingTokenRejected() async throws {
         let data = try loadFixture("pair_410_invalid_pair")
         let script = MockTransportScript([.respond(status: 410, data: data)])
-        await assertThrows(client(script: script).pair(
-            token: "bad", hostname: "mac-1", daemonVersion: "0.1.0", protocolVersion: 1)) { error in
+        await assertThrows({ try await client(script: script).pair(
+            token: "bad", hostname: "mac-1", daemonVersion: "0.1.0", protocolVersion: 1) }) { error in
             guard case PiClientError.pairingTokenRejected = error else {
                 XCTFail("expected pairingTokenRejected, got \(error)")
                 return
@@ -39,8 +39,8 @@ final class PiClientPairTests: XCTestCase {
     func testPair409MapsToHostAlreadyPaired() async throws {
         let data = try loadFixture("pair_409_already_paired")
         let script = MockTransportScript([.respond(status: 409, data: data)])
-        await assertThrows(client(script: script).pair(
-            token: "abc", hostname: "mac-1", daemonVersion: "0.1.0", protocolVersion: 1)) { error in
+        await assertThrows({ try await client(script: script).pair(
+            token: "abc", hostname: "mac-1", daemonVersion: "0.1.0", protocolVersion: 1) }) { error in
             guard case PiClientError.hostAlreadyPaired = error else {
                 XCTFail("expected hostAlreadyPaired, got \(error)")
                 return
@@ -53,8 +53,8 @@ final class PiClientPairTests: XCTestCase {
         let script = MockTransportScript([
             .respond(status: 502, data: Data("{}".utf8)),
         ])
-        await assertThrows(client(script: script).pair(
-            token: "abc", hostname: "mac-1", daemonVersion: "0.1.0", protocolVersion: 1)) { error in
+        await assertThrows({ try await client(script: script).pair(
+            token: "abc", hostname: "mac-1", daemonVersion: "0.1.0", protocolVersion: 1) }) { error in
             guard case PiClientError.serverError = error else {
                 XCTFail("expected serverError, got \(error)")
                 return
@@ -67,8 +67,8 @@ final class PiClientPairTests: XCTestCase {
         let script = MockTransportScript([
             .fail(URLError(.timedOut)),
         ])
-        await assertThrows(client(script: script).pair(
-            token: "abc", hostname: "mac-1", daemonVersion: "0.1.0", protocolVersion: 1)) { error in
+        await assertThrows({ try await client(script: script).pair(
+            token: "abc", hostname: "mac-1", daemonVersion: "0.1.0", protocolVersion: 1) }) { error in
             guard case PiClientError.transport = error else {
                 XCTFail("expected transport error, got \(error)")
                 return
@@ -94,7 +94,7 @@ final class PiClientPairTests: XCTestCase {
 // MARK: - async throws helper
 
 func assertThrows<T>(
-    _ expression: @autoclosure () async throws -> T,
+    _ expression: () async throws -> T,
     file: StaticString = #file,
     line: UInt = #line,
     _ handler: (Error) -> Void

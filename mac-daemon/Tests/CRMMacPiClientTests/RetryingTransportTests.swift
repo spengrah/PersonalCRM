@@ -35,7 +35,7 @@ final class RetryingTransportTests: XCTestCase {
         // 5 retries + initial = 6 attempts
         let script = MockTransportScript(Array(repeating: .respond(status: 503, data: Data("{}".utf8)), count: 6))
         let transport = makeTransport(script: script)
-        await assertThrows(transport.send(request())) { error in
+        await assertThrows({ try await transport.send(request()) }) { error in
             guard case PiClientError.serverError = error else {
                 XCTFail("got \(error)")
                 return
@@ -49,7 +49,7 @@ final class RetryingTransportTests: XCTestCase {
             .respond(status: 502, data: Data("{}".utf8)),
         ])
         let transport = makeTransport(script: script)
-        await assertThrows(transport.send(request(), maxRetries: 0)) { error in
+        await assertThrows({ try await transport.send(request(), maxRetries: 0) }) { error in
             guard case PiClientError.serverError = error else {
                 XCTFail("got \(error)")
                 return
@@ -75,7 +75,7 @@ final class RetryingTransportTests: XCTestCase {
         """.utf8)
         let script = MockTransportScript(Array(repeating: .respond(status: 500, data: body), count: 6))
         let transport = makeTransport(script: script)
-        await assertThrows(transport.send(request())) { error in
+        await assertThrows({ try await transport.send(request()) }) { error in
             guard case let PiClientError.serverError(_, message) = error else {
                 XCTFail("got \(error)")
                 return

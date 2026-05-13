@@ -31,7 +31,7 @@ final class PiClientHeartbeatTests: XCTestCase {
     func testHeartbeat401MapsToAuthRevoked() async throws {
         let data = try loadFixture("heartbeat_401")
         let script = MockTransportScript([.respond(status: 401, data: data)])
-        await assertThrows(client(script).heartbeat(auth: auth, body: emptyBody)) { error in
+        await assertThrows({ try await client(script).heartbeat(auth: auth, body: emptyBody) }) { error in
             guard case PiClientError.authenticationRevoked = error else {
                 XCTFail("got \(error)")
                 return
@@ -42,7 +42,7 @@ final class PiClientHeartbeatTests: XCTestCase {
     func testHeartbeat412MapsToUpgradeRequiredWithMinVersion() async throws {
         let data = try loadFixture("heartbeat_412")
         let script = MockTransportScript([.respond(status: 412, data: data)])
-        await assertThrows(client(script).heartbeat(auth: auth, body: emptyBody)) { error in
+        await assertThrows({ try await client(script).heartbeat(auth: auth, body: emptyBody) }) { error in
             guard case let PiClientError.upgradeRequired(minVersion, _) = error else {
                 XCTFail("got \(error)")
                 return
@@ -61,7 +61,7 @@ final class PiClientHeartbeatTests: XCTestCase {
             .respond(status: 500, data: Data("{}".utf8)),
             .respond(status: 502, data: Data("{}".utf8)),
         ])
-        await assertThrows(client(script).heartbeat(auth: auth, body: emptyBody)) { error in
+        await assertThrows({ try await client(script).heartbeat(auth: auth, body: emptyBody) }) { error in
             guard case PiClientError.serverError = error else {
                 XCTFail("got \(error)")
                 return
@@ -99,7 +99,7 @@ final class PiClientHeartbeatTests: XCTestCase {
         let script = MockTransportScript([
             .respond(status: 429, data: Data("{\"success\":false,\"error\":{\"code\":\"RATE_LIMITED\",\"message\":\"too many\"}}".utf8)),
         ])
-        await assertThrows(client(script).heartbeat(auth: auth, body: emptyBody)) { error in
+        await assertThrows({ try await client(script).heartbeat(auth: auth, body: emptyBody) }) { error in
             guard case let PiClientError.clientError(status, _, _) = error else {
                 XCTFail("got \(error)")
                 return
