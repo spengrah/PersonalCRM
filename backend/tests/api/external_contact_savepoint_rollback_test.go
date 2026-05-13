@@ -18,6 +18,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -210,4 +211,14 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 	require.Error(t, err, "event-log row must not be committed after savepoint rollback")
 	require.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound, got %v", err)
 	require.Nil(t, logged)
+
+	// 3. No external_identity row was committed. The handler called
+	//    MatchOrCreateTx on the seeded email BEFORE UpdateMatchTx
+	//    failed; that call writes an external_identity row inside the
+	//    same savepoint. Rollback must undo it.
+	ident, err := identityRepo.GetByIdentifier(ctx,
+		identity.IdentifierTypeEmail, seededEmail, "icloud_contacts")
+	require.Error(t, err, "external_identity row must not be committed after savepoint rollback")
+	require.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound, got %v", err)
+	require.Nil(t, ident)
 }

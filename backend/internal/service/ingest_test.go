@@ -4,9 +4,13 @@ import (
 	"context"
 	"testing"
 
+	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 )
 
@@ -380,4 +384,127 @@ func TestVerifyExternalContactInvariants_SourceIDEntityPrefixMismatch(t *testing
 	rej := verifyExternalContactInvariants(env, host)
 	require.NotNil(t, rej)
 	require.Contains(t, rej.Message, "entity prefix")
+}
+
+// stubExternalContactWriter records method invocations so tests can
+// drive narrow scenarios without a live DB. The pgx.Tx args are
+// ignored — the writer doesn't touch the DB at all.
+type stubExternalContactWriter struct {
+	getResp     *repository.ExternalContact
+	getErr      error
+	upsertResp  *repository.ExternalContact
+	upsertErr   error
+	updateResp  *repository.ExternalContact
+	updateErr   error
+	reviveResp  *repository.ExternalContact
+	reviveErr   error
+	softDelErr  error
+	reviveCalls int
+	updateCalls int
+}
+
+func (s *stubExternalContactWriter) GetBySourceTx(_ context.Context, _ pgx.Tx, _ string, _ string, _ *string) (*repository.ExternalContact, error) {
+	return s.getResp, s.getErr
+}
+func (s *stubExternalContactWriter) UpsertTx(_ context.Context, _ pgx.Tx, _ repository.UpsertExternalContactRequest) (*repository.ExternalContact, error) {
+	return s.upsertResp, s.upsertErr
+}
+func (s *stubExternalContactWriter) UpdateMatchTx(_ context.Context, _ pgx.Tx, _ uuid.UUID, _ *uuid.UUID, _ repository.MatchStatus) (*repository.ExternalContact, error) {
+	s.updateCalls++
+	return s.updateResp, s.updateErr
+}
+func (s *stubExternalContactWriter) ReviveTx(_ context.Context, _ pgx.Tx, _ uuid.UUID) (*repository.ExternalContact, error) {
+	s.reviveCalls++
+	return s.reviveResp, s.reviveErr
+}
+func (s *stubExternalContactWriter) SoftDeleteTx(_ context.Context, _ pgx.Tx, _ uuid.UUID) error {
+	return s.softDelErr
+}
+
+// stubIdentityMatcher returns a configured MatchResult / error for
+// every MatchOrCreateTx call.
+type stubIdentityMatcher struct {
+	result *MatchResult
+	err    error
+	calls  int
+}
+
+func (s *stubIdentityMatcher) MatchOrCreateTx(_ context.Context, _ pgx.Tx, _ MatchRequest) (*MatchResult, error) {
+	s.calls++
+	return s.result, s.err
+}
+
+// TestHandleExternalContactUpserted_PostUpsertTombstoneTriggersRevive
+// exercises the defensive race-recovery path: the pre-read returns
+// "not found" so wasTombstoned=false, but a concurrent delete
+// tombstoned the row between our pre-read and our upsert, so UpsertTx
+// returns a row with DeletedAt != nil. The handler MUST call ReviveTx
+// in that case (post-upsert deleted_at check), even though
+// wasTombstoned=false.
+func TestHandleExternalContactUpserted_PostUpsertTombstoneTriggersRevive(t *testing.T) {
+	rowID := uuid.New()
+	hostID := uuid.New()
+	deletedAt := accelerated.GetCurrentTime()
+	postUpsertRow := &repository.ExternalContact{
+		ID:          rowID,
+		Source:      "icloud_contacts",
+		SourceID:    "CN-race",
+		MatchStatus: repository.MatchStatusUnmatched,
+		DeletedAt:   &deletedAt, // concurrent delete tombstoned it
+	}
+	revivedRow := &repository.ExternalContact{
+		ID:          rowID,
+		Source:      "icloud_contacts",
+		SourceID:    "CN-race",
+		MatchStatus: repository.MatchStatusUnmatched,
+		DeletedAt:   nil, // ReviveTx cleared it
+	}
+	stubExt := &stubExternalContactWriter{
+		// Pre-read says "not found" — wasTombstoned will be false.
+		getResp:    nil,
+		getErr:     db.ErrNotFound,
+		upsertResp: postUpsertRow, // but post-upsert returns a tombstoned row
+		reviveResp: revivedRow,
+	}
+	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
+
+	svc := &IngestService{
+		identity:         stubIdent,
+		externalContacts: stubExt,
+	}
+	env := validUpsertedEnv(hostID, "CN-race")
+	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	require.Nil(t, rej, "handler must not reject when revive succeeds")
+	require.Equal(t, 1, stubExt.reviveCalls, "ReviveTx must be called when post-upsert row is tombstoned")
+}
+
+// TestHandleExternalContactUpserted_LiveUpsertSkipsRevive confirms the
+// happy path does not invoke ReviveTx — keeps the previous test honest
+// (a regression that always called ReviveTx would still pass the
+// other test, but fail this one).
+func TestHandleExternalContactUpserted_LiveUpsertSkipsRevive(t *testing.T) {
+	rowID := uuid.New()
+	hostID := uuid.New()
+	liveRow := &repository.ExternalContact{
+		ID:          rowID,
+		Source:      "icloud_contacts",
+		SourceID:    "CN-live",
+		MatchStatus: repository.MatchStatusUnmatched,
+		DeletedAt:   nil,
+	}
+	stubExt := &stubExternalContactWriter{
+		getResp:    nil,
+		getErr:     db.ErrNotFound,
+		upsertResp: liveRow,
+	}
+	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
+
+	svc := &IngestService{
+		identity:         stubIdent,
+		externalContacts: stubExt,
+	}
+	env := validUpsertedEnv(hostID, "CN-live")
+	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	require.Nil(t, rej)
+	require.Equal(t, 0, stubExt.reviveCalls, "ReviveTx must NOT be called on a live first-insert")
 }

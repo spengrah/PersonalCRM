@@ -418,10 +418,14 @@ func (h *MacHostHandler) KnownIDs(c *gin.Context) {
 
 // KnownIdentifiers returns the cross-source canonical phone + email
 // set the daemon uses to filter incoming Apple Messages senders. The
-// daemon polls this endpoint on every heartbeat (~60s); the response
-// shape is `{"phones": ["..."], "emails": ["..."]}` with both arrays
-// alphabetically sorted and deduplicated. Empty arrays on a fresh CRM
-// are valid.
+// daemon polls this endpoint on every heartbeat (~60s).
+//
+// Wire shape: the standard `{success, data, ...}` envelope from
+// api.SendSuccess. The data payload is `{"phones": ["..."], "emails":
+// ["..."]}` — both arrays alphabetically sorted and deduplicated, empty
+// arrays valid on a fresh CRM. The envelope is consistent with every
+// other mac-host endpoint (Pair, Heartbeat, GetCursor, KnownIDs,
+// admin endpoints).
 //
 // Authentication is the host-bearer path (MacHostAuthMiddleware) —
 // the daemon is the only legitimate caller.
