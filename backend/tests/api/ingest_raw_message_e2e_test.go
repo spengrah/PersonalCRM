@@ -26,7 +26,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -353,7 +352,3 @@ func (w *noopFollowUpManagerWorker) Work(_ context.Context, _ *river.Job[consume
 func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
-
-// Unused import guards — silence unused-pgx warning when nothing in
-// this file uses pgx directly.
-var _ pgx.Tx

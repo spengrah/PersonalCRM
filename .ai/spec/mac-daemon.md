@@ -112,6 +112,8 @@ The pairing token model means there's no admin/bootstrap key in widespread use �
 
 **Permissions:** Full Disk Access (chat.db; WhatsApp likely not required since sandbox container is user-readable), Contacts permission (native `requestAccess`), Files & Folders for Anarlog path. `doctor` enumerates and provides `x-apple.systempreferences:` deep links.
 
+**Testing & CI:** structure Swift modules so OS-permission-mediated code (Full Disk Access for chat.db, `CNContactStore` consent, Files & Folders) is a thin shell over pure-logic modules — chat.db parsing against a fixture SQLite file, identifier filtering, push payload serialization, pairing client logic, cursor/state management. CI runs `swift build` + `swift test` on `macos-latest`, path-filtered to `mac-daemon/**` so Pi-side PRs don't burn macOS minutes (macOS runners are ~10× Linux cost). Integration tests that require TCC permissions, real iCloud state, or live `~/Library/Messages/chat.db` access live behind a `make test-daemon-local` target run on the developer's Mac before push — not in CI. The first Swift PR (daemon skeleton) lands this CI job so all subsequent Swift PRs have signal from day one.
+
 ### 2. Data sources
 
 #### `messages` (iMessage + SMS via Messages.app)
