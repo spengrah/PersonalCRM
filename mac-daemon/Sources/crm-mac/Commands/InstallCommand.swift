@@ -2,6 +2,7 @@
 // CRMMacLifecycle.Installer.
 import Foundation
 import ArgumentParser
+import CRMMacCore
 import CRMMacLifecycle
 
 struct InstallCommand: AsyncParsableCommand {
@@ -47,6 +48,14 @@ struct InstallCommand: AsyncParsableCommand {
         } else {
             guard let parsed = URL(string: piURL) else {
                 throw ValidationError("--pi-url is not a valid URL: \(piURL)")
+            }
+            // Reject file://, relative paths, missing host, anything
+            // that's not http(s). Otherwise the install will fail
+            // mid-pair with a confusing transport error.
+            do {
+                try ConfigStore.validatePiURL(parsed)
+            } catch {
+                throw ValidationError("--pi-url is invalid: \(error)")
             }
             url = parsed
         }

@@ -278,8 +278,17 @@ public struct Installer {
                 underlying: String(describing: error))
         }
 
-        // Write plist + launchctl bootstrap.
-        try writePlist()
+        // Write plist + launchctl bootstrap. Both happen AFTER the
+        // binary + config + Keychain + state are durably installed,
+        // so any failure here leaves the install in a state where
+        // `crm-mac install --register-only` is the recovery path.
+        do {
+            try writePlist()
+        } catch let fsErr {
+            throw InstallError.launchctlFailed(
+                exitCode: -1,
+                stderr: "write plist: \(fsErr)")
+        }
         try bootstrapAgent()
 
         deps.logger.info("install: complete", metadata: [

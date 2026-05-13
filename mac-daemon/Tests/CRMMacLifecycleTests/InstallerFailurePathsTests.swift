@@ -118,6 +118,52 @@ final class InstallerFailurePathsTests: XCTestCase {
         XCTAssertFalse(fs.fileExists(at: paths.binaryPath))
     }
 
+    func testPlistWriteFailureLeavesBinaryInPlaceAsLaunchctlFailed() async throws {
+        let transport = LifecycleMockTransport([.respond(status: 200, data: pair200JSON)])
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        fs.seedFile(at: "/tmp/source/crm-mac")
+        // Fail writes specifically at the plist path. The binary,
+        // config, keychain, and state are all already written by then.
+        fs.failWritesAtPath = paths.plistPath
+        let keychain = InMemoryKeychainStore()
+        let launchctl = FakeLaunchctlRunner()
+        let installer = Installer(InstallerDependencies(
+            paths: paths,
+            filesystem: fs,
+            executable: FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac"),
+            keychain: keychain,
+            launchctl: launchctl,
+            piClientFactory: { url in
+                PiClient(
+                    baseURL: url,
+                    transport: transport.asTransport(),
+                    sleep: noopSleep)
+            },
+            clock: FixedClock(),
+            logger: NoopLogger()))
+        do {
+            _ = try await installer.run(InstallRequest(
+                piURL: URL(string: "https://pi.example.test")!,
+                pairingToken: "tk",
+                hostname: "mac-1"))
+            XCTFail("expected launchctlFailed")
+        } catch InstallError.launchctlFailed(_, let stderr) {
+            XCTAssertTrue(stderr.contains("write plist"), "expected plist context in error, got \(stderr)")
+        } catch {
+            XCTFail("got \(error)")
+        }
+        // Binary IS in place; config + Keychain + state too. Operator
+        // recovers via `crm-mac install --register-only` after fixing
+        // the underlying filesystem issue.
+        XCTAssertTrue(fs.fileExists(at: paths.binaryPath))
+        XCTAssertTrue(fs.fileExists(at: paths.configFilePath))
+        XCTAssertTrue(fs.fileExists(at: paths.stateFilePath))
+        XCTAssertEqual(keychain.currentValue, "k")
+        // launchctl bootstrap was NOT called (we failed before it).
+        XCTAssertEqual(launchctl.bootstrapCalls.count, 0)
+    }
+
     func testLaunchctlBootstrapFailureLeavesBinaryInPlace() async throws {
         let transport = LifecycleMockTransport([.respond(status: 200, data: pair200JSON)])
         var script = FakeLaunchctlRunner.Script()

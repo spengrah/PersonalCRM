@@ -7,6 +7,11 @@ public final class InMemoryFilesystem: FilesystemAdapter {
     private var entries: [String: Data] = [:]
     private var dirs: Set<String> = []
     public private(set) var madeExecutable: Set<String> = []
+    /// If non-nil, write() throws an ioError with this reason when the
+    /// target path matches `failWritesAtPath`. Used to exercise the
+    /// plist-write-failure branch of the installer.
+    public var failWritesAtPath: String?
+    public var failWritesReason: String = "injected failure"
 
     public init() {}
 
@@ -54,6 +59,9 @@ public final class InMemoryFilesystem: FilesystemAdapter {
     }
 
     public func write(_ data: Data, to path: String) throws {
+        if let failPath = failWritesAtPath, failPath == path {
+            throw FilesystemError.ioError(failWritesReason)
+        }
         entries[path] = data
     }
 
