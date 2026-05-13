@@ -18,11 +18,16 @@ final class DoctorTests: XCTestCase {
         try fs.write(try encoder.encode(config), to: paths.configFilePath)
         try fs.write(try encoder.encode(state), to: paths.stateFilePath)
         let keychain = InMemoryKeychainStore(initial: "key")
+        // The fake's default printService is exit 1 (unregistered);
+        // this test wants all four checks to PASS, so override the
+        // launchctl probe to "registered".
+        var script = FakeLaunchctlRunner.Script()
+        script.printService = [0]
         let doctor = Doctor(DoctorDependencies(
             paths: paths,
             filesystem: fs,
             keychain: keychain,
-            launchctl: FakeLaunchctlRunner(),
+            launchctl: FakeLaunchctlRunner(script: script),
             piClientFactory: { url in
                 PiClient(
                     baseURL: url,

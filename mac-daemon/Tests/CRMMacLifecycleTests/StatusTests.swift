@@ -21,10 +21,14 @@ final class StatusTests: XCTestCase {
             lastHeartbeatAt: Date(timeIntervalSince1970: 1_700_001_000))
         try fs.write(try encoder.encode(state), to: paths.stateFilePath)
 
+        // The fake's default printService is exit 1 (unregistered);
+        // this test wants the registered path, so override to exit 0.
+        var script = FakeLaunchctlRunner.Script()
+        script.printService = [0]
         let status = Status(StatusDependencies(
             paths: paths,
             filesystem: fs,
-            launchctl: FakeLaunchctlRunner()))
+            launchctl: FakeLaunchctlRunner(script: script)))
         let report = status.run()
         XCTAssertTrue(report.installed)
         XCTAssertTrue(report.registered)
