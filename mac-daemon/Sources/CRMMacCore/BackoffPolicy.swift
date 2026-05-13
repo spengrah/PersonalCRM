@@ -1,0 +1,35 @@
+// Exponential-backoff helper. Used by CRMMacPiClient.RetryingTransport
+// (the only consumer in PR6) and any future per-source retry callsite.
+//
+// No jitter in PR6 — the daemon makes at most ~1 retry burst per
+// minute under heartbeat, far from rate-limit pressure; jitter can
+// land in a follow-up if needed.
+import Foundation
+
+public struct BackoffPolicy: Equatable {
+    /// First sleep delay, in seconds.
+    public let initialDelay: TimeInterval
+    /// Multiplier per attempt. PR6 uses 2 (exponential).
+    public let multiplier: Double
+    /// Max number of retries AFTER the initial attempt. The total
+    /// number of attempts is `maxRetries + 1`.
+    public let maxRetries: Int
+
+    public init(
+        initialDelay: TimeInterval = 1.0,
+        multiplier: Double = 2.0,
+        maxRetries: Int = 5
+    ) {
+        self.initialDelay = initialDelay
+        self.multiplier = multiplier
+        self.maxRetries = maxRetries
+    }
+
+    /// Sleep before retry attempt `attempt` (1-indexed; 1 == sleep
+    /// before the first retry, 2 == before the second, etc.). Returns
+    /// 0 for invalid indices.
+    public func delay(forAttempt attempt: Int) -> TimeInterval {
+        guard attempt >= 1, attempt <= maxRetries else { return 0 }
+        return initialDelay * pow(multiplier, Double(attempt - 1))
+    }
+}
