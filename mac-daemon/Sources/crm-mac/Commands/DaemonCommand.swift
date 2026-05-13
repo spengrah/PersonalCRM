@@ -65,16 +65,16 @@ struct DaemonCommand: AsyncParsableCommand {
         // wake on signal delivery; the explicit SIG_IGN on each is
         // required so the default handler doesn't terminate the
         // process before our source observes it.
-        let shutdownToken = ShutdownToken()
+        let shutdownSignal = ShutdownSignal()
         let sigtermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        sigtermSource.setEventHandler { shutdownToken.signal() }
+        sigtermSource.setEventHandler { shutdownSignal.signal() }
         sigtermSource.resume()
         let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-        sigintSource.setEventHandler { shutdownToken.signal() }
+        sigintSource.setEventHandler { shutdownSignal.signal() }
         sigintSource.resume()
         signal(SIGTERM, SIG_IGN)
         signal(SIGINT, SIG_IGN)
 
-        await runner.run(awaitShutdown: shutdownToken.wait)
+        await runner.run(awaitShutdown: shutdownSignal.wait)
     }
 }
