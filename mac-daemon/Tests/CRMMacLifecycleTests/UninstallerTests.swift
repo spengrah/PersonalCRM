@@ -1,4 +1,5 @@
 import XCTest
+import CRMMacCore
 @testable import CRMMacLifecycle
 
 final class UninstallerTests: XCTestCase {

@@ -16,6 +16,7 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      mac_daemon: ${{ steps.filter.outputs.mac_daemon }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -28,6 +29,9 @@ jobs:
               - 'go.mod'
             frontend:
               - 'frontend/**'
+            mac_daemon:
+              - 'mac-daemon/**'
+              - '.github/workflows/ci.yml'
 
   backend-tests:
     name: Backend Tests
@@ -149,6 +153,52 @@ jobs:
           export NEXT_PUBLIC_BUILD_VERSION=$(date +"%Y.%-m.%-d")
           bun run build
 
+  mac-daemon-tests:
+    name: Mac Daemon Tests
+    # Pin to a specific macOS major to avoid silent runner-image
+    # migration (macos-latest moves on a 1-2 month cadence and we don't
+    # want spec surprises). When Apple deprecates this image we will
+    # deliberately bump in a follow-up PR. As of 2026 macos-15 maps to
+    # Xcode 16 / Swift 6.0 on GitHub Actions; the package targets
+    # Swift 5.9 minimum so this is forward-compatible.
+    runs-on: macos-15
+    needs: changes
+    if: ${{ needs.changes.outputs.mac_daemon == 'true' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Resolve dependencies
+        working-directory: mac-daemon
+        run: swift package resolve
+
+      - name: Build (release)
+        working-directory: mac-daemon
+        run: swift build -c release -Xswiftc -warnings-as-errors
+
+      - name: Test
+        working-directory: mac-daemon
+        # NOT --parallel: tests inject per-test URLSession instances to
+        # avoid global URLProtocol races, so we don't need process-level
+        # isolation. Process-spawn overhead is measurable on macOS
+        # runners and our suite is small.
+        run: swift test
+
+      - name: Smoke — subcommand --help
+        working-directory: mac-daemon
+        # Verifies the released binary's swift-argument-parser wiring.
+        # Runs each subcommand's --help; asserts exit 0. Implemented as
+        # a CI step rather than an XCTest target because executable
+        # test-target dependencies are brittle under SPM.
+        run: |
+          ./.build/release/crm-mac --help
+          for cmd in daemon install uninstall doctor status configure; do
+            ./.build/release/crm-mac $cmd --help
+          done
+
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
@@ -245,7 +295,7 @@ jobs:
 
   claude-review:
     name: Claude Code Review
-    needs: [changes, backend-tests, frontend-tests, e2e-tests]
+    needs: [changes, backend-tests, frontend-tests, e2e-tests, mac-daemon-tests]
     # Run on PRs when tests pass/skip, but skip if ALL tests were skipped (docs/workflow-only changes)
     if: |
       always() &&
@@ -254,7 +304,8 @@ jobs:
       (needs.backend-tests.result == 'success' || needs.backend-tests.result == 'skipped') &&
       (needs.frontend-tests.result == 'success' || needs.frontend-tests.result == 'skipped') &&
       (needs.e2e-tests.result == 'success' || needs.e2e-tests.result == 'skipped') &&
-      (needs.backend-tests.result == 'success' || needs.frontend-tests.result == 'success' || needs.e2e-tests.result == 'success')
+      (needs.mac-daemon-tests.result == 'success' || needs.mac-daemon-tests.result == 'skipped') &&
+      (needs.backend-tests.result == 'success' || needs.frontend-tests.result == 'success' || needs.e2e-tests.result == 'success' || needs.mac-daemon-tests.result == 'success')
 
     runs-on: ubuntu-latest
     permissions:
