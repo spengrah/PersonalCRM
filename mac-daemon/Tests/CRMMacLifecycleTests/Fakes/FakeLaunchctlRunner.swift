@@ -2,12 +2,16 @@ import Foundation
 @testable import CRMMacLifecycle
 
 /// Records every launchctl invocation; returns a scripted exit code
-/// per invocation, or a default of 0 when the script is empty.
+/// per invocation. Defaults model a clean system where no service is
+/// registered: bootstrap/bootout succeed (exit 0), and printService
+/// reports "service unknown" (exit 1) so the Installer preflight does
+/// not see an existing registration. Tests that need a registered
+/// service set `script.printService = [0]` explicitly.
 public final class FakeLaunchctlRunner: LaunchctlRunner {
     public struct Script {
         public var bootstrap: [Int32] = [0]
         public var bootout: [Int32] = [0]
-        public var printService: [Int32] = [0]
+        public var printService: [Int32] = [1]
         public init() {}
     }
 
@@ -46,7 +50,10 @@ public final class FakeLaunchctlRunner: LaunchctlRunner {
             printServiceThrowsOnce = nil
             throw err
         }
-        let exit = script.printService.isEmpty ? 0 : script.printService.removeFirst()
+        // Default to exit 1 ("service unknown") when the script is
+        // exhausted so multi-call tests do not silently flip to
+        // "registered" on the second probe.
+        let exit = script.printService.isEmpty ? 1 : script.printService.removeFirst()
         return LaunchctlInvocation(
             arguments: ["print", "gui/501/\(label)"],
             exitCode: exit)
