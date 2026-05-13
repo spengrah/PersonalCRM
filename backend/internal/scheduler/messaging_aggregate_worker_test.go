@@ -73,7 +73,7 @@ func TestMessagingAggregateWorker_HappyPath_DrainsAndCallsPerChat(t *testing.T) 
 		},
 	}
 	worker := NewMessagingAggregateForContactWorker(
-		map[string]chatAwareAggregator{"messages": agg},
+		map[string]ChatAwareAggregator{"messages": agg},
 		lister,
 	)
 
@@ -103,7 +103,7 @@ func TestMessagingAggregateWorker_RelistLoopDrainsLandedRows(t *testing.T) {
 		},
 	}
 	worker := NewMessagingAggregateForContactWorker(
-		map[string]chatAwareAggregator{"messages": agg},
+		map[string]ChatAwareAggregator{"messages": agg},
 		lister,
 	)
 	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
@@ -122,7 +122,7 @@ func TestMessagingAggregateWorker_UnknownSource_NoOp(t *testing.T) {
 	agg := &stubAggregator{}
 	lister := &stubChatLister{source: "messages", lists: [][]string{{"chat-A"}, {}}}
 	worker := NewMessagingAggregateForContactWorker(
-		map[string]chatAwareAggregator{"messages": agg},
+		map[string]ChatAwareAggregator{"messages": agg},
 		lister,
 	)
 	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
@@ -139,7 +139,7 @@ func TestMessagingAggregateWorker_EngineError_Propagates(t *testing.T) {
 	agg := &stubAggregator{failOn: "chat-A", failErr: errors.New("boom")}
 	lister := &stubChatLister{source: "messages", lists: [][]string{{"chat-A"}, {}}}
 	worker := NewMessagingAggregateForContactWorker(
-		map[string]chatAwareAggregator{"messages": agg},
+		map[string]ChatAwareAggregator{"messages": agg},
 		lister,
 	)
 	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
@@ -162,7 +162,7 @@ func TestMessagingAggregateWorker_ListerError_Propagates(t *testing.T) {
 		errReturn: errors.New("db down"),
 	}
 	worker := NewMessagingAggregateForContactWorker(
-		map[string]chatAwareAggregator{"messages": agg},
+		map[string]ChatAwareAggregator{"messages": agg},
 		lister,
 	)
 	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
@@ -185,7 +185,7 @@ func TestMessagingAggregateWorker_LoopBound_TerminatesAndLogs(t *testing.T) {
 	}
 	lister := &stubChatLister{source: "messages", lists: lists}
 	worker := NewMessagingAggregateForContactWorker(
-		map[string]chatAwareAggregator{"messages": agg},
+		map[string]ChatAwareAggregator{"messages": agg},
 		lister,
 	)
 	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{

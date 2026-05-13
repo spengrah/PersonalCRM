@@ -21,11 +21,11 @@ import (
 // picks up the residual rows.
 const workerLoopMaxIterations = 50
 
-// chatAwareAggregator is the subset of the messaging aggregation
+// ChatAwareAggregator is the subset of the messaging aggregation
 // engine surface the worker actually invokes. Concrete is
 // *aggregation.Engine; the interface keeps the worker testable with
 // a stub.
-type chatAwareAggregator interface {
+type ChatAwareAggregator interface {
 	AggregateForContact(ctx context.Context, contactID uuid.UUID, chatID string) error
 }
 
@@ -74,7 +74,7 @@ func (r *PerSourceChatListerRegistry) ListUnprocessedChats(ctx context.Context, 
 // coalescing.
 type MessagingAggregateForContactWorker struct {
 	river.WorkerDefaults[consumerjobs.MessagingAggregateForContactArgs]
-	engines    map[string]chatAwareAggregator
+	engines    map[string]ChatAwareAggregator
 	chatLister chatLister
 }
 
@@ -82,7 +82,7 @@ type MessagingAggregateForContactWorker struct {
 // engines is keyed by source name; chatLister routes
 // ListUnprocessedChats by source.
 func NewMessagingAggregateForContactWorker(
-	engines map[string]chatAwareAggregator,
+	engines map[string]ChatAwareAggregator,
 	chatLister chatLister,
 ) *MessagingAggregateForContactWorker {
 	return &MessagingAggregateForContactWorker{
