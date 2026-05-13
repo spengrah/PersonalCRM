@@ -106,14 +106,14 @@ func NewIngestService(
 }
 
 // hostAuthAllowedKinds is the single source of truth for which event
-// kinds may be submitted via the host-auth path. PR4 allows only the
-// daemon-emitted raw_message.* kinds. Future PRs widen this set
-// (external_contact.* in the iCloud upsert PR, etc).
+// kinds may be submitted via the host-auth path. Currently only the
+// daemon-emitted raw_message.* kinds are allowed; new daemon-emitted
+// kinds extend the set as they land.
 //
 // Symmetric: kinds in this set are REJECTED on the global-API-key
-// path — spec §3 line 345 locks daemon-emitted raw_message.* as the
-// ONLY producer path. Internal Pi publishers writing a raw_message
-// event would either be a bug or a hostile actor with the global key.
+// path. Daemon-emitted raw_message.* is the ONLY producer path;
+// an internal Pi publisher writing a raw_message would either be a
+// bug or a hostile actor with the global key.
 var hostAuthAllowedKinds = map[events.Kind]struct{}{
 	events.KindRawMessageReceived: {},
 	events.KindRawMessageSent:     {},
@@ -165,7 +165,7 @@ type pendingAggregateKey struct {
 //
 // hostID is the authenticated Mac-host UUID when the request was
 // received on the host-auth path; nil on the global-API-key path. The
-// service uses hostID to enforce the per-path kind allowlist (D8) and
+// service uses hostID to enforce the per-path kind allowlist and
 // to stamp staging rows with mac_host_id.
 func (s *IngestService) IngestBatch(
 	ctx context.Context,
@@ -212,7 +212,7 @@ func (s *IngestService) IngestBatch(
 	for i, env := range envs {
 		originalIdx := originalIndices[i]
 
-		// Step 1 — host-auth allowlist enforcement (D8).
+		// Step 1 — host-auth allowlist enforcement.
 		//   * raw_message.* allowed ONLY on the host-auth path (hostID != nil).
 		//   * other kinds allowed ONLY on the global-key path (hostID == nil).
 		if hostID != nil {
@@ -431,7 +431,7 @@ func (s *IngestService) handleRawMessage(
 // Properties checked:
 //  1. payload.HostID matches the authenticated host (no host
 //     cross-impersonation).
-//  2. env.Source matches the PR4-locked "messages" source.
+//  2. env.Source matches the currently-supported "messages" source.
 //  3. payload.Source matches env.Source.
 //  4. payload.Guid is non-empty and equals env.SourceID (so event-log
 //     dedup key and staging-table dedup key are the same string).

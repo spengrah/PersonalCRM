@@ -28,7 +28,7 @@ type RiverInserter interface {
 }
 
 // MessagingAggregateSweeperWorker is the periodic safety net for
-// stranded-row recovery (plan R10C). The worker:
+// stranded-row recovery. The worker:
 //  1. Lists all contacts with at least one eligible (unprocessed AND
 //     unclaimed-or-stale) staging row for a given source.
 //  2. Enqueues a MessagingAggregateForContactArgs per contact (with

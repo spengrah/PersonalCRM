@@ -25,7 +25,7 @@ import (
 //
 // Sync() is a no-op. ValidateCredentials() returns nil — the Mac
 // daemon authenticates on its own with the host-bearer key minted
-// during pairing (PR1).
+// during the pairing flow.
 type Provider struct{}
 
 // New constructs a Messages provider.

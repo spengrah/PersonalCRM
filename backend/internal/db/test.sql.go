@@ -33,6 +33,34 @@ func (q *Queries) CountExternalContactsByDisplayNamePrefix(ctx context.Context, 
 	return count, err
 }
 
+const CountMessagesMessageByGuid = `-- name: CountMessagesMessageByGuid :one
+SELECT COUNT(*) FROM messages_message WHERE guid = $1
+`
+
+// Test assertion — count rows with the given guid (typically 0 or 1
+// under the partial unique index). Used by duplicate-detection tests.
+func (q *Queries) CountMessagesMessageByGuid(ctx context.Context, guid string) (int64, error) {
+	row := q.db.QueryRow(ctx, CountMessagesMessageByGuid, guid)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const CountRiverJobsByKindUnfinalized = `-- name: CountRiverJobsByKindUnfinalized :one
+SELECT COUNT(*) FROM river_job WHERE kind = $1 AND finalized_at IS NULL
+`
+
+// Test assertion — count unfinalized River jobs of the given kind.
+// Used to verify ingest enqueues the expected number of aggregator
+// jobs. River's own admin SQL is OK to query at the test boundary;
+// production code never reads river_job directly.
+func (q *Queries) CountRiverJobsByKindUnfinalized(ctx context.Context, kind string) (int64, error) {
+	row := q.db.QueryRow(ctx, CountRiverJobsByKindUnfinalized, kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const DeleteAllMacHosts = `-- name: DeleteAllMacHosts :execrows
 DELETE FROM mac_host
 `
@@ -99,6 +127,20 @@ func (q *Queries) DeleteContactsByNamePrefix(ctx context.Context, dollar_1 pgtyp
 	return result.RowsAffected(), nil
 }
 
+const DeleteEventsBySource = `-- name: DeleteEventsBySource :execrows
+DELETE FROM event WHERE source = $1
+`
+
+// Test teardown — drop event rows by source. Mirrors
+// DeleteExternalIdentitiesBySource for the event log.
+func (q *Queries) DeleteEventsBySource(ctx context.Context, source string) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteEventsBySource, source)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const DeleteExternalContactsByDisplayNamePrefix = `-- name: DeleteExternalContactsByDisplayNamePrefix :execrows
 DELETE FROM external_contact WHERE display_name LIKE $1 || '%'
 `
@@ -123,12 +165,44 @@ func (q *Queries) DeleteExternalContactsBySourceIDPrefix(ctx context.Context, do
 	return result.RowsAffected(), nil
 }
 
+const DeleteExternalIdentitiesBySource = `-- name: DeleteExternalIdentitiesBySource :execrows
+DELETE FROM external_identity WHERE source = $1
+`
+
+// Test teardown — drop external_identity rows seeded by a test under
+// a known source string (e.g., 'messages'). Used in raw_message ingest
+// integration tests to ensure shared-DB cleanup is complete between
+// runs.
+func (q *Queries) DeleteExternalIdentitiesBySource(ctx context.Context, source string) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteExternalIdentitiesBySource, source)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const DeleteExternalIdentitiesBySourceID = `-- name: DeleteExternalIdentitiesBySourceID :execrows
 DELETE FROM external_identity WHERE source_id = $1
 `
 
 func (q *Queries) DeleteExternalIdentitiesBySourceID(ctx context.Context, sourceID pgtype.Text) (int64, error) {
 	result, err := q.db.Exec(ctx, DeleteExternalIdentitiesBySourceID, sourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const DeleteRiverJobsByKindAny = `-- name: DeleteRiverJobsByKindAny :execrows
+DELETE FROM river_job WHERE kind = ANY($1::text[])
+`
+
+// Test teardown — drop river_job rows whose kind is in the given
+// array. Scoped to test-emitted kinds so we don't wipe production-
+// shape rows on a shared DB. River doesn't expose a sqlc layer; this
+// is the operator-test seam.
+func (q *Queries) DeleteRiverJobsByKindAny(ctx context.Context, kinds []string) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteRiverJobsByKindAny, kinds)
 	if err != nil {
 		return 0, err
 	}

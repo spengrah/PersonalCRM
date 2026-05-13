@@ -31,13 +31,13 @@ type messagesRiverInserter interface {
 
 // MessagesAggregatorReenqueuer wires the messages aggregation engine
 // + River client into the post-Stage-3 reenqueue path. Two actions
-// run per call (plan R10):
+// run per call:
 //
-//  1. (R10B) Enqueue a fresh MessagingAggregateForContactArgs River
-//     job — UniqueOpts dedup against in-flight jobs means a no-op when
-//     one is already pending, but a brand-new job fires when the
-//     previous worker just finished. Catches rows that landed in
-//     OTHER chats for the same contact while Stage 3 was committing.
+//  1. Enqueue a fresh MessagingAggregateForContactArgs River job —
+//     UniqueOpts dedup against in-flight jobs means a no-op when one
+//     is already pending, but a brand-new job fires when the previous
+//     worker just finished. Catches rows that landed in OTHER chats
+//     for the same contact while Stage 3 was committing.
 //
 //  2. Synchronously invoke AggregateForContact for the chat just
 //     processed — closes the burst-extend window so a follow-up

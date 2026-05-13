@@ -97,7 +97,7 @@ func (messagesAdapter) SourceRef(chatID, firstExternalID string) string {
 // Apple Messages chat.guid values are opaque strings that empirically
 // contain `_` (e.g., "iMessage;-;_chat-uuid_") — `_` and `%` are
 // PostgreSQL LIKE wildcards. We escape them with `\` per the
-// SourceAdapter contract (PR2). The underlying sqlc queries use
+// SourceAdapter contract. The underlying sqlc queries use
 // `LIKE pattern ESCAPE '\'` so the explicit escape character takes
 // effect.
 //

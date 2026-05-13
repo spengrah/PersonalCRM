@@ -667,7 +667,7 @@ func run() int {
 		// Register the Messages push provider. The source is push-only —
 		// data lands via /api/v1/ingest/events from the Mac daemon, never
 		// via the scheduler — so Sync() is a no-op. The scheduler's push-
-		// strategy exclusion (PR1) ensures we never try to poll it.
+		// strategy exclusion in ListDueAccounts ensures we never poll it.
 		providerRegistry.Register(messages.New())
 		logger.Info().Msg("Messages push provider registered")
 
@@ -761,11 +761,11 @@ func run() int {
 	// daemon-side connection or background loop).
 	//
 	// The chat-aware AggregateForContact path is what preserves the
-	// engine's extend/bridge/coalesce contract (spec §3 "Stage 2 —
-	// Aggregator"). The MessagingAggregateForContactWorker iterates
-	// over the contact's distinct unprocessed chats and invokes it
-	// per chat; the periodic sweeper provides a 5-min safety net for
-	// the never-claimed-stranded-row gap (plan R10C).
+	// engine's extend/bridge/coalesce contract. The
+	// MessagingAggregateForContactWorker iterates over the contact's
+	// distinct unprocessed chats and invokes it per chat; the periodic
+	// sweeper provides a 5-min safety net for the never-claimed
+	// stranded-row gap.
 	messagesEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(riverClient)
 	const messagesBurstWindowHours = 4
 	const messagesReplyBridgeHours = 48
@@ -821,7 +821,7 @@ func run() int {
 
 	// Periodic 5-min sweeper — drains never-claimed stranded rows that
 	// the in-line worker re-list loop AND the post-Stage-3 reenqueue
-	// both missed (plan R10C).
+	// both missed. Last-resort safety net.
 	sweeperListers := map[string]scheduler.UnprocessedContactLister{
 		repository.InteractionSourceMessages: messagesMessageRepo,
 	}

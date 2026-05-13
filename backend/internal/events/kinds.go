@@ -296,7 +296,7 @@ func IsCanonicalMessageType(t string) bool {
 type RawMessageReceivedPayload struct {
 	Version     int              `json:"version"`             // start at 1
 	HostID      uuid.UUID        `json:"host_id"`             // authenticated host that observed the row
-	Source      string           `json:"source"`              // "messages" only in PR4
+	Source      string           `json:"source"`              // currently "messages"
 	Guid        string           `json:"guid"`                // iMessage guid; primary dedup key
 	ChatID      string           `json:"chat_id"`             // chat.db chat.guid
 	PeerHandle  string           `json:"peer_handle"`         // raw phone/email as observed in chat.db
@@ -306,7 +306,7 @@ type RawMessageReceivedPayload struct {
 	IsGroup     bool             `json:"is_group"`            // group chat vs DM
 	SentAt      time.Time        `json:"sent_at"`             // from source, NOT daemon clock
 	ReplyToGuid *string          `json:"reply_to_guid,omitempty"`
-	Attachments []AttachmentMeta `json:"attachments,omitempty"` // metadata only; PR7 populates
+	Attachments []AttachmentMeta `json:"attachments,omitempty"` // metadata only; daemon populates when chat.db reader lands
 }
 
 // RawMessageSentPayload is the payload for KindRawMessageSent. Same

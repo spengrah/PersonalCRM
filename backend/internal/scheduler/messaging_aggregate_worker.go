@@ -14,8 +14,7 @@ import (
 
 // workerLoopMaxIterations caps how many re-list passes the worker
 // performs in a single run. The loop drains rows that landed between
-// the engine's list-query and the worker's re-list (see spec §3 race-
-// mechanics for the unhandled-row window discussion). Hitting the cap
+// the engine's list-query and the worker's re-list. Hitting the cap
 // means staging is being filled faster than we drain; the next
 // MessagingAggregateForContactArgs enqueue OR the periodic sweeper
 // picks up the residual rows.
@@ -143,7 +142,7 @@ func (w *MessagingAggregateForContactWorker) Work(
 }
 
 // Timeout caps each invocation. 60s matches existing worker timeouts;
-// PR7's chat.db reader load testing may surface a need to bump this.
+// real-traffic load testing may surface a need to bump this.
 func (*MessagingAggregateForContactWorker) Timeout(_ *river.Job[consumerjobs.MessagingAggregateForContactArgs]) time.Duration {
 	return 60 * time.Second
 }

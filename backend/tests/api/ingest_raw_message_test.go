@@ -19,6 +19,7 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/messages"
+	"personal-crm/backend/internal/messaging/aggregation"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -85,11 +86,15 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 	// Queues must be declared (River errors on a nil/empty Queues map
 	// at insert time even if no workers are registered).
 	workers := river.NewWorkers()
-	// MessagingAggregateForContactArgs is the only kind enqueued by
-	// this test path. River requires every enqueued kind to have a
-	// registered worker; we register a noop so River accepts the
-	// kind without actually running aggregation.
+	// Every kind the test path enqueues must have a registered worker.
+	// We register noop workers for both MessagingAggregateForContact
+	// (enqueued by the ingest service) and InteractionRecorderJobArgs
+	// (enqueued by Bus.PublishTx when the engine publishes a
+	// message.received envelope from the e2e test). Workers are noops
+	// because the tests assert on staging-row + event-log state, not
+	// on Stage 3 execution.
 	river.AddWorker(workers, &noopAggregateForContactWorker{})
+	river.AddWorker(workers, &noopInteractionRecorderWorker{})
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		JobTimeout: cfg.River.JobTimeout,
 		Queues: map[string]river.QueueConfig{
@@ -181,11 +186,9 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = messagesRepo.HardDeleteByMacHost(cleanCtx, env.pairedHostID)
-		// Identity rows + external_identity (no scoping by host;
-		// best-effort wipe of source='messages' identities created by
-		// this test run).
-		_, _ = database.Pool.Exec(cleanCtx,
-			`DELETE FROM external_identity WHERE source = 'messages'`)
+		// Identity rows for the messages source (best-effort wipe
+		// across the whole table — tests on a shared DB).
+		_, _ = database.Queries.DeleteExternalIdentitiesBySource(cleanCtx, "messages")
 		_ = cmRepo.DeleteContactMethodsByContact(cleanCtx, env.pairedContactA)
 		_ = contactRepo.HardDeleteContact(cleanCtx, env.pairedContactA)
 		states, _ := database.Queries.ListSyncStates(cleanCtx)
@@ -197,10 +200,11 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 		_, _ = database.Queries.DeleteAllMacHosts(cleanCtx)
 		_, _ = database.Queries.DeleteAllPairingTokens(cleanCtx)
 		// Drop river jobs we enqueued.
-		_, _ = database.Pool.Exec(cleanCtx,
-			`DELETE FROM river_job WHERE kind IN ('messaging_aggregate_for_contact', 'messaging_aggregate_sweeper')`)
-		_, _ = database.Pool.Exec(cleanCtx,
-			`DELETE FROM event WHERE source = 'messages'`)
+		_, _ = database.Queries.DeleteRiverJobsByKindAny(cleanCtx, []string{
+			"messaging_aggregate_for_contact",
+			"messaging_aggregate_sweeper",
+		})
+		_, _ = database.Queries.DeleteEventsBySource(cleanCtx, "messages")
 		database.Close()
 	})
 
@@ -265,12 +269,61 @@ func parseIngestResp(t *testing.T, w *httptest.ResponseRecorder) handlers.Ingest
 // count is scoped to the current test's enqueues.
 func countRiverJobs(t *testing.T, env *ingestRawTestEnv, kind string) int {
 	t.Helper()
-	var count int
-	err := env.database.Pool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM river_job WHERE kind = $1 AND finalized_at IS NULL`, kind).Scan(&count)
+	count, err := env.database.Queries.CountRiverJobsByKindUnfinalized(context.Background(), kind)
 	require.NoError(t, err)
-	return count
+	return int(count)
 }
+
+// messagesEngineForTest builds a live messages aggregation engine
+// wired against the test env's repositories. The engine is used by
+// the e2e test in ingest_raw_message_e2e_test.go to drive a real
+// chat-aware aggregator pass from a unit-test boundary.
+//
+// A live events.Bus is required because the engine's cutover-wiring
+// invariant refuses to drop interactions when no publisher is wired.
+// The bus is constructed against the same River client so the engine's
+// claim/publish runs inside its own tx, mirroring production. We
+// register a noop interaction_recorder worker so the bus's
+// post-publish job enqueue accepts the kind.
+func messagesEngineForTest(t *testing.T, env *ingestRawTestEnv) *aggregationEngine {
+	t.Helper()
+	const burstWindowHours = 4
+	const replyBridgeHours = 48
+
+	contactSvc := service.NewContactService(
+		env.database,
+		env.contactRepo,
+		env.cmRepo,
+		repository.NewInteractionRepository(env.database.Queries),
+		repository.NewContactTaskRepository(env.database.Queries),
+		nil, // bus injected below when needed; engine doesn't read this.
+		service.NewRematchService(),
+	)
+
+	// Build a dedicated bus + River client per call so the
+	// interaction_recorder worker registration doesn't collide with
+	// the env's noop aggregate worker registration.
+	eventRepo := repository.NewEventRepository(env.database.Queries)
+	bus := events.NewBus(env.database.Pool, env.riverClient, eventRepo)
+
+	eng := messages.NewAggregationEngine(
+		burstWindowHours,
+		replyBridgeHours,
+		env.messagesRepo,
+		repository.NewInteractionRepository(env.database.Queries),
+		contactSvc,
+		contactSvc,
+		bus,
+		env.database.Pool,
+		nil, // no recovery enqueuer — test does not exercise that
+	)
+	return eng
+}
+
+// aggregationEngine is the type alias the e2e test uses to keep the
+// helper return type in the api package without importing the
+// messaging/aggregation package directly.
+type aggregationEngine = aggregation.Engine
 
 // noopAggregateForContactWorker is a stub worker that River accepts so
 // MessagingAggregateForContactArgs inserts succeed without actually
@@ -281,6 +334,19 @@ type noopAggregateForContactWorker struct {
 }
 
 func (w *noopAggregateForContactWorker) Work(_ context.Context, _ *river.Job[consumerjobs.MessagingAggregateForContactArgs]) error {
+	return nil
+}
+
+// noopInteractionRecorderWorker is registered so the e2e test's bus
+// can enqueue InteractionRecorderJobArgs after the engine publishes a
+// message.received envelope. The body is a noop because the e2e test
+// asserts on staging-row claim columns + event-log presence, not on
+// Stage 3 (interaction row creation).
+type noopInteractionRecorderWorker struct {
+	river.WorkerDefaults[consumerjobs.InteractionRecorderJobArgs]
+}
+
+func (w *noopInteractionRecorderWorker) Work(_ context.Context, _ *river.Job[consumerjobs.InteractionRecorderJobArgs]) error {
 	return nil
 }
 
@@ -346,10 +412,9 @@ func TestIngestRawMessage_Duplicate_DetectedAndSkipped(t *testing.T) {
 	require.Equal(t, 1, resp.Duplicate)
 	require.Equal(t, 0, resp.Rejected)
 
-	var count int
-	require.NoError(t, env.database.Pool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM messages_message WHERE guid = $1`, guid).Scan(&count))
-	require.Equal(t, 1, count)
+	count, err := env.database.Queries.CountMessagesMessageByGuid(context.Background(), guid)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
 }
 
 // TestIngestRawMessage_UnmatchedPeer_StagedWithoutContactNoJob asserts

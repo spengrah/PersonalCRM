@@ -88,6 +88,9 @@ type Querier interface {
 	CountMergeInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	// Count notes for a contact (for merge preview)
 	CountMergeNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	// Test assertion — count rows with the given guid (typically 0 or 1
+	// under the partial unique index). Used by duplicate-detection tests.
+	CountMessagesMessageByGuid(ctx context.Context, guid string) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	// Test-only count of river_job rows for the rematch_dispatcher kind
@@ -101,6 +104,11 @@ type Querier interface {
 	// tests to assert a create/close/refresh job was enqueued without
 	// inlining raw SQL into Go test code (core.md rule 2).
 	CountRiverJobsByContactTask(ctx context.Context, arg CountRiverJobsByContactTaskParams) (int64, error)
+	// Test assertion — count unfinalized River jobs of the given kind.
+	// Used to verify ingest enqueues the expected number of aggregator
+	// jobs. River's own admin SQL is OK to query at the test boundary;
+	// production code never reads river_job directly.
+	CountRiverJobsByKindUnfinalized(ctx context.Context, kind string) (int64, error)
 	CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountTelegramMessagesByChat(ctx context.Context) ([]*CountTelegramMessagesByChatRow, error)
@@ -172,11 +180,19 @@ type Querier interface {
 	DeleteEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) error
 	// Delete all events for a Google account (used when revoking access)
 	DeleteEventsByAccount(ctx context.Context, googleAccountID string) error
+	// Test teardown — drop event rows by source. Mirrors
+	// DeleteExternalIdentitiesBySource for the event log.
+	DeleteEventsBySource(ctx context.Context, source string) (int64, error)
 	DeleteExpiredPairingTokens(ctx context.Context) (int64, error)
 	DeleteExternalContact(ctx context.Context, id pgtype.UUID) error
 	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error
 	DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	// Test teardown — drop external_identity rows seeded by a test under
+	// a known source string (e.g., 'messages'). Used in raw_message ingest
+	// integration tests to ensure shared-DB cleanup is complete between
+	// runs.
+	DeleteExternalIdentitiesBySource(ctx context.Context, source string) (int64, error)
 	DeleteExternalIdentitiesBySourceID(ctx context.Context, sourceID pgtype.Text) (int64, error)
 	DeleteIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) error
 	DeleteIdentity(ctx context.Context, id pgtype.UUID) error
@@ -193,6 +209,11 @@ type Querier interface {
 	// Delete all OAuth credentials for a provider
 	DeleteOAuthCredentialByProvider(ctx context.Context, provider string) error
 	DeleteOldSyncLogs(ctx context.Context, createdAt pgtype.Timestamptz) error
+	// Test teardown — drop river_job rows whose kind is in the given
+	// array. Scoped to test-emitted kinds so we don't wipe production-
+	// shape rows on a shared DB. River doesn't expose a sqlc layer; this
+	// is the operator-test seam.
+	DeleteRiverJobsByKindAny(ctx context.Context, kinds []string) (int64, error)
 	DeleteSyncState(ctx context.Context, id pgtype.UUID) error
 	DeleteSyncStatesByAccountID(ctx context.Context, accountID pgtype.Text) error
 	DeleteTag(ctx context.Context, id pgtype.UUID) error

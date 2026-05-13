@@ -30,6 +30,7 @@ import (
 	"os"
 
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
@@ -72,9 +73,19 @@ func run() error {
 	}
 	defer database.Close()
 
-	// River client without workers — we only insert jobs here.
+	// River client configured as an inserter only. We register a
+	// noop worker for MessagingAggregateForContactArgs so River
+	// accepts the kind at Insert time without actually running the
+	// aggregation worker in this admin process — the main crm-api
+	// service owns execution.
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &noopMessagingAggregateWorker{})
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		JobTimeout: cfg.River.JobTimeout,
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: 1},
+		},
+		Workers: workers,
 	})
 	if err != nil {
 		return fmt.Errorf("build river client: %w", err)
@@ -115,4 +126,16 @@ type adminRiverAdapter struct {
 
 func (a adminRiverAdapter) Insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error) {
 	return a.client.Insert(ctx, args, opts)
+}
+
+// noopMessagingAggregateWorker satisfies River's "every enqueued kind
+// must have a registered worker" rule for the admin binary's insert-
+// only path. Execution lives in crm-api; the admin process never
+// runs the worker — Start is never called on the client.
+type noopMessagingAggregateWorker struct {
+	river.WorkerDefaults[consumerjobs.MessagingAggregateForContactArgs]
+}
+
+func (w *noopMessagingAggregateWorker) Work(_ context.Context, _ *river.Job[consumerjobs.MessagingAggregateForContactArgs]) error {
+	return nil
 }
