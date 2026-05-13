@@ -1,6 +1,7 @@
-// Composition-root placeholder. Replaced by the CLI commit with the
-// swift-argument-parser entry point that dispatches to the daemon and
-// subcommands.
-import Foundation
+// crm-mac entry point. swift-argument-parser dispatches to one of
+// the subcommands defined in Commands/. The executable target stays
+// thin — argument parsing only; every business behavior lives in
+// CRMMacLifecycle so it can be tested without the CLI shim.
+import ArgumentParser
 
-print("crm-mac: skeleton; see plan in .ai/log/plan/")
+CRMMacCommand.main()
