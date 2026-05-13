@@ -132,9 +132,6 @@ func runMain(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	ctx := context.Background()
-	if err := db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath); err != nil {
-		return fmt.Errorf("run migrations: %w", err)
-	}
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	if err != nil {
 		return fmt.Errorf("connect db: %w", err)
