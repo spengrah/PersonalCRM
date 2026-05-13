@@ -4,7 +4,8 @@
 import ArgumentParser
 import CRMMacLifecycle
 
-struct CRMMacCommand: ParsableCommand {
+@main
+struct CRMMacCommand: AsyncParsableCommand {
     static var configuration = CommandConfiguration(
         commandName: "crm-mac",
         abstract: "Personal CRM Mac daemon — Apple Messages + iCloud Contacts ingestion.",
