@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
@@ -58,7 +59,7 @@ func seedExtSweepFixtures(t *testing.T) *extSweepFixtures {
 	})
 	require.NoError(t, err)
 
-	syncedAt := time.Now()
+	syncedAt := accelerated.GetCurrentTime()
 	emailValue := "sweep-shared-" + prefix + "@example.invalid"
 	liveReq := repository.UpsertExternalContactRequest{
 		Source:   "gcontacts", // arbitrary; the soft-delete filter is source-agnostic
@@ -171,7 +172,7 @@ func TestExternalContactSweep_ListUnmatched_FiltersTombstone(t *testing.T) {
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 	prefix := "sweep-unm-" + uuid.NewString()[:8] + "-"
-	syncedAt := time.Now()
+	syncedAt := accelerated.GetCurrentTime()
 
 	live, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source:   "gcontacts",
@@ -223,7 +224,7 @@ func TestExternalContactSweep_ListAllUnmatched_FiltersTombstone(t *testing.T) {
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 	prefix := "sweep-allunm-" + uuid.NewString()[:8] + "-"
-	syncedAt := time.Now()
+	syncedAt := accelerated.GetCurrentTime()
 	live, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source: "gcontacts", SourceID: prefix + "live", SyncedAt: &syncedAt,
 	})
@@ -272,7 +273,7 @@ func TestExternalContactSweep_CountUnmatched_ExcludesTombstone(t *testing.T) {
 	// Use a unique source per-run so counts are bounded.
 	source := "sweep-src-" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
 	prefix := "sweep-cnt-" + uuid.NewString()[:8] + "-"
-	syncedAt := time.Now()
+	syncedAt := accelerated.GetCurrentTime()
 	_, err = repo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source: source, SourceID: prefix + "live-a", SyncedAt: &syncedAt,
 	})
@@ -329,7 +330,7 @@ func TestExternalContactSweep_ListForCRMContact_FiltersTombstone(t *testing.T) {
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
 	prefix := "sweep-crm-" + uuid.NewString()[:8] + "-"
-	syncedAt := time.Now()
+	syncedAt := accelerated.GetCurrentTime()
 
 	crm, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "Sweep CRM " + prefix})
 	require.NoError(t, err)
@@ -379,7 +380,7 @@ func TestExternalContactSweep_RoundTrip_ReviveAfterSoftDelete(t *testing.T) {
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
 	prefix := "sweep-rt-" + uuid.NewString()[:8] + "-"
-	syncedAt := time.Now()
+	syncedAt := accelerated.GetCurrentTime()
 
 	crm, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "RT " + prefix})
 	require.NoError(t, err)
@@ -433,7 +434,7 @@ func TestExternalContactSweep_GetByID_AccountIDNullSemantics(t *testing.T) {
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 	prefix := "sweep-acct-" + uuid.NewString()[:8] + "-"
-	syncedAt := time.Now()
+	syncedAt := accelerated.GetCurrentTime()
 
 	// account_id = NULL (icloud_contacts shape).
 	_, err = repo.Upsert(ctx, repository.UpsertExternalContactRequest{
