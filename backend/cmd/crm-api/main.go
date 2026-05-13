@@ -45,6 +45,7 @@ import (
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/health"
+	"personal-crm/backend/internal/icloudcontacts"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
@@ -287,12 +288,22 @@ func run() int {
 	// savepoint.
 	messagesMessageRepo := repository.NewMessagesMessageRepository(database.Queries)
 
+	// External contact repo for the IngestService's inline
+	// external_contact.* handler (Mac daemon iCloud Contacts watcher
+	// path). Constructed unconditionally because the IngestService is
+	// always wired even when external sync is disabled — the daemon
+	// can still call /api/v1/ingest/events on a host-auth path. A
+	// later block under `if cfg.Features.EnableExternalSync` reuses
+	// the same instance for the Import / Calendar rematch wiring.
+	externalContactRepoForIngest := repository.NewExternalContactRepository(database.Queries)
+
 	ingestService := service.NewIngestService(
 		database,
 		eventBus,
 		identityServiceForIngest,
 		messagesMessageRepo,
 		riverClient,
+		externalContactRepoForIngest,
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
@@ -589,8 +600,11 @@ func run() int {
 			logger.Info().Msg("Todoist OAuth not configured (TODOIST_CLIENT_ID and TODOIST_CLIENT_SECRET required)")
 		}
 
-		// Initialize external contact repository
-		externalContactRepo = repository.NewExternalContactRepository(database.Queries)
+		// External contact repository — reuse the instance constructed
+		// at outer scope for the IngestService so all code paths share
+		// the same repo (no behavioral difference today; future stateful
+		// caching is centralized).
+		externalContactRepo = externalContactRepoForIngest
 
 		// Initialize identity service (enrichmentService is constructed at outer scope
 		// so the Telegram block can share it).
@@ -670,6 +684,13 @@ func run() int {
 		// strategy exclusion in ListDueAccounts ensures we never poll it.
 		providerRegistry.Register(messages.New())
 		logger.Info().Msg("Messages push provider registered")
+
+		// Register the iCloud Contacts push provider. Same push-only
+		// semantics as Messages — data lands via the Mac daemon's
+		// external_contact.* events. Scheduler exclusion already
+		// enforced in PR1.
+		providerRegistry.Register(icloudcontacts.New())
+		logger.Info().Msg("iCloud Contacts push provider registered")
 
 		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
 
@@ -855,6 +876,7 @@ func run() int {
 		macHostRepo,
 		pairingTokenRepo,
 		macSyncRepo,
+		contactMethodRepo,
 		database.Pool,
 		0, // default bcrypt cost
 	)

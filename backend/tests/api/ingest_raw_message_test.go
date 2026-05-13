@@ -71,7 +71,7 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
-	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, database.Pool, 4)
+	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, nil, database.Pool, 4)
 
 	identityRepo := repository.NewIdentityRepository(database.Queries)
 	identityService := service.NewIdentityService(identityRepo)
@@ -119,6 +119,7 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 		identityService,
 		messagesRepo,
 		riverClient,
+		nil,
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
@@ -396,7 +397,7 @@ func TestIngestRawMessage_UnmatchedPeer_StagedWithoutContactNoJob(t *testing.T) 
 
 // TestIngestRawMessage_GlobalKeyPath_RejectedWithCode asserts that
 // raw_message.* events submitted via the global API key (no
-// X-Mac-Host-ID) are REJECTED per-event with RAW_MESSAGE_REQUIRES_HOST_AUTH.
+// X-Mac-Host-ID) are REJECTED per-event with HOST_ONLY_REQUIRES_HOST_AUTH.
 func TestIngestRawMessage_GlobalKeyPath_RejectedWithCode(t *testing.T) {
 	env := setupRawIngestEnv(t)
 	guid := "test-guid-" + uuid.NewString()
@@ -410,7 +411,7 @@ func TestIngestRawMessage_GlobalKeyPath_RejectedWithCode(t *testing.T) {
 	require.Equal(t, 0, resp.Accepted)
 	require.Equal(t, 1, resp.Rejected)
 	require.Len(t, resp.Errors, 1)
-	require.Equal(t, "RAW_MESSAGE_REQUIRES_HOST_AUTH", resp.Errors[0].Code)
+	require.Equal(t, "HOST_ONLY_REQUIRES_HOST_AUTH", resp.Errors[0].Code)
 }
 
 // TestIngestRawMessage_HostAuthForeignKind_Rejected asserts a non-

@@ -21,11 +21,12 @@ type MacHostRouteDeps struct {
 // RegisterMacHostRoutes wires the public + daemon-auth Mac-daemon route
 // surface onto the given router:
 //
-//   - POST /api/v1/host                          (public, IP rate-limited inside handler)
-//   - POST /api/v1/host/:id/heartbeat            (host bearer auth)
-//   - GET  /api/v1/host/:id/sync/:source/cursor  (host bearer auth)
-//   - POST /api/v1/host/:id/sync/:source/cursor  (host bearer auth)
-//   - GET  /api/v1/host/:id/sync/:source/known-ids (host bearer auth)
+//   - POST /api/v1/host                            (public, IP rate-limited inside handler)
+//   - POST /api/v1/host/:id/heartbeat              (host bearer auth)
+//   - GET  /api/v1/host/:id/sync/:source/cursor    (host bearer auth)
+//   - POST /api/v1/host/:id/sync/:source/cursor    (host bearer auth)
+//   - GET  /api/v1/host/:id/sync/:source/known-ids (host bearer auth; per-source tombstone reconciliation; stub)
+//   - GET  /api/v1/host/:id/known-identifiers      (host bearer auth; cross-source canonical phone/email set)
 //
 // Caller is responsible for adding the admin routes via
 // RegisterMacHostAdminRoutes against their own global-API-key-protected
@@ -44,6 +45,7 @@ func RegisterMacHostRoutes(router *gin.Engine, deps MacHostRouteDeps) {
 		macDaemon.GET("/host/:id/sync/:source/cursor", deps.Handler.GetCursor)
 		macDaemon.POST("/host/:id/sync/:source/cursor", deps.Handler.CommitCursor)
 		macDaemon.GET("/host/:id/sync/:source/known-ids", deps.Handler.KnownIDs)
+		macDaemon.GET("/host/:id/known-identifiers", deps.Handler.KnownIdentifiers)
 	}
 }
 
