@@ -27,9 +27,15 @@ public struct ProductionFilesystemAdapter: FilesystemAdapter {
         }
         // FileManager.copyItem fails if destination exists; remove
         // first to match the production install pattern (re-copy on
-        // upgrade).
+        // upgrade). Surface removal failures explicitly — otherwise
+        // copyItem fails with a cryptic "file already exists" error.
         if fm.fileExists(atPath: to) {
-            try? fm.removeItem(atPath: to)
+            do {
+                try fm.removeItem(atPath: to)
+            } catch {
+                throw FilesystemError.ioError(
+                    "remove pre-existing \(to): \(error.localizedDescription)")
+            }
         }
         do {
             try fm.copyItem(atPath: from, toPath: to)

@@ -377,8 +377,19 @@ public struct Installer {
         if deps.filesystem.fileExists(at: deps.paths.binaryPath) { return true }
         if deps.filesystem.fileExists(at: deps.paths.configFilePath) { return true }
         if (try? deps.keychain.readAPIKey()) != nil { return true }
-        if let inv = try? deps.launchctl.printService(label: Daemon.label), inv.exitCode == 0 {
-            return true
+        // Surface launchctl spawn failures (vs non-zero exit) so an
+        // unexpected runtime error can't silently mask a leftover
+        // registration. Non-zero exit (service unknown) is fine — that's
+        // the normal "no install" path.
+        do {
+            let inv = try deps.launchctl.printService(label: Daemon.label)
+            if inv.exitCode == 0 {
+                return true
+            }
+        } catch {
+            deps.logger.warning("install: launchctl probe failed; assuming no existing service", metadata: [
+                "error": .private(String(describing: error)),
+            ])
         }
         return false
     }

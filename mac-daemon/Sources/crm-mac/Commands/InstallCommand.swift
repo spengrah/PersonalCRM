@@ -34,10 +34,16 @@ struct InstallCommand: AsyncParsableCommand {
             upgrade: upgrade,
             registerOnly: registerOnly)
         let request: InstallRequest
+        let warnings: InstallRequestParseWarnings
         do {
-            request = try InstallRequestParser.parse(input)
+            (request, warnings) = try InstallRequestParser.parseWithWarnings(input)
         } catch let e as InstallRequestParseError {
             throw ValidationError(String(describing: e))
+        }
+
+        if warnings.plaintextHTTPNonLoopback {
+            FileHandle.standardError.write(Data(
+                "WARNING: --pi-url uses http:// to a non-loopback host. The API key is sent in a Bearer header on every request; plaintext over the network leaks it to anyone in the path. Use https:// (e.g. via Tailscale) for real installs.\n".utf8))
         }
 
         let ctx = ProductionContext()

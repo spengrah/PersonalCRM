@@ -108,6 +108,33 @@ final class InstallRequestParserTests: XCTestCase {
         }
     }
 
+    func testPlaintextHTTPNonLoopbackEmitsWarning() throws {
+        let result = try InstallRequestParser.parseWithWarnings(input(piURL: "http://pi.example.test"))
+        XCTAssertTrue(result.warnings.plaintextHTTPNonLoopback)
+    }
+
+    func testPlaintextHTTPLoopbackDoesNotWarn() throws {
+        let result = try InstallRequestParser.parseWithWarnings(input(piURL: "http://localhost:8080"))
+        XCTAssertFalse(result.warnings.plaintextHTTPNonLoopback)
+    }
+
+    func testPlaintextHTTP127LoopbackDoesNotWarn() throws {
+        let result = try InstallRequestParser.parseWithWarnings(input(piURL: "http://127.0.0.1:8080"))
+        XCTAssertFalse(result.warnings.plaintextHTTPNonLoopback)
+    }
+
+    func testHTTPSDoesNotWarn() throws {
+        let result = try InstallRequestParser.parseWithWarnings(input(piURL: "https://pi.example.test"))
+        XCTAssertFalse(result.warnings.plaintextHTTPNonLoopback)
+    }
+
+    func testUpgradeDoesNotWarnEvenIfHTTPSupplied() throws {
+        let result = try InstallRequestParser.parseWithWarnings(input(
+            piURL: "http://pi.example.test", pair: "", hostname: "", upgrade: true))
+        XCTAssertFalse(result.warnings.plaintextHTTPNonLoopback,
+            "upgrade doesn't consume URL, so no warning is appropriate")
+    }
+
     func testMalformedURL() {
         XCTAssertThrowsError(try InstallRequestParser.parse(input(piURL: " "))) { e in
             // URL(string: " ") returns nil — surfaces as malformedPiURL.

@@ -53,6 +53,36 @@ final class UninstallerTests: XCTestCase {
         XCTAssertFalse(fs.fileExists(at: paths.binaryPath))
     }
 
+    func testPlistAlreadyAbsentSurfacesAsNotDeleted() throws {
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        // No plist seeded.
+        let uninstaller = Uninstaller(UninstallerDependencies(
+            paths: paths,
+            filesystem: fs,
+            keychain: InMemoryKeychainStore(initial: "k"),
+            launchctl: FakeLaunchctlRunner(),
+            logger: NoopLogger()))
+        let summary = try uninstaller.run(UninstallRequest())
+        XCTAssertFalse(summary.plistDeleted, "plist was already absent")
+        XCTAssertTrue(summary.keychainDeleted)
+    }
+
+    func testKeychainAlreadyAbsentStillSucceeds() throws {
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        // No initial Keychain value; deleteAPIKey is idempotent.
+        let keychain = InMemoryKeychainStore()
+        let uninstaller = Uninstaller(UninstallerDependencies(
+            paths: paths,
+            filesystem: fs,
+            keychain: keychain,
+            launchctl: FakeLaunchctlRunner(),
+            logger: NoopLogger()))
+        let summary = try uninstaller.run(UninstallRequest())
+        XCTAssertTrue(summary.keychainDeleted, "delete on missing entry is a successful no-op")
+    }
+
     func testBootoutNonZeroExitIsTolerated() throws {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()

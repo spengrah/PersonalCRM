@@ -81,6 +81,19 @@ public struct ProductionKeychainStore: KeychainStore {
         switch addStatus {
         case errSecSuccess:
             return
+        case errSecDuplicateItem:
+            // Concurrent writer added the item between our update-
+            // returning-notFound and our add. Retry as an update; if
+            // that still fails, surface whatever the system tells us.
+            let retryStatus = SecItemUpdate(baseQuery as CFDictionary, attributesToUpdate as CFDictionary)
+            switch retryStatus {
+            case errSecSuccess:
+                return
+            case errSecInteractionNotAllowed, errSecAuthFailed:
+                throw KeychainStoreError.accessDenied
+            default:
+                throw KeychainStoreError.unexpected(status: retryStatus)
+            }
         case errSecInteractionNotAllowed, errSecAuthFailed:
             throw KeychainStoreError.accessDenied
         default:

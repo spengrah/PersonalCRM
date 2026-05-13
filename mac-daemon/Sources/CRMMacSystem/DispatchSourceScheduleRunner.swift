@@ -1,7 +1,15 @@
-// DispatchSourceScheduleRunner is the fallback scheduler — uses
-// DispatchSourceTimer directly so we can swap it in if NSBA
-// coalescing turns out to be too aggressive once source readers are
-// wired up. Same protocol shape as NSBackgroundActivityScheduleRunner.
+// DispatchSourceScheduleRunner is the fallback scheduler.
+//
+// Status: not currently selected by ProductionContext (the daemon
+// always uses NSBackgroundActivityScheduleRunner). It ships
+// pre-built so we can swap it in via a one-line ProductionContext
+// edit if observability after source-reader wiring shows NSBA's
+// coalescing is too aggressive for our 60s ticks. Removing it now
+// would force a future PR to rediscover the right protocol shape
+// and re-derive the DispatchSourceTimer interaction; keeping it
+// here is the cheap option.
+//
+// Same protocol shape as NSBackgroundActivityScheduleRunner.
 import Foundation
 import CRMMacCore
 import CRMMacLifecycle

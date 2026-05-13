@@ -5,7 +5,7 @@ import CRMMacCore
 
 final class InstallerUpgradeTests: XCTestCase {
     func testUpgradeDoesNotPostHost() async throws {
-        let (installer, fs, launchctl, _, paths, transport) = prepareExistingInstall()
+        let (installer, fs, launchctl, _, paths, transport) = try prepareExistingInstall()
         let summary = try await installer.run(InstallRequest(
             piURL: URL(string: "https://pi.example.test")!,
             pairingToken: "ignored",
@@ -51,20 +51,20 @@ final class InstallerUpgradeTests: XCTestCase {
         }
     }
 
-    private func prepareExistingInstall() -> (Installer, InMemoryFilesystem, FakeLaunchctlRunner, InMemoryKeychainStore, LifecyclePaths, LifecycleMockTransport) {
+    private func prepareExistingInstall() throws -> (Installer, InMemoryFilesystem, FakeLaunchctlRunner, InMemoryKeychainStore, LifecyclePaths, LifecycleMockTransport) {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         fs.seedFile(at: "/tmp/source/crm-mac")
         // Pretend an install exists.
-        try? fs.write(Data("old binary".utf8), to: paths.binaryPath)
+        try fs.write(Data("old binary".utf8), to: paths.binaryPath)
         let config = DaemonConfig(
             piURL: URL(string: "https://pi.example.test")!,
             hostID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
             hostname: "mac-1",
-            installedAt: Date())
+            installedAt: Date(timeIntervalSince1970: 1_700_000_000))
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        try? fs.write(try! encoder.encode(config), to: paths.configFilePath)
+        try fs.write(try encoder.encode(config), to: paths.configFilePath)
 
         let keychain = InMemoryKeychainStore(initial: "existing-key")
         let launchctl = FakeLaunchctlRunner()

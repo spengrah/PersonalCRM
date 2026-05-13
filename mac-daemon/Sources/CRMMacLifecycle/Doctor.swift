@@ -80,14 +80,14 @@ public struct Doctor {
         results.append(checkKeychain())
         results.append(checkLaunchctl())
 
-        let configResult = checkConfigAndState()
-        results.append(configResult.0)
+        let configCheck = checkConfigAndState()
+        results.append(configCheck.result)
         // The Pi reachability probe needs the host ID + api key, both
         // of which depend on config + Keychain. If those failed, surface
         // a single derived FAIL for reachability without making the
         // network call.
-        if let auth = configResult.1 {
-            let reach = await checkPiReachability(auth: auth, piURL: configResult.2)
+        if let auth = configCheck.auth {
+            let reach = await checkPiReachability(auth: auth, piURL: configCheck.piURL)
             results.append(reach)
         } else {
             results.append(CheckResult(
@@ -96,6 +96,15 @@ public struct Doctor {
                 details: "skipped — config or keychain unavailable"))
         }
         return DoctorReport(results: results)
+    }
+
+    /// Aggregate of the config+state check that downstream callers
+    /// (Pi reachability) need to inspect. Named for self-documentation
+    /// where the prior 3-tuple shape required positional unwrap.
+    private struct ConfigAndStateResult {
+        let result: CheckResult
+        let auth: PiAuth?
+        let piURL: URL
     }
 
     private func checkKeychain() -> CheckResult {
@@ -127,23 +136,22 @@ public struct Doctor {
         }
     }
 
-    /// Returns (result, auth-on-success, pi-url-on-success).
-    private func checkConfigAndState() -> (CheckResult, PiAuth?, URL) {
+    private func checkConfigAndState() -> ConfigAndStateResult {
         let placeholderURL = URL(string: "https://localhost")!
         guard deps.filesystem.fileExists(at: deps.paths.configFilePath) else {
-            return (CheckResult(
-                name: "config_state",
-                status: .fail,
-                details: "config.json missing"), nil, placeholderURL)
+            return ConfigAndStateResult(
+                result: CheckResult(name: "config_state", status: .fail, details: "config.json missing"),
+                auth: nil,
+                piURL: placeholderURL)
         }
         let configData: Data
         do {
             configData = try deps.filesystem.read(from: deps.paths.configFilePath)
         } catch {
-            return (CheckResult(
-                name: "config_state",
-                status: .fail,
-                details: "read config.json: \(error)"), nil, placeholderURL)
+            return ConfigAndStateResult(
+                result: CheckResult(name: "config_state", status: .fail, details: "read config.json: \(error)"),
+                auth: nil,
+                piURL: placeholderURL)
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -151,58 +159,64 @@ public struct Doctor {
         do {
             cfg = try decoder.decode(DaemonConfig.self, from: configData)
         } catch {
-            return (CheckResult(
-                name: "config_state",
-                status: .fail,
-                details: "decode config.json: \(error)"), nil, placeholderURL)
+            return ConfigAndStateResult(
+                result: CheckResult(name: "config_state", status: .fail, details: "decode config.json: \(error)"),
+                auth: nil,
+                piURL: placeholderURL)
         }
 
         guard deps.filesystem.fileExists(at: deps.paths.stateFilePath) else {
-            return (CheckResult(
-                name: "config_state",
-                status: .fail,
-                details: "state.json missing"), nil, cfg.piURL)
+            return ConfigAndStateResult(
+                result: CheckResult(name: "config_state", status: .fail, details: "state.json missing"),
+                auth: nil,
+                piURL: cfg.piURL)
         }
         let stateData: Data
         do {
             stateData = try deps.filesystem.read(from: deps.paths.stateFilePath)
         } catch {
-            return (CheckResult(
-                name: "config_state",
-                status: .fail,
-                details: "read state.json: \(error)"), nil, cfg.piURL)
+            return ConfigAndStateResult(
+                result: CheckResult(name: "config_state", status: .fail, details: "read state.json: \(error)"),
+                auth: nil,
+                piURL: cfg.piURL)
         }
         let state: DaemonState
         do {
             state = try decoder.decode(DaemonState.self, from: stateData)
         } catch {
-            return (CheckResult(
-                name: "config_state",
-                status: .fail,
-                details: "decode state.json: \(error)"), nil, cfg.piURL)
+            return ConfigAndStateResult(
+                result: CheckResult(name: "config_state", status: .fail, details: "decode state.json: \(error)"),
+                auth: nil,
+                piURL: cfg.piURL)
         }
         if state.schemaVersion != DaemonState.currentSchemaVersion {
-            return (CheckResult(
-                name: "config_state",
-                status: .fail,
-                details: "state schemaVersion=\(state.schemaVersion); expected \(DaemonState.currentSchemaVersion)"),
-                    nil, cfg.piURL)
+            return ConfigAndStateResult(
+                result: CheckResult(
+                    name: "config_state",
+                    status: .fail,
+                    details: "state schemaVersion=\(state.schemaVersion); expected \(DaemonState.currentSchemaVersion)"),
+                auth: nil,
+                piURL: cfg.piURL)
         }
         let apiKey: String
         do {
             apiKey = try deps.keychain.readAPIKey()
         } catch {
-            return (CheckResult(
+            return ConfigAndStateResult(
+                result: CheckResult(
+                    name: "config_state",
+                    status: .pass,
+                    details: "config + state OK (keychain probed separately)"),
+                auth: nil,
+                piURL: cfg.piURL)
+        }
+        return ConfigAndStateResult(
+            result: CheckResult(
                 name: "config_state",
                 status: .pass,
-                details: "config + state OK (keychain probed separately)"),
-                    nil, cfg.piURL)
-        }
-        return (CheckResult(
-            name: "config_state",
-            status: .pass,
-            details: "host=\(cfg.hostname) schemaVersion=\(state.schemaVersion)"),
-                PiAuth(hostID: cfg.hostID, apiKey: apiKey), cfg.piURL)
+                details: "host=\(cfg.hostname) schemaVersion=\(state.schemaVersion)"),
+            auth: PiAuth(hostID: cfg.hostID, apiKey: apiKey),
+            piURL: cfg.piURL)
     }
 
     private func checkPiReachability(auth: PiAuth, piURL: URL) async -> CheckResult {

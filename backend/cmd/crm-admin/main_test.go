@@ -219,6 +219,18 @@ func TestRunListHostsNeverHeartbeat(t *testing.T) {
 	}
 }
 
+func TestRunListHostsError(t *testing.T) {
+	deps, _, _, hosts, _, _ := newTestDeps()
+	hosts.err = errors.New("db unreachable")
+	err := run(context.Background(), runOptions{listHosts: true}, deps)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "list active hosts") {
+		t.Fatalf("expected wrapped error, got %v", err)
+	}
+}
+
 func TestRunRevokeHostMalformedUUID(t *testing.T) {
 	deps, _, _, _, revoker, _ := newTestDeps()
 	err := run(context.Background(), runOptions{revokeHostID: "not-a-uuid"}, deps)

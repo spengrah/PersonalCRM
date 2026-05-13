@@ -75,7 +75,7 @@ public struct LaunchAgentPlist: Equatable {
 /// Minimal XML escaping for plist `<string>` values. Replaces the
 /// five XML-significant characters so an unusual home directory
 /// path (e.g., `/Users/o'malley`) cannot produce a malformed plist.
-func xmlEscape(_ s: String) -> String {
+private func xmlEscape(_ s: String) -> String {
     var out = ""
     out.reserveCapacity(s.count)
     for c in s {

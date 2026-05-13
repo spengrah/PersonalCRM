@@ -49,8 +49,30 @@ public enum InstallRequestParseError: Error, Equatable, CustomStringConvertible 
     }
 }
 
+/// Captures non-fatal warnings the parser wants to surface to the
+/// operator. The InstallCommand prints these to stderr.
+public struct InstallRequestParseWarnings: Equatable {
+    /// True when a fresh install passes `http://` to a non-loopback
+    /// host. The API key is sent in a Bearer header on every
+    /// authenticated request — plaintext over the wire to a routable
+    /// host leaks the credential to anyone in the network path.
+    public var plaintextHTTPNonLoopback: Bool
+
+    public init(plaintextHTTPNonLoopback: Bool = false) {
+        self.plaintextHTTPNonLoopback = plaintextHTTPNonLoopback
+    }
+
+    public var isEmpty: Bool {
+        !plaintextHTTPNonLoopback
+    }
+}
+
 public enum InstallRequestParser {
     public static func parse(_ input: InstallRequestParserInput) throws -> InstallRequest {
+        return try parseWithWarnings(input).request
+    }
+
+    public static func parseWithWarnings(_ input: InstallRequestParserInput) throws -> (request: InstallRequest, warnings: InstallRequestParseWarnings) {
         if input.upgrade && input.registerOnly {
             throw InstallRequestParseError.mutuallyExclusiveModes
         }
@@ -91,11 +113,34 @@ public enum InstallRequestParser {
             }
             url = parsed
         }
-        return InstallRequest(
+
+        var warnings = InstallRequestParseWarnings()
+        if isFresh,
+           url.scheme?.lowercased() == "http",
+           !isLoopbackHost(url.host ?? "") {
+            warnings.plaintextHTTPNonLoopback = true
+        }
+
+        let request = InstallRequest(
             piURL: url,
             pairingToken: input.pair,
             hostname: input.hostname,
             upgrade: input.upgrade,
             registerOnly: input.registerOnly)
+        return (request, warnings)
     }
+}
+
+/// Whether `host` is a loopback address. localhost + 127.0.0.0/8 +
+/// ::1 are the loopback set; everything else (including 10/8,
+/// 192.168/16 LAN ranges) is treated as routable for the plaintext-
+/// HTTP warning's purposes — plaintext over a LAN still leaks the
+/// key on the wire.
+private func isLoopbackHost(_ host: String) -> Bool {
+    if host.isEmpty { return false }
+    let lower = host.lowercased()
+    if lower == "localhost" { return true }
+    if lower == "::1" { return true }
+    if lower.hasPrefix("127.") { return true }
+    return false
 }

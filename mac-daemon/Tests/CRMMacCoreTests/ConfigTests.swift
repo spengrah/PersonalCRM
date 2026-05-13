@@ -59,6 +59,18 @@ final class ConfigTests: XCTestCase {
         try ConfigStore.validatePiURL(URL(string: "http://localhost:8080")!)
     }
 
+    func testValidatePiURLAcceptsIPv4Literal() throws {
+        try ConfigStore.validatePiURL(URL(string: "http://192.168.1.1")!)
+    }
+
+    func testValidatePiURLRejectsEmptyHostHTTPS() {
+        XCTAssertThrowsError(try ConfigStore.validatePiURL(URL(string: "https://")!))
+    }
+
+    func testValidatePiURLRejectsTripleSlashScheme() {
+        XCTAssertThrowsError(try ConfigStore.validatePiURL(URL(string: "http:///path")!))
+    }
+
     func testSaveValidatesPiURL() {
         let store = ConfigStore(fileURL: fileURL)
         let bad = DaemonConfig(
