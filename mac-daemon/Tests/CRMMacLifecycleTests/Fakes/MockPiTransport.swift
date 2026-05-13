@@ -18,8 +18,12 @@ final class LifecycleMockTransport {
     }
 
     func asTransport() -> TransportFunc {
-        return { [weak self] request in
-            guard let self else { throw URLError(.cancelled) }
+        // Strong capture: tests create the transport inline
+        // (`LifecycleMockTransport([...]).asTransport()`) and rely on
+        // the closure keeping the script alive. A weak capture would
+        // let the script deallocate before the PiClient invokes the
+        // transport, making every request fail with URLError(.cancelled).
+        return { request in
             self.invocations.append(request)
             guard !self.steps.isEmpty else {
                 throw URLError(.unknown)
