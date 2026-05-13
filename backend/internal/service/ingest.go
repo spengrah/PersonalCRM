@@ -796,6 +796,16 @@ func (s *IngestService) handleExternalContactUpserted(
 	// regardless of which one triggered the match. The
 	// external_contact.crm_contact_id / match_status update only fires
 	// on FIRST INSERT (D-JC4) and only on the first successful match.
+	//
+	// Defensive: only flip match state when the UPSERT returned a row
+	// that does NOT already carry a crm_contact_id. The combination
+	// (firstInsert && CRMContactID == nil) closes a theoretical race
+	// where a concurrent INSERT lands between our pre-read and our
+	// UPSERT — the UPSERT's UPDATE branch then returns the other tx's
+	// crm_contact_id, and we must NOT clobber it with our own match
+	// result. Single-daemon ordering makes the race extremely
+	// unlikely, but the guard is cheap.
+	canSetMatchOnRow := firstInsert && external.CRMContactID == nil
 	matched := false
 	for _, em := range p.Emails {
 		if em.Value == "" {
@@ -813,7 +823,7 @@ func (s *IngestService) handleExternalContactUpserted(
 				Message: fmt.Sprintf("identity match (email): %s", err.Error()),
 			}
 		}
-		if firstInsert && !matched && result != nil && result.ContactID != nil {
+		if canSetMatchOnRow && !matched && result != nil && result.ContactID != nil {
 			if _, err := s.externalContacts.UpdateMatchTx(ctx, tx,
 				external.ID, result.ContactID, repository.MatchStatusMatched); err != nil {
 				return &IngestPerEventRejection{
@@ -840,7 +850,7 @@ func (s *IngestService) handleExternalContactUpserted(
 				Message: fmt.Sprintf("identity match (phone): %s", err.Error()),
 			}
 		}
-		if firstInsert && !matched && result != nil && result.ContactID != nil {
+		if canSetMatchOnRow && !matched && result != nil && result.ContactID != nil {
 			if _, err := s.externalContacts.UpdateMatchTx(ctx, tx,
 				external.ID, result.ContactID, repository.MatchStatusMatched); err != nil {
 				return &IngestPerEventRejection{
