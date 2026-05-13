@@ -2,7 +2,7 @@
 // tasks that don't fit the HTTP API surface. Operator-only; NOT
 // deployed as part of the production service.
 //
-// Subcommands:
+// Subcommands (exactly one required):
 //
 //	--messages-rematch-stranded   Retroactively match messages_message
 //	                              rows whose matched_contact_id is NULL
@@ -11,9 +11,23 @@
 //	                              MessagingAggregateForContactArgs River
 //	                              jobs per newly-matched contact.
 //
-// See backend/internal/messages/admin_rematch.go for the business
-// logic — this binary is a thin CLI shim so the entire admin handler
-// stays unit-testable independently of the binary.
+//	--mint-pairing-token          Mint a single-use pairing token for
+//	                              `crm-mac install --pair`. Optional
+//	                              --hostname-label is operator-side
+//	                              terminal context only; not persisted
+//	                              server-side.
+//
+//	--list-hosts                  Print active paired Mac hosts
+//	                              (id, hostname, created_at,
+//	                              last_heartbeat_at) for ambiguous-pair
+//	                              recovery.
+//
+//	--revoke-host <uuid>          Revoke a paired Mac host by id.
+//
+// See backend/internal/messages/admin_rematch.go for the rematch
+// business logic and backend/internal/service/mac_host.go for the
+// pairing service. This binary is a thin CLI shim so the entire
+// admin surface stays unit-testable independently of the binary.
 //
 // Build:  make crm-admin   (operator-only target; NOT wired into CI).
 //
@@ -24,10 +38,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"strings"
+	"time"
 
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer/consumerjobs"
@@ -36,33 +54,77 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
 )
 
+// tokenMinter is the narrow interface --mint-pairing-token needs.
+// Production wires this to *service.MacHostService.CreatePairingToken.
+type tokenMinter interface {
+	CreatePairingToken(ctx context.Context) (plaintext string, expiresAt time.Time, err error)
+}
+
+// hostLister is the narrow interface --list-hosts needs.
+type hostLister interface {
+	ListActiveHosts(ctx context.Context) ([]*repository.MacHost, error)
+}
+
+// hostRevoker is the narrow interface --revoke-host needs.
+type hostRevoker interface {
+	RevokeHost(ctx context.Context, id uuid.UUID) error
+}
+
+// rematchRunner is the narrow interface --messages-rematch-stranded
+// needs. Defined for symmetry with the new flags so all four
+// subcommands can be exercised by test doubles.
+type rematchRunner interface {
+	RematchStranded(ctx context.Context) (*messages.RematchStrandedResult, error)
+}
+
+// adminDeps groups the four subcommand dependencies. Tests inject
+// fakes for each interface; the production wiring builds a single
+// MacHostService and a small adapter for rematch.
+type adminDeps struct {
+	tokens  tokenMinter
+	hosts   hostLister
+	revoker hostRevoker
+	rematch rematchRunner
+	stdout  io.Writer
+	stderr  io.Writer
+}
+
+// runOptions captures parsed flags. Exposed as a struct so tests can
+// drive run() directly without re-parsing argv.
+type runOptions struct {
+	rematchStranded  bool
+	mintPairingToken bool
+	hostnameLabel    string
+	listHosts        bool
+	revokeHostID     string
+}
+
 func main() {
-	if err := run(); err != nil {
+	if err := runMain(os.Args[1:]); err != nil {
 		log.Fatalf("crm-admin: %v", err)
 	}
 }
 
-func run() error {
-	rematchStranded := flag.Bool("messages-rematch-stranded", false,
-		"Retroactively match stranded messages_message rows against contact_method and enqueue aggregator jobs")
-	flag.Parse()
-
-	if !*rematchStranded {
-		flag.Usage()
-		return fmt.Errorf("no subcommand specified; pass --messages-rematch-stranded")
+// runMain parses argv and dispatches. Split out so tests can drive
+// the dispatch + mutual-exclusion logic against fake deps without
+// touching flag.Parse's global state.
+func runMain(args []string) error {
+	opts, err := parseArgs(args)
+	if err != nil {
+		return err
 	}
 
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-
 	ctx := context.Background()
 	if err := db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
@@ -73,6 +135,158 @@ func run() error {
 	}
 	defer database.Close()
 
+	deps, cleanup, err := buildProductionDeps(ctx, cfg, database)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	deps.stdout = os.Stdout
+	deps.stderr = os.Stderr
+
+	return run(ctx, opts, deps)
+}
+
+// parseArgs uses a private FlagSet so tests can drive the parser
+// without polluting flag's global state.
+func parseArgs(args []string) (runOptions, error) {
+	fs := flag.NewFlagSet("crm-admin", flag.ContinueOnError)
+	var opts runOptions
+	fs.BoolVar(&opts.rematchStranded, "messages-rematch-stranded", false,
+		"Retroactively match stranded messages_message rows and enqueue aggregator jobs.")
+	fs.BoolVar(&opts.mintPairingToken, "mint-pairing-token", false,
+		"Mint a single-use pairing token for `crm-mac install --pair`.")
+	fs.StringVar(&opts.hostnameLabel, "hostname-label", "",
+		"Optional operator-side label for the mint output. NOT persisted server-side.")
+	fs.BoolVar(&opts.listHosts, "list-hosts", false,
+		"Print active paired Mac hosts for ambiguous-pair recovery.")
+	fs.StringVar(&opts.revokeHostID, "revoke-host", "",
+		"Revoke an existing paired Mac host by UUID.")
+	if err := fs.Parse(args); err != nil {
+		return runOptions{}, err
+	}
+	return opts, nil
+}
+
+// run dispatches to exactly one subcommand. Surfaces a clear error on
+// mutual-exclusion violations or when no flag is set.
+func run(ctx context.Context, opts runOptions, deps adminDeps) error {
+	// Count active subcommand flags. Exactly one must be set.
+	active := 0
+	if opts.rematchStranded {
+		active++
+	}
+	if opts.mintPairingToken {
+		active++
+	}
+	if opts.listHosts {
+		active++
+	}
+	if opts.revokeHostID != "" {
+		active++
+	}
+	if active == 0 {
+		return errors.New("no subcommand specified; pass exactly one of " +
+			"--messages-rematch-stranded, --mint-pairing-token, --list-hosts, --revoke-host <uuid>")
+	}
+	if active > 1 {
+		return errors.New("subcommand flags are mutually exclusive; pass exactly one of " +
+			"--messages-rematch-stranded, --mint-pairing-token, --list-hosts, --revoke-host <uuid>")
+	}
+
+	switch {
+	case opts.mintPairingToken:
+		return runMintPairingToken(ctx, opts, deps)
+	case opts.listHosts:
+		return runListHosts(ctx, deps)
+	case opts.revokeHostID != "":
+		return runRevokeHost(ctx, opts, deps)
+	case opts.rematchStranded:
+		return runRematchStranded(ctx, deps)
+	}
+	return errors.New("unreachable")
+}
+
+func runMintPairingToken(ctx context.Context, opts runOptions, deps adminDeps) error {
+	token, expiresAt, err := deps.tokens.CreatePairingToken(ctx)
+	if err != nil {
+		return fmt.Errorf("mint pairing token: %w", err)
+	}
+	if _, err := fmt.Fprintf(deps.stdout,
+		"token=%s\nexpires_at=%s\n", token, expiresAt.UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("write token: %w", err)
+	}
+	if opts.hostnameLabel != "" {
+		if _, err := fmt.Fprintf(deps.stdout,
+			"hostname_label=%s\n", opts.hostnameLabel); err != nil {
+			return fmt.Errorf("write hostname label: %w", err)
+		}
+	}
+	if _, err := fmt.Fprintf(deps.stdout,
+		"note: paste into `crm-mac install --pair <token>` within 10 minutes\n"); err != nil {
+		return fmt.Errorf("write note: %w", err)
+	}
+	return nil
+}
+
+func runListHosts(ctx context.Context, deps adminDeps) error {
+	hosts, err := deps.hosts.ListActiveHosts(ctx)
+	if err != nil {
+		return fmt.Errorf("list active hosts: %w", err)
+	}
+	if len(hosts) == 0 {
+		if _, err := fmt.Fprintln(deps.stdout, "no active paired hosts"); err != nil {
+			return fmt.Errorf("write empty list: %w", err)
+		}
+		return nil
+	}
+	for _, h := range hosts {
+		lastHeartbeat := "never"
+		if h.LastHeartbeatAt != nil {
+			lastHeartbeat = h.LastHeartbeatAt.UTC().Format(time.RFC3339)
+		}
+		if _, err := fmt.Fprintf(deps.stdout,
+			"id=%s hostname=%s created_at=%s last_heartbeat_at=%s\n",
+			h.ID, h.Hostname, h.CreatedAt.UTC().Format(time.RFC3339), lastHeartbeat); err != nil {
+			return fmt.Errorf("write host row: %w", err)
+		}
+	}
+	return nil
+}
+
+func runRevokeHost(ctx context.Context, opts runOptions, deps adminDeps) error {
+	id, err := uuid.Parse(strings.TrimSpace(opts.revokeHostID))
+	if err != nil {
+		return fmt.Errorf("--revoke-host must be a valid UUID: %w", err)
+	}
+	if err := deps.revoker.RevokeHost(ctx, id); err != nil {
+		return fmt.Errorf("revoke host %s: %w", id, err)
+	}
+	if _, err := fmt.Fprintf(deps.stdout, "revoked host_id=%s\n", id); err != nil {
+		return fmt.Errorf("write revoke summary: %w", err)
+	}
+	return nil
+}
+
+func runRematchStranded(ctx context.Context, deps adminDeps) error {
+	res, err := deps.rematch.RematchStranded(ctx)
+	if err != nil {
+		return fmt.Errorf("rematch stranded: %w", err)
+	}
+	if _, err := fmt.Fprintf(deps.stdout, "messages-rematch-stranded summary:\n"+
+		"  scanned:        %d\n"+
+		"  matched:        %d\n"+
+		"  still_stranded: %d\n"+
+		"  enqueued:       %d\n"+
+		"  errors:         %d\n",
+		res.Scanned, res.Matched, res.StillStranded, res.Enqueued, res.Errors); err != nil {
+		return fmt.Errorf("write summary: %w", err)
+	}
+	return nil
+}
+
+// buildProductionDeps wires up the production service stack. Returns
+// a cleanup function to call before exit (releases the river client).
+func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.Database) (adminDeps, func(), error) {
 	// River client configured as an inserter only. We register a
 	// noop worker for MessagingAggregateForContactArgs so River
 	// accepts the kind at Insert time without actually running the
@@ -88,34 +302,62 @@ func run() error {
 		Workers: workers,
 	})
 	if err != nil {
-		return fmt.Errorf("build river client: %w", err)
+		return adminDeps{}, nil, fmt.Errorf("build river client: %w", err)
 	}
 
-	// Repositories + identity service. Constructed locally; identical
-	// shape to the crm-api wiring.
 	identityRepo := repository.NewIdentityRepository(database.Queries)
 	identityService := service.NewIdentityService(identityRepo)
 	messagesRepo := repository.NewMessagesMessageRepository(database.Queries)
 
-	res, err := messages.RematchStranded(ctx, messages.RematchStrandedDeps{
-		Messages:    messagesRepo,
-		Identity:    identityService,
-		RiverClient: adminRiverAdapter{client: riverClient},
-	})
-	if err != nil {
-		return fmt.Errorf("rematch stranded: %w", err)
+	// MacHostService wires through the same dependencies the API
+	// handler uses. The bcryptCost passes 0 to indicate default;
+	// see service.NewMacHostService.
+	hostRepo := repository.NewMacHostRepository(database.Queries)
+	pairingTokenRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
+	syncRepo := repository.NewSyncRepository(database.Queries)
+	contactMethodLister := repository.NewContactMethodRepository(database.Queries)
+	hostService := service.NewMacHostService(
+		hostRepo,
+		pairingTokenRepo,
+		syncRepo,
+		contactMethodLister,
+		database.Pool,
+		0)
+
+	rematch := rematchAdapter{
+		messagesRepo:    messagesRepo,
+		identityService: identityService,
+		riverClient:     riverClient,
 	}
 
-	if _, err := fmt.Fprintf(os.Stdout, "messages-rematch-stranded summary:\n"+
-		"  scanned:        %d\n"+
-		"  matched:        %d\n"+
-		"  still_stranded: %d\n"+
-		"  enqueued:       %d\n"+
-		"  errors:         %d\n",
-		res.Scanned, res.Matched, res.StillStranded, res.Enqueued, res.Errors); err != nil {
-		return fmt.Errorf("write summary: %w", err)
+	cleanup := func() {}
+	return adminDeps{
+		tokens:  hostService,
+		hosts:   hostService,
+		revoker: hostService,
+		rematch: rematch,
+	}, cleanup, nil
+}
+
+// rematchAdapter wraps messages.RematchStranded so it conforms to
+// rematchRunner without exposing the dependency struct through the
+// admin surface.
+type rematchAdapter struct {
+	messagesRepo    *repository.MessagesMessageRepository
+	identityService *service.IdentityService
+	riverClient     *river.Client[pgx.Tx]
+}
+
+func (a rematchAdapter) RematchStranded(ctx context.Context) (*messages.RematchStrandedResult, error) {
+	res, err := messages.RematchStranded(ctx, messages.RematchStrandedDeps{
+		Messages:    a.messagesRepo,
+		Identity:    a.identityService,
+		RiverClient: adminRiverAdapter{client: a.riverClient},
+	})
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	return res, nil
 }
 
 // adminRiverAdapter adapts *river.Client[pgx.Tx] to the
