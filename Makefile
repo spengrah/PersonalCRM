@@ -248,6 +248,14 @@ build:
 	@echo "Building frontend..."
 	@cd frontend && bun run build
 
+# Operator-only admin binary. NOT wired into CI; build on demand on
+# the Pi when a one-shot maintenance task is needed (e.g.,
+# `./crm-admin --messages-rematch-stranded`).
+crm-admin:
+	@echo "Building crm-admin..."
+	@cd backend && go build -o crm-admin cmd/crm-admin/main.go
+	@echo "✓ crm-admin built at backend/crm-admin"
+
 # Tests
 test: test-unit test-integration test-frontend
 

@@ -11,9 +11,32 @@ import (
 	"personal-crm/backend/internal/service"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 )
+
+// AdminStrandedLister is the narrow surface RematchStranded uses to
+// enumerate stranded rows. Concrete is *repository.MessagesMessageRepository.
+type AdminStrandedLister interface {
+	ListStranded(ctx context.Context) ([]repository.MessagesMessage, error)
+	UpdateMatchedContact(ctx context.Context, params repository.UpdateMatchedContactParams) error
+}
+
+// AdminIdentityMatcher is the narrow surface RematchStranded uses to
+// run identity match. Concrete is *service.IdentityService (non-tx —
+// the admin path is a one-shot batch utility, not the hot ingest
+// path).
+type AdminIdentityMatcher interface {
+	MatchOrCreate(ctx context.Context, req service.MatchRequest) (*service.MatchResult, error)
+}
+
+// AdminRiverInserter is the narrow surface RematchStranded uses to
+// enqueue MessagingAggregateForContactArgs jobs. Concrete is
+// *river.Client[pgx.Tx]. Pass nil to disable enqueue (useful in
+// dry-run mode).
+type AdminRiverInserter interface {
+	Insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error)
+}
 
 // RematchStrandedDeps bundles the repos + services used by the
 // stranded-row remediation handler.
@@ -23,9 +46,9 @@ import (
 // transient match error per row degrades to MatchTypeUnmatched (the
 // existing forgiving behavior) and the operator can re-run.
 type RematchStrandedDeps struct {
-	Messages      *repository.MessagesMessageRepository
-	Identity      *service.IdentityService
-	RiverClient   *river.Client[pgx.Tx]
+	Messages      AdminStrandedLister
+	Identity      AdminIdentityMatcher
+	RiverClient   AdminRiverInserter
 	DefaultSource string // "messages"
 }
 
