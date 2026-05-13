@@ -143,10 +143,26 @@ final class InstallRequestParserTests: XCTestCase {
     }
 
     func testMalformedURL() {
-        XCTAssertThrowsError(try InstallRequestParser.parse(input(piURL: " "))) { e in
-            // URL(string: " ") returns nil — surfaces as malformedPiURL.
+        // Unclosed IPv6 literal is rejected by URL(string:) across
+        // supported Swift toolchains, surfacing as malformedPiURL.
+        // (A bare space like " " is now tolerated by URL(string:) on
+        // recent Swift and surfaces as invalidPiURL via the validator
+        // instead — see testWhitespaceURLRejected.)
+        XCTAssertThrowsError(try InstallRequestParser.parse(input(piURL: "http://[unterminated"))) { e in
             guard case InstallRequestParseError.malformedPiURL = e else {
                 XCTFail("expected malformedPiURL, got \(e)")
+                return
+            }
+        }
+    }
+
+    func testWhitespaceURLRejected() {
+        // Bare whitespace parses (URL(string: " ") is non-nil on recent
+        // Swift), but ConfigStore.validatePiURL rejects the empty host
+        // / missing scheme — surfaces as invalidPiURL.
+        XCTAssertThrowsError(try InstallRequestParser.parse(input(piURL: " "))) { e in
+            guard case InstallRequestParseError.invalidPiURL = e else {
+                XCTFail("expected invalidPiURL, got \(e)")
                 return
             }
         }
