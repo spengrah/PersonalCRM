@@ -687,8 +687,8 @@ func run() int {
 
 		// Register the iCloud Contacts push provider. Same push-only
 		// semantics as Messages — data lands via the Mac daemon's
-		// external_contact.* events. Scheduler exclusion already
-		// enforced in PR1.
+		// external_contact.* events; the scheduler skips push providers
+		// in ListDueAccounts.
 		providerRegistry.Register(icloudcontacts.New())
 		logger.Info().Msg("iCloud Contacts push provider registered")
 

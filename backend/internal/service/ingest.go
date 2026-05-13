@@ -43,9 +43,8 @@ const (
 )
 
 // allowedExternalContactSources is the set of envelope.Source values the
-// external_contact.* inline handler accepts. Limited to icloud_contacts
-// in PR5; anarlog_humans joins later. Mismatches surface as
-// PAYLOAD_INVARIANT.
+// external_contact.* inline handler accepts. Mismatches surface as
+// PAYLOAD_INVARIANT. Extend when a new daemon-side source ships.
 var allowedExternalContactSources = map[string]struct{}{
 	"icloud_contacts": {},
 }
@@ -153,8 +152,8 @@ func NewIngestService(
 
 // hostAuthAllowedKinds is the single source of truth for which event
 // kinds may be submitted via the host-auth path. Daemon-emitted kinds
-// extend the set as they land. PR5 adds external_contact.upserted and
-// external_contact.deleted (the iCloud Contacts watcher path).
+// extend the set as they land (currently raw_message.* for Messages
+// staging + external_contact.* for the iCloud Contacts watcher).
 //
 // Symmetric: kinds in this set are REJECTED on the global-API-key
 // path. These kinds have exactly one producer — the Mac daemon — so
@@ -167,19 +166,13 @@ var hostAuthAllowedKinds = map[events.Kind]struct{}{
 	events.KindExternalContactDeleted:  {},
 }
 
-// isHostAuthAllowedKind reports whether the kind is permitted on the
-// host-auth path.
-func isHostAuthAllowedKind(k events.Kind) bool {
-	_, ok := hostAuthAllowedKinds[k]
-	return ok
-}
-
-// isHostOnlyKind reports whether the kind is in the host-auth allowlist
-// (i.e., daemon-emitted only). Used for the symmetric global-key
-// rejection. Same predicate as isHostAuthAllowedKind — kept as a named
-// helper because the call site reads more clearly as
-// "isHostOnlyKind(k)" than "isHostAuthAllowedKind(k)" when the intent
-// is rejection rather than acceptance.
+// isHostOnlyKind reports whether the kind is in the host-auth
+// allowlist (i.e., daemon-emitted only). Used on BOTH sides of the
+// auth dispatch:
+//   - on the host-auth path, kinds NOT in this set are rejected as
+//     "host-auth doesn't accept this kind"
+//   - on the global-API-key path, kinds IN this set are rejected as
+//     "this kind requires host-auth"
 func isHostOnlyKind(k events.Kind) bool {
 	_, ok := hostAuthAllowedKinds[k]
 	return ok
@@ -284,7 +277,7 @@ func (s *IngestService) IngestBatch(
 		//   * Other kinds (Pi internal publishers) are allowed ONLY on
 		//     the global-key path (hostID == nil).
 		if hostID != nil {
-			if !isHostAuthAllowedKind(env.Kind) {
+			if !isHostOnlyKind(env.Kind) {
 				perEventRejections = append(perEventRejections, IngestPerEventRejection{
 					Index:   originalIdx,
 					Code:    ingestRejectUnsupportedHostAuthKind,
@@ -582,7 +575,7 @@ func verifyRawMessageInvariants(env *events.Envelope, authenticatedHostID uuid.U
 //  1. payload decodes cleanly into the per-kind struct.
 //  2. payload.HostID matches the authenticated host (no host
 //     cross-impersonation).
-//  3. env.Source is in the allowed set (PR5: icloud_contacts).
+//  3. env.Source is in allowedExternalContactSources.
 //  4. payload.Source matches env.Source.
 //  5. payload.EntityID is non-empty.
 //  6. env.SourceID format matches the kind's content-hash discriminator
@@ -700,7 +693,8 @@ func commonExternalContactInvariants(
 //     UpdateMatchTx. On re-upsert / revive, the external_contact row's
 //     match state is preserved — identity rows are refreshed via
 //     MatchOrCreateTx but the external_contact UpdateMatchTx call is
-//     intentionally skipped (D-JC4).
+//     intentionally skipped so a user's manually-resolved `imported` or
+//     `ignored` state is not silently flipped on a content edit.
 //
 // Returns nil on success; rejection != nil rolls back the savepoint.
 func (s *IngestService) handleExternalContactUpserted(
@@ -755,7 +749,7 @@ func (s *IngestService) handleExternalContactUpserted(
 	upsertReq := repository.UpsertExternalContactRequest{
 		Source:       env.Source,
 		SourceID:     p.EntityID,
-		AccountID:    nil, // icloud_contacts: NULL account_id (D-JC8)
+		AccountID:    nil, // icloud_contacts has no account_id concept
 		DisplayName:  p.DisplayName,
 		FirstName:    p.FirstName,
 		LastName:     p.LastName,
@@ -795,7 +789,8 @@ func (s *IngestService) handleExternalContactUpserted(
 	// set so external_identity rows get refreshed for every method,
 	// regardless of which one triggered the match. The
 	// external_contact.crm_contact_id / match_status update only fires
-	// on FIRST INSERT (D-JC4) and only on the first successful match.
+	// on FIRST INSERT and only on the first successful match — see the
+	// godoc above for the rationale.
 	//
 	// Defensive: only flip match state when the UPSERT returned a row
 	// that does NOT already carry a crm_contact_id. The combination
@@ -868,8 +863,11 @@ func (s *IngestService) handleExternalContactUpserted(
 // external_contact.deleted envelope inside the per-event savepoint.
 //
 // Behavior:
-//   - Unknown entity → silent no-op (D-JC9). The event-log row from
+//   - Unknown entity → silent no-op. The event-log row from
 //     Bus.PublishTx is preserved for audit; no row materialization.
+//     Rationale: a late-arriving delete after a never-upserted row
+//     (e.g., Pi was wiped, daemon resends a queued delete) must not
+//     stall the daemon's cursor.
 //   - Already-tombstoned → idempotent silent no-op.
 //   - Live row → SoftDeleteTx sets deleted_at. crm_contact_id,
 //     match_status, and duplicate_of_id are preserved.

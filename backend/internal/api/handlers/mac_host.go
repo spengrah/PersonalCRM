@@ -395,12 +395,14 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 	api.SendInternalError(c, "commit cursor failed")
 }
 
-// KnownIDs is a stub for the daemon's per-source tombstone
-// reconciliation surface. Returns an empty list — daemon code is
-// forward-compatible because empty IDs is the expected response on a
-// fresh Pi. The body will be filled in once the daemon's token-
-// expiration recovery flow needs it (PR8+); PR5 leaves the stub
-// intact and ships the separate /known-identifiers endpoint below.
+// KnownIDs is a stub for the per-source tombstone reconciliation
+// surface. Returns an empty list — the wire shape is the daemon-
+// expected one and the empty list is the correct response on a fresh
+// Pi. The stub body is intentional today: the daemon does not exercise
+// this endpoint outside the token-expiration recovery flow, which is
+// not yet wired. The separate /known-identifiers endpoint below is
+// the cross-source canonical phone/email surface used on every
+// heartbeat.
 func (h *MacHostHandler) KnownIDs(c *gin.Context) {
 	source := c.Param("source")
 	if source == "" {

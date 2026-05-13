@@ -72,12 +72,12 @@ func TestIngestService_RejectsLenMismatchOnOriginalIndices(t *testing.T) {
 // match + staging upsert, aggregator enqueue) are covered by the
 // integration tests under backend/tests/api/.
 
-// TestIsHostAuthAllowedKind_Whitelist verifies the allowlist contains
-// exactly the daemon-emitted raw_message.* kinds and rejects all
-// others. Locks the allowlist contract at the unit level.
-func TestIsHostAuthAllowedKind_Whitelist(t *testing.T) {
-	require.True(t, isHostAuthAllowedKind(events.KindRawMessageReceived))
-	require.True(t, isHostAuthAllowedKind(events.KindRawMessageSent))
+// TestIsHostOnlyKind_Whitelist verifies the allowlist contains exactly
+// the daemon-emitted raw_message.* + external_contact.* kinds and
+// rejects all others. Locks the allowlist contract at the unit level.
+func TestIsHostOnlyKind_Whitelist(t *testing.T) {
+	require.True(t, isHostOnlyKind(events.KindRawMessageReceived))
+	require.True(t, isHostOnlyKind(events.KindRawMessageSent))
 	// Sample of kinds that MUST NOT be allowed on host-auth.
 	for _, k := range []events.Kind{
 		events.KindMessageReceived,
@@ -88,7 +88,7 @@ func TestIsHostAuthAllowedKind_Whitelist(t *testing.T) {
 		events.KindContactMethodsAdded,
 		events.KindInteractionRecorded,
 	} {
-		require.False(t, isHostAuthAllowedKind(k), "kind %s must NOT be on host-auth allowlist", k)
+		require.False(t, isHostOnlyKind(k), "kind %s must NOT be on host-auth allowlist", k)
 	}
 }
 
@@ -208,11 +208,11 @@ func mustMarshalRawMsg(p events.RawMessageReceivedPayload) []byte {
 }
 
 // ----------------------------------------------------------------------------
-// external_contact.* unit tests (PR5).
+// external_contact.* unit tests.
 //
-// These tests cover the verifier + allowlist surface. End-to-end
-// savepoint behavior (revive, delete-no-op, identity match) is covered
-// by integration tests under backend/tests/api/.
+// These cover the verifier + allowlist surface. End-to-end savepoint
+// behavior (revive, delete-no-op, identity match) is covered by
+// integration tests under backend/tests/api/.
 // ----------------------------------------------------------------------------
 
 func mustMarshalExtUpsert(p events.ExternalContactUpsertedPayload) []byte {
@@ -265,9 +265,9 @@ func validDeletedEnv(host uuid.UUID, entityID string) *events.Envelope {
 	}
 }
 
-func TestIsHostAuthAllowedKind_IncludesExternalContact(t *testing.T) {
-	require.True(t, isHostAuthAllowedKind(events.KindExternalContactUpserted))
-	require.True(t, isHostAuthAllowedKind(events.KindExternalContactDeleted))
+func TestIsHostOnlyKind_IncludesExternalContact(t *testing.T) {
+	require.True(t, isHostOnlyKind(events.KindExternalContactUpserted))
+	require.True(t, isHostOnlyKind(events.KindExternalContactDeleted))
 }
 
 func TestIsExternalContactKind(t *testing.T) {

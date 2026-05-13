@@ -26,7 +26,7 @@ import (
 )
 
 // ----------------------------------------------------------------------------
-// external_contact.* ingest integration tests (PR5)
+// external_contact.* ingest integration tests
 // ----------------------------------------------------------------------------
 
 // extContactIngestEnv bundles the wired stack for external_contact
@@ -345,8 +345,8 @@ func TestIngestExternalContact_Upserted_ReUpsertPreservesMatchState(t *testing.T
 
 	// Re-upsert with a different email (no longer matching the
 	// original seeded contact). The external_contact row's match state
-	// must be preserved (D-JC4) — crm_contact_id stays pinned to the
-	// seeded contact.
+	// must be preserved — crm_contact_id stays pinned to the seeded
+	// contact even though the new payload's emails don't match it.
 	ev2 := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
 		p.Emails = []events.ExternalContactMethodValue{{Value: "unrelated-edit@example.invalid"}}
 	})

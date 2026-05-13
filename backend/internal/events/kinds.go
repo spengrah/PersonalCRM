@@ -359,7 +359,7 @@ type ExternalContactAddressValue struct {
 type ExternalContactUpsertedPayload struct {
 	Version      int                           `json:"version"`   // start at 1
 	HostID       uuid.UUID                     `json:"host_id"`   // authenticated host
-	Source       string                        `json:"source"`    // "icloud_contacts" in PR5
+	Source       string                        `json:"source"`    // e.g. "icloud_contacts"
 	EntityID     string                        `json:"entity_id"` // CNContact identifier; column source_id
 	DisplayName  *string                       `json:"display_name,omitempty"`
 	FirstName    *string                       `json:"first_name,omitempty"`
@@ -382,7 +382,7 @@ type ExternalContactUpsertedPayload struct {
 type ExternalContactDeletedPayload struct {
 	Version  int       `json:"version"`   // start at 1
 	HostID   uuid.UUID `json:"host_id"`   // authenticated host
-	Source   string    `json:"source"`    // "icloud_contacts" in PR5
+	Source   string    `json:"source"`    // e.g. "icloud_contacts"
 	EntityID string    `json:"entity_id"` // CNContact identifier
 }
 
