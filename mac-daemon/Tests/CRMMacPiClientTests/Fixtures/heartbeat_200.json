@@ -1,0 +1,9 @@
+{
+  "success": true,
+  "data": {
+    "ok": true,
+    "cursor_epoch": 1,
+    "protocol_version": 1,
+    "min_protocol_version": 1
+  }
+}

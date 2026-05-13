@@ -1,0 +1,7 @@
+{
+  "success": false,
+  "error": {
+    "code": "UNKNOWN_HOST",
+    "message": "host not found or revoked"
+  }
+}

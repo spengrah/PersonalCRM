@@ -369,3 +369,10 @@ Personal CRM.app/
 # Git worktrees
 .worktrees/
 .ai/log/.transcript-temp.md
+
+# ===========================================
+# MAC DAEMON (Swift)
+# ===========================================
+mac-daemon/.build/
+mac-daemon/.swiftpm/
+mac-daemon/Sources/**/*.xcuserstate

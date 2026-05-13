@@ -1,0 +1,115 @@
+// RequestBuilder produces URLRequests for the Pi endpoints. The pair
+// request omits auth headers; every other request injects
+// `X-Mac-Host-ID` + `Authorization: Bearer <key>` to satisfy
+// MacHostAuthMiddleware on the Pi side.
+import Foundation
+import CRMMacCore
+
+/// Encapsulates the per-host auth pair. The pair request omits this
+/// entirely; everything else requires it.
+public struct PiAuth: Equatable {
+    public let hostID: UUID
+    public let apiKey: String
+
+    public init(hostID: UUID, apiKey: String) {
+        self.hostID = hostID
+        self.apiKey = apiKey
+    }
+}
+
+/// Pre-formatted pair request body.
+struct PairRequestBody: Encodable {
+    let pairingToken: String
+    let hostname: String
+    let daemonVersion: String
+    let protocolVersion: Int32
+
+    private enum CodingKeys: String, CodingKey {
+        case pairingToken = "pairing_token"
+        case hostname
+        case daemonVersion = "daemon_version"
+        case protocolVersion = "protocol_version"
+    }
+}
+
+enum RequestBuilderError: Error {
+    case malformedURL(String)
+    case encode(String)
+}
+
+struct RequestBuilder {
+    let baseURL: URL
+
+    init(baseURL: URL) {
+        self.baseURL = baseURL
+    }
+
+    func pair(
+        token: String,
+        hostname: String,
+        daemonVersion: String,
+        protocolVersion: Int32
+    ) throws -> URLRequest {
+        let url = try resolve(path: "/api/v1/host")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        let body = PairRequestBody(
+            pairingToken: token,
+            hostname: hostname,
+            daemonVersion: daemonVersion,
+            protocolVersion: protocolVersion)
+        do {
+            req.httpBody = try JSONEncoder().encode(body)
+        } catch {
+            throw RequestBuilderError.encode("encode pair body: \(error)")
+        }
+        return req
+    }
+
+    func heartbeat(auth: PiAuth, body: HeartbeatBody) throws -> URLRequest {
+        let url = try resolve(path: "/api/v1/host/\(auth.hostID.uuidString.lowercased())/heartbeat")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        Self.applyAuth(&req, auth: auth)
+        do {
+            req.httpBody = try JSONEncoder().encode(body)
+        } catch {
+            throw RequestBuilderError.encode("encode heartbeat body: \(error)")
+        }
+        return req
+    }
+
+    func knownIdentifiers(auth: PiAuth) throws -> URLRequest {
+        let url = try resolve(path: "/api/v1/host/\(auth.hostID.uuidString.lowercased())/known-identifiers")
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        Self.applyAuth(&req, auth: auth)
+        return req
+    }
+
+    private func resolve(path: String) throws -> URL {
+        guard var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            throw RequestBuilderError.malformedURL(baseURL.absoluteString)
+        }
+        // Trim any trailing slash on the base path so the join is
+        // deterministic regardless of how the operator supplied the URL.
+        let basePath = comps.path.hasSuffix("/")
+            ? String(comps.path.dropLast())
+            : comps.path
+        comps.path = basePath + path
+        guard let url = comps.url else {
+            throw RequestBuilderError.malformedURL(baseURL.absoluteString)
+        }
+        return url
+    }
+
+    static func applyAuth(_ req: inout URLRequest, auth: PiAuth) {
+        req.setValue(auth.hostID.uuidString.lowercased(), forHTTPHeaderField: "X-Mac-Host-ID")
+        req.setValue("Bearer \(auth.apiKey)", forHTTPHeaderField: "Authorization")
+    }
+}

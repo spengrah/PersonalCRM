@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build crm-admin test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher
+.PHONY: help setup dev build crm-admin mac-daemon test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -38,6 +38,7 @@ help:
 	@echo "  dev-native  - Start dev servers with native PostgreSQL (no Docker)"
 	@echo "  build       - Build both frontend and backend"
 	@echo "  crm-admin   - Build the operator-only admin CLI (backend/crm-admin)"
+	@echo "  mac-daemon  - Build the macOS daemon binary (mac-daemon/.build/release/crm-mac, ad-hoc signed)"
 	@echo "  sqlc        - Regenerate sqlc code from SQL queries"
 	@echo "  lint        - Run all linters (backend + frontend)"
 	@echo "  clean       - Clean build artifacts"
@@ -257,6 +258,17 @@ crm-admin:
 	@cd backend && go build -o crm-admin cmd/crm-admin/main.go
 	@echo "✓ crm-admin built at backend/crm-admin"
 
+# Mac daemon binary. Built locally on a Mac; not wired into `make
+# build` because the Pi-side build pipeline has no Swift toolchain.
+# Produces an ad-hoc-signed release binary at
+# mac-daemon/.build/release/crm-mac. First Gatekeeper launch may
+# require System Settings -> Privacy & Security approval.
+mac-daemon:
+	@echo "Building crm-mac (release)..."
+	@cd mac-daemon && swift build -c release
+	@codesign -s - --force mac-daemon/.build/release/crm-mac
+	@echo "✓ crm-mac built at mac-daemon/.build/release/crm-mac"
+
 # Tests
 test: test-unit test-integration test-frontend
 
@@ -311,6 +323,7 @@ smoke-test:
 ci-build-backend:
 	@echo "Building backend for ARM64..."
 	@cd backend && GOOS=linux GOARCH=arm64 go build -o bin/crm-api cmd/crm-api/main.go
+	@cd backend && GOOS=linux GOARCH=arm64 go build -o bin/crm-admin cmd/crm-admin/main.go
 
 ci-build-frontend:
 	@echo "Building frontend..."

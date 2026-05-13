@@ -1,0 +1,170 @@
+import XCTest
+@testable import CRMMacLifecycle
+
+final class InstallRequestParserTests: XCTestCase {
+    private func input(
+        piURL: String = "https://pi.example.test",
+        pair: String = "tk",
+        hostname: String = "mac-1",
+        upgrade: Bool = false,
+        registerOnly: Bool = false
+    ) -> InstallRequestParserInput {
+        InstallRequestParserInput(
+            piURL: piURL,
+            pair: pair,
+            hostname: hostname,
+            upgrade: upgrade,
+            registerOnly: registerOnly)
+    }
+
+    func testFreshHappyPath() throws {
+        let r = try InstallRequestParser.parse(input())
+        XCTAssertEqual(r.piURL.absoluteString, "https://pi.example.test")
+        XCTAssertEqual(r.pairingToken, "tk")
+        XCTAssertEqual(r.hostname, "mac-1")
+        XCTAssertFalse(r.upgrade)
+    }
+
+    func testFreshRejectsEmptyPiURL() {
+        XCTAssertThrowsError(try InstallRequestParser.parse(input(piURL: ""))) { e in
+            XCTAssertEqual(e as? InstallRequestParseError, .piURLRequired)
+        }
+    }
+
+    func testFreshRejectsEmptyPair() {
+        XCTAssertThrowsError(try InstallRequestParser.parse(input(pair: ""))) { e in
+            XCTAssertEqual(e as? InstallRequestParseError, .pairTokenRequired)
+        }
+    }
+
+    func testFreshRejectsEmptyHostname() {
+        XCTAssertThrowsError(try InstallRequestParser.parse(input(hostname: ""))) { e in
+            XCTAssertEqual(e as? InstallRequestParseError, .hostnameRequired)
+        }
+    }
+
+    func testFreshRejectsFileScheme() {
+        XCTAssertThrowsError(try InstallRequestParser.parse(input(piURL: "file:///tmp"))) { e in
+            guard case InstallRequestParseError.invalidPiURL = e else {
+                XCTFail("expected invalidPiURL, got \(e)")
+                return
+            }
+        }
+    }
+
+    func testFreshRejectsRelativePath() {
+        XCTAssertThrowsError(try InstallRequestParser.parse(input(piURL: "/relative/path"))) { e in
+            guard case InstallRequestParseError.invalidPiURL = e else {
+                XCTFail("expected invalidPiURL, got \(e)")
+                return
+            }
+        }
+    }
+
+    func testFreshAcceptsHTTPSWithPort() throws {
+        _ = try InstallRequestParser.parse(input(piURL: "https://pi.example.test:8443"))
+    }
+
+    func testUpgradeIgnoresEmptyRequiredFields() throws {
+        // --upgrade does not require pair / hostname / pi-url.
+        let r = try InstallRequestParser.parse(input(
+            piURL: "", pair: "", hostname: "", upgrade: true))
+        XCTAssertTrue(r.upgrade)
+        XCTAssertEqual(r.pairingToken, "")
+        XCTAssertEqual(r.hostname, "")
+    }
+
+    func testUpgradeTolerantOfInvalidPiURL() throws {
+        // --upgrade ignores a supplied pi-url; tolerate any value
+        // including file:// schemes.
+        let r = try InstallRequestParser.parse(input(
+            piURL: "file:///tmp", pair: "", hostname: "", upgrade: true))
+        XCTAssertTrue(r.upgrade)
+    }
+
+    func testUpgradeTolerantOfMalformedPiURL() throws {
+        // Even a syntactically-malformed URL string passes — upgrade
+        // doesn't consume it.
+        let r = try InstallRequestParser.parse(input(
+            piURL: " ", pair: "", hostname: "", upgrade: true))
+        XCTAssertTrue(r.upgrade)
+    }
+
+    func testRegisterOnlyTolerantOfInvalidPiURL() throws {
+        let r = try InstallRequestParser.parse(input(
+            piURL: "file:///tmp", pair: "", hostname: "", registerOnly: true))
+        XCTAssertTrue(r.registerOnly)
+    }
+
+    func testRegisterOnlyTolerantOfMalformedPiURL() throws {
+        let r = try InstallRequestParser.parse(input(
+            piURL: " ", pair: "", hostname: "", registerOnly: true))
+        XCTAssertTrue(r.registerOnly)
+    }
+
+    func testMutuallyExclusiveModes() {
+        XCTAssertThrowsError(try InstallRequestParser.parse(input(upgrade: true, registerOnly: true))) { e in
+            XCTAssertEqual(e as? InstallRequestParseError, .mutuallyExclusiveModes)
+        }
+    }
+
+    func testPlaintextHTTPNonLoopbackEmitsWarning() throws {
+        let result = try InstallRequestParser.parseWithWarnings(input(piURL: "http://pi.example.test"))
+        XCTAssertTrue(result.warnings.plaintextHTTPNonLoopback)
+    }
+
+    func testPlaintextHTTPLoopbackDoesNotWarn() throws {
+        let result = try InstallRequestParser.parseWithWarnings(input(piURL: "http://localhost:8080"))
+        XCTAssertFalse(result.warnings.plaintextHTTPNonLoopback)
+    }
+
+    func testPlaintextHTTP127LoopbackDoesNotWarn() throws {
+        let result = try InstallRequestParser.parseWithWarnings(input(piURL: "http://127.0.0.1:8080"))
+        XCTAssertFalse(result.warnings.plaintextHTTPNonLoopback)
+    }
+
+    func testPlaintextHTTPHostnameStartingWith127DotIsNotLoopback() throws {
+        // `127.example.com` is a routable hostname; the 127. prefix
+        // must NOT classify it as loopback.
+        let result = try InstallRequestParser.parseWithWarnings(input(piURL: "http://127.example.com"))
+        XCTAssertTrue(result.warnings.plaintextHTTPNonLoopback)
+    }
+
+    func testHTTPSDoesNotWarn() throws {
+        let result = try InstallRequestParser.parseWithWarnings(input(piURL: "https://pi.example.test"))
+        XCTAssertFalse(result.warnings.plaintextHTTPNonLoopback)
+    }
+
+    func testUpgradeDoesNotWarnEvenIfHTTPSupplied() throws {
+        let result = try InstallRequestParser.parseWithWarnings(input(
+            piURL: "http://pi.example.test", pair: "", hostname: "", upgrade: true))
+        XCTAssertFalse(result.warnings.plaintextHTTPNonLoopback,
+            "upgrade doesn't consume URL, so no warning is appropriate")
+    }
+
+    func testMalformedURL() {
+        // Unclosed IPv6 literal is rejected by URL(string:) across
+        // supported Swift toolchains, surfacing as malformedPiURL.
+        // (A bare space like " " is now tolerated by URL(string:) on
+        // recent Swift and surfaces as invalidPiURL via the validator
+        // instead — see testWhitespaceURLRejected.)
+        XCTAssertThrowsError(try InstallRequestParser.parse(input(piURL: "http://[unterminated"))) { e in
+            guard case InstallRequestParseError.malformedPiURL = e else {
+                XCTFail("expected malformedPiURL, got \(e)")
+                return
+            }
+        }
+    }
+
+    func testWhitespaceURLRejected() {
+        // Bare whitespace parses (URL(string: " ") is non-nil on recent
+        // Swift), but ConfigStore.validatePiURL rejects the empty host
+        // / missing scheme — surfaces as invalidPiURL.
+        XCTAssertThrowsError(try InstallRequestParser.parse(input(piURL: " "))) { e in
+            guard case InstallRequestParseError.invalidPiURL = e else {
+                XCTFail("expected invalidPiURL, got \(e)")
+                return
+            }
+        }
+    }
+}

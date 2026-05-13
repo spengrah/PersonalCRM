@@ -84,9 +84,10 @@ echo "=== Deploying to $PI_HOST ==="
 # rsync flags: -rltz (recursive, links, times, compress) + --no-perms to avoid permission errors
 RSYNC_OPTS="-rltvz --omit-dir-times --no-perms"
 
-# Backend binary
-echo "Deploying backend binary..."
+# Backend binaries
+echo "Deploying backend binaries..."
 rsync $RSYNC_OPTS --progress backend/bin/crm-api "$PI_HOST:$PI_DIR/backend/bin/"
+rsync $RSYNC_OPTS --progress backend/bin/crm-admin "$PI_HOST:$PI_DIR/backend/bin/"
 
 # Migrations
 echo "Deploying migrations..."
@@ -119,24 +120,35 @@ sleep 5
 # Health checks
 BACKEND_OK=false
 FRONTEND_OK=false
+CRM_ADMIN_OK=false
 
 if ssh "$PI_HOST" 'curl -sf http://127.0.0.1:8080/health' > /dev/null 2>&1; then
-    echo "Backend:  OK"
+    echo "Backend:    OK"
     BACKEND_OK=true
 else
-    echo "Backend:  FAILED"
+    echo "Backend:    FAILED"
 fi
 
 if ssh "$PI_HOST" 'curl -sf http://127.0.0.1:3001' > /dev/null 2>&1; then
-    echo "Frontend: OK"
+    echo "Frontend:   OK"
     FRONTEND_OK=true
 else
-    echo "Frontend: FAILED"
+    echo "Frontend:   FAILED"
+fi
+
+# crm-admin is an operator-only CLI, not a service — verify the
+# binary landed and is executable rather than invoking it (which
+# would require sourcing the Pi's .env for DATABASE_URL).
+if ssh "$PI_HOST" "test -x $PI_DIR/backend/bin/crm-admin"; then
+    echo "crm-admin:  OK"
+    CRM_ADMIN_OK=true
+else
+    echo "crm-admin:  FAILED"
 fi
 
 echo ""
 
-if [ "$BACKEND_OK" = true ] && [ "$FRONTEND_OK" = true ]; then
+if [ "$BACKEND_OK" = true ] && [ "$FRONTEND_OK" = true ] && [ "$CRM_ADMIN_OK" = true ]; then
     echo "=== Deploy complete ==="
     echo ""
     echo "Access your CRM at: http://$PI_HOST:3001"
