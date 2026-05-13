@@ -73,7 +73,7 @@ func buildMessageEnvelope(t *testing.T, kind events.Kind, peerRef string) *event
 }
 
 // TestReenqueuer_EnqueuesFreshJobAndCallsEngine asserts the happy path:
-// both R10B (fresh River job) and the chat-aware sync pass fire on
+// both the fresh-River-job enqueue and the chat-aware sync pass fire on
 // a successful Reenqueue call.
 func TestReenqueuer_EnqueuesFreshJobAndCallsEngine(t *testing.T) {
 	eng := &stubMessagesEngine{}
@@ -132,7 +132,7 @@ func TestReenqueuer_EmptyChatID_LogsAndReturnsNil(t *testing.T) {
 }
 
 // TestReenqueuer_NilEngine_NoOpsButStillEnqueues confirms that a nil
-// engine (test mode) doesn't crash the reenqueuer; the R10B fresh-
+// engine (test mode) doesn't crash the reenqueuer; the fresh-
 // enqueue path still fires.
 func TestReenqueuer_NilEngine_NoOpsButStillEnqueues(t *testing.T) {
 	ins := &stubMsgInserter{}

@@ -80,6 +80,11 @@ type Querier interface {
 	// JSONB paths match the struct tags on scheduler.SyncProviderAccountArgs;
 	// TestSyncProviderAccountArgs_JSONContract guards the key names.
 	CountInFlightSyncJobs(ctx context.Context, arg CountInFlightSyncJobsParams) (int64, error)
+	// Test assertion — confirms exactly the expected interaction row exists
+	// for the (id, contact_id, source) tuple. Used by the raw_message
+	// end-to-end test to verify Stage 3 created the row the staging
+	// table's interaction_id points to.
+	CountInteractionsByIDContactAndSource(ctx context.Context, arg CountInteractionsByIDContactAndSourceParams) (int64, error)
 	// Count calendar events involving a contact (for merge preview)
 	CountMergeCalendarEvents(ctx context.Context, dollar_1 pgtype.UUID) (int64, error)
 	// Count contact methods for a contact (for merge preview)
@@ -104,6 +109,12 @@ type Querier interface {
 	// tests to assert a create/close/refresh job was enqueued without
 	// inlining raw SQL into Go test code (core.md rule 2).
 	CountRiverJobsByContactTask(ctx context.Context, arg CountRiverJobsByContactTaskParams) (int64, error)
+	// Test assertion — count ALL River jobs of the given kind (including
+	// finalized). When the test runs against a River client with active
+	// workers, jobs can be picked up and finalized between insert and
+	// assertion; counting by kind alone is timing-resilient. Cross-test
+	// pollution is bounded by DeleteRiverJobsByKindAny in test cleanup.
+	CountRiverJobsByKind(ctx context.Context, kind string) (int64, error)
 	// Test assertion — count unfinalized River jobs of the given kind.
 	// Used to verify ingest enqueues the expected number of aggregator
 	// jobs. River's own admin SQL is OK to query at the test boundary;
@@ -196,6 +207,10 @@ type Querier interface {
 	DeleteExternalIdentitiesBySourceID(ctx context.Context, sourceID pgtype.Text) (int64, error)
 	DeleteIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) error
 	DeleteIdentity(ctx context.Context, id pgtype.UUID) error
+	// Test teardown — drops interactions seeded by a test under the given
+	// (contact_id, source) pair. Scoped to the seeded contact so production
+	// data is never wiped.
+	DeleteInteractionsByContactAndSource(ctx context.Context, arg DeleteInteractionsByContactAndSourceParams) (int64, error)
 	// Cascade-on-revoke: when a host is uninstalled, drop its push-cursor
 	// rows. Filters by strategy='push' so OAuth-driven rows that happen to
 	// share an account_id string can never be deleted by this path (defence

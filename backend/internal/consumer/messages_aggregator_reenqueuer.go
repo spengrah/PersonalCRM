@@ -68,7 +68,7 @@ func NewMessagesAggregatorReenqueuer(
 
 // Reenqueue implements AggregatorReenqueuer.
 func (r *MessagesAggregatorReenqueuer) Reenqueue(ctx context.Context, env *events.Envelope, contactID uuid.UUID) error {
-	// (R10B) Fire a fresh aggregator job up-front. UniqueOpts dedups
+	// Fire a fresh aggregator job up-front. UniqueOpts dedups
 	// in-flight; completed jobs do NOT block re-enqueue so this
 	// always either coalesces or runs.
 	if r.riverClient != nil {

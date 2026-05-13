@@ -74,7 +74,7 @@ func TestIngestService_RejectsLenMismatchOnOriginalIndices(t *testing.T) {
 
 // TestIsHostAuthAllowedKind_Whitelist verifies the allowlist contains
 // exactly the daemon-emitted raw_message.* kinds and rejects all
-// others. Locks the D8 contract at the unit level.
+// others. Locks the allowlist contract at the unit level.
 func TestIsHostAuthAllowedKind_Whitelist(t *testing.T) {
 	require.True(t, isHostAuthAllowedKind(events.KindRawMessageReceived))
 	require.True(t, isHostAuthAllowedKind(events.KindRawMessageSent))
@@ -139,7 +139,7 @@ func TestVerifyRawMessageInvariants_HostMismatch(t *testing.T) {
 }
 
 // TestVerifyRawMessageInvariants_SourceMismatch rejects an envelope
-// whose source is not "messages" (PR4-locked).
+// whose source is not "messages" (currently the only supported one).
 func TestVerifyRawMessageInvariants_SourceMismatch(t *testing.T) {
 	host := uuid.New()
 	pBytes := mustMarshalRawMsg(events.RawMessageReceivedPayload{

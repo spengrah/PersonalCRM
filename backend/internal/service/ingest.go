@@ -339,7 +339,8 @@ func (s *IngestService) IngestBatch(
 //
 //  1. Decode the payload (already structurally validated by handler).
 //  2. Detect identifier type (phone vs email) and call IdentityService.
-//     MatchOrCreateTx — propagates repo errors per R2.
+//     MatchOrCreateTx — propagates repo errors so the daemon does not
+//     advance its cursor on a transient identity-match failure.
 //  3. Upsert messages_message staging via the tx-bound repository.
 //  4. Return the matched contactID (nil when unmatched — caller skips
 //     aggregator enqueue) and nil rejection on success.

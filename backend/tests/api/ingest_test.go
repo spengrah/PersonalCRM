@@ -117,11 +117,11 @@ func setupIngestTestRouter(t *testing.T, enableIngest bool) *ingestTestSetup {
 		return events.NewBus(database.Pool, client, repo)
 	}
 	eventBus := busFactory(eventRepo)
-	// PR4: ingest service has identity/messages/river deps for raw_message.*
-	// envelopes. The existing batch-publish tests don't exercise raw_message
-	// kinds, so passing nil for those deps is safe — raw_message envelopes
-	// are rejected at the handler with PAYLOAD_INVALID before reaching the
-	// inline handler.
+	// The ingest service has identity/messages/river deps for
+	// raw_message.* envelopes. The batch-publish tests in this file
+	// don't exercise raw_message kinds; passing nil for those deps is
+	// safe — raw_message envelopes are rejected at the handler with
+	// PAYLOAD_INVALID before reaching the inline handler.
 	ingestService := service.NewIngestService(database, eventBus, nil, nil, nil)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 

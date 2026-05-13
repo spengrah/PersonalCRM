@@ -264,60 +264,16 @@ func parseIngestResp(t *testing.T, w *httptest.ResponseRecorder) handlers.Ingest
 	return resp
 }
 
-// countRiverJobs returns the number of unfinalized River jobs of the
-// given kind. The test cleanup tears these down between runs so the
-// count is scoped to the current test's enqueues.
+// countRiverJobs returns the total number of River jobs of the given
+// kind (including finalized rows). Timing-resilient: River workers may
+// pick up jobs between insert and assertion under TestOnly mode, so
+// counting only `finalized_at IS NULL` is racy. Cross-test pollution
+// is bounded by DeleteRiverJobsByKindAny in t.Cleanup.
 func countRiverJobs(t *testing.T, env *ingestRawTestEnv, kind string) int {
 	t.Helper()
-	count, err := env.database.Queries.CountRiverJobsByKindUnfinalized(context.Background(), kind)
+	count, err := env.database.Queries.CountRiverJobsByKind(context.Background(), kind)
 	require.NoError(t, err)
 	return int(count)
-}
-
-// messagesEngineForTest builds a live messages aggregation engine
-// wired against the test env's repositories. The engine is used by
-// the e2e test in ingest_raw_message_e2e_test.go to drive a real
-// chat-aware aggregator pass from a unit-test boundary.
-//
-// A live events.Bus is required because the engine's cutover-wiring
-// invariant refuses to drop interactions when no publisher is wired.
-// The bus is constructed against the same River client so the engine's
-// claim/publish runs inside its own tx, mirroring production. We
-// register a noop interaction_recorder worker so the bus's
-// post-publish job enqueue accepts the kind.
-func messagesEngineForTest(t *testing.T, env *ingestRawTestEnv) *aggregationEngine {
-	t.Helper()
-	const burstWindowHours = 4
-	const replyBridgeHours = 48
-
-	contactSvc := service.NewContactService(
-		env.database,
-		env.contactRepo,
-		env.cmRepo,
-		repository.NewInteractionRepository(env.database.Queries),
-		repository.NewContactTaskRepository(env.database.Queries),
-		nil, // bus injected below when needed; engine doesn't read this.
-		service.NewRematchService(),
-	)
-
-	// Build a dedicated bus + River client per call so the
-	// interaction_recorder worker registration doesn't collide with
-	// the env's noop aggregate worker registration.
-	eventRepo := repository.NewEventRepository(env.database.Queries)
-	bus := events.NewBus(env.database.Pool, env.riverClient, eventRepo)
-
-	eng := messages.NewAggregationEngine(
-		burstWindowHours,
-		replyBridgeHours,
-		env.messagesRepo,
-		repository.NewInteractionRepository(env.database.Queries),
-		contactSvc,
-		contactSvc,
-		bus,
-		env.database.Pool,
-		nil, // no recovery enqueuer — test does not exercise that
-	)
-	return eng
 }
 
 // aggregationEngine is the type alias the e2e test uses to keep the
@@ -582,8 +538,9 @@ func TestIngestRawMessage_BatchDedupesAggregatorJobs(t *testing.T) {
 }
 
 // TestIngestRawMessage_AdminRematch_MatchesAfterContactAdded covers
-// R7-D: a previously-stranded row gets matched + enqueued by the admin
-// handler after a contact_method is added that matches it.
+// the operator remediation path: a previously-stranded row gets
+// matched + enqueued by the admin handler after a contact_method is
+// added that matches it.
 func TestIngestRawMessage_AdminRematch_MatchesAfterContactAdded(t *testing.T) {
 	env := setupRawIngestEnv(t)
 	guid := "test-guid-" + uuid.NewString()

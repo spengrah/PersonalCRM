@@ -97,3 +97,25 @@ SELECT COUNT(*) FROM messages_message WHERE guid = @guid;
 -- jobs. River's own admin SQL is OK to query at the test boundary;
 -- production code never reads river_job directly.
 SELECT COUNT(*) FROM river_job WHERE kind = @kind AND finalized_at IS NULL;
+
+-- name: CountRiverJobsByKind :one
+-- Test assertion — count ALL River jobs of the given kind (including
+-- finalized). When the test runs against a River client with active
+-- workers, jobs can be picked up and finalized between insert and
+-- assertion; counting by kind alone is timing-resilient. Cross-test
+-- pollution is bounded by DeleteRiverJobsByKindAny in test cleanup.
+SELECT COUNT(*) FROM river_job WHERE kind = @kind;
+
+-- name: DeleteInteractionsByContactAndSource :execrows
+-- Test teardown — drops interactions seeded by a test under the given
+-- (contact_id, source) pair. Scoped to the seeded contact so production
+-- data is never wiped.
+DELETE FROM interaction WHERE contact_id = @contact_id AND source = @source;
+
+-- name: CountInteractionsByIDContactAndSource :one
+-- Test assertion — confirms exactly the expected interaction row exists
+-- for the (id, contact_id, source) tuple. Used by the raw_message
+-- end-to-end test to verify Stage 3 created the row the staging
+-- table's interaction_id points to.
+SELECT COUNT(*) FROM interaction
+WHERE id = @id AND contact_id = @contact_id AND source = @source;

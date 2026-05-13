@@ -90,8 +90,7 @@ func TestMessagingAggregateWorker_HappyPath_DrainsAndCallsPerChat(t *testing.T) 
 
 // TestMessagingAggregateWorker_RelistLoopDrainsLandedRows asserts the
 // worker re-lists after every iteration: chats that land during an
-// engine call are picked up before the worker returns. This is R10A
-// from the plan.
+// engine call are picked up before the worker returns.
 func TestMessagingAggregateWorker_RelistLoopDrainsLandedRows(t *testing.T) {
 	agg := &stubAggregator{}
 	lister := &stubChatLister{
