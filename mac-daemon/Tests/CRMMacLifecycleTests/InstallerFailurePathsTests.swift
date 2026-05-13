@@ -76,8 +76,10 @@ final class InstallerFailurePathsTests: XCTestCase {
         XCTAssertFalse(fs.allPaths.contains(where: { $0.contains(".tmp.") }))
     }
 
-    func test5xxCleansTempBinaryNoRetry() async {
-        // 6 entries — Pair is no-retry so we expect only 1 attempt.
+    func test5xxCleansTempBinaryAndSurfacesAmbiguous() async {
+        // Pair is no-retry so we expect only 1 attempt; 5xx now
+        // surfaces as ambiguousPair so the operator gets the
+        // list-hosts recovery guidance.
         let transport = LifecycleMockTransport([
             .respond(status: 502, data: Data("{}".utf8)),
         ])
@@ -88,13 +90,32 @@ final class InstallerFailurePathsTests: XCTestCase {
                 pairingToken: "tk",
                 hostname: "mac-1"))
             XCTFail("expected throw")
-        } catch InstallError.pairFailed {
+        } catch InstallError.ambiguousPair {
             // ok
         } catch {
             XCTFail("got \(error)")
         }
         XCTAssertFalse(fs.fileExists(at: paths.binaryPath))
         XCTAssertEqual(transport.invocations.count, 1, "pair must not retry on 5xx")
+    }
+
+    func testNetworkErrorSurfacesAmbiguous() async {
+        let transport = LifecycleMockTransport([
+            .fail(URLError(.timedOut)),
+        ])
+        let (installer, fs, _, _, paths) = makeInstaller(transport: transport)
+        do {
+            _ = try await installer.run(InstallRequest(
+                piURL: URL(string: "https://pi.example.test")!,
+                pairingToken: "tk",
+                hostname: "mac-1"))
+            XCTFail("expected throw")
+        } catch InstallError.ambiguousPair {
+            // ok
+        } catch {
+            XCTFail("got \(error)")
+        }
+        XCTAssertFalse(fs.fileExists(at: paths.binaryPath))
     }
 
     func testLaunchctlBootstrapFailureLeavesBinaryInPlace() async throws {

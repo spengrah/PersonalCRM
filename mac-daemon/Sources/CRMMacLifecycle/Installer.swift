@@ -176,7 +176,7 @@ public struct Installer {
             throw InstallError.alreadyInstalled
         }
 
-        // Step 3: create supporting directories.
+        // Create supporting directories.
         for dir in [deps.paths.configDirPath, deps.paths.binDirPath, deps.paths.logsDirPath, deps.paths.launchAgentsDirPath] {
             do {
                 try deps.filesystem.createDirectory(at: dir)
@@ -185,7 +185,7 @@ public struct Installer {
             }
         }
 
-        // Step 4: stage the running executable to a temp path.
+        // Stage the running executable to a temp path.
         let sourcePath: String
         do {
             sourcePath = try deps.executable.currentExecutablePath()
@@ -207,7 +207,7 @@ public struct Installer {
             throw InstallError.codesignFailed("\(error)")
         }
 
-        // Step 5: pair with the Pi.
+        // Pair with the Pi.
         let client = deps.piClientFactory(request.piURL)
         let pairResult: PairData
         do {
@@ -234,9 +234,9 @@ public struct Installer {
             throw InstallError.ambiguousPair(underlying: String(describing: error))
         }
 
-        // Step 6: persist config + Keychain + state. On ANY failure
-        // unlink the temp binary and surface persistFailed (with the
-        // paired host ID) so the operator's recovery path is clear.
+        // Persist config + Keychain + state. On ANY failure unlink the
+        // temp binary and surface persistFailed (with the paired host
+        // ID) so the operator's recovery path is clear.
         do {
             let cfg = DaemonConfig(
                 piURL: request.piURL,
@@ -264,7 +264,10 @@ public struct Installer {
                 underlying: String(describing: error))
         }
 
-        // Step 7: atomic-rename the temp binary into place.
+        // Atomic-rename the temp binary into place. Final step
+        // before launchd registration; any failure beyond this point
+        // leaves the binary installed and recovery is
+        // `crm-mac install --register-only`.
         do {
             try deps.filesystem.rename(from: tempPath, to: deps.paths.binaryPath)
         } catch {
@@ -275,13 +278,13 @@ public struct Installer {
                 underlying: String(describing: error))
         }
 
-        // Step 8: write plist + launchctl bootstrap.
+        // Write plist + launchctl bootstrap.
         try writePlist()
         try bootstrapAgent()
 
         deps.logger.info("install: complete", metadata: [
             "host_id": .private(pairResult.hostID.uuidString),
-            "binary": .public(deps.paths.binaryPath),
+            "binary": .private(deps.paths.binaryPath),
         ])
         return InstallSummary(
             hostID: pairResult.hostID,

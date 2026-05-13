@@ -1,7 +1,7 @@
 // RequestBuilder produces URLRequests for the Pi endpoints. The pair
 // request omits auth headers; every other request injects
 // `X-Mac-Host-ID` + `Authorization: Bearer <key>` to satisfy
-// MacHostAuthMiddleware (PR1).
+// MacHostAuthMiddleware on the Pi side.
 import Foundation
 import CRMMacCore
 
