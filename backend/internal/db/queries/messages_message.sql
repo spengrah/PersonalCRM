@@ -132,6 +132,45 @@ UPDATE messages_message
 SET claimed_at = NOW() - INTERVAL '10 minutes'
 WHERE id = ANY(@message_ids::uuid[]);
 
+-- name: ListUnprocessedMessagesChatsByContact :many
+-- Distinct chat_guid values for a contact with at least one eligible
+-- (unprocessed AND unclaimed-or-stale) staging row. Used by the
+-- messaging aggregator worker to drive per-chat AggregateForContact
+-- invocations — the chat-aware path is what preserves the engine's
+-- extend/bridge/coalesce contract (see spec §3 "Stage 2 — Aggregator").
+SELECT DISTINCT chat_guid
+FROM messages_message
+WHERE matched_contact_id = @matched_contact_id
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+ORDER BY chat_guid ASC;
+
+-- name: ListStrandedMessagesMessages :many
+-- Lists rows with matched_contact_id IS NULL — i.e., rows that the
+-- ingest service accepted into staging but couldn't match to a contact
+-- at the time. The crm-admin --messages-rematch-stranded command
+-- iterates this list to retroactively match rows after a contact_method
+-- is added.
+SELECT * FROM messages_message
+WHERE matched_contact_id IS NULL
+  AND processed_at IS NULL
+  AND deleted_at IS NULL
+ORDER BY sent_at;
+
+-- name: UpdateMatchedContactForStrandedMessage :exec
+-- Sets matched_contact_id + peer_normalized on a single stranded row.
+-- Scoped to rows that are still unmatched + unprocessed so a
+-- concurrent ingest path (a never-stranding daemon push for a peer
+-- that just got matched) cannot be overwritten by this admin path.
+UPDATE messages_message
+SET matched_contact_id = @matched_contact_id,
+    peer_normalized    = @peer_normalized
+WHERE id = @id
+  AND matched_contact_id IS NULL
+  AND processed_at IS NULL
+  AND deleted_at IS NULL;
+
 -- name: HardDeleteMessagesMessagesByMacHost :exec
 -- Test-only helper (mirrors HardDeleteTelegramMessagesByChatIDRange).
 -- Cleanup needs hard-delete because the upsert does not clear deleted_at

@@ -10,6 +10,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // MatchRequest represents a request to match an external identifier
@@ -162,6 +163,120 @@ func (s *IdentityService) recordKnownMatch(ctx context.Context, normalized strin
 		MatchType: repository.MatchTypeExact,
 		Cached:    false,
 	}, nil
+}
+
+// MatchOrCreateTx is the tx-bound variant of MatchOrCreate. The
+// identity-row upsert and contact-method search both run inside the
+// caller's transaction, so a downstream failure in the same tx rolls
+// back the identity write atomically with whatever else the caller
+// is doing (e.g., the ingest service's staging-row insert).
+//
+// Error-handling divergence vs the non-tx MatchOrCreate: the
+// underlying findContactByMethodTx propagates repository errors
+// rather than swallowing them and degrading to MatchTypeUnmatched.
+// In the ingest hot path a silent degrade would strand the row AND
+// let the daemon advance its cursor — the caller wants to surface a
+// per-event rejection instead. The non-tx MatchOrCreate keeps its
+// existing forgiving behavior for the sync providers that already
+// depend on it.
+func (s *IdentityService) MatchOrCreateTx(ctx context.Context, tx pgx.Tx, req MatchRequest) (*MatchResult, error) {
+	normalized := identity.Normalize(req.RawIdentifier, req.Type)
+	if normalized == "" {
+		return nil, fmt.Errorf("empty identifier after normalization")
+	}
+
+	// Contact-driven mode is intentionally NOT supported on the tx
+	// path today — the ingest hot path is always discovery-mode
+	// (the daemon does not know which contact the peer belongs to).
+	// Future callers can extend; reject for now to keep the surface
+	// minimal.
+	if req.KnownContactID != nil {
+		return nil, fmt.Errorf("MatchOrCreateTx: KnownContactID is not supported")
+	}
+
+	// Cache check (matches MatchOrCreate's step 3): if we already
+	// know this identifier for this source AND a contact, return the
+	// cached match.
+	existing, err := s.identityRepo.GetByIdentifierTx(ctx, tx, req.Type, normalized, req.Source)
+	if err == nil && existing.ContactID != nil {
+		return &MatchResult{
+			Identity:  existing,
+			ContactID: existing.ContactID,
+			MatchType: existing.MatchType,
+			Cached:    true,
+		}, nil
+	}
+
+	// Discovery path: search contact_method for a match. Error
+	// propagation (vs. swallow + unmatched) is the deliberate
+	// divergence from the non-tx path — see method doc.
+	contactID, matchType, err := s.findContactByMethodTx(ctx, tx, normalized, req.Type)
+	if err != nil {
+		return nil, fmt.Errorf("find contact methods: %w", err)
+	}
+
+	now := accelerated.GetCurrentTime()
+	upsertReq := repository.UpsertIdentityRequest{
+		Identifier:     normalized,
+		IdentifierType: req.Type,
+		RawIdentifier:  &req.RawIdentifier,
+		Source:         req.Source,
+		SourceID:       req.SourceID,
+		ContactID:      contactID,
+		MatchType:      matchType,
+		DisplayName:    req.DisplayName,
+		LastSeenAt:     &now,
+		MessageCount:   1,
+	}
+	if matchType == repository.MatchTypeExact {
+		confidence := 1.0
+		upsertReq.MatchConfidence = &confidence
+	}
+
+	ident, err := s.identityRepo.UpsertTx(ctx, tx, upsertReq)
+	if err != nil {
+		return nil, fmt.Errorf("upsert identity: %w", err)
+	}
+
+	return &MatchResult{
+		Identity:  ident,
+		ContactID: contactID,
+		MatchType: matchType,
+		Cached:    false,
+	}, nil
+}
+
+// findContactByMethodTx is the tx-bound variant of findContactByMethod.
+// CRITICALLY, it propagates errors rather than swallowing them — see
+// MatchOrCreateTx for why this divergence matters in the ingest hot
+// path.
+func (s *IdentityService) findContactByMethodTx(ctx context.Context, tx pgx.Tx, identifier string, idType identity.IdentifierType) (*uuid.UUID, repository.MatchType, error) {
+	methodTypes := identity.MapIdentifierTypeToContactMethodTypes(idType)
+	if len(methodTypes) == 0 {
+		return nil, repository.MatchTypeUnmatched, nil
+	}
+	typeStrings := make([]string, len(methodTypes))
+	for i, mt := range methodTypes {
+		typeStrings[i] = string(mt)
+	}
+
+	matches, err := s.identityRepo.FindContactMethodsByValueTx(ctx, tx, typeStrings, identifier)
+	if err != nil {
+		return nil, repository.MatchTypeUnmatched, err
+	}
+
+	if len(matches) == 0 {
+		return nil, repository.MatchTypeUnmatched, nil
+	}
+	if len(matches) == 1 {
+		return &matches[0].ContactID, repository.MatchTypeExact, nil
+	}
+	// Multiple matches — ambiguous, leave for user to resolve.
+	logger.Warn().
+		Str("identifier", identifier).
+		Int("match_count", len(matches)).
+		Msg("ambiguous identity match - multiple contacts found")
+	return nil, repository.MatchTypeUnmatched, nil
 }
 
 // findContactByMethod searches contact_method table for a match

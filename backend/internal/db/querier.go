@@ -80,6 +80,11 @@ type Querier interface {
 	// JSONB paths match the struct tags on scheduler.SyncProviderAccountArgs;
 	// TestSyncProviderAccountArgs_JSONContract guards the key names.
 	CountInFlightSyncJobs(ctx context.Context, arg CountInFlightSyncJobsParams) (int64, error)
+	// Test assertion — confirms exactly the expected interaction row exists
+	// for the (id, contact_id, source) tuple. Used by the raw_message
+	// end-to-end test to verify Stage 3 created the row the staging
+	// table's interaction_id points to.
+	CountInteractionsByIDContactAndSource(ctx context.Context, arg CountInteractionsByIDContactAndSourceParams) (int64, error)
 	// Count calendar events involving a contact (for merge preview)
 	CountMergeCalendarEvents(ctx context.Context, dollar_1 pgtype.UUID) (int64, error)
 	// Count contact methods for a contact (for merge preview)
@@ -88,6 +93,9 @@ type Querier interface {
 	CountMergeInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	// Count notes for a contact (for merge preview)
 	CountMergeNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	// Test assertion — count rows with the given guid (typically 0 or 1
+	// under the partial unique index). Used by duplicate-detection tests.
+	CountMessagesMessageByGuid(ctx context.Context, guid string) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	// Test-only count of river_job rows for the rematch_dispatcher kind
@@ -101,6 +109,17 @@ type Querier interface {
 	// tests to assert a create/close/refresh job was enqueued without
 	// inlining raw SQL into Go test code (core.md rule 2).
 	CountRiverJobsByContactTask(ctx context.Context, arg CountRiverJobsByContactTaskParams) (int64, error)
+	// Test assertion — count ALL River jobs of the given kind (including
+	// finalized). When the test runs against a River client with active
+	// workers, jobs can be picked up and finalized between insert and
+	// assertion; counting by kind alone is timing-resilient. Cross-test
+	// pollution is bounded by DeleteRiverJobsByKindAny in test cleanup.
+	CountRiverJobsByKind(ctx context.Context, kind string) (int64, error)
+	// Test assertion — count unfinalized River jobs of the given kind.
+	// Used to verify ingest enqueues the expected number of aggregator
+	// jobs. River's own admin SQL is OK to query at the test boundary;
+	// production code never reads river_job directly.
+	CountRiverJobsByKindUnfinalized(ctx context.Context, kind string) (int64, error)
 	CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountTelegramMessagesByChat(ctx context.Context) ([]*CountTelegramMessagesByChatRow, error)
@@ -172,14 +191,26 @@ type Querier interface {
 	DeleteEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) error
 	// Delete all events for a Google account (used when revoking access)
 	DeleteEventsByAccount(ctx context.Context, googleAccountID string) error
+	// Test teardown — drop event rows by source. Mirrors
+	// DeleteExternalIdentitiesBySource for the event log.
+	DeleteEventsBySource(ctx context.Context, source string) (int64, error)
 	DeleteExpiredPairingTokens(ctx context.Context) (int64, error)
 	DeleteExternalContact(ctx context.Context, id pgtype.UUID) error
 	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error
 	DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	// Test teardown — drop external_identity rows seeded by a test under
+	// a known source string (e.g., 'messages'). Used in raw_message ingest
+	// integration tests to ensure shared-DB cleanup is complete between
+	// runs.
+	DeleteExternalIdentitiesBySource(ctx context.Context, source string) (int64, error)
 	DeleteExternalIdentitiesBySourceID(ctx context.Context, sourceID pgtype.Text) (int64, error)
 	DeleteIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) error
 	DeleteIdentity(ctx context.Context, id pgtype.UUID) error
+	// Test teardown — drops interactions seeded by a test under the given
+	// (contact_id, source) pair. Scoped to the seeded contact so production
+	// data is never wiped.
+	DeleteInteractionsByContactAndSource(ctx context.Context, arg DeleteInteractionsByContactAndSourceParams) (int64, error)
 	// Cascade-on-revoke: when a host is uninstalled, drop its push-cursor
 	// rows. Filters by strategy='push' so OAuth-driven rows that happen to
 	// share an account_id string can never be deleted by this path (defence
@@ -193,6 +224,11 @@ type Querier interface {
 	// Delete all OAuth credentials for a provider
 	DeleteOAuthCredentialByProvider(ctx context.Context, provider string) error
 	DeleteOldSyncLogs(ctx context.Context, createdAt pgtype.Timestamptz) error
+	// Test teardown — drop river_job rows whose kind is in the given
+	// array. Scoped to test-emitted kinds so we don't wipe production-
+	// shape rows on a shared DB. River doesn't expose a sqlc layer; this
+	// is the operator-test seam.
+	DeleteRiverJobsByKindAny(ctx context.Context, kinds []string) (int64, error)
 	DeleteSyncState(ctx context.Context, id pgtype.UUID) error
 	DeleteSyncStatesByAccountID(ctx context.Context, accountID pgtype.Text) error
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
@@ -273,10 +309,26 @@ type Querier interface {
 	// Used by the shared aggregator (backend/internal/messaging/aggregation)
 	// for same-direction coalescing. source_ref_prefix should include
 	// trailing % for LIKE match.
+	//
+	// The ESCAPE clause lets adapters whose source-ref segments may
+	// contain `_` or `%` (e.g., Apple Messages chat.guid values like
+	// "iMessage;-;_chat-uuid_") supply their own escape character `\`
+	// without false-matching unrelated rows. Numeric-only chat IDs
+	// (Telegram) pass through unchanged since they never contain LIKE
+	// wildcards.
+	//
+	// The explicit ::text cast on the bind variable keeps sqlc inferring
+	// pgtype.Text for the parameter; without it the ESCAPE clause causes
+	// sqlc to fall back to []byte (Postgres treats the LIKE pattern as
+	// bytea-compatible in that form). Plain LIKE-on-text behavior is what
+	// the existing callers expect.
 	FindRecentInteractionBySourceAndDirection(ctx context.Context, arg FindRecentInteractionBySourceAndDirectionParams) (*Interaction, error)
 	// Source-neutral generalization of FindRecentOutboundTelegramInteraction.
 	// Used by the shared aggregator for time-based reply bridging on inbound
 	// sessions.
+	//
+	// ESCAPE clause: same rationale as FindRecentInteractionBySourceAndDirection.
+	// See that query for the ::text cast rationale.
 	FindRecentOutboundInteractionBySource(ctx context.Context, arg FindRecentOutboundInteractionBySourceParams) (*Interaction, error)
 	// Find the most recent outbound telegram interaction for a contact in a specific chat
 	// within a time window. source_ref_prefix should include trailing % for LIKE match.
@@ -515,6 +567,12 @@ type Querier interface {
 	// List past events that haven't updated last_contacted yet
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
+	// Lists rows with matched_contact_id IS NULL — i.e., rows that the
+	// ingest service accepted into staging but couldn't match to a contact
+	// at the time. The crm-admin --messages-rematch-stranded command
+	// iterates this list to retroactively match rows after a contact_method
+	// is added.
+	ListStrandedMessagesMessages(ctx context.Context) ([]*MessagesMessage, error)
 	ListSyncLogsByState(ctx context.Context, arg ListSyncLogsByStateParams) ([]*ExternalSyncLog, error)
 	ListSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListTags(ctx context.Context) ([]*Tag, error)
@@ -530,6 +588,12 @@ type Querier interface {
 	ListUnprocessedContactIDs(ctx context.Context) ([]pgtype.UUID, error)
 	ListUnprocessedMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*MessagesMessage, error)
 	ListUnprocessedMessagesByContactAndChat(ctx context.Context, arg ListUnprocessedMessagesByContactAndChatParams) ([]*MessagesMessage, error)
+	// Distinct chat_guid values for a contact with at least one eligible
+	// (unprocessed AND unclaimed-or-stale) staging row. Used by the
+	// messaging aggregator worker to drive per-chat AggregateForContact
+	// invocations — the chat-aware path is what preserves the engine's
+	// extend/bridge/coalesce contract (see spec §3 "Stage 2 — Aggregator").
+	ListUnprocessedMessagesChatsByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]string, error)
 	// Claim-aware filter — same predicate shape as telegram_message.
 	ListUnprocessedMessagesContactIDs(ctx context.Context) ([]pgtype.UUID, error)
 	ListUnprocessedTelegramMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*TelegramMessage, error)
@@ -764,6 +828,11 @@ type Querier interface {
 	// planning read and this update; the caller re-reads and surfaces 409.
 	// metadata.backfill_complete is rewritten on every successful commit.
 	UpdateMacHostSyncCursor(ctx context.Context, arg UpdateMacHostSyncCursorParams) (*UpdateMacHostSyncCursorRow, error)
+	// Sets matched_contact_id + peer_normalized on a single stranded row.
+	// Scoped to rows that are still unmatched + unprocessed so a
+	// concurrent ingest path (a never-stranding daemon push for a peer
+	// that just got matched) cannot be overwritten by this admin path.
+	UpdateMatchedContactForStrandedMessage(ctx context.Context, arg UpdateMatchedContactForStrandedMessageParams) error
 	// Update the matched contact IDs for an event
 	UpdateMatchedContacts(ctx context.Context, arg UpdateMatchedContactsParams) (*CalendarEvent, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)

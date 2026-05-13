@@ -143,7 +143,7 @@ SELECT id, contact_id, source, source_ref, occurred_at, description, created_at,
 WHERE contact_id = $1
   AND source = $2
   AND direction = $3
-  AND source_ref LIKE $4
+  AND source_ref LIKE $4::text ESCAPE '\'
   AND occurred_at >= $5
   AND occurred_at <= $6
   AND deleted_at IS NULL
@@ -155,7 +155,7 @@ type FindRecentInteractionBySourceAndDirectionParams struct {
 	ContactID       pgtype.UUID        `json:"contact_id"`
 	Source          string             `json:"source"`
 	Direction       string             `json:"direction"`
-	SourceRefPrefix pgtype.Text        `json:"source_ref_prefix"`
+	SourceRefPrefix string             `json:"source_ref_prefix"`
 	WindowStart     pgtype.Timestamptz `json:"window_start"`
 	WindowEnd       pgtype.Timestamptz `json:"window_end"`
 }
@@ -164,6 +164,19 @@ type FindRecentInteractionBySourceAndDirectionParams struct {
 // Used by the shared aggregator (backend/internal/messaging/aggregation)
 // for same-direction coalescing. source_ref_prefix should include
 // trailing % for LIKE match.
+//
+// The ESCAPE clause lets adapters whose source-ref segments may
+// contain `_` or `%` (e.g., Apple Messages chat.guid values like
+// "iMessage;-;_chat-uuid_") supply their own escape character `\`
+// without false-matching unrelated rows. Numeric-only chat IDs
+// (Telegram) pass through unchanged since they never contain LIKE
+// wildcards.
+//
+// The explicit ::text cast on the bind variable keeps sqlc inferring
+// pgtype.Text for the parameter; without it the ESCAPE clause causes
+// sqlc to fall back to []byte (Postgres treats the LIKE pattern as
+// bytea-compatible in that form). Plain LIKE-on-text behavior is what
+// the existing callers expect.
 func (q *Queries) FindRecentInteractionBySourceAndDirection(ctx context.Context, arg FindRecentInteractionBySourceAndDirectionParams) (*Interaction, error) {
 	row := q.db.QueryRow(ctx, FindRecentInteractionBySourceAndDirection,
 		arg.ContactID,
@@ -193,7 +206,7 @@ SELECT id, contact_id, source, source_ref, occurred_at, description, created_at,
 WHERE contact_id = $1
   AND source = $2
   AND direction = 'outbound'
-  AND source_ref LIKE $3
+  AND source_ref LIKE $3::text ESCAPE '\'
   AND occurred_at >= $4
   AND occurred_at <= $5
   AND deleted_at IS NULL
@@ -204,7 +217,7 @@ LIMIT 1
 type FindRecentOutboundInteractionBySourceParams struct {
 	ContactID       pgtype.UUID        `json:"contact_id"`
 	Source          string             `json:"source"`
-	SourceRefPrefix pgtype.Text        `json:"source_ref_prefix"`
+	SourceRefPrefix string             `json:"source_ref_prefix"`
 	WindowStart     pgtype.Timestamptz `json:"window_start"`
 	WindowEnd       pgtype.Timestamptz `json:"window_end"`
 }
@@ -212,6 +225,9 @@ type FindRecentOutboundInteractionBySourceParams struct {
 // Source-neutral generalization of FindRecentOutboundTelegramInteraction.
 // Used by the shared aggregator for time-based reply bridging on inbound
 // sessions.
+//
+// ESCAPE clause: same rationale as FindRecentInteractionBySourceAndDirection.
+// See that query for the ::text cast rationale.
 func (q *Queries) FindRecentOutboundInteractionBySource(ctx context.Context, arg FindRecentOutboundInteractionBySourceParams) (*Interaction, error) {
 	row := q.db.QueryRow(ctx, FindRecentOutboundInteractionBySource,
 		arg.ContactID,

@@ -128,6 +128,32 @@ func convertDbMessagesMessage(m *db.MessagesMessage) MessagesMessage {
 
 // UpsertMessage creates or updates a messages_message row by guid.
 func (r *MessagesMessageRepository) UpsertMessage(ctx context.Context, params UpsertMessagesMessageParams) (*MessagesMessage, error) {
+	dbMsg, err := r.queries.UpsertMessagesMessage(ctx, buildUpsertMessagesMessageParams(params))
+	if err != nil {
+		return nil, err
+	}
+	msg := convertDbMessagesMessage(dbMsg)
+	return &msg, nil
+}
+
+// UpsertMessageTx is the tx-bound variant of UpsertMessage. Used by the
+// ingest service so the staging-row write commits atomically with the
+// raw event-log insert + River aggregator-job enqueue (spec §3 Stage 1
+// "single tx"). Caller owns the tx lifecycle.
+func (r *MessagesMessageRepository) UpsertMessageTx(ctx context.Context, tx pgx.Tx, params UpsertMessagesMessageParams) (*MessagesMessage, error) {
+	dbMsg, err := db.New(tx).UpsertMessagesMessage(ctx, buildUpsertMessagesMessageParams(params))
+	if err != nil {
+		return nil, err
+	}
+	msg := convertDbMessagesMessage(dbMsg)
+	return &msg, nil
+}
+
+// buildUpsertMessagesMessageParams centralizes the pgtype conversion
+// shared between the tx and non-tx upsert paths. Keeping this in one
+// place ensures both variants stay in lockstep — drift would silently
+// produce different on-disk shapes depending on caller.
+func buildUpsertMessagesMessageParams(params UpsertMessagesMessageParams) db.UpsertMessagesMessageParams {
 	var matchedContactID pgtype.UUID
 	if params.MatchedContactID != nil {
 		matchedContactID = uuidToPgUUID(*params.MatchedContactID)
@@ -136,7 +162,7 @@ func (r *MessagesMessageRepository) UpsertMessage(ctx context.Context, params Up
 	if params.MacHostID != nil {
 		macHostID = uuidToPgUUID(*params.MacHostID)
 	}
-	dbMsg, err := r.queries.UpsertMessagesMessage(ctx, db.UpsertMessagesMessageParams{
+	return db.UpsertMessagesMessageParams{
 		Guid:             params.Guid,
 		ChatGuid:         params.ChatGuid,
 		PeerHandle:       params.PeerHandle,
@@ -149,12 +175,7 @@ func (r *MessagesMessageRepository) UpsertMessage(ctx context.Context, params Up
 		ReplyToGuid:      stringToPgText(params.ReplyToGuid),
 		MatchedContactID: matchedContactID,
 		MacHostID:        macHostID,
-	})
-	if err != nil {
-		return nil, err
 	}
-	msg := convertDbMessagesMessage(dbMsg)
-	return &msg, nil
 }
 
 // GetMessage retrieves a message by guid. Returns db.ErrNotFound on miss.
@@ -214,6 +235,56 @@ func (r *MessagesMessageRepository) ListUnprocessedByContact(ctx context.Context
 		msgs[i] = convertDbMessagesMessage(m)
 	}
 	return msgs, nil
+}
+
+// ListUnprocessedChatsByContact returns the distinct chat_guid values
+// for which the contact has at least one eligible (unprocessed AND
+// unclaimed-or-stale) row. Drives the messaging aggregator worker's
+// per-chat loop (the chat-aware AggregateForContact path is what
+// preserves the extend/bridge/coalesce contract from spec §3 Stage 2).
+//
+// Returned values are ordered by chat_guid ASC so concurrent workers
+// tend to collide on the same chat first; this improves the partial-
+// claim retry path's convergence properties.
+func (r *MessagesMessageRepository) ListUnprocessedChatsByContact(ctx context.Context, contactID uuid.UUID) ([]string, error) {
+	return r.queries.ListUnprocessedMessagesChatsByContact(ctx, uuidToPgUUID(contactID))
+}
+
+// UpdateMatchedContactParams is the input for UpdateMatchedContact.
+type UpdateMatchedContactParams struct {
+	ID               uuid.UUID
+	MatchedContactID uuid.UUID
+	PeerNormalized   string
+}
+
+// ListStranded returns staging rows whose matched_contact_id is NULL
+// — i.e., rows the ingest service accepted but couldn't match to a
+// contact. Used by the crm-admin --messages-rematch-stranded utility
+// to retroactively match rows after a contact_method gets added.
+func (r *MessagesMessageRepository) ListStranded(ctx context.Context) ([]MessagesMessage, error) {
+	dbMsgs, err := r.queries.ListStrandedMessagesMessages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	msgs := make([]MessagesMessage, len(dbMsgs))
+	for i, m := range dbMsgs {
+		msgs[i] = convertDbMessagesMessage(m)
+	}
+	return msgs, nil
+}
+
+// UpdateMatchedContact sets matched_contact_id + peer_normalized on a
+// stranded row. The SQL predicate scopes the update to rows still
+// unmatched + unprocessed; concurrent ingest of a never-stranded row
+// (one whose peer just got matched) will not be overwritten by this
+// admin path. Idempotent — re-running on an already-matched row is a
+// no-op.
+func (r *MessagesMessageRepository) UpdateMatchedContact(ctx context.Context, params UpdateMatchedContactParams) error {
+	return r.queries.UpdateMatchedContactForStrandedMessage(ctx, db.UpdateMatchedContactForStrandedMessageParams{
+		ID:               uuidToPgUUID(params.ID),
+		MatchedContactID: uuidToPgUUID(params.MatchedContactID),
+		PeerNormalized:   pgtype.Text{String: params.PeerNormalized, Valid: true},
+	})
 }
 
 // ListUnprocessedByContactAndChat returns eligible rows for a contact +

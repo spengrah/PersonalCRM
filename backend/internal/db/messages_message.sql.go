@@ -178,6 +178,59 @@ func (q *Queries) HardDeleteMessagesMessagesByMacHost(ctx context.Context, macHo
 	return err
 }
 
+const ListStrandedMessagesMessages = `-- name: ListStrandedMessagesMessages :many
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
+WHERE matched_contact_id IS NULL
+  AND processed_at IS NULL
+  AND deleted_at IS NULL
+ORDER BY sent_at
+`
+
+// Lists rows with matched_contact_id IS NULL — i.e., rows that the
+// ingest service accepted into staging but couldn't match to a contact
+// at the time. The crm-admin --messages-rematch-stranded command
+// iterates this list to retroactively match rows after a contact_method
+// is added.
+func (q *Queries) ListStrandedMessagesMessages(ctx context.Context) ([]*MessagesMessage, error) {
+	rows, err := q.db.Query(ctx, ListStrandedMessagesMessages)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*MessagesMessage{}
+	for rows.Next() {
+		var i MessagesMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.Guid,
+			&i.ChatGuid,
+			&i.PeerHandle,
+			&i.PeerNormalized,
+			&i.Text,
+			&i.MessageType,
+			&i.SentAt,
+			&i.IsOutgoing,
+			&i.IsGroupChat,
+			&i.ReplyToGuid,
+			&i.MatchedContactID,
+			&i.InteractionID,
+			&i.MacHostID,
+			&i.ProcessedAt,
+			&i.ClaimedAt,
+			&i.ClaimedSessionRef,
+			&i.DeletedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListUnprocessedMessagesByContact = `-- name: ListUnprocessedMessagesByContact :many
 SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
 WHERE matched_contact_id = $1
@@ -282,6 +335,41 @@ func (q *Queries) ListUnprocessedMessagesByContactAndChat(ctx context.Context, a
 	return items, nil
 }
 
+const ListUnprocessedMessagesChatsByContact = `-- name: ListUnprocessedMessagesChatsByContact :many
+SELECT DISTINCT chat_guid
+FROM messages_message
+WHERE matched_contact_id = $1
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+ORDER BY chat_guid ASC
+`
+
+// Distinct chat_guid values for a contact with at least one eligible
+// (unprocessed AND unclaimed-or-stale) staging row. Used by the
+// messaging aggregator worker to drive per-chat AggregateForContact
+// invocations — the chat-aware path is what preserves the engine's
+// extend/bridge/coalesce contract (see spec §3 "Stage 2 — Aggregator").
+func (q *Queries) ListUnprocessedMessagesChatsByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, ListUnprocessedMessagesChatsByContact, matchedContactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var chat_guid string
+		if err := rows.Scan(&chat_guid); err != nil {
+			return nil, err
+		}
+		items = append(items, chat_guid)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListUnprocessedMessagesContactIDs = `-- name: ListUnprocessedMessagesContactIDs :many
 SELECT DISTINCT matched_contact_id
 FROM messages_message
@@ -374,6 +462,31 @@ func (q *Queries) MarkMessagesMessagesProcessedForSession(ctx context.Context, a
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const UpdateMatchedContactForStrandedMessage = `-- name: UpdateMatchedContactForStrandedMessage :exec
+UPDATE messages_message
+SET matched_contact_id = $1,
+    peer_normalized    = $2
+WHERE id = $3
+  AND matched_contact_id IS NULL
+  AND processed_at IS NULL
+  AND deleted_at IS NULL
+`
+
+type UpdateMatchedContactForStrandedMessageParams struct {
+	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
+	PeerNormalized   pgtype.Text `json:"peer_normalized"`
+	ID               pgtype.UUID `json:"id"`
+}
+
+// Sets matched_contact_id + peer_normalized on a single stranded row.
+// Scoped to rows that are still unmatched + unprocessed so a
+// concurrent ingest path (a never-stranding daemon push for a peer
+// that just got matched) cannot be overwritten by this admin path.
+func (q *Queries) UpdateMatchedContactForStrandedMessage(ctx context.Context, arg UpdateMatchedContactForStrandedMessageParams) error {
+	_, err := q.db.Exec(ctx, UpdateMatchedContactForStrandedMessage, arg.MatchedContactID, arg.PeerNormalized, arg.ID)
+	return err
 }
 
 const UpsertMessagesMessage = `-- name: UpsertMessagesMessage :one

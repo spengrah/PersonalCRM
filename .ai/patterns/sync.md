@@ -7,6 +7,7 @@
 | Google Contacts | `gcontacts` | `contact_driven` | `backend/internal/google/contacts.go` |
 | Google Calendar | `gcal` | `contact_driven` | `backend/internal/google/calendar.go` |
 | Todoist | `todoist` | `fetch_all` | `backend/internal/todoist/provider.go` |
+| Messages | `messages` | `push` | `backend/internal/messages/provider.go` |
 
 Providers are registered in `backend/cmd/crm-api/main.go` via `providerRegistry.Register()`.
 

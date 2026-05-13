@@ -90,6 +90,7 @@ $RECYCLE.BIN/
 # Binaries
 backend/bin/
 backend/crm-api
+backend/crm-admin
 backend/main
 backend/*.exe
 backend/*.exe~

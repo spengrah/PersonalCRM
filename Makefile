@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher
+.PHONY: help setup dev build crm-admin test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -37,6 +37,7 @@ help:
 	@echo "  dev         - Start development servers (uses Docker for PostgreSQL)"
 	@echo "  dev-native  - Start dev servers with native PostgreSQL (no Docker)"
 	@echo "  build       - Build both frontend and backend"
+	@echo "  crm-admin   - Build the operator-only admin CLI (backend/crm-admin)"
 	@echo "  sqlc        - Regenerate sqlc code from SQL queries"
 	@echo "  lint        - Run all linters (backend + frontend)"
 	@echo "  clean       - Clean build artifacts"
@@ -247,6 +248,14 @@ build:
 	@cd backend && go build -o bin/crm-api cmd/crm-api/main.go
 	@echo "Building frontend..."
 	@cd frontend && bun run build
+
+# Operator-only admin binary. NOT wired into CI; build on demand on
+# the Pi when a one-shot maintenance task is needed (e.g.,
+# `./crm-admin --messages-rematch-stranded`).
+crm-admin:
+	@echo "Building crm-admin..."
+	@cd backend && go build -o crm-admin cmd/crm-admin/main.go
+	@echo "✓ crm-admin built at backend/crm-admin"
 
 # Tests
 test: test-unit test-integration test-frontend

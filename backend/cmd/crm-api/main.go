@@ -39,12 +39,14 @@ import (
 	"personal-crm/backend/internal/auth"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
+	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/crypto"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/health"
 	"personal-crm/backend/internal/logger"
+	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
@@ -266,7 +268,32 @@ func run() int {
 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
-	ingestService := service.NewIngestService(database, eventBus)
+
+	// Identity repository + service for the ingest path. The host-auth
+	// ingest path (raw_message.* envelopes from the Mac daemon) needs a
+	// tx-bound identity matcher so the per-event savepoint can roll back
+	// the identity write atomically with the staging-row insert on
+	// failure. The external-sync block (further down) constructs its own
+	// IdentityService for the providers that use it — IdentityService is
+	// stateless so the two instances are interchangeable.
+	identityRepoForIngest := repository.NewIdentityRepository(database.Queries)
+	identityServiceForIngest := service.NewIdentityService(identityRepoForIngest)
+
+	// Messages staging repo (Mac daemon spec §3). Wired here so the
+	// InteractionRecorder's staging registry can dispatch
+	// source="messages" mark-processed calls correctly once the Mac
+	// daemon ingest writer is live, and so the IngestService can upsert
+	// staging rows from raw_message.* envelopes inside its per-event
+	// savepoint.
+	messagesMessageRepo := repository.NewMessagesMessageRepository(database.Queries)
+
+	ingestService := service.NewIngestService(
+		database,
+		eventBus,
+		identityServiceForIngest,
+		messagesMessageRepo,
+		riverClient,
+	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	// Rematch service — constructed above ContactService so it can be
@@ -281,13 +308,6 @@ func run() int {
 	// InteractionRecorder wiring so the consumer can mark messages
 	// processed in the same tx as the interaction insert).
 	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
-
-	// Messages staging repo (Mac daemon spec §3). Wired here so the
-	// InteractionRecorder's staging registry can dispatch
-	// source="messages" mark-processed calls correctly once the Mac
-	// daemon ingest writer is live; until then the table has no rows
-	// and the registry entry is dormant.
-	messagesMessageRepo := repository.NewMessagesMessageRepository(database.Queries)
 
 	// Source-neutral staging registry — InteractionRecorder dispatches
 	// MarkProcessedTx by env.Source to the right repository. Unknown
@@ -644,6 +664,13 @@ func run() int {
 			logger.Info().Msg("Contact task handler initialized")
 		}
 
+		// Register the Messages push provider. The source is push-only —
+		// data lands via /api/v1/ingest/events from the Mac daemon, never
+		// via the scheduler — so Sync() is a no-op. The scheduler's push-
+		// strategy exclusion in ListDueAccounts ensures we never poll it.
+		providerRegistry.Register(messages.New())
+		logger.Info().Msg("Messages push provider registered")
+
 		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
 
 		syncHandler = handlers.NewSyncHandler(syncService)
@@ -710,18 +737,6 @@ func run() int {
 		}
 		defer telegramManager.Stop()
 
-		// Wire the per-source aggregator reenqueuer registry now that
-		// the Telegram engine exists. The InteractionRecorderWorker
-		// holds the deferred holder; this assignment makes the
-		// post-commit reenqueue path live for telegram-source events.
-		// Messages source is a no-op until the Mac daemon ingest writer is live.
-		aggregatorReenqueuerHolder.set(consumer.NewAggregatorReenqueuerRegistry(
-			map[string]consumer.AggregatorReenqueuer{
-				repository.InteractionSourceTelegram: consumer.NewTelegramAggregatorReenqueuer(telegramManager.AggregationEngine()),
-				repository.InteractionSourceMessages: consumer.NoopAggregatorReenqueuer{},
-			},
-		))
-
 		telegramHandler = handlers.NewTelegramHandler(telegramManager)
 
 		// Register telegram rematch handlers (telegram + phone identifiers)
@@ -738,6 +753,86 @@ func run() int {
 	if telegramManager != nil && importHandler != nil {
 		importHandler.SetPostImportHook(telegramManager)
 	}
+
+	// Messages aggregator engine + reenqueuer + worker + sweeper.
+	// Wired unconditionally — the Mac daemon push pipeline accepts
+	// raw_message.* envelopes regardless of any feature flag, and the
+	// engine is a stateless function over messagesMessageRepo (no
+	// daemon-side connection or background loop).
+	//
+	// The chat-aware AggregateForContact path is what preserves the
+	// engine's extend/bridge/coalesce contract. The
+	// MessagingAggregateForContactWorker iterates over the contact's
+	// distinct unprocessed chats and invokes it per chat; the periodic
+	// sweeper provides a 5-min safety net for the never-claimed
+	// stranded-row gap.
+	messagesEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(riverClient)
+	const messagesBurstWindowHours = 4
+	const messagesReplyBridgeHours = 48
+	messagesEngine := messages.NewAggregationEngine(
+		messagesBurstWindowHours,
+		messagesReplyBridgeHours,
+		messagesMessageRepo,
+		interactionRepo,
+		contactService,
+		contactService,
+		eventBus,
+		database.Pool,
+		messagesEnqueuer,
+	)
+	messagesReenqueuer := consumer.NewMessagesAggregatorReenqueuer(
+		messagesEngine,
+		riverClient,
+		repository.InteractionSourceMessages,
+	)
+
+	// Wire the per-source aggregator reenqueuer registry. The
+	// InteractionRecorderWorker holds the deferred holder; this
+	// assignment makes the post-commit reenqueue path live for both
+	// telegram-source and messages-source events. When Telegram is
+	// disabled the telegram entry is a no-op reenqueuer (so calls for
+	// telegram-source envelopes — which won't be produced anyway —
+	// degrade cleanly).
+	reenqueuerEntries := map[string]consumer.AggregatorReenqueuer{
+		repository.InteractionSourceMessages: messagesReenqueuer,
+	}
+	if telegramManager != nil {
+		reenqueuerEntries[repository.InteractionSourceTelegram] = consumer.NewTelegramAggregatorReenqueuer(telegramManager.AggregationEngine())
+	} else {
+		reenqueuerEntries[repository.InteractionSourceTelegram] = consumer.NoopAggregatorReenqueuer{}
+	}
+	aggregatorReenqueuerHolder.set(consumer.NewAggregatorReenqueuerRegistry(reenqueuerEntries))
+
+	// Register the messaging aggregate workers. The chat-lister
+	// registry maps source → repository's ListUnprocessedChatsByContact;
+	// future messaging sources (whatsapp etc) extend the map without
+	// touching the worker.
+	chatListerRegistry := scheduler.NewPerSourceChatListerRegistry(
+		map[string]func(ctx context.Context, contactID uuid.UUID) ([]string, error){
+			repository.InteractionSourceMessages: messagesMessageRepo.ListUnprocessedChatsByContact,
+		},
+	)
+	river.AddWorker(riverWorkers, scheduler.NewMessagingAggregateForContactWorker(
+		map[string]scheduler.ChatAwareAggregator{
+			repository.InteractionSourceMessages: messagesEngine,
+		},
+		chatListerRegistry,
+	))
+
+	// Periodic 5-min sweeper — drains never-claimed stranded rows that
+	// the in-line worker re-list loop AND the post-Stage-3 reenqueue
+	// both missed. Last-resort safety net.
+	sweeperListers := map[string]scheduler.UnprocessedContactLister{
+		repository.InteractionSourceMessages: messagesMessageRepo,
+	}
+	river.AddWorker(riverWorkers, scheduler.NewMessagingAggregateSweeperWorker(sweeperListers, riverClient))
+	riverClient.PeriodicJobs().Add(river.NewPeriodicJob(
+		river.PeriodicInterval(5*time.Minute),
+		func() (river.JobArgs, *river.InsertOpts) {
+			return consumerjobs.MessagingAggregateSweeperArgs{}, nil
+		},
+		&river.PeriodicJobOpts{RunOnStart: false},
+	))
 
 	// Initialize handlers
 	contactHandler := handlers.NewContactHandler(contactService)
@@ -853,6 +948,25 @@ func run() int {
 		Handler:     macHostHandler,
 		AuthLimiter: auth.DefaultMacHostAuthLimiterConfig(),
 	})
+
+	// Event bus ingestion endpoint (feature-flagged per spec §3.9).
+	// Registered as a SIBLING of /api/v1 (not inside it) so the
+	// composite IngestAuthMiddleware can branch per-request:
+	//   - X-Mac-Host-ID present → MacHostAuthMiddleware (daemon path)
+	//   - X-Mac-Host-ID absent  → APIKeyMiddleware (global-key path)
+	// gin route trees reject duplicate registration of the same prefix
+	// under different middleware groups, so the composite dispatch is
+	// the minimum seam to support both auth paths on one URL.
+	if cfg.Features.EnableEventBusIngest {
+		ingestAuth := auth.IngestAuthMiddleware(
+			auth.APIKeyMiddleware(cfg),
+			auth.MacHostAuthMiddleware(macHostRepo, auth.DefaultPasswordComparator, auth.DefaultMacHostAuthLimiterConfig()),
+		)
+		ingestGroup := router.Group("/api/v1/ingest")
+		ingestGroup.Use(ingestAuth)
+		ingestGroup.POST("/events", ingestHandler.IngestEvents)
+		logger.Info().Msg("event bus ingestion endpoint enabled")
+	}
 
 	// API routes
 	v1 := router.Group("/api/v1")
@@ -1018,19 +1132,6 @@ func run() int {
 		// Export/Import routes
 		v1.POST("/export", systemHandler.ExportData)
 		v1.POST("/import", systemHandler.ImportData)
-
-		// Event bus ingestion endpoint (feature-flagged per spec §3.9).
-		// When the flag is off the route is NOT registered — gin's
-		// NoRoute handler returns 404 without running the API-key
-		// middleware, matching the spec's acceptance criterion
-		// "EVENT_BUS_INGEST_ENABLED=false (default) returns 404."
-		if cfg.Features.EnableEventBusIngest {
-			ingest := v1.Group("/ingest")
-			{
-				ingest.POST("/events", ingestHandler.IngestEvents)
-			}
-			logger.Info().Msg("event bus ingestion endpoint enabled")
-		}
 
 		// Test routes (gated by CRM_ENV=testing or CRM_ENV=test)
 		if cfg.Runtime.CRMEnvironment == "testing" || cfg.Runtime.CRMEnvironment == "test" {

@@ -84,11 +84,24 @@ LIMIT 1;
 -- Used by the shared aggregator (backend/internal/messaging/aggregation)
 -- for same-direction coalescing. source_ref_prefix should include
 -- trailing % for LIKE match.
+--
+-- The ESCAPE clause lets adapters whose source-ref segments may
+-- contain `_` or `%` (e.g., Apple Messages chat.guid values like
+-- "iMessage;-;_chat-uuid_") supply their own escape character `\`
+-- without false-matching unrelated rows. Numeric-only chat IDs
+-- (Telegram) pass through unchanged since they never contain LIKE
+-- wildcards.
+--
+-- The explicit ::text cast on the bind variable keeps sqlc inferring
+-- pgtype.Text for the parameter; without it the ESCAPE clause causes
+-- sqlc to fall back to []byte (Postgres treats the LIKE pattern as
+-- bytea-compatible in that form). Plain LIKE-on-text behavior is what
+-- the existing callers expect.
 SELECT * FROM interaction
 WHERE contact_id = sqlc.arg(contact_id)
   AND source = sqlc.arg(source)
   AND direction = sqlc.arg(direction)
-  AND source_ref LIKE sqlc.arg(source_ref_prefix)
+  AND source_ref LIKE sqlc.arg(source_ref_prefix)::text ESCAPE '\'
   AND occurred_at >= sqlc.arg(window_start)
   AND occurred_at <= sqlc.arg(window_end)
   AND deleted_at IS NULL
@@ -99,11 +112,14 @@ LIMIT 1;
 -- Source-neutral generalization of FindRecentOutboundTelegramInteraction.
 -- Used by the shared aggregator for time-based reply bridging on inbound
 -- sessions.
+--
+-- ESCAPE clause: same rationale as FindRecentInteractionBySourceAndDirection.
+-- See that query for the ::text cast rationale.
 SELECT * FROM interaction
 WHERE contact_id = sqlc.arg(contact_id)
   AND source = sqlc.arg(source)
   AND direction = 'outbound'
-  AND source_ref LIKE sqlc.arg(source_ref_prefix)
+  AND source_ref LIKE sqlc.arg(source_ref_prefix)::text ESCAPE '\'
   AND occurred_at >= sqlc.arg(window_start)
   AND occurred_at <= sqlc.arg(window_end)
   AND deleted_at IS NULL

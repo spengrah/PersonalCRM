@@ -531,9 +531,10 @@ func TestKindPayloadTypes_CoversAllKinds(t *testing.T) {
 
 // TestAllKinds_ExpectedCount guards against accidental Kind additions or
 // deletions from AllKinds without updating the spec. Current spec (§3.2)
-// declares exactly 10 kinds (9 raw-signal + 1 derived).
+// declares 10 base kinds (9 raw-signal + 1 derived) plus the two
+// daemon-emitted raw_message.* kinds introduced for the messages source.
 func TestAllKinds_ExpectedCount(t *testing.T) {
-	require.Len(t, AllKinds, 10)
+	require.Len(t, AllKinds, 12)
 }
 
 // TestIsKnownKind_CoversAllKinds is the positive side: every Kind declared
@@ -597,9 +598,110 @@ func buildCanonicalPayload(t *testing.T, kind Kind) json.RawMessage {
 		raw, err := Marshal(kind, InteractionRecordedPayload{Version: 1, ContactID: cid, InteractionID: uuid.New(), Direction: "mutual", OccurredAt: at, Source: "manual"})
 		require.NoError(t, err)
 		return raw
+	case KindRawMessageReceived:
+		raw, err := Marshal(kind, RawMessageReceivedPayload{
+			Version: 1, HostID: uuid.New(), Source: "messages",
+			Guid: "g-1", ChatID: "iMessage;-;chat-x", PeerHandle: "+15551234567",
+			MessageType: "text", SentAt: at,
+		})
+		require.NoError(t, err)
+		return raw
+	case KindRawMessageSent:
+		raw, err := Marshal(kind, RawMessageSentPayload{
+			Version: 1, HostID: uuid.New(), Source: "messages",
+			Guid: "g-2", ChatID: "iMessage;-;chat-x", PeerHandle: "+15551234567",
+			MessageType: "text", SentAt: at,
+		})
+		require.NoError(t, err)
+		return raw
 	}
 	t.Fatalf("unhandled kind %s", kind)
 	return nil
+}
+
+// TestMarshalUnmarshal_RawMessageReceived round-trips the daemon-emitted
+// raw_message.received payload including the omitempty optional fields.
+func TestMarshalUnmarshal_RawMessageReceived(t *testing.T) {
+	host := uuid.New()
+	name := "Alice"
+	text := "hello"
+	reply := "g-reply"
+	size := int64(123)
+	filename := "kitten.jpg"
+	mime := "image/jpeg"
+	original := RawMessageReceivedPayload{
+		Version: 1, HostID: host, Source: "messages",
+		Guid: "g-1", ChatID: "iMessage;-;chat-xyz", PeerHandle: "+15551234567",
+		PeerName: &name, Text: &text, MessageType: "photo", IsGroup: false,
+		SentAt:      time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		ReplyToGuid: &reply,
+		Attachments: []AttachmentMeta{
+			{Type: "photo", Filename: &filename, MimeType: &mime, Size: &size},
+		},
+	}
+	raw, err := Marshal(KindRawMessageReceived, original)
+	require.NoError(t, err)
+
+	env := &Envelope{Kind: KindRawMessageReceived, Payload: raw}
+	var decoded RawMessageReceivedPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.Equal(t, original, decoded)
+}
+
+// TestMarshalUnmarshal_RawMessageSent round-trips the outbound twin.
+func TestMarshalUnmarshal_RawMessageSent(t *testing.T) {
+	host := uuid.New()
+	original := RawMessageSentPayload{
+		Version: 1, HostID: host, Source: "messages",
+		Guid: "g-2", ChatID: "iMessage;-;chat-xyz", PeerHandle: "+15551234567",
+		MessageType: "text",
+		SentAt:      time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	}
+	raw, err := Marshal(KindRawMessageSent, original)
+	require.NoError(t, err)
+
+	env := &Envelope{Kind: KindRawMessageSent, Payload: raw}
+	var decoded RawMessageSentPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.Equal(t, original, decoded)
+}
+
+// TestValidatePayload_RawMessage_RejectsNonCanonicalMessageType asserts
+// the per-kind value check rejects a MessageType outside the canonical
+// CHECK-constraint set.
+func TestValidatePayload_RawMessage_RejectsNonCanonicalMessageType(t *testing.T) {
+	raw := json.RawMessage(`{
+		"version": 1,
+		"host_id": "00000000-0000-0000-0000-000000000001",
+		"source": "messages",
+		"guid": "g-1",
+		"chat_id": "iMessage;-;chat-xyz",
+		"peer_handle": "+15551234567",
+		"message_type": "sticker",
+		"sent_at": "2026-04-10T12:00:00Z"
+	}`)
+	env := &Envelope{Kind: KindRawMessageReceived, Payload: raw}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "message_type")
+}
+
+// TestValidatePayload_RawMessage_AcceptsAllCanonicalMessageTypes covers
+// every value in the canonical set passes ValidatePayload.
+func TestValidatePayload_RawMessage_AcceptsAllCanonicalMessageTypes(t *testing.T) {
+	at := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+	for _, mt := range []string{"text", "photo", "audio", "video", "document", "other"} {
+		t.Run(mt, func(t *testing.T) {
+			raw, err := Marshal(KindRawMessageReceived, RawMessageReceivedPayload{
+				Version: 1, HostID: uuid.New(), Source: "messages",
+				Guid: "g-" + mt, ChatID: "iMessage;-;chat-x", PeerHandle: "+1",
+				MessageType: mt, SentAt: at,
+			})
+			require.NoError(t, err)
+			env := &Envelope{Kind: KindRawMessageReceived, Payload: raw}
+			require.NoError(t, ValidatePayload(env))
+		})
+	}
 }
 
 // TestValidatePayload_AllKindsRoundTrip exercises the validate-only helper
