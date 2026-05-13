@@ -323,6 +323,7 @@ smoke-test:
 ci-build-backend:
 	@echo "Building backend for ARM64..."
 	@cd backend && GOOS=linux GOARCH=arm64 go build -o bin/crm-api cmd/crm-api/main.go
+	@cd backend && GOOS=linux GOARCH=arm64 go build -o bin/crm-admin cmd/crm-admin/main.go
 
 ci-build-frontend:
 	@echo "Building frontend..."
