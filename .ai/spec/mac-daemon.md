@@ -637,6 +637,123 @@ Validates the trickiest cross-cutting concerns (FDA permission, container allowl
 
 **Value at end of v1:** `last_contacted` auto-updates from iMessage/SMS via Messages.app; iCloud contacts surface as import candidates and enrich existing CRM contacts.
 
+### v1 PR-by-PR decomposition
+
+v1 ships across 8 PRs. PRs 1-5 are Pi-side (Go); PRs 6-8 are Mac-side (Swift). Each PR is independently mergeable and reviewable.
+
+#### Pi side (merged)
+
+| PR | # | Scope |
+|---|---|---|
+| PR1 | [#301](https://github.com/spengrah/PersonalCRM/pull/301) | `mac_host` table + pairing/auth/heartbeat endpoints, `MacHostAuthMiddleware` |
+| PR2 | [#302](https://github.com/spengrah/PersonalCRM/pull/302) | Extract Telegram burst aggregator into source-neutral `backend/internal/messaging/aggregation` |
+| PR3 | [#303](https://github.com/spengrah/PersonalCRM/pull/303) | `messages_message` staging table, claim-aware aggregator, `messages` source registration |
+| PR4 | [#304](https://github.com/spengrah/PersonalCRM/pull/304) | Ingest service generalization, per-event savepoint pattern, `messages` push provider, host-auth dispatch middleware, `events.ValidatePayload` boundary |
+| PR5 | [#305](https://github.com/spengrah/PersonalCRM/pull/305) | `external_contact.upserted` / `.deleted` events (inline ingest), `external_contact.deleted_at` soft-delete + query sweep, `GET /host/:id/known-identifiers` body, `icloud_contacts` push provider stub |
+
+#### Mac side (remaining)
+
+##### PR6 — Daemon skeleton + scheduler shell + CI
+
+**Repo location:** new `mac-daemon/` directory at repo root (sibling to `backend/`, `frontend/`).
+
+**Package structure:** SPM package at `mac-daemon/Package.swift`. Thin-shell-over-pure-logic per the Testing & CI section — executable target stays minimal; testable logic lives in library targets.
+
+**Targets:**
+- `crm-mac` executable (CLI entrypoint, `swift-argument-parser`)
+- `CRMMacCore` library (pure-logic: cursor mgmt, state file, source-plugin protocol)
+- `CRMMacPiClient` library (`URLSession`-based, pure protocol-level — no system deps)
+- `CRMMacSystem` library (Keychain, `SMAppService`, `NSBackgroundActivityScheduler`, `os.Log` adapters — thin shells)
+- Test targets matching each library
+
+**CLI surface** (subcommands stubbed; only `install`, `uninstall`, `doctor`, `status` functional in PR6):
+- `crm-mac daemon` — long-running daemon process (in PR6: registers stub no-op `NSBackgroundActivityScheduler` jobs, runs heartbeat loop, exits cleanly on SIGTERM)
+- `crm-mac install --pair <token>` — exchange pairing token for API key (Pi side issues via new `crm-api pair --host <name>` CLI), store in Keychain, register `SMAppService` login item
+- `crm-mac uninstall` — unregister `SMAppService`, optionally purge Keychain + state
+- `crm-mac configure` — stubbed; full impl in PR8 (container allowlist picker)
+- `crm-mac doctor` — Pi reachability probe (hits `/host/:id/known-identifiers` with stored key), Keychain access check, `SMAppService` status check
+- `crm-mac status` — print last heartbeat, scheduler state, current cursors
+
+**Pairing token UX:**
+- New `crm-api pair --host <name>` subcommand on the Pi side (Go) issues a short-lived pairing token by calling `POST /host` from PR1; prints token to stdout.
+- User runs `crm-api pair --host mac-1` on the Pi, copies token, runs `crm-mac install --pair <token>` on the Mac.
+- (Web UI button is a follow-up polish item per Open Questions.)
+
+**Auth + storage:**
+- API key stored in macOS Keychain (`kSecClassGenericPassword`, service = `xyz.spengrah.crm-mac`, account = host ID).
+- `state.json` at `~/Library/Application Support/crm-mac/state.json` — JSON file with per-source cursor primitives (read/write only; no cursor advancement logic yet — that's PR7/8).
+
+**Pi client:**
+- `URLSession`-based; auth header from Keychain.
+- Retry policy: exponential backoff on 5xx, give up on 4xx (no chunked uploads in PR6 — that's PR7's batch event push).
+- Smoke test in `doctor`: `GET /host/:id/known-identifiers` returns 200 with valid auth.
+
+**Lifecycle:**
+- `SMAppService` agent registration in `install`, unregister in `uninstall`.
+- Ad-hoc codesign (`codesign -s -`) in build step; no Developer ID, no notarization. First-launch gatekeeper bypass via right-click-Open documented in install output.
+
+**Logging:** `os.Log` with `Logger(subsystem: "xyz.spengrah.crm-mac", category: <component>)`. Privacy-aware redaction for any identifier data (`.private` interpolation).
+
+**Scheduler shell:**
+- `NSBackgroundActivityScheduler` registration with one stub no-op job per planned source (`messages`, `icloud_contacts`).
+- Defines `SourcePlugin` protocol that PR7 (`messages`) and PR8 (`icloud_contacts`) conform to:
+  ```swift
+  protocol SourcePlugin {
+      var identifier: String { get }
+      var schedulerInterval: TimeInterval { get }
+      func performTick(context: SourceContext) async throws
+  }
+  ```
+- `SourceContext` carries Pi client, cursor read/write, logger.
+
+**CI:**
+- New workflow `.github/workflows/mac-daemon.yml` on `macos-latest`.
+- Path-filtered to `mac-daemon/**` and the workflow file itself.
+- Runs `swift build -c release` and `swift test`.
+- No additional secrets required.
+
+**Tests:**
+- Unit tests for pure-logic modules: cursor read/write, source-plugin protocol contracts, Pi client request shaping (mocked `URLSession`).
+- Thin-shell modules (Keychain, `SMAppService`, `NSBackgroundActivityScheduler`) covered by smoke tests that exercise the system API surface but tolerate sandboxed CI limitations.
+- `doctor` integration test against a mock Pi (local HTTP server in-process).
+
+**Definition of done:**
+1. On a fresh macOS machine: `crm-api pair --host mac-1` → `crm-mac install --pair <token>` → daemon is registered as a login item, has Pi-side API key in Keychain, `crm-mac doctor` reports green.
+2. `crm-mac daemon` runs without crashing; stub scheduler jobs fire on schedule and log a no-op tick.
+3. `swift test` passes on `macos-latest` in CI.
+
+**Out of scope (deferred to PR7/PR8):**
+- chat.db reader, 30-day backwards scan (PR7)
+- `messages_message` event publishing (PR7 — Pi side already accepts these from PR3/PR4)
+- `CNContactStore` reader, change-history fetching (PR8)
+- Container allowlist picker (PR8)
+- `external_contact.upserted`/`.deleted` event publishing (PR8 — Pi side already accepts these from PR5)
+- Backfill, tombstone reconciliation
+- Developer ID signing, notarization
+
+##### PR7 — `messages` source
+
+Anchor only; full scope brainstormed before PR7 kicks off.
+
+- GRDB.swift integration; chat.db read-only reader.
+- Daemon-side `known-identifiers` fetch + cache + sender filter.
+- Live cursor (event-stream tail) + 30-day backwards scan on newly-known identifiers.
+- Backfill to 2026-01-01.
+- Event publishing: `raw_message.received` / `raw_message.sent` to `POST /api/v1/ingest/events`.
+- Conforms `MessagesSource` to `SourcePlugin` from PR6.
+- Pi-side bits already merged in PR2/PR3/PR4.
+
+##### PR8 — `icloud_contacts` source
+
+Anchor only; full scope brainstormed before PR8 kicks off.
+
+- `CNContactStore` reader with `CNChangeHistoryFetchRequest`.
+- Container allowlist picker UX in `crm-mac install` and `crm-mac configure`.
+- Token expiration → full resync + tombstone reconciliation.
+- Event publishing: `external_contact.upserted` / `external_contact.deleted` to `POST /api/v1/ingest/events`.
+- Conforms `ICloudContactsSource` to `SourcePlugin` from PR6.
+- Pi-side bits already merged in PR5.
+
 ### v2 — Anarlog (humans + sessions)
 
 - File-format inspection sub-task (research already done; see `.ai/log/plan/mac-daemon-research-findings.md`).
