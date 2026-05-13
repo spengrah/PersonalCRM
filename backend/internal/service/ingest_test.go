@@ -206,3 +206,178 @@ func mustMarshalRawMsg(p events.RawMessageReceivedPayload) []byte {
 	}
 	return b
 }
+
+// ----------------------------------------------------------------------------
+// external_contact.* unit tests (PR5).
+//
+// These tests cover the verifier + allowlist surface. End-to-end
+// savepoint behavior (revive, delete-no-op, identity match) is covered
+// by integration tests under backend/tests/api/.
+// ----------------------------------------------------------------------------
+
+func mustMarshalExtUpsert(p events.ExternalContactUpsertedPayload) []byte {
+	b, err := events.Marshal(events.KindExternalContactUpserted, p)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func mustMarshalExtDelete(p events.ExternalContactDeletedPayload) []byte {
+	b, err := events.Marshal(events.KindExternalContactDeleted, p)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+// validUpsertedEnv returns a well-formed external_contact.upserted
+// envelope keyed off the given host + entity id. The source_id uses a
+// stable 64-char hex tail so it satisfies the regex shape.
+func validUpsertedEnv(host uuid.UUID, entityID string) *events.Envelope {
+	hashHex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	return &events.Envelope{
+		Source:   "icloud_contacts",
+		SourceID: entityID + "@" + hashHex,
+		Kind:     events.KindExternalContactUpserted,
+		Payload: mustMarshalExtUpsert(events.ExternalContactUpsertedPayload{
+			Version:  1,
+			HostID:   host,
+			Source:   "icloud_contacts",
+			EntityID: entityID,
+		}),
+	}
+}
+
+// validDeletedEnv mirrors validUpsertedEnv for the deleted kind.
+func validDeletedEnv(host uuid.UUID, entityID string) *events.Envelope {
+	hashHex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	return &events.Envelope{
+		Source:   "icloud_contacts",
+		SourceID: entityID + "@deleted@" + hashHex,
+		Kind:     events.KindExternalContactDeleted,
+		Payload: mustMarshalExtDelete(events.ExternalContactDeletedPayload{
+			Version:  1,
+			HostID:   host,
+			Source:   "icloud_contacts",
+			EntityID: entityID,
+		}),
+	}
+}
+
+func TestIsHostAuthAllowedKind_IncludesExternalContact(t *testing.T) {
+	require.True(t, isHostAuthAllowedKind(events.KindExternalContactUpserted))
+	require.True(t, isHostAuthAllowedKind(events.KindExternalContactDeleted))
+}
+
+func TestIsExternalContactKind(t *testing.T) {
+	require.True(t, isExternalContactKind(events.KindExternalContactUpserted))
+	require.True(t, isExternalContactKind(events.KindExternalContactDeleted))
+	require.False(t, isExternalContactKind(events.KindRawMessageReceived))
+	require.False(t, isExternalContactKind(events.KindMessageReceived))
+}
+
+func TestVerifyExternalContactInvariants_HappyPath_Upsert(t *testing.T) {
+	host := uuid.New()
+	require.Nil(t, verifyExternalContactInvariants(validUpsertedEnv(host, "CN-1"), host))
+}
+
+func TestVerifyExternalContactInvariants_HappyPath_Delete(t *testing.T) {
+	host := uuid.New()
+	require.Nil(t, verifyExternalContactInvariants(validDeletedEnv(host, "CN-1"), host))
+}
+
+func TestVerifyExternalContactInvariants_DeleteWithUnknownHash(t *testing.T) {
+	host := uuid.New()
+	env := validDeletedEnv(host, "CN-1")
+	env.SourceID = "CN-1@deleted@unknown"
+	require.Nil(t, verifyExternalContactInvariants(env, host))
+}
+
+func TestVerifyExternalContactInvariants_HostMismatch(t *testing.T) {
+	authHost := uuid.New()
+	other := uuid.New()
+	env := validUpsertedEnv(other, "CN-1")
+	rej := verifyExternalContactInvariants(env, authHost)
+	require.NotNil(t, rej)
+	require.Equal(t, ingestRejectPayloadInvariant, rej.Code)
+	require.Contains(t, rej.Message, "host_id")
+}
+
+func TestVerifyExternalContactInvariants_SourceMismatch(t *testing.T) {
+	host := uuid.New()
+	env := validUpsertedEnv(host, "CN-1")
+	env.Source = "anarlog_humans"
+	rej := verifyExternalContactInvariants(env, host)
+	require.NotNil(t, rej)
+	require.Contains(t, rej.Message, "not supported")
+}
+
+func TestVerifyExternalContactInvariants_PayloadVsEnvelopeSource(t *testing.T) {
+	host := uuid.New()
+	hashHex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	env := &events.Envelope{
+		Source:   "icloud_contacts",
+		SourceID: "CN-1@" + hashHex,
+		Kind:     events.KindExternalContactUpserted,
+		Payload: mustMarshalExtUpsert(events.ExternalContactUpsertedPayload{
+			Version:  1,
+			HostID:   host,
+			Source:   "different",
+			EntityID: "CN-1",
+		}),
+	}
+	rej := verifyExternalContactInvariants(env, host)
+	require.NotNil(t, rej)
+	require.Contains(t, rej.Message, "payload source")
+}
+
+func TestVerifyExternalContactInvariants_EmptyEntityID(t *testing.T) {
+	host := uuid.New()
+	hashHex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	env := &events.Envelope{
+		Source:   "icloud_contacts",
+		SourceID: "@" + hashHex,
+		Kind:     events.KindExternalContactUpserted,
+		Payload: mustMarshalExtUpsert(events.ExternalContactUpsertedPayload{
+			Version:  1,
+			HostID:   host,
+			Source:   "icloud_contacts",
+			EntityID: "",
+		}),
+	}
+	rej := verifyExternalContactInvariants(env, host)
+	require.NotNil(t, rej)
+	require.Contains(t, rej.Message, "entity_id is required")
+}
+
+func TestVerifyExternalContactInvariants_BadSourceIDShape_Upsert(t *testing.T) {
+	host := uuid.New()
+	env := validUpsertedEnv(host, "CN-1")
+	// SourceID with non-hex hash.
+	env.SourceID = "CN-1@notanhash"
+	rej := verifyExternalContactInvariants(env, host)
+	require.NotNil(t, rej)
+	require.Contains(t, rej.Message, "source_id")
+}
+
+func TestVerifyExternalContactInvariants_BadSourceIDShape_Delete(t *testing.T) {
+	host := uuid.New()
+	env := validDeletedEnv(host, "CN-1")
+	// Wrong scheme — missing the @deleted@ segment.
+	env.SourceID = "CN-1@" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	rej := verifyExternalContactInvariants(env, host)
+	require.NotNil(t, rej)
+	require.Contains(t, rej.Message, "source_id")
+}
+
+func TestVerifyExternalContactInvariants_SourceIDEntityPrefixMismatch(t *testing.T) {
+	host := uuid.New()
+	env := validUpsertedEnv(host, "CN-1")
+	hashHex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	// Envelope says CN-2 but payload entity_id is CN-1.
+	env.SourceID = "CN-2@" + hashHex
+	rej := verifyExternalContactInvariants(env, host)
+	require.NotNil(t, rej)
+	require.Contains(t, rej.Message, "entity prefix")
+}
