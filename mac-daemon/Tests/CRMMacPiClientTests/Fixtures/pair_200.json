@@ -1,0 +1,8 @@
+{
+  "success": true,
+  "data": {
+    "host_id": "11111111-2222-3333-4444-555555555555",
+    "api_key": "test-api-key-plaintext",
+    "cursor_epoch": 1
+  }
+}

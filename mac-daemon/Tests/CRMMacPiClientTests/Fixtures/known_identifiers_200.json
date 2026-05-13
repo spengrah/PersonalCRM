@@ -1,0 +1,7 @@
+{
+  "success": true,
+  "data": {
+    "phones": ["+15555550100", "+15555550101"],
+    "emails": ["alice@example.test", "bob@example.test"]
+  }
+}
