@@ -199,6 +199,27 @@ jobs:
             ./.build/release/crm-mac $cmd --help
           done
 
+      - name: Smoke — async subcommand dispatch
+        working-directory: mac-daemon
+        # Regression guard for the @main / AsyncParsableCommand wiring.
+        # Without @main on an AsyncParsableCommand root, async
+        # subcommands silently fall through to printing help with
+        # exit 0. The --help smoke above can't catch this — help is
+        # intercepted by ArgumentParser before dispatch.
+        #
+        # `doctor` is async and fails fast on clean state (no install).
+        # If async dispatch is broken, it prints the help banner
+        # ("OVERVIEW: …") instead of the doctor body.
+        run: |
+          output=$(./.build/release/crm-mac doctor 2>&1 || true)
+          echo "--- doctor output ---"
+          echo "$output"
+          echo "--- end ---"
+          if echo "$output" | grep -q "^OVERVIEW:"; then
+            echo "FAIL: doctor short-circuited to help — async dispatch regression"
+            exit 1
+          fi
+
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
