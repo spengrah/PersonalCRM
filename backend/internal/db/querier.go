@@ -281,11 +281,13 @@ type Querier interface {
 	FindExternalContactsByEmail(ctx context.Context, dollar_1 []byte) ([]*ExternalContact, error)
 	// Finds external contacts whose JSONB emails contain the given normalized
 	// email value. Backed by idx_external_contact_emails_value_lower_gin via
-	// the jsonb_array_lower_values helper.
+	// the jsonb_array_lower_values helper. Tombstoned rows are excluded so
+	// duplicate detection ignores soft-deleted candidates.
 	FindExternalContactsByNormalizedEmail(ctx context.Context, lower string) ([]*ExternalContact, error)
 	// Finds all unmatched external_contact rows for a (source, source_id) pair
 	// regardless of account_id. Used by the calendar rematch handler to mark
 	// gcal_attendee import candidates as matched after a CRM contact links them.
+	// Tombstoned candidates must not be rematched.
 	FindExternalContactsBySourceAndSourceID(ctx context.Context, arg FindExternalContactsBySourceAndSourceIDParams) ([]*ExternalContact, error)
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
 	// Find an existing interaction by contact, source, and source_ref (for deduplication)
@@ -377,7 +379,13 @@ type Querier interface {
 	GetEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactEnrichment, error)
 	GetEvent(ctx context.Context, id pgtype.UUID) (*Event, error)
 	// External Contact queries
+	// Tombstoned rows are not retrievable by ID through normal flows.
 	GetExternalContact(ctx context.Context, id pgtype.UUID) (*ExternalContact, error)
+	// Tombstone-aware: returns tombstoned rows too. The mac-daemon ingest path
+	// needs visibility into tombstoned rows so it can revive them on a fresh
+	// external_contact.upserted event. Existing telegram / gcontacts callers
+	// never tombstone, so the broader read does not affect them. Callers that
+	// want live-only rows must check `DeletedAt == nil` after the call.
 	GetExternalContactBySource(ctx context.Context, arg GetExternalContactBySourceParams) (*ExternalContact, error)
 	// External identity queries for cross-platform contact identity matching
 	GetIdentityByID(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
@@ -507,6 +515,13 @@ type Querier interface {
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
 	ListAllUnmatchedExternalContacts(ctx context.Context, arg ListAllUnmatchedExternalContactsParams) ([]*ExternalContact, error)
+	// Returns the deduplicated canonicalized value set for the given
+	// contact_method types, scoped to non-deleted contacts. Ordered
+	// alphabetically by value_normalized for deterministic daemon-side diff.
+	// Used by GET /api/v1/host/:id/known-identifiers — the daemon needs the
+	// SET of canonical phones/emails, not the contact mapping, so DISTINCT
+	// collapses the same value across multiple contacts.
+	ListCanonicalIdentifiersByType(ctx context.Context, dollar_1 []string) ([]string, error)
 	// Lightweight query returning only IDs for navigation
 	ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]pgtype.UUID, error)
 	// Lightweight query returning only IDs with sorting for navigation
@@ -661,6 +676,10 @@ type Querier interface {
 	// Uses array_replace for efficient in-place replacement
 	ReplaceContactInCalendarEvents(ctx context.Context, arg ReplaceContactInCalendarEventsParams) error
 	ResetTelegramChatConfigBackfill(ctx context.Context, telegramChatID int64) error
+	// Clears deleted_at on a tombstoned row. Defensive WHERE deleted_at IS NOT
+	// NULL keeps the statement idempotent across concurrent revive races.
+	// Preserves crm_contact_id, match_status, and all content columns.
+	ReviveExternalContact(ctx context.Context, id pgtype.UUID) (*ExternalContact, error)
 	RevokeMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error)
 	// Lightweight query returning only IDs with search for navigation
 	SearchContactIDs(ctx context.Context, arg SearchContactIDsParams) ([]pgtype.UUID, error)
@@ -700,6 +719,11 @@ type Querier interface {
 	// consumer reads prev from the event payload (plan Decision 2a).
 	SnapshotContactCadenceFields(ctx context.Context, id pgtype.UUID) (*SnapshotContactCadenceFieldsRow, error)
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
+	// Tombstones a live row. Defensive WHERE deleted_at IS NULL keeps the
+	// statement idempotent against a concurrent delete. crm_contact_id,
+	// match_status, and duplicate_of_id are preserved per the external_contact
+	// soft-delete contract.
+	SoftDeleteExternalContact(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteInteraction(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteTelegramChannelMessages(ctx context.Context, arg SoftDeleteTelegramChannelMessagesParams) error
 	SoftDeleteTelegramMessages(ctx context.Context, messageIds []int32) error

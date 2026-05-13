@@ -179,3 +179,18 @@ func (r *ContactMethodRepository) SetPrimary(ctx context.Context, id uuid.UUID, 
 		IsPrimary: pgtype.Bool{Bool: isPrimary, Valid: true},
 	})
 }
+
+// ListCanonicalIdentifiersByType returns the deduplicated, alphabetically
+// sorted set of canonical contact-method values for the given types,
+// scoped to non-deleted contacts. Backs GET /api/v1/host/:id/known-
+// identifiers — the daemon uses this to filter incoming Apple Messages
+// senders against the user's known contact set.
+//
+// types is typically ["email"] or ["phone"]. Empty value_normalized
+// entries (legacy rows / null normalization) are excluded.
+func (r *ContactMethodRepository) ListCanonicalIdentifiersByType(
+	ctx context.Context,
+	types []string,
+) ([]string, error) {
+	return r.queries.ListCanonicalIdentifiersByType(ctx, types)
+}

@@ -1,18 +1,28 @@
 -- External Contact queries
 
 -- name: GetExternalContact :one
-SELECT * FROM external_contact WHERE id = $1;
+-- Tombstoned rows are not retrievable by ID through normal flows.
+SELECT * FROM external_contact
+WHERE id = $1
+  AND deleted_at IS NULL;
 
 -- name: FindExternalContactsBySourceAndSourceID :many
 -- Finds all unmatched external_contact rows for a (source, source_id) pair
 -- regardless of account_id. Used by the calendar rematch handler to mark
 -- gcal_attendee import candidates as matched after a CRM contact links them.
+-- Tombstoned candidates must not be rematched.
 SELECT * FROM external_contact
 WHERE source = sqlc.arg('source')
   AND source_id = sqlc.arg('source_id')
-  AND match_status = 'unmatched';
+  AND match_status = 'unmatched'
+  AND deleted_at IS NULL;
 
 -- name: GetExternalContactBySource :one
+-- Tombstone-aware: returns tombstoned rows too. The mac-daemon ingest path
+-- needs visibility into tombstoned rows so it can revive them on a fresh
+-- external_contact.upserted event. Existing telegram / gcontacts callers
+-- never tombstone, so the broader read does not affect them. Callers that
+-- want live-only rows must check `DeletedAt == nil` after the call.
 SELECT * FROM external_contact
 WHERE source = $1 AND source_id = $2 AND COALESCE(account_id, '') = COALESCE($3, '');
 
@@ -39,9 +49,33 @@ ON CONFLICT (source, source_id, COALESCE(account_id, '')) DO UPDATE SET
     updated_at = NOW()
 RETURNING *;
 
+-- name: ReviveExternalContact :one
+-- Clears deleted_at on a tombstoned row. Defensive WHERE deleted_at IS NOT
+-- NULL keeps the statement idempotent across concurrent revive races.
+-- Preserves crm_contact_id, match_status, and all content columns.
+UPDATE external_contact SET
+    deleted_at = NULL,
+    updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NOT NULL
+RETURNING *;
+
+-- name: SoftDeleteExternalContact :exec
+-- Tombstones a live row. Defensive WHERE deleted_at IS NULL keeps the
+-- statement idempotent against a concurrent delete. crm_contact_id,
+-- match_status, and duplicate_of_id are preserved per the external_contact
+-- soft-delete contract.
+UPDATE external_contact SET
+    deleted_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL;
+
 -- name: ListExternalContactsBySource :many
 SELECT * FROM external_contact
-WHERE source = $1 AND ($2::text IS NULL OR account_id = $2)
+WHERE source = $1
+  AND ($2::text IS NULL OR account_id = $2)
+  AND deleted_at IS NULL
 ORDER BY display_name
 LIMIT $3 OFFSET $4;
 
@@ -50,6 +84,7 @@ SELECT * FROM external_contact
 WHERE source = $1
   AND match_status = 'unmatched'
   AND duplicate_of_id IS NULL
+  AND deleted_at IS NULL
 ORDER BY display_name
 LIMIT $2 OFFSET $3;
 
@@ -57,6 +92,7 @@ LIMIT $2 OFFSET $3;
 SELECT * FROM external_contact
 WHERE match_status = 'unmatched'
   AND duplicate_of_id IS NULL
+  AND deleted_at IS NULL
 ORDER BY source, display_name
 LIMIT $1 OFFSET $2;
 
@@ -64,12 +100,14 @@ LIMIT $1 OFFSET $2;
 SELECT COUNT(*) FROM external_contact
 WHERE source = $1
   AND match_status = 'unmatched'
-  AND duplicate_of_id IS NULL;
+  AND duplicate_of_id IS NULL
+  AND deleted_at IS NULL;
 
 -- name: CountAllUnmatchedExternalContacts :one
 SELECT COUNT(*) FROM external_contact
 WHERE match_status = 'unmatched'
-  AND duplicate_of_id IS NULL;
+  AND duplicate_of_id IS NULL
+  AND deleted_at IS NULL;
 
 -- name: UpdateExternalContactMatch :one
 UPDATE external_contact SET
@@ -95,20 +133,24 @@ WHERE id = $1;
 SELECT * FROM external_contact
 WHERE emails @> $1::jsonb
   AND duplicate_of_id IS NULL
+  AND deleted_at IS NULL
 ORDER BY created_at;
 
 -- name: FindExternalContactsByNormalizedEmail :many
 -- Finds external contacts whose JSONB emails contain the given normalized
 -- email value. Backed by idx_external_contact_emails_value_lower_gin via
--- the jsonb_array_lower_values helper.
+-- the jsonb_array_lower_values helper. Tombstoned rows are excluded so
+-- duplicate detection ignores soft-deleted candidates.
 SELECT * FROM external_contact
 WHERE jsonb_array_lower_values(emails, 'value') && ARRAY[LOWER($1)]
   AND duplicate_of_id IS NULL
+  AND deleted_at IS NULL
 ORDER BY created_at;
 
 -- name: ListExternalContactsForCRMContact :many
 SELECT * FROM external_contact
 WHERE crm_contact_id = $1
+  AND deleted_at IS NULL
 ORDER BY source, account_id;
 
 -- name: DeleteExternalContactsBySourceAccount :exec
