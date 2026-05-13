@@ -67,22 +67,27 @@ public enum InstallRequestParser {
             }
         }
         let url: URL
-        if input.piURL.isEmpty {
+        if !isFresh {
+            // --upgrade / --register-only do not consume the URL — the
+            // existing config.json supplies it. Use a placeholder
+            // without parsing the operator's argument so they can pass
+            // any value (or omit it) without spurious validation.
+            url = URL(string: "https://localhost")!
+        } else if input.piURL.isEmpty {
+            // Fresh install required-fields are checked above; this
+            // branch is unreachable on fresh install but keeps the
+            // type non-optional.
             url = URL(string: "https://localhost")!
         } else {
             guard let parsed = URL(string: input.piURL) else {
                 throw InstallRequestParseError.malformedPiURL(raw: input.piURL)
             }
-            if isFresh {
-                // Reject file://, relative paths, missing host. For
-                // --upgrade / --register-only the URL is unused so we
-                // tolerate any value the operator may have supplied
-                // out of habit.
-                do {
-                    try ConfigStore.validatePiURL(parsed)
-                } catch {
-                    throw InstallRequestParseError.invalidPiURL(reason: String(describing: error))
-                }
+            // Reject file://, relative paths, missing host for fresh
+            // installs.
+            do {
+                try ConfigStore.validatePiURL(parsed)
+            } catch {
+                throw InstallRequestParseError.invalidPiURL(reason: String(describing: error))
             }
             url = parsed
         }

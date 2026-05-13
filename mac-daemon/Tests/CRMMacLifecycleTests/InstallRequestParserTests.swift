@@ -75,15 +75,30 @@ final class InstallRequestParserTests: XCTestCase {
     }
 
     func testUpgradeTolerantOfInvalidPiURL() throws {
-        // --upgrade ignores a supplied pi-url; tolerate any value.
+        // --upgrade ignores a supplied pi-url; tolerate any value
+        // including file:// schemes.
         let r = try InstallRequestParser.parse(input(
             piURL: "file:///tmp", pair: "", hostname: "", upgrade: true))
+        XCTAssertTrue(r.upgrade)
+    }
+
+    func testUpgradeTolerantOfMalformedPiURL() throws {
+        // Even a syntactically-malformed URL string passes — upgrade
+        // doesn't consume it.
+        let r = try InstallRequestParser.parse(input(
+            piURL: " ", pair: "", hostname: "", upgrade: true))
         XCTAssertTrue(r.upgrade)
     }
 
     func testRegisterOnlyTolerantOfInvalidPiURL() throws {
         let r = try InstallRequestParser.parse(input(
             piURL: "file:///tmp", pair: "", hostname: "", registerOnly: true))
+        XCTAssertTrue(r.registerOnly)
+    }
+
+    func testRegisterOnlyTolerantOfMalformedPiURL() throws {
+        let r = try InstallRequestParser.parse(input(
+            piURL: " ", pair: "", hostname: "", registerOnly: true))
         XCTAssertTrue(r.registerOnly)
     }
 
