@@ -1,8 +1,9 @@
 // `crm-mac install` parses options and delegates to
-// CRMMacLifecycle.Installer.
+// CRMMacLifecycle.Installer. The branchy validation lives in
+// InstallRequestParser so it can be unit-tested without standing up
+// the executable target (which has no test target by design).
 import Foundation
 import ArgumentParser
-import CRMMacCore
 import CRMMacLifecycle
 
 struct InstallCommand: AsyncParsableCommand {
@@ -26,47 +27,21 @@ struct InstallCommand: AsyncParsableCommand {
     var registerOnly: Bool = false
 
     mutating func run() async throws {
-        if upgrade && registerOnly {
-            throw ValidationError("--upgrade and --register-only are mutually exclusive")
-        }
-        // --hostname is required only on a fresh install.
-        if !upgrade && !registerOnly {
-            if piURL.isEmpty {
-                throw ValidationError("--pi-url <url> is required for fresh install")
-            }
-            if pair.isEmpty {
-                throw ValidationError("--pair <token> is required for fresh install")
-            }
-            if hostname.isEmpty {
-                throw ValidationError("--hostname <label> is required. Pick a non-PII label like 'mac-1', 'work-mac', 'home-laptop'.")
-            }
-        }
-
-        let url: URL
-        if piURL.isEmpty {
-            url = URL(string: "https://localhost")!
-        } else {
-            guard let parsed = URL(string: piURL) else {
-                throw ValidationError("--pi-url is not a valid URL: \(piURL)")
-            }
-            // Reject file://, relative paths, missing host, anything
-            // that's not http(s). Otherwise the install will fail
-            // mid-pair with a confusing transport error.
-            do {
-                try ConfigStore.validatePiURL(parsed)
-            } catch {
-                throw ValidationError("--pi-url is invalid: \(error)")
-            }
-            url = parsed
-        }
-        let ctx = ProductionContext()
-        let installer = ctx.installer()
-        let request = InstallRequest(
-            piURL: url,
-            pairingToken: pair,
+        let input = InstallRequestParserInput(
+            piURL: piURL,
+            pair: pair,
             hostname: hostname,
             upgrade: upgrade,
             registerOnly: registerOnly)
+        let request: InstallRequest
+        do {
+            request = try InstallRequestParser.parse(input)
+        } catch let e as InstallRequestParseError {
+            throw ValidationError(String(describing: e))
+        }
+
+        let ctx = ProductionContext()
+        let installer = ctx.installer()
         let summary = try await installer.run(request)
         print("install complete")
         print("  host_id=\(summary.hostID.uuidString.lowercased())")
