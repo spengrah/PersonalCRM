@@ -15,6 +15,10 @@ public final class FakeLaunchctlRunner: LaunchctlRunner {
     public private(set) var bootstrapCalls: [String] = []
     public private(set) var bootoutCalls: [String] = []
     public private(set) var printServiceCalls: [String] = []
+    /// If non-nil, `printService(label:)` throws this error on the
+    /// next invocation. Used to exercise the launchctl-spawn-failure
+    /// branch of Installer.existingInstallDetected.
+    public var printServiceThrowsOnce: Error?
 
     public init(script: Script = Script()) {
         self.script = script
@@ -38,6 +42,10 @@ public final class FakeLaunchctlRunner: LaunchctlRunner {
 
     public func printService(label: String) throws -> LaunchctlInvocation {
         printServiceCalls.append(label)
+        if let err = printServiceThrowsOnce {
+            printServiceThrowsOnce = nil
+            throw err
+        }
         let exit = script.printService.isEmpty ? 0 : script.printService.removeFirst()
         return LaunchctlInvocation(
             arguments: ["print", "gui/501/\(label)"],

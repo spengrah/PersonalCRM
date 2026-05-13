@@ -31,6 +31,20 @@ final class InstallerPreflightTests: XCTestCase {
         await assertThrowsAlreadyInstalled(installer)
     }
 
+    func testRefusesWhenLaunchctlSpawnFails() async {
+        // The launchctl probe throws (spawn failure) — preflight
+        // treats the inconclusive probe as "existing install" and
+        // refuses, rather than failing open.
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        fs.seedFile(at: "/tmp/source/crm-mac")
+        let launchctl = FakeLaunchctlRunner()
+        launchctl.printServiceThrowsOnce = NSError(
+            domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "spawn refused"])
+        let installer = makeInstaller(paths: paths, fs: fs, launchctl: launchctl)
+        await assertThrowsAlreadyInstalled(installer)
+    }
+
     func testRefusesWhenLaunchctlReportsRegistered() async {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
