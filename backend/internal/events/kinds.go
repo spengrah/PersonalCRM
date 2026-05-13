@@ -30,6 +30,15 @@ const (
 	// §3.4.1) atomically with an interaction row insert. PR 2 declares
 	// the constant; PR 5 introduces the consumer that emits it.
 	KindInteractionRecorded Kind = "interaction.recorded"
+
+	// Daemon-emitted raw-message events. Published by the Mac daemon
+	// against /api/v1/ingest/events with host-auth. NOT consumed by any
+	// bus consumer — IngestService processes them inline within the
+	// per-event savepoint (identity match → staging upsert → aggregator
+	// enqueue). The event-log row exists for audit + (source, source_id)
+	// dedup on retries.
+	KindRawMessageReceived Kind = "raw_message.received"
+	KindRawMessageSent     Kind = "raw_message.sent"
 )
 
 // AllKinds enumerates every defined Kind. Used by tests to guard that
@@ -46,6 +55,8 @@ var AllKinds = []Kind{
 	KindInteractionManual,
 	KindContactMethodsAdded,
 	KindInteractionRecorded,
+	KindRawMessageReceived,
+	KindRawMessageSent,
 }
 
 // Envelope is the wire/DB shape passed through Bus.Publish. Payload is
@@ -241,6 +252,68 @@ type CadenceFieldsSnapshot struct {
 	ContactBy      *time.Time `json:"contact_by,omitempty"` // date-precision
 }
 
+// AttachmentMeta carries metadata-only descriptors for a message
+// attachment. No content; the daemon never ships attachment bytes
+// across the wire. Defined alongside RawMessage*Payload so the payload
+// struct compiles today; the field is `omitempty` so daemon clients
+// that don't yet ship attachments produce wire-compatible payloads.
+type AttachmentMeta struct {
+	Type     string  `json:"type"` // photo|audio|video|document|other
+	Filename *string `json:"filename,omitempty"`
+	MimeType *string `json:"mime_type,omitempty"`
+	Size     *int64  `json:"size,omitempty"`
+}
+
+// canonicalMessageTypes is the set of values accepted by
+// messages_message.message_type CHECK constraint. Matched verbatim
+// against the migration so payload validation rejects bad values
+// before the CHECK constraint aborts the ingest tx.
+var canonicalMessageTypes = map[string]struct{}{
+	"text":     {},
+	"photo":    {},
+	"audio":    {},
+	"video":    {},
+	"document": {},
+	"other":    {},
+}
+
+// IsCanonicalMessageType reports whether t is one of the six allowed
+// message_type values for messages_message. Used by ValidatePayload
+// for raw_message.* kinds and by the handler's pre-service validator.
+func IsCanonicalMessageType(t string) bool {
+	_, ok := canonicalMessageTypes[t]
+	return ok
+}
+
+// RawMessageReceivedPayload is the payload for KindRawMessageReceived,
+// emitted by the Mac daemon. Carries the full raw data needed by the
+// inline ingest handler to identity-match, upsert staging, and enqueue
+// the aggregator job. NOT consumed by any bus consumer — processed
+// inline within the ingest transaction.
+//
+// Version evolution: per spec §3.2, additive fields are V1-compatible;
+// breaking changes ship a V2 struct.
+type RawMessageReceivedPayload struct {
+	Version     int              `json:"version"`             // start at 1
+	HostID      uuid.UUID        `json:"host_id"`             // authenticated host that observed the row
+	Source      string           `json:"source"`              // "messages" only in PR4
+	Guid        string           `json:"guid"`                // iMessage guid; primary dedup key
+	ChatID      string           `json:"chat_id"`             // chat.db chat.guid
+	PeerHandle  string           `json:"peer_handle"`         // raw phone/email as observed in chat.db
+	PeerName    *string          `json:"peer_name,omitempty"` // sender's display name when available
+	Text        *string          `json:"text,omitempty"`      // full message body
+	MessageType string           `json:"message_type"`        // text|photo|audio|video|document|other
+	IsGroup     bool             `json:"is_group"`            // group chat vs DM
+	SentAt      time.Time        `json:"sent_at"`             // from source, NOT daemon clock
+	ReplyToGuid *string          `json:"reply_to_guid,omitempty"`
+	Attachments []AttachmentMeta `json:"attachments,omitempty"` // metadata only; PR7 populates
+}
+
+// RawMessageSentPayload is the payload for KindRawMessageSent. Same
+// shape as RawMessageReceivedPayload (the only difference is the kind
+// constant — used by the inline handler to set IsOutgoing on staging).
+type RawMessageSentPayload RawMessageReceivedPayload
+
 // kindPayloadTypes is the canonical Kind → payload-type registry used by
 // Marshal and Unmarshal to assert type-vs-kind consistency at runtime. Add
 // a row each time a new Kind + payload struct are introduced. Keep in sync
@@ -257,6 +330,8 @@ var kindPayloadTypes = map[Kind]reflect.Type{
 	KindInteractionManual:    reflect.TypeOf(InteractionManualPayload{}),
 	KindContactMethodsAdded:  reflect.TypeOf(ContactMethodsAddedPayload{}),
 	KindInteractionRecorded:  reflect.TypeOf(InteractionRecordedPayload{}),
+	KindRawMessageReceived:   reflect.TypeOf(RawMessageReceivedPayload{}),
+	KindRawMessageSent:       reflect.TypeOf(RawMessageSentPayload{}),
 }
 
 // IsKnownKind reports whether kind has a registered payload type. Used by
@@ -301,6 +376,23 @@ func ValidatePayload(env *Envelope) error {
 	dst := reflect.New(expected).Interface() // *P
 	if err := json.Unmarshal(env.Payload, dst); err != nil {
 		return fmt.Errorf("validate %s: %w", env.Kind, err)
+	}
+	// Per-kind value checks beyond structural decode. Currently the
+	// only kinds with strict value rules at the validate boundary are
+	// the raw_message.* daemon-emitted kinds: their MessageType must
+	// match the messages_message CHECK constraint set so a misshaped
+	// payload doesn't abort the ingest tx with a constraint violation.
+	switch env.Kind {
+	case KindRawMessageReceived:
+		p := dst.(*RawMessageReceivedPayload)
+		if p.MessageType != "" && !IsCanonicalMessageType(p.MessageType) {
+			return fmt.Errorf("validate %s: message_type %q is not in the canonical set", env.Kind, p.MessageType)
+		}
+	case KindRawMessageSent:
+		p := dst.(*RawMessageSentPayload)
+		if p.MessageType != "" && !IsCanonicalMessageType(p.MessageType) {
+			return fmt.Errorf("validate %s: message_type %q is not in the canonical set", env.Kind, p.MessageType)
+		}
 	}
 	return nil
 }
