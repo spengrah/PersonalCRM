@@ -840,6 +840,9 @@ type Querier interface {
 	UpdateContactTaskMetadata(ctx context.Context, arg UpdateContactTaskMetadataParams) (*ContactTask, error)
 	UpdateContactTaskState(ctx context.Context, arg UpdateContactTaskStateParams) (*ContactTask, error)
 	UpdateExternalContactDuplicate(ctx context.Context, arg UpdateExternalContactDuplicateParams) error
+	// Filter `deleted_at IS NULL` so a tombstoned row cannot have its
+	// match state mutated. A tombstoned row is invisible to every read
+	// path; writes should be invisible too.
 	UpdateExternalContactMatch(ctx context.Context, arg UpdateExternalContactMatchParams) (*ExternalContact, error)
 	UpdateIdentityMessageCount(ctx context.Context, arg UpdateIdentityMessageCountParams) (*ExternalIdentity, error)
 	// Promote an outbound interaction to mutual when a reply arrives (in-place update)

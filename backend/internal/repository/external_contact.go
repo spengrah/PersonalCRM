@@ -419,7 +419,9 @@ func (r *ExternalContactRepository) CountAllUnmatched(ctx context.Context) (int6
 	return r.queries.CountAllUnmatchedExternalContacts(ctx)
 }
 
-// UpdateMatch updates the CRM contact ID and match status
+// UpdateMatch updates the CRM contact ID and match status. Returns
+// db.ErrNotFound when the target row is tombstoned (the underlying
+// query filters `deleted_at IS NULL`) or has been hard-deleted.
 func (r *ExternalContactRepository) UpdateMatch(ctx context.Context, id uuid.UUID, crmContactID *uuid.UUID, status MatchStatus) (*ExternalContact, error) {
 	var crmContactIDPg pgtype.UUID
 	if crmContactID != nil {
@@ -432,6 +434,9 @@ func (r *ExternalContactRepository) UpdateMatch(ctx context.Context, id uuid.UUI
 		MatchStatus:  pgtype.Text{String: string(status), Valid: true},
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
 		return nil, err
 	}
 	return convertDbExternalContact(dbContact)
@@ -566,6 +571,8 @@ func (r *ExternalContactRepository) UpsertTx(
 // UpdateMatchTx is the tx-bound variant of UpdateMatch. Used by the
 // mac-daemon ingest handler's first-insert path to set
 // crm_contact_id + match_status when an identity match succeeds.
+// Returns db.ErrNotFound when the target row is tombstoned (the
+// underlying query filters `deleted_at IS NULL`) or hard-deleted.
 // Caller owns the tx lifecycle.
 func (r *ExternalContactRepository) UpdateMatchTx(
 	ctx context.Context,
@@ -584,6 +591,9 @@ func (r *ExternalContactRepository) UpdateMatchTx(
 		MatchStatus:  pgtype.Text{String: string(status), Valid: true},
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
 		return nil, err
 	}
 	return convertDbExternalContact(dbContact)

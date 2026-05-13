@@ -577,3 +577,35 @@ func TestIngestExternalContact_BadSourceIDFormat_Rejected(t *testing.T) {
 	require.Equal(t, 1, resp.Rejected)
 	require.Equal(t, "PAYLOAD_INVARIANT", resp.Errors[0].Code)
 }
+
+func TestIngestExternalContact_VersionZero_Rejected(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	entityID := env.sourceIDPrefix + "v0"
+	ev := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Version = 0 // wire-shape forbidden — Version must be >= 1
+	})
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{ev},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Rejected)
+	require.Equal(t, "PAYLOAD_INVALID", resp.Errors[0].Code)
+	require.Contains(t, resp.Errors[0].Message, "version")
+}
+
+func TestIngestExternalContact_VersionTooHigh_Rejected(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	entityID := env.sourceIDPrefix + "vhigh"
+	ev := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Version = 999 // future daemon — operator must upgrade Pi
+	})
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{ev},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Rejected)
+	require.Equal(t, "PAYLOAD_INVALID", resp.Errors[0].Code)
+	require.Contains(t, resp.Errors[0].Message, "upgrade Pi")
+}

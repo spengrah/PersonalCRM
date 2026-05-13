@@ -110,24 +110,30 @@ WHERE match_status = 'unmatched'
   AND deleted_at IS NULL;
 
 -- name: UpdateExternalContactMatch :one
+-- Filter `deleted_at IS NULL` so a tombstoned row cannot have its
+-- match state mutated. A tombstoned row is invisible to every read
+-- path; writes should be invisible too.
 UPDATE external_contact SET
     crm_contact_id = $2,
     match_status = $3,
     updated_at = NOW()
 WHERE id = $1
+  AND deleted_at IS NULL
 RETURNING *;
 
 -- name: UpdateExternalContactDuplicate :exec
 UPDATE external_contact SET
     duplicate_of_id = $2,
     updated_at = NOW()
-WHERE id = $1;
+WHERE id = $1
+  AND deleted_at IS NULL;
 
 -- name: IgnoreExternalContact :exec
 UPDATE external_contact SET
     match_status = 'ignored',
     updated_at = NOW()
-WHERE id = $1;
+WHERE id = $1
+  AND deleted_at IS NULL;
 
 -- name: FindExternalContactsByEmail :many
 SELECT * FROM external_contact

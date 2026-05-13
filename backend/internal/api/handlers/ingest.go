@@ -52,6 +52,11 @@ const (
 // dropped-field decode.
 const eventsRawMessageMaxKnownVersion = 1
 
+// eventsExternalContactMaxKnownVersion is the highest
+// external_contact.* payload Version the Pi knows how to process. Same
+// "upgrade Pi" rejection semantics as raw_message.* (above).
+const eventsExternalContactMaxKnownVersion = 1
+
 // IngestHandler exposes POST /api/v1/ingest/events. Registered only when
 // cfg.Features.EnableEventBusIngest is true (spec §3.9).
 type IngestHandler struct {
@@ -322,6 +327,49 @@ func validateIngestEvent(index int, ev IngestEventRequest) *IngestError {
 		}
 	}
 
+	// external_contact.* kinds: the payload version envelope is the
+	// daemon's "upgrade Pi" signal; reject zero/missing or too-high so
+	// the operator sees a clear PAYLOAD_INVALID rather than a silent
+	// dropped-field decode. The service-layer verifier enforces the
+	// source_id regex shape and source-allowlist (we don't duplicate
+	// that here).
+	if kind == events.KindExternalContactUpserted || kind == events.KindExternalContactDeleted {
+		if ev.SourceID == "" {
+			return &IngestError{
+				Index:   index,
+				Code:    ingestCodeMissingField,
+				Message: "source_id is required for external_contact.* kinds",
+			}
+		}
+		if rerr := validateExternalContactPayloadVersion(index, kind, ev); rerr != nil {
+			return rerr
+		}
+	}
+
+	return nil
+}
+
+// validateExternalContactPayloadVersion enforces the version envelope
+// on both external_contact.* kinds. Runs after ValidatePayload has
+// already passed (so the payload decodes into the typed struct).
+func validateExternalContactPayloadVersion(index int, kind events.Kind, ev IngestEventRequest) *IngestError {
+	// Both kinds carry Version at the same JSON key; decode just enough
+	// to read it.
+	var versionEnvelope struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(ev.Payload, &versionEnvelope); err != nil {
+		return &IngestError{Index: index, Code: ingestCodePayloadInvalid, Message: err.Error()}
+	}
+	if versionEnvelope.Version < 1 {
+		return &IngestError{Index: index, Code: ingestCodePayloadInvalid,
+			Message: fmt.Sprintf("%s payload: version must be >=1 (got %d)", kind, versionEnvelope.Version)}
+	}
+	if versionEnvelope.Version > eventsExternalContactMaxKnownVersion {
+		return &IngestError{Index: index, Code: ingestCodePayloadInvalid,
+			Message: fmt.Sprintf("%s payload version %d exceeds max known %d; upgrade Pi",
+				kind, versionEnvelope.Version, eventsExternalContactMaxKnownVersion)}
+	}
 	return nil
 }
 

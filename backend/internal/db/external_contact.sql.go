@@ -469,6 +469,7 @@ UPDATE external_contact SET
     match_status = 'ignored',
     updated_at = NOW()
 WHERE id = $1
+  AND deleted_at IS NULL
 `
 
 func (q *Queries) IgnoreExternalContact(ctx context.Context, id pgtype.UUID) error {
@@ -817,6 +818,7 @@ UPDATE external_contact SET
     duplicate_of_id = $2,
     updated_at = NOW()
 WHERE id = $1
+  AND deleted_at IS NULL
 `
 
 type UpdateExternalContactDuplicateParams struct {
@@ -835,6 +837,7 @@ UPDATE external_contact SET
     match_status = $3,
     updated_at = NOW()
 WHERE id = $1
+  AND deleted_at IS NULL
 RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at
 `
 
@@ -844,6 +847,9 @@ type UpdateExternalContactMatchParams struct {
 	MatchStatus  pgtype.Text `json:"match_status"`
 }
 
+// Filter `deleted_at IS NULL` so a tombstoned row cannot have its
+// match state mutated. A tombstoned row is invisible to every read
+// path; writes should be invisible too.
 func (q *Queries) UpdateExternalContactMatch(ctx context.Context, arg UpdateExternalContactMatchParams) (*ExternalContact, error) {
 	row := q.db.QueryRow(ctx, UpdateExternalContactMatch, arg.ID, arg.CrmContactID, arg.MatchStatus)
 	var i ExternalContact

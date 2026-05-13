@@ -730,7 +730,7 @@ func (s *IngestService) handleExternalContactUpserted(
 			Msg("external_contact.upserted carries empty metadata; daemon should populate container_identifier")
 	}
 
-	// Step 1: pre-read to determine first-insert / re-upsert / revive.
+	// Pre-read to determine first-insert / re-upsert / revive.
 	// GetBySourceTx is intentionally tombstone-aware.
 	prior, getErr := s.externalContacts.GetBySourceTx(ctx, tx, env.Source, p.EntityID, nil)
 	if getErr != nil && !errors.Is(getErr, db.ErrNotFound) {
@@ -742,7 +742,7 @@ func (s *IngestService) handleExternalContactUpserted(
 	firstInsert := errors.Is(getErr, db.ErrNotFound)
 	wasTombstoned := !firstInsert && prior != nil && prior.DeletedAt != nil
 
-	// Step 2: upsert the row. The query does not touch deleted_at,
+	// Upsert the row. The underlying query does not touch deleted_at,
 	// crm_contact_id, or match_status on the UPDATE branch.
 	birthday := parseExternalContactBirthday(p.Birthday)
 	syncedAt := accelerated.GetCurrentTime()
@@ -771,8 +771,13 @@ func (s *IngestService) handleExternalContactUpserted(
 		}
 	}
 
-	// Step 3: revive if the pre-read showed a tombstone.
-	if wasTombstoned {
+	// Revive if the row is tombstoned. We check BOTH the pre-read AND
+	// the post-upsert returned row's deleted_at — a concurrent delete
+	// that committed between our pre-read and our upsert leaves
+	// wasTombstoned=false even though the row is tombstoned at this
+	// point. The post-upsert check closes that race.
+	needsRevive := wasTombstoned || (external != nil && external.DeletedAt != nil)
+	if needsRevive {
 		revived, err := s.externalContacts.ReviveTx(ctx, tx, external.ID)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
 			return &IngestPerEventRejection{
@@ -785,22 +790,28 @@ func (s *IngestService) handleExternalContactUpserted(
 		}
 	}
 
-	// Step 4: identity match per (email, phone). Iterate the full
-	// set so external_identity rows get refreshed for every method,
-	// regardless of which one triggered the match. The
-	// external_contact.crm_contact_id / match_status update only fires
-	// on FIRST INSERT and only on the first successful match — see the
-	// godoc above for the rationale.
+	// Identity match per (email, phone). Iterate the full set so
+	// external_identity rows get refreshed for every method,
+	// regardless of which one triggered the match.
 	//
-	// Defensive: only flip match state when the UPSERT returned a row
-	// that does NOT already carry a crm_contact_id. The combination
-	// (firstInsert && CRMContactID == nil) closes a theoretical race
-	// where a concurrent INSERT lands between our pre-read and our
-	// UPSERT — the UPSERT's UPDATE branch then returns the other tx's
-	// crm_contact_id, and we must NOT clobber it with our own match
-	// result. Single-daemon ordering makes the race extremely
-	// unlikely, but the guard is cheap.
-	canSetMatchOnRow := firstInsert && external.CRMContactID == nil
+	// The external_contact.crm_contact_id / match_status update only
+	// fires on FIRST INSERT and only on the first successful match —
+	// re-upsert / revive preserves match state verbatim so a user's
+	// manually-resolved `imported` or `ignored` decision is not
+	// silently flipped on a content edit.
+	//
+	// Defensive guards (closing concurrent-INSERT-between-pre-read-and-
+	// upsert races):
+	//   - external.CRMContactID == nil: another tx may have set the
+	//     match; do not clobber.
+	//   - external.MatchStatus is unmatched: the user may have
+	//     `imported` / `ignored` the row manually; preserve that.
+	//   - external.DuplicateOfID == nil: the row is not marked as a
+	//     duplicate of another contact.
+	canSetMatchOnRow := firstInsert &&
+		external.CRMContactID == nil &&
+		external.MatchStatus == repository.MatchStatusUnmatched &&
+		external.DuplicateOfID == nil
 	matched := false
 	for _, em := range p.Emails {
 		if em.Value == "" {
