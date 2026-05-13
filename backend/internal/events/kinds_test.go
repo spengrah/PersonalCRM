@@ -802,7 +802,7 @@ func TestValidatePayload_NullPayloadWithWhitespace(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// external_contact.* payload tests (PR5).
+// external_contact.* payload tests.
 // ----------------------------------------------------------------------------
 
 func makeExternalContactUpsertedRaw(t *testing.T, mutate func(*ExternalContactUpsertedPayload)) json.RawMessage {
