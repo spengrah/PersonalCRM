@@ -136,11 +136,25 @@ public enum InstallRequestParser {
 /// 192.168/16 LAN ranges) is treated as routable for the plaintext-
 /// HTTP warning's purposes — plaintext over a LAN still leaks the
 /// key on the wire.
+///
+/// The 127/8 check matches only IPv4 literals (four numeric octets)
+/// to avoid a false-negative on hostnames like `127.example.com`
+/// that happen to start with `127.`.
 private func isLoopbackHost(_ host: String) -> Bool {
     if host.isEmpty { return false }
     let lower = host.lowercased()
     if lower == "localhost" { return true }
     if lower == "::1" { return true }
-    if lower.hasPrefix("127.") { return true }
+    if isLoopbackIPv4Literal(lower) { return true }
     return false
+}
+
+private func isLoopbackIPv4Literal(_ host: String) -> Bool {
+    let octets = host.split(separator: ".")
+    guard octets.count == 4 else { return false }
+    guard let first = UInt8(octets[0]), first == 127 else { return false }
+    guard UInt8(octets[1]) != nil,
+          UInt8(octets[2]) != nil,
+          UInt8(octets[3]) != nil else { return false }
+    return true
 }

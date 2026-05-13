@@ -707,9 +707,9 @@ v1 ships across 8 PRs. PRs 1-5 are Pi-side (Go); PRs 6-8 are Mac-side (Swift). E
 - `SourceContext` carries Pi client, cursor read/write, logger.
 
 **CI:**
-- New workflow `.github/workflows/mac-daemon.yml` on `macos-latest`.
-- Path-filtered to `mac-daemon/**` and the workflow file itself.
-- Runs `swift build -c release` and `swift test`.
+- New `mac-daemon-tests` job inside `.github/workflows/ci.yml` on `macos-15` (pinned).
+- Gated on a `mac_daemon` paths filter that triggers on `mac-daemon/**` or the `ci.yml` workflow file itself.
+- Runs `swift build -c release -Xswiftc -warnings-as-errors` and `swift test`.
 - No additional secrets required.
 
 **Tests:**
@@ -720,7 +720,7 @@ v1 ships across 8 PRs. PRs 1-5 are Pi-side (Go); PRs 6-8 are Mac-side (Swift). E
 **Definition of done:**
 1. On a fresh macOS machine: `crm-api pair --host mac-1` → `crm-mac install --pair <token>` → daemon is registered as a login item, has Pi-side API key in Keychain, `crm-mac doctor` reports green.
 2. `crm-mac daemon` runs without crashing; stub scheduler jobs fire on schedule and log a no-op tick.
-3. `swift test` passes on `macos-latest` in CI.
+3. `swift test` passes on `macos-15` in CI.
 
 **Out of scope (deferred to PR7/PR8):**
 - chat.db reader, 30-day backwards scan (PR7)

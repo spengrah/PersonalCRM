@@ -6,9 +6,9 @@
 // Concurrency note: load -> mutate -> save is NOT atomic across
 // concurrent writers, only the save() itself is. Today the heartbeat
 // loop is the only writer of state.json so this is safe; once source
-// plugins begin committing per-source cursors (PR7/PR8), state writes
-// need to be serialized — see PluginRegistry / DaemonRunner for the
-// expected actor barrier.
+// plugins begin committing per-source cursors, state writes need to
+// be serialized — see PluginRegistry / DaemonRunner for the expected
+// actor barrier.
 import Foundation
 import CRMMacCore
 

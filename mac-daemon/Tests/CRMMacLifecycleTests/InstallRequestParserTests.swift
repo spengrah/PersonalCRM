@@ -123,6 +123,13 @@ final class InstallRequestParserTests: XCTestCase {
         XCTAssertFalse(result.warnings.plaintextHTTPNonLoopback)
     }
 
+    func testPlaintextHTTPHostnameStartingWith127DotIsNotLoopback() throws {
+        // `127.example.com` is a routable hostname; the 127. prefix
+        // must NOT classify it as loopback.
+        let result = try InstallRequestParser.parseWithWarnings(input(piURL: "http://127.example.com"))
+        XCTAssertTrue(result.warnings.plaintextHTTPNonLoopback)
+    }
+
     func testHTTPSDoesNotWarn() throws {
         let result = try InstallRequestParser.parseWithWarnings(input(piURL: "https://pi.example.test"))
         XCTAssertFalse(result.warnings.plaintextHTTPNonLoopback)
