@@ -200,6 +200,7 @@ type ExternalContact struct {
 	SyncedAt      pgtype.Timestamptz `json:"synced_at"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
 }
 
 type ExternalIdentity struct {

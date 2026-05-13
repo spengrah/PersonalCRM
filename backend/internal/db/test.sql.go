@@ -23,7 +23,9 @@ func (q *Queries) CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype
 }
 
 const CountExternalContactsByDisplayNamePrefix = `-- name: CountExternalContactsByDisplayNamePrefix :one
-SELECT COUNT(*) FROM external_contact WHERE display_name LIKE $1 || '%'
+SELECT COUNT(*) FROM external_contact
+WHERE display_name LIKE $1 || '%'
+  AND deleted_at IS NULL
 `
 
 func (q *Queries) CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error) {

@@ -64,3 +64,18 @@ WHERE cm.id = $1
     WHERE c.id = cm.contact_id
       AND c.deleted_at IS NULL
   );
+
+-- name: ListCanonicalIdentifiersByType :many
+-- Returns the deduplicated canonicalized value set for the given
+-- contact_method types, scoped to non-deleted contacts. Ordered
+-- alphabetically by value_normalized for deterministic daemon-side diff.
+-- Used by GET /api/v1/host/:id/known-identifiers — the daemon needs the
+-- SET of canonical phones/emails, not the contact mapping, so DISTINCT
+-- collapses the same value across multiple contacts.
+SELECT DISTINCT cm.value_normalized
+FROM contact_method cm
+JOIN contact c ON c.id = cm.contact_id
+WHERE cm.type = ANY($1::text[])
+  AND cm.value_normalized <> ''
+  AND c.deleted_at IS NULL
+ORDER BY cm.value_normalized ASC;

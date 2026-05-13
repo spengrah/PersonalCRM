@@ -531,10 +531,11 @@ func TestKindPayloadTypes_CoversAllKinds(t *testing.T) {
 
 // TestAllKinds_ExpectedCount guards against accidental Kind additions or
 // deletions from AllKinds without updating the spec. Current spec (§3.2)
-// declares 10 base kinds (9 raw-signal + 1 derived) plus the two
-// daemon-emitted raw_message.* kinds introduced for the messages source.
+// declares 10 base kinds (9 raw-signal + 1 derived), plus the two
+// daemon-emitted raw_message.* kinds (messages source), plus the two
+// external_contact.* kinds (iCloud Contacts source).
 func TestAllKinds_ExpectedCount(t *testing.T) {
-	require.Len(t, AllKinds, 12)
+	require.Len(t, AllKinds, 14)
 }
 
 // TestIsKnownKind_CoversAllKinds is the positive side: every Kind declared
@@ -611,6 +612,20 @@ func buildCanonicalPayload(t *testing.T, kind Kind) json.RawMessage {
 			Version: 1, HostID: uuid.New(), Source: "messages",
 			Guid: "g-2", ChatID: "iMessage;-;chat-x", PeerHandle: "+15551234567",
 			MessageType: "text", SentAt: at,
+		})
+		require.NoError(t, err)
+		return raw
+	case KindExternalContactUpserted:
+		raw, err := Marshal(kind, ExternalContactUpsertedPayload{
+			Version: 1, HostID: uuid.New(), Source: "icloud_contacts",
+			EntityID: "CN-canonical-1",
+		})
+		require.NoError(t, err)
+		return raw
+	case KindExternalContactDeleted:
+		raw, err := Marshal(kind, ExternalContactDeletedPayload{
+			Version: 1, HostID: uuid.New(), Source: "icloud_contacts",
+			EntityID: "CN-canonical-2",
 		})
 		require.NoError(t, err)
 		return raw
@@ -784,4 +799,187 @@ func TestValidatePayload_NullPayloadWithWhitespace(t *testing.T) {
 	err := ValidatePayload(env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "got null")
+}
+
+// ----------------------------------------------------------------------------
+// external_contact.* payload tests.
+// ----------------------------------------------------------------------------
+
+func makeExternalContactUpsertedRaw(t *testing.T, mutate func(*ExternalContactUpsertedPayload)) json.RawMessage {
+	t.Helper()
+	bday := "1990-04-21"
+	dn := "Sample User"
+	p := ExternalContactUpsertedPayload{
+		Version:     1,
+		HostID:      uuid.New(),
+		Source:      "icloud_contacts",
+		EntityID:    "CN-entity-1",
+		DisplayName: &dn,
+		Emails:      []ExternalContactMethodValue{{Value: "u@example.com", Type: "home", Primary: true}},
+		Phones:      []ExternalContactMethodValue{{Value: "+15551234567", Type: "mobile"}},
+		Birthday:    &bday,
+	}
+	if mutate != nil {
+		mutate(&p)
+	}
+	b, err := json.Marshal(p)
+	require.NoError(t, err)
+	return json.RawMessage(b)
+}
+
+func TestValidatePayload_ExternalContactUpserted_AcceptsValid(t *testing.T) {
+	env := &Envelope{
+		Kind:    KindExternalContactUpserted,
+		Payload: makeExternalContactUpsertedRaw(t, nil),
+	}
+	require.NoError(t, ValidatePayload(env))
+}
+
+func TestValidatePayload_ExternalContactUpserted_RejectsEmptyEntityID(t *testing.T) {
+	env := &Envelope{
+		Kind: KindExternalContactUpserted,
+		Payload: makeExternalContactUpsertedRaw(t, func(p *ExternalContactUpsertedPayload) {
+			p.EntityID = ""
+		}),
+	}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "entity_id is required")
+}
+
+func TestValidatePayload_ExternalContactUpserted_RejectsZeroHostID(t *testing.T) {
+	env := &Envelope{
+		Kind: KindExternalContactUpserted,
+		Payload: makeExternalContactUpsertedRaw(t, func(p *ExternalContactUpsertedPayload) {
+			p.HostID = uuid.Nil
+		}),
+	}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "host_id is required")
+}
+
+func TestValidatePayload_ExternalContactUpserted_RejectsMalformedBirthday(t *testing.T) {
+	env := &Envelope{
+		Kind: KindExternalContactUpserted,
+		Payload: makeExternalContactUpsertedRaw(t, func(p *ExternalContactUpsertedPayload) {
+			bad := "1990/04/21"
+			p.Birthday = &bad
+		}),
+	}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "birthday")
+}
+
+func TestValidatePayload_ExternalContactUpserted_OmittedBirthdayAccepted(t *testing.T) {
+	env := &Envelope{
+		Kind: KindExternalContactUpserted,
+		Payload: makeExternalContactUpsertedRaw(t, func(p *ExternalContactUpsertedPayload) {
+			p.Birthday = nil
+		}),
+	}
+	require.NoError(t, ValidatePayload(env))
+}
+
+func TestMarshalUnmarshal_ExternalContactUpserted_RoundTrip(t *testing.T) {
+	bday := "1990-04-21"
+	dn := "Sample User"
+	org := "ACME"
+	original := ExternalContactUpsertedPayload{
+		Version:      1,
+		HostID:       uuid.New(),
+		Source:       "icloud_contacts",
+		EntityID:     "CN-entity-2",
+		DisplayName:  &dn,
+		Emails:       []ExternalContactMethodValue{{Value: "u@example.com"}, {Value: "w@example.com", Type: "work"}},
+		Phones:       []ExternalContactMethodValue{{Value: "+15551234567", Primary: true}},
+		Addresses:    []ExternalContactAddressValue{{Formatted: "1 Test St", Type: "home"}},
+		Organization: &org,
+		Birthday:     &bday,
+		Metadata:     map[string]any{"container_identifier": "CN-container-1"},
+	}
+	raw, err := Marshal(KindExternalContactUpserted, original)
+	require.NoError(t, err)
+
+	env := &Envelope{Kind: KindExternalContactUpserted, Payload: raw}
+	var decoded ExternalContactUpsertedPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.Equal(t, original.EntityID, decoded.EntityID)
+	require.Equal(t, original.HostID, decoded.HostID)
+	require.Equal(t, original.Emails, decoded.Emails)
+	require.Equal(t, original.Phones, decoded.Phones)
+	require.Equal(t, original.Addresses, decoded.Addresses)
+	require.Equal(t, *original.Birthday, *decoded.Birthday)
+	require.Equal(t, original.Metadata, decoded.Metadata)
+}
+
+func TestValidatePayload_ExternalContactDeleted_AcceptsValid(t *testing.T) {
+	p := ExternalContactDeletedPayload{
+		Version:  1,
+		HostID:   uuid.New(),
+		Source:   "icloud_contacts",
+		EntityID: "CN-entity-3",
+	}
+	raw, err := json.Marshal(p)
+	require.NoError(t, err)
+	env := &Envelope{Kind: KindExternalContactDeleted, Payload: raw}
+	require.NoError(t, ValidatePayload(env))
+}
+
+func TestValidatePayload_ExternalContactDeleted_RejectsEmptyEntityID(t *testing.T) {
+	p := ExternalContactDeletedPayload{
+		Version: 1,
+		HostID:  uuid.New(),
+		Source:  "icloud_contacts",
+	}
+	raw, err := json.Marshal(p)
+	require.NoError(t, err)
+	env := &Envelope{Kind: KindExternalContactDeleted, Payload: raw}
+	err = ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "entity_id is required")
+}
+
+func TestValidatePayload_ExternalContactDeleted_RejectsZeroHostID(t *testing.T) {
+	p := ExternalContactDeletedPayload{
+		Version:  1,
+		Source:   "icloud_contacts",
+		EntityID: "CN-entity-4",
+	}
+	raw, err := json.Marshal(p)
+	require.NoError(t, err)
+	env := &Envelope{Kind: KindExternalContactDeleted, Payload: raw}
+	err = ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "host_id is required")
+}
+
+// TestExternalContactPayload_JSONShape locks the omitempty wire shape
+// for both new kinds — a future field rename or json tag drift would
+// break daemon compatibility silently.
+func TestExternalContactPayload_JSONShape(t *testing.T) {
+	hid := uuid.New()
+	p := ExternalContactUpsertedPayload{
+		Version:  1,
+		HostID:   hid,
+		Source:   "icloud_contacts",
+		EntityID: "CN-1",
+	}
+	b, err := json.Marshal(p)
+	require.NoError(t, err)
+	asMap := map[string]any{}
+	require.NoError(t, json.Unmarshal(b, &asMap))
+	// Required fields always present.
+	require.Equal(t, float64(1), asMap["version"])
+	require.Equal(t, hid.String(), asMap["host_id"])
+	require.Equal(t, "icloud_contacts", asMap["source"])
+	require.Equal(t, "CN-1", asMap["entity_id"])
+	// Omit-empty fields are absent.
+	_, hasEmails := asMap["emails"]
+	require.False(t, hasEmails, "emails should be omitted when empty")
+	_, hasBirthday := asMap["birthday"]
+	require.False(t, hasBirthday, "birthday should be omitted when nil")
+	_, hasMetadata := asMap["metadata"]
+	require.False(t, hasMetadata, "metadata should be omitted when nil")
 }

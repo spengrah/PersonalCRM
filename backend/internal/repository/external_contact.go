@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -67,6 +68,11 @@ type ExternalContact struct {
 	SyncedAt      *time.Time     `json:"synced_at,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
+	// DeletedAt is set when a soft-delete tombstones the row. Production
+	// read queries filter `deleted_at IS NULL` so a tombstoned row only
+	// surfaces through GetBySource (intentionally tombstone-aware for the
+	// mac-daemon revive path).
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 }
 
 // UpsertTelegramDiscoveryCandidateRequest carries the Telegram-specific fields
@@ -211,6 +217,10 @@ func convertDbExternalContact(dbContact *db.ExternalContact) (*ExternalContact, 
 	if dbContact.UpdatedAt.Valid {
 		contact.UpdatedAt = dbContact.UpdatedAt.Time
 	}
+	if dbContact.DeletedAt.Valid {
+		t := dbContact.DeletedAt.Time
+		contact.DeletedAt = &t
+	}
 
 	return contact, nil
 }
@@ -250,7 +260,18 @@ func (r *ExternalContactRepository) GetBySource(ctx context.Context, source, sou
 
 // Upsert creates or updates an external contact
 func (r *ExternalContactRepository) Upsert(ctx context.Context, req UpsertExternalContactRequest) (*ExternalContact, error) {
-	// Marshal JSONB fields
+	dbContact, err := r.queries.UpsertExternalContact(ctx, buildUpsertExternalContactParams(req))
+	if err != nil {
+		return nil, err
+	}
+	return convertDbExternalContact(dbContact)
+}
+
+// buildUpsertExternalContactParams centralizes the pgtype + JSONB
+// conversion shared between Upsert (non-tx) and UpsertTx. Keeping it in
+// one place ensures both variants stay in lockstep — drift would
+// silently produce different on-disk shapes depending on caller.
+func buildUpsertExternalContactParams(req UpsertExternalContactRequest) db.UpsertExternalContactParams {
 	emailsJSON, _ := json.Marshal(req.Emails)
 	if req.Emails == nil {
 		emailsJSON = []byte("[]")
@@ -308,12 +329,7 @@ func (r *ExternalContactRepository) Upsert(ctx context.Context, req UpsertExtern
 	if req.SyncedAt != nil {
 		params.SyncedAt = pgtype.Timestamptz{Time: *req.SyncedAt, Valid: true}
 	}
-
-	dbContact, err := r.queries.UpsertExternalContact(ctx, params)
-	if err != nil {
-		return nil, err
-	}
-	return convertDbExternalContact(dbContact)
+	return params
 }
 
 // UpsertTelegramDiscoveryCandidate inserts or updates a Telegram discovery
@@ -403,7 +419,9 @@ func (r *ExternalContactRepository) CountAllUnmatched(ctx context.Context) (int6
 	return r.queries.CountAllUnmatchedExternalContacts(ctx)
 }
 
-// UpdateMatch updates the CRM contact ID and match status
+// UpdateMatch updates the CRM contact ID and match status. Returns
+// db.ErrNotFound when the target row is tombstoned (the underlying
+// query filters `deleted_at IS NULL`) or has been hard-deleted.
 func (r *ExternalContactRepository) UpdateMatch(ctx context.Context, id uuid.UUID, crmContactID *uuid.UUID, status MatchStatus) (*ExternalContact, error) {
 	var crmContactIDPg pgtype.UUID
 	if crmContactID != nil {
@@ -416,6 +434,9 @@ func (r *ExternalContactRepository) UpdateMatch(ctx context.Context, id uuid.UUI
 		MatchStatus:  pgtype.Text{String: string(status), Valid: true},
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
 		return nil, err
 	}
 	return convertDbExternalContact(dbContact)
@@ -496,4 +517,118 @@ func (r *ExternalContactRepository) ListForCRMContact(ctx context.Context, crmCo
 // Delete removes an external contact
 func (r *ExternalContactRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.queries.DeleteExternalContact(ctx, pgtype.UUID{Bytes: id, Valid: true})
+}
+
+// GetBySourceTx retrieves an external contact by (source, source_id,
+// account_id) within an active transaction. Tombstone-aware: returns
+// tombstoned rows too (caller inspects `DeletedAt != nil` to decide).
+// Returns (nil, db.ErrNotFound) on miss. Used by the mac-daemon ingest
+// service's inline external_contact.upserted / .deleted handlers — both
+// need visibility into tombstoned rows (upserted to revive, deleted to
+// confirm an existing tombstone for idempotent no-op).
+func (r *ExternalContactRepository) GetBySourceTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	source, sourceID string,
+	accountID *string,
+) (*ExternalContact, error) {
+	var accountIDText pgtype.Text
+	if accountID != nil {
+		accountIDText = pgtype.Text{String: *accountID, Valid: true}
+	}
+	dbContact, err := db.New(tx).GetExternalContactBySource(ctx, db.GetExternalContactBySourceParams{
+		Source:    source,
+		SourceID:  sourceID,
+		AccountID: accountIDText,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	return convertDbExternalContact(dbContact)
+}
+
+// UpsertTx is the tx-bound variant of Upsert. Caller owns the tx
+// lifecycle. The underlying UpsertExternalContact query does NOT touch
+// deleted_at, crm_contact_id, or match_status on the UPDATE branch —
+// the revive path issues a separate ReviveTx call when the pre-read
+// detected a tombstone.
+func (r *ExternalContactRepository) UpsertTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	req UpsertExternalContactRequest,
+) (*ExternalContact, error) {
+	params := buildUpsertExternalContactParams(req)
+	dbContact, err := db.New(tx).UpsertExternalContact(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	return convertDbExternalContact(dbContact)
+}
+
+// UpdateMatchTx is the tx-bound variant of UpdateMatch. Used by the
+// mac-daemon ingest handler's first-insert path to set
+// crm_contact_id + match_status when an identity match succeeds.
+// Returns db.ErrNotFound when the target row is tombstoned (the
+// underlying query filters `deleted_at IS NULL`) or hard-deleted.
+// Caller owns the tx lifecycle.
+func (r *ExternalContactRepository) UpdateMatchTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id uuid.UUID,
+	crmContactID *uuid.UUID,
+	status MatchStatus,
+) (*ExternalContact, error) {
+	var crmContactIDPg pgtype.UUID
+	if crmContactID != nil {
+		crmContactIDPg = pgtype.UUID{Bytes: *crmContactID, Valid: true}
+	}
+	dbContact, err := db.New(tx).UpdateExternalContactMatch(ctx, db.UpdateExternalContactMatchParams{
+		ID:           pgtype.UUID{Bytes: id, Valid: true},
+		CrmContactID: crmContactIDPg,
+		MatchStatus:  pgtype.Text{String: string(status), Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	return convertDbExternalContact(dbContact)
+}
+
+// ReviveTx clears `deleted_at` on a tombstoned row. The underlying SQL
+// has a defensive `WHERE deleted_at IS NOT NULL` predicate so a
+// concurrent revive that beat us is absorbed safely. Caller owns the
+// tx lifecycle. Returns db.ErrNotFound when the row is already live
+// (or does not exist) — callers should pre-check via GetBySourceTx to
+// avoid spurious not-found.
+func (r *ExternalContactRepository) ReviveTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id uuid.UUID,
+) (*ExternalContact, error) {
+	dbContact, err := db.New(tx).ReviveExternalContact(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	return convertDbExternalContact(dbContact)
+}
+
+// SoftDeleteTx tombstones a row by setting deleted_at = NOW(). The
+// underlying SQL has a defensive `WHERE deleted_at IS NULL` predicate
+// so calling it twice is an idempotent no-op (no error on already-
+// tombstoned rows). crm_contact_id, match_status, and duplicate_of_id
+// are preserved. Caller owns the tx lifecycle.
+func (r *ExternalContactRepository) SoftDeleteTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id uuid.UUID,
+) error {
+	return db.New(tx).SoftDeleteExternalContact(ctx, pgtype.UUID{Bytes: id, Valid: true})
 }

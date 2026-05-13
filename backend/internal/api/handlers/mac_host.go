@@ -31,6 +31,7 @@ type MacHostService interface {
 	ListActiveHosts(ctx context.Context) ([]*repository.MacHost, error)
 	GetHost(ctx context.Context, id uuid.UUID) (*repository.MacHost, error)
 	RevokeHost(ctx context.Context, id uuid.UUID) error
+	KnownIdentifiers(ctx context.Context) (*service.KnownIdentifiersResult, error)
 }
 
 // MacHostHandler handles Mac-daemon HTTP requests + admin UI requests
@@ -394,10 +395,14 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 	api.SendInternalError(c, "commit cursor failed")
 }
 
-// KnownIDs is a stub for the daemon's external-contact synchronisation
-// surface. Returns an empty list — daemon code is forward-compatible
-// because empty IDs is the expected response on a fresh Pi. The body
-// will be filled in once the external_contact consumer ships.
+// KnownIDs is a stub for the per-source tombstone reconciliation
+// surface. Returns an empty list — the wire shape is the daemon-
+// expected one and the empty list is the correct response on a fresh
+// Pi. The stub body is intentional today: the daemon does not exercise
+// this endpoint outside the token-expiration recovery flow, which is
+// not yet wired. The separate /known-identifiers endpoint below is
+// the cross-source canonical phone/email surface used on every
+// heartbeat.
 func (h *MacHostHandler) KnownIDs(c *gin.Context) {
 	source := c.Param("source")
 	if source == "" {
@@ -409,6 +414,29 @@ func (h *MacHostHandler) KnownIDs(c *gin.Context) {
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, gin.H{"ids": []string{}}, nil)
+}
+
+// KnownIdentifiers returns the cross-source canonical phone + email
+// set the daemon uses to filter incoming Apple Messages senders. The
+// daemon polls this endpoint on every heartbeat (~60s).
+//
+// Wire shape: the standard `{success, data, ...}` envelope from
+// api.SendSuccess. The data payload is `{"phones": ["..."], "emails":
+// ["..."]}` — both arrays alphabetically sorted and deduplicated, empty
+// arrays valid on a fresh CRM. The envelope is consistent with every
+// other mac-host endpoint (Pair, Heartbeat, GetCursor, KnownIDs,
+// admin endpoints).
+//
+// Authentication is the host-bearer path (MacHostAuthMiddleware) —
+// the daemon is the only legitimate caller.
+func (h *MacHostHandler) KnownIdentifiers(c *gin.Context) {
+	result, err := h.svc.KnownIdentifiers(c.Request.Context())
+	if err != nil {
+		logger.Error().Err(err).Msg("known-identifiers: failed")
+		api.SendInternalError(c, "known identifiers failed")
+		return
+	}
+	api.SendSuccess(c, http.StatusOK, result, nil)
 }
 
 // ListHosts is the admin list view.

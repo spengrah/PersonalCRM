@@ -14,7 +14,9 @@ DELETE FROM external_contact WHERE source_id LIKE $1 || '%';
 SELECT COUNT(*) FROM contact WHERE full_name LIKE $1 || '%';
 
 -- name: CountExternalContactsByDisplayNamePrefix :one
-SELECT COUNT(*) FROM external_contact WHERE display_name LIKE $1 || '%';
+SELECT COUNT(*) FROM external_contact
+WHERE display_name LIKE $1 || '%'
+  AND deleted_at IS NULL;
 
 -- name: DeleteCalendarEventsByTitlePrefix :execrows
 DELETE FROM calendar_event WHERE title LIKE $1 || '%';

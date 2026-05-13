@@ -119,6 +119,42 @@ func (q *Queries) FindMethodsByNormalizedValue(ctx context.Context, arg FindMeth
 	return items, nil
 }
 
+const ListCanonicalIdentifiersByType = `-- name: ListCanonicalIdentifiersByType :many
+SELECT DISTINCT cm.value_normalized
+FROM contact_method cm
+JOIN contact c ON c.id = cm.contact_id
+WHERE cm.type = ANY($1::text[])
+  AND cm.value_normalized <> ''
+  AND c.deleted_at IS NULL
+ORDER BY cm.value_normalized ASC
+`
+
+// Returns the deduplicated canonicalized value set for the given
+// contact_method types, scoped to non-deleted contacts. Ordered
+// alphabetically by value_normalized for deterministic daemon-side diff.
+// Used by GET /api/v1/host/:id/known-identifiers — the daemon needs the
+// SET of canonical phones/emails, not the contact mapping, so DISTINCT
+// collapses the same value across multiple contacts.
+func (q *Queries) ListCanonicalIdentifiersByType(ctx context.Context, dollar_1 []string) ([]string, error) {
+	rows, err := q.db.Query(ctx, ListCanonicalIdentifiersByType, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var value_normalized string
+		if err := rows.Scan(&value_normalized); err != nil {
+			return nil, err
+		}
+		items = append(items, value_normalized)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListContactMethodsByContact = `-- name: ListContactMethodsByContact :many
 
 SELECT id, contact_id, type, value, is_primary, created_at, updated_at, value_normalized FROM contact_method

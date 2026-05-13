@@ -66,24 +66,37 @@ var ErrPairingValidation = errors.New("pairing input validation failed")
 // the primary gate.
 var ErrUnknownPushSource = errors.New("unknown push source")
 
+// ContactMethodLister is the narrow interface MacHostService needs for
+// the /known-identifiers endpoint. Concrete is
+// *repository.ContactMethodRepository. Defined here so the service can
+// be unit-tested with a stub without depending on the full repo.
+type ContactMethodLister interface {
+	ListCanonicalIdentifiersByType(ctx context.Context, types []string) ([]string, error)
+}
+
 // MacHostService owns business logic for pairing, heartbeat, cursor
 // commit, and revoke-cascade. Stateless aside from the constructor-
 // injected dependencies — safe to share across requests.
 type MacHostService struct {
-	hostRepo   *repository.MacHostRepository
-	tokenRepo  *repository.MacHostPairingTokenRepository
-	syncRepo   *repository.SyncRepository
-	pool       *pgxpool.Pool
-	bcryptCost int
+	hostRepo          *repository.MacHostRepository
+	tokenRepo         *repository.MacHostPairingTokenRepository
+	syncRepo          *repository.SyncRepository
+	contactMethodRepo ContactMethodLister
+	pool              *pgxpool.Pool
+	bcryptCost        int
 }
 
 // NewMacHostService constructs a service. bcryptCost defaults to
 // bcrypt.DefaultCost when 0 — at cost=10 the hash is ~50ms on a Pi 4,
-// fine for once-per-pair.
+// fine for once-per-pair. contactMethodRepo may be nil in test fixtures
+// that don't exercise the /known-identifiers endpoint; the
+// KnownIdentifiers method returns a clear error when called in that
+// state.
 func NewMacHostService(
 	hostRepo *repository.MacHostRepository,
 	tokenRepo *repository.MacHostPairingTokenRepository,
 	syncRepo *repository.SyncRepository,
+	contactMethodRepo ContactMethodLister,
 	pool *pgxpool.Pool,
 	bcryptCost int,
 ) *MacHostService {
@@ -91,12 +104,48 @@ func NewMacHostService(
 		bcryptCost = bcrypt.DefaultCost
 	}
 	return &MacHostService{
-		hostRepo:   hostRepo,
-		tokenRepo:  tokenRepo,
-		syncRepo:   syncRepo,
-		pool:       pool,
-		bcryptCost: bcryptCost,
+		hostRepo:          hostRepo,
+		tokenRepo:         tokenRepo,
+		syncRepo:          syncRepo,
+		contactMethodRepo: contactMethodRepo,
+		pool:              pool,
+		bcryptCost:        bcryptCost,
 	}
+}
+
+// KnownIdentifiersResult is the cross-source identifier set returned to
+// the daemon. Both arrays are alphabetically sorted and deduplicated
+// (DISTINCT value_normalized across all contact_method rows that join
+// a non-deleted contact). Empty arrays on a fresh CRM.
+type KnownIdentifiersResult struct {
+	Phones []string `json:"phones"`
+	Emails []string `json:"emails"`
+}
+
+// KnownIdentifiers returns the canonical phone + email set the daemon
+// uses to filter incoming Apple Messages senders against the user's
+// known contacts. Two SQL queries (phones, emails) — cleaner than a
+// single union because the daemon receives them under separate JSON
+// keys.
+func (s *MacHostService) KnownIdentifiers(ctx context.Context) (*KnownIdentifiersResult, error) {
+	if s.contactMethodRepo == nil {
+		return nil, fmt.Errorf("known identifiers: contact_method repository not wired")
+	}
+	emails, err := s.contactMethodRepo.ListCanonicalIdentifiersByType(ctx, []string{"email"})
+	if err != nil {
+		return nil, fmt.Errorf("list canonical emails: %w", err)
+	}
+	phones, err := s.contactMethodRepo.ListCanonicalIdentifiersByType(ctx, []string{"phone"})
+	if err != nil {
+		return nil, fmt.Errorf("list canonical phones: %w", err)
+	}
+	if emails == nil {
+		emails = []string{}
+	}
+	if phones == nil {
+		phones = []string{}
+	}
+	return &KnownIdentifiersResult{Phones: phones, Emails: emails}, nil
 }
 
 // CreatePairingToken mints a new short-lived pairing token. Returns

@@ -39,6 +39,16 @@ const (
 	// dedup on retries.
 	KindRawMessageReceived Kind = "raw_message.received"
 	KindRawMessageSent     Kind = "raw_message.sent"
+
+	// Daemon-emitted external-contact events. Published by the Mac
+	// daemon's iCloud Contacts watcher against /api/v1/ingest/events
+	// with host-auth. NOT consumed by any bus consumer — IngestService
+	// processes them inline within the per-event savepoint (identity
+	// match per email/phone → external_contact upsert/tombstone with
+	// optional revive). The event-log row exists for audit +
+	// (source, source_id) dedup on retries.
+	KindExternalContactUpserted Kind = "external_contact.upserted"
+	KindExternalContactDeleted  Kind = "external_contact.deleted"
 )
 
 // AllKinds enumerates every defined Kind. Used by tests to guard that
@@ -57,6 +67,8 @@ var AllKinds = []Kind{
 	KindInteractionRecorded,
 	KindRawMessageReceived,
 	KindRawMessageSent,
+	KindExternalContactUpserted,
+	KindExternalContactDeleted,
 }
 
 // Envelope is the wire/DB shape passed through Bus.Publish. Payload is
@@ -314,24 +326,86 @@ type RawMessageReceivedPayload struct {
 // constant — used by the inline handler to set IsOutgoing on staging).
 type RawMessageSentPayload RawMessageReceivedPayload
 
+// ExternalContactMethodValue carries a single contact-method value
+// (email or phone) plus its display tags. Same shape used for both
+// emails[] and phones[] in ExternalContactUpsertedPayload.
+type ExternalContactMethodValue struct {
+	Value   string `json:"value"`             // raw, daemon-supplied
+	Type    string `json:"type,omitempty"`    // e.g. "home", "work"
+	Primary bool   `json:"primary,omitempty"` // true on the entity's primary
+}
+
+// ExternalContactAddressValue is the address shape in
+// ExternalContactUpsertedPayload. Metadata-only (no geocoding).
+type ExternalContactAddressValue struct {
+	Formatted string `json:"formatted"`
+	Type      string `json:"type,omitempty"`
+}
+
+// ExternalContactUpsertedPayload is the payload for
+// KindExternalContactUpserted, emitted by the Mac daemon on every
+// CNChangeHistoryFetchRequest add/update event for a contact in an
+// allow-listed container. Inline-processed by IngestService (identity
+// match per email/phone → external_contact upsert; revives a
+// tombstoned row when present).
+//
+// Version starts at 1. Additive fields are V1-compatible.
+//
+// Metadata is source-specific: the Mac daemon populates
+// `container_identifier` (which CNContainer this contact came from);
+// future sources populate their own keys. Persisted into
+// external_contact.metadata JSONB wholesale (NOT merged) — daemon owns
+// the contents.
+type ExternalContactUpsertedPayload struct {
+	Version      int                           `json:"version"`   // start at 1
+	HostID       uuid.UUID                     `json:"host_id"`   // authenticated host
+	Source       string                        `json:"source"`    // e.g. "icloud_contacts"
+	EntityID     string                        `json:"entity_id"` // CNContact identifier; column source_id
+	DisplayName  *string                       `json:"display_name,omitempty"`
+	FirstName    *string                       `json:"first_name,omitempty"`
+	LastName     *string                       `json:"last_name,omitempty"`
+	Emails       []ExternalContactMethodValue  `json:"emails,omitempty"`
+	Phones       []ExternalContactMethodValue  `json:"phones,omitempty"`
+	Addresses    []ExternalContactAddressValue `json:"addresses,omitempty"`
+	Organization *string                       `json:"organization,omitempty"`
+	JobTitle     *string                       `json:"job_title,omitempty"`
+	Birthday     *string                       `json:"birthday,omitempty"` // ISO date YYYY-MM-DD
+	PhotoURL     *string                       `json:"photo_url,omitempty"`
+	Metadata     map[string]any                `json:"metadata,omitempty"`
+}
+
+// ExternalContactDeletedPayload is the payload for
+// KindExternalContactDeleted, emitted on a CNChangeHistoryFetchRequest
+// delete (or tombstone reconciliation on a full resync). The handler
+// tombstones the row by id; an unknown entity is a silent no-op
+// (event-log row is durable for audit either way).
+type ExternalContactDeletedPayload struct {
+	Version  int       `json:"version"`   // start at 1
+	HostID   uuid.UUID `json:"host_id"`   // authenticated host
+	Source   string    `json:"source"`    // e.g. "icloud_contacts"
+	EntityID string    `json:"entity_id"` // CNContact identifier
+}
+
 // kindPayloadTypes is the canonical Kind → payload-type registry used by
 // Marshal and Unmarshal to assert type-vs-kind consistency at runtime. Add
 // a row each time a new Kind + payload struct are introduced. Keep in sync
 // with AllKinds (the unit test TestKindPayloadTypes_CoversAllKinds enforces
 // this invariant).
 var kindPayloadTypes = map[Kind]reflect.Type{
-	KindMessageReceived:      reflect.TypeOf(MessageReceivedPayload{}),
-	KindMessageSent:          reflect.TypeOf(MessageSentPayload{}),
-	KindCalendarAttended:     reflect.TypeOf(CalendarAttendedPayload{}),
-	KindCalendarDeclined:     reflect.TypeOf(CalendarDeclinedPayload{}),
-	KindTaskCompleted:        reflect.TypeOf(TaskCompletedPayload{}),
-	KindTaskSkipped:          reflect.TypeOf(TaskSkippedPayload{}),
-	KindTaskOutreachDetected: reflect.TypeOf(TaskOutreachDetectedPayload{}),
-	KindInteractionManual:    reflect.TypeOf(InteractionManualPayload{}),
-	KindContactMethodsAdded:  reflect.TypeOf(ContactMethodsAddedPayload{}),
-	KindInteractionRecorded:  reflect.TypeOf(InteractionRecordedPayload{}),
-	KindRawMessageReceived:   reflect.TypeOf(RawMessageReceivedPayload{}),
-	KindRawMessageSent:       reflect.TypeOf(RawMessageSentPayload{}),
+	KindMessageReceived:         reflect.TypeOf(MessageReceivedPayload{}),
+	KindMessageSent:             reflect.TypeOf(MessageSentPayload{}),
+	KindCalendarAttended:        reflect.TypeOf(CalendarAttendedPayload{}),
+	KindCalendarDeclined:        reflect.TypeOf(CalendarDeclinedPayload{}),
+	KindTaskCompleted:           reflect.TypeOf(TaskCompletedPayload{}),
+	KindTaskSkipped:             reflect.TypeOf(TaskSkippedPayload{}),
+	KindTaskOutreachDetected:    reflect.TypeOf(TaskOutreachDetectedPayload{}),
+	KindInteractionManual:       reflect.TypeOf(InteractionManualPayload{}),
+	KindContactMethodsAdded:     reflect.TypeOf(ContactMethodsAddedPayload{}),
+	KindInteractionRecorded:     reflect.TypeOf(InteractionRecordedPayload{}),
+	KindRawMessageReceived:      reflect.TypeOf(RawMessageReceivedPayload{}),
+	KindRawMessageSent:          reflect.TypeOf(RawMessageSentPayload{}),
+	KindExternalContactUpserted: reflect.TypeOf(ExternalContactUpsertedPayload{}),
+	KindExternalContactDeleted:  reflect.TypeOf(ExternalContactDeletedPayload{}),
 }
 
 // IsKnownKind reports whether kind has a registered payload type. Used by
@@ -392,6 +466,27 @@ func ValidatePayload(env *Envelope) error {
 		p := dst.(*RawMessageSentPayload)
 		if p.MessageType != "" && !IsCanonicalMessageType(p.MessageType) {
 			return fmt.Errorf("validate %s: message_type %q is not in the canonical set", env.Kind, p.MessageType)
+		}
+	case KindExternalContactUpserted:
+		p := dst.(*ExternalContactUpsertedPayload)
+		if p.EntityID == "" {
+			return fmt.Errorf("validate %s: entity_id is required", env.Kind)
+		}
+		if p.HostID == uuid.Nil {
+			return fmt.Errorf("validate %s: host_id is required", env.Kind)
+		}
+		if p.Birthday != nil && *p.Birthday != "" {
+			if _, err := time.Parse("2006-01-02", *p.Birthday); err != nil {
+				return fmt.Errorf("validate %s: birthday %q not in YYYY-MM-DD form", env.Kind, *p.Birthday)
+			}
+		}
+	case KindExternalContactDeleted:
+		p := dst.(*ExternalContactDeletedPayload)
+		if p.EntityID == "" {
+			return fmt.Errorf("validate %s: entity_id is required", env.Kind)
+		}
+		if p.HostID == uuid.Nil {
+			return fmt.Errorf("validate %s: host_id is required", env.Kind)
 		}
 	}
 	return nil
