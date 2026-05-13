@@ -334,7 +334,7 @@ v1 := router.Group("/api/v1")
 | **System** | `/system/time` | GET | SystemHandler | Current time |
 | | `/export` | POST | SystemHandler | Export data |
 | | `/import` | POST | SystemHandler | Import data |
-| **Ingest** | `/ingest/events` | POST | IngestHandler | Batched event ingestion (gated by `EVENT_BUS_INGEST_ENABLED`) |
+| **Ingest** | `/ingest/events` | POST | IngestHandler | Batched event ingestion (gated by `EVENT_BUS_INGEST_ENABLED`). Composite auth: `X-Mac-Host-ID` header → host-auth path (Mac daemon raw_message.\* only); absent → global API-key path (internal Pi publishers). Service enforces per-path kind allowlist. |
 | **Mac Daemon (public)** | `/host` | POST | MacHostHandler | Daemon pairs with a token — rate-limited per source IP, no auth |
 | **Mac Daemon (host auth)** | `/host/:id/heartbeat` | POST | MacHostHandler | Periodic daemon heartbeat — `Authorization: Bearer <host-key>` + `X-Mac-Host-ID` |
 | | `/host/:id/sync/:source/cursor` | GET | MacHostHandler | Read push-cursor for (host, source) |
