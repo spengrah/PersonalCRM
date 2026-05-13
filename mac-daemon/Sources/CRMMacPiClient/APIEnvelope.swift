@@ -12,10 +12,10 @@ public struct APIEnvelope<Data: Decodable>: Decodable {
     public let success: Bool
     public let data: Data?
     public let error: APIError?
-    // `meta` is present on paginated responses; PR6 doesn't use it but
-    // the field is decoded as `Any?`-ish via JSONValue so the envelope
-    // stays forward-compatible without forcing every consumer to define
-    // a meta type.
+    // `meta` is present on paginated responses; daemon endpoints
+    // don't use it but the field is decoded as `Any?`-ish via
+    // JSONValue so the envelope stays forward-compatible without
+    // forcing every consumer to define a meta type.
     public let meta: JSONValue?
 
     public init(success: Bool, data: Data?, error: APIError?, meta: JSONValue? = nil) {

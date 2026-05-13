@@ -1,4 +1,4 @@
-// `crm-mac doctor` runs the four PR6 checks and exits with the
+// `crm-mac doctor` runs the four health checks and exits with the
 // number of FAIL entries.
 import Foundation
 import ArgumentParser

@@ -2,14 +2,15 @@
 // state. Loaded at process start, mutated by the heartbeat loop and
 // per-source plugins, persisted via StateStore.
 //
-// PR6 ships the schema and read/write only; PR7/PR8 add cursor
-// advancement methods on top.
+// Ships the schema and read/write only — source-specific cursor
+// advancement methods land with each reader.
 import Foundation
 
 /// Top-level state file. Persisted at
 /// `~/Library/Application Support/crm-mac/state.json`.
 public struct DaemonState: Codable, Equatable {
-    /// Bumped when an incompatible schema change ships. PR6 is `1`.
+    /// Bumped when an incompatible schema change ships. Initial
+    /// release is `1`.
     public var schemaVersion: Int
     /// Convenience copy of the paired host id. Authoritative copy lives
     /// in `config.json`; this field exists so `crm-mac status` can
@@ -19,7 +20,8 @@ public struct DaemonState: Codable, Equatable {
     /// heartbeat after install.
     public var lastHeartbeatAt: Date?
     /// Per-source cursor state. Keys are stable source identifiers
-    /// (`"messages"`, `"icloud_contacts"`). Empty in PR6.
+    /// (`"messages"`, `"icloud_contacts"`). Empty until source
+    /// readers begin committing cursors.
     public var sources: [String: SourceState]
 
     public init(
@@ -35,14 +37,15 @@ public struct DaemonState: Codable, Equatable {
     }
 }
 
-/// Per-source persistent state. PR7/PR8 mutate this after each tick.
+/// Per-source persistent state. Source readers mutate this after
+/// every tick.
 public struct SourceState: Codable, Equatable {
     /// Opaque cursor — interpretation is per-source. Empty string on
     /// first run before any cursor has been committed.
     public var cursor: String
     /// Pi-supplied cursor epoch as of the most recent successful poll.
-    /// Increments when the Pi restores from backup; PR7/PR8 compare
-    /// this against the heartbeat response to detect mismatch.
+    /// Increments when the Pi restores from backup; source readers
+    /// compare this against the heartbeat response to detect mismatch.
     public var cursorEpoch: Int64
     /// True once the backfill window has been fully walked.
     public var backfillComplete: Bool

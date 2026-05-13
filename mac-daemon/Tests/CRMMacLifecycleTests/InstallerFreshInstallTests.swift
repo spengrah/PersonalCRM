@@ -42,12 +42,14 @@ final class InstallerFreshInstallTests: XCTestCase {
         // Codesign was invoked.
         XCTAssertEqual(exec.codesignCalls.count, 1)
         // Config exists and parses with the expected hostname.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
         let configData = try fs.read(from: paths.configFilePath)
-        let cfg = try JSONDecoder().decode(DaemonConfig.self, from: configData)
+        let cfg = try decoder.decode(DaemonConfig.self, from: configData)
         XCTAssertEqual(cfg.hostname, "mac-1")
         // State exists and parses with schema version 1.
         let stateData = try fs.read(from: paths.stateFilePath)
-        let state = try JSONDecoder().decode(DaemonState.self, from: stateData)
+        let state = try decoder.decode(DaemonState.self, from: stateData)
         XCTAssertEqual(state.schemaVersion, 1)
         // Keychain holds the api key.
         XCTAssertEqual(keychain.currentValue, "k")

@@ -28,7 +28,7 @@ struct InstallCommand: AsyncParsableCommand {
         if upgrade && registerOnly {
             throw ValidationError("--upgrade and --register-only are mutually exclusive")
         }
-        // Per plan D9: --hostname is required only on a fresh install.
+        // --hostname is required only on a fresh install.
         if !upgrade && !registerOnly {
             if piURL.isEmpty {
                 throw ValidationError("--pi-url <url> is required for fresh install")

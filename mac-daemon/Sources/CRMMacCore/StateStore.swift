@@ -3,8 +3,8 @@
 //
 // The atomic-rename pattern means a partial-write crash leaves the
 // prior committed state intact rather than producing a half-written
-// file. PR7/PR8 mutate state after every source-poll tick, so this
-// is the durability boundary we rely on for cursor-correctness.
+// file. Source-poll ticks mutate state on every cycle, so this is
+// the durability boundary we rely on for cursor-correctness.
 import Foundation
 
 public enum StateStoreError: Error, Equatable, CustomStringConvertible {

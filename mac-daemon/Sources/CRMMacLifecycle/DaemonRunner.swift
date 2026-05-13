@@ -4,9 +4,10 @@
 //   - blocks awaiting SIGTERM (or test-injected cancellation)
 //   - on shutdown, cancels all registered plugins and returns
 //
-// Plan A4. Per D14, non-crash exits stay dead — the daemon's
-// terminal-error paths (401 -> exit 1; 412 -> exit 2) are routed
-// through ExitHandler at HeartbeatLoop, not here.
+// Non-crash exits stay dead per the launchd plist's
+// `KeepAlive={Crashed:true}` — the daemon's terminal-error paths
+// (401 -> exit 1; 412 -> exit 2) are routed through ExitHandler at
+// HeartbeatLoop, not here.
 import Foundation
 import CRMMacCore
 

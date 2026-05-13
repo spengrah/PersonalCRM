@@ -1,6 +1,5 @@
 // Typed error surface for the Pi client. Workflows in CRMMacLifecycle
-// switch on these to map to exit codes (per plan D14) or operator
-// messages.
+// switch on these to map to exit codes or operator messages.
 import Foundation
 
 public enum PiClientError: Error, Equatable, CustomStringConvertible {

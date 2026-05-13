@@ -1,7 +1,7 @@
 // DispatchSourceScheduleRunner is the fallback scheduler — uses
-// DispatchSourceTimer directly so PR7/PR8 can swap it in if NSBA
-// coalescing turns out to be too aggressive. Same protocol shape as
-// NSBackgroundActivityScheduleRunner.
+// DispatchSourceTimer directly so we can swap it in if NSBA
+// coalescing turns out to be too aggressive once source readers are
+// wired up. Same protocol shape as NSBackgroundActivityScheduleRunner.
 import Foundation
 import CRMMacCore
 import CRMMacLifecycle

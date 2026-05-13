@@ -1,9 +1,9 @@
 // Installer implements `crm-mac install`, `--upgrade`, and
-// `--register-only` per plan D9 + D9.5.
+// `--register-only`.
 //
-// The fresh-install sequence (D9 steps 1-11):
+// The fresh-install sequence:
 //   1. Validate inputs.
-//   2. (D9.5 preflight) refuse if existing install detected unless
+//   2. Preflight: refuse if existing install detected unless
 //      --upgrade or --register-only set.
 //   3. mkdir -p config/bin/logs directories.
 //   4. Stage running binary to a temp path; chmod +x; codesign.
@@ -61,8 +61,18 @@ public enum InstallError: Error, CustomStringConvertible {
     case invalidPairingToken
     case alreadyInstalled
     case noExistingInstall
+    /// Pair surfaced a typed Pi error (410/409/4xx). Recovery is the
+    /// typed-error specific path (mint a new token, revoke the
+    /// existing host, etc.).
     case pairFailed(PiClientError)
-    case persistFailed(String)
+    /// Pair failed at the transport layer or with a 5xx — the Pi may
+    /// or may not have committed the host row. Operator must run
+    /// `crm-admin --list-hosts` to disambiguate.
+    case ambiguousPair(underlying: String)
+    /// Post-pair local persistence (config, Keychain, state, or
+    /// atomic rename) failed AFTER the Pi committed. The host ID is
+    /// carried so the recovery message names it.
+    case persistFailed(hostID: UUID, stage: String, underlying: String)
     case launchctlFailed(exitCode: Int32, stderr: String)
     case filesystemFailed(String)
     case codesignFailed(String)
@@ -81,8 +91,15 @@ public enum InstallError: Error, CustomStringConvertible {
             return "no existing install found; run `crm-mac install` without --upgrade / --register-only"
         case .pairFailed(let e):
             return "pair failed: \(e)"
-        case .persistFailed(let m):
-            return "persist failed: \(m). To recover: (1) run `crm-mac uninstall --purge`, (2) on the Pi run `crm-admin --revoke-host <id>`, (3) re-mint a token and re-install."
+        case .ambiguousPair(let underlying):
+            return "pair status is ambiguous (the Pi may or may not have committed before the response was lost): \(underlying). " +
+                "Recovery: run `crm-admin --list-hosts` on the Pi to see if a host row was created, then " +
+                "`crm-admin --revoke-host <id>` if so. Then re-mint a token and re-run `crm-mac install`."
+        case .persistFailed(let id, let stage, let underlying):
+            return "post-pair persistence failed at \(stage): \(underlying). The Pi paired host_id=\(id.uuidString.lowercased()). " +
+                "To recover: (1) run `crm-mac uninstall --purge` to clear partial local state, " +
+                "(2) on the Pi run `crm-admin --revoke-host \(id.uuidString.lowercased())`, " +
+                "(3) re-mint a token and re-run `crm-mac install`."
         case .launchctlFailed(let code, let stderr):
             return "launchctl bootstrap failed (exit \(code)): \(stderr). Binary is installed; run `crm-mac install --register-only` after fixing the underlying issue (System Settings -> Privacy & Security)."
         case .filesystemFailed(let m): return "filesystem: \(m)"
@@ -201,31 +218,50 @@ public struct Installer {
                 protocolVersion: Daemon.protocolVersion)
         } catch let piErr as PiClientError {
             try? deps.filesystem.remove(at: tempPath)
-            deps.logger.error("pair failed", metadata: ["error": .public(String(describing: piErr))])
-            throw InstallError.pairFailed(piErr)
+            deps.logger.error("pair failed", metadata: ["error": .private(String(describing: piErr))])
+            // Transport / 5xx failures are ambiguous — the Pi may
+            // have committed before the response was lost. Surface a
+            // distinct error so the operator gets the list-hosts
+            // recovery path.
+            switch piErr {
+            case .transport, .serverError:
+                throw InstallError.ambiguousPair(underlying: String(describing: piErr))
+            default:
+                throw InstallError.pairFailed(piErr)
+            }
         } catch {
             try? deps.filesystem.remove(at: tempPath)
-            throw InstallError.pairFailed(.transport(underlying: String(describing: error)))
+            throw InstallError.ambiguousPair(underlying: String(describing: error))
         }
 
         // Step 6: persist config + Keychain + state. On ANY failure
-        // unlink the temp binary and surface persistFailed so the
-        // operator's recovery path is clear.
+        // unlink the temp binary and surface persistFailed (with the
+        // paired host ID) so the operator's recovery path is clear.
         do {
             let cfg = DaemonConfig(
                 piURL: request.piURL,
                 hostID: pairResult.hostID,
                 hostname: request.hostname,
                 installedAt: deps.clock.now())
-            try writeConfig(cfg)
-            try deps.keychain.writeAPIKey(pairResult.apiKey)
+            try writeConfig(cfg, hostID: pairResult.hostID)
+            do {
+                try deps.keychain.writeAPIKey(pairResult.apiKey)
+            } catch {
+                throw InstallError.persistFailed(
+                    hostID: pairResult.hostID,
+                    stage: "keychain write",
+                    underlying: String(describing: error))
+            }
             try writeInitialState(hostID: pairResult.hostID)
         } catch let pErr as InstallError {
             try? deps.filesystem.remove(at: tempPath)
             throw pErr
         } catch {
             try? deps.filesystem.remove(at: tempPath)
-            throw InstallError.persistFailed(String(describing: error))
+            throw InstallError.persistFailed(
+                hostID: pairResult.hostID,
+                stage: "post-pair persistence",
+                underlying: String(describing: error))
         }
 
         // Step 7: atomic-rename the temp binary into place.
@@ -233,7 +269,10 @@ public struct Installer {
             try deps.filesystem.rename(from: tempPath, to: deps.paths.binaryPath)
         } catch {
             try? deps.filesystem.remove(at: tempPath)
-            throw InstallError.persistFailed("rename temp -> install: \(error)")
+            throw InstallError.persistFailed(
+                hostID: pairResult.hostID,
+                stage: "rename temp -> install",
+                underlying: String(describing: error))
         }
 
         // Step 8: write plist + launchctl bootstrap.
@@ -320,8 +359,8 @@ public struct Installer {
     // MARK: - shared helpers
 
     /// Preflight detection — returns true when any of the install
-    /// artifacts exist. Used by D9.5 to refuse fresh-install on top
-    /// of an existing one.
+    /// artifacts exist, to refuse fresh-install on top of an existing
+    /// one.
     private func existingInstallDetected() -> Bool {
         if deps.filesystem.fileExists(at: deps.paths.binaryPath) { return true }
         if deps.filesystem.fileExists(at: deps.paths.configFilePath) { return true }
@@ -332,7 +371,7 @@ public struct Installer {
         return false
     }
 
-    private func writeConfig(_ cfg: DaemonConfig) throws {
+    private func writeConfig(_ cfg: DaemonConfig, hostID: UUID) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -340,12 +379,18 @@ public struct Installer {
         do {
             data = try encoder.encode(cfg)
         } catch {
-            throw InstallError.persistFailed("encode config: \(error)")
+            throw InstallError.persistFailed(
+                hostID: hostID,
+                stage: "encode config",
+                underlying: String(describing: error))
         }
         do {
             try deps.filesystem.write(data, to: deps.paths.configFilePath)
         } catch {
-            throw InstallError.persistFailed("write config: \(error)")
+            throw InstallError.persistFailed(
+                hostID: hostID,
+                stage: "write config",
+                underlying: String(describing: error))
         }
     }
 
@@ -354,14 +399,14 @@ public struct Installer {
         do {
             data = try deps.filesystem.read(from: deps.paths.configFilePath)
         } catch {
-            throw InstallError.persistFailed("read config: \(error)")
+            throw InstallError.filesystemFailed("read config: \(error)")
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
             return try decoder.decode(DaemonConfig.self, from: data)
         } catch {
-            throw InstallError.persistFailed("decode config: \(error)")
+            throw InstallError.filesystemFailed("decode config: \(error)")
         }
     }
 
@@ -376,50 +421,28 @@ public struct Installer {
         do {
             data = try encoder.encode(state)
         } catch {
-            throw InstallError.persistFailed("encode state: \(error)")
+            throw InstallError.persistFailed(
+                hostID: hostID,
+                stage: "encode state",
+                underlying: String(describing: error))
         }
         do {
             try deps.filesystem.write(data, to: deps.paths.stateFilePath)
         } catch {
-            throw InstallError.persistFailed("write state: \(error)")
+            throw InstallError.persistFailed(
+                hostID: hostID,
+                stage: "write state",
+                underlying: String(describing: error))
         }
     }
 
     private func writePlist() throws {
-        let plist = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>Label</key>
-            <string>\(Daemon.label)</string>
-            <key>ProgramArguments</key>
-            <array>
-                <string>\(deps.paths.binaryPath)</string>
-                <string>daemon</string>
-            </array>
-            <key>RunAtLoad</key>
-            <true/>
-            <key>KeepAlive</key>
-            <dict>
-                <key>Crashed</key>
-                <true/>
-            </dict>
-            <key>ProcessType</key>
-            <string>Background</string>
-            <key>StandardOutPath</key>
-            <string>\(deps.paths.stdoutLogPath)</string>
-            <key>StandardErrorPath</key>
-            <string>\(deps.paths.stderrLogPath)</string>
-            <key>EnvironmentVariables</key>
-            <dict>
-                <key>CRM_MAC_CONFIG_DIR</key>
-                <string>\(deps.paths.configDirPath)</string>
-            </dict>
-        </dict>
-        </plist>
-
-        """
+        let plist = LaunchAgentPlist(
+            label: Daemon.label,
+            binaryPath: deps.paths.binaryPath,
+            configDirPath: deps.paths.configDirPath,
+            stdoutPath: deps.paths.stdoutLogPath,
+            stderrPath: deps.paths.stderrLogPath).render()
         do {
             try deps.filesystem.write(Data(plist.utf8), to: deps.paths.plistPath)
         } catch {

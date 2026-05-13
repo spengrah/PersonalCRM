@@ -1,5 +1,5 @@
-// Status implements `crm-mac status`. Plan D12 / D14: shows the
-// daemon's known state without making any network call. The
+// Status implements `crm-mac status`. Shows the daemon's known
+// state without making any network call. The
 // launchctl status is an exit-code-only signal — we do NOT parse the
 // `state = running` line from launchctl print (that's informational,
 // not API).

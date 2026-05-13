@@ -1,15 +1,15 @@
 // Exponential-backoff helper. Used by CRMMacPiClient.RetryingTransport
-// (the only consumer in PR6) and any future per-source retry callsite.
+// and by any future per-source retry callsite.
 //
-// No jitter in PR6 — the daemon makes at most ~1 retry burst per
-// minute under heartbeat, far from rate-limit pressure; jitter can
-// land in a follow-up if needed.
+// No jitter — the daemon makes at most ~1 retry burst per minute
+// under heartbeat, far from rate-limit pressure. Jitter can land in
+// a follow-up if needed.
 import Foundation
 
 public struct BackoffPolicy: Equatable {
     /// First sleep delay, in seconds.
     public let initialDelay: TimeInterval
-    /// Multiplier per attempt. PR6 uses 2 (exponential).
+    /// Multiplier per attempt. Default is 2 (exponential).
     public let multiplier: Double
     /// Max number of retries AFTER the initial attempt. The total
     /// number of attempts is `maxRetries + 1`.

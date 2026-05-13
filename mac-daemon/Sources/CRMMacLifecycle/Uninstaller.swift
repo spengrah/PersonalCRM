@@ -1,4 +1,4 @@
-// Uninstaller implements `crm-mac uninstall` per plan D10.
+// Uninstaller implements `crm-mac uninstall`.
 //
 // Default uninstall:
 //   1. launchctl bootout (tolerates non-zero — service may not be loaded)
@@ -11,7 +11,7 @@
 //      logs (best-effort)
 //
 // Pi-side mac_host row is NOT touched — `crm-admin --revoke-host <id>`
-// is the Pi-side knob (plan D10 + spec § lifecycle).
+// is the Pi-side knob.
 import Foundation
 import CRMMacCore
 
@@ -83,7 +83,7 @@ public struct Uninstaller {
             bootoutExit = inv.exitCode
         } catch {
             deps.logger.warning("uninstall: bootout invocation failed", metadata: [
-                "error": .public(String(describing: error)),
+                "error": .private(String(describing: error)),
             ])
         }
 
@@ -101,7 +101,7 @@ public struct Uninstaller {
             keychainDeleted = true
         } catch {
             deps.logger.warning("uninstall: keychain delete failed", metadata: [
-                "error": .public(String(describing: error)),
+                "error": .private(String(describing: error)),
             ])
         }
 

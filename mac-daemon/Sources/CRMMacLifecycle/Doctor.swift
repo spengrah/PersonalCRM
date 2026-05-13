@@ -1,4 +1,4 @@
-// Doctor implements `crm-mac doctor` per plan D12.
+// Doctor implements `crm-mac doctor`.
 //
 // Four checks:
 //   1. Keychain access (read api-key)

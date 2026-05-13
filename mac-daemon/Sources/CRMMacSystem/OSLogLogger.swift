@@ -1,8 +1,8 @@
 // OSLogLogger is the production LoggerProtocol implementation. It
 // routes messages to os_log under subsystem "xyz.spengrah.crm-mac".
 //
-// Per plan D13 the daemon defaults to .private interpolation for any
-// string-valued field; operators can override in Console.app by
+// The daemon defaults to .private interpolation for any string-
+// valued field; operators can override in Console.app by
 // selecting "Include Private Data". We pre-format the metadata into
 // the message string using the appropriate os_log privacy modifier
 // for each LogValue case.

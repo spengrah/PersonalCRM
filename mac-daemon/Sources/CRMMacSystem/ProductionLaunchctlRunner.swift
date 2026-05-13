@@ -2,9 +2,9 @@
 // domain target ("gui/<uid>") is computed from `getuid()` so the
 // daemon's plist can run under whichever account installed it.
 //
-// Plan D14: classic `launchctl bootstrap gui/<uid> <plist>` /
-// `launchctl bootout gui/<uid>/<label>` path. NOT SMAppService (which
-// requires an .app bundle).
+// Uses classic `launchctl bootstrap gui/<uid> <plist>` /
+// `launchctl bootout gui/<uid>/<label>` rather than SMAppService.agent
+// (which requires an .app bundle; this binary is a bare CLI).
 import Foundation
 import CRMMacLifecycle
 

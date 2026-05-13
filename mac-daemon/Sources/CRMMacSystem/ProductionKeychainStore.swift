@@ -1,7 +1,7 @@
 // ProductionKeychainStore wraps Security framework SecItem* APIs to
 // store the daemon's API key in the user's Keychain.
 //
-// Plan D9 / A3:
+// Attribute set:
 //   - service = "xyz.spengrah.crm-mac"
 //   - account = constant "api-key" (NOT the host UUID — so the key can
 //     be retrieved even when config.json is corrupted)

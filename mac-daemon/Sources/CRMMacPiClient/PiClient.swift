@@ -1,6 +1,8 @@
 // PiClient is the typed HTTP client every CRMMacLifecycle workflow
-// uses to talk to the Pi. All requests go through a RetryingTransport
-// per plan D16; the pair request bypasses retry entirely.
+// uses to talk to the Pi. All requests go through a RetryingTransport;
+// the pair request bypasses retry entirely because the pair tx is
+// non-idempotent on the daemon side (ambiguous response is operator-
+// recovery territory).
 //
 // Tests inject a per-test URLSession + MockHTTPProtocol handler so no
 // global URLProtocol registration is needed and parallel tests cannot

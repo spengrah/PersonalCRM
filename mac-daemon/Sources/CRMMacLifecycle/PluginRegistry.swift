@@ -1,9 +1,8 @@
 // PluginRegistry is the composition point where the daemon's stub
-// plugins (PR6) and real plugins (PR7+) are registered against the
-// ScheduleRunner. PR6's registry registers the StubMessagesPlugin
-// and StubICloudContactsPlugin from CRMMacCore — they log a no-op
-// tick on the configured cadence so the spec § PR6 Definition-of-Done
-// item "stub scheduler jobs fire on schedule" is exercised.
+// plugins and real plugins are registered against the ScheduleRunner.
+// The skeleton ships StubMessagesPlugin + StubICloudContactsPlugin
+// (from CRMMacCore) that log a no-op tick on the configured cadence;
+// real source readers replace those stubs as they land.
 import Foundation
 import CRMMacCore
 

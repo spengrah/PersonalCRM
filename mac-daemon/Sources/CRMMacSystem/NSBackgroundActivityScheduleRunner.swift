@@ -1,8 +1,8 @@
 // NSBackgroundActivityScheduleRunner wraps NSBackgroundActivityScheduler
-// to drive SourcePlugin ticks. This is the spec-default scheduler
-// (see plan D15); the DispatchSourceTimer fallback in
-// DispatchSourceScheduleRunner.swift is preserved for swap-in if
-// coalescing proves too aggressive in PR7/PR8.
+// to drive SourcePlugin ticks. This is the default scheduler; the
+// DispatchSourceTimer fallback in DispatchSourceScheduleRunner.swift
+// is preserved for swap-in if coalescing proves too aggressive once
+// source readers are wired up.
 //
 // Each registered plugin gets its own NSBackgroundActivityScheduler
 // instance. The tickInterval is mapped to `interval` and `tolerance`

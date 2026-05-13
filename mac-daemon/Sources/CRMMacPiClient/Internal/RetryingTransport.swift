@@ -1,6 +1,6 @@
 // RetryingTransport wraps URLSession with policy-aware retries.
 //
-// Per plan D16:
+// Retry policy:
 //   - 5xx + network errors are retryable (5 retries; 1s, 2s, 4s, 8s, 16s).
 //   - 4xx (including 429) are NEVER retried — Pi's pairing limiter
 //     returns 429 without Retry-After and a client retry would amplify

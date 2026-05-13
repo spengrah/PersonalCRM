@@ -1,6 +1,6 @@
 // SourcePlugin is the contract every per-source poller satisfies.
-// PR6 ships the protocol + two no-op stubs (messages, icloud_contacts);
-// PR7 and PR8 each replace one stub with a real reader.
+// Ships the protocol + two no-op stubs (messages, icloud_contacts);
+// real source readers replace those stubs as they land.
 //
 // The contract is intentionally tiny — the scheduler is owned by
 // CRMMacLifecycle, not by the plugins themselves, so plugins remain
@@ -24,26 +24,26 @@ public struct SourceID: RawRepresentable, Hashable, Codable, ExpressibleByString
     public static let icloudContacts: SourceID = "icloud_contacts"
 }
 
-/// A poller of one external source. PR6's stub implementations log a
-/// no-op tick; PR7/PR8 replace with real readers.
+/// A poller of one external source. The stub implementations log a
+/// no-op tick; real readers replace them.
 public protocol SourcePlugin: AnyObject {
     /// Stable source identifier; used as the state-file key and
     /// heartbeat-payload key.
     var id: SourceID { get }
 
     /// Schedule cadence the registry should request from ScheduleRunner.
-    /// PR6 stubs ask for 60s; real readers tune this themselves.
+    /// Stubs ask for 60s; real readers tune this themselves.
     var tickInterval: TimeInterval { get }
 
-    /// Called by the scheduler on every tick. PR6 stubs log + return.
+    /// Called by the scheduler on every tick. Stubs log + return.
     /// Errors are caught and logged by the caller — plugins don't need
     /// to handle their own retry envelope.
     func tick() async throws
 }
 
-/// Wrapper holding the dependencies a plugin needs. PR6 ships a tiny
-/// surface (just a logger); PR7 adds a PiClient + StateStore; PR8 adds
-/// the contact-store + filesystem accessors.
+/// Wrapper holding the dependencies a plugin needs. Currently a tiny
+/// surface (just a logger); source-specific dependencies (PiClient,
+/// StateStore, contact-store accessors) land with each real reader.
 public struct SourceContext {
     public let logger: LoggerProtocol
 

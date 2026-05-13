@@ -7,8 +7,8 @@ public enum Daemon {
     /// breaking incompatibility (none planned).
     public static let label = "xyz.spengrah.crm-mac"
     /// Daemon version string. Sent in pair + heartbeat payloads.
-    /// Bumped per release; PR6 ships 0.1.0.
+    /// Bumped per release.
     public static let version = "0.1.0"
-    /// Protocol version transmitted to the Pi. PR1 floor is 1.
+    /// Protocol version transmitted to the Pi.
     public static let protocolVersion: Int32 = 1
 }

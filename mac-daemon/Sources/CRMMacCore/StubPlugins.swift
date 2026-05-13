@@ -1,10 +1,8 @@
-// PR6 ships two no-op SourcePlugin implementations. They are wired
-// into the scheduler by CRMMacLifecycle.PluginRegistry so the
-// "daemon ticks and logs" Definition-of-Done item is exercised
-// end-to-end, even though no source data is actually read.
-//
-// PR7 replaces StubMessagesPlugin with a real chat.db reader.
-// PR8 replaces StubICloudContactsPlugin with a CNContactStore reader.
+// Two no-op SourcePlugin implementations wired into the scheduler by
+// CRMMacLifecycle.PluginRegistry. They exist so the "daemon ticks and
+// logs" smoke is exercised end-to-end, even though no source data is
+// actually read. Real source readers replace these as they land
+// (Apple Messages chat.db reader, CNContactStore reader).
 import Foundation
 
 public final class StubMessagesPlugin: SourcePlugin {

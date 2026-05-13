@@ -4,7 +4,7 @@
 //   2. Composes the heartbeat loop + stub source plugins.
 //   3. Awaits SIGTERM (delivered by `launchctl bootout`).
 //
-// Plan D14 exit-code map:
+// Exit-code map:
 //   - clean shutdown: 0
 //   - 401 from Pi during heartbeat: 1 (via ExitHandler)
 //   - 412 from Pi during heartbeat: 2 (via ExitHandler)
@@ -34,7 +34,7 @@ struct DaemonCommand: AsyncParsableCommand {
             config = try configStore.load()
         } catch {
             logger.error("daemon: config load failed", metadata: [
-                "error": .public(String(describing: error)),
+                "error": .private(String(describing: error)),
             ])
             throw ExitCode(3)
         }
@@ -45,7 +45,7 @@ struct DaemonCommand: AsyncParsableCommand {
             apiKey = try ctx.keychain.readAPIKey()
         } catch {
             logger.error("daemon: keychain load failed", metadata: [
-                "error": .public(String(describing: error)),
+                "error": .private(String(describing: error)),
             ])
             throw ExitCode(4)
         }
@@ -56,7 +56,7 @@ struct DaemonCommand: AsyncParsableCommand {
             _ = try stateStore.load()
         } catch {
             logger.error("daemon: state load failed", metadata: [
-                "error": .public(String(describing: error)),
+                "error": .private(String(describing: error)),
             ])
             throw ExitCode(5)
         }
@@ -149,7 +149,7 @@ private final class OnDiskHeartbeatStateWriter: HeartbeatStateWriter {
             try stateStore.save(state)
         } catch {
             logger.warning("heartbeat: state persist failed", metadata: [
-                "error": .public(String(describing: error)),
+                "error": .private(String(describing: error)),
             ])
         }
     }

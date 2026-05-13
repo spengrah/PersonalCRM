@@ -4,8 +4,7 @@ import PackageDescription
 // Personal CRM Mac daemon (`crm-mac`).
 //
 // Single binary, two roles: a launchd-managed background agent and a
-// user-facing CLI. See `../.ai/spec/mac-daemon.md` and the PR6 plan at
-// `../.ai/log/plan/mac-daemon-phase-1-pr6-daemon-skeleton.md` for the
+// user-facing CLI. See `../.ai/spec/mac-daemon.md` for the
 // authoritative scope and target layering rationale.
 //
 // Target layering:

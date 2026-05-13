@@ -39,17 +39,21 @@ public struct ProductionFilesystemAdapter: FilesystemAdapter {
     }
 
     public func rename(from: String, to: String) throws {
+        let src = URL(fileURLWithPath: from)
         if !fm.fileExists(atPath: from) {
             throw FilesystemError.notFound(from)
         }
-        // Best-effort remove of any pre-existing destination so
-        // rename(2) succeeds. Foundation's moveItem will otherwise
-        // fail with NSFileWriteFileExistsError.
-        if fm.fileExists(atPath: to) {
-            try? fm.removeItem(atPath: to)
-        }
+        let dst = URL(fileURLWithPath: to)
         do {
-            try fm.moveItem(atPath: from, toPath: to)
+            if fm.fileExists(atPath: to) {
+                // replaceItemAt performs an atomic-rename: on a same-fs
+                // target it uses renamex_np(2) (or rename(2)), so a
+                // crash mid-call cannot leave both the old and new
+                // file simultaneously absent.
+                _ = try fm.replaceItemAt(dst, withItemAt: src)
+            } else {
+                try fm.moveItem(at: src, to: dst)
+            }
         } catch {
             throw FilesystemError.ioError("rename \(from) -> \(to): \(error.localizedDescription)")
         }

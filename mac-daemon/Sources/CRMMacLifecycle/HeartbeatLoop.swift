@@ -2,7 +2,7 @@
 // SourcePlugin so the registry can schedule it via the same
 // ScheduleRunner the source plugins use.
 //
-// Plan D11 / D16:
+// Behavior:
 //   - 60s tick by default; one in-flight at a time (plugin tick
 //     awaits before scheduler considers the activity done).
 //   - 401 → request exit 1 (auth revoked).
@@ -68,7 +68,7 @@ public final class HeartbeatLoop: SourcePlugin {
             // 5xx after retries, transport, or other transient — log
             // and continue.
             logger.warning("heartbeat: transient failure", metadata: [
-                "error": .public(String(describing: error)),
+                "error": .private(String(describing: error)),
             ])
         }
     }

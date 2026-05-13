@@ -4,9 +4,9 @@
 // SecItemCopyMatching / SecItemUpdate / SecItemDelete; tests can
 // inject an in-memory fake.
 //
-// Plan D9 / A3: service = "xyz.spengrah.crm-mac", account = the
-// constant string "api-key" (NOT the host UUID — that would couple
-// the API-key retrieval to a parsed config.json).
+// Production attribute set: service = "xyz.spengrah.crm-mac", account
+// = the constant string "api-key" (NOT the host UUID — that would
+// couple the API-key retrieval to a parsed config.json).
 import Foundation
 
 public enum KeychainStoreError: Error, Equatable, CustomStringConvertible {

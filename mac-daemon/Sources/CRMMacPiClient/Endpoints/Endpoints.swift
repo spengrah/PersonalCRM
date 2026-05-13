@@ -28,9 +28,11 @@ public struct PairData: Decodable, Equatable {
 public struct HeartbeatBody: Encodable, Equatable {
     public let daemonVersion: String
     public let protocolVersion: Int32
-    /// Opaque permissions JSON; PR6 ships empty `{}`.
+    /// Opaque permissions JSON. Empty `{}` until source readers
+    /// populate it.
     public let permissions: Data
-    /// Opaque per-source health JSON; PR6 ships empty `{}`.
+    /// Opaque per-source health JSON. Empty `{}` until source readers
+    /// populate it.
     public let sourceHealth: Data
 
     public init(

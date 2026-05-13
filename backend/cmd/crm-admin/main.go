@@ -120,6 +120,12 @@ func runMain(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Validate subcommand selection BEFORE loading config / opening
+	// the DB so a missing-flag or mutual-exclusion error surfaces as
+	// a usage error rather than a config-not-found / migration error.
+	if err := validateSubcommand(opts); err != nil {
+		return err
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -146,6 +152,34 @@ func runMain(args []string) error {
 	return run(ctx, opts, deps)
 }
 
+// validateSubcommand returns nil iff exactly one subcommand flag is
+// set. Run BEFORE config/DB setup so usage errors are surfaced
+// immediately.
+func validateSubcommand(opts runOptions) error {
+	active := 0
+	if opts.rematchStranded {
+		active++
+	}
+	if opts.mintPairingToken {
+		active++
+	}
+	if opts.listHosts {
+		active++
+	}
+	if opts.revokeHostID != "" {
+		active++
+	}
+	if active == 0 {
+		return errors.New("no subcommand specified; pass exactly one of " +
+			"--messages-rematch-stranded, --mint-pairing-token, --list-hosts, --revoke-host <uuid>")
+	}
+	if active > 1 {
+		return errors.New("subcommand flags are mutually exclusive; pass exactly one of " +
+			"--messages-rematch-stranded, --mint-pairing-token, --list-hosts, --revoke-host <uuid>")
+	}
+	return nil
+}
+
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
 func parseArgs(args []string) (runOptions, error) {
@@ -167,30 +201,12 @@ func parseArgs(args []string) (runOptions, error) {
 	return opts, nil
 }
 
-// run dispatches to exactly one subcommand. Surfaces a clear error on
-// mutual-exclusion violations or when no flag is set.
+// run dispatches to exactly one subcommand. Validates flag selection
+// defensively even though runMain validates first — tests drive run()
+// directly, so the same guard lives here.
 func run(ctx context.Context, opts runOptions, deps adminDeps) error {
-	// Count active subcommand flags. Exactly one must be set.
-	active := 0
-	if opts.rematchStranded {
-		active++
-	}
-	if opts.mintPairingToken {
-		active++
-	}
-	if opts.listHosts {
-		active++
-	}
-	if opts.revokeHostID != "" {
-		active++
-	}
-	if active == 0 {
-		return errors.New("no subcommand specified; pass exactly one of " +
-			"--messages-rematch-stranded, --mint-pairing-token, --list-hosts, --revoke-host <uuid>")
-	}
-	if active > 1 {
-		return errors.New("subcommand flags are mutually exclusive; pass exactly one of " +
-			"--messages-rematch-stranded, --mint-pairing-token, --list-hosts, --revoke-host <uuid>")
+	if err := validateSubcommand(opts); err != nil {
+		return err
 	}
 
 	switch {

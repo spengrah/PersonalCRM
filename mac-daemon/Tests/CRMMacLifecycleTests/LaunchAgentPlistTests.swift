@@ -1,10 +1,10 @@
 import XCTest
-@testable import CRMMacSystem
+@testable import CRMMacLifecycle
 
 final class LaunchAgentPlistTests: XCTestCase {
     func testRenderMatchesGoldenFixture() {
         let plist = LaunchAgentPlist(
-            label: "xyz.spengrah.crm-mac",
+            label: Daemon.label,
             binaryPath: "/Users/example/Library/Application Support/crm-mac/bin/crm-mac",
             configDirPath: "/Users/example/Library/Application Support/crm-mac",
             stdoutPath: "/Users/example/Library/Logs/crm-mac/stdout.log",
@@ -47,10 +47,8 @@ final class LaunchAgentPlistTests: XCTestCase {
     }
 
     func testPlistParsesAsPropertyList() throws {
-        // The render output must parse as a PropertyList so launchd
-        // will load it. We use PropertyListSerialization to confirm
-        // the bytes are well-formed.
         let plist = LaunchAgentPlist(
+            label: Daemon.label,
             binaryPath: "/Users/example/bin/crm-mac",
             configDirPath: "/Users/example/cfg",
             stdoutPath: "/Users/example/logs/stdout.log",
@@ -58,18 +56,28 @@ final class LaunchAgentPlistTests: XCTestCase {
         let data = Data(plist.render().utf8)
         let any = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
         let dict = any as! [String: Any]
-        XCTAssertEqual(dict["Label"] as? String, LaunchAgentPlist.label)
+        XCTAssertEqual(dict["Label"] as? String, Daemon.label)
         XCTAssertEqual((dict["KeepAlive"] as? [String: Any])?["Crashed"] as? Bool, true)
         XCTAssertEqual((dict["ProgramArguments"] as? [String])?.last, "daemon")
     }
 
-    func testDaemonPathsExpandsHome() {
-        let home = URL(fileURLWithPath: "/Users/alice")
-        let paths = DaemonPaths(home: home)
-        XCTAssertEqual(paths.configDir.path, "/Users/alice/Library/Application Support/crm-mac")
-        XCTAssertEqual(paths.binaryPath.path, "/Users/alice/Library/Application Support/crm-mac/bin/crm-mac")
-        XCTAssertEqual(paths.plistPath.path, "/Users/alice/Library/LaunchAgents/xyz.spengrah.crm-mac.plist")
-        XCTAssertEqual(paths.stdoutLog.path, "/Users/alice/Library/Logs/crm-mac/stdout.log")
-        XCTAssertEqual(paths.stderrLog.path, "/Users/alice/Library/Logs/crm-mac/stderr.log")
+    func testXMLEscapesSpecialCharacters() throws {
+        let plist = LaunchAgentPlist(
+            label: Daemon.label,
+            binaryPath: "/Users/o'malley/Library/bin/crm-mac",
+            configDirPath: "/Users/<weird>",
+            stdoutPath: "/Users/a&b/stdout.log",
+            stderrPath: "/Users/a&b/stderr.log").render()
+        // Critical: parseable as a plist even with special chars.
+        let data = Data(plist.utf8)
+        let any = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+        let dict = any as! [String: Any]
+        let programArgs = dict["ProgramArguments"] as! [String]
+        XCTAssertEqual(programArgs.first, "/Users/o'malley/Library/bin/crm-mac")
+        // CRM_MAC_CONFIG_DIR survives < > round-trip.
+        let env = dict["EnvironmentVariables"] as! [String: String]
+        XCTAssertEqual(env["CRM_MAC_CONFIG_DIR"], "/Users/<weird>")
+        // stderr path round-trips with & intact.
+        XCTAssertEqual(dict["StandardErrorPath"] as? String, "/Users/a&b/stderr.log")
     }
 }
