@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/api"
+	"personal-crm/backend/internal/auth"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // Ingestion limits. Chosen per plan/spec §3.5:
@@ -42,6 +44,13 @@ const (
 	ingestCodePayloadInvalid  = "PAYLOAD_INVALID"
 	ingestCodePayloadTooLarge = "PAYLOAD_TOO_LARGE"
 )
+
+// eventsRawMessageMaxKnownVersion is the highest raw_message.* payload
+// Version the Pi knows how to process. Daemons that ship a Version
+// higher than this are rejected at the handler with PAYLOAD_INVALID so
+// the operator sees a clear "upgrade Pi" error rather than a silent
+// dropped-field decode.
+const eventsRawMessageMaxKnownVersion = 1
 
 // IngestHandler exposes POST /api/v1/ingest/events. Registered only when
 // cfg.Features.EnableEventBusIngest is true (spec §3.9).
@@ -111,10 +120,18 @@ type IngestResponse struct {
 //  2. Bind the JSON body. Malformed → 400.
 //  3. Enforce batch shape: non-empty, ≤ maxBatchSize.
 //  4. Validate each event (required fields, length bounds, known kind,
-//     payload shape). Failures land in errors[]; the batch continues.
+//     payload shape, raw_message-specific field checks). Failures land
+//     in errors[]; the batch continues.
 //  5. If any events pass validation, forward them to the service as a
 //     single atomic batch. Return spec-shaped success response. If the
 //     service errors (unexpected DB failure), return 500.
+//
+// Auth dispatch: the route runs behind IngestAuthMiddleware which
+// branches on the X-Mac-Host-ID header. When present and validated by
+// MacHostAuthMiddleware, the parsed UUID is stashed in gin context and
+// the handler reads it via auth.MacHostIDFromContext to pass through to
+// the service (so raw_message.* events can be processed and stamped
+// with mac_host_id). Absent header → API-key path → hostID is nil.
 func (h *IngestHandler) IngestEvents(c *gin.Context) {
 	// Body size cap. MaxBytesReader returns *http.MaxBytesError (Go 1.21+)
 	// which propagates through json.Decoder without re-wrapping; detect it
@@ -150,7 +167,11 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 	}
 
 	// Validate each event pre-tx. Valid ones become envelopes to publish.
+	// originalIndices[i] is the caller-original request-array position of
+	// envsToIngest[i]; passed to the service so per-event rejections
+	// surface with caller-original indexing.
 	envsToIngest := make([]*events.Envelope, 0, len(req.Events))
+	originalIndices := make([]int, 0, len(req.Events))
 	ingestErrors := make([]IngestError, 0)
 	for i, ev := range req.Events {
 		if ierr := validateIngestEvent(i, ev); ierr != nil {
@@ -164,9 +185,16 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 			Payload:    ev.Payload,
 			ObservedAt: *ev.ObservedAt, // validator guarantees non-nil + non-zero
 		})
+		originalIndices = append(originalIndices, i)
 	}
 
-	rejected := len(ingestErrors)
+	// Host ID is set by MacHostAuthMiddleware when the host-auth path
+	// fired; nil on the global-API-key path. Service uses it to enforce
+	// the per-path kind allowlist and stamp staging rows.
+	var hostID *uuid.UUID
+	if id, ok := auth.MacHostIDFromContext(c); ok {
+		hostID = &id
+	}
 
 	// All events failed validation — still a success response (spec §3.5
 	// distinguishes "validation failure per event" from "batch-level
@@ -176,18 +204,18 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 			Int("batch_size", len(req.Events)).
 			Int("accepted", 0).
 			Int("duplicate", 0).
-			Int("rejected", rejected).
+			Int("rejected", len(ingestErrors)).
 			Msg("event batch ingested (all rejected)")
 		c.JSON(http.StatusOK, IngestResponse{
 			Accepted:  0,
 			Duplicate: 0,
-			Rejected:  rejected,
+			Rejected:  len(ingestErrors),
 			Errors:    ingestErrors,
 		})
 		return
 	}
 
-	accepted, duplicate, err := h.ingestService.IngestBatch(c.Request.Context(), envsToIngest)
+	accepted, duplicate, perEventRejections, err := h.ingestService.IngestBatch(c.Request.Context(), envsToIngest, originalIndices, hostID)
 	if err != nil {
 		logger.Error().
 			Err(err).
@@ -198,17 +226,25 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 		return
 	}
 
+	for _, r := range perEventRejections {
+		ingestErrors = append(ingestErrors, IngestError{
+			Index:   r.Index,
+			Code:    r.Code,
+			Message: r.Message,
+		})
+	}
+
 	logger.Info().
 		Int("batch_size", len(req.Events)).
 		Int("accepted", accepted).
 		Int("duplicate", duplicate).
-		Int("rejected", rejected).
+		Int("rejected", len(ingestErrors)).
 		Msg("event batch ingested")
 
 	c.JSON(http.StatusOK, IngestResponse{
 		Accepted:  accepted,
 		Duplicate: duplicate,
-		Rejected:  rejected,
+		Rejected:  len(ingestErrors),
 		Errors:    ingestErrors,
 	})
 }
@@ -269,5 +305,73 @@ func validateIngestEvent(index int, ev IngestEventRequest) *IngestError {
 		}
 	}
 
+	// Raw_message.* kinds require strict field-level checks beyond the
+	// lenient ValidatePayload contract. Zero-valued chat_id, peer_handle,
+	// or sent_at would cause downstream identity-match + staging-upsert
+	// to fail mid-tx in non-obvious ways. Catch them at the handler.
+	if kind == events.KindRawMessageReceived || kind == events.KindRawMessageSent {
+		if ev.SourceID == "" {
+			return &IngestError{
+				Index:   index,
+				Code:    ingestCodeMissingField,
+				Message: "source_id is required for raw_message.* kinds (must equal payload.guid)",
+			}
+		}
+		if rerr := validateRawMessagePayload(index, ev); rerr != nil {
+			return rerr
+		}
+	}
+
+	return nil
+}
+
+// validateRawMessagePayload runs the raw_message.*-specific field-level
+// validation that ValidatePayload's lenient decode does not enforce.
+// Runs only when the kind is a raw_message.* kind and ValidatePayload
+// has already passed (structural).
+func validateRawMessagePayload(index int, ev IngestEventRequest) *IngestError {
+	var p events.RawMessageReceivedPayload
+	if err := json.Unmarshal(ev.Payload, &p); err != nil {
+		return &IngestError{Index: index, Code: ingestCodePayloadInvalid, Message: err.Error()}
+	}
+	if p.Version < 1 {
+		return &IngestError{Index: index, Code: ingestCodePayloadInvalid,
+			Message: fmt.Sprintf("raw_message payload: version must be >=1 (got %d)", p.Version)}
+	}
+	if p.Version > eventsRawMessageMaxKnownVersion {
+		return &IngestError{Index: index, Code: ingestCodePayloadInvalid,
+			Message: fmt.Sprintf("raw_message payload version %d exceeds max known %d; upgrade Pi",
+				p.Version, eventsRawMessageMaxKnownVersion)}
+	}
+	if p.HostID == uuid.Nil {
+		return &IngestError{Index: index, Code: ingestCodeMissingField,
+			Message: "raw_message payload: host_id is required"}
+	}
+	if p.Source == "" {
+		return &IngestError{Index: index, Code: ingestCodeMissingField,
+			Message: "raw_message payload: source is required"}
+	}
+	if p.Guid == "" {
+		return &IngestError{Index: index, Code: ingestCodeMissingField,
+			Message: "raw_message payload: guid is required"}
+	}
+	if p.ChatID == "" {
+		return &IngestError{Index: index, Code: ingestCodeMissingField,
+			Message: "raw_message payload: chat_id is required"}
+	}
+	if p.PeerHandle == "" {
+		return &IngestError{Index: index, Code: ingestCodeMissingField,
+			Message: "raw_message payload: peer_handle is required"}
+	}
+	if p.SentAt.IsZero() {
+		return &IngestError{Index: index, Code: ingestCodeMissingField,
+			Message: "raw_message payload: sent_at is required and must not be zero"}
+	}
+	if p.MessageType == "" {
+		return &IngestError{Index: index, Code: ingestCodeMissingField,
+			Message: "raw_message payload: message_type is required"}
+	}
+	// ValidatePayload already rejects message_type values outside the
+	// canonical set when non-empty; that check fires above.
 	return nil
 }

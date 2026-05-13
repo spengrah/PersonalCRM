@@ -266,7 +266,32 @@ func run() int {
 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
-	ingestService := service.NewIngestService(database, eventBus)
+
+	// Identity repository + service for the ingest path. The host-auth
+	// ingest path (raw_message.* envelopes from the Mac daemon) needs a
+	// tx-bound identity matcher so the per-event savepoint can roll back
+	// the identity write atomically with the staging-row insert on
+	// failure. The external-sync block (further down) constructs its own
+	// IdentityService for the providers that use it — IdentityService is
+	// stateless so the two instances are interchangeable.
+	identityRepoForIngest := repository.NewIdentityRepository(database.Queries)
+	identityServiceForIngest := service.NewIdentityService(identityRepoForIngest)
+
+	// Messages staging repo (Mac daemon spec §3). Wired here so the
+	// InteractionRecorder's staging registry can dispatch
+	// source="messages" mark-processed calls correctly once the Mac
+	// daemon ingest writer is live, and so the IngestService can upsert
+	// staging rows from raw_message.* envelopes inside its per-event
+	// savepoint.
+	messagesMessageRepo := repository.NewMessagesMessageRepository(database.Queries)
+
+	ingestService := service.NewIngestService(
+		database,
+		eventBus,
+		identityServiceForIngest,
+		messagesMessageRepo,
+		riverClient,
+	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	// Rematch service — constructed above ContactService so it can be
@@ -281,13 +306,6 @@ func run() int {
 	// InteractionRecorder wiring so the consumer can mark messages
 	// processed in the same tx as the interaction insert).
 	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
-
-	// Messages staging repo (Mac daemon spec §3). Wired here so the
-	// InteractionRecorder's staging registry can dispatch
-	// source="messages" mark-processed calls correctly once the Mac
-	// daemon ingest writer is live; until then the table has no rows
-	// and the registry entry is dormant.
-	messagesMessageRepo := repository.NewMessagesMessageRepository(database.Queries)
 
 	// Source-neutral staging registry — InteractionRecorder dispatches
 	// MarkProcessedTx by env.Source to the right repository. Unknown
