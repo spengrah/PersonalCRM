@@ -64,7 +64,7 @@ final class MessagesSourcePluginTests: XCTestCase {
             try db.execute(sql:
                 "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 1)")
         }
-        config = config // appease 'used' warning
+        _ = config // unused after queue setup
         return dbURL
     }
 

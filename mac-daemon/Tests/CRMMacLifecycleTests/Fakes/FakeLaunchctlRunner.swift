@@ -7,7 +7,7 @@ import Foundation
 /// reports "service unknown" (exit 1) so the Installer preflight does
 /// not see an existing registration. Tests that need a registered
 /// service set `script.printService = [0]` explicitly.
-public final class FakeLaunchctlRunner: LaunchctlRunner {
+public final class FakeLaunchctlRunner: LaunchctlRunner, @unchecked Sendable {
     public struct Script {
         public var bootstrap: [Int32] = [0]
         public var bootout: [Int32] = [0]
