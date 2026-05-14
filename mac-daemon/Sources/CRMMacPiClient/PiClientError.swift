@@ -27,6 +27,9 @@ public enum PiClientError: Error, Equatable, CustomStringConvertible {
     /// code. Should not happen against the current Pi but we surface
     /// it explicitly rather than silently treating as success.
     case envelopeError(code: String, message: String)
+    /// 409 from POST /api/v1/host/:id/sync/:source/cursor.  The daemon
+    /// refreshes via GET and aborts the rest of the tick.
+    case cursorConflict(code: ConflictCode, current: CursorConflict)
 
     public var description: String {
         switch self {
@@ -40,6 +43,10 @@ public enum PiClientError: Error, Equatable, CustomStringConvertible {
         case .transport(let u): return "transport error: \(u)"
         case .decode(let r): return "decode error: \(r)"
         case .envelopeError(let c, let m): return "envelope error \(c): \(m)"
+        case .cursorConflict(let code, let current):
+            return "cursor conflict (\(code.rawValue)): " +
+                "current_cursor=\(current.currentCursor ?? "nil") " +
+                "current_epoch=\(current.currentEpoch.map(String.init) ?? "nil")"
         }
     }
 }

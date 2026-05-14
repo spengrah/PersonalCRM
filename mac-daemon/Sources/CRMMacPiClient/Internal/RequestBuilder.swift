@@ -92,6 +92,62 @@ struct RequestBuilder {
         return req
     }
 
+    func getCursor(auth: PiAuth, source: String) throws -> URLRequest {
+        let url = try resolve(path:
+            "/api/v1/host/\(auth.hostID.uuidString.lowercased())/sync/\(source)/cursor")
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        Self.applyAuth(&req, auth: auth)
+        return req
+    }
+
+    func commitCursor(
+        auth: PiAuth,
+        source: String,
+        cursor: String,
+        baseCursor: String,
+        cursorEpoch: Int64,
+        backfillComplete: Bool
+    ) throws -> URLRequest {
+        let url = try resolve(path:
+            "/api/v1/host/\(auth.hostID.uuidString.lowercased())/sync/\(source)/cursor")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        Self.applyAuth(&req, auth: auth)
+        let body = CommitCursorBody(
+            cursor: cursor,
+            baseCursor: baseCursor,
+            cursorEpoch: cursorEpoch,
+            backfillComplete: backfillComplete)
+        do {
+            req.httpBody = try JSONEncoder().encode(body)
+        } catch {
+            throw RequestBuilderError.encode("encode commit cursor body: \(error)")
+        }
+        return req
+    }
+
+    func ingestEvents(auth: PiAuth, body: IngestEventsBody) throws -> URLRequest {
+        let url = try resolve(path: "/api/v1/ingest/events")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        Self.applyAuth(&req, auth: auth)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        do {
+            req.httpBody = try encoder.encode(body)
+        } catch {
+            throw RequestBuilderError.encode("encode ingest body: \(error)")
+        }
+        return req
+    }
+
     private func resolve(path: String) throws -> URL {
         guard var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw RequestBuilderError.malformedURL(baseURL.absoluteString)

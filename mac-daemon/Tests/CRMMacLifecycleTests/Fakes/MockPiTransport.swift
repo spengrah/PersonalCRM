@@ -4,8 +4,8 @@ import Foundation
 /// Lightweight scriptable transport reused across lifecycle tests.
 /// Mirrors the helper in CRMMacPiClientTests but lives in this test
 /// target — SwiftPM doesn't share test code across targets.
-final class LifecycleMockTransport {
-    enum Step {
+final class LifecycleMockTransport: @unchecked Sendable {
+    enum Step: Sendable {
         case respond(status: Int, data: Data)
         case fail(URLError)
     }
@@ -45,7 +45,7 @@ final class LifecycleMockTransport {
     }
 }
 
-func noopSleep(_ delay: TimeInterval) async throws {}
+@Sendable func noopSleep(_ delay: TimeInterval) async throws {}
 
 let pair200JSON: Data = Data("""
 {"success": true, "data": {"host_id":"11111111-2222-3333-4444-555555555555","api_key":"k","cursor_epoch":1}}
