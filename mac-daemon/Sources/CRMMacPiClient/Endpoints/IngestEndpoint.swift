@@ -125,12 +125,14 @@ extension JSONValue {
         if any is NSNull {
             return .null
         }
-        if let b = any as? Bool {
-            return .bool(b)
-        }
+        // JSONSerialization wraps every numeric literal — including
+        // booleans — as NSNumber. `any as? Bool` returns true for
+        // NSNumber(value: 0) and NSNumber(value: 1), so the only
+        // reliable way to tell `true` from `1` is CFBooleanGetTypeID.
         if let n = any as? NSNumber {
-            // NSNumber sometimes wraps Bool — guard the Bool case
-            // above first.
+            if CFGetTypeID(n) == CFBooleanGetTypeID() {
+                return .bool(n.boolValue)
+            }
             return .number(n.doubleValue)
         }
         if let s = any as? String {
@@ -146,7 +148,6 @@ extension JSONValue {
             }
             return .object(out)
         }
-        // Unknown type — fall back to null for safety.
         return .null
     }
 }
