@@ -71,6 +71,24 @@ final class MessagesSourcePluginTests: XCTestCase {
         StateStore(fileURL: tempDir.appendingPathComponent("state.json"))
     }
 
+    /// Sync helper that adds a second seeded message at ROWID=2 to a
+    /// chat.db produced by `makeChatDB()`. Lives in a sync method so
+    /// the GRDB write closure isn't inferred as `@Sendable` (which
+    /// would block `self.unix2026` capture from an async test).
+    private func seedSecondMessage(at dbURL: URL) throws {
+        let queue = try DatabaseQueue(path: dbURL.path)
+        let appleNanos = Int64((unix2026 - 978_307_200) * 1e9)
+        try queue.write { db in
+            try db.execute(sql:
+                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                "is_from_me, cache_has_attachments, associated_message_guid) " +
+                "VALUES (2, 'g2', 'bye', 1, ?, 0, 0, NULL)",
+                arguments: [appleNanos])
+            try db.execute(sql:
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 2)")
+        }
+    }
+
     // MARK: - smoke: cache empty -> tick is no-op
 
     func testTickSkipsWhenKnownIdentifiersCacheEmpty() async throws {
@@ -121,17 +139,7 @@ final class MessagesSourcePluginTests: XCTestCase {
         // Seed a second row at ROWID=2 so the install-max capture sets
         // installMaxRowID=2; backfill then scans `< 2` and picks up the
         // ROWID=1 row that makeChatDB() seeded.
-        let queue = try DatabaseQueue(path: dbURL.path)
-        try queue.write { db in
-            let appleNanos = Int64((self.unix2026 - 978_307_200) * 1e9)
-            try db.execute(sql:
-                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
-                "is_from_me, cache_has_attachments, associated_message_guid) " +
-                "VALUES (2, 'g2', 'bye', 1, ?, 0, 0, NULL)",
-                arguments: [appleNanos])
-            try db.execute(sql:
-                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 2)")
-        }
+        try seedSecondMessage(at: dbURL)
 
         let store = makeStateStore()
         try store.save(DaemonState(schemaVersion: 1))
