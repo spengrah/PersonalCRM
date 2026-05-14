@@ -108,10 +108,9 @@ public final class HeartbeatLoop: SourcePlugin {
 /// production composition root provides an impl that updates the
 /// state.json `lastHeartbeatAt` field; tests inject a recording fake.
 ///
-/// Note: `async throws` because production impls funnel through the
-/// `StateMutator` actor (introduced in PR7) to serialize writes with
-/// other `state.json` writers (source plugins). Pre-PR7 the protocol
-/// was synchronous and the actor did not exist.
+/// `async throws` because production impls funnel through the
+/// `StateMutator` actor to serialize writes with other `state.json`
+/// writers (source plugins).
 public protocol HeartbeatStateWriter: Sendable {
     func recordSuccessfulHeartbeat(at: Date, cursorEpoch: Int64) async throws
 }

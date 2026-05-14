@@ -3,7 +3,7 @@
 //   crm-mac messages scan --identifier <handle> [--since <duration>]
 //
 // Both commands modify the Pi-side cursor via the GET -> mutate -> POST
-// CAS-commit flow (plan §"CLI ops subcommands").  Mutating local
+// CAS-commit flow.  Mutating local
 // state.json only would be silently overwritten on the daemon's next
 // tick when it re-fetches the (unchanged) cursor.
 //
@@ -191,73 +191,10 @@ public final class MessagesOps: Sendable {
     }
 }
 
-/// Decode the cursor JSON used by MessagesOps. Re-declared here as a
-/// thin wrapper around the JSON shape so CRMMacLifecycle doesn't need
-/// to depend on CRMMacMessagesSource (which pulls in GRDB).  Matches
-/// the wire shape produced by CRMMacMessagesSource.MessagesCursorCodec.
-struct MessagesCursor: Codable, Equatable, Sendable {
-    var backfillCursor: Int64?
-    var liveCursor: Int64?
-    var installMaxRowID: Int64?
-    var backfillFloorSentAt: Date
-    var backfillComplete: Bool = false
-    var pendingScans: [PendingScan] = []
-    var knownIdentifiersHash: String?
-
-    static let pendingScansCap: Int = 256
-
-    init(
-        backfillCursor: Int64? = nil,
-        liveCursor: Int64? = nil,
-        installMaxRowID: Int64? = nil,
-        backfillFloorSentAt: Date,
-        backfillComplete: Bool = false,
-        pendingScans: [PendingScan] = [],
-        knownIdentifiersHash: String? = nil
-    ) {
-        self.backfillCursor = backfillCursor
-        self.liveCursor = liveCursor
-        self.installMaxRowID = installMaxRowID
-        self.backfillFloorSentAt = backfillFloorSentAt
-        self.backfillComplete = backfillComplete
-        self.pendingScans = pendingScans
-        self.knownIdentifiersHash = knownIdentifiersHash
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case backfillCursor       = "backfill_cursor"
-        case liveCursor           = "live_cursor"
-        case installMaxRowID      = "install_max_rowid"
-        case backfillFloorSentAt  = "backfill_floor_sent_at"
-        case backfillComplete     = "backfill_complete"
-        case pendingScans         = "pending_scans"
-        case knownIdentifiersHash = "known_identifiers_hash"
-    }
-}
-
-struct PendingScan: Codable, Equatable, Sendable {
-    let normalizedHandle: String
-    let since: Date
-
-    enum CodingKeys: String, CodingKey {
-        case normalizedHandle = "normalized_handle"
-        case since
-    }
-}
-
-enum MessagesCursorCodec {
-    static func encode(_ cursor: MessagesCursor) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(cursor)
-        return String(decoding: data, as: UTF8.self)
-    }
-
-    static func decode(_ raw: String) throws -> MessagesCursor? {
-        if raw.isEmpty { return nil }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(MessagesCursor.self, from: Data(raw.utf8))
-    }
-}
+/// Cursor wire types are shared between MessagesOps and the source
+/// plugin via CRMMacCore.MessagesCursorWire. Aliasing here keeps the
+/// file-internal call sites concise while making the cross-target
+/// shared schema explicit at the type-system level.
+typealias MessagesCursor = MessagesCursorWire
+typealias PendingScan = MessagesCursorPendingScan
+typealias MessagesCursorCodec = MessagesCursorWireCodec

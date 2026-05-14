@@ -34,7 +34,7 @@ struct StatusCommand: ParsableCommand {
             print("last_heartbeat_at=never")
         }
 
-        // Sources block — PR7 surfaces messages cursor watermarks.
+        // Sources block — the messages source surfaces messages cursor watermarks.
         print("")
         print("Sources:")
         if let messages = report.messages {

@@ -1,13 +1,13 @@
 // MessagesPublisher — batches shaped payloads + POSTs them to the
 // Pi's /api/v1/ingest/events endpoint.
 //
-// Batching rules (plan §R4):
+// Batching rules:
 //   - Cap at 200 events per batch (well below Pi's hard 500 limit).
 //   - Cap at 1 MB body bytes per batch (well below Pi's 8 MiB limit).
 //   - Compute the body size pre-emptively: if appending the next event
 //     would push the batch over either threshold, flush first.
 //
-// Cursor advance rules (plan §R5):
+// Cursor advance rules:
 //   - Cursor advances ONLY when rejected == 0.
 //   - On per-event rejection, log warning + DO NOT advance the cursor.
 //   - On transport failure, cursor stays put for the next tick.
@@ -241,7 +241,7 @@ public actor MessagesPublisher {
             ])
         }
 
-        // Per plan §R5: cursor advances ONLY when rejected == 0.
+        // Per the spec: cursor advances ONLY when rejected == 0.
         // BatchOutcome.advanced reflects "this batch had no rejections";
         // the caller's caller decides cursor advance across all batches.
         let advanced = response.rejected == 0

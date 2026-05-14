@@ -15,7 +15,7 @@ public struct StatusReport: Equatable {
     public let hostID: UUID?
     public let lastHeartbeatAt: Date?
     public let stateSchemaVersion: Int?
-    /// Per-source status block surfaced by PR7. Decoded from
+    /// Per-source status block for the messages source. Decoded from
     /// state.sources["messages"].cursor on a best-effort basis;
     /// nil if no cursor has been committed yet OR the cursor JSON
     /// fails to decode.
@@ -44,10 +44,10 @@ public struct StatusReport: Equatable {
     }
 }
 
-/// Per plan §"Status command extension".  Subset of MessagesCursor
-/// surfaced via `crm-mac status`. Cursor JSON is opaque to the
-/// Lifecycle target (the full struct lives in CRMMacMessagesSource);
-/// we decode just the cursor watermarks here.
+/// Subset of MessagesCursor surfaced via `crm-mac status`. The full
+/// MessagesCursor struct lives in CRMMacMessagesSource (depends on
+/// GRDB); we decode just the cursor watermarks here so Status stays
+/// free of any GRDB-dependent target.
 public struct MessagesSourceStatus: Equatable {
     public let liveCursor: Int64?
     public let backfillCursor: Int64?

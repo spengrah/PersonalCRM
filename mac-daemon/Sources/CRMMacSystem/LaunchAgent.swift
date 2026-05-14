@@ -43,7 +43,7 @@ public struct DaemonPaths {
     public var stderrLog: URL {
         logsDir.appendingPathComponent("stderr.log")
     }
-    /// Daemon-runtime directory.  PR7's PidfileLock writes
+    /// Daemon-runtime directory.  The daemon's PidfileLock writes
     /// `daemon.pid` here so the CLI ops subcommands can detect the
     /// daemon-running state.  Defaults to the configDir so the same
     /// folder hosts config/state/pid.

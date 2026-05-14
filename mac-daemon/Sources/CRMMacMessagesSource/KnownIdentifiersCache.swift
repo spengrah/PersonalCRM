@@ -6,7 +6,7 @@
 //
 //   1. Sender filter — every chat.db row goes through `contains` before
 //      payload shaping; non-members are dropped. This is an OPTIMIZATION
-//      (per spec §2 + plan §"Sender filter integration"), not a contract:
+//      (per spec §2 + the spec), not a contract:
 //      the Pi's handleRawMessage still accepts events with no matching
 //      contact_method, staging the row with NULL contact_id. Daemon-side
 //      filter just reduces noise.
@@ -16,7 +16,7 @@
 //      last fetch so the messages plugin can enqueue a 30-day backwards
 //      scan for each.
 //
-// Restart semantics (plan §R9): the cache is in-memory; on daemon
+// Restart semantics: the cache is in-memory; on daemon
 // restart it starts empty and is repopulated by the first heartbeat
 // fetch. To avoid replaying the full set as "new" on every restart, the
 // daemon persists the SHA-256 hash of the sorted canonical set inside
@@ -30,6 +30,11 @@ import CryptoKit
 
 public actor KnownIdentifiersCache {
     private var canonicalSet: Set<String> = []
+    /// Identifiers added by the last `replace(with:)` call.  The
+    /// MessagesSourcePlugin reads this on its next tick to queue a
+    /// 30-day backwards scan for each newly-added contact (per spec
+    /// §"newly-known scan trigger").
+    private var pendingNewlyAdded: Set<String> = []
 
     public init(initial: Set<String> = []) {
         self.canonicalSet = initial
@@ -58,17 +63,39 @@ public actor KnownIdentifiersCache {
     /// (Pi-side deletions) are NOT returned — diff is one-way (only
     /// additions), matching the spec's "trigger 30-day scan on new
     /// contact" semantics.
+    ///
+    /// Side effect: appends `added` into the internal newly-added
+    /// queue so the messages plugin can drain it on its next tick.
+    /// On first call (cache was empty), the entire `fetched` set is
+    /// returned but NOT appended to the queue — the initial population
+    /// must not enqueue a scan for every existing contact (that's
+    /// what backfill is for; the spec cold
+    /// start).
+    @discardableResult
     public func replace(with fetched: Set<String>) -> Set<String> {
+        let wasEmpty = canonicalSet.isEmpty
         let added = fetched.subtracting(canonicalSet)
         canonicalSet = fetched
+        if !wasEmpty {
+            pendingNewlyAdded.formUnion(added)
+        }
         return added
+    }
+
+    /// Drain the newly-added queue. The messages plugin calls this at
+    /// the top of each tick to schedule scans for contacts added since
+    /// the last drain.
+    public func drainNewlyAdded() -> Set<String> {
+        let drained = pendingNewlyAdded
+        pendingNewlyAdded.removeAll()
+        return drained
     }
 }
 
 /// SHA-256 hash of the sorted canonical set, hex-encoded lowercase.
 ///
 /// Used in MessagesCursor.knownIdentifiersHash for restart-time change
-/// detection (plan §R9).  Sorting before hashing makes the hash
+/// detection.  Sorting before hashing makes the hash
 /// deterministic regardless of insertion order.
 public enum KnownIdentifiersHash {
     public static func sha256Hex(of set: Set<String>) -> String {

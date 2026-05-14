@@ -73,6 +73,40 @@ public enum ChatDBReaderError: Error, Equatable, Sendable {
     case dateOutOfRange(rowID: Int64, rawDate: Int64)
 }
 
+/// Result of a fetch() call. Reports:
+///   - rows: only the rows we kept (after skip filters).
+///   - scannedROWIDBounds: (min, max) of EVERY row inspected, including
+///     skipped ones. The caller advances cursors past skipped rows so
+///     a page of all-empty-handle rows doesn't stall the iterator.
+///   - exhausted: true if SQL returned fewer than `limit` rows (so
+///     there are no more rows in the requested direction).
+public struct ChatDBReadPage: Equatable, Sendable {
+    public let rows: [ChatDBMessage]
+    /// Min and max of EVERY row's ROWID inspected (including skipped).
+    /// Nil if SQL returned zero rows.
+    public let scannedROWIDBounds: (min: Int64, max: Int64)?
+    public let exhausted: Bool
+
+    public init(
+        rows: [ChatDBMessage],
+        scannedROWIDBounds: (min: Int64, max: Int64)?,
+        exhausted: Bool
+    ) {
+        self.rows = rows
+        self.scannedROWIDBounds = scannedROWIDBounds
+        self.exhausted = exhausted
+    }
+
+    public static func == (lhs: ChatDBReadPage, rhs: ChatDBReadPage) -> Bool {
+        guard lhs.rows == rhs.rows && lhs.exhausted == rhs.exhausted else { return false }
+        switch (lhs.scannedROWIDBounds, rhs.scannedROWIDBounds) {
+        case (nil, nil): return true
+        case let (.some(l), .some(r)): return l == r
+        default: return false
+        }
+    }
+}
+
 public final class ChatDBReader {
     /// Apple-epoch offset in seconds (1970-01-01 -> 2001-01-01).
     public static let appleEpochOffset: TimeInterval = 978_307_200
@@ -89,17 +123,29 @@ public final class ChatDBReader {
     }
 
     /// Fetch up to `limit` rows in `direction` order, with per-row
-    /// JOINs to handle/chat/attachment.  Rows whose handle.id is empty
-    /// or whose date is corrupt are skipped (the caller will not see
-    /// them).
+    /// JOINs to handle/chat/attachment.
     ///
-    /// Returns the rows; the caller is responsible for updating the
-    /// cursor based on the highest/lowest ROWID seen.
+    /// Returns only the rows we kept; this entry point is kept for
+    /// backward compatibility with tests that don't need the bounds
+    /// info.  New callers should use `fetchPage` which also reports
+    /// the scanned-ROWID bounds (so the caller can advance the cursor
+    /// past skipped rows).
     public static func fetch(
         db: Database,
         direction: ReadDirection,
         limit: Int
     ) throws -> [ChatDBMessage] {
+        try fetchPage(db: db, direction: direction, limit: limit).rows
+    }
+
+    /// Like `fetch` but also reports the min+max of every ROWID
+    /// inspected and whether SQL returned fewer rows than the limit
+    /// (i.e. the iterator is exhausted in the requested direction).
+    public static func fetchPage(
+        db: Database,
+        direction: ReadDirection,
+        limit: Int
+    ) throws -> ChatDBReadPage {
         precondition(limit > 0, "limit must be > 0")
         let condition: String
         let order: String
@@ -150,15 +196,23 @@ public final class ChatDBReader {
             """
 
         var results: [ChatDBMessage] = []
+        var scannedMin: Int64?
+        var scannedMax: Int64?
         let rows = try Row.fetchAll(db, sql: sql, arguments: [bound, limit])
         results.reserveCapacity(rows.count)
 
         for row in rows {
             guard let rowID: Int64 = row["msg_rowid"],
-                  let guid: String = row["msg_guid"],
                   let rawDate: Int64 = row["msg_date"] else {
                 continue
             }
+            // Track every ROWID we saw, including skipped ones — the
+            // caller needs this so cursor advance doesn't stall on a
+            // page where every row got filtered out.
+            scannedMin = min(scannedMin ?? rowID, rowID)
+            scannedMax = max(scannedMax ?? rowID, rowID)
+
+            guard let guid: String = row["msg_guid"] else { continue }
             // Skip rows with no handle (system messages, etc.) — they
             // have no peer to attribute to and the Pi would no-match
             // anyway.
@@ -207,7 +261,16 @@ public final class ChatDBReader {
                 primaryAttachmentTransferName: primaryName,
                 primaryAttachmentTotalBytes: primarySize))
         }
-        return results
+        let bounds: (min: Int64, max: Int64)? = {
+            if let lo = scannedMin, let hi = scannedMax {
+                return (min: lo, max: hi)
+            }
+            return nil
+        }()
+        return ChatDBReadPage(
+            rows: results,
+            scannedROWIDBounds: bounds,
+            exhausted: rows.count < limit)
     }
 
     /// Outbound group-chat peer selection: smallest `chat_handle_join.ROWID`

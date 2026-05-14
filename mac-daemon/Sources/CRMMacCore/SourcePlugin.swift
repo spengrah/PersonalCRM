@@ -33,7 +33,7 @@ public struct SourceID: RawRepresentable, Hashable, Codable, ExpressibleByString
 /// `StubICloudContactsPlugin`) must be safe to share across actor boundaries
 /// — they are: stored state is either `let` plus injected protocol-typed
 /// collaborators (themselves `Sendable`) or guarded via the `StateMutator`
-/// actor introduced in PR7. New conformers like `MessagesSourcePlugin` are
+/// actor introduced when source plugins began writing state. New conformers like `MessagesSourcePlugin` are
 /// actors, which are automatically `Sendable`.
 public protocol SourcePlugin: AnyObject, Sendable {
     /// Stable source identifier; used as the state-file key and

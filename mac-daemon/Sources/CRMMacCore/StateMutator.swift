@@ -8,8 +8,8 @@
 //
 // Writers expected to share a single instance per process:
 //   - HeartbeatLoop (via OnDiskHeartbeatStateWriter)
-//   - MessagesSourcePlugin (PR7)
-//   - Future source plugins (icloud_contacts in PR8, etc.)
+//   - MessagesSourcePlugin (the messages source)
+//   - Future source plugins (icloud_contacts in future iCloud Contacts source, etc.)
 //
 // Cross-process concurrency (daemon vs CLI ops subcommands) is the
 // PidfileLock's job — actor isolation is intra-process only.

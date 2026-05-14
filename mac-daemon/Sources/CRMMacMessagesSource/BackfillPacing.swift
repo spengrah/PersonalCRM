@@ -1,6 +1,6 @@
 // BackfillPacing — (row-count, wall-clock) budget tracker.
 //
-// Each messages tick is bounded by ~500 rows and ~5 seconds (plan §R3).
+// Each messages tick is bounded by ~500 rows and ~5 seconds.
 // Backfill and live share a single budget that decrements as the tick
 // processes batches: backfill runs first, then live consumes whatever
 // remains.

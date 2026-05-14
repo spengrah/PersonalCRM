@@ -1,6 +1,6 @@
 // MessagesSourcePlugin — actor that orchestrates one messages tick.
 //
-// Per-tick flow (plan §"Plugin lifecycle on a single tick"):
+// Per-tick flow:
 //   1. Check schema health: if drifted, set source_health unhealthy
 //      -> return.
 //   2. Open chat.db DatabasePool (cached on first successful open).
@@ -34,9 +34,9 @@ public struct MessagesSourceConfig: Sendable {
     public let chatDBPath: URL
     /// Backfill floor — events with sentAt before this date are not emitted.
     public let backfillFloor: Date
-    /// Max rows per tick (default 500 per plan §R3).
+    /// Max rows per tick (default 500).
     public let maxRowsPerTick: Int
-    /// Max wall-clock seconds per tick (default 5.0 per plan §R3).
+    /// Max wall-clock seconds per tick (default 5.0).
     public let maxDurationPerTick: TimeInterval
 
     public init(
@@ -107,19 +107,22 @@ public actor MessagesSourcePlugin: SourcePlugin {
         await healthRegistry.update(id, await currentHealthSnapshot(
             enabled: true, lastScheduled: tickStart))
 
-        // Step 1+2: open pool + validate schema (cached on success).
+        // Open pool + validate schema (cached on success).
         let pool: DatabasePool
         do {
             pool = try await openOrCached()
         } catch let SchemaDriftError.drift(table, missing) {
             await markUnhealthy(reason: "schema_drift:\(table).\(missing.sorted().first ?? "?")")
             return
+        } catch is FDAError {
+            await markUnhealthy(reason: "fda_required")
+            return
         } catch {
             await markUnhealthy(reason: "open_failed: \(String(describing: error))")
             return
         }
 
-        // Step 3: load cursor (from local cache or Pi).
+        // Load cursor (from local cache or Pi).
         let cursor: MessagesCursor
         do {
             cursor = try await loadOrFetchCursor()
@@ -139,7 +142,7 @@ public actor MessagesSourcePlugin: SourcePlugin {
             return
         }
 
-        // Step 4: capture install-time MAX(ROWID) if needed.
+        // Capture install-time MAX(ROWID) if needed.
         var working = cursor
         if working.installMaxRowID == nil {
             do {
@@ -162,23 +165,38 @@ public actor MessagesSourcePlugin: SourcePlugin {
         var hadRejection = false
 
         // Steps 5-7: drain pending scans, then backfill, then live.
-        // For PR7 v1 we collapse pending-scan execution into "queue
-        // up like a backfill batch but capped at 30 days" since chat.db
-        // doesn't support direct identifier filtering at SQL level
-        // without a full scan. The pending-scans drain just reads the
-        // queue; the actual scan happens via the live/backfill paths
-        // which already publish to ingest. (V1 simplification.)
+        //
+        // Two sources of pending scans:
+        //   - Operator-queued via `crm-mac messages scan` (persisted
+        //     in the Pi-side cursor JSON's pendingScans).
+        //   - Newly-added contacts since the last heartbeat (in-memory
+        //     queue inside KnownIdentifiersCache, drained here).
+        //
+        // V1 simplification: chat.db doesn't support an efficient
+        // identifier-scoped query; we'd need a full scan. Instead, we
+        // log the requested scans and rely on the regular backfill/live
+        // descent to pick up each contact's messages over time. The
+        // existing sender filter (KnownIdentifiersCache.contains) makes
+        // sure those rows are emitted as soon as backfill reaches them.
+        //
+        // For operator-queued scans we clear the queue after logging
+        // (the cursor commit at step 8 persists the cleared state).
+        // For newly-added we drain the in-memory queue (no commit
+        // needed — drain is in-memory only).
+        let newlyAdded = await cache.drainNewlyAdded()
+        if !newlyAdded.isEmpty {
+            logger.info("messages tick: newly-known contacts detected", metadata: [
+                "count": .public(String(newlyAdded.count)),
+            ])
+        }
         if !working.pendingScans.isEmpty {
-            logger.info("messages tick: pending scans queued", metadata: [
+            logger.info("messages tick: operator-queued scans drained", metadata: [
                 "count": .public(String(working.pendingScans.count)),
             ])
-            // V1 simplification: clear the pending-scan queue on tick;
-            // the next backfill/live pass picks up the rows. Future PRs
-            // can implement explicit identifier-scoped queries.
             working.pendingScans = []
         }
 
-        // Step 6: backfill batch (descending).
+        // Backfill batch (descending).
         if !working.backfillComplete, budget.rowsRemaining > 0 {
             let outcome = await runBackfillBatch(
                 pool: pool,
@@ -187,7 +205,7 @@ public actor MessagesSourcePlugin: SourcePlugin {
             if !outcome.rejected.isEmpty { hadRejection = true }
         }
 
-        // Step 7: live batch (ascending).
+        // Live batch (ascending).
         if !budget.exhausted(now: clock()) {
             let outcome = await runLiveBatch(
                 pool: pool,
@@ -196,7 +214,7 @@ public actor MessagesSourcePlugin: SourcePlugin {
             if !outcome.rejected.isEmpty { hadRejection = true }
         }
 
-        // Step 8: commit cursor only if changed AND no rejections.
+        // Commit cursor only if changed AND no rejections.
         let cursorChanged = working != cursor
         if cursorChanged && !hadRejection {
             do {
@@ -209,7 +227,11 @@ public actor MessagesSourcePlugin: SourcePlugin {
                     cursorEpoch: cachedEpoch,
                     backfillComplete: working.backfillComplete)
                 // Cache locally via StateMutator (write-through).
-                try await writeThroughCursor(newJSON, epoch: cachedEpoch)
+                try await writeThroughCursor(
+                    newJSON,
+                    epoch: cachedEpoch,
+                    backfillComplete: working.backfillComplete,
+                    lastPushedAt: clock())
                 cachedCursor = working
                 lastCommittedCursorJSON = newJSON
                 logger.debug("messages tick: cursor committed", metadata: [
@@ -234,7 +256,7 @@ public actor MessagesSourcePlugin: SourcePlugin {
             logger.warning("messages tick: per-event rejections; holding cursor", metadata: [:])
         }
 
-        // Step 9: refresh health snapshot.
+        // Refresh health snapshot.
         await healthRegistry.update(id, await currentHealthSnapshot(
             enabled: true,
             lastScheduled: tickStart,
@@ -255,6 +277,13 @@ public actor MessagesSourcePlugin: SourcePlugin {
     /// Backfill: walk message.ROWID downward from
     /// (backfillCursor ?? installMaxRowID) toward backfillFloor's
     /// associated ROWID. Stops when budget exhausted or no more rows.
+    ///
+    /// Cursor advance is conditional: only advance backfillCursor past
+    /// publishable rows when the publish batch came back with
+    /// `rejected.isEmpty` AND advanceTo != nil. For pages where every
+    /// row got filtered out (empty handle, corrupt date), we still
+    /// advance past the scanned bounds — otherwise we'd loop forever
+    /// re-reading the same page.
     private func runBackfillBatch(
         pool: DatabasePool,
         cursor: inout MessagesCursor,
@@ -271,10 +300,10 @@ public actor MessagesSourcePlugin: SourcePlugin {
             return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
         }
 
-        let rows: [ChatDBMessage]
+        let page: ChatDBReadPage
         do {
-            rows = try await pool.read { db in
-                try ChatDBReader.fetch(
+            page = try await pool.read { db in
+                try ChatDBReader.fetchPage(
                     db: db,
                     direction: .backwardFromExclusive(upperBoundExclusive),
                     limit: limit)
@@ -286,25 +315,44 @@ public actor MessagesSourcePlugin: SourcePlugin {
             return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
         }
 
-        if rows.isEmpty {
-            // No more backfill rows — mark complete.
+        // No SQL rows at all -> we've walked the whole iterator.
+        if page.scannedROWIDBounds == nil {
             cursor.backfillComplete = true
             cursor.backfillCursor = 0
             return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
         }
 
         // Floor check: drop rows whose sentAt is below backfillFloor.
-        let inRangeRows = rows.filter { $0.sentAt >= config.backfillFloor }
-        let belowFloor = rows.count - inRangeRows.count
+        let inRangeRows = page.rows.filter { $0.sentAt >= config.backfillFloor }
+        let belowFloor = page.rows.count - inRangeRows.count
         let publishItems = await filterAndShape(rows: inRangeRows, isBackfill: true)
         let outcome = await publisher.publish(items: publishItems)
 
-        budget.consume(rows: rows.count)
-        // Advance backfill cursor: lowest ROWID seen.
-        let lowestROWID = rows.map(\.rowID).min() ?? upperBoundExclusive
-        cursor.backfillCursor = lowestROWID
-        if belowFloor > 0 {
-            // We crossed the floor; backfill is complete.
+        budget.consume(rows: page.rows.count)
+
+        // Advance cursor:
+        //   - If we have publish items and the batch was clean
+        //     (advanceTo != nil + no rejections), advance past the
+        //     scanned MIN (since we're descending, MIN is the new
+        //     upper-bound exclusive for the next page).
+        //   - If we have no publish items (all rows filtered out by
+        //     handle/date/sender filter), advance past the scanned MIN
+        //     anyway so the next page reads new rows — otherwise the
+        //     iterator stalls on a page of all-skipped rows.
+        //   - If we had rows to publish but publish failed/rejected,
+        //     do NOT advance.
+        let canAdvance: Bool
+        if publishItems.isEmpty {
+            canAdvance = true
+        } else {
+            canAdvance = outcome.advanceTo != nil && outcome.rejected.isEmpty
+        }
+        if let bounds = page.scannedROWIDBounds, canAdvance {
+            cursor.backfillCursor = bounds.min
+        }
+        if belowFloor > 0 || page.exhausted {
+            // We either crossed the floor or scanned every remaining
+            // row; backfill is complete.
             cursor.backfillComplete = true
         }
 
@@ -316,6 +364,12 @@ public actor MessagesSourcePlugin: SourcePlugin {
 
     /// Live: walk message.ROWID upward from liveCursor.  Stops when
     /// budget exhausted or no more rows.
+    ///
+    /// Cursor advance is conditional: only advance liveCursor past
+    /// publishable rows when the publish batch came back with
+    /// `rejected.isEmpty` AND advanceTo != nil. Pages of all-skipped
+    /// rows still advance to the scanned MAX so the iterator doesn't
+    /// stall.
     private func runLiveBatch(
         pool: DatabasePool,
         cursor: inout MessagesCursor,
@@ -327,10 +381,10 @@ public actor MessagesSourcePlugin: SourcePlugin {
             return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
         }
 
-        let rows: [ChatDBMessage]
+        let page: ChatDBReadPage
         do {
-            rows = try await pool.read { db in
-                try ChatDBReader.fetch(
+            page = try await pool.read { db in
+                try ChatDBReader.fetchPage(
                     db: db,
                     direction: .forwardFromExclusive(lower),
                     limit: limit)
@@ -342,16 +396,25 @@ public actor MessagesSourcePlugin: SourcePlugin {
             return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
         }
 
-        if rows.isEmpty {
+        if page.scannedROWIDBounds == nil {
+            // No new rows since liveCursor.
             return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
         }
 
-        let publishItems = await filterAndShape(rows: rows, isBackfill: false)
+        let publishItems = await filterAndShape(rows: page.rows, isBackfill: false)
         let outcome = await publisher.publish(items: publishItems)
 
-        budget.consume(rows: rows.count)
-        let highestROWID = rows.map(\.rowID).max() ?? lower
-        cursor.liveCursor = highestROWID
+        budget.consume(rows: page.rows.count)
+
+        let canAdvance: Bool
+        if publishItems.isEmpty {
+            canAdvance = true
+        } else {
+            canAdvance = outcome.advanceTo != nil && outcome.rejected.isEmpty
+        }
+        if let bounds = page.scannedROWIDBounds, canAdvance {
+            cursor.liveCursor = bounds.max
+        }
 
         return BatchSummary(
             accepted: outcome.accepted,
@@ -397,7 +460,18 @@ public actor MessagesSourcePlugin: SourcePlugin {
         var config = Configuration()
         config.readonly = true
         // Don't add ?immutable=1 — Messages.app is actively writing.
-        let pool = try DatabasePool(path: self.config.chatDBPath.path, configuration: config)
+        let pool: DatabasePool
+        do {
+            pool = try DatabasePool(path: self.config.chatDBPath.path, configuration: config)
+        } catch let dbError as DatabaseError {
+            // FDA / sandbox denial: SQLITE_AUTH (23), SQLITE_PERM (3),
+            // or SQLITE_CANTOPEN (14). Distinguish from a transient
+            // SQLITE_BUSY so the operator gets actionable feedback.
+            if isFDAError(dbError) {
+                throw FDAError()
+            }
+            throw dbError
+        }
         let health = try await pool.read { try ChatDBSchemaValidator.validate(db: $0) }
         schemaHealth = health
         switch health {
@@ -408,6 +482,16 @@ public actor MessagesSourcePlugin: SourcePlugin {
             throw SchemaDriftError.drift(table: table, missing: missing)
         }
     }
+
+    private func isFDAError(_ err: DatabaseError) -> Bool {
+        // GRDB's DatabaseError wraps SQLite result codes; FDA denial
+        // surfaces as SQLITE_AUTH (23), SQLITE_PERM (3), or
+        // SQLITE_CANTOPEN (14).
+        let code = err.resultCode.rawValue
+        return code == 3 || code == 14 || code == 23
+    }
+
+    private struct FDAError: Error {}
 
     // MARK: - cursor load + commit
 
@@ -428,10 +512,18 @@ public actor MessagesSourcePlugin: SourcePlugin {
         return fresh
     }
 
-    private func writeThroughCursor(_ json: String, epoch: Int64) async throws {
+    private func writeThroughCursor(
+        _ json: String,
+        epoch: Int64,
+        backfillComplete: Bool,
+        lastPushedAt: Date
+    ) async throws {
         try await mutator.mutate { state in
             var src = state.sources["messages"] ?? SourceState(cursor: "")
             src.cursor = json
+            src.cursorEpoch = epoch
+            src.backfillComplete = backfillComplete
+            src.lastPushedAt = lastPushedAt
             state.sources["messages"] = src
         }
     }

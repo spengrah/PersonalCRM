@@ -287,7 +287,7 @@ disabled or running on its scheduled cadence.
 2. **Pre-state — capture last_contacted on the Pi:**
 
    ```bash
-   ssh raspberet 'docker exec crm-postgres psql -U crm_user -d personal_crm \
+   ssh <pi-host> 'docker exec crm-postgres psql -U crm_user -d personal_crm \
        -c "SELECT id, last_contacted FROM contact WHERE id = '<uuid>';"'
    ```
 
@@ -309,7 +309,7 @@ disabled or running on its scheduled cadence.
 6. **Verify events arrived on the Pi:**
 
    ```bash
-   ssh raspberet 'sudo journalctl -u personalcrm-backend --since "10 min ago" --no-pager' \
+   ssh <pi-host> 'sudo journalctl -u personalcrm-backend --since "10 min ago" --no-pager' \
        | grep -i raw_message
    ```
 
@@ -319,7 +319,7 @@ disabled or running on its scheduled cadence.
 7. **Verify the interaction row** was created on the Pi:
 
    ```bash
-   ssh raspberet 'docker exec crm-postgres psql -U crm_user -d personal_crm \
+   ssh <pi-host> 'docker exec crm-postgres psql -U crm_user -d personal_crm \
        -c "SELECT id, contact_id, source, direction, occurred_at \
            FROM interaction \
            WHERE contact_id = '<uuid>' AND source = '"'"'messages'"'"' \
@@ -332,7 +332,7 @@ disabled or running on its scheduled cadence.
 8. **Verify last_contacted advanced:**
 
    ```bash
-   ssh raspberet 'docker exec crm-postgres psql -U crm_user -d personal_crm \
+   ssh <pi-host> 'docker exec crm-postgres psql -U crm_user -d personal_crm \
        -c "SELECT last_contacted FROM contact WHERE id = '<uuid>';"'
    ```
 

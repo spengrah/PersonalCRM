@@ -4,7 +4,7 @@
 // Isolated from other targets so GRDB is not transitively pulled into
 // Foundation-only modules (CRMMacCore, CRMMacLifecycle).
 //
-// Source files (added across PR7 commits):
+// Source files:
 //   - UTIMapping.swift              attachment.uti -> MessageType bucketing
 //   - HandleNormalization.swift     thin re-export of CRMMacCore normalizers
 //   - MessagesCursor.swift          JSON-packed Pi-side opaque cursor

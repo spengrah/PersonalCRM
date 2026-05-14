@@ -1,11 +1,8 @@
 // No-op SourcePlugin implementation wired into the scheduler by
 // CRMMacLifecycle.PluginRegistry. Exists so the "daemon ticks and
 // logs" smoke is exercised end-to-end for iCloud Contacts even
-// though no source data is actually read yet. The real reader lands
-// in PR8.
-//
-// The Messages stub was removed in PR7 alongside the real
-// MessagesSourcePlugin landing.
+// though no source data is actually read yet. Replaced when the
+// real CNContactStore-backed reader lands.
 import Foundation
 
 public final class StubICloudContactsPlugin: SourcePlugin {

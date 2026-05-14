@@ -174,7 +174,7 @@ public enum PayloadShaping {
             guid: row.guid,
             chatID: row.chatGUID ?? "",
             peerHandle: peerHandle,
-            peerName: nil, // v1: chat.db display names left out per plan §"chat.db row -> payload mapping"
+            peerName: nil, // v1: chat.db display names left out per the spec
             text: row.text,
             messageType: messageType,
             isGroup: row.isGroup,
