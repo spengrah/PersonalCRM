@@ -168,8 +168,13 @@ final class MessagesPublisherTests: XCTestCase {
                        "second batch's items are unconfirmed")
         XCTAssertEqual(outcome.advanceTo, 200,
                        "advanceTo is highest confirmed ROWID")
-        // Caller MUST gate on (rejected.isEmpty AND unconfirmed == 0).
-        XCTAssertFalse(outcome.rejected.isEmpty == false && outcome.unconfirmed > 0)
+        // Caller's cursor-advance gate is (rejected.isEmpty AND
+        // unconfirmed == 0). Here `rejected.isEmpty` is true (the
+        // failure is transport, not per-event) but `unconfirmed > 0`
+        // — so the gate must evaluate to FALSE, blocking advance.
+        XCTAssertTrue(outcome.rejected.isEmpty)
+        XCTAssertFalse(outcome.rejected.isEmpty && outcome.unconfirmed == 0,
+                       "cursor-advance gate must NOT pass when unconfirmed > 0")
     }
 
     // MARK: - wire shape

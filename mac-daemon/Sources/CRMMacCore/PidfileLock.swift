@@ -105,11 +105,13 @@ public final class PidfileLock: @unchecked Sendable {
         // Stale-PID pre-check: if the file exists and contains a
         // numeric PID for a non-running process, remove it.
         if let stalePID = readStalePID() {
-            // The PID is stale; remove the old file so we can recreate
-            // it cleanly. If remove fails, we'll still attempt to open
-            // and lock — flock works on the existing file too.
+            // Surface the recovery so it shows up in launchd / journal
+            // logs without taking a logger dependency in this file.
+            let msg = "crm-mac: pidfile: stale PID \(stalePID) at \(path); removing\n"
+            FileHandle.standardError.write(Data(msg.utf8))
+            // If remove fails, we'll still attempt to open and lock —
+            // flock works on the existing file too.
             _ = unlink(path)
-            _ = stalePID // unused outside the read; logged by caller
         }
 
         let openFlags = O_CREAT | O_RDWR

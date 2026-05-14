@@ -66,7 +66,7 @@ struct DaemonCommand: AsyncParsableCommand {
         // Messages source: real chat.db reader + cursor commit + publish.
         let chatDBPath = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Messages/chat.db")
-        let backfillFloor = Date(timeIntervalSince1970: 1_767_225_600) // 2026-01-01 UTC
+        let backfillFloor = MessagesSourceConfig.defaultBackfillFloor
         let knownIdentifiersCache = KnownIdentifiersCache()
         let publisher = MessagesPublisher(
             sender: { [piClient] auth, body in

@@ -44,9 +44,12 @@ struct StatusCommand: ParsableCommand {
             print("    install_max_rowid:  \(messages.installMaxRowID.map(String.init) ?? "nil")")
             print("    backfill_complete:  \(messages.backfillComplete)")
             print("    pending_scans:      \(messages.pendingScansCount)")
-            if let live = messages.liveCursor, let max = messages.installMaxRowID, max > 0 {
-                let progress = Double(live - (messages.backfillCursor ?? max)) / Double(max)
-                let pct = Int(progress * 100)
+            if let installMax = messages.installMaxRowID, installMax > 0 {
+                // Backfill descends from installMaxRowID toward 0;
+                // progress = (start - current) / start, clamped to [0, 1].
+                let cursor = messages.backfillCursor ?? installMax
+                let raw = Double(installMax - cursor) / Double(installMax)
+                let pct = Int(min(1.0, max(0.0, raw)) * 100)
                 print("    backfill_progress:  ~\(pct)%")
             }
         } else {

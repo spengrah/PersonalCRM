@@ -16,7 +16,7 @@ final class MessagesSourcePluginTests: XCTestCase {
     private let auth = PiAuth(
         hostID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
         apiKey: "k")
-    private let backfillFloor = Date(timeIntervalSince1970: 1_767_225_600) // 2026-01-01
+    private let backfillFloor = MessagesSourceConfig.defaultBackfillFloor
     private let unix2026: TimeInterval = 1_778_686_938 // 2026-05-13T15:42:18Z
     private var tempDir: URL!
 
@@ -43,7 +43,7 @@ final class MessagesSourcePluginTests: XCTestCase {
             throw XCTSkip("chat_db_schema.sql not in test bundle")
         }
         let script = try String(contentsOf: scriptURL, encoding: .utf8)
-        var config = Configuration()
+        let config = Configuration()
         let queue = try DatabaseQueue(path: dbURL.path, configuration: config)
         try queue.write { db in
             try db.execute(sql: script)
@@ -64,7 +64,6 @@ final class MessagesSourcePluginTests: XCTestCase {
             try db.execute(sql:
                 "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 1)")
         }
-        _ = config // unused after queue setup
         return dbURL
     }
 

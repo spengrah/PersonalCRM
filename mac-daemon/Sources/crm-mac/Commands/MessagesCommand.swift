@@ -11,6 +11,7 @@ import Foundation
 import ArgumentParser
 import CRMMacCore
 import CRMMacLifecycle
+import CRMMacMessagesSource
 import CRMMacPiClient
 import CRMMacSystem
 
@@ -118,9 +119,7 @@ private func makeMessagesOps() throws -> MessagesOps {
     let pidfileURL = URL(fileURLWithPath: ctx.paths.runtimeDirPath)
         .appendingPathComponent("daemon.pid")
     let pidfileLock = PidfileLock(path: pidfileURL)
-    // 2026-01-01 UTC floor for backfill — matches the daemon default
-    // and the cursor's backfill_floor_sent_at field.
-    let backfillFloor = Date(timeIntervalSince1970: 1_767_225_600)
+    let backfillFloor = MessagesSourceConfig.defaultBackfillFloor
 
     return MessagesOps(
         piClient: piClient,
