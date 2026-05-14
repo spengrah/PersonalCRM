@@ -12,14 +12,14 @@ import Foundation
 import CRMMacCore
 
 /// Function-type sleeper so tests can inject a no-sleep variant.
-public typealias SleepFunction = (TimeInterval) async throws -> Void
+public typealias SleepFunction = @Sendable (TimeInterval) async throws -> Void
 
 /// Closure-based mock URLSession contract. Production passes a real
 /// URLSession.data(for:) closure; tests pass a closure that consults
 /// a per-test MockHTTPProtocol handler.
-public typealias TransportFunc = (URLRequest) async throws -> (Data, URLResponse)
+public typealias TransportFunc = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
-public struct RetryingTransport {
+public struct RetryingTransport: Sendable {
     public let transport: TransportFunc
     public let policy: BackoffPolicy
     public let sleep: SleepFunction

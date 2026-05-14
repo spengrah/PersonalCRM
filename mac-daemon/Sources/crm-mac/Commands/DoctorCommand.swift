@@ -5,7 +5,7 @@ import ArgumentParser
 import CRMMacLifecycle
 
 struct DoctorCommand: AsyncParsableCommand {
-    static var configuration = CommandConfiguration(
+    static let configuration = CommandConfiguration(
         commandName: "doctor",
         abstract: "Run health checks: Keychain, launchctl, Pi reachability, config + state files.")
 

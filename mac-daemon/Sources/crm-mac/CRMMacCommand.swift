@@ -6,7 +6,7 @@ import CRMMacLifecycle
 
 @main
 struct CRMMacCommand: AsyncParsableCommand {
-    static var configuration = CommandConfiguration(
+    static let configuration = CommandConfiguration(
         commandName: "crm-mac",
         abstract: "Personal CRM Mac daemon — Apple Messages + iCloud Contacts ingestion.",
         version: Daemon.version,

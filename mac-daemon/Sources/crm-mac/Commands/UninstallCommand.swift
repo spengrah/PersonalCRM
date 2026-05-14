@@ -4,7 +4,7 @@ import ArgumentParser
 import CRMMacLifecycle
 
 struct UninstallCommand: ParsableCommand {
-    static var configuration = CommandConfiguration(
+    static let configuration = CommandConfiguration(
         commandName: "uninstall",
         abstract: "Remove the launchd agent, plist, and Keychain entry. --purge also removes config and state.")
 

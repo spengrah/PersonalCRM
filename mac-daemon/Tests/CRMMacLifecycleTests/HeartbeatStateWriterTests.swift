@@ -19,34 +19,43 @@ final class HeartbeatStateWriterTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testRecordsLastHeartbeatAt() throws {
+    func testRecordsLastHeartbeatAt() async throws {
         let store = StateStore(fileURL: stateURL)
         try store.save(DaemonState(schemaVersion: 1))
-        let writer = OnDiskHeartbeatStateWriter(stateStore: store, logger: NoopLogger())
+        let mutator = StateMutator(store: store)
+        let writer = OnDiskHeartbeatStateWriter(mutator: mutator, logger: NoopLogger())
         let when = Date(timeIntervalSince1970: 1_700_500_000)
-        writer.recordSuccessfulHeartbeat(at: when, cursorEpoch: 7)
+        try await writer.recordSuccessfulHeartbeat(at: when, cursorEpoch: 7)
         let loaded = try store.load()
         XCTAssertEqual(loaded.lastHeartbeatAt, when)
     }
 
-    func testReplaceExistingHeartbeatTimestamp() throws {
+    func testReplaceExistingHeartbeatTimestamp() async throws {
         let store = StateStore(fileURL: stateURL)
         try store.save(DaemonState(
             schemaVersion: 1,
             lastHeartbeatAt: Date(timeIntervalSince1970: 1_700_000_000)))
-        let writer = OnDiskHeartbeatStateWriter(stateStore: store, logger: NoopLogger())
+        let mutator = StateMutator(store: store)
+        let writer = OnDiskHeartbeatStateWriter(mutator: mutator, logger: NoopLogger())
         let when = Date(timeIntervalSince1970: 1_700_500_000)
-        writer.recordSuccessfulHeartbeat(at: when, cursorEpoch: 7)
+        try await writer.recordSuccessfulHeartbeat(at: when, cursorEpoch: 7)
         let loaded = try store.load()
         XCTAssertEqual(loaded.lastHeartbeatAt, when)
     }
 
-    func testMissingStateLogsButDoesNotThrow() {
-        // No state file written. recordSuccessfulHeartbeat should
-        // log the failure but not throw (it's best-effort by contract).
+    func testMissingStateLogsAndThrows() async {
+        // No state file written. recordSuccessfulHeartbeat must surface
+        // the error to the caller so the heartbeat loop knows the state
+        // write failed (it remains best-effort at the caller level but
+        // the protocol now returns the underlying StateStoreError).
         let store = StateStore(fileURL: stateURL)
-        let writer = OnDiskHeartbeatStateWriter(stateStore: store, logger: NoopLogger())
-        writer.recordSuccessfulHeartbeat(at: Date(), cursorEpoch: 0)
-        // No assertion needed — we just verify no crash.
+        let mutator = StateMutator(store: store)
+        let writer = OnDiskHeartbeatStateWriter(mutator: mutator, logger: NoopLogger())
+        do {
+            try await writer.recordSuccessfulHeartbeat(at: Date(), cursorEpoch: 0)
+            XCTFail("expected throw when state file is missing")
+        } catch {
+            // Expected — StateStoreError.missing or similar.
+        }
     }
 }

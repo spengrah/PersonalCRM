@@ -8,7 +8,7 @@ import Foundation
 
 /// Top-level state file. Persisted at
 /// `~/Library/Application Support/crm-mac/state.json`.
-public struct DaemonState: Codable, Equatable {
+public struct DaemonState: Codable, Equatable, Sendable {
     /// Bumped when an incompatible schema change ships. Initial
     /// release is `1`.
     public var schemaVersion: Int
@@ -39,7 +39,7 @@ public struct DaemonState: Codable, Equatable {
 
 /// Per-source persistent state. Source readers mutate this after
 /// every tick.
-public struct SourceState: Codable, Equatable {
+public struct SourceState: Codable, Equatable, Sendable {
     /// Opaque cursor — interpretation is per-source. Empty string on
     /// first run before any cursor has been committed.
     public var cursor: String

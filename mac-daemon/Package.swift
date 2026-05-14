@@ -1,4 +1,4 @@
-// swift-tools-version:5.9
+// swift-tools-version:6.0
 import PackageDescription
 
 // Personal CRM Mac daemon (`crm-mac`).
@@ -19,7 +19,7 @@ import PackageDescription
 //                     impls into CRMMacLifecycle workflows.
 let package = Package(
     name: "crm-mac",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     products: [
         .executable(name: "crm-mac", targets: ["crm-mac"]),
     ],

@@ -10,7 +10,15 @@
 import Foundation
 import CRMMacCore
 
-public final class PiClient {
+/// `Sendable` constraint: `PiClient` is shared by every workflow
+/// (installer, heartbeat loop, source plugins). The stored builder /
+/// transport / decoder / logger are themselves `Sendable` or wrap
+/// thread-safe Apple types. `JSONDecoder` is documented thread-safe
+/// after configuration; we configure once in `init` and never mutate
+/// it. Marked `@unchecked Sendable` because `JSONDecoder` lacks a
+/// formal `Sendable` conformance from Foundation but is safe to share
+/// across actors in practice.
+public final class PiClient: @unchecked Sendable {
     private let builder: RequestBuilder
     private let transport: RetryingTransport
     private let decoder: JSONDecoder

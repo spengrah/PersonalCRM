@@ -7,7 +7,7 @@ import ArgumentParser
 import CRMMacLifecycle
 
 struct InstallCommand: AsyncParsableCommand {
-    static var configuration = CommandConfiguration(
+    static let configuration = CommandConfiguration(
         commandName: "install",
         abstract: "Pair with the Pi and register the launchd agent.")
 

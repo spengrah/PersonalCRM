@@ -23,8 +23,9 @@ final class HeartbeatLoopTests: XCTestCase {
             logger: NoopLogger(),
             clock: FixedClock())
         try await loop.tick()
-        XCTAssertEqual(writer.records.count, 1)
-        XCTAssertEqual(writer.records.first?.cursorEpoch, 1)
+        let records = await writer.records
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.cursorEpoch, 1)
         XCTAssertTrue(exitHandler.capturedCodes.isEmpty)
     }
 
@@ -51,7 +52,8 @@ final class HeartbeatLoopTests: XCTestCase {
             XCTFail("got \(error)")
         }
         XCTAssertEqual(exitHandler.capturedCodes, [1])
-        XCTAssertTrue(writer.records.isEmpty)
+        let records = await writer.records
+        XCTAssertTrue(records.isEmpty)
     }
 
     func test412RequestsExitTwo() async {
@@ -97,18 +99,24 @@ final class HeartbeatLoopTests: XCTestCase {
             logger: NoopLogger(),
             clock: FixedClock())
         try await loop.tick()
-        XCTAssertTrue(writer.records.isEmpty)
+        let records = await writer.records
+        XCTAssertTrue(records.isEmpty)
         XCTAssertTrue(exitHandler.capturedCodes.isEmpty, "transient errors must not exit")
     }
 }
 
-final class RecordingHeartbeatStateWriter: HeartbeatStateWriter {
+/// Test double for HeartbeatStateWriter that records each call.
+///
+/// `actor` because `HeartbeatStateWriter` requires `Sendable` and the
+/// stored `records` array is mutable across the async call. Callers
+/// read `await writer.records` to inspect captured invocations.
+actor RecordingHeartbeatStateWriter: HeartbeatStateWriter {
     struct Record: Equatable {
         let at: Date
         let cursorEpoch: Int64
     }
     private(set) var records: [Record] = []
-    func recordSuccessfulHeartbeat(at: Date, cursorEpoch: Int64) {
+    func recordSuccessfulHeartbeat(at: Date, cursorEpoch: Int64) async throws {
         records.append(Record(at: at, cursorEpoch: cursorEpoch))
     }
 }

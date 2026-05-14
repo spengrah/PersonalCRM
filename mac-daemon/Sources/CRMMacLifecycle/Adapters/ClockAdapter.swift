@@ -4,7 +4,7 @@
 // in CRMMacLifecycleTests/Fakes.
 import Foundation
 
-public protocol ClockAdapter {
+public protocol ClockAdapter: Sendable {
     func now() -> Date
 }
 

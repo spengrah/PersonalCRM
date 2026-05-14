@@ -6,7 +6,7 @@ import ArgumentParser
 import CRMMacLifecycle
 
 struct StatusCommand: ParsableCommand {
-    static var configuration = CommandConfiguration(
+    static let configuration = CommandConfiguration(
         commandName: "status",
         abstract: "Print the daemon's installation + heartbeat status.")
 

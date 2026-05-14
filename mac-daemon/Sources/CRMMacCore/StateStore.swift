@@ -33,7 +33,14 @@ public enum StateStoreError: Error, Equatable, CustomStringConvertible {
 
 /// Pure read/write wrapper. Atomic-rename on write; strict schema
 /// version check on read.
-public struct StateStore {
+///
+/// `Sendable`: pure-value façade over Foundation thread-safe types
+/// (`URL` is `Sendable`; `FileManager` is documented thread-safe for
+/// reads but the type itself is not formally `Sendable`). Marked
+/// `@unchecked Sendable` because `FileManager` lacks a formal
+/// conformance; in practice the store is always copied to call sites
+/// and never mutated.
+public struct StateStore: @unchecked Sendable {
     private let fileURL: URL
     private let fileManager: FileManager
 

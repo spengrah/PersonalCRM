@@ -18,7 +18,7 @@ import CRMMacPiClient
 import CRMMacSystem
 
 struct DaemonCommand: AsyncParsableCommand {
-    static var configuration = CommandConfiguration(
+    static let configuration = CommandConfiguration(
         commandName: "daemon",
         abstract: "Long-running launchd-managed daemon. Don't invoke directly — use `install` first.")
 
@@ -38,8 +38,9 @@ struct DaemonCommand: AsyncParsableCommand {
 
         let piClient = PiClient(baseURL: artifacts.config.piURL, logger: logger)
         let auth = PiAuth(hostID: artifacts.config.hostID, apiKey: artifacts.apiKey)
+        let stateMutator = StateMutator(store: artifacts.stateStore)
         let stateWriter = OnDiskHeartbeatStateWriter(
-            stateStore: artifacts.stateStore,
+            mutator: stateMutator,
             logger: logger)
         let heartbeat = HeartbeatLoop(
             piClient: piClient,

@@ -7,7 +7,7 @@ import CRMMacCore
 
 /// Encapsulates the per-host auth pair. The pair request omits this
 /// entirely; everything else requires it.
-public struct PiAuth: Equatable {
+public struct PiAuth: Equatable, Sendable {
     public let hostID: UUID
     public let apiKey: String
 

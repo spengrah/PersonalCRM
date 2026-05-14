@@ -51,7 +51,7 @@ public final class HeartbeatLoop: SourcePlugin {
             sourceHealth: Data("{}".utf8))
         do {
             let result = try await piClient.heartbeat(auth: auth, body: body)
-            stateWriter.recordSuccessfulHeartbeat(at: clock.now(), cursorEpoch: result.cursorEpoch)
+            try await stateWriter.recordSuccessfulHeartbeat(at: clock.now(), cursorEpoch: result.cursorEpoch)
             logger.debug("heartbeat ok", metadata: [
                 "cursor_epoch": .public(String(result.cursorEpoch)),
             ])
@@ -77,12 +77,17 @@ public final class HeartbeatLoop: SourcePlugin {
 /// Hook the heartbeat loop calls after a successful tick. The
 /// production composition root provides an impl that updates the
 /// state.json `lastHeartbeatAt` field; tests inject a recording fake.
-public protocol HeartbeatStateWriter {
-    func recordSuccessfulHeartbeat(at: Date, cursorEpoch: Int64)
+///
+/// Note: `async throws` because production impls funnel through the
+/// `StateMutator` actor (introduced in PR7) to serialize writes with
+/// other `state.json` writers (source plugins). Pre-PR7 the protocol
+/// was synchronous and the actor did not exist.
+public protocol HeartbeatStateWriter: Sendable {
+    func recordSuccessfulHeartbeat(at: Date, cursorEpoch: Int64) async throws
 }
 
 /// No-op writer for tests / smoke that don't care about state.
 public final class DiscardingHeartbeatStateWriter: HeartbeatStateWriter {
     public init() {}
-    public func recordSuccessfulHeartbeat(at: Date, cursorEpoch: Int64) {}
+    public func recordSuccessfulHeartbeat(at: Date, cursorEpoch: Int64) async throws {}
 }
