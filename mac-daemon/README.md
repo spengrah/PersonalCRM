@@ -223,3 +223,144 @@ swift test
 the Command Line Tools subset). The `KeychainProductionTests` are
 skipped in CI (`XCTSkipIf(CI=true)`) — they exercise SecItem* against
 the developer's keychain using a per-run test account.
+
+You can also run via the project Makefile:
+
+```bash
+make test-daemon-local
+```
+
+## Operator commands (PR7)
+
+### `crm-mac messages backfill --restart`
+
+Reset the messages cursor to install-time state so the daemon re-walks
+all historical messages back to the 2026-01-01 backfill floor. The
+command refuses while the daemon is running (it would race with the
+daemon's own cursor commits). Stop the daemon, run the command, then
+restart:
+
+```bash
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
+crm-mac messages backfill --restart       # prompts for "yes"
+crm-mac messages backfill --restart --yes # scripted / no prompt
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
+```
+
+This produces duplicate-but-deduplicated events on the Pi (event-log
+`(source, source_id)` dedup absorbs the overlap; no contact-side
+effect, but visible in `/api/v1/host/:id` logs).
+
+### `crm-mac messages scan --identifier <handle> [--since 30d]`
+
+Queue a one-shot backwards scan for a specific phone/email handle —
+useful when a contact was added while the daemon was offline and the
+heartbeat-driven diff didn't fire. The scan is persisted Pi-side via
+the cursor JSON; the next daemon tick drains the queue. Same
+daemon-running guard as `backfill`.
+
+```bash
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
+crm-mac messages scan --identifier "+1-555-123-4567" --since 30d
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
+```
+
+`--since` accepts a simple duration: `30d`, `12h`, `60m`, `3600s`.
+
+## Daemon-running guard
+
+PR7 introduces a POSIX advisory lock on
+`~/Library/Application Support/crm-mac/daemon.pid`. The daemon
+acquires it on start, the ops subcommands acquire-or-refuse it before
+mutating cursor state. Stale PID recovery is automatic — if the
+daemon crashed without releasing the lock, the next daemon startup
+(or CLI op) detects the dead PID, unlinks the pidfile, and re-acquires.
+
+## Live smoke test (PR7)
+
+Pre-req: PR6-installed daemon paired to a live Pi; messages tick
+disabled or running on its scheduled cadence.
+
+1. **Pick a fixture contact** — one whose primary phone/email is in
+   the canonical `known-identifiers` set.
+
+2. **Pre-state — capture last_contacted on the Pi:**
+
+   ```bash
+   ssh raspberet 'docker exec crm-postgres psql -U crm_user -d personal_crm \
+       -c "SELECT id, last_contacted FROM contact WHERE id = '<uuid>';"'
+   ```
+
+3. **Install the PR7 daemon binary:**
+
+   ```bash
+   make mac-daemon
+   launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
+   cp .build/release/crm-mac ~/Library/Application\ Support/crm-mac/bin/
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
+   ```
+
+4. **Send a real iMessage** in both directions to the fixture contact
+   (outbound + inbound). Two-direction proves direction inference is
+   wired.
+
+5. **Wait two messages-tick cadences** (~3 minutes).
+
+6. **Verify events arrived on the Pi:**
+
+   ```bash
+   ssh raspberet 'sudo journalctl -u personalcrm-backend --since "10 min ago" --no-pager' \
+       | grep -i raw_message
+   ```
+
+   Expect: at least two `raw_message.received` / `raw_message.sent`
+   events with `accepted=1`.
+
+7. **Verify the interaction row** was created on the Pi:
+
+   ```bash
+   ssh raspberet 'docker exec crm-postgres psql -U crm_user -d personal_crm \
+       -c "SELECT id, contact_id, source, direction, occurred_at \
+           FROM interaction \
+           WHERE contact_id = '<uuid>' AND source = '"'"'messages'"'"' \
+           ORDER BY occurred_at DESC LIMIT 5;"'
+   ```
+
+   Expect: ≥ 1 rows with `source=messages`, sane direction, recent
+   `occurred_at`.
+
+8. **Verify last_contacted advanced:**
+
+   ```bash
+   ssh raspberet 'docker exec crm-postgres psql -U crm_user -d personal_crm \
+       -c "SELECT last_contacted FROM contact WHERE id = '<uuid>';"'
+   ```
+
+9. **Verify the messages source health:**
+
+   ```bash
+   crm-mac status
+   ```
+
+   Expect: messages source `live_cursor` advanced; `backfill_complete`
+   either false (still descending) or true; no `last_error`.
+
+## Limitations (v1)
+
+- **Daemon-down + contact added → no auto-scan.** Plan §R9: the
+  daemon's known-identifiers cache hash detects offline contact-list
+  changes but does NOT auto-queue a 30-day scan for every new
+  identifier (it would defeat the optimization on every restart). Run
+  `crm-mac messages scan --identifier <X>` manually if you want
+  backfill for a specific newly-added contact.
+- **Outbound group attribution.** For outbound group messages the
+  daemon attributes the outreach to the first non-self handle by
+  `chat_handle_join.ROWID` order. This is a v1 simplification: every
+  outbound group message attributes to the same arbitrary peer, so
+  one group member's `last_outreach_at` advances on every outbound
+  group message while others' do not.
+- **Outbound messages currently not emitted.** The reader's fetch
+  query joins on `message.handle_id`, which is NULL for outbound rows
+  in chat.db; outbound peer resolution requires a separate path
+  through `outboundGroupPeer`, deferred to a follow-up. Inbound
+  emission is fully wired.

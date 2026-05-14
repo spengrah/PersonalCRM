@@ -33,5 +33,24 @@ struct StatusCommand: ParsableCommand {
         } else {
             print("last_heartbeat_at=never")
         }
+
+        // Sources block — PR7 surfaces messages cursor watermarks.
+        print("")
+        print("Sources:")
+        if let messages = report.messages {
+            print("  messages:")
+            print("    live_cursor:        \(messages.liveCursor.map(String.init) ?? "nil")")
+            print("    backfill_cursor:    \(messages.backfillCursor.map(String.init) ?? "nil")")
+            print("    install_max_rowid:  \(messages.installMaxRowID.map(String.init) ?? "nil")")
+            print("    backfill_complete:  \(messages.backfillComplete)")
+            print("    pending_scans:      \(messages.pendingScansCount)")
+            if let live = messages.liveCursor, let max = messages.installMaxRowID, max > 0 {
+                let progress = Double(live - (messages.backfillCursor ?? max)) / Double(max)
+                let pct = Int(progress * 100)
+                print("    backfill_progress:  ~\(pct)%")
+            }
+        } else {
+            print("  messages: (no cursor committed yet)")
+        }
     }
 }

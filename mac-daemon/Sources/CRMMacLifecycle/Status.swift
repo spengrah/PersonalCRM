@@ -15,6 +15,11 @@ public struct StatusReport: Equatable {
     public let hostID: UUID?
     public let lastHeartbeatAt: Date?
     public let stateSchemaVersion: Int?
+    /// Per-source status block surfaced by PR7. Decoded from
+    /// state.sources["messages"].cursor on a best-effort basis;
+    /// nil if no cursor has been committed yet OR the cursor JSON
+    /// fails to decode.
+    public let messages: MessagesSourceStatus?
 
     public init(
         installed: Bool,
@@ -24,7 +29,8 @@ public struct StatusReport: Equatable {
         configPiURL: String?,
         hostID: UUID?,
         lastHeartbeatAt: Date?,
-        stateSchemaVersion: Int?
+        stateSchemaVersion: Int?,
+        messages: MessagesSourceStatus? = nil
     ) {
         self.installed = installed
         self.registered = registered
@@ -34,6 +40,79 @@ public struct StatusReport: Equatable {
         self.hostID = hostID
         self.lastHeartbeatAt = lastHeartbeatAt
         self.stateSchemaVersion = stateSchemaVersion
+        self.messages = messages
+    }
+}
+
+/// Per plan §"Status command extension".  Subset of MessagesCursor
+/// surfaced via `crm-mac status`. Cursor JSON is opaque to the
+/// Lifecycle target (the full struct lives in CRMMacMessagesSource);
+/// we decode just the cursor watermarks here.
+public struct MessagesSourceStatus: Equatable {
+    public let liveCursor: Int64?
+    public let backfillCursor: Int64?
+    public let installMaxRowID: Int64?
+    public let backfillComplete: Bool
+    public let pendingScansCount: Int
+
+    public init(
+        liveCursor: Int64?,
+        backfillCursor: Int64?,
+        installMaxRowID: Int64?,
+        backfillComplete: Bool,
+        pendingScansCount: Int
+    ) {
+        self.liveCursor = liveCursor
+        self.backfillCursor = backfillCursor
+        self.installMaxRowID = installMaxRowID
+        self.backfillComplete = backfillComplete
+        self.pendingScansCount = pendingScansCount
+    }
+
+    /// Decoder shape mirrors the Pi-side opaque cursor JSON. Not
+    /// shared with CRMMacMessagesSource on purpose — keeps Status
+    /// free of any GRDB-dependent target.
+    private struct CursorJSON: Decodable {
+        let backfillCursor: Int64?
+        let liveCursor: Int64?
+        let installMaxRowID: Int64?
+        let backfillComplete: Bool?
+        let pendingScans: [PendingScan]?
+
+        enum CodingKeys: String, CodingKey {
+            case backfillCursor      = "backfill_cursor"
+            case liveCursor          = "live_cursor"
+            case installMaxRowID     = "install_max_rowid"
+            case backfillComplete    = "backfill_complete"
+            case pendingScans        = "pending_scans"
+        }
+
+        struct PendingScan: Decodable {
+            let normalizedHandle: String?
+            let since: Date?
+            enum CodingKeys: String, CodingKey {
+                case normalizedHandle = "normalized_handle"
+                case since
+            }
+        }
+    }
+
+    /// Best-effort decode from the opaque cursor string.  Nil on
+    /// empty input or decode failure.
+    public static func decode(opaqueCursor: String) -> MessagesSourceStatus? {
+        if opaqueCursor.isEmpty { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let parsed = try? decoder.decode(CursorJSON.self,
+                                                from: Data(opaqueCursor.utf8)) else {
+            return nil
+        }
+        return MessagesSourceStatus(
+            liveCursor: parsed.liveCursor,
+            backfillCursor: parsed.backfillCursor,
+            installMaxRowID: parsed.installMaxRowID,
+            backfillComplete: parsed.backfillComplete ?? false,
+            pendingScansCount: parsed.pendingScans?.count ?? 0)
     }
 }
 
@@ -84,12 +163,17 @@ public struct Status {
 
         var lastHeartbeat: Date?
         var schemaVersion: Int?
+        var messagesStatus: MessagesSourceStatus?
         if let data = try? deps.filesystem.read(from: deps.paths.stateFilePath) {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             if let state = try? decoder.decode(DaemonState.self, from: data) {
                 lastHeartbeat = state.lastHeartbeatAt
                 schemaVersion = state.schemaVersion
+                if let messagesSrc = state.sources["messages"] {
+                    messagesStatus = MessagesSourceStatus.decode(
+                        opaqueCursor: messagesSrc.cursor)
+                }
             }
         }
 
@@ -101,6 +185,7 @@ public struct Status {
             configPiURL: configPiURL,
             hostID: hostID,
             lastHeartbeatAt: lastHeartbeat,
-            stateSchemaVersion: schemaVersion)
+            stateSchemaVersion: schemaVersion,
+            messages: messagesStatus)
     }
 }

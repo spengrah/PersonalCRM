@@ -14,6 +14,17 @@ import Foundation
 import CRMMacCore
 import CRMMacPiClient
 
+/// Closure that the heartbeat loop invokes after each successful
+/// heartbeat to refresh per-source caches with the latest
+/// known-identifiers fetch.  Production wiring: the closure calls
+/// piClient.knownIdentifiers + feeds the canonicalized set into the
+/// messages plugin's KnownIdentifiersCache.replace(with:). Tests inject
+/// no-op or recording closures.
+///
+/// Errors are caught + logged inside the heartbeat tick; refresher
+/// failures must not propagate as heartbeat failures.
+public typealias KnownIdentifiersRefresher = @Sendable () async throws -> Void
+
 public final class HeartbeatLoop: SourcePlugin {
     public let id: SourceID = "_heartbeat"
     public let tickInterval: TimeInterval
@@ -24,6 +35,8 @@ public final class HeartbeatLoop: SourcePlugin {
     private let exitHandler: ExitHandler
     private let logger: LoggerProtocol
     private let clock: ClockAdapter
+    private let refresher: KnownIdentifiersRefresher?
+    private let sourceHealthProvider: SourceHealthProvider?
 
     public init(
         piClient: PiClient,
@@ -32,7 +45,9 @@ public final class HeartbeatLoop: SourcePlugin {
         exitHandler: ExitHandler,
         logger: LoggerProtocol,
         clock: ClockAdapter,
-        tickInterval: TimeInterval = 60
+        tickInterval: TimeInterval = 60,
+        refresher: KnownIdentifiersRefresher? = nil,
+        sourceHealthProvider: SourceHealthProvider? = nil
     ) {
         self.piClient = piClient
         self.auth = auth
@@ -41,20 +56,35 @@ public final class HeartbeatLoop: SourcePlugin {
         self.logger = logger
         self.clock = clock
         self.tickInterval = tickInterval
+        self.refresher = refresher
+        self.sourceHealthProvider = sourceHealthProvider
     }
 
     public func tick() async throws {
+        let sourceHealthData = await buildSourceHealthData()
         let body = HeartbeatBody(
             daemonVersion: Daemon.version,
             protocolVersion: Daemon.protocolVersion,
             permissions: Data("{}".utf8),
-            sourceHealth: Data("{}".utf8))
+            sourceHealth: sourceHealthData)
         do {
             let result = try await piClient.heartbeat(auth: auth, body: body)
             try await stateWriter.recordSuccessfulHeartbeat(at: clock.now(), cursorEpoch: result.cursorEpoch)
             logger.debug("heartbeat ok", metadata: [
                 "cursor_epoch": .public(String(result.cursorEpoch)),
             ])
+            // Refresh known-identifiers after a successful heartbeat.
+            // Errors here MUST NOT propagate as heartbeat failures —
+            // log and continue.
+            if let refresher {
+                do {
+                    try await refresher()
+                } catch {
+                    logger.warning("known-identifiers refresh failed", metadata: [
+                        "error": .private(String(describing: error)),
+                    ])
+                }
+            }
         } catch PiClientError.authenticationRevoked(let message) {
             logger.error("heartbeat: 401 — exiting", metadata: ["message": .public(message)])
             try exitHandler.requestExit(1)
@@ -90,4 +120,55 @@ public protocol HeartbeatStateWriter: Sendable {
 public final class DiscardingHeartbeatStateWriter: HeartbeatStateWriter {
     public init() {}
     public func recordSuccessfulHeartbeat(at: Date, cursorEpoch: Int64) async throws {}
+}
+
+/// Source-health JSON builder for the heartbeat body.  Production
+/// wiring reads SourceHealthRegistry.all() and serializes the result;
+/// tests inject a static / recording impl.
+public protocol SourceHealthProvider: Sendable {
+    /// Returns the JSON bytes to include in the heartbeat body's
+    /// `source_health` field.  Must always return a valid JSON object
+    /// (at minimum `{}`).
+    func currentBody() async -> Data
+}
+
+/// Bridges CRMMacCore.SourceHealthRegistry into the heartbeat body
+/// builder. Reads the latest snapshot for every registered source +
+/// emits a JSON object keyed by source id.
+public final class RegistryHealthProvider: SourceHealthProvider {
+    private let registry: SourceHealthRegistry
+    private let logger: LoggerProtocol
+
+    public init(registry: SourceHealthRegistry, logger: LoggerProtocol) {
+        self.registry = registry
+        self.logger = logger
+    }
+
+    public func currentBody() async -> Data {
+        let snapshots = await registry.all()
+        var keyed: [String: SourceHealthSnapshot] = [:]
+        for (id, snap) in snapshots {
+            keyed[id.rawValue] = snap
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        do {
+            return try encoder.encode(keyed)
+        } catch {
+            logger.warning("source health body encode failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+            return Data("{}".utf8)
+        }
+    }
+}
+
+private extension HeartbeatLoop {
+    func buildSourceHealthData() async -> Data {
+        if let provider = sourceHealthProvider {
+            return await provider.currentBody()
+        }
+        return Data("{}".utf8)
+    }
 }

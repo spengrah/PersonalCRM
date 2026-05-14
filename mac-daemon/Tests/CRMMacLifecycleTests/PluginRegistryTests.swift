@@ -2,11 +2,21 @@ import XCTest
 import CRMMacCore
 @testable import CRMMacLifecycle
 
+/// Local test double — StubMessagesPlugin was removed when
+/// MessagesSourcePlugin (the real implementation) landed; this fake
+/// preserves the prior test coverage of PluginRegistry's wiring
+/// behavior without re-introducing the no-op stub.
+private final class FakeMessagesPluginForRegistryTests: SourcePlugin {
+    let id: SourceID = .messages
+    let tickInterval: TimeInterval = 60
+    func tick() async throws {}
+}
+
 final class PluginRegistryTests: XCTestCase {
     func testRegisterAllRegistersEachPlugin() {
         let runner = FakeScheduleRunner()
         let registry = PluginRegistry(runner: runner, logger: NoopLogger())
-        let p1 = StubMessagesPlugin(context: SourceContext(logger: NoopLogger()))
+        let p1 = FakeMessagesPluginForRegistryTests()
         let p2 = StubICloudContactsPlugin(context: SourceContext(logger: NoopLogger()))
         registry.registerAll([p1, p2])
         XCTAssertEqual(runner.registrations.count, 2)
@@ -16,7 +26,7 @@ final class PluginRegistryTests: XCTestCase {
     func testCancelAllPropagates() {
         let runner = FakeScheduleRunner()
         let registry = PluginRegistry(runner: runner, logger: NoopLogger())
-        let p1 = StubMessagesPlugin(context: SourceContext(logger: NoopLogger()))
+        let p1 = FakeMessagesPluginForRegistryTests()
         registry.registerAll([p1])
         registry.cancelAll()
         XCTAssertEqual(runner.cancelledCount(), 1)
@@ -26,7 +36,7 @@ final class PluginRegistryTests: XCTestCase {
     func testFakeRunnerFiresRegisteredPlugin() async throws {
         let runner = FakeScheduleRunner()
         let registry = PluginRegistry(runner: runner, logger: NoopLogger())
-        let plugin = StubMessagesPlugin(context: SourceContext(logger: NoopLogger()))
+        let plugin = FakeMessagesPluginForRegistryTests()
         registry.registerAll([plugin])
         let fired = try await runner.fire(id: .messages)
         XCTAssertTrue(fired)
