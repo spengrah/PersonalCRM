@@ -11,7 +11,6 @@ import Foundation
 import ArgumentParser
 import CRMMacCore
 import CRMMacLifecycle
-import CRMMacMessagesSource
 import CRMMacPiClient
 import CRMMacSystem
 
@@ -119,7 +118,7 @@ private func makeMessagesOps() throws -> MessagesOps {
     let pidfileURL = URL(fileURLWithPath: ctx.paths.runtimeDirPath)
         .appendingPathComponent("daemon.pid")
     let pidfileLock = PidfileLock(path: pidfileURL)
-    let backfillFloor = MessagesSourceConfig.defaultBackfillFloor
+    let backfillFloor = MessagesCursorWire.defaultBackfillFloor
 
     return MessagesOps(
         piClient: piClient,

@@ -50,6 +50,12 @@ public struct MessagesCursorWire: Codable, Equatable, Sendable {
     /// Cap on pending scans persisted in the cursor JSON.
     public static let pendingScansCap: Int = 256
 
+    /// 2026-01-01T00:00:00Z — the spec-defined backfill floor. Older
+    /// chat.db rows are not emitted. Lives in CRMMacCore so every
+    /// caller (source plugin, CLI ops, lifecycle tests) can reference
+    /// it without pulling in the GRDB-bearing messages source target.
+    public static let defaultBackfillFloor = Date(timeIntervalSince1970: 1_767_225_600)
+
     public init(
         backfillCursor: Int64? = nil,
         liveCursor: Int64? = nil,

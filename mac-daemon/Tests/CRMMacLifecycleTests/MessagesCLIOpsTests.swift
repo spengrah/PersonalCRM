@@ -13,7 +13,7 @@ final class MessagesCLIOpsTests: XCTestCase {
     private let auth = PiAuth(
         hostID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
         apiKey: "k")
-    private let backfillFloor = Date(timeIntervalSince1970: 1_767_225_600)
+    private let backfillFloor = MessagesCursorWire.defaultBackfillFloor
     private var tempDir: URL!
     private var pidfileURL: URL!
 

@@ -16,7 +16,7 @@ final class MessagesSourcePluginTests: XCTestCase {
     private let auth = PiAuth(
         hostID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
         apiKey: "k")
-    private let backfillFloor = MessagesSourceConfig.defaultBackfillFloor
+    private let backfillFloor = MessagesCursorWire.defaultBackfillFloor
     private let unix2026: TimeInterval = 1_778_686_938 // 2026-05-13T15:42:18Z
     private var tempDir: URL!
 
@@ -107,6 +107,95 @@ final class MessagesSourcePluginTests: XCTestCase {
         // Tick: should fetch cursor, decide cache is empty, and skip.
         try await plugin.tick()
         XCTAssertFalse(piCalled, "publisher must not be invoked when cache is empty")
+    }
+
+    // MARK: - smoke: full tick flow with populated cache
+
+    /// End-to-end orchestration: cache pre-populated with the seeded
+    /// handle, scripted Pi transport for GET cursor + POST commit
+    /// cursor, capturing publisher. Verifies the seeded inbound
+    /// message flows through publish and the post-tick state writer
+    /// records lastPushedAt.
+    func testTickEmitsAndCommitsOnPopulatedCache() async throws {
+        let dbURL = try makeChatDB()
+        // Seed a second row at ROWID=2 so the install-max capture sets
+        // installMaxRowID=2; backfill then scans `< 2` and picks up the
+        // ROWID=1 row that makeChatDB() seeded.
+        let queue = try DatabaseQueue(path: dbURL.path)
+        try queue.write { db in
+            let appleNanos = Int64((self.unix2026 - 978_307_200) * 1e9)
+            try db.execute(sql:
+                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                "is_from_me, cache_has_attachments, associated_message_guid) " +
+                "VALUES (2, 'g2', 'bye', 1, ?, 0, 0, NULL)",
+                arguments: [appleNanos])
+            try db.execute(sql:
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 2)")
+        }
+
+        let store = makeStateStore()
+        try store.save(DaemonState(schemaVersion: 1))
+
+        // Capture publisher invocations.
+        nonisolated(unsafe) var publishCallCount = 0
+        nonisolated(unsafe) var lastPublishedEvents: [IngestEvent] = []
+        let publisher = MessagesPublisher(
+            sender: { _, body in
+                publishCallCount += 1
+                lastPublishedEvents = body.events
+                return IngestEventsData(
+                    accepted: body.events.count,
+                    duplicate: 0, rejected: 0, errors: [])
+            },
+            auth: auth, logger: NoopLogger())
+
+        // Scripted PiClient: GET cursor (fresh install) -> POST commit cursor (ok).
+        let script = MessagesSourcePluginTestScript([
+            .respond(status: 200, data: Data(
+                #"{"success":true,"data":{"cursor":"","cursor_epoch":0,"backfill_complete":false}}"#.utf8)),
+            .respond(status: 200, data: Data(
+                #"{"success":true,"data":{"ok":true}}"#.utf8)),
+        ])
+        let piClient = PiClient(
+            baseURL: URL(string: "https://pi.example.test")!,
+            transport: script.asTransport(),
+            sleep: { _ in })
+
+        // Cache pre-populated with the canonical form of the seeded handle.
+        let cache = KnownIdentifiersCache(initial: ["+15551234567"])
+        let plugin = MessagesSourcePlugin(
+            tickInterval: 60,
+            config: MessagesSourceConfig(
+                chatDBPath: dbURL,
+                backfillFloor: backfillFloor),
+            piClient: piClient,
+            auth: auth,
+            mutator: StateMutator(store: store),
+            publisher: publisher,
+            cache: cache,
+            healthRegistry: SourceHealthRegistry(),
+            logger: NoopLogger())
+
+        try await plugin.tick()
+
+        // Publisher invoked with the seeded row.
+        XCTAssertEqual(publishCallCount, 1,
+                       "publisher invoked once with the seeded row")
+        XCTAssertEqual(lastPublishedEvents.count, 1,
+                       "exactly one event emitted")
+        XCTAssertEqual(lastPublishedEvents.first?.kind, "raw_message.received")
+        XCTAssertEqual(lastPublishedEvents.first?.sourceID, "g1",
+                       "event source_id is the chat.db guid")
+
+        // State-file updated post-tick (lastPushedAt populated, cursor non-empty).
+        let state = try store.load()
+        let sourceState = state.sources["messages"]
+        XCTAssertNotNil(sourceState,
+                        "messages source state written after tick")
+        XCTAssertNotNil(sourceState?.lastPushedAt,
+                        "lastPushedAt set after successful tick")
+        XCTAssertFalse(sourceState?.cursor.isEmpty ?? true,
+                       "cursor JSON committed locally")
     }
 
     // MARK: - helpers

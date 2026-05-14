@@ -2,10 +2,11 @@
 // the daemon-private cursor envelope that gets packed into the Pi-side
 // opaque cursor string.
 import XCTest
+import CRMMacCore
 @testable import CRMMacMessagesSource
 
 final class MessagesCursorTests: XCTestCase {
-    private let floor = Date(timeIntervalSince1970: 1_767_225_600) // 2026-01-01 UTC
+    private let floor = MessagesCursorWire.defaultBackfillFloor
 
     func testRoundTripEmpty() throws {
         let original = MessagesCursor(backfillFloorSentAt: floor)

@@ -30,12 +30,6 @@ import CRMMacPiClient
 
 /// Inputs the plugin needs from the daemon's composition root.
 public struct MessagesSourceConfig: Sendable {
-    /// 2026-01-01T00:00:00Z — the spec-defined backfill floor. Older
-    /// chat.db rows are not emitted. Shared across the daemon, ops
-    /// subcommands, and tests so a future floor change is a one-site
-    /// edit.
-    public static let defaultBackfillFloor = Date(timeIntervalSince1970: 1_767_225_600)
-
     /// Path to chat.db. Production: ~/Library/Messages/chat.db.
     public let chatDBPath: URL
     /// Backfill floor — events with sentAt before this date are not emitted.
