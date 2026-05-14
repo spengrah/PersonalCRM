@@ -2,8 +2,9 @@
 //
 // Opens chat.db in read-only mode (mode=ro; NOT immutable=1 — Messages.app
 // is actively writing while we read). Honors WAL via GRDB's default
-// behavior. On SQLITE_BUSY: one 200ms retry; on continued failure the
-// caller marks the source unhealthy for this tick.
+// behavior. SQLITE_BUSY is mapped through GRDB's DatabasePool retry
+// policy; on continued failure the caller logs + treats the page as
+// empty for this tick (next tick re-reads).
 //
 // Per-row JOINs:
 //   - message.handle_id -> handle.ROWID  (inbound sender + outbound 1:1 peer)

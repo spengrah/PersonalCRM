@@ -95,7 +95,7 @@ final class PiClientIngestEventsTests: XCTestCase {
         }
     }
 
-    // MARK: - wire shape (the load-bearing one per plan §I3)
+    // MARK: - wire shape
 
     func testIngestEventWireShape() async throws {
         let response = Data(#"{"accepted":0,"duplicate":0,"rejected":0,"errors":[]}"#.utf8)

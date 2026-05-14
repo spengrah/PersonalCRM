@@ -253,10 +253,17 @@ effect, but visible in `/api/v1/host/:id` logs).
 
 ### `crm-mac messages scan --identifier <handle> [--since 30d]`
 
-Queue a one-shot backwards scan for a specific phone/email handle —
-useful when a contact was added while the daemon was offline and the
-heartbeat-driven diff didn't fire. The scan is persisted Pi-side via
-the cursor JSON; the next daemon tick drains the queue. Same
+Queue a one-shot backwards scan for a specific phone/email handle. The
+scan request is persisted Pi-side via the cursor JSON. **v1
+limitation:** the daemon's source plugin observes pending-scan
+requests via `crm-mac status` and logs them on each tick, but does
+NOT yet execute identifier-scoped backwards scans (chat.db has no
+indexed-by-handle reader; a full scan would be required). The regular
+backfill descent walks every message back to the
+`backfill_floor_sent_at` floor anyway, so a newly-added contact's
+historical messages will arrive once backfill reaches them. The
+scan command is wired through so a future PR can ship the actual
+scan execution without an additional protocol change. Same
 daemon-running guard as `backfill`.
 
 ```bash

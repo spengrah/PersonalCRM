@@ -163,26 +163,26 @@ public actor MessagesSourcePlugin: SourcePlugin {
             maxDuration: config.maxDurationPerTick,
             now: tickStart)
         var hadRejection = false
+        var hadUnconfirmed = false
 
-        // Steps 5-7: drain pending scans, then backfill, then live.
-        //
-        // Two sources of pending scans:
-        //   - Operator-queued via `crm-mac messages scan` (persisted
-        //     in the Pi-side cursor JSON's pendingScans).
-        //   - Newly-added contacts since the last heartbeat (in-memory
-        //     queue inside KnownIdentifiersCache, drained here).
+        // Pending-scan + newly-known handling.
         //
         // V1 simplification: chat.db doesn't support an efficient
-        // identifier-scoped query; we'd need a full scan. Instead, we
-        // log the requested scans and rely on the regular backfill/live
-        // descent to pick up each contact's messages over time. The
-        // existing sender filter (KnownIdentifiersCache.contains) makes
-        // sure those rows are emitted as soon as backfill reaches them.
+        // identifier-scoped query, so the daemon doesn't execute
+        // identifier-scoped backwards scans. Both the operator-queued
+        // pendingScans (in the cursor JSON) and the in-memory
+        // newly-added queue are surfaced via logs + status output
+        // but NOT consumed here.
         //
-        // For operator-queued scans we clear the queue after logging
-        // (the cursor commit at step 8 persists the cleared state).
-        // For newly-added we drain the in-memory queue (no commit
-        // needed — drain is in-memory only).
+        // The natural backfill descent already walks every message
+        // back to backfillFloorSentAt and the sender filter
+        // (KnownIdentifiersCache.contains) makes sure new contacts'
+        // messages emit as soon as backfill reaches them. The
+        // pendingScans queue is therefore kept (not cleared) so the
+        // operator can see queued items via `crm-mac status` until
+        // a future PR ships true identifier-scoped scans. README
+        // documents this v1 behavior; tests cover the persistence
+        // semantics.
         let newlyAdded = await cache.drainNewlyAdded()
         if !newlyAdded.isEmpty {
             logger.info("messages tick: newly-known contacts detected", metadata: [
@@ -190,10 +190,9 @@ public actor MessagesSourcePlugin: SourcePlugin {
             ])
         }
         if !working.pendingScans.isEmpty {
-            logger.info("messages tick: operator-queued scans drained", metadata: [
+            logger.info("messages tick: pending scans observed (not executed in v1)", metadata: [
                 "count": .public(String(working.pendingScans.count)),
             ])
-            working.pendingScans = []
         }
 
         // Backfill batch (descending).
@@ -203,6 +202,7 @@ public actor MessagesSourcePlugin: SourcePlugin {
                 cursor: &working,
                 budget: &budget)
             if !outcome.rejected.isEmpty { hadRejection = true }
+            if outcome.hadUnconfirmedItems { hadUnconfirmed = true }
         }
 
         // Live batch (ascending).
@@ -212,11 +212,15 @@ public actor MessagesSourcePlugin: SourcePlugin {
                 cursor: &working,
                 budget: &budget)
             if !outcome.rejected.isEmpty { hadRejection = true }
+            if outcome.hadUnconfirmedItems { hadUnconfirmed = true }
         }
 
-        // Commit cursor only if changed AND no rejections.
+        // Commit cursor only if changed, no rejections, AND every
+        // item we tried to publish was confirmed. A transport
+        // failure mid-tick must NOT commit a cursor that skips the
+        // failed rows.
         let cursorChanged = working != cursor
-        if cursorChanged && !hadRejection {
+        if cursorChanged && !hadRejection && !hadUnconfirmed {
             do {
                 let newJSON = try MessagesCursorCodec.encode(working)
                 try await piClient.commitCursor(
@@ -254,6 +258,8 @@ public actor MessagesSourcePlugin: SourcePlugin {
             }
         } else if hadRejection {
             logger.warning("messages tick: per-event rejections; holding cursor", metadata: [:])
+        } else if hadUnconfirmed {
+            logger.warning("messages tick: publish unconfirmed; holding cursor", metadata: [:])
         }
 
         // Refresh health snapshot.
@@ -272,6 +278,12 @@ public actor MessagesSourcePlugin: SourcePlugin {
         let accepted: Int
         let duplicate: Int
         let rejected: [PerEventRejection]
+        /// True if there were publish items in the batch but the
+        /// publish call did NOT confirm them (transport failure or
+        /// per-event rejections). The caller must NOT advance any
+        /// derived state (e.g. backfillComplete flag) when this is
+        /// true.
+        let hadUnconfirmedItems: Bool
     }
 
     /// Backfill: walk message.ROWID downward from
@@ -292,12 +304,14 @@ public actor MessagesSourcePlugin: SourcePlugin {
         let upperBoundExclusive = cursor.backfillCursor ?? (cursor.installMaxRowID ?? 0)
         if upperBoundExclusive <= 0 {
             cursor.backfillComplete = true
-            return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
         }
 
         let limit = min(budget.rowsRemaining, MessagesPublisher.maxEventsPerBatch)
         if limit <= 0 {
-            return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
         }
 
         let page: ChatDBReadPage
@@ -308,18 +322,24 @@ public actor MessagesSourcePlugin: SourcePlugin {
                     direction: .backwardFromExclusive(upperBoundExclusive),
                     limit: limit)
             }
+        } catch let dbError as DatabaseError where isFDAError(dbError) {
+            await markUnhealthy(reason: "fda_required")
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
         } catch {
             logger.warning("messages tick: backfill read failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
-            return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
         }
 
         // No SQL rows at all -> we've walked the whole iterator.
         if page.scannedROWIDBounds == nil {
             cursor.backfillComplete = true
             cursor.backfillCursor = 0
-            return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
         }
 
         // Floor check: drop rows whose sentAt is below backfillFloor.
@@ -330,36 +350,37 @@ public actor MessagesSourcePlugin: SourcePlugin {
 
         budget.consume(rows: page.rows.count)
 
-        // Advance cursor:
-        //   - If we have publish items and the batch was clean
-        //     (advanceTo != nil + no rejections), advance past the
-        //     scanned MIN (since we're descending, MIN is the new
-        //     upper-bound exclusive for the next page).
-        //   - If we have no publish items (all rows filtered out by
-        //     handle/date/sender filter), advance past the scanned MIN
-        //     anyway so the next page reads new rows — otherwise the
-        //     iterator stalls on a page of all-skipped rows.
-        //   - If we had rows to publish but publish failed/rejected,
-        //     do NOT advance.
-        let canAdvance: Bool
+        // Cursor advance rules:
+        //   - publishItems empty (everything filtered out): advance
+        //     past scanned MIN so the iterator doesn't stall.
+        //   - publishItems non-empty + clean batch: advance past the
+        //     scanned MIN. (Descending walk; MIN is the new exclusive
+        //     upper bound.)
+        //   - publishItems non-empty + ANY transport / per-event
+        //     failure: do NOT advance, AND do NOT flip
+        //     backfillComplete — those rows must be retried.
+        let confirmedAllItems: Bool
         if publishItems.isEmpty {
-            canAdvance = true
+            confirmedAllItems = true
         } else {
-            canAdvance = outcome.advanceTo != nil && outcome.rejected.isEmpty
+            confirmedAllItems = outcome.advanceTo != nil
+                && outcome.rejected.isEmpty
+                && outcome.unconfirmed == 0
         }
-        if let bounds = page.scannedROWIDBounds, canAdvance {
+        if let bounds = page.scannedROWIDBounds, confirmedAllItems {
             cursor.backfillCursor = bounds.min
         }
-        if belowFloor > 0 || page.exhausted {
+        if confirmedAllItems && (belowFloor > 0 || page.exhausted) {
             // We either crossed the floor or scanned every remaining
-            // row; backfill is complete.
+            // row AND every item we tried to publish was confirmed.
             cursor.backfillComplete = true
         }
 
         return BatchSummary(
             accepted: outcome.accepted,
             duplicate: outcome.duplicate,
-            rejected: outcome.rejected)
+            rejected: outcome.rejected,
+            hadUnconfirmedItems: !confirmedAllItems)
     }
 
     /// Live: walk message.ROWID upward from liveCursor.  Stops when
@@ -378,7 +399,8 @@ public actor MessagesSourcePlugin: SourcePlugin {
         let lower = cursor.liveCursor ?? (cursor.installMaxRowID ?? 0)
         let limit = min(budget.rowsRemaining, MessagesPublisher.maxEventsPerBatch)
         if limit <= 0 {
-            return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
         }
 
         let page: ChatDBReadPage
@@ -389,16 +411,22 @@ public actor MessagesSourcePlugin: SourcePlugin {
                     direction: .forwardFromExclusive(lower),
                     limit: limit)
             }
+        } catch let dbError as DatabaseError where isFDAError(dbError) {
+            await markUnhealthy(reason: "fda_required")
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
         } catch {
             logger.warning("messages tick: live read failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
-            return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
         }
 
         if page.scannedROWIDBounds == nil {
             // No new rows since liveCursor.
-            return BatchSummary(accepted: 0, duplicate: 0, rejected: [])
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
         }
 
         let publishItems = await filterAndShape(rows: page.rows, isBackfill: false)
@@ -406,20 +434,23 @@ public actor MessagesSourcePlugin: SourcePlugin {
 
         budget.consume(rows: page.rows.count)
 
-        let canAdvance: Bool
+        let confirmedAllItems: Bool
         if publishItems.isEmpty {
-            canAdvance = true
+            confirmedAllItems = true
         } else {
-            canAdvance = outcome.advanceTo != nil && outcome.rejected.isEmpty
+            confirmedAllItems = outcome.advanceTo != nil
+                && outcome.rejected.isEmpty
+                && outcome.unconfirmed == 0
         }
-        if let bounds = page.scannedROWIDBounds, canAdvance {
+        if let bounds = page.scannedROWIDBounds, confirmedAllItems {
             cursor.liveCursor = bounds.max
         }
 
         return BatchSummary(
             accepted: outcome.accepted,
             duplicate: outcome.duplicate,
-            rejected: outcome.rejected)
+            rejected: outcome.rejected,
+            hadUnconfirmedItems: !confirmedAllItems)
     }
 
     /// Apply sender filter + shape to publishable form.

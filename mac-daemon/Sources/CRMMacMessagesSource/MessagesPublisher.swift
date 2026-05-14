@@ -24,19 +24,28 @@ public struct MessagesBatchOutcome: Equatable, Sendable {
     public let accepted: Int
     public let duplicate: Int
     public let rejected: [PerEventRejection]
-    /// Highest ROWID confirmed by the Pi (caller uses this for cursor
-    /// advance).  Nil if the transport failed entirely (no batches
-    /// completed) OR if rejected.isEmpty was false on every batch.
-    /// Caller advances cursor ONLY when advanceTo != nil AND
-    /// rejected.isEmpty.
+    /// Items submitted but neither accepted/duplicated nor rejected
+    /// by the Pi — i.e. lost in transit (transport / 5xx after
+    /// retries). Caller MUST treat any nonzero value as "do not
+    /// advance the cursor": those rows didn't reach the Pi.
+    public let unconfirmed: Int
+    /// Highest ROWID confirmed by the Pi.  Nil if the transport
+    /// failed entirely (no batches completed).
+    ///
+    /// IMPORTANT: presence of advanceTo does NOT mean all items
+    /// reached the Pi — partial success during multi-batch publish
+    /// can produce advanceTo != nil AND unconfirmed > 0. Caller MUST
+    /// gate cursor advance on `rejected.isEmpty && unconfirmed == 0`.
     public let advanceTo: Int64?
 
     public init(accepted: Int, duplicate: Int,
                 rejected: [PerEventRejection],
+                unconfirmed: Int,
                 advanceTo: Int64?) {
         self.accepted = accepted
         self.duplicate = duplicate
         self.rejected = rejected
+        self.unconfirmed = unconfirmed
         self.advanceTo = advanceTo
     }
 }
@@ -101,15 +110,18 @@ public actor MessagesPublisher {
     /// and maxBodyBytes.  Returns an aggregated outcome.
     ///
     /// Caller is responsible for the cursor-advance decision based on
-    /// the returned outcome (advanceTo != nil AND rejected.isEmpty).
+    /// the returned outcome: advance ONLY when
+    /// `rejected.isEmpty && unconfirmed == 0`.
     public func publish(items: [PublishItem]) async -> MessagesBatchOutcome {
         if items.isEmpty {
-            return MessagesBatchOutcome(accepted: 0, duplicate: 0,
-                                          rejected: [], advanceTo: nil)
+            return MessagesBatchOutcome(
+                accepted: 0, duplicate: 0,
+                rejected: [], unconfirmed: 0, advanceTo: nil)
         }
 
         var totalAccepted = 0
         var totalDuplicate = 0
+        var unconfirmed = 0
         var rejections: [PerEventRejection] = []
         var lastSuccessfulBatchHighestROWID: Int64? = nil
 
@@ -139,11 +151,17 @@ public actor MessagesPublisher {
                 if outcome.advanced {
                     lastSuccessfulBatchHighestROWID = outcome.highestROWID
                 } else if outcome.transportFailed {
-                    // Transport failure - abort the rest of the batch.
+                    // Transport failure on this batch + everything
+                    // after this point in the input is unsubmitted.
+                    let stillUnflushed = items.count -
+                        (totalAccepted + totalDuplicate + rejections.count
+                          + currentBatch.count)
+                    unconfirmed += currentBatch.count + max(0, stillUnflushed)
                     return MessagesBatchOutcome(
                         accepted: totalAccepted,
                         duplicate: totalDuplicate,
                         rejected: rejections,
+                        unconfirmed: unconfirmed,
                         advanceTo: lastSuccessfulBatchHighestROWID)
                 }
                 currentBatch = []
@@ -163,25 +181,17 @@ public actor MessagesPublisher {
             totalDuplicate += outcome.duplicate
             if outcome.advanced {
                 lastSuccessfulBatchHighestROWID = outcome.highestROWID
+            } else if outcome.transportFailed {
+                unconfirmed += currentBatch.count
             }
-        }
-
-        let advanceTo: Int64?
-        if rejections.isEmpty && lastSuccessfulBatchHighestROWID != nil {
-            advanceTo = lastSuccessfulBatchHighestROWID
-        } else if rejections.isEmpty && totalAccepted + totalDuplicate > 0 {
-            // Mixed accept/duplicate with no rejections — advance.
-            advanceTo = lastSuccessfulBatchHighestROWID
-        } else {
-            // Any rejection holds the cursor.
-            advanceTo = nil
         }
 
         return MessagesBatchOutcome(
             accepted: totalAccepted,
             duplicate: totalDuplicate,
             rejected: rejections,
-            advanceTo: advanceTo)
+            unconfirmed: unconfirmed,
+            advanceTo: lastSuccessfulBatchHighestROWID)
     }
 
     private struct BatchOutcome {

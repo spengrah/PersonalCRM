@@ -66,7 +66,7 @@ final class MessagesPublisherTests: XCTestCase {
         XCTAssertEqual(outcome.advanceTo, 2)
     }
 
-    // MARK: - per plan §R5
+    // MARK: - cursor advance gating
 
     func testCursorAdvanceOnlyOnCleanBatch() async {
         // Mixed accepted + rejected: cursor must NOT advance.
@@ -136,7 +136,40 @@ final class MessagesPublisherTests: XCTestCase {
         XCTAssertEqual(outcome.accepted, 0)
         XCTAssertTrue(outcome.rejected.isEmpty,
                       "transport failure means no per-event rejections — only no advance")
+        XCTAssertEqual(outcome.unconfirmed, 3,
+                       "all items must be counted as unconfirmed on transport failure")
         XCTAssertNil(outcome.advanceTo)
+    }
+
+    /// Partial transport failure: batch 1 succeeds, batch 2 fails.
+    /// advanceTo carries the highest ROWID from batch 1, but unconfirmed
+    /// is non-zero so the caller MUST NOT advance the cursor.
+    func testPartialSuccessReportsUnconfirmed() async {
+        nonisolated(unsafe) var callCount = 0
+        struct NetError: Error {}
+        let publisher = MessagesPublisher(
+            sender: { _, body in
+                callCount += 1
+                if callCount == 1 {
+                    return IngestEventsData(accepted: body.events.count,
+                                            duplicate: 0, rejected: 0,
+                                            errors: [])
+                }
+                throw NetError()
+            },
+            auth: auth, logger: NoopLogger())
+        // 250 items -> two batches (200 + 50). Batch 2 fails.
+        let items = (1...250).map { makeItem(rowID: Int64($0)) }
+        let outcome = await publisher.publish(items: items)
+        XCTAssertEqual(callCount, 2)
+        XCTAssertEqual(outcome.accepted, 200,
+                       "first batch confirms")
+        XCTAssertEqual(outcome.unconfirmed, 50,
+                       "second batch's items are unconfirmed")
+        XCTAssertEqual(outcome.advanceTo, 200,
+                       "advanceTo is highest confirmed ROWID")
+        // Caller MUST gate on (rejected.isEmpty AND unconfirmed == 0).
+        XCTAssertFalse(outcome.rejected.isEmpty == false && outcome.unconfirmed > 0)
     }
 
     // MARK: - wire shape
