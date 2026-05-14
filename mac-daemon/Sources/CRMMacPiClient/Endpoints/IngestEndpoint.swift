@@ -13,7 +13,7 @@ import Foundation
 
 /// The top-level POST body. The Pi enforces ≤ 500 events and 8 MiB body;
 /// our daemon caps at 200 events / 1 MB to stay well below.
-public struct IngestEventsBody: Encodable, Equatable {
+public struct IngestEventsBody: Encodable, Equatable, Sendable {
     public let events: [IngestEvent]
 
     public init(events: [IngestEvent]) {
@@ -28,7 +28,7 @@ public struct IngestEventsBody: Encodable, Equatable {
 ///   kind       string
 ///   payload    json.RawMessage (inline JSON object — NOT base64)
 ///   observed_at *time.Time (RFC3339)
-public struct IngestEvent: Encodable, Equatable {
+public struct IngestEvent: Encodable, Equatable, Sendable {
     public let source: String
     public let sourceID: String
     public let kind: String
@@ -57,7 +57,7 @@ public struct IngestEvent: Encodable, Equatable {
 /// as a nested JSON object — NOT base64-encoded like Swift's default
 /// Data encoding.  Validates that the bytes parse as JSON; throws an
 /// EncodingError if they don't.
-public struct RawJSON: Encodable, Equatable {
+public struct RawJSON: Encodable, Equatable, Sendable {
     public let bytes: Data
 
     public init(_ bytes: Data) {
@@ -89,7 +89,7 @@ public struct RawJSON: Encodable, Equatable {
 
 /// Mirrors IngestResponse.  Pi-side response is NOT enveloped, so
 /// callers decode directly via JSONDecoder.decode(IngestEventsData.self).
-public struct IngestEventsData: Decodable, Equatable {
+public struct IngestEventsData: Decodable, Equatable, Sendable {
     public let accepted: Int
     public let duplicate: Int
     public let rejected: Int
@@ -104,7 +104,7 @@ public struct IngestEventsData: Decodable, Equatable {
     }
 }
 
-public struct IngestEventError: Decodable, Equatable {
+public struct IngestEventError: Decodable, Equatable, Sendable {
     public let index: Int
     public let code: String
     public let message: String
