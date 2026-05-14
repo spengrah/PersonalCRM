@@ -274,7 +274,7 @@ test: test-unit test-integration test-frontend
 
 test-unit:
 	@echo "Running backend unit tests..."
-	@cd backend && go test ./tests/... -v -short
+	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... -v -short
 
 test-integration-fast:
 	@echo "Running backend integration tests (default set)..."
