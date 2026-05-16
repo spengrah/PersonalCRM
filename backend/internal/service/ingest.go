@@ -410,7 +410,7 @@ func (s *IngestService) IngestBatch(
 			Source:    pair.Source,
 		}
 		if _, insErr := s.riverClient.InsertTx(ctx, tx, args, &river.InsertOpts{
-			UniqueOpts: river.UniqueOpts{ByArgs: true},
+			UniqueOpts: consumerjobs.MessagingAggregateUniqueOpts(),
 		}); insErr != nil {
 			return 0, 0, nil, fmt.Errorf("enqueue messaging aggregate (contact=%s source=%s): %w",
 				pair.ContactID, pair.Source, insErr)

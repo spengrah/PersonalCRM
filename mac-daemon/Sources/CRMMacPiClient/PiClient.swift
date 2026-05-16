@@ -10,7 +10,15 @@
 import Foundation
 import CRMMacCore
 
-public final class PiClient {
+/// `Sendable` constraint: `PiClient` is shared by every workflow
+/// (installer, heartbeat loop, source plugins). The stored builder /
+/// transport / decoder / logger are themselves `Sendable` or wrap
+/// thread-safe Apple types. `JSONDecoder` is documented thread-safe
+/// after configuration; we configure once in `init` and never mutate
+/// it. Marked `@unchecked Sendable` because `JSONDecoder` lacks a
+/// formal `Sendable` conformance from Foundation but is safe to share
+/// across actors in practice.
+public final class PiClient: @unchecked Sendable {
     private let builder: RequestBuilder
     private let transport: RetryingTransport
     private let decoder: JSONDecoder
@@ -79,6 +87,47 @@ public final class PiClient {
         return try decodeKnownIdentifiers(data: data, http: http)
     }
 
+    /// GET /api/v1/host/:id/sync/:source/cursor.  Returns the
+    /// unwrapped cursorResponse data (cursor string + epoch + flag).
+    public func getCursor(auth: PiAuth, source: String) async throws -> MessagesCursorState {
+        let request = try builder.getCursor(auth: auth, source: source)
+        let (data, http) = try await transport.send(request)
+        return try decodeGetCursor(data: data, http: http)
+    }
+
+    /// POST /api/v1/host/:id/sync/:source/cursor.  Success returns void
+    /// (the Pi's `data` is `{"ok": true}`).  On 409: throws
+    /// PiClientError.cursorConflict(code:, current:).
+    public func commitCursor(
+        auth: PiAuth,
+        source: String,
+        cursor: String,
+        baseCursor: String,
+        cursorEpoch: Int64,
+        backfillComplete: Bool
+    ) async throws {
+        let request = try builder.commitCursor(
+            auth: auth,
+            source: source,
+            cursor: cursor,
+            baseCursor: baseCursor,
+            cursorEpoch: cursorEpoch,
+            backfillComplete: backfillComplete)
+        let (data, http) = try await transport.send(request)
+        try decodeCommitCursor(data: data, http: http)
+    }
+
+    /// POST /api/v1/ingest/events.  The Pi's response is deliberately
+    /// NOT enveloped — we decode the raw top-level shape.
+    public func ingestEvents(
+        auth: PiAuth,
+        body: IngestEventsBody
+    ) async throws -> IngestEventsData {
+        let request = try builder.ingestEvents(auth: auth, body: body)
+        let (data, http) = try await transport.send(request)
+        return try decodeIngestEvents(data: data, http: http)
+    }
+
     // MARK: - decoding helpers
 
     private func decodePair(data: Data, http: HTTPURLResponse) throws -> PairData {
@@ -132,6 +181,98 @@ public final class PiClient {
                 message: errorMessage(data) ?? "authentication revoked")
         case 400...499:
             throw mapClient4xx(status: http.statusCode, data: data)
+        default:
+            throw PiClientError.transport(
+                underlying: "unexpected status \(http.statusCode)")
+        }
+    }
+
+    private func decodeGetCursor(data: Data, http: HTTPURLResponse) throws -> MessagesCursorState {
+        switch http.statusCode {
+        case 200:
+            return try decodeSuccess(data: data, type: MessagesCursorState.self)
+        case 401:
+            throw PiClientError.authenticationRevoked(
+                message: errorMessage(data) ?? "authentication revoked")
+        case 400...499:
+            throw mapClient4xx(status: http.statusCode, data: data)
+        default:
+            throw PiClientError.transport(
+                underlying: "unexpected status \(http.statusCode)")
+        }
+    }
+
+    private func decodeCommitCursor(data: Data, http: HTTPURLResponse) throws {
+        switch http.statusCode {
+        case 200:
+            // Success — body is `{"ok": true}`.  We do not need to read
+            // it; the status code is the discriminator.
+            return
+        case 401:
+            throw PiClientError.authenticationRevoked(
+                message: errorMessage(data) ?? "authentication revoked")
+        case 409:
+            throw try decodeCursorConflict(data: data)
+        case 400...499:
+            throw mapClient4xx(status: http.statusCode, data: data)
+        default:
+            throw PiClientError.transport(
+                underlying: "unexpected status \(http.statusCode)")
+        }
+    }
+
+    /// 409 conflict body shape is
+    ///   {success:false,
+    ///    error:{code,message},
+    ///    data:{current_cursor?, current_epoch?}}
+    /// We decode error.code -> ConflictCode and data -> CursorConflict.
+    private func decodeCursorConflict(data: Data) throws -> PiClientError {
+        struct Envelope: Decodable {
+            let error: APIError?
+            let data: CursorConflict?
+        }
+        let env: Envelope
+        do {
+            env = try decoder.decode(Envelope.self, from: data)
+        } catch {
+            return PiClientError.decode(reason: "decode cursor conflict body: \(error)")
+        }
+        guard let err = env.error,
+              let code = ConflictCode(rawValue: err.code) else {
+            // Recognized 409 status but body is unexpected — surface
+            // as a generic 4xx for visibility.
+            return PiClientError.clientError(
+                status: 409,
+                code: env.error?.code ?? "UNKNOWN_CONFLICT",
+                message: env.error?.message ?? "unknown cursor conflict shape")
+        }
+        let conflict = env.data ?? CursorConflict(currentCursor: nil, currentEpoch: nil)
+        return PiClientError.cursorConflict(code: code, current: conflict)
+    }
+
+    /// IngestResponse is NOT enveloped — decode the raw top-level shape.
+    private func decodeIngestEvents(data: Data, http: HTTPURLResponse) throws -> IngestEventsData {
+        switch http.statusCode {
+        case 200:
+            do {
+                return try decoder.decode(IngestEventsData.self, from: data)
+            } catch {
+                throw PiClientError.decode(reason: String(describing: error))
+            }
+        case 401:
+            throw PiClientError.authenticationRevoked(
+                message: errorMessage(data) ?? "authentication revoked")
+        case 412:
+            let minVersion = try? extractMinVersion(data: data)
+            throw PiClientError.upgradeRequired(
+                minVersion: minVersion,
+                message: errorMessage(data) ?? "upgrade required")
+        case 400...499:
+            throw mapClient4xx(status: http.statusCode, data: data)
+        case 500...599:
+            throw PiClientError.serverError(
+                status: http.statusCode,
+                message: errorMessage(data) ?? "server error \(http.statusCode)")
         default:
             throw PiClientError.transport(
                 underlying: "unexpected status \(http.statusCode)")

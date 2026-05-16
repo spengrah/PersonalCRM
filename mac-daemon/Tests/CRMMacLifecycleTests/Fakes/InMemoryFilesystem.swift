@@ -3,7 +3,7 @@ import Foundation
 
 /// String-keyed in-memory filesystem. Models directories as paths
 /// ending with a "/" sentinel suffix; files as path -> Data entries.
-public final class InMemoryFilesystem: FilesystemAdapter {
+public final class InMemoryFilesystem: FilesystemAdapter, @unchecked Sendable {
     private var entries: [String: Data] = [:]
     private var dirs: Set<String> = []
     public private(set) var madeExecutable: Set<String> = []

@@ -6,17 +6,24 @@ import XCTest
 /// each invocation, or throws to simulate a transport failure. Tests
 /// pre-seed the script and consume in order; if the script runs out
 /// we fail loudly.
-final class MockTransportScript {
-    enum Step {
+///
+/// `@unchecked Sendable` because the class stores mutable arrays that
+/// the production-side `TransportFunc` closure expects to be safe to
+/// invoke from any actor context.  Within tests we drive it serially
+/// (no concurrent dispatch to the transport), so the lack of locking
+/// is intentional. Swift 6 strict-concurrency forces the annotation.
+final class MockTransportScript: @unchecked Sendable {
+    enum Step: Sendable {
         case respond(status: Int, data: Data)
         case fail(URLError)
     }
 
     private var steps: [Step]
     private(set) var invocations: [URLRequest] = []
-    private let onMissingScript: (URLRequest) -> Void
+    private let onMissingScript: @Sendable (URLRequest) -> Void
 
-    init(_ steps: [Step], onMissingScript: @escaping (URLRequest) -> Void = { _ in
+    init(_ steps: [Step],
+         onMissingScript: @escaping @Sendable (URLRequest) -> Void = { _ in
         XCTFail("MockTransportScript ran out of scripted steps")
     }) {
         self.steps = steps
@@ -51,7 +58,7 @@ final class MockTransportScript {
 }
 
 /// No-op sleep — keeps RetryingTransport tests fast.
-func noopSleep(_ delay: TimeInterval) async throws {}
+@Sendable func noopSleep(_ delay: TimeInterval) async throws {}
 
 /// Loads a JSON fixture from this test target's bundle resources.
 func loadFixture(_ name: String, file: StaticString = #file, line: UInt = #line) throws -> Data {

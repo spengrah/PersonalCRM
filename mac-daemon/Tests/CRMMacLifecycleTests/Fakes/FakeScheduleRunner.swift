@@ -4,7 +4,7 @@ import CRMMacCore
 
 /// Records registered plugins; tests call `fire(id:)` to invoke one
 /// tick of a single plugin synchronously.
-public final class FakeScheduleRunner: ScheduleRunner {
+public final class FakeScheduleRunner: ScheduleRunner, @unchecked Sendable {
     public final class Registration: Cancellable {
         public let plugin: SourcePlugin
         public private(set) var cancelled = false

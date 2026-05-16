@@ -63,8 +63,9 @@ func (r *PerSourceChatListerRegistry) ListUnprocessedChats(ctx context.Context, 
 // MessagingAggregateForContactWorker drives the chat-aware aggregation
 // engine over all unprocessed chats for a (contactID, source) pair.
 // Enqueued by the ingest service after a batch of raw_message.* events
-// lands; UniqueOpts{ByArgs: true} dedups concurrent enqueues for the
-// same pair into one in-flight job.
+// lands; MessagingAggregateUniqueOpts dedups concurrent enqueues for
+// the same pair into one in-flight job while allowing a later fresh job
+// after prior work completes.
 //
 // The chat-aware path is what preserves the engine's extend/bridge/
 // coalesce contract (spec §3 "Stage 2 — Aggregator"). The create-only

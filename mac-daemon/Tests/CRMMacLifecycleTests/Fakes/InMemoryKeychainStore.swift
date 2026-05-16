@@ -4,7 +4,7 @@ import Foundation
 /// Capture-only keychain. Models the production semantics exactly:
 /// missing entry throws .notFound; writeAPIKey is idempotent;
 /// deleteAPIKey is idempotent.
-public final class InMemoryKeychainStore: KeychainStore {
+public final class InMemoryKeychainStore: KeychainStore, @unchecked Sendable {
     private var stored: String?
 
     public init(initial: String? = nil) {

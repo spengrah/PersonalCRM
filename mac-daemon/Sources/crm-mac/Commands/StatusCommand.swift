@@ -6,7 +6,7 @@ import ArgumentParser
 import CRMMacLifecycle
 
 struct StatusCommand: ParsableCommand {
-    static var configuration = CommandConfiguration(
+    static let configuration = CommandConfiguration(
         commandName: "status",
         abstract: "Print the daemon's installation + heartbeat status.")
 
@@ -32,6 +32,28 @@ struct StatusCommand: ParsableCommand {
             print("last_heartbeat_at=\(formatter.string(from: last))")
         } else {
             print("last_heartbeat_at=never")
+        }
+
+        // Sources block — the messages source surfaces messages cursor watermarks.
+        print("")
+        print("Sources:")
+        if let messages = report.messages {
+            print("  messages:")
+            print("    live_cursor:        \(messages.liveCursor.map(String.init) ?? "nil")")
+            print("    backfill_cursor:    \(messages.backfillCursor.map(String.init) ?? "nil")")
+            print("    install_max_rowid:  \(messages.installMaxRowID.map(String.init) ?? "nil")")
+            print("    backfill_complete:  \(messages.backfillComplete)")
+            print("    pending_scans:      \(messages.pendingScansCount)")
+            if let installMax = messages.installMaxRowID, installMax > 0 {
+                // Backfill descends from installMaxRowID toward 0;
+                // progress = (start - current) / start, clamped to [0, 1].
+                let cursor = messages.backfillCursor ?? installMax
+                let raw = Double(installMax - cursor) / Double(installMax)
+                let pct = Int(min(1.0, max(0.0, raw)) * 100)
+                print("    backfill_progress:  ~\(pct)%")
+            }
+        } else {
+            print("  messages: (no cursor committed yet)")
         }
     }
 }

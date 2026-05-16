@@ -4,7 +4,7 @@
 import ArgumentParser
 
 struct ConfigureCommand: ParsableCommand {
-    static var configuration = CommandConfiguration(
+    static let configuration = CommandConfiguration(
         commandName: "configure",
         abstract: "Interactive configuration (not implemented in this version).")
 

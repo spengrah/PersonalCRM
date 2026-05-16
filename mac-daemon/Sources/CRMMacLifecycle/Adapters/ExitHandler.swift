@@ -10,14 +10,14 @@
 // code.
 import Foundation
 
-public struct ExitRequested: Error, Equatable {
+public struct ExitRequested: Error, Equatable, Sendable {
     public let code: Int32
     public init(code: Int32) {
         self.code = code
     }
 }
 
-public protocol ExitHandler {
+public protocol ExitHandler: Sendable {
     /// Terminate the process with the given exit code. The production
     /// impl never returns; the capture-only test impl throws
     /// `ExitRequested(code:)` so callers unwind without doing more

@@ -1,0 +1,597 @@
+// MessagesSourcePlugin — actor that orchestrates one messages tick.
+//
+// Per-tick flow:
+//   1. Check schema health: if drifted, set source_health unhealthy
+//      -> return.
+//   2. Open chat.db DatabasePool (cached on first successful open).
+//   3. If no cached cursor: piClient.getMessagesCursor(...) -> decode
+//      into MessagesCursor; cache locally via StateMutator.
+//   4. If installMaxRowID == nil: capture MAX(ROWID) into the in-memory
+//      MessagesCursor (uncommitted; committed in step 8).
+//   5. Drain pendingScans (from cursor JSON): for each, run targeted
+//      30-day scan -> publish via MessagesPublisher.
+//   6. If backfillComplete == false: run a backfill batch (budget-
+//      bound) -> publish -> advance backfillCursor downward.
+//   7. Run live batch (remaining budget): read message.ROWID > liveCursor
+//      -> publish -> advance liveCursor upward.
+//   8. If the in-memory cursor changed AND every batch had
+//      rejected == 0: commitMessagesCursor; on success write through
+//      to local state.json via StateMutator. On 409: refresh + abort.
+//      On transport error: log + leave local cache untouched -> return.
+//   9. Update source_health snapshot via the shared registry.
+//
+// The plugin is the single owner of the GRDB DatabasePool, the
+// KnownIdentifiersCache, and the messages source's slot in
+// SourceState. All writes to state.json funnel through StateMutator.
+import Foundation
+import GRDB
+import CRMMacCore
+import CRMMacPiClient
+
+/// Inputs the plugin needs from the daemon's composition root.
+public struct MessagesSourceConfig: Sendable {
+    /// Path to chat.db. Production: ~/Library/Messages/chat.db.
+    public let chatDBPath: URL
+    /// Backfill floor — events with sentAt before this date are not emitted.
+    public let backfillFloor: Date
+    /// Max rows per tick (default 500).
+    public let maxRowsPerTick: Int
+    /// Max wall-clock seconds per tick (default 5.0).
+    public let maxDurationPerTick: TimeInterval
+
+    public init(
+        chatDBPath: URL,
+        backfillFloor: Date,
+        maxRowsPerTick: Int = 500,
+        maxDurationPerTick: TimeInterval = 5.0
+    ) {
+        self.chatDBPath = chatDBPath
+        self.backfillFloor = backfillFloor
+        self.maxRowsPerTick = maxRowsPerTick
+        self.maxDurationPerTick = maxDurationPerTick
+    }
+}
+
+public actor MessagesSourcePlugin: SourcePlugin {
+    public nonisolated let id: SourceID = .messages
+    public nonisolated let tickInterval: TimeInterval
+
+    private let config: MessagesSourceConfig
+    private let piClient: PiClient
+    private let auth: PiAuth
+    private let mutator: StateMutator
+    private let publisher: MessagesPublisher
+    private let cache: KnownIdentifiersCache
+    private let logger: LoggerProtocol
+    private let clock: @Sendable () -> Date
+    private let healthRegistry: SourceHealthRegistry
+
+    /// Cached pool, opened lazily on first successful tick.
+    private var pool: DatabasePool?
+    /// Cached schema health. Validated on first open.
+    private var schemaHealth: SchemaHealth?
+    /// Cached cursor + epoch loaded from local state.json or fetched
+    /// from the Pi on first tick.
+    private var cachedCursor: MessagesCursor?
+    private var cachedEpoch: Int64 = 0
+    /// Last serialized cursor JSON committed to the Pi.  Used as
+    /// base_cursor on the next commit.
+    private var lastCommittedCursorJSON: String = ""
+
+    public init(
+        tickInterval: TimeInterval,
+        config: MessagesSourceConfig,
+        piClient: PiClient,
+        auth: PiAuth,
+        mutator: StateMutator,
+        publisher: MessagesPublisher,
+        cache: KnownIdentifiersCache,
+        healthRegistry: SourceHealthRegistry,
+        logger: LoggerProtocol,
+        clock: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        self.tickInterval = tickInterval
+        self.config = config
+        self.piClient = piClient
+        self.auth = auth
+        self.mutator = mutator
+        self.publisher = publisher
+        self.cache = cache
+        self.healthRegistry = healthRegistry
+        self.logger = logger
+        self.clock = clock
+    }
+
+    public func tick() async throws {
+        let tickStart = clock()
+        await healthRegistry.update(id, await currentHealthSnapshot(
+            enabled: true, lastScheduled: tickStart))
+
+        // Open pool + validate schema (cached on success).
+        let pool: DatabasePool
+        do {
+            pool = try await openOrCached()
+        } catch let SchemaDriftError.drift(table, missing) {
+            await markUnhealthy(reason: "schema_drift:\(table).\(missing.sorted().first ?? "?")")
+            return
+        } catch is FDAError {
+            await markUnhealthy(reason: "fda_required")
+            return
+        } catch {
+            await markUnhealthy(reason: "open_failed: \(String(describing: error))")
+            return
+        }
+
+        // Load cursor (from local cache or Pi).
+        let cursor: MessagesCursor
+        do {
+            cursor = try await loadOrFetchCursor()
+        } catch {
+            logger.warning("messages tick: cursor fetch failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+            await markUnhealthy(reason: "cursor_fetch_failed")
+            return
+        }
+
+        // Sender filter ready?  If the known-identifiers cache hasn't
+        // been populated yet, skip the tick (heartbeat will fill it).
+        let populated = await cache.isPopulated
+        if !populated {
+            logger.debug("messages tick: known-identifiers cache empty; skipping", metadata: [:])
+            return
+        }
+
+        // Capture install-time MAX(ROWID) if needed.
+        var working = cursor
+        if working.installMaxRowID == nil {
+            do {
+                let maxROWID = try await pool.read { try ChatDBReader.maxROWID(db: $0) } ?? 0
+                working.installMaxRowID = maxROWID
+                working.liveCursor = maxROWID
+                logger.info("messages tick: captured install-time MAX(ROWID)", metadata: [
+                    "max_rowid": .public(String(maxROWID)),
+                ])
+            } catch {
+                await markUnhealthy(reason: "max_rowid_failed")
+                return
+            }
+        }
+
+        var budget = BackfillBudget(
+            maxRows: config.maxRowsPerTick,
+            maxDuration: config.maxDurationPerTick,
+            now: tickStart)
+        var hadRejection = false
+        var hadUnconfirmed = false
+
+        // Pending-scan + newly-known handling.
+        //
+        // V1 simplification: chat.db doesn't support an efficient
+        // identifier-scoped query, so the daemon doesn't execute
+        // identifier-scoped backwards scans. Both the operator-queued
+        // pendingScans (in the cursor JSON) and the in-memory
+        // newly-added queue are surfaced via logs + status output
+        // but NOT consumed here.
+        //
+        // The natural backfill descent already walks every message
+        // back to backfillFloorSentAt and the sender filter
+        // (KnownIdentifiersCache.contains) makes sure new contacts'
+        // messages emit as soon as backfill reaches them. The
+        // pendingScans queue is therefore kept (not cleared) so the
+        // operator can see queued items via `crm-mac status` until
+        // a future PR ships true identifier-scoped scans. README
+        // documents this v1 behavior; tests cover the persistence
+        // semantics.
+        let newlyAdded = await cache.drainNewlyAdded()
+        if !newlyAdded.isEmpty {
+            logger.info("messages tick: newly-known contacts detected", metadata: [
+                "count": .public(String(newlyAdded.count)),
+            ])
+        }
+        if !working.pendingScans.isEmpty {
+            logger.info("messages tick: pending scans observed (not executed in v1)", metadata: [
+                "count": .public(String(working.pendingScans.count)),
+            ])
+        }
+
+        // Backfill batch (descending).
+        if !working.backfillComplete, budget.rowsRemaining > 0 {
+            let outcome = await runBackfillBatch(
+                pool: pool,
+                cursor: &working,
+                budget: &budget)
+            if !outcome.rejected.isEmpty { hadRejection = true }
+            if outcome.hadUnconfirmedItems { hadUnconfirmed = true }
+        }
+
+        // Live batch (ascending).
+        if !budget.exhausted(now: clock()) {
+            let outcome = await runLiveBatch(
+                pool: pool,
+                cursor: &working,
+                budget: &budget)
+            if !outcome.rejected.isEmpty { hadRejection = true }
+            if outcome.hadUnconfirmedItems { hadUnconfirmed = true }
+        }
+
+        // Commit cursor only if changed, no rejections, AND every
+        // item we tried to publish was confirmed. A transport
+        // failure mid-tick must NOT commit a cursor that skips the
+        // failed rows.
+        let cursorChanged = working != cursor
+        if cursorChanged && !hadRejection && !hadUnconfirmed {
+            do {
+                let newJSON = try MessagesCursorCodec.encode(working)
+                try await piClient.commitCursor(
+                    auth: auth,
+                    source: "messages",
+                    cursor: newJSON,
+                    baseCursor: lastCommittedCursorJSON,
+                    cursorEpoch: cachedEpoch,
+                    backfillComplete: working.backfillComplete)
+                // Cache locally via StateMutator (write-through).
+                try await writeThroughCursor(
+                    newJSON,
+                    epoch: cachedEpoch,
+                    backfillComplete: working.backfillComplete,
+                    lastPushedAt: clock())
+                cachedCursor = working
+                lastCommittedCursorJSON = newJSON
+                logger.debug("messages tick: cursor committed", metadata: [
+                    "live_cursor": .public(String(working.liveCursor ?? 0)),
+                    "backfill_cursor": .public(working.backfillCursor.map(String.init) ?? "nil"),
+                    "backfill_complete": .public(String(working.backfillComplete)),
+                ])
+            } catch let PiClientError.cursorConflict(_, current) {
+                logger.info("messages tick: cursor conflict, refreshing", metadata: [
+                    "current_epoch": .public(current.currentEpoch.map(String.init) ?? "nil"),
+                ])
+                // Best-effort refresh; abort the tick.
+                _ = try? await loadOrFetchCursor(forceRefresh: true)
+                return
+            } catch {
+                logger.warning("messages tick: cursor commit failed", metadata: [
+                    "error": .private(String(describing: error)),
+                ])
+                return
+            }
+        } else if hadRejection {
+            logger.warning("messages tick: per-event rejections; holding cursor", metadata: [:])
+        } else if hadUnconfirmed {
+            logger.warning("messages tick: publish unconfirmed; holding cursor", metadata: [:])
+        }
+
+        // Refresh health snapshot.
+        await healthRegistry.update(id, await currentHealthSnapshot(
+            enabled: true,
+            lastScheduled: tickStart,
+            lastPushed: cursorChanged ? clock() : nil,
+            observed: working.liveCursor,
+            pushed: working.liveCursor,
+            backfillComplete: working.backfillComplete))
+    }
+
+    // MARK: - per-tick batch runners
+
+    private struct BatchSummary {
+        let accepted: Int
+        let duplicate: Int
+        let rejected: [PerEventRejection]
+        /// True if there were publish items in the batch but the
+        /// publish call did NOT confirm them (transport failure or
+        /// per-event rejections). The caller must NOT advance any
+        /// derived state (e.g. backfillComplete flag) when this is
+        /// true.
+        let hadUnconfirmedItems: Bool
+    }
+
+    /// Backfill: walk message.ROWID downward from
+    /// (backfillCursor ?? installMaxRowID) toward backfillFloor's
+    /// associated ROWID. Stops when budget exhausted or no more rows.
+    ///
+    /// Cursor advance is conditional: only advance backfillCursor past
+    /// publishable rows when the publish batch came back with
+    /// `rejected.isEmpty` AND advanceTo != nil. For pages where every
+    /// row got filtered out (empty handle, corrupt date), we still
+    /// advance past the scanned bounds — otherwise we'd loop forever
+    /// re-reading the same page.
+    private func runBackfillBatch(
+        pool: DatabasePool,
+        cursor: inout MessagesCursor,
+        budget: inout BackfillBudget
+    ) async -> BatchSummary {
+        let upperBoundExclusive = cursor.backfillCursor ?? (cursor.installMaxRowID ?? 0)
+        if upperBoundExclusive <= 0 {
+            cursor.backfillComplete = true
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
+        }
+
+        let limit = min(budget.rowsRemaining, MessagesPublisher.maxEventsPerBatch)
+        if limit <= 0 {
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
+        }
+
+        let page: ChatDBReadPage
+        do {
+            page = try await pool.read { db in
+                try ChatDBReader.fetchPage(
+                    db: db,
+                    direction: .backwardFromExclusive(upperBoundExclusive),
+                    limit: limit)
+            }
+        } catch let dbError as DatabaseError where isFDAError(dbError) {
+            await markUnhealthy(reason: "fda_required")
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
+        } catch {
+            logger.warning("messages tick: backfill read failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
+        }
+
+        // No SQL rows at all -> we've walked the whole iterator.
+        if page.scannedROWIDBounds == nil {
+            cursor.backfillComplete = true
+            cursor.backfillCursor = 0
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
+        }
+
+        // Floor check: drop rows whose sentAt is below backfillFloor.
+        let inRangeRows = page.rows.filter { $0.sentAt >= config.backfillFloor }
+        let belowFloor = page.rows.count - inRangeRows.count
+        let publishItems = await filterAndShape(rows: inRangeRows, isBackfill: true)
+        let outcome = await publisher.publish(items: publishItems)
+
+        budget.consume(rows: page.rows.count)
+
+        // Cursor advance rules:
+        //   - publishItems empty (everything filtered out): advance
+        //     past scanned MIN so the iterator doesn't stall.
+        //   - publishItems non-empty + clean batch: advance past the
+        //     scanned MIN. (Descending walk; MIN is the new exclusive
+        //     upper bound.)
+        //   - publishItems non-empty + ANY transport / per-event
+        //     failure: do NOT advance, AND do NOT flip
+        //     backfillComplete — those rows must be retried.
+        let confirmedAllItems: Bool
+        if publishItems.isEmpty {
+            confirmedAllItems = true
+        } else {
+            confirmedAllItems = outcome.advanceTo != nil
+                && outcome.rejected.isEmpty
+                && outcome.unconfirmed == 0
+        }
+        if let bounds = page.scannedROWIDBounds, confirmedAllItems {
+            cursor.backfillCursor = bounds.min
+        }
+        if confirmedAllItems && (belowFloor > 0 || page.exhausted) {
+            // We either crossed the floor or scanned every remaining
+            // row AND every item we tried to publish was confirmed.
+            cursor.backfillComplete = true
+        }
+
+        return BatchSummary(
+            accepted: outcome.accepted,
+            duplicate: outcome.duplicate,
+            rejected: outcome.rejected,
+            hadUnconfirmedItems: !confirmedAllItems)
+    }
+
+    /// Live: walk message.ROWID upward from liveCursor.  Stops when
+    /// budget exhausted or no more rows.
+    ///
+    /// Cursor advance is conditional: only advance liveCursor past
+    /// publishable rows when the publish batch came back with
+    /// `rejected.isEmpty` AND advanceTo != nil. Pages of all-skipped
+    /// rows still advance to the scanned MAX so the iterator doesn't
+    /// stall.
+    private func runLiveBatch(
+        pool: DatabasePool,
+        cursor: inout MessagesCursor,
+        budget: inout BackfillBudget
+    ) async -> BatchSummary {
+        let lower = cursor.liveCursor ?? (cursor.installMaxRowID ?? 0)
+        let limit = min(budget.rowsRemaining, MessagesPublisher.maxEventsPerBatch)
+        if limit <= 0 {
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
+        }
+
+        let page: ChatDBReadPage
+        do {
+            page = try await pool.read { db in
+                try ChatDBReader.fetchPage(
+                    db: db,
+                    direction: .forwardFromExclusive(lower),
+                    limit: limit)
+            }
+        } catch let dbError as DatabaseError where isFDAError(dbError) {
+            await markUnhealthy(reason: "fda_required")
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
+        } catch {
+            logger.warning("messages tick: live read failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
+        }
+
+        if page.scannedROWIDBounds == nil {
+            // No new rows since liveCursor.
+            return BatchSummary(accepted: 0, duplicate: 0,
+                                  rejected: [], hadUnconfirmedItems: false)
+        }
+
+        let publishItems = await filterAndShape(rows: page.rows, isBackfill: false)
+        let outcome = await publisher.publish(items: publishItems)
+
+        budget.consume(rows: page.rows.count)
+
+        let confirmedAllItems: Bool
+        if publishItems.isEmpty {
+            confirmedAllItems = true
+        } else {
+            confirmedAllItems = outcome.advanceTo != nil
+                && outcome.rejected.isEmpty
+                && outcome.unconfirmed == 0
+        }
+        if let bounds = page.scannedROWIDBounds, confirmedAllItems {
+            cursor.liveCursor = bounds.max
+        }
+
+        return BatchSummary(
+            accepted: outcome.accepted,
+            duplicate: outcome.duplicate,
+            rejected: outcome.rejected,
+            hadUnconfirmedItems: !confirmedAllItems)
+    }
+
+    /// Apply sender filter + shape to publishable form.
+    /// Outbound rows have NULL handle_id in chat.db (reader skips them
+    /// during fetch); for cursor advancement we DO advance past them,
+    /// but the publisher only sees emitted rows. Outbound peer
+    /// resolution would happen here via outboundGroupPeer, but
+    /// fetch() already excludes outbound rows; v1 ships inbound-only
+    /// emission until the outbound branch is wired through the reader.
+    private func filterAndShape(rows: [ChatDBMessage], isBackfill: Bool) async -> [PublishItem] {
+        var out: [PublishItem] = []
+        out.reserveCapacity(rows.count)
+        for row in rows {
+            let canonical = HandleNormalization.canonicalize(row.peerHandleRaw)
+            if canonical.isEmpty { continue }
+            let inSet = await cache.contains(canonical)
+            if !inSet { continue }
+            let (kind, payload) = PayloadShaping.shape(
+                row: row,
+                peerHandle: row.peerHandleRaw,
+                hostID: auth.hostID)
+            out.append(PublishItem(rowID: row.rowID, direction: kind, payload: payload))
+            _ = isBackfill // unused in v1; reserved for backfill-specific telemetry
+        }
+        return out
+    }
+
+    // MARK: - schema + pool
+
+    private enum SchemaDriftError: Error {
+        case drift(table: String, missing: Set<String>)
+    }
+
+    private func openOrCached() async throws -> DatabasePool {
+        if let cached = pool, schemaHealth == .ok {
+            return cached
+        }
+        var config = Configuration()
+        config.readonly = true
+        // Don't add ?immutable=1 — Messages.app is actively writing.
+        let pool: DatabasePool
+        do {
+            pool = try DatabasePool(path: self.config.chatDBPath.path, configuration: config)
+        } catch let dbError as DatabaseError {
+            // FDA / sandbox denial: SQLITE_AUTH (23), SQLITE_PERM (3),
+            // or SQLITE_CANTOPEN (14). Distinguish from a transient
+            // SQLITE_BUSY so the operator gets actionable feedback.
+            if isFDAError(dbError) {
+                throw FDAError()
+            }
+            throw dbError
+        }
+        let health = try await pool.read { try ChatDBSchemaValidator.validate(db: $0) }
+        schemaHealth = health
+        switch health {
+        case .ok:
+            self.pool = pool
+            return pool
+        case .drift(let table, let missing):
+            throw SchemaDriftError.drift(table: table, missing: missing)
+        }
+    }
+
+    private func isFDAError(_ err: DatabaseError) -> Bool {
+        // GRDB's DatabaseError wraps SQLite result codes; FDA denial
+        // surfaces as SQLITE_AUTH (23), SQLITE_PERM (3), or
+        // SQLITE_CANTOPEN (14).
+        let code = err.resultCode.rawValue
+        return code == 3 || code == 14 || code == 23
+    }
+
+    private struct FDAError: Error {}
+
+    // MARK: - cursor load + commit
+
+    /// Load the messages cursor from the local state.json cache; if
+    /// no cached value, fetch from the Pi via GET.
+    @discardableResult
+    private func loadOrFetchCursor(forceRefresh: Bool = false) async throws -> MessagesCursor {
+        if !forceRefresh, let cached = cachedCursor {
+            return cached
+        }
+        // GET cursor from Pi.
+        let state = try await piClient.getCursor(auth: auth, source: "messages")
+        cachedEpoch = state.cursorEpoch
+        lastCommittedCursorJSON = state.cursor
+        let decoded = try MessagesCursorCodec.decode(state.cursor)
+        let fresh = decoded ?? MessagesCursor(backfillFloorSentAt: config.backfillFloor)
+        cachedCursor = fresh
+        return fresh
+    }
+
+    private func writeThroughCursor(
+        _ json: String,
+        epoch: Int64,
+        backfillComplete: Bool,
+        lastPushedAt: Date
+    ) async throws {
+        try await mutator.mutate { state in
+            var src = state.sources["messages"] ?? SourceState(cursor: "")
+            src.cursor = json
+            src.cursorEpoch = epoch
+            src.backfillComplete = backfillComplete
+            src.lastPushedAt = lastPushedAt
+            state.sources["messages"] = src
+        }
+    }
+
+    // MARK: - health surface
+
+    private func currentHealthSnapshot(
+        enabled: Bool,
+        lastScheduled: Date,
+        lastPushed: Date? = nil,
+        observed: Int64? = nil,
+        pushed: Int64? = nil,
+        backfillComplete: Bool? = nil
+    ) async -> SourceHealthSnapshot {
+        SourceHealthSnapshot(
+            enabled: enabled,
+            lastScheduledAt: lastScheduled,
+            lastPushedAt: lastPushed,
+            observedCursor: observed,
+            pushedCursor: pushed,
+            schemaVersion: schemaHealth?.label,
+            backfillComplete: backfillComplete,
+            lastError: nil,
+            lastErrorAt: nil)
+    }
+
+    private func markUnhealthy(reason: String) async {
+        let snap = SourceHealthSnapshot(
+            enabled: false,
+            lastScheduledAt: clock(),
+            schemaVersion: schemaHealth?.label,
+            lastError: reason,
+            lastErrorAt: clock())
+        await healthRegistry.update(id, snap)
+        logger.error("messages tick: marked unhealthy", metadata: [
+            "reason": .public(reason),
+        ])
+    }
+}
+

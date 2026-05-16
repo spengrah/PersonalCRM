@@ -9,7 +9,7 @@ import Foundation
 
 /// Stable identifier for a source. Persisted in `state.json` under
 /// `sources[<id>]` and used in heartbeat `source_health` payloads.
-public struct SourceID: RawRepresentable, Hashable, Codable, ExpressibleByStringLiteral {
+public struct SourceID: RawRepresentable, Hashable, Codable, ExpressibleByStringLiteral, Sendable {
     public let rawValue: String
 
     public init(rawValue: String) {
@@ -26,7 +26,16 @@ public struct SourceID: RawRepresentable, Hashable, Codable, ExpressibleByString
 
 /// A poller of one external source. The stub implementations log a
 /// no-op tick; real readers replace them.
-public protocol SourcePlugin: AnyObject {
+///
+/// `Sendable` constraint: `PluginRegistry` reads `id`/`tickInterval` from
+/// arbitrary contexts and the scheduler runners spawn a `Task` to invoke
+/// `tick()`. Existing class-based conformers (`HeartbeatLoop`,
+/// `StubICloudContactsPlugin`) must be safe to share across actor boundaries
+/// — they are: stored state is either `let` plus injected protocol-typed
+/// collaborators (themselves `Sendable`) or guarded via the `StateMutator`
+/// actor introduced when source plugins began writing state. New conformers like `MessagesSourcePlugin` are
+/// actors, which are automatically `Sendable`.
+public protocol SourcePlugin: AnyObject, Sendable {
     /// Stable source identifier; used as the state-file key and
     /// heartbeat-payload key.
     var id: SourceID { get }
@@ -44,7 +53,7 @@ public protocol SourcePlugin: AnyObject {
 /// Wrapper holding the dependencies a plugin needs. Currently a tiny
 /// surface (just a logger); source-specific dependencies (PiClient,
 /// StateStore, contact-store accessors) land with each real reader.
-public struct SourceContext {
+public struct SourceContext: Sendable {
     public let logger: LoggerProtocol
 
     public init(logger: LoggerProtocol) {

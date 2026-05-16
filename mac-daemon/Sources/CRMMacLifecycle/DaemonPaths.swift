@@ -40,4 +40,10 @@ public struct LifecyclePaths: Equatable {
         self.stdoutLogPath = stdoutLogPath
         self.stderrLogPath = stderrLogPath
     }
+
+    /// Daemon-runtime directory.  The daemon's PidfileLock writes
+    /// `daemon.pid` here so the CLI ops subcommands can detect the
+    /// daemon-running state.  Defaults to the config dir so the same
+    /// folder hosts config / state / pid.
+    public var runtimeDirPath: String { configDirPath }
 }

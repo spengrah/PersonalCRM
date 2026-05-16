@@ -842,7 +842,8 @@ func run() int {
 
 	// Periodic 5-min sweeper — drains never-claimed stranded rows that
 	// the in-line worker re-list loop AND the post-Stage-3 reenqueue
-	// both missed. Last-resort safety net.
+	// both missed. Run once on startup so restart-recovery does not wait
+	// a full interval before the safety net engages.
 	sweeperListers := map[string]scheduler.UnprocessedContactLister{
 		repository.InteractionSourceMessages: messagesMessageRepo,
 	}
@@ -852,7 +853,7 @@ func run() int {
 		func() (river.JobArgs, *river.InsertOpts) {
 			return consumerjobs.MessagingAggregateSweeperArgs{}, nil
 		},
-		&river.PeriodicJobOpts{RunOnStart: false},
+		&river.PeriodicJobOpts{RunOnStart: true},
 	))
 
 	// Initialize handlers

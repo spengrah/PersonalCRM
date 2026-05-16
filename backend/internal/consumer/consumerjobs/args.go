@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // InteractionRecorderJobArgs carries the event id that the
@@ -25,10 +27,10 @@ import (
 // dedupes repeated recovery enqueues against the same event into one
 // in-flight job. The publish-side enqueue (from
 // events.consumerJobsForKind) does NOT pass UniqueOpts, so the tag is
-// a no-op there — only the recovery path consults it. Default ByState
-// (Pending/Scheduled/Available/Running/Retryable) excludes `discarded`,
-// so a permanently-failing consumer's MaxAttempts exhaustion
-// eventually frees a fresh recovery slot.
+// a no-op there — only the recovery path consults it. River's default
+// ByState includes completed work but excludes `discarded`, so a
+// permanently-failing consumer's MaxAttempts exhaustion eventually
+// frees a fresh recovery slot.
 type InteractionRecorderJobArgs struct {
 	EventID uuid.UUID `json:"event_id" river:"unique"`
 }
@@ -103,11 +105,10 @@ func (TodoistFollowUpRefreshJobArgs) Kind() string { return "todoist_followup_re
 // (contactID, source) pair.
 //
 // ContactID + Source carry the `river:"unique"` tag so River's
-// UniqueOpts{ByArgs: true} dedupes concurrent enqueues for the same
-// pair into one in-flight job. Default ByState (Pending/Scheduled/
-// Available/Running/Retryable) is intentional — completed jobs do
-// NOT block re-enqueue, so a subsequent batch arriving after the
-// previous worker finished still triggers a fresh aggregation pass.
+// MessagingAggregateUniqueOpts dedupes concurrent enqueues for the
+// same pair into one in-flight job. The state set is explicit because
+// River's default also includes `completed`, which would strand rows
+// that arrive after an earlier worker finished.
 //
 // JSON tag names ("contact_id" / "source") are load-bearing for
 // River's args-hash uniqueness; do not rename without auditing all
@@ -120,6 +121,23 @@ type MessagingAggregateForContactArgs struct {
 // Kind returns the river job-kind identifier for messaging aggregate
 // jobs.
 func (MessagingAggregateForContactArgs) Kind() string { return "messaging_aggregate_for_contact" }
+
+// MessagingAggregateUniqueOpts dedupes concurrent aggregate jobs for
+// the same (contact_id, source) pair while allowing a fresh job after a
+// prior one completed. River's default ByState includes `completed`, so
+// every enqueue site must use this helper instead of the default.
+func MessagingAggregateUniqueOpts() river.UniqueOpts {
+	return river.UniqueOpts{
+		ByArgs: true,
+		ByState: []rivertype.JobState{
+			rivertype.JobStateAvailable,
+			rivertype.JobStatePending,
+			rivertype.JobStateRetryable,
+			rivertype.JobStateRunning,
+			rivertype.JobStateScheduled,
+		},
+	}
+}
 
 // MessagingAggregateSweeperArgs is the periodic sweep job. The worker
 // lists all contacts with unprocessed messages_message rows and

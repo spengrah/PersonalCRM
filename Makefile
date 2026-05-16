@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build crm-admin mac-daemon test clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher
+.PHONY: help setup dev build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -269,12 +269,19 @@ mac-daemon:
 	@codesign -s - --force mac-daemon/.build/release/crm-mac
 	@echo "✓ crm-mac built at mac-daemon/.build/release/crm-mac"
 
+# Run Mac daemon Swift tests locally. Requires Xcode 16 (Swift 6 toolchain).
+# A CI-skipped chat.db smoke test reads ~/Library/Messages/chat.db; that
+# test only runs without the CI=1 env var (i.e. interactive dev runs).
+test-daemon-local:
+	@echo "Running Mac daemon Swift tests..."
+	@cd mac-daemon && swift test
+
 # Tests
 test: test-unit test-integration test-frontend
 
 test-unit:
 	@echo "Running backend unit tests..."
-	@cd backend && go test ./tests/... -v -short
+	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... -v -short
 
 test-integration-fast:
 	@echo "Running backend integration tests (default set)..."

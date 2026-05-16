@@ -6,7 +6,7 @@
 // a follow-up if needed.
 import Foundation
 
-public struct BackoffPolicy: Equatable {
+public struct BackoffPolicy: Equatable, Sendable {
     /// First sleep delay, in seconds.
     public let initialDelay: TimeInterval
     /// Multiplier per attempt. Default is 2 (exponential).

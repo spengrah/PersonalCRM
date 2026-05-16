@@ -9,7 +9,7 @@ import Foundation
 
 /// Privacy-tagged string value. `.private` redacts on the system log
 /// stream by default; operators can override in Console.app.
-public enum LogValue: Equatable {
+public enum LogValue: Equatable, Sendable {
     case `public`(String)
     case `private`(String)
 
@@ -24,7 +24,7 @@ public enum LogValue: Equatable {
     }
 }
 
-public enum LogLevel {
+public enum LogLevel: Sendable {
     case debug
     case info
     case warning
@@ -34,7 +34,12 @@ public enum LogLevel {
 /// Logger protocol consumed by every CRMMac* target. Defaults below
 /// route to `log(level:_:metadata:)`; production conformers only need
 /// implement that single method.
-public protocol LoggerProtocol: AnyObject {
+///
+/// `Sendable` constraint: loggers are passed to actors and escaping
+/// closures (scheduler runners, source plugins, the heartbeat loop).
+/// Production conformers (`OSLogLogger`, `StdoutLogger`) are stateless
+/// or wrap thread-safe Apple APIs; the no-op conformer is trivially safe.
+public protocol LoggerProtocol: AnyObject, Sendable {
     func log(_ level: LogLevel, _ message: String, metadata: [String: LogValue])
 }
 

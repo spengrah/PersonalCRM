@@ -1,7 +1,7 @@
 import Foundation
 @testable import CRMMacLifecycle
 
-public final class FakeExecutableAdapter: ExecutableAdapter {
+public final class FakeExecutableAdapter: ExecutableAdapter, @unchecked Sendable {
     public private(set) var codesignCalls: [String] = []
     public var pathToReport: String?
     public var failCodesignWith: String?
