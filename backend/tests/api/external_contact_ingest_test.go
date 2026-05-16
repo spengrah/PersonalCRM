@@ -87,6 +87,7 @@ func setupExtContactIngestEnv(t *testing.T) *extContactIngestEnv {
 		nil, // messagesRepo unused on external_contact path
 		nil, // riverClient unused
 		externalRepo,
+		hostRepo, // host-liveness re-check for the FOR UPDATE lock
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
@@ -175,17 +176,23 @@ func setupExtContactIngestEnv(t *testing.T) *extContactIngestEnv {
 	return env
 }
 
-// canonicalUpsertSourceID synthesizes a valid envelope source_id for an
-// upserted event. Hash content is opaque to the Pi; we just need the
-// regex shape to pass.
-func canonicalUpsertSourceID(entityID string) string {
-	return entityID + "@" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-}
-
 // canonicalDeleteSourceID synthesizes a valid envelope source_id for a
-// deleted event.
+// deleted event using the spec's @unknown fallback (line 343). Tests
+// that need to exercise the stored-hash validation construct the
+// suffix explicitly from the seeded row's last_content_hash.
 func canonicalDeleteSourceID(entityID string) string {
 	return entityID + "@deleted@unknown"
+}
+
+// computeUpsertSourceID returns the envelope source_id whose hash
+// suffix matches SHA-256(JCS(payload \ {host_id})) — the contract the
+// ingest layer's verifier enforces. Use this in every test that
+// constructs an upsert envelope so the verifier accepts the event.
+func computeUpsertSourceID(t *testing.T, entityID string, payload []byte) string {
+	t.Helper()
+	hashHex, err := service.ComputeContentHash(payload)
+	require.NoError(t, err)
+	return entityID + "@" + hashHex
 }
 
 func buildExtUpsertEvent(t *testing.T, hostID uuid.UUID, entityID string, mutate func(*events.ExternalContactUpsertedPayload)) map[string]any {
@@ -207,7 +214,7 @@ func buildExtUpsertEvent(t *testing.T, hostID uuid.UUID, entityID string, mutate
 	require.NoError(t, err)
 	return map[string]any{
 		"source":      "icloud_contacts",
-		"source_id":   canonicalUpsertSourceID(entityID),
+		"source_id":   computeUpsertSourceID(t, entityID, pBytes),
 		"kind":        string(events.KindExternalContactUpserted),
 		"payload":     json.RawMessage(pBytes),
 		"observed_at": now,

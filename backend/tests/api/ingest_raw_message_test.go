@@ -120,6 +120,7 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 		messagesRepo,
 		riverClient,
 		nil,
+		hostRepo,
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 

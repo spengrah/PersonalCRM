@@ -222,6 +222,15 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 
 	accepted, duplicate, perEventRejections, err := h.ingestService.IngestBatch(c.Request.Context(), envsToIngest, originalIndices, hostID)
 	if err != nil {
+		// Host revoked between auth-middleware validation and the
+		// batch's tx-internal FOR UPDATE lock — return 401 so the
+		// daemon stops retrying. Matches the cursor-commit precedent
+		// (MacHostHandler.CommitCursor). See plan D-JC11.
+		if errors.Is(err, service.ErrHostRevokedDuringBatch) {
+			api.SendError(c, http.StatusUnauthorized, "UNKNOWN_HOST",
+				"host revoked during ingest batch", "")
+			return
+		}
 		logger.Error().
 			Err(err).
 			Int("batch_size", len(req.Events)).

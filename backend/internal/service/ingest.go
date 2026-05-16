@@ -29,18 +29,28 @@ import (
 // Per-event rejection codes surfaced through perEventRejections so the
 // HTTP handler can translate them into the response's errors[] array.
 const (
-	ingestRejectUnsupportedHostAuthKind          = "UNSUPPORTED_HOST_AUTH_KIND"
-	ingestRejectHostOnlyRequiresHost             = "HOST_ONLY_REQUIRES_HOST_AUTH"
-	ingestRejectPayloadInvariant                 = "PAYLOAD_INVARIANT"
-	ingestRejectPayloadInvalid                   = "PAYLOAD_INVALID"
-	ingestRejectIdentityMatchFailed              = "IDENTITY_MATCH_FAILED"
-	ingestRejectStagingUpsertFailed              = "STAGING_UPSERT_FAILED"
-	ingestRejectExternalContactGetFailed         = "EXTERNAL_CONTACT_GET_FAILED"
-	ingestRejectExternalContactUpsertFailed      = "EXTERNAL_CONTACT_UPSERT_FAILED"
-	ingestRejectExternalContactReviveFailed      = "EXTERNAL_CONTACT_REVIVE_FAILED"
-	ingestRejectExternalContactUpdateMatchFailed = "EXTERNAL_CONTACT_UPDATE_MATCH_FAILED"
-	ingestRejectExternalContactDeleteFailed      = "EXTERNAL_CONTACT_DELETE_FAILED"
+	ingestRejectUnsupportedHostAuthKind           = "UNSUPPORTED_HOST_AUTH_KIND"
+	ingestRejectHostOnlyRequiresHost              = "HOST_ONLY_REQUIRES_HOST_AUTH"
+	ingestRejectPayloadInvariant                  = "PAYLOAD_INVARIANT"
+	ingestRejectPayloadInvalid                    = "PAYLOAD_INVALID"
+	ingestRejectIdentityMatchFailed               = "IDENTITY_MATCH_FAILED"
+	ingestRejectStagingUpsertFailed               = "STAGING_UPSERT_FAILED"
+	ingestRejectExternalContactGetFailed          = "EXTERNAL_CONTACT_GET_FAILED"
+	ingestRejectExternalContactUpsertFailed       = "EXTERNAL_CONTACT_UPSERT_FAILED"
+	ingestRejectExternalContactReviveFailed       = "EXTERNAL_CONTACT_REVIVE_FAILED"
+	ingestRejectExternalContactUpdateMatchFailed  = "EXTERNAL_CONTACT_UPDATE_MATCH_FAILED"
+	ingestRejectExternalContactDeleteFailed       = "EXTERNAL_CONTACT_DELETE_FAILED"
+	ingestRejectExternalContactHashMismatch       = "EXTERNAL_CONTACT_HASH_MISMATCH"
+	ingestRejectExternalContactDeleteHashMismatch = "EXTERNAL_CONTACT_DELETE_HASH_MISMATCH"
 )
+
+// ErrHostRevokedDuringBatch is returned by IngestBatch when the
+// tx-internal host-liveness re-check (SELECT ... FOR UPDATE on
+// mac_host) finds the host revoked between auth-middleware validation
+// and the batch's lock acquire. The handler translates this to
+// 401 UNKNOWN_HOST, matching the cursor-commit precedent in
+// MacHostHandler.CommitCursor. See plan D-JC11.
+var ErrHostRevokedDuringBatch = errors.New("host revoked during ingest batch")
 
 // allowedExternalContactSources is the set of envelope.Source values the
 // external_contact.* inline handler accepts. Mismatches surface as
@@ -103,6 +113,16 @@ type ExternalContactWriter interface {
 	SoftDeleteTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error
 }
 
+// HostLivenessChecker is the narrow surface IngestService needs to
+// acquire the row-level write lock on the authed host's mac_host row
+// inside the batch tx. Concrete is *repository.MacHostRepository. The
+// SELECT ... FOR UPDATE the method runs blocks any concurrent revoke
+// of the same row until the batch tx commits or rolls back. Returns
+// db.ErrNotFound when the host has been revoked. See plan D-JC11.
+type HostLivenessChecker interface {
+	GetActiveHostByIDForUpdateTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.MacHost, error)
+}
+
 // IngestService persists pre-validated event envelopes inside a single
 // transaction. All envelopes in a batch commit together or roll back
 // together — spec §3.5 "all-or-nothing on unexpected errors."
@@ -125,6 +145,7 @@ type IngestService struct {
 	messages         MessagesUpserter
 	riverClient      JobInsertTxer
 	externalContacts ExternalContactWriter
+	hostLiveness     HostLivenessChecker
 }
 
 // NewIngestService builds an IngestService. Per-kind dependencies may
@@ -132,6 +153,12 @@ type IngestService struct {
 // of that kind with PAYLOAD_INVARIANT explaining the missing wiring.
 // Production constructs all dependencies; unit tests can pass nils for
 // the kinds they don't exercise.
+//
+// hostLiveness may be nil for tests that don't exercise the host-auth
+// path. When nil, the per-batch FOR UPDATE re-check is skipped and the
+// batch trusts the auth-middleware's read. Production always wires a
+// concrete repository so the race window between auth and commit is
+// closed (see plan D-JC11).
 func NewIngestService(
 	database *db.Database,
 	bus *events.Bus,
@@ -139,6 +166,7 @@ func NewIngestService(
 	messages MessagesUpserter,
 	riverClient JobInsertTxer,
 	externalContacts ExternalContactWriter,
+	hostLiveness HostLivenessChecker,
 ) *IngestService {
 	return &IngestService{
 		database:         database,
@@ -147,6 +175,7 @@ func NewIngestService(
 		messages:         messages,
 		riverClient:      riverClient,
 		externalContacts: externalContacts,
+		hostLiveness:     hostLiveness,
 	}
 }
 
@@ -265,6 +294,25 @@ func (s *IngestService) IngestBatch(
 			err = fmt.Errorf("rollback: %w", rollbackErr)
 		}
 	}()
+
+	// Tx-internal host-liveness re-check via SELECT ... FOR UPDATE.
+	// Closes the race window between auth-middleware validation and
+	// the batch's commit: a concurrent revoke blocks on the same row
+	// lock until this batch commits or rolls back, then proceeds. If
+	// the host was already revoked when the lock acquired, we abort
+	// the batch (nothing commits) and surface ErrHostRevokedDuringBatch
+	// so the handler can return 401 UNKNOWN_HOST. See plan D-JC11.
+	//
+	// Skipped when hostID is nil (global-API-key path) or hostLiveness
+	// is nil (test wiring). Production always sets both.
+	if hostID != nil && s.hostLiveness != nil {
+		if _, livenessErr := s.hostLiveness.GetActiveHostByIDForUpdateTx(ctx, tx, *hostID); livenessErr != nil {
+			if errors.Is(livenessErr, db.ErrNotFound) {
+				return 0, 0, nil, ErrHostRevokedDuringBatch
+			}
+			return 0, 0, nil, fmt.Errorf("re-validate host liveness: %w", livenessErr)
+		}
+	}
 
 	pendingAggregate := make(map[pendingAggregateKey]struct{})
 
@@ -605,6 +653,26 @@ func verifyExternalContactInvariants(env *events.Envelope, authenticatedHostID u
 				Message: "external_contact.upserted source_id entity prefix does not match payload entity_id",
 			}
 		}
+		// Recompute SHA-256(JCS(payload \ {host_id})) and compare to the
+		// hash suffix in env.SourceID. Closes the daemon-side contract
+		// the spec defines at line 342 — a mismatch signals a stale
+		// daemon cache, a JCS-library bug, or protocol drift, and is
+		// rejected as PAYLOAD_INVARIANT rather than silently stored.
+		// See plan D-JC2.
+		computedHash, hashErr := ComputeContentHash(env.Payload)
+		if hashErr != nil {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectPayloadInvalid,
+				Message: fmt.Sprintf("compute content hash: %s", hashErr.Error()),
+			}
+		}
+		claimedHash := env.SourceID[len(env.SourceID)-64:]
+		if computedHash != claimedHash {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectExternalContactHashMismatch,
+				Message: fmt.Sprintf("source_id hash %s does not match computed JCS hash %s", claimedHash, computedHash),
+			}
+		}
 		return nil
 	case events.KindExternalContactDeleted:
 		var p events.ExternalContactDeletedPayload
@@ -743,25 +811,36 @@ func (s *IngestService) handleExternalContactUpserted(
 	wasTombstoned := !firstInsert && prior != nil && prior.DeletedAt != nil
 
 	// Upsert the row. The underlying query does not touch deleted_at,
-	// crm_contact_id, or match_status on the UPDATE branch.
+	// crm_contact_id, or match_status on the UPDATE branch. host_id is
+	// written on INSERT only — the ORIGINAL paired host's ownership
+	// persists across re-upserts (see plan D-JC1). last_content_hash
+	// is written on every UPSERT so the /known-ids endpoint always
+	// returns the most recent payload's hash; the value is the
+	// envelope's source_id suffix (already verified upstream against
+	// SHA-256(JCS(payload \ {host_id}))). Concurrent upserts for the
+	// same entity with different content hashes are last-write-wins.
 	birthday := parseExternalContactBirthday(p.Birthday)
 	syncedAt := accelerated.GetCurrentTime()
+	contentHash := env.SourceID[len(env.SourceID)-64:]
+	payloadHostID := p.HostID
 	upsertReq := repository.UpsertExternalContactRequest{
-		Source:       env.Source,
-		SourceID:     p.EntityID,
-		AccountID:    nil, // icloud_contacts has no account_id concept
-		DisplayName:  p.DisplayName,
-		FirstName:    p.FirstName,
-		LastName:     p.LastName,
-		Emails:       toRepoEmailEntries(p.Emails),
-		Phones:       toRepoPhoneEntries(p.Phones),
-		Addresses:    toRepoAddressEntries(p.Addresses),
-		Organization: p.Organization,
-		JobTitle:     p.JobTitle,
-		Birthday:     birthday,
-		PhotoURL:     p.PhotoURL,
-		Metadata:     p.Metadata,
-		SyncedAt:     &syncedAt,
+		Source:          env.Source,
+		SourceID:        p.EntityID,
+		AccountID:       nil, // icloud_contacts has no account_id concept
+		DisplayName:     p.DisplayName,
+		FirstName:       p.FirstName,
+		LastName:        p.LastName,
+		Emails:          toRepoEmailEntries(p.Emails),
+		Phones:          toRepoPhoneEntries(p.Phones),
+		Addresses:       toRepoAddressEntries(p.Addresses),
+		Organization:    p.Organization,
+		JobTitle:        p.JobTitle,
+		Birthday:        birthday,
+		PhotoURL:        p.PhotoURL,
+		Metadata:        p.Metadata,
+		SyncedAt:        &syncedAt,
+		HostID:          &payloadHostID,
+		LastContentHash: &contentHash,
 	}
 	external, err := s.externalContacts.UpsertTx(ctx, tx, upsertReq)
 	if err != nil {
@@ -880,8 +959,18 @@ func (s *IngestService) handleExternalContactUpserted(
 //     (e.g., Pi was wiped, daemon resends a queued delete) must not
 //     stall the daemon's cursor.
 //   - Already-tombstoned → idempotent silent no-op.
-//   - Live row → SoftDeleteTx sets deleted_at. crm_contact_id,
-//     match_status, and duplicate_of_id are preserved.
+//   - Live row → validate the source_id's hash suffix against the
+//     row's stored last_content_hash (three exceptions: @unknown
+//     sentinel, NULL stored hash, already-tombstoned — the last fires
+//     before the check). Mismatch rejects as
+//     EXTERNAL_CONTACT_DELETE_HASH_MISMATCH. On match, SoftDeleteTx
+//     sets deleted_at. crm_contact_id, match_status, and
+//     duplicate_of_id are preserved. See plan D-JC5/D-JC12.
+//
+// The lookup-based hash check (vs. the upsert's JCS recomputation)
+// is by spec design — spec line 343 defines the delete source_id
+// over the PRIOR upsert's payload, which the Pi does not see in the
+// delete payload.
 func (s *IngestService) handleExternalContactDeleted(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -916,6 +1005,22 @@ func (s *IngestService) handleExternalContactDeleted(
 		// Already tombstoned. Idempotent no-op.
 		return nil
 	}
+	// Validate the source_id hash suffix against the row's stored
+	// last_content_hash. Three exceptions per plan D-JC5: @unknown
+	// sentinel (daemon-declared hash-unknown per spec line 343),
+	// NULL stored hash (legacy row pre-PR8a), already-tombstoned
+	// (handled above).
+	if !strings.HasSuffix(env.SourceID, externalContactDeleteUnknownSuffix) && prior.LastContentHash != nil {
+		claimed := env.SourceID[len(env.SourceID)-64:]
+		if *prior.LastContentHash != claimed {
+			return &IngestPerEventRejection{
+				Code: ingestRejectExternalContactDeleteHashMismatch,
+				Message: fmt.Sprintf(
+					"delete source_id hash %s does not match stored last_content_hash %s for entity %s",
+					claimed, *prior.LastContentHash, p.EntityID),
+			}
+		}
+	}
 	if err := s.externalContacts.SoftDeleteTx(ctx, tx, prior.ID); err != nil {
 		return &IngestPerEventRejection{
 			Code:    ingestRejectExternalContactDeleteFailed,
@@ -924,6 +1029,12 @@ func (s *IngestService) handleExternalContactDeleted(
 	}
 	return nil
 }
+
+// externalContactDeleteUnknownSuffix is the spec-defined fallback
+// suffix on external_contact.deleted source_ids when the daemon has
+// no local cache of the prior content hash (spec line 343). The
+// delete-hash validation short-circuits and accepts the event.
+const externalContactDeleteUnknownSuffix = "@deleted@unknown"
 
 // parseExternalContactBirthday parses the payload's *string Birthday
 // (ISO YYYY-MM-DD) into a *time.Time. ValidatePayload already rejected

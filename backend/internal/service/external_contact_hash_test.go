@@ -10,7 +10,7 @@ import (
 )
 
 // computeReference produces the expected hash for a payload using the
-// exact same algorithm as computeContentHash. Used as an independent
+// exact same algorithm as ComputeContentHash. Used as an independent
 // cross-check that the hash output is deterministic and matches the
 // recipe verbatim.
 func computeReference(t *testing.T, input string) string {
@@ -28,9 +28,9 @@ func TestComputeContentHash_StableAcrossKeyOrder(t *testing.T) {
 	a := `{"b":1,"a":2}`
 	b := `{"a":2,"b":1}`
 
-	hashA, err := computeContentHash([]byte(a))
+	hashA, err := ComputeContentHash([]byte(a))
 	require.NoError(t, err)
-	hashB, err := computeContentHash([]byte(b))
+	hashB, err := ComputeContentHash([]byte(b))
 	require.NoError(t, err)
 
 	require.Equal(t, hashA, hashB, "JCS must sort keys; both inputs must hash identically")
@@ -42,14 +42,14 @@ func TestComputeContentHash_StableAcrossKeyOrder(t *testing.T) {
 func TestComputeContentHash_RFC8785Vectors(t *testing.T) {
 	// Simple ASCII object.
 	input := `{"a":1,"b":2}`
-	got, err := computeContentHash([]byte(input))
+	got, err := ComputeContentHash([]byte(input))
 	require.NoError(t, err)
 	want := computeReference(t, input)
 	require.Equal(t, want, got)
 
 	// Nested object with array — exercises canonicalization recursion.
 	input2 := `{"outer":{"x":[3,2,1],"y":"hello"},"id":"abc"}`
-	got2, err := computeContentHash([]byte(input2))
+	got2, err := ComputeContentHash([]byte(input2))
 	require.NoError(t, err)
 	want2 := computeReference(t, input2)
 	require.Equal(t, want2, got2)
@@ -62,9 +62,9 @@ func TestComputeContentHash_RemovesHostID(t *testing.T) {
 	withHost := `{"entity_id":"e1","host_id":"h-uuid","display_name":"x"}`
 	withoutHost := `{"entity_id":"e1","display_name":"x"}`
 
-	hashWith, err := computeContentHash([]byte(withHost))
+	hashWith, err := ComputeContentHash([]byte(withHost))
 	require.NoError(t, err)
-	hashWithout, err := computeContentHash([]byte(withoutHost))
+	hashWithout, err := ComputeContentHash([]byte(withoutHost))
 	require.NoError(t, err)
 
 	require.Equal(t, hashWithout, hashWith, "host_id must be stripped before hashing")
@@ -76,9 +76,9 @@ func TestComputeContentHash_RemovesHostID(t *testing.T) {
 // verbatim UTF-8 byte sequence; no Unicode normalization is applied.
 func TestComputeContentHash_NonAsciiStringsPreserveBytes(t *testing.T) {
 	input := `{"name":"José 👋","city":"São Paulo"}`
-	hash1, err := computeContentHash([]byte(input))
+	hash1, err := ComputeContentHash([]byte(input))
 	require.NoError(t, err)
-	hash2, err := computeContentHash([]byte(input))
+	hash2, err := ComputeContentHash([]byte(input))
 	require.NoError(t, err)
 	require.Equal(t, hash1, hash2)
 	require.Len(t, hash1, 64)
@@ -100,9 +100,9 @@ func TestComputeContentHash_NormalizationFormsAreDistinct(t *testing.T) {
 	// "e" + combining acute accent (NFD, U+0065 U+0301).
 	nfd := "{\"name\":\"é\"}"
 
-	hashNFC, err := computeContentHash([]byte(nfc))
+	hashNFC, err := ComputeContentHash([]byte(nfc))
 	require.NoError(t, err)
-	hashNFD, err := computeContentHash([]byte(nfd))
+	hashNFD, err := ComputeContentHash([]byte(nfd))
 	require.NoError(t, err)
 
 	require.NotEqual(t, hashNFC, hashNFD,
@@ -134,9 +134,9 @@ func TestComputeContentHash_NumericPrecisionFollowsJCSSpec(t *testing.T) {
 	withBig := `{"big":9999999999999999}`
 	withRounded := `{"big":10000000000000000}`
 
-	hashBig, err := computeContentHash([]byte(withBig))
+	hashBig, err := ComputeContentHash([]byte(withBig))
 	require.NoError(t, err)
-	hashRounded, err := computeContentHash([]byte(withRounded))
+	hashRounded, err := ComputeContentHash([]byte(withRounded))
 	require.NoError(t, err)
 
 	require.Equal(t, hashBig, hashRounded,
@@ -148,17 +148,17 @@ func TestComputeContentHash_NumericPrecisionFollowsJCSSpec(t *testing.T) {
 // surfaces canonicalization errors rather than silently producing a
 // hash of garbage bytes.
 func TestComputeContentHash_RejectsInvalidJSON(t *testing.T) {
-	_, err := computeContentHash([]byte(`{"missing-close":`))
+	_, err := ComputeContentHash([]byte(`{"missing-close":`))
 	require.Error(t, err)
 
-	_, err = computeContentHash([]byte(`not json at all`))
+	_, err = ComputeContentHash([]byte(`not json at all`))
 	require.Error(t, err)
 }
 
 // TestComputeContentHash_EmptyObject ensures the trivial empty-object
 // payload produces a deterministic hash (SHA-256 of `{}`).
 func TestComputeContentHash_EmptyObject(t *testing.T) {
-	got, err := computeContentHash([]byte(`{}`))
+	got, err := ComputeContentHash([]byte(`{}`))
 	require.NoError(t, err)
 	expected := computeReference(t, `{}`)
 	require.Equal(t, expected, got)

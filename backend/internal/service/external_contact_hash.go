@@ -30,7 +30,7 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// computeContentHash returns the lowercase-hex SHA-256 of the JCS-
+// ComputeContentHash returns the lowercase-hex SHA-256 of the JCS-
 // canonicalized payload with the top-level host_id field removed.
 //
 // payload must be valid JSON. The function returns an error for
@@ -40,7 +40,7 @@ import (
 // preserves the original numeric fidelity for every other field, so
 // integers larger than 2^53 in Metadata round-trip without precision
 // loss. The Swift daemon must produce byte-identical canonical JSON.
-func computeContentHash(payload []byte) (string, error) {
+func ComputeContentHash(payload []byte) (string, error) {
 	stripped, err := sjson.DeleteBytes(payload, "host_id")
 	if err != nil {
 		return "", fmt.Errorf("strip host_id: %w", err)

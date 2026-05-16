@@ -236,24 +236,33 @@ func mustMarshalExtDelete(p events.ExternalContactDeletedPayload) []byte {
 }
 
 // validUpsertedEnv returns a well-formed external_contact.upserted
-// envelope keyed off the given host + entity id. The source_id uses a
-// stable 64-char hex tail so it satisfies the regex shape.
+// envelope keyed off the given host + entity id. The source_id's hash
+// suffix is computed via the same JCS+SHA-256 recipe the production
+// ingest path expects, so verifyExternalContactInvariants's hash check
+// passes.
 func validUpsertedEnv(host uuid.UUID, entityID string) *events.Envelope {
-	hashHex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	payload := mustMarshalExtUpsert(events.ExternalContactUpsertedPayload{
+		Version:  1,
+		HostID:   host,
+		Source:   "icloud_contacts",
+		EntityID: entityID,
+	})
+	hashHex, err := ComputeContentHash(payload)
+	if err != nil {
+		panic(err)
+	}
 	return &events.Envelope{
 		Source:   "icloud_contacts",
 		SourceID: entityID + "@" + hashHex,
 		Kind:     events.KindExternalContactUpserted,
-		Payload: mustMarshalExtUpsert(events.ExternalContactUpsertedPayload{
-			Version:  1,
-			HostID:   host,
-			Source:   "icloud_contacts",
-			EntityID: entityID,
-		}),
+		Payload:  payload,
 	}
 }
 
-// validDeletedEnv mirrors validUpsertedEnv for the deleted kind.
+// validDeletedEnv mirrors validUpsertedEnv for the deleted kind. The
+// hash suffix here is arbitrary (the delete handler validates against
+// the row's STORED last_content_hash, not against the delete payload);
+// we use a deterministic 64-hex tail for verifier shape tests.
 func validDeletedEnv(host uuid.UUID, entityID string) *events.Envelope {
 	hashHex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	return &events.Envelope{
@@ -331,6 +340,8 @@ func TestVerifyExternalContactInvariants_PayloadVsEnvelopeSource(t *testing.T) {
 			EntityID: "CN-1",
 		}),
 	}
+	// The payload-source check fires before the hash check, so an
+	// arbitrary hash placeholder is fine.
 	rej := verifyExternalContactInvariants(env, host)
 	require.NotNil(t, rej)
 	require.Contains(t, rej.Message, "payload source")
@@ -350,6 +361,7 @@ func TestVerifyExternalContactInvariants_EmptyEntityID(t *testing.T) {
 			EntityID: "",
 		}),
 	}
+	// The entity_id check fires before the hash check.
 	rej := verifyExternalContactInvariants(env, host)
 	require.NotNil(t, rej)
 	require.Contains(t, rej.Message, "entity_id is required")
