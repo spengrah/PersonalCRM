@@ -71,7 +71,7 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 	// bcrypt cost 4 is the lowest bcrypt accepts; the speed makes
 	// integration test execution tolerable while still exercising the
 	// real bcrypt path.
-	macService := service.NewMacHostService(hostRepo, tokenRepo, syncRepo, nil, database.Pool, 4)
+	macService := service.NewMacHostService(hostRepo, tokenRepo, syncRepo, nil, nil, database.Pool, 4)
 	limiter := auth.NewPairingIPRateLimiter()
 	macHandler := handlers.NewMacHostHandler(macService, limiter)
 

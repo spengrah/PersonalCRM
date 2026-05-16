@@ -890,6 +890,7 @@ func run() int {
 		pairingTokenRepo,
 		macSyncRepo,
 		contactMethodRepo,
+		externalContactRepoForIngest, // PR8a: /known-ids reader
 		database.Pool,
 		0, // default bcrypt cost
 	)

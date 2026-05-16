@@ -25,7 +25,7 @@ type MacHostRouteDeps struct {
 //   - POST /api/v1/host/:id/heartbeat              (host bearer auth)
 //   - GET  /api/v1/host/:id/sync/:source/cursor    (host bearer auth)
 //   - POST /api/v1/host/:id/sync/:source/cursor    (host bearer auth)
-//   - GET  /api/v1/host/:id/sync/:source/known-ids (host bearer auth; per-source tombstone reconciliation; stub)
+//   - GET  /api/v1/host/:id/sync/:source/known-ids (host bearer auth; per-source tombstone reconciliation)
 //   - GET  /api/v1/host/:id/known-identifiers      (host bearer auth; cross-source canonical phone/email set)
 //
 // Caller is responsible for adding the admin routes via

@@ -74,29 +74,39 @@ type ContactMethodLister interface {
 	ListCanonicalIdentifiersByType(ctx context.Context, types []string) ([]string, error)
 }
 
+// ExternalContactReader is the narrow surface MacHostService needs for
+// the per-(host, source) /known-ids endpoint. Concrete is
+// *repository.ExternalContactRepository. Defined here so the service
+// can be unit-tested with a stub.
+type ExternalContactReader interface {
+	ListKnownIDsByHostAndSource(ctx context.Context, hostID uuid.UUID, source string) ([]repository.KnownExternalContactID, error)
+}
+
 // MacHostService owns business logic for pairing, heartbeat, cursor
 // commit, and revoke-cascade. Stateless aside from the constructor-
 // injected dependencies — safe to share across requests.
 type MacHostService struct {
-	hostRepo          *repository.MacHostRepository
-	tokenRepo         *repository.MacHostPairingTokenRepository
-	syncRepo          *repository.SyncRepository
-	contactMethodRepo ContactMethodLister
-	pool              *pgxpool.Pool
-	bcryptCost        int
+	hostRepo            *repository.MacHostRepository
+	tokenRepo           *repository.MacHostPairingTokenRepository
+	syncRepo            *repository.SyncRepository
+	contactMethodRepo   ContactMethodLister
+	externalContactRepo ExternalContactReader
+	pool                *pgxpool.Pool
+	bcryptCost          int
 }
 
 // NewMacHostService constructs a service. bcryptCost defaults to
 // bcrypt.DefaultCost when 0 — at cost=10 the hash is ~50ms on a Pi 4,
-// fine for once-per-pair. contactMethodRepo may be nil in test fixtures
-// that don't exercise the /known-identifiers endpoint; the
-// KnownIdentifiers method returns a clear error when called in that
-// state.
+// fine for once-per-pair. contactMethodRepo and externalContactRepo
+// may be nil in test fixtures that don't exercise the corresponding
+// endpoint; the affected method returns a clear "not wired" error in
+// that state.
 func NewMacHostService(
 	hostRepo *repository.MacHostRepository,
 	tokenRepo *repository.MacHostPairingTokenRepository,
 	syncRepo *repository.SyncRepository,
 	contactMethodRepo ContactMethodLister,
+	externalContactRepo ExternalContactReader,
 	pool *pgxpool.Pool,
 	bcryptCost int,
 ) *MacHostService {
@@ -104,12 +114,13 @@ func NewMacHostService(
 		bcryptCost = bcrypt.DefaultCost
 	}
 	return &MacHostService{
-		hostRepo:          hostRepo,
-		tokenRepo:         tokenRepo,
-		syncRepo:          syncRepo,
-		contactMethodRepo: contactMethodRepo,
-		pool:              pool,
-		bcryptCost:        bcryptCost,
+		hostRepo:            hostRepo,
+		tokenRepo:           tokenRepo,
+		syncRepo:            syncRepo,
+		contactMethodRepo:   contactMethodRepo,
+		externalContactRepo: externalContactRepo,
+		pool:                pool,
+		bcryptCost:          bcryptCost,
 	}
 }
 
@@ -146,6 +157,30 @@ func (s *MacHostService) KnownIdentifiers(ctx context.Context) (*KnownIdentifier
 		phones = []string{}
 	}
 	return &KnownIdentifiersResult{Phones: phones, Emails: emails}, nil
+}
+
+// KnownIDsForSource returns the per-(host, source) known
+// external_contact IDs and their last observed content hashes. Empty
+// slice on a fresh CRM or for sources without external_contact rows
+// (the handler validates the source against mac.IsAllowedPushSource
+// before dispatching). The slice is sorted by source_id for
+// deterministic responses (the underlying SQL query orders).
+//
+// Used by the Mac daemon's tombstone-reconciliation flow after a
+// full CNContactStore scan: the daemon set-diffs its scan results
+// against the returned IDs and emits external_contact.deleted events
+// for entries that disappeared upstream. The last_content_hash
+// supplies the prior-hash component of the spec-defined delete
+// source_id (`<entity>@deleted@<prev_hash>`). See plan D-JC1.
+func (s *MacHostService) KnownIDsForSource(
+	ctx context.Context,
+	hostID uuid.UUID,
+	source string,
+) ([]repository.KnownExternalContactID, error) {
+	if s.externalContactRepo == nil {
+		return nil, fmt.Errorf("known IDs: external_contact repository not wired")
+	}
+	return s.externalContactRepo.ListKnownIDsByHostAndSource(ctx, hostID, source)
 }
 
 // CreatePairingToken mints a new short-lived pairing token. Returns
