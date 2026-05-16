@@ -15,6 +15,7 @@ import (
 	"personal-crm/backend/internal/auth"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -393,4 +394,108 @@ func TestKnownIDsByHost_RoundTripUpsertThenFetch(t *testing.T) {
 	require.NotNil(t, row.HostID, "icloud_contacts row must persist host_id")
 	require.Equal(t, env.pairedHostID, *row.HostID)
 	require.NotNil(t, row.LastContentHash, "icloud_contacts row must persist last_content_hash")
+}
+
+// TestUpsertExternalContact_ClaimsLegacyNullHostID covers the upgrade
+// path: a pre-migration external_contact row whose host_id is NULL
+// must be claimed by the first host that emits an upsert for it, and
+// then become visible to that host's /known-ids endpoint. Without the
+// claim-on-first-non-NULL-emit semantics in the ON CONFLICT branch,
+// legacy rows remain permanently invisible to known-ids and the
+// daemon cannot reconcile tombstones for them.
+//
+// Also asserts non-NULL ownership is preserved: a second host that
+// emits an upsert for the same entity does NOT overwrite the first
+// claimer's ownership.
+func TestUpsertExternalContact_ClaimsLegacyNullHostID(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	ctx := context.Background()
+	entityID := env.sourceIDPrefix + "legacy-claim"
+
+	// Plant a legacy row directly via the repository with HostID = nil
+	// to simulate pre-migration data. SyncedAt + a placeholder hash
+	// make the row look like it was last written by an older code path.
+	legacyHash := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	syncedAt := accelerated.GetCurrentTime()
+	tx, err := env.database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	_, err = env.externalRepo.UpsertTx(ctx, tx, repository.UpsertExternalContactRequest{
+		Source:          "icloud_contacts",
+		SourceID:        entityID,
+		HostID:          nil,
+		LastContentHash: &legacyHash,
+		SyncedAt:        &syncedAt,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+
+	pre, err := env.externalRepo.GetBySource(ctx, "icloud_contacts", entityID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, pre)
+	require.Nil(t, pre.HostID, "fixture must start with NULL host_id (legacy row)")
+
+	// Host A (env.pairedHostID) emits an upsert for the legacy row.
+	upsertEv := buildExtUpsertEvent(t, env.pairedHostID, entityID, nil)
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{upsertEv},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseIngestResp(t, w).Accepted)
+
+	// Assertion 1: host_id is now claimed by host A.
+	claimed, err := env.externalRepo.GetBySource(ctx, "icloud_contacts", entityID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	require.NotNil(t, claimed.HostID, "legacy row must be claimed on first non-NULL upsert")
+	require.Equal(t, env.pairedHostID, *claimed.HostID,
+		"legacy row's host_id must be set to the claiming host")
+
+	// Assertion 2: the row appears in host A's /known-ids response.
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/host/"+env.pairedHostID.String()+"/sync/icloud_contacts/known-ids", nil)
+	req.Header.Set("X-Mac-Host-ID", env.pairedHostID.String())
+	req.Header.Set("Authorization", "Bearer "+env.pairedHostKey)
+	w2 := httptest.NewRecorder()
+	env.router.ServeHTTP(w2, req)
+	require.Equal(t, http.StatusOK, w2.Code, "body: %s", w2.Body.String())
+	r := parseKnownIDsByHostResp(t, w2)
+	foundForA := false
+	for _, entry := range r.Data.IDs {
+		if entry.SourceID == entityID {
+			foundForA = true
+		}
+	}
+	require.True(t, foundForA,
+		"claimed legacy row must be visible to its new owner via /known-ids")
+
+	// Now pair a second host (B) and have it attempt an upsert. The
+	// singleton index requires we revoke A first.
+	require.NoError(t, env.macService.RevokeHost(ctx, env.pairedHostID))
+	plainB, _, err := env.macService.CreatePairingToken(ctx)
+	require.NoError(t, err)
+	pairB, err := env.macService.PairWithToken(ctx, plainB, "legacy-claim-host-b", "0.1.0", 1)
+	require.NoError(t, err)
+
+	// Mutate display_name so the envelope source_id hash differs from
+	// host A's emit. Identical hashes would dedup at the event-log
+	// layer (the JCS hash excludes host_id, so same content from a
+	// different host hashes the same) and never reach the upsert path.
+	upsertEvB := buildExtUpsertEvent(t, pairB.HostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		dn := "Host B Display Name"
+		p.DisplayName = &dn
+	})
+	wB := postIngestExt(t, env, &pairB.HostID, pairB.APIKey, map[string]any{
+		"events": []any{upsertEvB},
+	})
+	require.Equal(t, http.StatusOK, wB.Code, "body: %s", wB.Body.String())
+	require.Equal(t, 1, parseIngestResp(t, wB).Accepted, "host B's upsert should be accepted; body: %s", wB.Body.String())
+
+	// Assertion 3: ownership is preserved — host A still owns the row
+	// even though host B emitted an upsert for the same entity.
+	postB, err := env.externalRepo.GetBySource(ctx, "icloud_contacts", entityID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, postB)
+	require.NotNil(t, postB.HostID, "host_id must remain set after second host's upsert")
+	require.Equal(t, env.pairedHostID, *postB.HostID,
+		"first claimer's ownership must be preserved on subsequent upserts from other hosts")
 }

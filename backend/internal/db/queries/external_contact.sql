@@ -27,11 +27,14 @@ SELECT * FROM external_contact
 WHERE source = $1 AND source_id = $2 AND COALESCE(account_id, '') = COALESCE($3, '');
 
 -- name: UpsertExternalContact :one
--- Named-param variant. host_id is on INSERT only and NOT in the
--- ON CONFLICT DO UPDATE SET list — the ORIGINAL paired host's
--- ownership persists across content updates. Re-pair onto a different
--- Mac is a documented limitation; the operator script
--- scripts/admin/reset_icloud_contacts.sh handles cleanup.
+-- Named-param variant. host_id follows claim-on-first-non-NULL-emit:
+-- legacy rows whose host_id IS NULL (pre-migration data) get claimed
+-- by the first host that emits an upsert for them, but non-NULL
+-- ownership is preserved thereafter. This keeps existing
+-- icloud_contacts rows reachable from /known-ids on upgraded systems
+-- without requiring destructive operator cleanup. Re-pair onto a
+-- different Mac for already-owned rows is a documented limitation;
+-- scripts/admin/reset_icloud_contacts.sh handles that path.
 --
 -- last_content_hash is written on both INSERT and UPDATE so the
 -- /known-ids endpoint always returns the most recent payload's hash.
@@ -66,7 +69,9 @@ INSERT INTO external_contact (
     sqlc.arg('last_content_hash')
 )
 ON CONFLICT (source, source_id, COALESCE(account_id, '')) DO UPDATE SET
-    -- host_id intentionally NOT updated — preserves first-insert ownership.
+    -- Claim-on-first-non-NULL: legacy rows with NULL host_id get
+    -- claimed by the upserting host; non-NULL ownership is preserved.
+    host_id           = COALESCE(external_contact.host_id, EXCLUDED.host_id),
     display_name      = EXCLUDED.display_name,
     first_name        = EXCLUDED.first_name,
     last_name         = EXCLUDED.last_name,

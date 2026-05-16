@@ -917,11 +917,14 @@ type Querier interface {
 	UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error)
 	// Upsert a contact task by external_task_id (Todoist task IDs are globally unique)
 	UpsertContactTask(ctx context.Context, arg UpsertContactTaskParams) (*ContactTask, error)
-	// Named-param variant. host_id is on INSERT only and NOT in the
-	// ON CONFLICT DO UPDATE SET list — the ORIGINAL paired host's
-	// ownership persists across content updates. Re-pair onto a different
-	// Mac is a documented limitation; the operator script
-	// scripts/admin/reset_icloud_contacts.sh handles cleanup.
+	// Named-param variant. host_id follows claim-on-first-non-NULL-emit:
+	// legacy rows whose host_id IS NULL (pre-migration data) get claimed
+	// by the first host that emits an upsert for them, but non-NULL
+	// ownership is preserved thereafter. This keeps existing
+	// icloud_contacts rows reachable from /known-ids on upgraded systems
+	// without requiring destructive operator cleanup. Re-pair onto a
+	// different Mac for already-owned rows is a documented limitation;
+	// scripts/admin/reset_icloud_contacts.sh handles that path.
 	//
 	// last_content_hash is written on both INSERT and UPDATE so the
 	// /known-ids endpoint always returns the most recent payload's hash.
