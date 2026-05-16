@@ -311,7 +311,7 @@ func run() int {
 		messagesMessageRepo,
 		riverClient,
 		externalContactRepoForIngest,
-		macHostRepoForIngest,
+		macHostRepoForIngest, // host-liveness re-check inside the batch tx
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
@@ -890,7 +890,7 @@ func run() int {
 		pairingTokenRepo,
 		macSyncRepo,
 		contactMethodRepo,
-		externalContactRepoForIngest, // PR8a: /known-ids reader
+		externalContactRepoForIngest, // /known-ids reader
 		database.Pool,
 		0, // default bcrypt cost
 	)

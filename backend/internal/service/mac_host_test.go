@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"personal-crm/backend/internal/repository"
-
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -126,7 +124,7 @@ func TestMacHostService_KnownIdentifiers_NilRepoErrors(t *testing.T) {
 // for KnownIDsForSource unit tests. The pgx.Tx is unused at this
 // layer.
 type stubExternalContactReader struct {
-	resp      []repository.KnownExternalContactID
+	resp      []KnownExternalContactID
 	err       error
 	gotHostID uuid.UUID
 	gotSource string
@@ -135,7 +133,7 @@ type stubExternalContactReader struct {
 
 func (s *stubExternalContactReader) ListKnownIDsByHostAndSource(
 	_ context.Context, hostID uuid.UUID, source string,
-) ([]repository.KnownExternalContactID, error) {
+) ([]KnownExternalContactID, error) {
 	s.callCount++
 	s.gotHostID = hostID
 	s.gotSource = source
@@ -146,7 +144,7 @@ func TestMacHostService_KnownIDsForSource_HappyPath(t *testing.T) {
 	hash1 := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	hash2 := "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 	stub := &stubExternalContactReader{
-		resp: []repository.KnownExternalContactID{
+		resp: []KnownExternalContactID{
 			{SourceID: "CN-A", LastContentHash: &hash1},
 			{SourceID: "CN-B", LastContentHash: &hash2},
 		},
@@ -166,7 +164,7 @@ func TestMacHostService_KnownIDsForSource_HappyPath(t *testing.T) {
 }
 
 func TestMacHostService_KnownIDsForSource_EmptyResult(t *testing.T) {
-	stub := &stubExternalContactReader{resp: []repository.KnownExternalContactID{}}
+	stub := &stubExternalContactReader{resp: []KnownExternalContactID{}}
 	svc := &MacHostService{externalContactRepo: stub}
 	got, err := svc.KnownIDsForSource(context.Background(), uuid.New(), "icloud_contacts")
 	require.NoError(t, err)

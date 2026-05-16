@@ -151,11 +151,11 @@ FOR UPDATE
 `
 
 // Tx-bound active-host lookup with row-level write lock. Used by
-// IngestService for the tx-internal host-liveness check per plan
-// D-JC11. The FOR UPDATE clause serializes against concurrent
-// revoke attempts: a revoke that tries to UPDATE this row blocks
-// until the ingest batch commits or rolls back. Matches the
-// cursor-commit precedent in GetMacHostCursorEpoch below.
+// IngestService for the tx-internal host-liveness check. The
+// FOR UPDATE clause serializes against concurrent revoke attempts:
+// a revoke that tries to UPDATE this row blocks until the ingest
+// batch commits or rolls back. Matches the cursor-commit precedent
+// in GetMacHostCursorEpoch below.
 func (q *Queries) GetActiveMacHostByIDForUpdate(ctx context.Context, id pgtype.UUID) (*MacHost, error) {
 	row := q.db.QueryRow(ctx, GetActiveMacHostByIDForUpdate, id)
 	var i MacHost

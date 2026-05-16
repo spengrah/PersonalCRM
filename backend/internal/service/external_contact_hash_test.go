@@ -93,7 +93,7 @@ func TestComputeContentHash_NonAsciiStringsPreserveBytes(t *testing.T) {
 // "e" + U+0301) but byte-different MUST hash to different values.
 // Locking this prevents a future implementer from adding a "helpful"
 // normalize-before-hash step that would silently break parity with
-// the Swift daemon (per Codex r3 P2-4).
+// the Swift daemon.
 func TestComputeContentHash_NormalizationFormsAreDistinct(t *testing.T) {
 	// "é" as a single precomposed code point (NFC, U+00E9).
 	nfc := "{\"name\":\"é\"}"
@@ -122,11 +122,11 @@ func TestComputeContentHash_NormalizationFormsAreDistinct(t *testing.T) {
 // needs to round-trip large integers through the hash, the payload
 // must encode them as JSON strings, not numbers.
 //
-// Codex r4 P2-3 originally proposed sjson to preserve large-integer
-// precision; that fix correctly preserves the strip step but does NOT
-// (and cannot) override the JCS spec's number model downstream. The
-// test below locks the spec-mandated behavior so future contributors
-// don't accidentally swap the canonicalizer for one that diverges.
+// sjson is used to preserve precision during the strip step, but
+// jcs.Transform itself goes through float64 — that is the spec, not
+// a bug in this helper. The test locks the spec-mandated behavior so
+// future contributors don't accidentally swap the canonicalizer for
+// one that diverges.
 func TestComputeContentHash_NumericPrecisionFollowsJCSSpec(t *testing.T) {
 	// 9999999999999999 ≈ 1e16, which is > 2^53. Under RFC 8785's ES6
 	// Number-to-String, this is indistinguishable from

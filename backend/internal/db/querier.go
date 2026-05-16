@@ -354,11 +354,11 @@ type Querier interface {
 	// daemon's bearer key cannot authenticate.
 	GetActiveMacHostByID(ctx context.Context, id pgtype.UUID) (*MacHost, error)
 	// Tx-bound active-host lookup with row-level write lock. Used by
-	// IngestService for the tx-internal host-liveness check per plan
-	// D-JC11. The FOR UPDATE clause serializes against concurrent
-	// revoke attempts: a revoke that tries to UPDATE this row blocks
-	// until the ingest batch commits or rolls back. Matches the
-	// cursor-commit precedent in GetMacHostCursorEpoch below.
+	// IngestService for the tx-internal host-liveness check. The
+	// FOR UPDATE clause serializes against concurrent revoke attempts:
+	// a revoke that tries to UPDATE this row blocks until the ingest
+	// batch commits or rolls back. Matches the cursor-commit precedent
+	// in GetMacHostCursorEpoch below.
 	GetActiveMacHostByIDForUpdate(ctx context.Context, id pgtype.UUID) (*MacHost, error)
 	// Look up an event by its Google Calendar ID
 	GetCalendarEventByGcalID(ctx context.Context, arg GetCalendarEventByGcalIDParams) (*CalendarEvent, error)
@@ -593,9 +593,9 @@ type Querier interface {
 	// Lowercase-hex of last_content_hash is enforced upstream by the
 	// ingest layer's verifyExternalContactInvariants regex
 	// (^[a-f0-9]{64}$) plus the JCS hash-verification check. This query
-	// stores and returns the value verbatim. Legacy rows (pre-PR8a) have
-	// NULL last_content_hash; the daemon falls back to the
-	// @deleted@unknown sentinel per spec line 343.
+	// stores and returns the value verbatim. Legacy rows whose
+	// last_content_hash is NULL cause the daemon to fall back to the
+	// @deleted@unknown sentinel per the spec.
 	ListKnownExternalContactIDsByHostAndSource(ctx context.Context, arg ListKnownExternalContactIDsByHostAndSourceParams) ([]*ListKnownExternalContactIDsByHostAndSourceRow, error)
 	ListMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all managed tasks for a provider (for reconciliation)
@@ -919,9 +919,9 @@ type Querier interface {
 	UpsertContactTask(ctx context.Context, arg UpsertContactTaskParams) (*ContactTask, error)
 	// Named-param variant. host_id is on INSERT only and NOT in the
 	// ON CONFLICT DO UPDATE SET list — the ORIGINAL paired host's
-	// ownership persists across content updates. See plan D-JC1 for
-	// the rationale (re-pair limitation handled by the operator script
-	// scripts/admin/reset_icloud_contacts.sh, NOT by a cascade).
+	// ownership persists across content updates. Re-pair onto a different
+	// Mac is a documented limitation; the operator script
+	// scripts/admin/reset_icloud_contacts.sh handles cleanup.
 	//
 	// last_content_hash is written on both INSERT and UPDATE so the
 	// /known-ids endpoint always returns the most recent payload's hash.

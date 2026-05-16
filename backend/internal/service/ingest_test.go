@@ -524,7 +524,6 @@ func TestHandleExternalContactUpserted_LiveUpsertSkipsRevive(t *testing.T) {
 // TestVerifyExternalContactInvariants_HashMismatchRejected proves the
 // Pi-side JCS recomputation catches a daemon-supplied source_id whose
 // hash does NOT match the canonical SHA-256(JCS(payload \ {host_id})).
-// See plan D-JC2 + R11.
 func TestVerifyExternalContactInvariants_HashMismatchRejected(t *testing.T) {
 	host := uuid.New()
 	env := validUpsertedEnv(host, "CN-1")
@@ -552,7 +551,8 @@ func TestVerifyExternalContactInvariants_HashWithExtraHostIDStillMatches(t *test
 
 // TestHandleExternalContactUpserted_WritesHostIDAndHash confirms the
 // upsert request carries both new fields when the inline handler runs
-// — application-level enforcement of the R13 invariant.
+// — enforces the application-level invariant that icloud_contacts
+// rows always carry both fields.
 func TestHandleExternalContactUpserted_WritesHostIDAndHash(t *testing.T) {
 	hostID := uuid.New()
 	rowID := uuid.New()
@@ -614,7 +614,7 @@ func TestHandleExternalContactDeleted_HashMatch(t *testing.T) {
 
 // TestHandleExternalContactDeleted_HashMismatchRejected proves the
 // lookup-based hash check fires when source_id's hash differs from
-// the row's stored last_content_hash. See plan D-JC5.
+// the row's stored last_content_hash.
 func TestHandleExternalContactDeleted_HashMismatchRejected(t *testing.T) {
 	storedHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	claimedHash := "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
@@ -666,7 +666,7 @@ func TestHandleExternalContactDeleted_UnknownSentinelAccepted(t *testing.T) {
 }
 
 // TestHandleExternalContactDeleted_NullStoredHashAccepted exercises
-// the legacy-row exception: a pre-PR8a row has last_content_hash=NULL,
+// the legacy-row exception: a pre-existing row has last_content_hash=NULL,
 // so the Pi has no reference value to compare against. Accept and
 // soft-delete.
 func TestHandleExternalContactDeleted_NullStoredHashAccepted(t *testing.T) {

@@ -6,7 +6,7 @@
 // ("<entity_uuid>@<hex>"). A mismatch signals a stale daemon cache, a
 // JCS-library bug, or protocol drift; the ingest layer rejects the
 // event as PAYLOAD_INVARIANT rather than silently storing inconsistent
-// state. See plan D-JC2.
+// state.
 //
 // The recipe must match the Swift daemon byte-for-byte:
 //

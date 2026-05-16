@@ -271,8 +271,8 @@ func TestKnownIDsByHost_ExcludesTombstonedRows(t *testing.T) {
 func TestKnownIDsByHost_HostScoped(t *testing.T) {
 	// Pair host A, seed two rows under A. Revoke A. Pair host B, seed
 	// one row under B. B's /known-ids must return only B's row — A's
-	// rows survive (no cascade per plan D-JC1) but they're owned by A
-	// and the partial filter excludes them from B's view.
+	// rows survive (no cascade on revoke) but they're owned by A and
+	// the partial filter excludes them from B's view.
 	env := setupKnownIDsByHostEnv(t)
 	ctx := context.Background()
 
@@ -341,4 +341,55 @@ func TestKnownIDsByHost_NonExternalContactSource_ReturnsEmpty(t *testing.T) {
 		require.NotContains(t, entry.SourceID, env.sourceIDPrefix,
 			"messages source should not contain any of our seeded icloud rows")
 	}
+}
+
+// TestKnownIDsByHost_RoundTripUpsertThenFetch is the end-to-end
+// recovery-flow test: POST an external_contact.upserted event through
+// the real ingest path, immediately GET /known-ids, and assert both
+// the source_id and the matching last_content_hash appear in the
+// response. Proves the ingest writes both columns AND the endpoint
+// returns them together.
+func TestKnownIDsByHost_RoundTripUpsertThenFetch(t *testing.T) {
+	// Wire a full ingest stack so we can POST an upsert event.
+	env := setupExtContactIngestEnv(t)
+	entityID := env.sourceIDPrefix + "roundtrip"
+	upsertEv := buildExtUpsertEvent(t, env.pairedHostID, entityID, nil)
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{upsertEv},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseIngestResp(t, w).Accepted)
+
+	// GET /known-ids on the same paired host.
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/host/"+env.pairedHostID.String()+"/sync/icloud_contacts/known-ids", nil)
+	req.Header.Set("X-Mac-Host-ID", env.pairedHostID.String())
+	req.Header.Set("Authorization", "Bearer "+env.pairedHostKey)
+	w2 := httptest.NewRecorder()
+	env.router.ServeHTTP(w2, req)
+	require.Equal(t, http.StatusOK, w2.Code, "body: %s", w2.Body.String())
+
+	r := parseKnownIDsByHostResp(t, w2)
+	expectedHash := upsertEv["source_id"].(string)[len(upsertEv["source_id"].(string))-64:]
+	found := false
+	for _, entry := range r.Data.IDs {
+		if entry.SourceID == entityID {
+			found = true
+			require.NotNil(t, entry.LastContentHash,
+				"recovered row's last_content_hash must not be NULL")
+			require.Equal(t, expectedHash, *entry.LastContentHash,
+				"hash returned by /known-ids must equal the hash the daemon submitted")
+		}
+	}
+	require.True(t, found, "freshly upserted entity must appear in /known-ids")
+
+	// Verify the host_id was persisted on the row too (R13 invariant
+	// for icloud_contacts: every row carries both columns).
+	row, err := env.externalRepo.GetBySource(context.Background(),
+		"icloud_contacts", entityID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	require.NotNil(t, row.HostID, "icloud_contacts row must persist host_id")
+	require.Equal(t, env.pairedHostID, *row.HostID)
+	require.NotNil(t, row.LastContentHash, "icloud_contacts row must persist last_content_hash")
 }

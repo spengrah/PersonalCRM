@@ -74,12 +74,18 @@ type ContactMethodLister interface {
 	ListCanonicalIdentifiersByType(ctx context.Context, types []string) ([]string, error)
 }
 
+// KnownExternalContactID is the service-layer alias for the
+// repository's wire DTO. Re-exporting here keeps handlers and other
+// callers from importing the repository package just to spell the
+// return type of MacHostService.KnownIDsForSource.
+type KnownExternalContactID = repository.KnownExternalContactID
+
 // ExternalContactReader is the narrow surface MacHostService needs for
 // the per-(host, source) /known-ids endpoint. Concrete is
 // *repository.ExternalContactRepository. Defined here so the service
 // can be unit-tested with a stub.
 type ExternalContactReader interface {
-	ListKnownIDsByHostAndSource(ctx context.Context, hostID uuid.UUID, source string) ([]repository.KnownExternalContactID, error)
+	ListKnownIDsByHostAndSource(ctx context.Context, hostID uuid.UUID, source string) ([]KnownExternalContactID, error)
 }
 
 // MacHostService owns business logic for pairing, heartbeat, cursor
@@ -171,12 +177,12 @@ func (s *MacHostService) KnownIdentifiers(ctx context.Context) (*KnownIdentifier
 // against the returned IDs and emits external_contact.deleted events
 // for entries that disappeared upstream. The last_content_hash
 // supplies the prior-hash component of the spec-defined delete
-// source_id (`<entity>@deleted@<prev_hash>`). See plan D-JC1.
+// source_id (`<entity>@deleted@<prev_hash>`).
 func (s *MacHostService) KnownIDsForSource(
 	ctx context.Context,
 	hostID uuid.UUID,
 	source string,
-) ([]repository.KnownExternalContactID, error) {
+) ([]KnownExternalContactID, error) {
 	if s.externalContactRepo == nil {
 		return nil, fmt.Errorf("known IDs: external_contact repository not wired")
 	}

@@ -49,7 +49,7 @@ const (
 // mac_host) finds the host revoked between auth-middleware validation
 // and the batch's lock acquire. The handler translates this to
 // 401 UNKNOWN_HOST, matching the cursor-commit precedent in
-// MacHostHandler.CommitCursor. See plan D-JC11.
+// MacHostHandler.CommitCursor.
 var ErrHostRevokedDuringBatch = errors.New("host revoked during ingest batch")
 
 // allowedExternalContactSources is the set of envelope.Source values the
@@ -118,7 +118,7 @@ type ExternalContactWriter interface {
 // inside the batch tx. Concrete is *repository.MacHostRepository. The
 // SELECT ... FOR UPDATE the method runs blocks any concurrent revoke
 // of the same row until the batch tx commits or rolls back. Returns
-// db.ErrNotFound when the host has been revoked. See plan D-JC11.
+// db.ErrNotFound when the host has been revoked.
 type HostLivenessChecker interface {
 	GetActiveHostByIDForUpdateTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.MacHost, error)
 }
@@ -158,7 +158,7 @@ type IngestService struct {
 // path. When nil, the per-batch FOR UPDATE re-check is skipped and the
 // batch trusts the auth-middleware's read. Production always wires a
 // concrete repository so the race window between auth and commit is
-// closed (see plan D-JC11).
+// closed.
 func NewIngestService(
 	database *db.Database,
 	bus *events.Bus,
@@ -301,7 +301,7 @@ func (s *IngestService) IngestBatch(
 	// lock until this batch commits or rolls back, then proceeds. If
 	// the host was already revoked when the lock acquired, we abort
 	// the batch (nothing commits) and surface ErrHostRevokedDuringBatch
-	// so the handler can return 401 UNKNOWN_HOST. See plan D-JC11.
+	// so the handler can return 401 UNKNOWN_HOST.
 	//
 	// Skipped when hostID is nil (global-API-key path) or hostLiveness
 	// is nil (test wiring). Production always sets both.
@@ -658,7 +658,6 @@ func verifyExternalContactInvariants(env *events.Envelope, authenticatedHostID u
 		// the spec defines at line 342 — a mismatch signals a stale
 		// daemon cache, a JCS-library bug, or protocol drift, and is
 		// rejected as PAYLOAD_INVARIANT rather than silently stored.
-		// See plan D-JC2.
 		computedHash, hashErr := ComputeContentHash(env.Payload)
 		if hashErr != nil {
 			return &IngestPerEventRejection{
@@ -813,7 +812,7 @@ func (s *IngestService) handleExternalContactUpserted(
 	// Upsert the row. The underlying query does not touch deleted_at,
 	// crm_contact_id, or match_status on the UPDATE branch. host_id is
 	// written on INSERT only — the ORIGINAL paired host's ownership
-	// persists across re-upserts (see plan D-JC1). last_content_hash
+	// persists across re-upserts. last_content_hash
 	// is written on every UPSERT so the /known-ids endpoint always
 	// returns the most recent payload's hash; the value is the
 	// envelope's source_id suffix (already verified upstream against
@@ -965,7 +964,7 @@ func (s *IngestService) handleExternalContactUpserted(
 //     before the check). Mismatch rejects as
 //     EXTERNAL_CONTACT_DELETE_HASH_MISMATCH. On match, SoftDeleteTx
 //     sets deleted_at. crm_contact_id, match_status, and
-//     duplicate_of_id are preserved. See plan D-JC5/D-JC12.
+//     duplicate_of_id are preserved.
 //
 // The lookup-based hash check (vs. the upsert's JCS recomputation)
 // is by spec design — spec line 343 defines the delete source_id
@@ -1006,10 +1005,10 @@ func (s *IngestService) handleExternalContactDeleted(
 		return nil
 	}
 	// Validate the source_id hash suffix against the row's stored
-	// last_content_hash. Three exceptions per plan D-JC5: @unknown
-	// sentinel (daemon-declared hash-unknown per spec line 343),
-	// NULL stored hash (legacy row pre-PR8a), already-tombstoned
-	// (handled above).
+	// last_content_hash. Three exceptions: @unknown sentinel
+	// (daemon-declared hash-unknown per the spec fallback), NULL
+	// stored hash (legacy row written before this column existed),
+	// already-tombstoned (handled above).
 	if !strings.HasSuffix(env.SourceID, externalContactDeleteUnknownSuffix) && prior.LastContentHash != nil {
 		claimed := env.SourceID[len(env.SourceID)-64:]
 		if *prior.LastContentHash != claimed {

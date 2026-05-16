@@ -29,9 +29,9 @@ WHERE source = $1 AND source_id = $2 AND COALESCE(account_id, '') = COALESCE($3,
 -- name: UpsertExternalContact :one
 -- Named-param variant. host_id is on INSERT only and NOT in the
 -- ON CONFLICT DO UPDATE SET list — the ORIGINAL paired host's
--- ownership persists across content updates. See plan D-JC1 for
--- the rationale (re-pair limitation handled by the operator script
--- scripts/admin/reset_icloud_contacts.sh, NOT by a cascade).
+-- ownership persists across content updates. Re-pair onto a different
+-- Mac is a documented limitation; the operator script
+-- scripts/admin/reset_icloud_contacts.sh handles cleanup.
 --
 -- last_content_hash is written on both INSERT and UPDATE so the
 -- /known-ids endpoint always returns the most recent payload's hash.
@@ -95,9 +95,9 @@ RETURNING *;
 -- Lowercase-hex of last_content_hash is enforced upstream by the
 -- ingest layer's verifyExternalContactInvariants regex
 -- (^[a-f0-9]{64}$) plus the JCS hash-verification check. This query
--- stores and returns the value verbatim. Legacy rows (pre-PR8a) have
--- NULL last_content_hash; the daemon falls back to the
--- @deleted@unknown sentinel per spec line 343.
+-- stores and returns the value verbatim. Legacy rows whose
+-- last_content_hash is NULL cause the daemon to fall back to the
+-- @deleted@unknown sentinel per the spec.
 SELECT source_id, last_content_hash
 FROM external_contact
 WHERE host_id = sqlc.arg('host_id')

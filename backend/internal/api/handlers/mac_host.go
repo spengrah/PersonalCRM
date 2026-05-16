@@ -32,7 +32,7 @@ type MacHostService interface {
 	GetHost(ctx context.Context, id uuid.UUID) (*repository.MacHost, error)
 	RevokeHost(ctx context.Context, id uuid.UUID) error
 	KnownIdentifiers(ctx context.Context) (*service.KnownIdentifiersResult, error)
-	KnownIDsForSource(ctx context.Context, hostID uuid.UUID, source string) ([]repository.KnownExternalContactID, error)
+	KnownIDsForSource(ctx context.Context, hostID uuid.UUID, source string) ([]service.KnownExternalContactID, error)
 }
 
 // MacHostHandler handles Mac-daemon HTTP requests + admin UI requests
@@ -407,7 +407,7 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 // always a non-nil JSON array of `{"source_id": "...",
 // "last_content_hash": "..." | null}` objects sorted by source_id.
 // Empty array on a fresh CRM or for sources without external_contact
-// rows. See plan D-JC1 / D-JC7.
+// rows.
 func (h *MacHostHandler) KnownIDs(c *gin.Context) {
 	host, ok := auth.MacHostFromContext(c)
 	if !ok {
@@ -431,7 +431,7 @@ func (h *MacHostHandler) KnownIDs(c *gin.Context) {
 	}
 	// Always emit a non-nil slice so the JSON encodes as `[]`, not `null`.
 	if ids == nil {
-		ids = []repository.KnownExternalContactID{}
+		ids = []service.KnownExternalContactID{}
 	}
 	api.SendSuccess(c, http.StatusOK, gin.H{"ids": ids}, nil)
 }

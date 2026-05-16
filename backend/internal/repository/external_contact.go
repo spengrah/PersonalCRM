@@ -76,7 +76,7 @@ type ExternalContact struct {
 	// HostID is the paired Mac host that originally inserted this row
 	// (mac-daemon sources only). Populated on first insert and never
 	// updated thereafter, so the row's ownership stays with the
-	// authoring host across content updates. See plan D-JC1.
+	// authoring host across content updates.
 	HostID *uuid.UUID `json:"host_id,omitempty"`
 	// LastContentHash is the lowercase-hex SHA-256 of the JCS-
 	// canonicalized payload (minus host_id) that produced this row's
@@ -90,9 +90,10 @@ type ExternalContact struct {
 // returned by GET /api/v1/host/:id/sync/:source/known-ids. The daemon
 // uses it to (a) drive tombstone reconciliation after a full
 // CNContactStore scan, and (b) construct deterministic delete
-// source_ids of the form `<entity>@deleted@<prev_hash>` per spec
-// line 343. LastContentHash is nil for legacy rows that pre-date
-// PR8a; the daemon falls back to the `@deleted@unknown` sentinel.
+// source_ids of the form `<entity>@deleted@<prev_hash>` per the
+// mac-daemon spec. LastContentHash is nil for legacy rows from
+// before the column existed; the daemon falls back to the
+// `@deleted@unknown` sentinel.
 type KnownExternalContactID struct {
 	SourceID        string  `json:"source_id"`
 	LastContentHash *string `json:"last_content_hash"`
@@ -131,7 +132,7 @@ type UpsertExternalContactRequest struct {
 	// HostID is set ONLY by mac-daemon ingest paths. The underlying
 	// sqlc query writes it on the INSERT branch only — it is NOT in
 	// the ON CONFLICT DO UPDATE SET list, so the ORIGINAL paired
-	// host's ownership persists across content updates. See plan D-JC1.
+	// host's ownership persists across content updates.
 	HostID *uuid.UUID `json:"host_id,omitempty"`
 	// LastContentHash is the lowercase-hex SHA-256 of the JCS-
 	// canonicalized payload (minus host_id). Set by mac-daemon ingest
