@@ -235,6 +235,11 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 	})
 
 	release := make(chan struct{})
+	releaseOnce := sync.Once{}
+	releaseBlocker := func() { releaseOnce.Do(func() { close(release) }) }
+	// Always release the blocker so the parked batch goroutine and
+	// its open transaction unwind even if a t.Fatal aborts mid-test.
+	defer releaseBlocker()
 	blocker := &blockingExternalContactWriter{
 		inner:   externalRepo,
 		release: release,
@@ -278,18 +283,22 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 	}()
 
 	// Wait until goroutine A has reached UpsertTx — at that point the
-	// FOR UPDATE lock is held inside the tx.
+	// FOR UPDATE lock is held inside the tx. The deferred
+	// releaseBlocker below guarantees we never leak the parked
+	// goroutine + open tx, even on a t.Fatal abort.
 	select {
 	case <-blocker.entered:
 	case <-time.After(5 * time.Second):
-		close(release)
 		t.Fatal("batch never entered UpsertTx; FOR UPDATE acquire may have failed")
 	}
 
 	// Goroutine B: try to revoke. UPDATE mac_host will block on the
-	// row lock held by goroutine A.
+	// row lock held by goroutine A. We measure how long the revoke
+	// blocks using wall-clock time (not accelerated.GetCurrentTime
+	// which can be sped up by the time-acceleration knob) because
+	// the test is asserting on real elapsed concurrency behavior.
 	revokeDone := make(chan struct{})
-	revokeStart := time.Now()
+	revokeStart := time.Now() //nolint:forbidigo // Wall-clock time for concurrency-latency assertion
 	var revokeErr error
 	go func() {
 		revokeErr = macService.RevokeHost(ctx, pair.HostID)
@@ -307,7 +316,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 
 	// Release goroutine A. The batch commits, drops the lock, and B
 	// proceeds.
-	close(release)
+	releaseBlocker()
 
 	select {
 	case res := <-batchDone:
@@ -320,7 +329,8 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 	select {
 	case <-revokeDone:
 		require.NoError(t, revokeErr)
-		require.GreaterOrEqual(t, time.Since(revokeStart), 250*time.Millisecond,
+		elapsed := time.Since(revokeStart) //nolint:forbidigo // Wall-clock concurrency latency
+		require.GreaterOrEqual(t, elapsed, 250*time.Millisecond,
 			"revoke must have waited for the batch tx to release the row lock")
 	case <-time.After(5 * time.Second):
 		t.Fatal("revoke never completed after batch released the lock")
