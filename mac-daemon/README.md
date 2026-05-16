@@ -27,7 +27,13 @@ The PR6 Definition of Done. Replace `<pi-host>` with your Pi's reachable hostnam
 **On the Pi:** mint a single-use pairing token.
 
 ```bash
-ssh <pi-host> "cd /opt/personal-crm && ./backend/crm-admin --mint-pairing-token --hostname-label mac-1"
+ssh <pi-host> "sudo -u crm bash -lc '
+set -a
+. /srv/personalcrm/.env
+set +a
+cd /srv/personalcrm
+./backend/bin/crm-admin --mint-pairing-token --hostname-label mac-1
+'"
 # token=<plaintext-base64-rawurl>
 # expires_at=2026-05-13T15:42:18Z
 # hostname_label=mac-1
@@ -48,6 +54,14 @@ The pairing token is single-use and short-lived (10 minutes). The `--hostname-la
 `--hostname` is REQUIRED on fresh install. Pick a non-PII label (`mac-1`, `work-mac`, `home-laptop`). The value is stored in the Pi's `mac_host` table and shown in the settings UI.
 
 The first launch may trip Gatekeeper because the binary is ad-hoc signed. If it does, the daemon will print a hint pointing at **System Settings → Privacy & Security → "crm-mac was blocked..." → Open Anyway.**
+
+Before testing the `messages` source, grant **Full Disk Access** to the installed daemon binary:
+
+1. Open **System Settings → Privacy & Security → Full Disk Access**.
+2. Click **+** and add `~/Library/Application Support/crm-mac/bin/crm-mac`.
+3. Ensure the new `crm-mac` entry is enabled.
+
+Without this permission, the daemon cannot read `~/Library/Messages/chat.db` and the messages source reports `fda_required`.
 
 ## Verify
 
@@ -103,14 +117,28 @@ make mac-daemon
 
 `--upgrade` reads the existing `config.json` + Keychain api-key, bootouts the running daemon, atomic-renames the new binary into place, and re-bootstraps launchd. It does NOT call `POST /host`.
 
+Because local builds are ad-hoc signed, macOS may ask you to approve Keychain access again after replacing the installed binary with a rebuilt one.
+
 ## Recovery scenarios
 
 **Pi unreachable during fresh install (network drop after Pi commit).** The pair tx may have committed before the daemon got the response back. The Pi-side host row exists but the daemon doesn't know its `host_id` or `api_key`:
 
 ```bash
-ssh <pi-host> "cd /opt/personal-crm && ./backend/crm-admin --list-hosts"
+ssh <pi-host> "sudo -u crm bash -lc '
+set -a
+. /srv/personalcrm/.env
+set +a
+cd /srv/personalcrm
+./backend/bin/crm-admin --list-hosts
+'"
 # id=<uuid> hostname=mac-1 created_at=... last_heartbeat_at=never
-ssh <pi-host> "cd /opt/personal-crm && ./backend/crm-admin --revoke-host <uuid>"
+ssh <pi-host> "sudo -u crm bash -lc '
+set -a
+. /srv/personalcrm/.env
+set +a
+cd /srv/personalcrm
+./backend/bin/crm-admin --revoke-host <uuid>
+'"
 # revoked host_id=<uuid>
 # Then re-mint a token and re-install.
 ```
@@ -119,7 +147,13 @@ ssh <pi-host> "cd /opt/personal-crm && ./backend/crm-admin --revoke-host <uuid>"
 
 ```bash
 ./mac-daemon/.build/release/crm-mac uninstall --purge
-ssh <pi-host> "cd /opt/personal-crm && ./backend/crm-admin --revoke-host <host_id>"
+ssh <pi-host> "sudo -u crm bash -lc '
+set -a
+. /srv/personalcrm/.env
+set +a
+cd /srv/personalcrm
+./backend/bin/crm-admin --revoke-host <host_id>
+'"
 # Re-mint a token and re-install.
 ```
 
@@ -214,7 +248,9 @@ PR7 introduces a POSIX advisory lock on `~/Library/Application Support/crm-mac/d
 
 ## Live smoke test (PR7)
 
-Pre-req: PR6-installed daemon paired to a live Pi; messages tick disabled or running on its scheduled cadence.
+Pre-req: daemon paired to a live Pi; Full Disk Access granted to the installed `crm-mac` binary; messages tick disabled or running on its scheduled cadence. If `./mac-daemon/.build/release/crm-mac status` reports `installed=false`, complete **Pair + install (manual smoke)** above before starting this procedure.
+
+This is a live ingestion smoke, not a dry run. Once the Pi ingest route is enabled and the daemon is running, the daemon publishes new messages immediately and also starts bounded historical backfill toward the configured floor.
 
 1. **Pick a fixture contact** — one whose primary phone/email is in the canonical `known-identifiers` set.
 
@@ -225,16 +261,14 @@ Pre-req: PR6-installed daemon paired to a live Pi; messages tick disabled or run
        -c "SELECT id, last_contacted FROM contact WHERE id = '<uuid>';"'
    ```
 
-3. **Install the PR7 daemon binary:**
+3. **Ensure the installed daemon is running the PR7 binary.** If you just completed a fresh install from this checkout, skip this step. If this Mac already had an older installed daemon, upgrade it in place:
 
    ```bash
    make mac-daemon
-   launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
-   cp .build/release/crm-mac ~/Library/Application\ Support/crm-mac/bin/
-   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
+   ./mac-daemon/.build/release/crm-mac install --upgrade
    ```
 
-4. **Send a real iMessage** in both directions to the fixture contact (outbound + inbound). Two-direction proves direction inference is wired.
+4. **Receive a real inbound iMessage** from the fixture contact. Outbound rows are not emitted yet; see **Limitations (v1)** below.
 
 5. **Wait two messages-tick cadences** (~3 minutes).
 
@@ -245,7 +279,7 @@ Pre-req: PR6-installed daemon paired to a live Pi; messages tick disabled or run
        | grep -i raw_message
    ```
 
-   Expect: at least two `raw_message.received` / `raw_message.sent` events with `accepted=1`.
+   Expect: at least one `raw_message.received` event with `accepted=1`.
 
 7. **Verify the interaction row** was created on the Pi:
 
@@ -257,7 +291,7 @@ Pre-req: PR6-installed daemon paired to a live Pi; messages tick disabled or run
            ORDER BY occurred_at DESC LIMIT 5;"'
    ```
 
-   Expect: ≥ 1 rows with `source=messages`, sane direction, recent `occurred_at`.
+   Expect: >= 1 row with `source=messages`, `direction=inbound`, recent `occurred_at`.
 
 8. **Verify last_contacted advanced:**
 
@@ -269,7 +303,7 @@ Pre-req: PR6-installed daemon paired to a live Pi; messages tick disabled or run
 9. **Verify the messages source health:**
 
    ```bash
-   crm-mac status
+   ./mac-daemon/.build/release/crm-mac status
    ```
 
    Expect: messages source `live_cursor` advanced; `backfill_complete` either false (still descending) or true; no `last_error`.

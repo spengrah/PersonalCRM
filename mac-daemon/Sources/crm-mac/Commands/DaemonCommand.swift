@@ -120,7 +120,7 @@ struct DaemonCommand: AsyncParsableCommand {
             messagesPlugin,
             StubICloudContactsPlugin(context: stubContext),
         ]
-        let scheduler = NSBackgroundActivityScheduleRunner(logger: logger)
+        let scheduler = DispatchSourceScheduleRunner(logger: logger)
         let runner = DaemonRunner(
             heartbeat: heartbeat,
             plugins: plugins,
