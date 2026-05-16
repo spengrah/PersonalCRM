@@ -126,7 +126,7 @@ func (q *Queries) DeleteExternalContactsBySourceAccount(ctx context.Context, arg
 }
 
 const FindExternalContactsByEmail = `-- name: FindExternalContactsByEmail :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
 WHERE emails @> $1::jsonb
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
@@ -166,6 +166,8 @@ func (q *Queries) FindExternalContactsByEmail(ctx context.Context, dollar_1 []by
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.HostID,
+			&i.LastContentHash,
 		); err != nil {
 			return nil, err
 		}
@@ -178,7 +180,7 @@ func (q *Queries) FindExternalContactsByEmail(ctx context.Context, dollar_1 []by
 }
 
 const FindExternalContactsByNormalizedEmail = `-- name: FindExternalContactsByNormalizedEmail :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
 WHERE jsonb_array_lower_values(emails, 'value') && ARRAY[LOWER($1)]
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
@@ -222,6 +224,8 @@ func (q *Queries) FindExternalContactsByNormalizedEmail(ctx context.Context, low
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.HostID,
+			&i.LastContentHash,
 		); err != nil {
 			return nil, err
 		}
@@ -234,7 +238,7 @@ func (q *Queries) FindExternalContactsByNormalizedEmail(ctx context.Context, low
 }
 
 const FindExternalContactsBySourceAndSourceID = `-- name: FindExternalContactsBySourceAndSourceID :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
 WHERE source = $1
   AND source_id = $2
   AND match_status = 'unmatched'
@@ -283,6 +287,8 @@ func (q *Queries) FindExternalContactsBySourceAndSourceID(ctx context.Context, a
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.HostID,
+			&i.LastContentHash,
 		); err != nil {
 			return nil, err
 		}
@@ -360,7 +366,7 @@ func (q *Queries) GetEnrichmentsForContact(ctx context.Context, contactID pgtype
 
 const GetExternalContact = `-- name: GetExternalContact :one
 
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
 WHERE id = $1
   AND deleted_at IS NULL
 `
@@ -394,12 +400,14 @@ func (q *Queries) GetExternalContact(ctx context.Context, id pgtype.UUID) (*Exte
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.HostID,
+		&i.LastContentHash,
 	)
 	return &i, err
 }
 
 const GetExternalContactBySource = `-- name: GetExternalContactBySource :one
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
 WHERE source = $1 AND source_id = $2 AND COALESCE(account_id, '') = COALESCE($3, '')
 `
 
@@ -441,6 +449,8 @@ func (q *Queries) GetExternalContactBySource(ctx context.Context, arg GetExterna
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.HostID,
+		&i.LastContentHash,
 	)
 	return &i, err
 }
@@ -478,7 +488,7 @@ func (q *Queries) IgnoreExternalContact(ctx context.Context, id pgtype.UUID) err
 }
 
 const ListAllUnmatchedExternalContacts = `-- name: ListAllUnmatchedExternalContacts :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
 WHERE match_status = 'unmatched'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
@@ -524,6 +534,8 @@ func (q *Queries) ListAllUnmatchedExternalContacts(ctx context.Context, arg List
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.HostID,
+			&i.LastContentHash,
 		); err != nil {
 			return nil, err
 		}
@@ -578,7 +590,7 @@ func (q *Queries) ListEnrichmentsBySource(ctx context.Context, arg ListEnrichmen
 }
 
 const ListExternalContactsBySource = `-- name: ListExternalContactsBySource :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
 WHERE source = $1
   AND ($2::text IS NULL OR account_id = $2)
   AND deleted_at IS NULL
@@ -631,6 +643,8 @@ func (q *Queries) ListExternalContactsBySource(ctx context.Context, arg ListExte
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.HostID,
+			&i.LastContentHash,
 		); err != nil {
 			return nil, err
 		}
@@ -643,7 +657,7 @@ func (q *Queries) ListExternalContactsBySource(ctx context.Context, arg ListExte
 }
 
 const ListExternalContactsForCRMContact = `-- name: ListExternalContactsForCRMContact :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
 WHERE crm_contact_id = $1
   AND deleted_at IS NULL
 ORDER BY source, account_id
@@ -682,6 +696,8 @@ func (q *Queries) ListExternalContactsForCRMContact(ctx context.Context, crmCont
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.HostID,
+			&i.LastContentHash,
 		); err != nil {
 			return nil, err
 		}
@@ -693,8 +709,60 @@ func (q *Queries) ListExternalContactsForCRMContact(ctx context.Context, crmCont
 	return items, nil
 }
 
+const ListKnownExternalContactIDsByHostAndSource = `-- name: ListKnownExternalContactIDsByHostAndSource :many
+SELECT source_id, last_content_hash
+FROM external_contact
+WHERE host_id = $1
+  AND source = $2
+  AND deleted_at IS NULL
+ORDER BY source_id
+`
+
+type ListKnownExternalContactIDsByHostAndSourceParams struct {
+	HostID pgtype.UUID `json:"host_id"`
+	Source string      `json:"source"`
+}
+
+type ListKnownExternalContactIDsByHostAndSourceRow struct {
+	SourceID        string      `json:"source_id"`
+	LastContentHash pgtype.Text `json:"last_content_hash"`
+}
+
+// Returns (source_id, last_content_hash) for every live
+// external_contact row owned by the given (host_id, source). Powers
+// GET /api/v1/host/:id/sync/:source/known-ids. Tombstoned rows are
+// excluded — the daemon's set-diff reconciliation requires that
+// rows the Pi has soft-deleted are NOT reported as known (else the
+// daemon never re-tombstones them).
+//
+// Lowercase-hex of last_content_hash is enforced upstream by the
+// ingest layer's verifyExternalContactInvariants regex
+// (^[a-f0-9]{64}$) plus the JCS hash-verification check. This query
+// stores and returns the value verbatim. Legacy rows (pre-PR8a) have
+// NULL last_content_hash; the daemon falls back to the
+// @deleted@unknown sentinel per spec line 343.
+func (q *Queries) ListKnownExternalContactIDsByHostAndSource(ctx context.Context, arg ListKnownExternalContactIDsByHostAndSourceParams) ([]*ListKnownExternalContactIDsByHostAndSourceRow, error) {
+	rows, err := q.db.Query(ctx, ListKnownExternalContactIDsByHostAndSource, arg.HostID, arg.Source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListKnownExternalContactIDsByHostAndSourceRow{}
+	for rows.Next() {
+		var i ListKnownExternalContactIDsByHostAndSourceRow
+		if err := rows.Scan(&i.SourceID, &i.LastContentHash); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListUnmatchedExternalContacts = `-- name: ListUnmatchedExternalContacts :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
 WHERE source = $1
   AND match_status = 'unmatched'
   AND duplicate_of_id IS NULL
@@ -742,6 +810,8 @@ func (q *Queries) ListUnmatchedExternalContacts(ctx context.Context, arg ListUnm
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.HostID,
+			&i.LastContentHash,
 		); err != nil {
 			return nil, err
 		}
@@ -759,7 +829,7 @@ UPDATE external_contact SET
     updated_at = NOW()
 WHERE id = $1
   AND deleted_at IS NOT NULL
-RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash
 `
 
 // Clears deleted_at on a tombstoned row. Defensive WHERE deleted_at IS NOT
@@ -792,6 +862,8 @@ func (q *Queries) ReviveExternalContact(ctx context.Context, id pgtype.UUID) (*E
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.HostID,
+		&i.LastContentHash,
 	)
 	return &i, err
 }
@@ -838,7 +910,7 @@ UPDATE external_contact SET
     updated_at = NOW()
 WHERE id = $1
   AND deleted_at IS NULL
-RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash
 `
 
 type UpdateExternalContactMatchParams struct {
@@ -877,61 +949,101 @@ func (q *Queries) UpdateExternalContactMatch(ctx context.Context, arg UpdateExte
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.HostID,
+		&i.LastContentHash,
 	)
 	return &i, err
 }
 
 const UpsertExternalContact = `-- name: UpsertExternalContact :one
 INSERT INTO external_contact (
-    source, source_id, account_id, display_name, first_name, last_name,
+    source, source_id, account_id, host_id, display_name, first_name, last_name,
     emails, phones, addresses, organization, job_title, birthday, photo_url,
-    crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+    crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at,
+    last_content_hash
+) VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    $11,
+    $12,
+    $13,
+    $14,
+    $15,
+    $16,
+    $17,
+    $18,
+    $19,
+    $20,
+    $21
+)
 ON CONFLICT (source, source_id, COALESCE(account_id, '')) DO UPDATE SET
-    display_name = EXCLUDED.display_name,
-    first_name = EXCLUDED.first_name,
-    last_name = EXCLUDED.last_name,
-    emails = EXCLUDED.emails,
-    phones = EXCLUDED.phones,
-    addresses = EXCLUDED.addresses,
-    organization = EXCLUDED.organization,
-    job_title = EXCLUDED.job_title,
-    birthday = EXCLUDED.birthday,
-    photo_url = EXCLUDED.photo_url,
-    etag = EXCLUDED.etag,
-    metadata = EXCLUDED.metadata,
-    synced_at = EXCLUDED.synced_at,
-    updated_at = NOW()
-RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at
+    -- host_id intentionally NOT updated — preserves first-insert ownership.
+    display_name      = EXCLUDED.display_name,
+    first_name        = EXCLUDED.first_name,
+    last_name         = EXCLUDED.last_name,
+    emails            = EXCLUDED.emails,
+    phones            = EXCLUDED.phones,
+    addresses         = EXCLUDED.addresses,
+    organization      = EXCLUDED.organization,
+    job_title         = EXCLUDED.job_title,
+    birthday          = EXCLUDED.birthday,
+    photo_url         = EXCLUDED.photo_url,
+    etag              = EXCLUDED.etag,
+    metadata          = EXCLUDED.metadata,
+    synced_at         = EXCLUDED.synced_at,
+    last_content_hash = EXCLUDED.last_content_hash,
+    updated_at        = NOW()
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash
 `
 
 type UpsertExternalContactParams struct {
-	Source        string             `json:"source"`
-	SourceID      string             `json:"source_id"`
-	AccountID     pgtype.Text        `json:"account_id"`
-	DisplayName   pgtype.Text        `json:"display_name"`
-	FirstName     pgtype.Text        `json:"first_name"`
-	LastName      pgtype.Text        `json:"last_name"`
-	Emails        []byte             `json:"emails"`
-	Phones        []byte             `json:"phones"`
-	Addresses     []byte             `json:"addresses"`
-	Organization  pgtype.Text        `json:"organization"`
-	JobTitle      pgtype.Text        `json:"job_title"`
-	Birthday      pgtype.Date        `json:"birthday"`
-	PhotoUrl      pgtype.Text        `json:"photo_url"`
-	CrmContactID  pgtype.UUID        `json:"crm_contact_id"`
-	MatchStatus   pgtype.Text        `json:"match_status"`
-	DuplicateOfID pgtype.UUID        `json:"duplicate_of_id"`
-	Etag          pgtype.Text        `json:"etag"`
-	Metadata      []byte             `json:"metadata"`
-	SyncedAt      pgtype.Timestamptz `json:"synced_at"`
+	Source          string             `json:"source"`
+	SourceID        string             `json:"source_id"`
+	AccountID       pgtype.Text        `json:"account_id"`
+	HostID          pgtype.UUID        `json:"host_id"`
+	DisplayName     pgtype.Text        `json:"display_name"`
+	FirstName       pgtype.Text        `json:"first_name"`
+	LastName        pgtype.Text        `json:"last_name"`
+	Emails          []byte             `json:"emails"`
+	Phones          []byte             `json:"phones"`
+	Addresses       []byte             `json:"addresses"`
+	Organization    pgtype.Text        `json:"organization"`
+	JobTitle        pgtype.Text        `json:"job_title"`
+	Birthday        pgtype.Date        `json:"birthday"`
+	PhotoUrl        pgtype.Text        `json:"photo_url"`
+	CrmContactID    pgtype.UUID        `json:"crm_contact_id"`
+	MatchStatus     pgtype.Text        `json:"match_status"`
+	DuplicateOfID   pgtype.UUID        `json:"duplicate_of_id"`
+	Etag            pgtype.Text        `json:"etag"`
+	Metadata        []byte             `json:"metadata"`
+	SyncedAt        pgtype.Timestamptz `json:"synced_at"`
+	LastContentHash pgtype.Text        `json:"last_content_hash"`
 }
 
+// Named-param variant. host_id is on INSERT only and NOT in the
+// ON CONFLICT DO UPDATE SET list — the ORIGINAL paired host's
+// ownership persists across content updates. See plan D-JC1 for
+// the rationale (re-pair limitation handled by the operator script
+// scripts/admin/reset_icloud_contacts.sh, NOT by a cascade).
+//
+// last_content_hash is written on both INSERT and UPDATE so the
+// /known-ids endpoint always returns the most recent payload's hash.
+// Application-layer regex enforces lowercase 64-char hex on write;
+// this query stores the value verbatim.
 func (q *Queries) UpsertExternalContact(ctx context.Context, arg UpsertExternalContactParams) (*ExternalContact, error) {
 	row := q.db.QueryRow(ctx, UpsertExternalContact,
 		arg.Source,
 		arg.SourceID,
 		arg.AccountID,
+		arg.HostID,
 		arg.DisplayName,
 		arg.FirstName,
 		arg.LastName,
@@ -948,6 +1060,7 @@ func (q *Queries) UpsertExternalContact(ctx context.Context, arg UpsertExternalC
 		arg.Etag,
 		arg.Metadata,
 		arg.SyncedAt,
+		arg.LastContentHash,
 	)
 	var i ExternalContact
 	err := row.Scan(
@@ -974,6 +1087,8 @@ func (q *Queries) UpsertExternalContact(ctx context.Context, arg UpsertExternalC
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.HostID,
+		&i.LastContentHash,
 	)
 	return &i, err
 }
@@ -989,7 +1104,7 @@ ON CONFLICT (source, source_id, COALESCE(account_id, '')) DO UPDATE SET
     metadata     = external_contact.metadata || EXCLUDED.metadata,
     synced_at    = EXCLUDED.synced_at,
     updated_at   = NOW()
-RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash
 `
 
 type UpsertTelegramDiscoveryCandidateParams struct {
@@ -1039,6 +1154,8 @@ func (q *Queries) UpsertTelegramDiscoveryCandidate(ctx context.Context, arg Upse
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.HostID,
+		&i.LastContentHash,
 	)
 	return &i, err
 }

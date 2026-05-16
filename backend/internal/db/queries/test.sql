@@ -10,6 +10,15 @@ DELETE FROM external_contact WHERE display_name LIKE $1 || '%';
 -- name: DeleteExternalContactsBySourceIDPrefix :execrows
 DELETE FROM external_contact WHERE source_id LIKE $1 || '%';
 
+-- name: DeleteExternalContactsBySourceForTest :execrows
+-- Test teardown — hard-deletes ALL external_contact rows for a given
+-- source string. The known-IDs integration tests use this when they
+-- seed rows under a synthetic source value and need a targeted
+-- cleanup that ignores soft-delete state. Production code must never
+-- call this; it bypasses the tombstone contract and the
+-- crm_contact_id/match_status preservation rules.
+DELETE FROM external_contact WHERE source = @source;
+
 -- name: CountContactsByNamePrefix :one
 SELECT COUNT(*) FROM contact WHERE full_name LIKE $1 || '%';
 

@@ -165,6 +165,28 @@ func (r *MacHostRepository) GetActiveHostByID(ctx context.Context, id uuid.UUID)
 	return convertDbMacHost(row), nil
 }
 
+// GetActiveHostByIDForUpdateTx is the tx-bound, row-locking variant
+// of GetActiveHostByID. The underlying SELECT ... FOR UPDATE blocks
+// any concurrent UPDATE (e.g. RevokeMacHost) on the same row until
+// the caller's tx commits or rolls back. Used by IngestService's
+// per-batch host-liveness check to close the race window between
+// MacHostAuthMiddleware's read and the batch's commit. Returns
+// db.ErrNotFound for both "no such id" and "id is revoked".
+func (r *MacHostRepository) GetActiveHostByIDForUpdateTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id uuid.UUID,
+) (*MacHost, error) {
+	row, err := db.New(tx).GetActiveMacHostByIDForUpdate(ctx, uuidToPgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, fmt.Errorf("get active mac_host for update: %w", err)
+	}
+	return convertDbMacHost(row), nil
+}
+
 // GetHost returns the row for id regardless of revocation status. Used
 // by admin handlers + delete-cascade flow.
 func (r *MacHostRepository) GetHost(ctx context.Context, id uuid.UUID) (*MacHost, error) {

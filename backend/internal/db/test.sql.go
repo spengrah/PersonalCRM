@@ -193,6 +193,24 @@ func (q *Queries) DeleteExternalContactsByDisplayNamePrefix(ctx context.Context,
 	return result.RowsAffected(), nil
 }
 
+const DeleteExternalContactsBySourceForTest = `-- name: DeleteExternalContactsBySourceForTest :execrows
+DELETE FROM external_contact WHERE source = $1
+`
+
+// Test teardown — hard-deletes ALL external_contact rows for a given
+// source string. The known-IDs integration tests use this when they
+// seed rows under a synthetic source value and need a targeted
+// cleanup that ignores soft-delete state. Production code must never
+// call this; it bypasses the tombstone contract and the
+// crm_contact_id/match_status preservation rules.
+func (q *Queries) DeleteExternalContactsBySourceForTest(ctx context.Context, source string) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteExternalContactsBySourceForTest, source)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const DeleteExternalContactsBySourceIDPrefix = `-- name: DeleteExternalContactsBySourceIDPrefix :execrows
 DELETE FROM external_contact WHERE source_id LIKE $1 || '%'
 `

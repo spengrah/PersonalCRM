@@ -198,6 +198,13 @@ type Querier interface {
 	DeleteExternalContact(ctx context.Context, id pgtype.UUID) error
 	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error
+	// Test teardown — hard-deletes ALL external_contact rows for a given
+	// source string. The known-IDs integration tests use this when they
+	// seed rows under a synthetic source value and need a targeted
+	// cleanup that ignores soft-delete state. Production code must never
+	// call this; it bypasses the tombstone contract and the
+	// crm_contact_id/match_status preservation rules.
+	DeleteExternalContactsBySourceForTest(ctx context.Context, source string) (int64, error)
 	DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	// Test teardown — drop external_identity rows seeded by a test under
 	// a known source string (e.g., 'messages'). Used in raw_message ingest
@@ -346,6 +353,13 @@ type Querier interface {
 	// Used by MacHostAuthMiddleware. Filters revoked hosts so a revoked
 	// daemon's bearer key cannot authenticate.
 	GetActiveMacHostByID(ctx context.Context, id pgtype.UUID) (*MacHost, error)
+	// Tx-bound active-host lookup with row-level write lock. Used by
+	// IngestService for the tx-internal host-liveness check per plan
+	// D-JC11. The FOR UPDATE clause serializes against concurrent
+	// revoke attempts: a revoke that tries to UPDATE this row blocks
+	// until the ingest batch commits or rolls back. Matches the
+	// cursor-commit precedent in GetMacHostCursorEpoch below.
+	GetActiveMacHostByIDForUpdate(ctx context.Context, id pgtype.UUID) (*MacHost, error)
 	// Look up an event by its Google Calendar ID
 	GetCalendarEventByGcalID(ctx context.Context, arg GetCalendarEventByGcalIDParams) (*CalendarEvent, error)
 	// Look up an event by its UUID
@@ -569,6 +583,20 @@ type Querier interface {
 	ListExternalContactsForCRMContact(ctx context.Context, crmContactID pgtype.UUID) ([]*ExternalContact, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
 	ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error)
+	// Returns (source_id, last_content_hash) for every live
+	// external_contact row owned by the given (host_id, source). Powers
+	// GET /api/v1/host/:id/sync/:source/known-ids. Tombstoned rows are
+	// excluded — the daemon's set-diff reconciliation requires that
+	// rows the Pi has soft-deleted are NOT reported as known (else the
+	// daemon never re-tombstones them).
+	//
+	// Lowercase-hex of last_content_hash is enforced upstream by the
+	// ingest layer's verifyExternalContactInvariants regex
+	// (^[a-f0-9]{64}$) plus the JCS hash-verification check. This query
+	// stores and returns the value verbatim. Legacy rows (pre-PR8a) have
+	// NULL last_content_hash; the daemon falls back to the
+	// @deleted@unknown sentinel per spec line 343.
+	ListKnownExternalContactIDsByHostAndSource(ctx context.Context, arg ListKnownExternalContactIDsByHostAndSourceParams) ([]*ListKnownExternalContactIDsByHostAndSourceRow, error)
 	ListMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all managed tasks for a provider (for reconciliation)
 	ListManagedContactTasks(ctx context.Context, provider string) ([]*ListManagedContactTasksRow, error)
@@ -889,6 +917,16 @@ type Querier interface {
 	UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error)
 	// Upsert a contact task by external_task_id (Todoist task IDs are globally unique)
 	UpsertContactTask(ctx context.Context, arg UpsertContactTaskParams) (*ContactTask, error)
+	// Named-param variant. host_id is on INSERT only and NOT in the
+	// ON CONFLICT DO UPDATE SET list — the ORIGINAL paired host's
+	// ownership persists across content updates. See plan D-JC1 for
+	// the rationale (re-pair limitation handled by the operator script
+	// scripts/admin/reset_icloud_contacts.sh, NOT by a cascade).
+	//
+	// last_content_hash is written on both INSERT and UPDATE so the
+	// /known-ids endpoint always returns the most recent payload's hash.
+	// Application-layer regex enforces lowercase 64-char hex on write;
+	// this query stores the value verbatim.
 	UpsertExternalContact(ctx context.Context, arg UpsertExternalContactParams) (*ExternalContact, error)
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
 	// Insert with no-op on guid conflict. peer_normalized and matched_contact_id

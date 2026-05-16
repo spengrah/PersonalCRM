@@ -27,27 +27,83 @@ SELECT * FROM external_contact
 WHERE source = $1 AND source_id = $2 AND COALESCE(account_id, '') = COALESCE($3, '');
 
 -- name: UpsertExternalContact :one
+-- Named-param variant. host_id is on INSERT only and NOT in the
+-- ON CONFLICT DO UPDATE SET list — the ORIGINAL paired host's
+-- ownership persists across content updates. See plan D-JC1 for
+-- the rationale (re-pair limitation handled by the operator script
+-- scripts/admin/reset_icloud_contacts.sh, NOT by a cascade).
+--
+-- last_content_hash is written on both INSERT and UPDATE so the
+-- /known-ids endpoint always returns the most recent payload's hash.
+-- Application-layer regex enforces lowercase 64-char hex on write;
+-- this query stores the value verbatim.
 INSERT INTO external_contact (
-    source, source_id, account_id, display_name, first_name, last_name,
+    source, source_id, account_id, host_id, display_name, first_name, last_name,
     emails, phones, addresses, organization, job_title, birthday, photo_url,
-    crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+    crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at,
+    last_content_hash
+) VALUES (
+    sqlc.arg('source'),
+    sqlc.arg('source_id'),
+    sqlc.arg('account_id'),
+    sqlc.arg('host_id'),
+    sqlc.arg('display_name'),
+    sqlc.arg('first_name'),
+    sqlc.arg('last_name'),
+    sqlc.arg('emails'),
+    sqlc.arg('phones'),
+    sqlc.arg('addresses'),
+    sqlc.arg('organization'),
+    sqlc.arg('job_title'),
+    sqlc.arg('birthday'),
+    sqlc.arg('photo_url'),
+    sqlc.arg('crm_contact_id'),
+    sqlc.arg('match_status'),
+    sqlc.arg('duplicate_of_id'),
+    sqlc.arg('etag'),
+    sqlc.arg('metadata'),
+    sqlc.arg('synced_at'),
+    sqlc.arg('last_content_hash')
+)
 ON CONFLICT (source, source_id, COALESCE(account_id, '')) DO UPDATE SET
-    display_name = EXCLUDED.display_name,
-    first_name = EXCLUDED.first_name,
-    last_name = EXCLUDED.last_name,
-    emails = EXCLUDED.emails,
-    phones = EXCLUDED.phones,
-    addresses = EXCLUDED.addresses,
-    organization = EXCLUDED.organization,
-    job_title = EXCLUDED.job_title,
-    birthday = EXCLUDED.birthday,
-    photo_url = EXCLUDED.photo_url,
-    etag = EXCLUDED.etag,
-    metadata = EXCLUDED.metadata,
-    synced_at = EXCLUDED.synced_at,
-    updated_at = NOW()
+    -- host_id intentionally NOT updated — preserves first-insert ownership.
+    display_name      = EXCLUDED.display_name,
+    first_name        = EXCLUDED.first_name,
+    last_name         = EXCLUDED.last_name,
+    emails            = EXCLUDED.emails,
+    phones            = EXCLUDED.phones,
+    addresses         = EXCLUDED.addresses,
+    organization      = EXCLUDED.organization,
+    job_title         = EXCLUDED.job_title,
+    birthday          = EXCLUDED.birthday,
+    photo_url         = EXCLUDED.photo_url,
+    etag              = EXCLUDED.etag,
+    metadata          = EXCLUDED.metadata,
+    synced_at         = EXCLUDED.synced_at,
+    last_content_hash = EXCLUDED.last_content_hash,
+    updated_at        = NOW()
 RETURNING *;
+
+-- name: ListKnownExternalContactIDsByHostAndSource :many
+-- Returns (source_id, last_content_hash) for every live
+-- external_contact row owned by the given (host_id, source). Powers
+-- GET /api/v1/host/:id/sync/:source/known-ids. Tombstoned rows are
+-- excluded — the daemon's set-diff reconciliation requires that
+-- rows the Pi has soft-deleted are NOT reported as known (else the
+-- daemon never re-tombstones them).
+--
+-- Lowercase-hex of last_content_hash is enforced upstream by the
+-- ingest layer's verifyExternalContactInvariants regex
+-- (^[a-f0-9]{64}$) plus the JCS hash-verification check. This query
+-- stores and returns the value verbatim. Legacy rows (pre-PR8a) have
+-- NULL last_content_hash; the daemon falls back to the
+-- @deleted@unknown sentinel per spec line 343.
+SELECT source_id, last_content_hash
+FROM external_contact
+WHERE host_id = sqlc.arg('host_id')
+  AND source = sqlc.arg('source')
+  AND deleted_at IS NULL
+ORDER BY source_id;
 
 -- name: ReviveExternalContact :one
 -- Clears deleted_at on a tombstoned row. Defensive WHERE deleted_at IS NOT
