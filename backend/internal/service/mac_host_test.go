@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"personal-crm/backend/internal/repository"
+
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -117,4 +120,71 @@ func TestMacHostService_KnownIdentifiers_NilRepoErrors(t *testing.T) {
 	_, err := svc.KnownIdentifiers(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "contact_method repository not wired")
+}
+
+// stubExternalContactReader is a recording ExternalContactReader stub
+// for KnownIDsForSource unit tests. The pgx.Tx is unused at this
+// layer.
+type stubExternalContactReader struct {
+	resp      []repository.KnownExternalContactID
+	err       error
+	gotHostID uuid.UUID
+	gotSource string
+	callCount int
+}
+
+func (s *stubExternalContactReader) ListKnownIDsByHostAndSource(
+	_ context.Context, hostID uuid.UUID, source string,
+) ([]repository.KnownExternalContactID, error) {
+	s.callCount++
+	s.gotHostID = hostID
+	s.gotSource = source
+	return s.resp, s.err
+}
+
+func TestMacHostService_KnownIDsForSource_HappyPath(t *testing.T) {
+	hash1 := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	hash2 := "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	stub := &stubExternalContactReader{
+		resp: []repository.KnownExternalContactID{
+			{SourceID: "CN-A", LastContentHash: &hash1},
+			{SourceID: "CN-B", LastContentHash: &hash2},
+		},
+	}
+	svc := &MacHostService{externalContactRepo: stub}
+	hostID := uuid.New()
+	got, err := svc.KnownIDsForSource(context.Background(), hostID, "icloud_contacts")
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Equal(t, "CN-A", got[0].SourceID)
+	require.Equal(t, &hash1, got[0].LastContentHash)
+	require.Equal(t, "CN-B", got[1].SourceID)
+	require.Equal(t, &hash2, got[1].LastContentHash)
+	// Service must forward host and source verbatim — no rewriting.
+	require.Equal(t, hostID, stub.gotHostID)
+	require.Equal(t, "icloud_contacts", stub.gotSource)
+}
+
+func TestMacHostService_KnownIDsForSource_EmptyResult(t *testing.T) {
+	stub := &stubExternalContactReader{resp: []repository.KnownExternalContactID{}}
+	svc := &MacHostService{externalContactRepo: stub}
+	got, err := svc.KnownIDsForSource(context.Background(), uuid.New(), "icloud_contacts")
+	require.NoError(t, err)
+	require.NotNil(t, got, "empty result must be a non-nil slice for JSON marshaling")
+	require.Len(t, got, 0)
+}
+
+func TestMacHostService_KnownIDsForSource_RepoErrorSurfaces(t *testing.T) {
+	stub := &stubExternalContactReader{err: errors.New("db: connection refused")}
+	svc := &MacHostService{externalContactRepo: stub}
+	_, err := svc.KnownIDsForSource(context.Background(), uuid.New(), "icloud_contacts")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "connection refused")
+}
+
+func TestMacHostService_KnownIDsForSource_NilRepoErrors(t *testing.T) {
+	svc := &MacHostService{externalContactRepo: nil}
+	_, err := svc.KnownIDsForSource(context.Background(), uuid.New(), "icloud_contacts")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "external_contact repository not wired")
 }
