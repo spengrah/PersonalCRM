@@ -1,22 +1,14 @@
 # crm-mac — Personal CRM Mac daemon
 
-Single-binary Swift daemon that ingests Apple Messages + iCloud
-Contacts from a Mac and pushes events to the Pi-side Personal CRM
-API. Phase 1 (this PR is PR6) lands the daemon framework only —
-no source readers yet. PR7 adds the `messages` source; PR8 adds
-`icloud_contacts`.
+Single-binary Swift daemon that ingests Apple Messages + iCloud Contacts from a Mac and pushes events to the Pi-side Personal CRM API. Phase 1 (this PR is PR6) lands the daemon framework only — no source readers yet. PR7 adds the `messages` source; PR8 adds `icloud_contacts`.
 
-See `../.ai/spec/mac-daemon.md` for the authoritative scope. This
-README covers local install + smoke procedures only.
+See `../.ai/spec/mac-daemon.md` for the authoritative scope. This README covers local install + smoke procedures only.
 
 ## Requirements
 
 - macOS 13+ (the package targets `macOS(.v13)`).
-- Xcode Command Line Tools or a full Xcode install (the latter is
-  required for `swift test` — Command Line Tools ship Swift but not
-  XCTest).
-- A running Pi-side `crm-api` reachable from the Mac (typically via
-  Tailscale).
+- Xcode Command Line Tools or a full Xcode install (the latter is required for `swift test` — Command Line Tools ship Swift but not XCTest).
+- A running Pi-side `crm-api` reachable from the Mac (typically via Tailscale).
 
 ## Build
 
@@ -26,15 +18,11 @@ From the repo root:
 make mac-daemon
 ```
 
-This runs `swift build -c release` from `mac-daemon/` and ad-hoc
-codesigns the resulting binary. Output:
-`mac-daemon/.build/release/crm-mac`.
+This runs `swift build -c release` from `mac-daemon/` and ad-hoc codesigns the resulting binary. Output: `mac-daemon/.build/release/crm-mac`.
 
 ## Pair + install (manual smoke)
 
-The PR6 Definition of Done. Replace `<pi-host>` with your Pi's
-reachable hostname (typically a Tailscale name) and `<pi-url>` with
-the Pi's HTTPS base URL.
+The PR6 Definition of Done. Replace `<pi-host>` with your Pi's reachable hostname (typically a Tailscale name) and `<pi-url>` with the Pi's HTTPS base URL.
 
 **On the Pi:** mint a single-use pairing token.
 
@@ -46,10 +34,7 @@ ssh <pi-host> "cd /opt/personal-crm && ./backend/crm-admin --mint-pairing-token 
 # note: paste into `crm-mac install --pair <token>` within 10 minutes
 ```
 
-The pairing token is single-use and short-lived (10 minutes). The
-`--hostname-label` flag is operator-side terminal context only — it
-is NOT persisted server-side. The Mac daemon supplies its own
-hostname at pair time via `crm-mac install --hostname`.
+The pairing token is single-use and short-lived (10 minutes). The `--hostname-label` flag is operator-side terminal context only — it is NOT persisted server-side. The Mac daemon supplies its own hostname at pair time via `crm-mac install --hostname`.
 
 **On the Mac:** install the daemon.
 
@@ -60,14 +45,9 @@ hostname at pair time via `crm-mac install --hostname`.
     --hostname mac-1
 ```
 
-`--hostname` is REQUIRED on fresh install. Pick a non-PII label
-(`mac-1`, `work-mac`, `home-laptop`). The value is stored in the
-Pi's `mac_host` table and shown in the settings UI.
+`--hostname` is REQUIRED on fresh install. Pick a non-PII label (`mac-1`, `work-mac`, `home-laptop`). The value is stored in the Pi's `mac_host` table and shown in the settings UI.
 
-The first launch may trip Gatekeeper because the binary is ad-hoc
-signed. If it does, the daemon will print a hint pointing at
-**System Settings → Privacy & Security → "crm-mac was blocked..." →
-Open Anyway.**
+The first launch may trip Gatekeeper because the binary is ad-hoc signed. If it does, the daemon will print a hint pointing at **System Settings → Privacy & Security → "crm-mac was blocked..." → Open Anyway.**
 
 ## Verify
 
@@ -86,8 +66,7 @@ launchctl print gui/$(id -u)/xyz.spengrah.crm-mac >/dev/null && echo "registered
 # registered
 ```
 
-We deliberately do NOT parse any specific line from `launchctl
-print` output — the human-readable format is informational, not API.
+We deliberately do NOT parse any specific line from `launchctl print` output — the human-readable format is informational, not API.
 
 ## Status
 
@@ -104,10 +83,7 @@ print` output — the human-readable format is informational, not API.
 
 ## Reboot smoke
 
-To verify Keychain access from the launchd context (the daemon runs
-under launchd; the Keychain is unlocked after first interactive
-login of the boot session per
-`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`):
+To verify Keychain access from the launchd context (the daemon runs under launchd; the Keychain is unlocked after first interactive login of the boot session per `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`):
 
 ```bash
 sudo shutdown -r now
@@ -125,16 +101,11 @@ make mac-daemon
 ./mac-daemon/.build/release/crm-mac install --upgrade
 ```
 
-`--upgrade` reads the existing `config.json` + Keychain api-key,
-bootouts the running daemon, atomic-renames the new binary into
-place, and re-bootstraps launchd. It does NOT call `POST /host`.
+`--upgrade` reads the existing `config.json` + Keychain api-key, bootouts the running daemon, atomic-renames the new binary into place, and re-bootstraps launchd. It does NOT call `POST /host`.
 
 ## Recovery scenarios
 
-**Pi unreachable during fresh install (network drop after Pi
-commit).** The pair tx may have committed before the daemon got the
-response back. The Pi-side host row exists but the daemon doesn't
-know its `host_id` or `api_key`:
+**Pi unreachable during fresh install (network drop after Pi commit).** The pair tx may have committed before the daemon got the response back. The Pi-side host row exists but the daemon doesn't know its `host_id` or `api_key`:
 
 ```bash
 ssh <pi-host> "cd /opt/personal-crm && ./backend/crm-admin --list-hosts"
@@ -144,8 +115,7 @@ ssh <pi-host> "cd /opt/personal-crm && ./backend/crm-admin --revoke-host <uuid>"
 # Then re-mint a token and re-install.
 ```
 
-**Post-pair persistence failure (Keychain write, state write, or
-atomic-rename failed).** Local state is partially populated:
+**Post-pair persistence failure (Keychain write, state write, or atomic-rename failed).** Local state is partially populated:
 
 ```bash
 ./mac-daemon/.build/release/crm-mac uninstall --purge
@@ -153,9 +123,7 @@ ssh <pi-host> "cd /opt/personal-crm && ./backend/crm-admin --revoke-host <host_i
 # Re-mint a token and re-install.
 ```
 
-**`launchctl bootstrap` failed (binary + config + Keychain + state
-all in place; only launchd registration failed).** The binary IS
-installed:
+**`launchctl bootstrap` failed (binary + config + Keychain + state all in place; only launchd registration failed).** The binary IS installed:
 
 ```bash
 # Address the underlying issue (System Settings -> Privacy & Security).
@@ -170,8 +138,7 @@ installed:
 # config.json + state.json + installed binary.
 ```
 
-The Pi-side `mac_host` row is NOT touched — run `crm-admin
---revoke-host <uuid>` on the Pi if you want to remove the row.
+The Pi-side `mac_host` row is NOT touched — run `crm-admin --revoke-host <uuid>` on the Pi if you want to remove the row.
 
 ## Where things live
 
@@ -193,36 +160,20 @@ log stream --predicate 'subsystem == "xyz.spengrah.crm-mac"' --info
 
 ## Spec deviation notes
 
-- **`cursor_epoch` is NOT in Keychain** (spec lists it; PR6 puts it
-  in `state.json` instead). It's an opaque integer the Pi increments
-  on backup-restore — not a secret, no security guarantee from
-  Keychain storage, and putting it on disk avoids a Keychain write
-  per source-poll. The Pi's cursor + epoch remain the source of
-  truth; PR7/PR8 refresh from heartbeat responses and handle
-  `cursor_epoch` mismatch by refetching Pi state rather than
-  trusting local cache.
-- **Bare CLI binary, not an `.app` bundle.** PR6 uses classic
-  `launchctl bootstrap gui/<uid> <plist>` rather than
-  `SMAppService.agent`, which expects the plist to be a resource of
-  the calling main app bundle. See `.ai/log/plan/mac-daemon-phase-1-pr6-daemon-skeleton.md` D14 for the rationale.
-- **CI pinned to `macos-15`**, not `macos-latest`. Eliminates the
-  silent image-migration risk; an image deprecation will surface as
-  a loud CI failure in a follow-up PR.
+- **`cursor_epoch` is NOT in Keychain** (spec lists it; PR6 puts it in `state.json` instead). It's an opaque integer the Pi increments on backup-restore — not a secret, no security guarantee from Keychain storage, and putting it on disk avoids a Keychain write per source-poll. The Pi's cursor + epoch remain the source of truth; PR7/PR8 refresh from heartbeat responses and handle `cursor_epoch` mismatch by refetching Pi state rather than trusting local cache.
+- **Bare CLI binary, not an `.app` bundle.** PR6 uses classic `launchctl bootstrap gui/<uid> <plist>` rather than `SMAppService.agent`, which expects the plist to be a resource of the calling main app bundle. See `.ai/log/plan/mac-daemon-phase-1-pr6-daemon-skeleton.md` D14 for the rationale.
+- **CI pinned to `macos-15`**, not `macos-latest`. Eliminates the silent image-migration risk; an image deprecation will surface as a loud CI failure in a follow-up PR.
 
 ## Testing
 
-Unit + lifecycle tests run on CI via `.github/workflows/mac-daemon.yml`
-on `macos-15`. To run locally:
+Unit + lifecycle tests run on CI via `.github/workflows/mac-daemon.yml` on `macos-15`. To run locally:
 
 ```bash
 cd mac-daemon
 swift test
 ```
 
-`swift test` requires XCTest, which ships with the full Xcode (not
-the Command Line Tools subset). The `KeychainProductionTests` are
-skipped in CI (`XCTSkipIf(CI=true)`) — they exercise SecItem* against
-the developer's keychain using a per-run test account.
+`swift test` requires XCTest, which ships with the full Xcode (not the Command Line Tools subset). The `KeychainProductionTests` are skipped in CI (`XCTSkipIf(CI=true)`) — they exercise SecItem* against the developer's keychain using a per-run test account.
 
 You can also run via the project Makefile:
 
@@ -234,11 +185,7 @@ make test-daemon-local
 
 ### `crm-mac messages backfill --restart`
 
-Reset the messages cursor to install-time state so the daemon re-walks
-all historical messages back to the 2026-01-01 backfill floor. The
-command refuses while the daemon is running (it would race with the
-daemon's own cursor commits). Stop the daemon, run the command, then
-restart:
+Reset the messages cursor to install-time state so the daemon re-walks all historical messages back to the 2026-01-01 backfill floor. The command refuses while the daemon is running (it would race with the daemon's own cursor commits). Stop the daemon, run the command, then restart:
 
 ```bash
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
@@ -247,24 +194,11 @@ crm-mac messages backfill --restart --yes # scripted / no prompt
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
 ```
 
-This produces duplicate-but-deduplicated events on the Pi (event-log
-`(source, source_id)` dedup absorbs the overlap; no contact-side
-effect, but visible in `/api/v1/host/:id` logs).
+This produces duplicate-but-deduplicated events on the Pi (event-log `(source, source_id)` dedup absorbs the overlap; no contact-side effect, but visible in `/api/v1/host/:id` logs).
 
 ### `crm-mac messages scan --identifier <handle> [--since 30d]`
 
-Queue a one-shot backwards scan for a specific phone/email handle. The
-scan request is persisted Pi-side via the cursor JSON. **v1
-limitation:** the daemon's source plugin observes pending-scan
-requests via `crm-mac status` and logs them on each tick, but does
-NOT yet execute identifier-scoped backwards scans (chat.db has no
-indexed-by-handle reader; a full scan would be required). The regular
-backfill descent walks every message back to the
-`backfill_floor_sent_at` floor anyway, so a newly-added contact's
-historical messages will arrive once backfill reaches them. The
-scan command is wired through so a future PR can ship the actual
-scan execution without an additional protocol change. Same
-daemon-running guard as `backfill`.
+Queue a one-shot backwards scan for a specific phone/email handle. The scan request is persisted Pi-side via the cursor JSON. **v1 limitation:** the daemon's source plugin observes pending-scan requests via `crm-mac status` and logs them on each tick, but does NOT yet execute identifier-scoped backwards scans (chat.db has no indexed-by-handle reader; a full scan would be required). The regular backfill descent walks every message back to the `backfill_floor_sent_at` floor anyway, so a newly-added contact's historical messages will arrive once backfill reaches them. The scan command is wired through so a future PR can ship the actual scan execution without an additional protocol change. Same daemon-running guard as `backfill`.
 
 ```bash
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
@@ -276,20 +210,13 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.pli
 
 ## Daemon-running guard
 
-PR7 introduces a POSIX advisory lock on
-`~/Library/Application Support/crm-mac/daemon.pid`. The daemon
-acquires it on start, the ops subcommands acquire-or-refuse it before
-mutating cursor state. Stale PID recovery is automatic — if the
-daemon crashed without releasing the lock, the next daemon startup
-(or CLI op) detects the dead PID, unlinks the pidfile, and re-acquires.
+PR7 introduces a POSIX advisory lock on `~/Library/Application Support/crm-mac/daemon.pid`. The daemon acquires it on start, the ops subcommands acquire-or-refuse it before mutating cursor state. Stale PID recovery is automatic — if the daemon crashed without releasing the lock, the next daemon startup (or CLI op) detects the dead PID, unlinks the pidfile, and re-acquires.
 
 ## Live smoke test (PR7)
 
-Pre-req: PR6-installed daemon paired to a live Pi; messages tick
-disabled or running on its scheduled cadence.
+Pre-req: PR6-installed daemon paired to a live Pi; messages tick disabled or running on its scheduled cadence.
 
-1. **Pick a fixture contact** — one whose primary phone/email is in
-   the canonical `known-identifiers` set.
+1. **Pick a fixture contact** — one whose primary phone/email is in the canonical `known-identifiers` set.
 
 2. **Pre-state — capture last_contacted on the Pi:**
 
@@ -307,9 +234,7 @@ disabled or running on its scheduled cadence.
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
    ```
 
-4. **Send a real iMessage** in both directions to the fixture contact
-   (outbound + inbound). Two-direction proves direction inference is
-   wired.
+4. **Send a real iMessage** in both directions to the fixture contact (outbound + inbound). Two-direction proves direction inference is wired.
 
 5. **Wait two messages-tick cadences** (~3 minutes).
 
@@ -320,8 +245,7 @@ disabled or running on its scheduled cadence.
        | grep -i raw_message
    ```
 
-   Expect: at least two `raw_message.received` / `raw_message.sent`
-   events with `accepted=1`.
+   Expect: at least two `raw_message.received` / `raw_message.sent` events with `accepted=1`.
 
 7. **Verify the interaction row** was created on the Pi:
 
@@ -333,8 +257,7 @@ disabled or running on its scheduled cadence.
            ORDER BY occurred_at DESC LIMIT 5;"'
    ```
 
-   Expect: ≥ 1 rows with `source=messages`, sane direction, recent
-   `occurred_at`.
+   Expect: ≥ 1 rows with `source=messages`, sane direction, recent `occurred_at`.
 
 8. **Verify last_contacted advanced:**
 
@@ -349,25 +272,10 @@ disabled or running on its scheduled cadence.
    crm-mac status
    ```
 
-   Expect: messages source `live_cursor` advanced; `backfill_complete`
-   either false (still descending) or true; no `last_error`.
+   Expect: messages source `live_cursor` advanced; `backfill_complete` either false (still descending) or true; no `last_error`.
 
 ## Limitations (v1)
 
-- **Daemon-down + contact added → no auto-scan.** Plan §R9: the
-  daemon's known-identifiers cache hash detects offline contact-list
-  changes but does NOT auto-queue a 30-day scan for every new
-  identifier (it would defeat the optimization on every restart). Run
-  `crm-mac messages scan --identifier <X>` manually if you want
-  backfill for a specific newly-added contact.
-- **Outbound group attribution.** For outbound group messages the
-  daemon attributes the outreach to the first non-self handle by
-  `chat_handle_join.ROWID` order. This is a v1 simplification: every
-  outbound group message attributes to the same arbitrary peer, so
-  one group member's `last_outreach_at` advances on every outbound
-  group message while others' do not.
-- **Outbound messages currently not emitted.** The reader's fetch
-  query joins on `message.handle_id`, which is NULL for outbound rows
-  in chat.db; outbound peer resolution requires a separate path
-  through `outboundGroupPeer`, deferred to a follow-up. Inbound
-  emission is fully wired.
+- **Daemon-down + contact added → no auto-scan.** Plan §R9: the daemon's known-identifiers cache hash detects offline contact-list changes but does NOT auto-queue a 30-day scan for every new identifier (it would defeat the optimization on every restart). Run `crm-mac messages scan --identifier <X>` manually if you want backfill for a specific newly-added contact.
+- **Outbound group attribution.** For outbound group messages the daemon attributes the outreach to the first non-self handle by `chat_handle_join.ROWID` order. This is a v1 simplification: every outbound group message attributes to the same arbitrary peer, so one group member's `last_outreach_at` advances on every outbound group message while others' do not.
+- **Outbound messages currently not emitted.** The reader's fetch query joins on `message.handle_id`, which is NULL for outbound rows in chat.db; outbound peer resolution requires a separate path through `outboundGroupPeer`, deferred to a follow-up. Inbound emission is fully wired.
