@@ -383,8 +383,9 @@ func TestKnownIDsByHost_RoundTripUpsertThenFetch(t *testing.T) {
 	}
 	require.True(t, found, "freshly upserted entity must appear in /known-ids")
 
-	// Verify the host_id was persisted on the row too (R13 invariant
-	// for icloud_contacts: every row carries both columns).
+	// Verify the host_id was persisted on the row too — the
+	// application-level invariant for icloud_contacts is that every
+	// row carries both host_id and last_content_hash.
 	row, err := env.externalRepo.GetBySource(context.Background(),
 		"icloud_contacts", entityID, nil)
 	require.NoError(t, err)
