@@ -28,6 +28,45 @@ echo "==============================================================" >&2
 echo "Pre-push: Running checks..." >&2
 echo "==============================================================" >&2
 
+# Check Claude review log for HEAD (mirrors the CI claude-review job locally).
+# Looks for .ai/log/review/<HEAD-sha>.md containing "RESULT=PASS".
+# Bypass with `git push --no-verify` if you really need to skip.
+check_review_log() {
+  local enabled
+  enabled=$(jq -r '.review.enabled // false' "$CONFIG_FILE")
+  if [[ "$enabled" != "true" ]]; then
+    return 0
+  fi
+
+  local head_sha
+  head_sha=$(git rev-parse HEAD)
+  local review_file=".ai/log/review/${head_sha}.md"
+
+  if [[ ! -f "$review_file" ]]; then
+    echo "" >&2
+    echo "==============================================================" >&2
+    echo "FAILED: No Claude review found for HEAD (${head_sha:0:12})" >&2
+    echo "Expected: $review_file" >&2
+    echo "Run /review-head before pushing (or use --no-verify to skip)." >&2
+    echo "==============================================================" >&2
+    exit 1
+  fi
+
+  if ! grep -q '^RESULT=PASS$' "$review_file"; then
+    echo "" >&2
+    echo "==============================================================" >&2
+    echo "FAILED: Claude review for HEAD did not pass" >&2
+    echo "File:  $review_file" >&2
+    echo "Address findings and re-run /review-head (HEAD must change)." >&2
+    echo "==============================================================" >&2
+    exit 1
+  fi
+
+  echo "  [review] OK Claude review of ${head_sha:0:12}" >&2
+}
+
+check_review_log
+
 # Run lint commands
 run_lint() {
   local enabled=$(jq -r '.lint.enabled // false' "$CONFIG_FILE")
