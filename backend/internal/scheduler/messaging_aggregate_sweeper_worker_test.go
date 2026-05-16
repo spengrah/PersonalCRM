@@ -28,9 +28,10 @@ func (s *stubContactLister) ListUnprocessedContactIDs(_ context.Context) ([]uuid
 }
 
 type stubInserter struct {
-	calls    []consumerjobs.MessagingAggregateForContactArgs
-	failOnce bool
-	failed   bool
+	calls        []consumerjobs.MessagingAggregateForContactArgs
+	duplicateIDs map[uuid.UUID]bool
+	failOnce     bool
+	failed       bool
 }
 
 func (s *stubInserter) Insert(_ context.Context, args river.JobArgs, _ *river.InsertOpts) (*rivertype.JobInsertResult, error) {
@@ -43,7 +44,7 @@ func (s *stubInserter) Insert(_ context.Context, args river.JobArgs, _ *river.In
 		return nil, errors.New("transient enqueue failure")
 	}
 	s.calls = append(s.calls, a)
-	return &rivertype.JobInsertResult{}, nil
+	return &rivertype.JobInsertResult{UniqueSkippedAsDuplicate: s.duplicateIDs[a.ContactID]}, nil
 }
 
 func TestSweeperWorker_EnqueuesPerContact(t *testing.T) {
@@ -118,6 +119,23 @@ func TestSweeperWorker_EnqueueError_ContinuesToNextContact(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, inserter.calls, 1)
 	require.True(t, inserter.failed)
+}
+
+// TestSweeperWorker_DuplicateSkipped_ContinuesToNextContact verifies a
+// River duplicate skip is treated as a successful insert attempt rather than
+// an error that stops the sweep.
+func TestSweeperWorker_DuplicateSkipped_ContinuesToNextContact(t *testing.T) {
+	c1, c2 := uuid.New(), uuid.New()
+	lister := &stubContactLister{ids: []uuid.UUID{c1, c2}}
+	inserter := &stubInserter{duplicateIDs: map[uuid.UUID]bool{c1: true}}
+
+	worker := NewMessagingAggregateSweeperWorker(
+		map[string]UnprocessedContactLister{"messages": lister},
+		inserter,
+	)
+	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
+	require.NoError(t, err)
+	require.Len(t, inserter.calls, 2)
 }
 
 // TestSweeperWorker_NilRiverClient_NoOps verifies a nil client makes

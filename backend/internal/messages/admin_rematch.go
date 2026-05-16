@@ -139,7 +139,7 @@ func RematchStranded(ctx context.Context, deps RematchStrandedDeps) (*RematchStr
 				ContactID: *match.ContactID,
 				Source:    source,
 			}, &river.InsertOpts{
-				UniqueOpts: river.UniqueOpts{ByArgs: true},
+				UniqueOpts: consumerjobs.MessagingAggregateUniqueOpts(),
 			})
 			if err != nil {
 				result.Errors++

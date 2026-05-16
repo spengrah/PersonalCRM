@@ -68,15 +68,15 @@ func NewMessagesAggregatorReenqueuer(
 
 // Reenqueue implements AggregatorReenqueuer.
 func (r *MessagesAggregatorReenqueuer) Reenqueue(ctx context.Context, env *events.Envelope, contactID uuid.UUID) error {
-	// Fire a fresh aggregator job up-front. UniqueOpts dedups
-	// in-flight; completed jobs do NOT block re-enqueue so this
-	// always either coalesces or runs.
+	// Fire a fresh aggregator job up-front. The shared uniqueness policy
+	// dedups in-flight jobs but intentionally allows a fresh job after a
+	// prior one completed.
 	if r.riverClient != nil {
 		_, err := r.riverClient.Insert(ctx, consumerjobs.MessagingAggregateForContactArgs{
 			ContactID: contactID,
 			Source:    r.source,
 		}, &river.InsertOpts{
-			UniqueOpts: river.UniqueOpts{ByArgs: true},
+			UniqueOpts: consumerjobs.MessagingAggregateUniqueOpts(),
 		})
 		if err != nil {
 			log.Warn().

@@ -62,7 +62,8 @@ func (w *MessagingAggregateSweeperWorker) Work(
 	ctx context.Context,
 	_ *river.Job[consumerjobs.MessagingAggregateSweeperArgs],
 ) error {
-	totalEnqueued := 0
+	totalInserted := 0
+	totalDuplicateSkipped := 0
 	for source, lister := range w.listers {
 		contactIDs, err := lister.ListUnprocessedContactIDs(ctx)
 		if err != nil {
@@ -84,9 +85,10 @@ func (w *MessagingAggregateSweeperWorker) Work(
 				ContactID: cid,
 				Source:    source,
 			}
-			if _, err := w.riverClient.Insert(ctx, args, &river.InsertOpts{
-				UniqueOpts: river.UniqueOpts{ByArgs: true},
-			}); err != nil {
+			res, err := w.riverClient.Insert(ctx, args, &river.InsertOpts{
+				UniqueOpts: consumerjobs.MessagingAggregateUniqueOpts(),
+			})
+			if err != nil {
 				logger.Warn().
 					Err(err).
 					Str("source", source).
@@ -94,13 +96,18 @@ func (w *MessagingAggregateSweeperWorker) Work(
 					Msg("messaging_aggregate_sweeper: enqueue failed")
 				continue
 			}
-			totalEnqueued++
+			if res != nil && res.UniqueSkippedAsDuplicate {
+				totalDuplicateSkipped++
+				continue
+			}
+			totalInserted++
 		}
 	}
-	if totalEnqueued > 0 {
+	if totalInserted > 0 || totalDuplicateSkipped > 0 {
 		logger.Info().
-			Int("enqueued", totalEnqueued).
-			Msg("messaging_aggregate_sweeper: tick enqueued aggregator jobs")
+			Int("inserted", totalInserted).
+			Int("duplicate_skipped", totalDuplicateSkipped).
+			Msg("messaging_aggregate_sweeper: tick processed aggregator jobs")
 	}
 	return nil
 }

@@ -175,9 +175,9 @@ func (e *RiverInteractionRecorderEnqueuer) EnqueueInteractionRecorderJob(ctx con
 			// ByArgs hashes only fields tagged `river:"unique"` on the
 			// JobArgs struct — InteractionRecorderJobArgs.EventID. Two
 			// recovery enqueues with the same EventID coalesce into one
-			// in-flight job. Default ByState (Pending/Scheduled/Available/
-			// Running/Retryable) excludes `discarded`, so a permanently-
-			// failing consumer eventually frees a slot.
+			// job, including a completed prior job. River's default
+			// ByState excludes `discarded`, so a permanently-failing
+			// consumer eventually frees a slot.
 			ByArgs: true,
 		},
 	})
