@@ -67,11 +67,12 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	tokenRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+	externalRepo := repository.NewExternalContactRepository(database.Queries)
 
 	// bcrypt cost 4 is the lowest bcrypt accepts; the speed makes
 	// integration test execution tolerable while still exercising the
 	// real bcrypt path.
-	macService := service.NewMacHostService(hostRepo, tokenRepo, syncRepo, nil, nil, database.Pool, 4)
+	macService := service.NewMacHostService(hostRepo, tokenRepo, syncRepo, nil, externalRepo, database.Pool, 4)
 	limiter := auth.NewPairingIPRateLimiter()
 	macHandler := handlers.NewMacHostHandler(macService, limiter)
 
@@ -298,11 +299,15 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, w.Code, "expected 200; body: %s", w.Body.String())
 
-	// 9. KnownIDs stub returns {ids: []}.
+	// 9. KnownIDs returns {ids: []} on a fresh host. Source 'messages'
+	// has no external_contact rows, so the response is always empty.
 	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+pair.HostID.String()+"/sync/messages/known-ids", hostHeaders, nil)
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	var ids struct {
-		IDs []string `json:"ids"`
+		IDs []struct {
+			SourceID        string  `json:"source_id"`
+			LastContentHash *string `json:"last_content_hash"`
+		} `json:"ids"`
 	}
 	readData(t, w, &ids)
 	require.NotNil(t, ids.IDs)

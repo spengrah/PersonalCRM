@@ -161,7 +161,6 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 	// the inline handler will get past UpsertTx + MatchOrCreateTx and
 	// then fail at UpdateMatchTx (the stub).
 	entityID := sourceIDPrefix + "match-fail"
-	hashHex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	now := accelerated.GetCurrentTime()
 	dn := "Sample Rollback"
 	p := events.ExternalContactUpsertedPayload{
@@ -174,6 +173,8 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 		Metadata:    map[string]any{"container_identifier": "rollback-test"},
 	}
 	pBytes, err := events.Marshal(events.KindExternalContactUpserted, p)
+	require.NoError(t, err)
+	hashHex, err := service.ComputeContentHash(pBytes)
 	require.NoError(t, err)
 	ev := map[string]any{
 		"source":      "icloud_contacts",

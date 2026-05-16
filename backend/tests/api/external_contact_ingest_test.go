@@ -354,12 +354,13 @@ func TestIngestExternalContact_Upserted_ReUpsertPreservesMatchState(t *testing.T
 	// original seeded contact). The external_contact row's match state
 	// must be preserved — crm_contact_id stays pinned to the seeded
 	// contact even though the new payload's emails don't match it.
+	// buildExtUpsertEvent computes a fresh JCS hash from the new
+	// payload, so the source_id naturally differs from ev1 (different
+	// emails → different canonical bytes → different hash) and the
+	// event-log dedup doesn't skip the inline handler.
 	ev2 := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
 		p.Emails = []events.ExternalContactMethodValue{{Value: "unrelated-edit@example.invalid"}}
 	})
-	// Different source_id (different content hash) so the dedup hash
-	// doesn't skip the inline handler.
-	ev2["source_id"] = entityID + "@" + "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 
 	w = postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
 		"events": []any{ev2},
