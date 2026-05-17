@@ -50,6 +50,14 @@ public struct DoctorDependencies {
     public let keychain: KeychainStore
     public let launchctl: LaunchctlRunner
     public let piClientFactory: (URL) -> PiClient
+    /// Contacts framework adapters used by the icloud_contacts check.
+    /// Tests inject stubs.
+    public let contactsAuth: ContactsAuthorizationAdapter
+    public let containerEnumerator: ContactContainerEnumerator
+    /// Used to compute the staleness threshold for icloud_contacts'
+    /// last-tick-age check (2× tickInterval).
+    public let tickInterval: TimeInterval
+    public let clock: ClockAdapter
     public let logger: LoggerProtocol
 
     public init(
@@ -58,6 +66,10 @@ public struct DoctorDependencies {
         keychain: KeychainStore,
         launchctl: LaunchctlRunner,
         piClientFactory: @escaping (URL) -> PiClient,
+        contactsAuth: ContactsAuthorizationAdapter,
+        containerEnumerator: ContactContainerEnumerator,
+        tickInterval: TimeInterval,
+        clock: ClockAdapter,
         logger: LoggerProtocol
     ) {
         self.paths = paths
@@ -65,6 +77,10 @@ public struct DoctorDependencies {
         self.keychain = keychain
         self.launchctl = launchctl
         self.piClientFactory = piClientFactory
+        self.contactsAuth = contactsAuth
+        self.containerEnumerator = containerEnumerator
+        self.tickInterval = tickInterval
+        self.clock = clock
         self.logger = logger
     }
 }
@@ -95,16 +111,135 @@ public struct Doctor {
                 status: .fail,
                 details: "skipped — config or keychain unavailable"))
         }
+        results.append(contentsOf: checkICloudContacts(
+            allowlist: configCheck.icloudAllowlist,
+            sourceState: configCheck.icloudSourceState))
         return DoctorReport(results: results)
     }
 
+    /// Composite check for the icloud_contacts source:
+    ///   1. Contacts permission via the auth adapter.
+    ///   2. Allowlist sanity — every configured CNContainer identifier
+    ///      resolves against the live enumerator output.
+    ///   3. Last-tick age — max(lastScheduledAt, lastPushedAt) older
+    ///      than 2× tickInterval is WARN.
+    ///
+    /// The gcontacts overlap check (spec line 161) is deliberately
+    /// deferred to a follow-up PR — the daemon doesn't know which
+    /// Pi-side providers are active.
+    private func checkICloudContacts(
+        allowlist: [String],
+        sourceState: SourceState?
+    ) -> [CheckResult] {
+        var results: [CheckResult] = []
+
+        // 1. Permission.
+        let status = deps.contactsAuth.authorizationStatus()
+        switch status {
+        case .authorized, .limited:
+            results.append(CheckResult(
+                name: "icloud_contacts.permission",
+                status: .pass,
+                details: "contacts \(status)"))
+        case .denied:
+            results.append(CheckResult(
+                name: "icloud_contacts.permission",
+                status: .fail,
+                details: "denied — re-run `crm-mac install --re-request-permission`"))
+        case .restricted:
+            results.append(CheckResult(
+                name: "icloud_contacts.permission",
+                status: .fail,
+                details: "restricted by MDM / parental controls"))
+        case .notDetermined:
+            results.append(CheckResult(
+                name: "icloud_contacts.permission",
+                status: .warn,
+                details: "not determined — run `crm-mac install --re-request-permission`"))
+        }
+
+        // 2. Allowlist sanity.
+        if allowlist.isEmpty {
+            results.append(CheckResult(
+                name: "icloud_contacts.allowlist",
+                status: .warn,
+                details: "no containers configured; run `crm-mac configure containers`"))
+        } else {
+            let visible: [ContainerInfo]
+            do {
+                visible = try deps.containerEnumerator.listContainers()
+            } catch ContactContainerEnumeratorError.notAuthorized {
+                visible = []
+            } catch {
+                results.append(CheckResult(
+                    name: "icloud_contacts.allowlist",
+                    status: .warn,
+                    details: "container enumeration failed: \(error)"))
+                return results
+            }
+            let visibleIDs = Set(visible.map(\.identifier))
+            let orphans = allowlist.filter { !visibleIDs.contains($0) }
+            if orphans.isEmpty {
+                results.append(CheckResult(
+                    name: "icloud_contacts.allowlist",
+                    status: .pass,
+                    details: "\(allowlist.count) container(s) configured; all visible"))
+            } else {
+                let orphanList = orphans.joined(separator: ",")
+                results.append(CheckResult(
+                    name: "icloud_contacts.allowlist",
+                    status: .warn,
+                    details: "\(orphans.count) orphaned identifier(s) (no longer visible): \(orphanList)"))
+            }
+        }
+
+        // 3. Last-tick age.
+        if let src = sourceState {
+            let bumps = [src.lastScheduledAt, src.lastPushedAt].compactMap { $0 }
+            if let latest = bumps.max() {
+                let age = deps.clock.now().timeIntervalSince(latest)
+                if age > 2 * deps.tickInterval {
+                    results.append(CheckResult(
+                        name: "icloud_contacts.last_tick",
+                        status: .warn,
+                        details: "last activity \(Int(age))s ago (threshold \(Int(2 * deps.tickInterval))s)"))
+                } else {
+                    results.append(CheckResult(
+                        name: "icloud_contacts.last_tick",
+                        status: .pass,
+                        details: "last activity \(Int(age))s ago"))
+                }
+            } else {
+                results.append(CheckResult(
+                    name: "icloud_contacts.last_tick",
+                    status: .warn,
+                    details: "no tick recorded yet"))
+            }
+        } else {
+            results.append(CheckResult(
+                name: "icloud_contacts.last_tick",
+                status: .warn,
+                details: "no source state present"))
+        }
+
+        return results
+    }
+
     /// Aggregate of the config+state check that downstream callers
-    /// (Pi reachability) need to inspect. Named for self-documentation
-    /// where the prior 3-tuple shape required positional unwrap.
+    /// (Pi reachability + icloud_contacts) need to inspect. Named for
+    /// self-documentation where the prior 3-tuple shape required
+    /// positional unwrap.
     private struct ConfigAndStateResult {
         let result: CheckResult
         let auth: PiAuth?
         let piURL: URL
+        /// Configured iCloud allowlist from `sources.icloud_contacts.containers`.
+        /// Empty when the config file lacks the key (pre-PR8b) or
+        /// the operator hasn't picked any containers yet.
+        let icloudAllowlist: [String]
+        /// Per-source state for icloud_contacts. Nil when the source
+        /// has never ticked.
+        let icloudSourceState: SourceState?
     }
 
     private func checkKeychain() -> CheckResult {
@@ -142,7 +277,9 @@ public struct Doctor {
             return ConfigAndStateResult(
                 result: CheckResult(name: "config_state", status: .fail, details: "config.json missing"),
                 auth: nil,
-                piURL: placeholderURL)
+                piURL: placeholderURL,
+                icloudAllowlist: [],
+                icloudSourceState: nil)
         }
         let configData: Data
         do {
@@ -151,7 +288,9 @@ public struct Doctor {
             return ConfigAndStateResult(
                 result: CheckResult(name: "config_state", status: .fail, details: "read config.json: \(error)"),
                 auth: nil,
-                piURL: placeholderURL)
+                piURL: placeholderURL,
+                icloudAllowlist: [],
+                icloudSourceState: nil)
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -162,14 +301,19 @@ public struct Doctor {
             return ConfigAndStateResult(
                 result: CheckResult(name: "config_state", status: .fail, details: "decode config.json: \(error)"),
                 auth: nil,
-                piURL: placeholderURL)
+                piURL: placeholderURL,
+                icloudAllowlist: [],
+                icloudSourceState: nil)
         }
+        let icloudAllowlist = cfg.sources?.icloudContacts?.containers ?? []
 
         guard deps.filesystem.fileExists(at: deps.paths.stateFilePath) else {
             return ConfigAndStateResult(
                 result: CheckResult(name: "config_state", status: .fail, details: "state.json missing"),
                 auth: nil,
-                piURL: cfg.piURL)
+                piURL: cfg.piURL,
+                icloudAllowlist: icloudAllowlist,
+                icloudSourceState: nil)
         }
         let stateData: Data
         do {
@@ -178,7 +322,9 @@ public struct Doctor {
             return ConfigAndStateResult(
                 result: CheckResult(name: "config_state", status: .fail, details: "read state.json: \(error)"),
                 auth: nil,
-                piURL: cfg.piURL)
+                piURL: cfg.piURL,
+                icloudAllowlist: icloudAllowlist,
+                icloudSourceState: nil)
         }
         let state: DaemonState
         do {
@@ -187,7 +333,9 @@ public struct Doctor {
             return ConfigAndStateResult(
                 result: CheckResult(name: "config_state", status: .fail, details: "decode state.json: \(error)"),
                 auth: nil,
-                piURL: cfg.piURL)
+                piURL: cfg.piURL,
+                icloudAllowlist: icloudAllowlist,
+                icloudSourceState: nil)
         }
         if state.schemaVersion != DaemonState.currentSchemaVersion {
             return ConfigAndStateResult(
@@ -196,8 +344,11 @@ public struct Doctor {
                     status: .fail,
                     details: "state schemaVersion=\(state.schemaVersion); expected \(DaemonState.currentSchemaVersion)"),
                 auth: nil,
-                piURL: cfg.piURL)
+                piURL: cfg.piURL,
+                icloudAllowlist: icloudAllowlist,
+                icloudSourceState: state.sources["icloud_contacts"])
         }
+        let icloudSourceState = state.sources["icloud_contacts"]
         let apiKey: String
         do {
             apiKey = try deps.keychain.readAPIKey()
@@ -208,7 +359,9 @@ public struct Doctor {
                     status: .pass,
                     details: "config + state OK (keychain probed separately)"),
                 auth: nil,
-                piURL: cfg.piURL)
+                piURL: cfg.piURL,
+                icloudAllowlist: icloudAllowlist,
+                icloudSourceState: icloudSourceState)
         }
         return ConfigAndStateResult(
             result: CheckResult(
@@ -216,7 +369,9 @@ public struct Doctor {
                 status: .pass,
                 details: "host=\(cfg.hostname) schemaVersion=\(state.schemaVersion)"),
             auth: PiAuth(hostID: cfg.hostID, apiKey: apiKey),
-            piURL: cfg.piURL)
+            piURL: cfg.piURL,
+            icloudAllowlist: icloudAllowlist,
+            icloudSourceState: icloudSourceState)
     }
 
     private func checkPiReachability(auth: PiAuth, piURL: URL) async -> CheckResult {

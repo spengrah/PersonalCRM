@@ -2,8 +2,18 @@
 // CRMMacLifecycle.Installer. The branchy validation lives in
 // InstallRequestParser so it can be unit-tested without standing up
 // the executable target (which has no test target by design).
+//
+// PR8b adds the post-pair Contacts-permission prompt + container
+// picker (per plan D-JC11 + D-JC3). The `--re-request-permission`
+// flag triggers ONLY the permission + picker flow without re-pairing
+// (used when the initial install was aborted at the permission step).
+// `--containers <id1>,<id2>` is the non-interactive form for scripted
+// installs that know the exact CNContainer identifiers from a prior
+// `crm-mac configure containers --list` run.
 import Foundation
 import ArgumentParser
+import CRMMacCore
+import CRMMacIcloudContactsSource
 import CRMMacLifecycle
 
 struct InstallCommand: AsyncParsableCommand {
@@ -26,7 +36,22 @@ struct InstallCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Re-register an existing install with launchd. Does NOT replace the binary or re-pair.")
     var registerOnly: Bool = false
 
+    @Flag(name: .long, help: "Re-run only the Contacts-permission prompt + iCloud container picker. Skips pairing.")
+    var reRequestPermission: Bool = false
+
+    @Option(
+        name: .long,
+        help: "Non-interactive iCloud Contacts allowlist: comma-separated CNContainer identifiers.")
+    var containers: String = ""
+
     mutating func run() async throws {
+        let ctx = ProductionContext()
+
+        if reRequestPermission {
+            try await runReRequestPermissionOnly(ctx: ctx)
+            return
+        }
+
         let input = InstallRequestParserInput(
             piURL: piURL,
             pair: pair,
@@ -46,7 +71,6 @@ struct InstallCommand: AsyncParsableCommand {
                 "WARNING: --pi-url uses http:// to a non-loopback host. The API key is sent in a Bearer header on every request; plaintext over the network leaks it to anyone in the path. Use https:// (e.g. via Tailscale) for real installs.\n".utf8))
         }
 
-        let ctx = ProductionContext()
         let installer = ctx.installer()
         let summary = try await installer.run(request)
         print("install complete")
@@ -54,7 +78,102 @@ struct InstallCommand: AsyncParsableCommand {
         print("  binary=\(summary.binaryPath)")
         print("  plist=\(summary.plistPath)")
         print("")
+
+        // Post-pair: request Contacts permission + run the container
+        // picker. Skipped on --upgrade / --register-only — those flows
+        // assume the user already accepted the permission prompt.
+        let isFreshInstall = !(upgrade || registerOnly)
+        if isFreshInstall {
+            do {
+                try await runContactsPermissionFlow(ctx: ctx)
+            } catch {
+                // The pair succeeded; permission/picker failure leaves
+                // the daemon running without the icloud_contacts source
+                // until the operator runs `--re-request-permission`.
+                FileHandle.standardError.write(Data(
+                    "\nWARNING: iCloud Contacts setup did not complete: \(error)\n".utf8))
+                FileHandle.standardError.write(Data(
+                    "Run `crm-mac install --re-request-permission` to retry.\n".utf8))
+            }
+        }
+
+        print("")
         print("First launch on this Mac may be blocked by Gatekeeper. If so:")
         print("  System Settings -> Privacy & Security -> scroll to \"crm-mac was blocked...\" -> Open Anyway")
+    }
+
+    /// Permission + picker flow. Called as part of fresh install AND
+    /// via --re-request-permission.
+    private func runContactsPermissionFlow(ctx: ProductionContext) async throws {
+        let authAdapter = ctx.contactsAuthAdapter()
+        let granted = try await authAdapter.requestAccess()
+        if !granted {
+            FileHandle.standardError.write(Data(
+                """
+                Contacts permission denied.
+                Open: System Settings -> Privacy & Security -> Contacts -> enable crm-mac
+                Then run: crm-mac install --re-request-permission
+                """.utf8))
+            throw ExitCode(1)
+        }
+        // Permission granted. Run picker.
+        let enumerator = ctx.contactContainerEnumerator()
+        let visible: [ContainerInfo]
+        do {
+            visible = try enumerator.listContainers()
+        } catch {
+            FileHandle.standardError.write(Data(
+                "container enumeration failed: \(error)\n".utf8))
+            throw ExitCode(1)
+        }
+        let pickedIDs: [String]
+        if !containers.isEmpty {
+            pickedIDs = try Self.resolveNonInteractive(raw: containers, visible: visible)
+        } else {
+            FileHandle.standardOutput.write(Data(
+                ContainerPicker.render(visible).utf8))
+            let line = readLine() ?? ""
+            do {
+                pickedIDs = try ContainerPicker.parse(input: line, containers: visible)
+            } catch {
+                FileHandle.standardError.write(Data("\(error)\n".utf8))
+                throw ExitCode(2)
+            }
+        }
+        let configStore = ConfigStore(
+            fileURL: URL(fileURLWithPath: ctx.paths.configFilePath))
+        try configStore.saveICloudContactsConfig(
+            ICloudContactsConfig(containers: pickedIDs))
+        print("iCloud Contacts allowlist saved (\(pickedIDs.count) container(s)).")
+    }
+
+    /// Re-request-permission-only flow. Re-runs the permission prompt
+    /// and picker WITHOUT touching the existing pair. Used when an
+    /// initial install was aborted at the permission step.
+    private func runReRequestPermissionOnly(ctx: ProductionContext) async throws {
+        guard FileManager.default.fileExists(atPath: ctx.paths.configFilePath) else {
+            FileHandle.standardError.write(Data(
+                "--re-request-permission requires a prior pair; no config.json at \(ctx.paths.configFilePath)\n".utf8))
+            throw ExitCode(3)
+        }
+        try await runContactsPermissionFlow(ctx: ctx)
+    }
+
+    private static func resolveNonInteractive(
+        raw: String,
+        visible: [ContainerInfo]
+    ) throws -> [String] {
+        let visibleIDs = Set(visible.map(\.identifier))
+        let parts = raw.split(separator: ",").map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+        for id in parts {
+            if !visibleIDs.contains(id) {
+                FileHandle.standardError.write(Data(
+                    "container identifier \(id) is not in the visible CNContainer list. Run `crm-mac configure containers --list` to see available IDs.\n".utf8))
+                throw ExitCode(2)
+            }
+        }
+        return parts
     }
 }

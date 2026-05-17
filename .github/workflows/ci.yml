@@ -220,6 +220,24 @@ jobs:
             exit 1
           fi
 
+      - name: Smoke — NSContactsUsageDescription embedded in __info_plist
+        working-directory: mac-daemon
+        # Per plan D-JC12: SPM has no first-class Info.plist support
+        # for command-line executables. We embed via linker
+        # -sectcreate; if the flag silently drops out (Package.swift
+        # rewrite, SPM behavior change, etc.) the Contacts framework
+        # has no usage description and the consent prompt fails to
+        # appear on first requestAccess. Catch the regression here.
+        run: |
+          if ! otool -s __TEXT __info_plist .build/release/crm-mac | grep -q .; then
+            echo "FAIL: __TEXT,__info_plist section is empty"
+            exit 1
+          fi
+          if ! strings .build/release/crm-mac | grep -q NSContactsUsageDescription; then
+            echo "FAIL: NSContactsUsageDescription key missing from binary"
+            exit 1
+          fi
+
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest

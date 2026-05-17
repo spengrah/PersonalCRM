@@ -38,6 +38,10 @@ final class UninstallerTests: XCTestCase {
         try fs.write(Data("config".utf8), to: paths.configFilePath)
         try fs.write(Data("state".utf8), to: paths.stateFilePath)
         try fs.write(Data("binary".utf8), to: paths.binaryPath)
+        let icloudHashCachePath = URL(fileURLWithPath: paths.configDirPath)
+            .appendingPathComponent("icloud_contacts_hashes.json").path
+        try fs.write(Data("{\"schema_version\":1,\"hashes\":{}}".utf8),
+                     to: icloudHashCachePath)
         let keychain = InMemoryKeychainStore(initial: "key")
         let uninstaller = Uninstaller(UninstallerDependencies(
             paths: paths,
@@ -51,6 +55,27 @@ final class UninstallerTests: XCTestCase {
         XCTAssertFalse(fs.fileExists(at: paths.configFilePath))
         XCTAssertFalse(fs.fileExists(at: paths.stateFilePath))
         XCTAssertFalse(fs.fileExists(at: paths.binaryPath))
+        XCTAssertFalse(fs.fileExists(at: icloudHashCachePath),
+                       "purge must include icloud_contacts_hashes.json so a re-pair starts clean")
+    }
+
+    func testPurgeLeavesIcloudHashCacheWhenNotPurging() throws {
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        try fs.write(Data("plist".utf8), to: paths.plistPath)
+        let icloudHashCachePath = URL(fileURLWithPath: paths.configDirPath)
+            .appendingPathComponent("icloud_contacts_hashes.json").path
+        try fs.write(Data("{\"schema_version\":1,\"hashes\":{}}".utf8),
+                     to: icloudHashCachePath)
+        let uninstaller = Uninstaller(UninstallerDependencies(
+            paths: paths,
+            filesystem: fs,
+            keychain: InMemoryKeychainStore(initial: "k"),
+            launchctl: FakeLaunchctlRunner(),
+            logger: NoopLogger()))
+        _ = try uninstaller.run(UninstallRequest(purge: false))
+        XCTAssertTrue(fs.fileExists(at: icloudHashCachePath),
+                      "default uninstall preserves icloud hash cache")
     }
 
     func testPlistAlreadyAbsentSurfacesAsNotDeleted() throws {

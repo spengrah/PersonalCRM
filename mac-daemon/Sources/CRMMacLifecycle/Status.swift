@@ -20,6 +20,10 @@ public struct StatusReport: Equatable {
     /// nil if no cursor has been committed yet OR the cursor JSON
     /// fails to decode.
     public let messages: MessagesSourceStatus?
+    /// Per-source status block for the icloud_contacts source.
+    /// Surfaces last-tick timestamps + recovery-flag visibility.
+    /// Nil when state.sources["icloud_contacts"] is absent.
+    public let icloudContacts: ICloudContactsSourceStatus?
 
     public init(
         installed: Bool,
@@ -30,7 +34,8 @@ public struct StatusReport: Equatable {
         hostID: UUID?,
         lastHeartbeatAt: Date?,
         stateSchemaVersion: Int?,
-        messages: MessagesSourceStatus? = nil
+        messages: MessagesSourceStatus? = nil,
+        icloudContacts: ICloudContactsSourceStatus? = nil
     ) {
         self.installed = installed
         self.registered = registered
@@ -41,6 +46,37 @@ public struct StatusReport: Equatable {
         self.lastHeartbeatAt = lastHeartbeatAt
         self.stateSchemaVersion = stateSchemaVersion
         self.messages = messages
+        self.icloudContacts = icloudContacts
+    }
+}
+
+/// Subset of SourceState surfaced via `crm-mac status` for the
+/// icloud_contacts source. Mirrors the same shape `MessagesSourceStatus`
+/// uses (and keeps Status free of any source-target dependency).
+public struct ICloudContactsSourceStatus: Equatable {
+    public let lastScheduledAt: Date?
+    public let lastPushedAt: Date?
+    public let containerCount: Int
+    /// Recovery-flag indicator. True when `lastError` starts with
+    /// `recovery_requested:` — surfaced prominently in the rendered
+    /// status output so the operator sees pending reconciliation.
+    public let recoveryRequested: Bool
+    /// The literal `lastError` string from SourceState. Nil when the
+    /// source is healthy.
+    public let lastError: String?
+
+    public init(
+        lastScheduledAt: Date?,
+        lastPushedAt: Date?,
+        containerCount: Int,
+        recoveryRequested: Bool,
+        lastError: String?
+    ) {
+        self.lastScheduledAt = lastScheduledAt
+        self.lastPushedAt = lastPushedAt
+        self.containerCount = containerCount
+        self.recoveryRequested = recoveryRequested
+        self.lastError = lastError
     }
 }
 
@@ -151,6 +187,7 @@ public struct Status {
         var configHostname: String?
         var configPiURL: String?
         var hostID: UUID?
+        var icloudContainerCount = 0
         if let data = try? deps.filesystem.read(from: deps.paths.configFilePath) {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
@@ -158,12 +195,14 @@ public struct Status {
                 configHostname = cfg.hostname
                 configPiURL = cfg.piURL.absoluteString
                 hostID = cfg.hostID
+                icloudContainerCount = cfg.sources?.icloudContacts?.containers.count ?? 0
             }
         }
 
         var lastHeartbeat: Date?
         var schemaVersion: Int?
         var messagesStatus: MessagesSourceStatus?
+        var icloudStatus: ICloudContactsSourceStatus?
         if let data = try? deps.filesystem.read(from: deps.paths.stateFilePath) {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
@@ -173,6 +212,26 @@ public struct Status {
                 if let messagesSrc = state.sources["messages"] {
                     messagesStatus = MessagesSourceStatus.decode(
                         opaqueCursor: messagesSrc.cursor)
+                }
+                if let icloudSrc = state.sources["icloud_contacts"] {
+                    let lastError = icloudSrc.lastError
+                    icloudStatus = ICloudContactsSourceStatus(
+                        lastScheduledAt: icloudSrc.lastScheduledAt,
+                        lastPushedAt: icloudSrc.lastPushedAt,
+                        containerCount: icloudContainerCount,
+                        recoveryRequested: (lastError ?? "").hasPrefix("recovery_requested:"),
+                        lastError: lastError)
+                } else if icloudContainerCount > 0 {
+                    // Config has containers but state has never
+                    // recorded a tick — surface a placeholder so
+                    // operators see the source is configured but
+                    // hasn't run.
+                    icloudStatus = ICloudContactsSourceStatus(
+                        lastScheduledAt: nil,
+                        lastPushedAt: nil,
+                        containerCount: icloudContainerCount,
+                        recoveryRequested: false,
+                        lastError: nil)
                 }
             }
         }
@@ -186,6 +245,7 @@ public struct Status {
             hostID: hostID,
             lastHeartbeatAt: lastHeartbeat,
             stateSchemaVersion: schemaVersion,
-            messages: messagesStatus)
+            messages: messagesStatus,
+            icloudContacts: icloudStatus)
     }
 }

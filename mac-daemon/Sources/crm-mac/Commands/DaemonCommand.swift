@@ -13,6 +13,7 @@
 import Foundation
 import ArgumentParser
 import CRMMacCore
+import CRMMacIcloudContactsSource
 import CRMMacLifecycle
 import CRMMacMessagesSource
 import CRMMacPiClient
@@ -115,10 +116,44 @@ struct DaemonCommand: AsyncParsableCommand {
             refresher: refresher,
             sourceHealthProvider: healthProvider)
 
-        let stubContext = SourceContext(logger: logger)
+        // iCloud Contacts source. Reads CNContactStore on the host
+        // (Contacts permission required), publishes external_contact.*
+        // events to the Pi, persists the per-contact content-hash
+        // cache locally for deterministic delete source_ids.
+        let icloudCachePath = URL(fileURLWithPath: ctx.paths.configDirPath)
+            .appendingPathComponent("icloud_contacts_hashes.json")
+        let icloudCache = ContactHashCache(fileURL: icloudCachePath)
+        do {
+            try await icloudCache.load()
+        } catch {
+            logger.warning("icloud cache load failed; treating as empty", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+        }
+        let icloudPublisher = ICloudContactsPublisher(
+            sender: { [piClient] auth, body in
+                try await piClient.ingestEvents(auth: auth, body: body)
+            },
+            auth: auth,
+            logger: logger)
+        let configStore = CRMMacCore.ConfigStore(
+            fileURL: URL(fileURLWithPath: ctx.paths.configFilePath))
+        let icloudPlugin = ICloudContactsSourcePlugin(
+            tickInterval: CRMMacIcloudContactsSource.defaultTickInterval,
+            piClient: piClient,
+            auth: auth,
+            mutator: stateMutator,
+            publisher: icloudPublisher,
+            cache: icloudCache,
+            reader: CNContactStoreReader(),
+            authAdapter: ctx.contactsAuthAdapter(),
+            configSource: ICloudContactsConfigStoreSource(store: configStore),
+            healthRegistry: healthRegistry,
+            logger: logger)
+
         let plugins: [SourcePlugin] = [
             messagesPlugin,
-            StubICloudContactsPlugin(context: stubContext),
+            icloudPlugin,
         ]
         let scheduler = DispatchSourceScheduleRunner(logger: logger)
         let runner = DaemonRunner(

@@ -34,7 +34,7 @@ struct StatusCommand: ParsableCommand {
             print("last_heartbeat_at=never")
         }
 
-        // Sources block — the messages source surfaces messages cursor watermarks.
+        // Sources block — each source surfaces its own watermarks.
         print("")
         print("Sources:")
         if let messages = report.messages {
@@ -54,6 +54,28 @@ struct StatusCommand: ParsableCommand {
             }
         } else {
             print("  messages: (no cursor committed yet)")
+        }
+
+        if let icloud = report.icloudContacts {
+            print("  icloud_contacts:")
+            print("    containers:         \(icloud.containerCount)")
+            let formatter = ISO8601DateFormatter()
+            let scheduled = icloud.lastScheduledAt
+                .map { formatter.string(from: $0) } ?? "never"
+            let pushed = icloud.lastPushedAt
+                .map { formatter.string(from: $0) } ?? "never"
+            print("    last_scheduled_at:  \(scheduled)")
+            print("    last_pushed_at:     \(pushed)")
+            if icloud.recoveryRequested {
+                // Surface recovery flag prominently so operators
+                // notice pending reconciliation. The reason follows
+                // the colon (allowlist_changed, hash_mismatch, etc.).
+                print("    recovery_requested: YES (\(icloud.lastError ?? "unknown reason"))")
+            } else if let err = icloud.lastError {
+                print("    last_error:         \(err)")
+            }
+        } else {
+            print("  icloud_contacts: (no containers configured; run `crm-mac configure containers`)")
         }
     }
 }
