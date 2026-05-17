@@ -1,4 +1,4 @@
-import { Users, Calendar, Send, HelpCircle } from 'lucide-react'
+import { Users, Calendar, Send, Cloud, HelpCircle } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 export interface SourceDisplayInfo {
@@ -9,6 +9,7 @@ export interface SourceDisplayInfo {
 const SOURCE_DISPLAY_MAP: Record<string, SourceDisplayInfo> = {
   gcontacts: { label: 'Google Contacts', icon: Users },
   gcal_attendee: { label: 'Google Calendar', icon: Calendar },
+  icloud_contacts: { label: 'iCloud Contacts', icon: Cloud },
   telegram: { label: 'Telegram', icon: Send },
 }
 
