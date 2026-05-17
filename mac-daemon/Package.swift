@@ -11,7 +11,9 @@ import PackageDescription
 //   - CRMMacCore                 (Foundation only): state, config, plugin protocol,
 //                                StateMutator, SourceHealthSnapshot, PidfileLock,
 //                                normalization parity helpers, JCS canonicalizer,
-//                                ContactRecord + ContainerInfo + ContainerKind.
+//                                ContactRecord + ContainerInfo + ContainerKind,
+//                                ContactsAuthorizationAdapter (Foundation-only
+//                                protocol; production impl in CRMMacSystem).
 //   - CRMMacPiClient             (Foundation + CRMMacCore): typed HTTP client.
 //   - CRMMacLifecycle            (Foundation + Core + PiClient): install/uninstall/
 //                                doctor/status/heartbeat workflows + adapter

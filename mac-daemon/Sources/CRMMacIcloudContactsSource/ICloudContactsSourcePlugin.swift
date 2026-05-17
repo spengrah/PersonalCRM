@@ -57,7 +57,6 @@
 // ticks regardless of where the abort happens (per Codex r3 P1-1).
 import Foundation
 import CRMMacCore
-import CRMMacLifecycle
 import CRMMacPiClient
 
 /// Inputs the plugin needs from the daemon's composition root.

@@ -4,7 +4,7 @@
 // stays framework-free + testable everywhere.
 import Foundation
 @preconcurrency import Contacts
-import CRMMacLifecycle
+import CRMMacCore
 
 /// `@unchecked Sendable` because `CNContactStore` is documented thread-
 /// safe for the methods we call (`authorizationStatus(for:)` is a

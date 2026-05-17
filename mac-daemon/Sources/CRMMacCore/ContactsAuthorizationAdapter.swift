@@ -1,8 +1,12 @@
 // ContactsAuthorizationAdapter exposes the Contacts framework's
 // `CNContactStore.authorizationStatus` + `requestAccess` to the
 // install + doctor + daemon flows without dragging the Contacts
-// framework into CRMMacLifecycle (which must stay testable on any
-// platform).
+// framework into the Foundation-only targets (which must stay
+// testable on any platform).
+//
+// Lives in CRMMacCore so both CRMMacLifecycle (Doctor) and
+// CRMMacIcloudContactsSource (per-tick auth probe) reference it
+// without one importing the other.
 //
 // Production impl lives in CRMMacSystem (`ProductionContactsAuthorizationAdapter`).
 // Tests inject a stub returning canned statuses.
