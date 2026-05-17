@@ -102,12 +102,19 @@ func (q *Queries) CountRiverJobsByKindUnfinalized(ctx context.Context, kind stri
 }
 
 const DeleteAllMacHosts = `-- name: DeleteAllMacHosts :execrows
-DELETE FROM mac_host
+DELETE FROM mac_host WHERE hostname NOT LIKE 'test-host-%'
 `
 
 // Test teardown — hard delete so the singleton index is empty for the
 // next test. mac_host has no deleted_at column, so soft-delete is not
 // an option.
+//
+// Excludes rows whose hostname starts with 'test-host-' (the
+// messages_message_repository_test fixture prefix). Those rows are
+// pre-revoked stand-ins used purely as FK targets by a parallel test
+// package; wiping them mid-run breaks
+// messages_message.mac_host_id FK inserts because Go runs test
+// packages in parallel against the shared test DB.
 func (q *Queries) DeleteAllMacHosts(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, DeleteAllMacHosts)
 	if err != nil {
@@ -427,6 +434,51 @@ func (q *Queries) SeedPairingToken(ctx context.Context, arg SeedPairingTokenPara
 		&i.ConsumedAt,
 		&i.ConsumedHostID,
 		&i.CreatedAt,
+	)
+	return &i, err
+}
+
+const SeedRevokedMacHost = `-- name: SeedRevokedMacHost :one
+INSERT INTO mac_host (hostname, daemon_version, protocol_version, api_key_hash, api_key_revoked_at)
+VALUES ($1, $2, $3, $4, NOW())
+RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at
+`
+
+type SeedRevokedMacHostParams struct {
+	Hostname        string `json:"hostname"`
+	DaemonVersion   string `json:"daemon_version"`
+	ProtocolVersion int32  `json:"protocol_version"`
+	ApiKeyHash      string `json:"api_key_hash"`
+}
+
+// Inserts a host that is already revoked (api_key_revoked_at = NOW()).
+// Used by integration tests that only need a valid mac_host UUID as an
+// FK target (e.g., messages_message.mac_host_id) and do NOT care about
+// pairing or auth state. The singleton index idx_mac_host_singleton only
+// applies to rows WHERE api_key_revoked_at IS NULL, so this helper can
+// be called freely from parallel test packages without contending with
+// the pairing-flow tests that hold the singleton slot.
+func (q *Queries) SeedRevokedMacHost(ctx context.Context, arg SeedRevokedMacHostParams) (*MacHost, error) {
+	row := q.db.QueryRow(ctx, SeedRevokedMacHost,
+		arg.Hostname,
+		arg.DaemonVersion,
+		arg.ProtocolVersion,
+		arg.ApiKeyHash,
+	)
+	var i MacHost
+	err := row.Scan(
+		&i.ID,
+		&i.Hostname,
+		&i.DaemonVersion,
+		&i.ProtocolVersion,
+		&i.LastHeartbeatAt,
+		&i.Permissions,
+		&i.SourceHealth,
+		&i.CursorEpoch,
+		&i.ApiKeyHash,
+		&i.ApiKeyRevokedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return &i, err
 }

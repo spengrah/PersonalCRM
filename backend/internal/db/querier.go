@@ -159,6 +159,13 @@ type Querier interface {
 	// Test teardown — hard delete so the singleton index is empty for the
 	// next test. mac_host has no deleted_at column, so soft-delete is not
 	// an option.
+	//
+	// Excludes rows whose hostname starts with 'test-host-' (the
+	// messages_message_repository_test fixture prefix). Those rows are
+	// pre-revoked stand-ins used purely as FK targets by a parallel test
+	// package; wiping them mid-run breaks
+	// messages_message.mac_host_id FK inserts because Go runs test
+	// packages in parallel against the shared test DB.
 	DeleteAllMacHosts(ctx context.Context) (int64, error)
 	DeleteAllPairingTokens(ctx context.Context) (int64, error)
 	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
@@ -729,6 +736,14 @@ type Querier interface {
 	// this to seed expired tokens (cannot mint via the real Create path
 	// because the service enforces a forward-only TTL).
 	SeedPairingToken(ctx context.Context, arg SeedPairingTokenParams) (*MacHostPairingToken, error)
+	// Inserts a host that is already revoked (api_key_revoked_at = NOW()).
+	// Used by integration tests that only need a valid mac_host UUID as an
+	// FK target (e.g., messages_message.mac_host_id) and do NOT care about
+	// pairing or auth state. The singleton index idx_mac_host_singleton only
+	// applies to rows WHERE api_key_revoked_at IS NULL, so this helper can
+	// be called freely from parallel test packages without contending with
+	// the pairing-flow tests that hold the singleton slot.
+	SeedRevokedMacHost(ctx context.Context, arg SeedRevokedMacHostParams) (*MacHost, error)
 	SetContactMethodPrimary(ctx context.Context, arg SetContactMethodPrimaryParams) error
 	// Persist external_task_id on a row without touching state. Used by the
 	// close-while-pending race path: the create worker enters on a row that

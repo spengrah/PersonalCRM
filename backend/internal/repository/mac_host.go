@@ -355,6 +355,31 @@ func (r *MacHostRepository) SeedHostForTest(
 	return convertDbMacHost(patched), nil
 }
 
+// SeedRevokedHostForTest is a test-only helper that inserts a host with
+// api_key_revoked_at already set. Tests that only need a valid mac_host
+// UUID as an FK target (e.g., messages_message.mac_host_id) should use
+// this instead of SeedHostForTest: the singleton index
+// idx_mac_host_singleton only constrains rows WHERE api_key_revoked_at
+// IS NULL, so multiple revoked rows coexist freely. This isolates such
+// tests from parallel packages that exercise the real pairing flow.
+func (r *MacHostRepository) SeedRevokedHostForTest(
+	ctx context.Context,
+	hostname, daemonVersion string,
+	protocolVersion int32,
+	apiKeyHash string,
+) (*MacHost, error) {
+	row, err := r.queries.SeedRevokedMacHost(ctx, db.SeedRevokedMacHostParams{
+		Hostname:        hostname,
+		DaemonVersion:   daemonVersion,
+		ProtocolVersion: protocolVersion,
+		ApiKeyHash:      apiKeyHash,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("seed revoked mac_host: %w", err)
+	}
+	return convertDbMacHost(row), nil
+}
+
 // MacHostPairingTokenRepository handles pairing-token persistence.
 type MacHostPairingTokenRepository struct {
 	queries db.Querier
