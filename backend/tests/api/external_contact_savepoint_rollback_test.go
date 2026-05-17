@@ -85,7 +85,7 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
-	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, contactMethodRepo, database.Pool, 4)
+	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, contactMethodRepo, nil, database.Pool, 4)
 
 	identityRepo := repository.NewIdentityRepository(database.Queries)
 	identityService := service.NewIdentityService(identityRepo)
@@ -100,7 +100,7 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 	// match-flip path errors after Bus.PublishTx + UpsertTx +
 	// MatchOrCreateTx have already written rows inside the savepoint.
 	failingWriter := &failingMatchExternalContactWriter{inner: externalRepo}
-	ingestService := service.NewIngestService(database, eventBus, identityService, nil, nil, failingWriter)
+	ingestService := service.NewIngestService(database, eventBus, identityService, nil, nil, failingWriter, hostRepo)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	gin.SetMode(gin.TestMode)
@@ -161,7 +161,6 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 	// the inline handler will get past UpsertTx + MatchOrCreateTx and
 	// then fail at UpdateMatchTx (the stub).
 	entityID := sourceIDPrefix + "match-fail"
-	hashHex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	now := accelerated.GetCurrentTime()
 	dn := "Sample Rollback"
 	p := events.ExternalContactUpsertedPayload{
@@ -174,6 +173,8 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 		Metadata:    map[string]any{"container_identifier": "rollback-test"},
 	}
 	pBytes, err := events.Marshal(events.KindExternalContactUpserted, p)
+	require.NoError(t, err)
+	hashHex, err := service.ComputeContentHash(pBytes)
 	require.NoError(t, err)
 	ev := map[string]any{
 		"source":      "icloud_contacts",

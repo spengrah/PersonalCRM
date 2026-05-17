@@ -1,0 +1,501 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+	"time"
+
+	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/api"
+	"personal-crm/backend/internal/api/handlers"
+	"personal-crm/backend/internal/auth"
+	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+)
+
+// ----------------------------------------------------------------------------
+// GET /api/v1/host/:id/sync/:source/known-ids integration tests
+//
+// These exercise the real router → middleware → service → repository
+// chain against a live Postgres so the wire shape, auth contract, and
+// host-scoped filter are all locked.
+// ----------------------------------------------------------------------------
+
+type knownIDsByHostEnv struct {
+	router        *gin.Engine
+	database      *db.Database
+	macService    *service.MacHostService
+	externalRepo  *repository.ExternalContactRepository
+	pairedHostID  uuid.UUID
+	pairedHostKey string
+	// sourceIDPrefix scopes per-test cleanup so parallel runs don't
+	// stomp each other under source='icloud_contacts'.
+	sourceIDPrefix string
+}
+
+func setupKnownIDsByHostEnv(t *testing.T) *knownIDsByHostEnv {
+	t.Helper()
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	cfg.External.APIKey = macHostTestKey
+
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+
+	hostRepo := repository.NewMacHostRepository(database.Queries)
+	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
+	externalRepo := repository.NewExternalContactRepository(database.Queries)
+	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, contactMethodRepo, externalRepo, database.Pool, 4)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(api.RequestIDMiddleware())
+	router.Use(api.LoggingMiddleware())
+	router.Use(api.CORSMiddleware(cfg.CORS))
+
+	limiter := auth.NewPairingIPRateLimiter()
+	macHandler := handlers.NewMacHostHandler(macService, limiter)
+	handlers.RegisterMacHostRoutes(router, handlers.MacHostRouteDeps{
+		HostRepo:    hostRepo,
+		Handler:     macHandler,
+		AuthLimiter: auth.DefaultMacHostAuthLimiterConfig(),
+	})
+
+	plain, _, err := macService.CreatePairingToken(ctx)
+	require.NoError(t, err)
+	pair, err := macService.PairWithToken(ctx, plain, "known-ids-by-host-test", "0.1.0", 1)
+	require.NoError(t, err)
+
+	suffix := uuid.NewString()[:8]
+	env := &knownIDsByHostEnv{
+		router:         router,
+		database:       database,
+		macService:     macService,
+		externalRepo:   externalRepo,
+		pairedHostID:   pair.HostID,
+		pairedHostKey:  pair.APIKey,
+		sourceIDPrefix: "known-ids-" + suffix + "-",
+	}
+
+	t.Cleanup(func() {
+		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		// Hard-delete every external_contact row seeded under our
+		// per-test source_id prefix (covers live and tombstoned).
+		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, env.sourceIDPrefix)
+		_, _ = database.Queries.DeleteAllMacHosts(cleanCtx)
+		_, _ = database.Queries.DeleteAllPairingTokens(cleanCtx)
+		database.Close()
+	})
+	return env
+}
+
+// seedExternalContact inserts a live external_contact row via the
+// repository's UpsertTx so the new columns (host_id, last_content_hash)
+// are populated. Returns the seeded row's source_id.
+func (e *knownIDsByHostEnv) seedExternalContact(
+	t *testing.T, hostID uuid.UUID, source, entityID string, hash *string,
+) string {
+	t.Helper()
+	ctx := context.Background()
+	sourceID := e.sourceIDPrefix + entityID
+	syncedAt := accelerated.GetCurrentTime()
+	tx, err := e.database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = e.externalRepo.UpsertTx(ctx, tx, repository.UpsertExternalContactRequest{
+		Source:          source,
+		SourceID:        sourceID,
+		HostID:          &hostID,
+		LastContentHash: hash,
+		SyncedAt:        &syncedAt,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+	return sourceID
+}
+
+func (e *knownIDsByHostEnv) softDeleteRow(t *testing.T, source, sourceID string) {
+	t.Helper()
+	ctx := context.Background()
+	row, err := e.externalRepo.GetBySource(ctx, source, sourceID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, row, "row %s should exist before soft-delete", sourceID)
+	tx, err := e.database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	require.NoError(t, e.externalRepo.SoftDeleteTx(ctx, tx, row.ID))
+	require.NoError(t, tx.Commit(ctx))
+}
+
+func getKnownIDsByHost(t *testing.T, env *knownIDsByHostEnv, urlHostID, headerHostID, hostKey, source string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/host/"+urlHostID+"/sync/"+source+"/known-ids", nil)
+	if headerHostID != "" {
+		req.Header.Set("X-Mac-Host-ID", headerHostID)
+	}
+	if hostKey != "" {
+		req.Header.Set("Authorization", "Bearer "+hostKey)
+	}
+	w := httptest.NewRecorder()
+	env.router.ServeHTTP(w, req)
+	return w
+}
+
+type knownIDsByHostEntry struct {
+	SourceID        string  `json:"source_id"`
+	LastContentHash *string `json:"last_content_hash"`
+}
+
+type knownIDsByHostResp struct {
+	Success bool `json:"success"`
+	Data    struct {
+		IDs []knownIDsByHostEntry `json:"ids"`
+	} `json:"data"`
+}
+
+func parseKnownIDsByHostResp(t *testing.T, w *httptest.ResponseRecorder) knownIDsByHostResp {
+	t.Helper()
+	var r knownIDsByHostResp
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&r), "body: %s", w.Body.String())
+	return r
+}
+
+func TestKnownIDsByHost_Auth_Missing_401(t *testing.T) {
+	env := setupKnownIDsByHostEnv(t)
+	w := getKnownIDsByHost(t, env, env.pairedHostID.String(), env.pairedHostID.String(), "", "icloud_contacts")
+	require.Equal(t, http.StatusUnauthorized, w.Code, "body: %s", w.Body.String())
+}
+
+func TestKnownIDsByHost_Auth_WrongHostID_403(t *testing.T) {
+	env := setupKnownIDsByHostEnv(t)
+	other := uuid.New().String()
+	// Valid bearer + X-Mac-Host-ID, but URL :id differs — middleware
+	// enforces the consistency check.
+	w := getKnownIDsByHost(t, env, other, env.pairedHostID.String(), env.pairedHostKey, "icloud_contacts")
+	require.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
+}
+
+func TestKnownIDsByHost_UnknownSource_400(t *testing.T) {
+	env := setupKnownIDsByHostEnv(t)
+	w := getKnownIDsByHost(t, env, env.pairedHostID.String(), env.pairedHostID.String(), env.pairedHostKey, "bogus")
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+}
+
+func TestKnownIDsByHost_EmptyDB_ReturnsEmptyArray(t *testing.T) {
+	env := setupKnownIDsByHostEnv(t)
+	w := getKnownIDsByHost(t, env, env.pairedHostID.String(), env.pairedHostID.String(), env.pairedHostKey, "icloud_contacts")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	r := parseKnownIDsByHostResp(t, w)
+	require.True(t, r.Success)
+	require.NotNil(t, r.Data.IDs, "ids must serialize as `[]`, never null")
+	// Other tests may have left their rows behind; the per-test
+	// source_id prefix scopes our expectation. Filter to only rows we
+	// seeded (in this test we seeded none).
+	for _, entry := range r.Data.IDs {
+		require.NotContains(t, entry.SourceID, env.sourceIDPrefix,
+			"empty-DB test must not see its own seeded rows")
+	}
+}
+
+func TestKnownIDsByHost_ReturnsLiveRows(t *testing.T) {
+	env := setupKnownIDsByHostEnv(t)
+	h1 := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	h2 := "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	h3 := "1111222233334444555566667777888899990000aaaabbbbccccddddeeeeffff"
+	sid1 := env.seedExternalContact(t, env.pairedHostID, "icloud_contacts", "alpha", &h1)
+	sid2 := env.seedExternalContact(t, env.pairedHostID, "icloud_contacts", "beta", &h2)
+	sid3 := env.seedExternalContact(t, env.pairedHostID, "icloud_contacts", "gamma", &h3)
+
+	w := getKnownIDsByHost(t, env, env.pairedHostID.String(), env.pairedHostID.String(), env.pairedHostKey, "icloud_contacts")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	r := parseKnownIDsByHostResp(t, w)
+	require.True(t, r.Success)
+
+	// Build a lookup over only OUR seeded rows.
+	mine := map[string]*string{}
+	for _, entry := range r.Data.IDs {
+		if _, ok := map[string]struct{}{sid1: {}, sid2: {}, sid3: {}}[entry.SourceID]; ok {
+			mine[entry.SourceID] = entry.LastContentHash
+		}
+	}
+	require.Len(t, mine, 3, "all three seeded live rows must be returned")
+	require.NotNil(t, mine[sid1])
+	require.Equal(t, h1, *mine[sid1])
+	require.NotNil(t, mine[sid2])
+	require.Equal(t, h2, *mine[sid2])
+	require.NotNil(t, mine[sid3])
+	require.Equal(t, h3, *mine[sid3])
+}
+
+func TestKnownIDsByHost_ExcludesTombstonedRows(t *testing.T) {
+	env := setupKnownIDsByHostEnv(t)
+	h1 := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	h2 := "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	h3 := "1111222233334444555566667777888899990000aaaabbbbccccddddeeeeffff"
+	sid1 := env.seedExternalContact(t, env.pairedHostID, "icloud_contacts", "live-a", &h1)
+	sid2 := env.seedExternalContact(t, env.pairedHostID, "icloud_contacts", "live-b", &h2)
+	tomb := env.seedExternalContact(t, env.pairedHostID, "icloud_contacts", "tombstoned", &h3)
+	env.softDeleteRow(t, "icloud_contacts", tomb)
+
+	w := getKnownIDsByHost(t, env, env.pairedHostID.String(), env.pairedHostID.String(), env.pairedHostKey, "icloud_contacts")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	r := parseKnownIDsByHostResp(t, w)
+
+	mine := map[string]bool{}
+	for _, entry := range r.Data.IDs {
+		mine[entry.SourceID] = true
+	}
+	require.True(t, mine[sid1], "live row sid1 must appear")
+	require.True(t, mine[sid2], "live row sid2 must appear")
+	require.False(t, mine[tomb], "tombstoned row must NOT appear in known-ids")
+}
+
+func TestKnownIDsByHost_HostScoped(t *testing.T) {
+	// Pair host A, seed two rows under A. Revoke A. Pair host B, seed
+	// one row under B. B's /known-ids must return only B's row — A's
+	// rows survive (no cascade on revoke) but they're owned by A and
+	// the partial filter excludes them from B's view.
+	env := setupKnownIDsByHostEnv(t)
+	ctx := context.Background()
+
+	// Host A is already paired by setup; treat env.pairedHostID as A.
+	hA := env.pairedHostID
+	h1 := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	h2 := "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	sid1A := env.seedExternalContact(t, hA, "icloud_contacts", "a-1", &h1)
+	sid2A := env.seedExternalContact(t, hA, "icloud_contacts", "a-2", &h2)
+
+	// Revoke A so B can pair (idx_mac_host_singleton allows only one
+	// non-revoked host).
+	require.NoError(t, env.macService.RevokeHost(ctx, hA))
+
+	// Pair host B.
+	plainB, _, err := env.macService.CreatePairingToken(ctx)
+	require.NoError(t, err)
+	pairB, err := env.macService.PairWithToken(ctx, plainB, "host-b", "0.1.0", 1)
+	require.NoError(t, err)
+	h3 := "1111222233334444555566667777888899990000aaaabbbbccccddddeeeeffff"
+	sid1B := env.seedExternalContact(t, pairB.HostID, "icloud_contacts", "b-1", &h3)
+
+	// Query as B.
+	w := getKnownIDsByHost(t, env, pairB.HostID.String(), pairB.HostID.String(), pairB.APIKey, "icloud_contacts")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	r := parseKnownIDsByHostResp(t, w)
+
+	mine := map[string]bool{}
+	for _, entry := range r.Data.IDs {
+		mine[entry.SourceID] = true
+	}
+	require.True(t, mine[sid1B], "host B's own row must appear")
+	require.False(t, mine[sid1A], "host A's row must NOT appear in host B's known-ids")
+	require.False(t, mine[sid2A], "host A's row must NOT appear in host B's known-ids")
+}
+
+func TestKnownIDsByHost_NullLastContentHashSerializesAsNull(t *testing.T) {
+	env := setupKnownIDsByHostEnv(t)
+	// Legacy row simulation: no last_content_hash on the upsert.
+	sid := env.seedExternalContact(t, env.pairedHostID, "icloud_contacts", "legacy", nil)
+
+	w := getKnownIDsByHost(t, env, env.pairedHostID.String(), env.pairedHostID.String(), env.pairedHostKey, "icloud_contacts")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	r := parseKnownIDsByHostResp(t, w)
+
+	found := false
+	for _, entry := range r.Data.IDs {
+		if entry.SourceID == sid {
+			found = true
+			require.Nil(t, entry.LastContentHash, "legacy row's last_content_hash must serialize as null")
+		}
+	}
+	require.True(t, found, "seeded legacy row must appear in response")
+}
+
+func TestKnownIDsByHost_NonExternalContactSource_ReturnsEmpty(t *testing.T) {
+	// `messages` is an allowed push source but has no external_contact
+	// rows. The query filter on source returns an empty array.
+	env := setupKnownIDsByHostEnv(t)
+	w := getKnownIDsByHost(t, env, env.pairedHostID.String(), env.pairedHostID.String(), env.pairedHostKey, "messages")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	r := parseKnownIDsByHostResp(t, w)
+	require.NotNil(t, r.Data.IDs)
+	// Filter to only the rows we seeded (none in this test).
+	for _, entry := range r.Data.IDs {
+		require.NotContains(t, entry.SourceID, env.sourceIDPrefix,
+			"messages source should not contain any of our seeded icloud rows")
+	}
+}
+
+// TestKnownIDsByHost_RoundTripUpsertThenFetch is the end-to-end
+// recovery-flow test: POST an external_contact.upserted event through
+// the real ingest path, immediately GET /known-ids, and assert both
+// the source_id and the matching last_content_hash appear in the
+// response. Proves the ingest writes both columns AND the endpoint
+// returns them together.
+func TestKnownIDsByHost_RoundTripUpsertThenFetch(t *testing.T) {
+	// Wire a full ingest stack so we can POST an upsert event.
+	env := setupExtContactIngestEnv(t)
+	entityID := env.sourceIDPrefix + "roundtrip"
+	upsertEv := buildExtUpsertEvent(t, env.pairedHostID, entityID, nil)
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{upsertEv},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseIngestResp(t, w).Accepted)
+
+	// GET /known-ids on the same paired host.
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/host/"+env.pairedHostID.String()+"/sync/icloud_contacts/known-ids", nil)
+	req.Header.Set("X-Mac-Host-ID", env.pairedHostID.String())
+	req.Header.Set("Authorization", "Bearer "+env.pairedHostKey)
+	w2 := httptest.NewRecorder()
+	env.router.ServeHTTP(w2, req)
+	require.Equal(t, http.StatusOK, w2.Code, "body: %s", w2.Body.String())
+
+	r := parseKnownIDsByHostResp(t, w2)
+	expectedHash := upsertEv["source_id"].(string)[len(upsertEv["source_id"].(string))-64:]
+	found := false
+	for _, entry := range r.Data.IDs {
+		if entry.SourceID == entityID {
+			found = true
+			require.NotNil(t, entry.LastContentHash,
+				"recovered row's last_content_hash must not be NULL")
+			require.Equal(t, expectedHash, *entry.LastContentHash,
+				"hash returned by /known-ids must equal the hash the daemon submitted")
+		}
+	}
+	require.True(t, found, "freshly upserted entity must appear in /known-ids")
+
+	// Verify the host_id was persisted on the row too — the
+	// application-level invariant for icloud_contacts is that every
+	// row carries both host_id and last_content_hash.
+	row, err := env.externalRepo.GetBySource(context.Background(),
+		"icloud_contacts", entityID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	require.NotNil(t, row.HostID, "icloud_contacts row must persist host_id")
+	require.Equal(t, env.pairedHostID, *row.HostID)
+	require.NotNil(t, row.LastContentHash, "icloud_contacts row must persist last_content_hash")
+}
+
+// TestUpsertExternalContact_ClaimsLegacyNullHostID covers the upgrade
+// path: a pre-migration external_contact row whose host_id is NULL
+// must be claimed by the first host that emits an upsert for it, and
+// then become visible to that host's /known-ids endpoint. Without the
+// claim-on-first-non-NULL-emit semantics in the ON CONFLICT branch,
+// legacy rows remain permanently invisible to known-ids and the
+// daemon cannot reconcile tombstones for them.
+//
+// Also asserts non-NULL ownership is preserved: a second host that
+// emits an upsert for the same entity does NOT overwrite the first
+// claimer's ownership.
+func TestUpsertExternalContact_ClaimsLegacyNullHostID(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	ctx := context.Background()
+	entityID := env.sourceIDPrefix + "legacy-claim"
+
+	// Plant a legacy row directly via the repository with HostID = nil
+	// to simulate pre-migration data. SyncedAt + a placeholder hash
+	// make the row look like it was last written by an older code path.
+	legacyHash := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	syncedAt := accelerated.GetCurrentTime()
+	tx, err := env.database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	_, err = env.externalRepo.UpsertTx(ctx, tx, repository.UpsertExternalContactRequest{
+		Source:          "icloud_contacts",
+		SourceID:        entityID,
+		HostID:          nil,
+		LastContentHash: &legacyHash,
+		SyncedAt:        &syncedAt,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+
+	pre, err := env.externalRepo.GetBySource(ctx, "icloud_contacts", entityID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, pre)
+	require.Nil(t, pre.HostID, "fixture must start with NULL host_id (legacy row)")
+
+	// Host A (env.pairedHostID) emits an upsert for the legacy row.
+	upsertEv := buildExtUpsertEvent(t, env.pairedHostID, entityID, nil)
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{upsertEv},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseIngestResp(t, w).Accepted)
+
+	// Assertion 1: host_id is now claimed by host A.
+	claimed, err := env.externalRepo.GetBySource(ctx, "icloud_contacts", entityID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	require.NotNil(t, claimed.HostID, "legacy row must be claimed on first non-NULL upsert")
+	require.Equal(t, env.pairedHostID, *claimed.HostID,
+		"legacy row's host_id must be set to the claiming host")
+
+	// Assertion 2: the row appears in host A's /known-ids response.
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/host/"+env.pairedHostID.String()+"/sync/icloud_contacts/known-ids", nil)
+	req.Header.Set("X-Mac-Host-ID", env.pairedHostID.String())
+	req.Header.Set("Authorization", "Bearer "+env.pairedHostKey)
+	w2 := httptest.NewRecorder()
+	env.router.ServeHTTP(w2, req)
+	require.Equal(t, http.StatusOK, w2.Code, "body: %s", w2.Body.String())
+	r := parseKnownIDsByHostResp(t, w2)
+	foundForA := false
+	for _, entry := range r.Data.IDs {
+		if entry.SourceID == entityID {
+			foundForA = true
+		}
+	}
+	require.True(t, foundForA,
+		"claimed legacy row must be visible to its new owner via /known-ids")
+
+	// Now pair a second host (B) and have it attempt an upsert. The
+	// singleton index requires we revoke A first.
+	require.NoError(t, env.macService.RevokeHost(ctx, env.pairedHostID))
+	plainB, _, err := env.macService.CreatePairingToken(ctx)
+	require.NoError(t, err)
+	pairB, err := env.macService.PairWithToken(ctx, plainB, "legacy-claim-host-b", "0.1.0", 1)
+	require.NoError(t, err)
+
+	// Mutate display_name so the envelope source_id hash differs from
+	// host A's emit. Identical hashes would dedup at the event-log
+	// layer (the JCS hash excludes host_id, so same content from a
+	// different host hashes the same) and never reach the upsert path.
+	upsertEvB := buildExtUpsertEvent(t, pairB.HostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		dn := "Host B Display Name"
+		p.DisplayName = &dn
+	})
+	wB := postIngestExt(t, env, &pairB.HostID, pairB.APIKey, map[string]any{
+		"events": []any{upsertEvB},
+	})
+	require.Equal(t, http.StatusOK, wB.Code, "body: %s", wB.Body.String())
+	require.Equal(t, 1, parseIngestResp(t, wB).Accepted, "host B's upsert should be accepted; body: %s", wB.Body.String())
+
+	// Assertion 3: ownership is preserved — host A still owns the row
+	// even though host B emitted an upsert for the same entity.
+	postB, err := env.externalRepo.GetBySource(ctx, "icloud_contacts", entityID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, postB)
+	require.NotNil(t, postB.HostID, "host_id must remain set after second host's upsert")
+	require.Equal(t, env.pairedHostID, *postB.HostID,
+		"first claimer's ownership must be preserved on subsequent upserts from other hosts")
+}

@@ -73,6 +73,31 @@ type ExternalContact struct {
 	// surfaces through GetBySource (intentionally tombstone-aware for the
 	// mac-daemon revive path).
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	// HostID is the paired Mac host that claimed this row (mac-daemon
+	// sources only). Written on INSERT and on UPDATE via
+	// COALESCE(existing, EXCLUDED) — a NULL row (legacy or never-claimed)
+	// is claimed by the next non-NULL emit; non-NULL ownership is
+	// preserved thereafter across all subsequent upserts.
+	HostID *uuid.UUID `json:"host_id,omitempty"`
+	// LastContentHash is the lowercase-hex SHA-256 of the JCS-
+	// canonicalized payload (minus host_id) that produced this row's
+	// current content. Written on every UPSERT for mac-daemon sources;
+	// preserved on soft-delete so a future delete-event can validate
+	// against the prior hash. Powers GET /sync/:source/known-ids.
+	LastContentHash *string `json:"last_content_hash,omitempty"`
+}
+
+// KnownExternalContactID is the (source_id, last_content_hash) pair
+// returned by GET /api/v1/host/:id/sync/:source/known-ids. The daemon
+// uses it to (a) drive tombstone reconciliation after a full
+// CNContactStore scan, and (b) construct deterministic delete
+// source_ids of the form `<entity>@deleted@<prev_hash>` per the
+// mac-daemon spec. LastContentHash is nil for legacy rows from
+// before the column existed; the daemon falls back to the
+// `@deleted@unknown` sentinel.
+type KnownExternalContactID struct {
+	SourceID        string  `json:"source_id"`
+	LastContentHash *string `json:"last_content_hash"`
 }
 
 // UpsertTelegramDiscoveryCandidateRequest carries the Telegram-specific fields
@@ -105,6 +130,17 @@ type UpsertExternalContactRequest struct {
 	Etag         *string        `json:"etag,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty"`
 	SyncedAt     *time.Time     `json:"synced_at,omitempty"`
+	// HostID is set ONLY by mac-daemon ingest paths. The underlying
+	// sqlc query writes it on INSERT, and on UPDATE via
+	// COALESCE(existing, EXCLUDED) — legacy NULL rows are claimed by
+	// the next non-NULL emit, and non-NULL ownership is preserved
+	// across all subsequent upserts.
+	HostID *uuid.UUID `json:"host_id,omitempty"`
+	// LastContentHash is the lowercase-hex SHA-256 of the JCS-
+	// canonicalized payload (minus host_id). Set by mac-daemon ingest
+	// paths after the ingest layer verifies the hash matches the
+	// envelope's source_id suffix. Written on both INSERT and UPDATE.
+	LastContentHash *string `json:"last_content_hash,omitempty"`
 }
 
 // ExternalContactRepository handles external contact persistence
@@ -221,6 +257,13 @@ func convertDbExternalContact(dbContact *db.ExternalContact) (*ExternalContact, 
 		t := dbContact.DeletedAt.Time
 		contact.DeletedAt = &t
 	}
+	if dbContact.HostID.Valid {
+		id := uuid.UUID(dbContact.HostID.Bytes)
+		contact.HostID = &id
+	}
+	if dbContact.LastContentHash.Valid {
+		contact.LastContentHash = &dbContact.LastContentHash.String
+	}
 
 	return contact, nil
 }
@@ -328,6 +371,12 @@ func buildUpsertExternalContactParams(req UpsertExternalContactRequest) db.Upser
 	}
 	if req.SyncedAt != nil {
 		params.SyncedAt = pgtype.Timestamptz{Time: *req.SyncedAt, Valid: true}
+	}
+	if req.HostID != nil {
+		params.HostID = pgtype.UUID{Bytes: *req.HostID, Valid: true}
+	}
+	if req.LastContentHash != nil {
+		params.LastContentHash = pgtype.Text{String: *req.LastContentHash, Valid: true}
 	}
 	return params
 }
@@ -631,4 +680,44 @@ func (r *ExternalContactRepository) SoftDeleteTx(
 	id uuid.UUID,
 ) error {
 	return db.New(tx).SoftDeleteExternalContact(ctx, pgtype.UUID{Bytes: id, Valid: true})
+}
+
+// ListKnownIDsByHostAndSource returns (source_id, last_content_hash)
+// for every live external_contact row owned by (host_id, source).
+// Tombstoned rows are excluded — the daemon's set-diff reconciliation
+// requires that rows the Pi has soft-deleted are NOT reported as
+// known, else the daemon never re-tombstones them. Powers GET
+// /api/v1/host/:id/sync/:source/known-ids.
+func (r *ExternalContactRepository) ListKnownIDsByHostAndSource(
+	ctx context.Context,
+	hostID uuid.UUID,
+	source string,
+) ([]KnownExternalContactID, error) {
+	rows, err := r.queries.ListKnownExternalContactIDsByHostAndSource(ctx, db.ListKnownExternalContactIDsByHostAndSourceParams{
+		HostID: pgtype.UUID{Bytes: hostID, Valid: true},
+		Source: source,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list known external contact IDs: %w", err)
+	}
+	out := make([]KnownExternalContactID, 0, len(rows))
+	for _, row := range rows {
+		entry := KnownExternalContactID{SourceID: row.SourceID}
+		if row.LastContentHash.Valid {
+			h := row.LastContentHash.String
+			entry.LastContentHash = &h
+		}
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+// DeleteBySourceForTest hard-deletes ALL external_contact rows for a
+// given source string. TEST ONLY: production code must not call this;
+// it bypasses the tombstone contract and the crm_contact_id /
+// match_status preservation rules. Used by integration tests that
+// seed rows under a synthetic source and need targeted cleanup.
+func (r *ExternalContactRepository) DeleteBySourceForTest(ctx context.Context, source string) error {
+	_, err := r.queries.DeleteExternalContactsBySourceForTest(ctx, source)
+	return err
 }

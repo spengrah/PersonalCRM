@@ -10,6 +10,15 @@ DELETE FROM external_contact WHERE display_name LIKE $1 || '%';
 -- name: DeleteExternalContactsBySourceIDPrefix :execrows
 DELETE FROM external_contact WHERE source_id LIKE $1 || '%';
 
+-- name: DeleteExternalContactsBySourceForTest :execrows
+-- Test teardown — hard-deletes ALL external_contact rows for a given
+-- source string. The known-IDs integration tests use this when they
+-- seed rows under a synthetic source value and need a targeted
+-- cleanup that ignores soft-delete state. Production code must never
+-- call this; it bypasses the tombstone contract and the
+-- crm_contact_id/match_status preservation rules.
+DELETE FROM external_contact WHERE source = @source;
+
 -- name: CountContactsByNamePrefix :one
 SELECT COUNT(*) FROM contact WHERE full_name LIKE $1 || '%';
 
@@ -43,6 +52,18 @@ INSERT INTO mac_host (hostname, daemon_version, protocol_version, api_key_hash)
 VALUES (@hostname, @daemon_version, @protocol_version, @api_key_hash)
 RETURNING *;
 
+-- name: SeedRevokedMacHost :one
+-- Inserts a host that is already revoked (api_key_revoked_at = NOW()).
+-- Used by integration tests that only need a valid mac_host UUID as an
+-- FK target (e.g., messages_message.mac_host_id) and do NOT care about
+-- pairing or auth state. The singleton index idx_mac_host_singleton only
+-- applies to rows WHERE api_key_revoked_at IS NULL, so this helper can
+-- be called freely from parallel test packages without contending with
+-- the pairing-flow tests that hold the singleton slot.
+INSERT INTO mac_host (hostname, daemon_version, protocol_version, api_key_hash, api_key_revoked_at)
+VALUES (@hostname, @daemon_version, @protocol_version, @api_key_hash, NOW())
+RETURNING *;
+
 -- name: SeedPairingToken :one
 -- Inserts a pairing token with caller-supplied hash + expiry. Tests use
 -- this to seed expired tokens (cannot mint via the real Create path
@@ -64,7 +85,14 @@ RETURNING *;
 -- Test teardown — hard delete so the singleton index is empty for the
 -- next test. mac_host has no deleted_at column, so soft-delete is not
 -- an option.
-DELETE FROM mac_host;
+--
+-- Excludes rows whose hostname starts with 'test-host-' (the
+-- messages_message_repository_test fixture prefix). Those rows are
+-- pre-revoked stand-ins used purely as FK targets by a parallel test
+-- package; wiping them mid-run breaks
+-- messages_message.mac_host_id FK inserts because Go runs test
+-- packages in parallel against the shared test DB.
+DELETE FROM mac_host WHERE hostname NOT LIKE 'test-host-%';
 
 -- name: DeleteAllPairingTokens :execrows
 DELETE FROM mac_host_pairing_token;

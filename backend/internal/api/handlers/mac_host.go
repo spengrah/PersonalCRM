@@ -32,6 +32,7 @@ type MacHostService interface {
 	GetHost(ctx context.Context, id uuid.UUID) (*repository.MacHost, error)
 	RevokeHost(ctx context.Context, id uuid.UUID) error
 	KnownIdentifiers(ctx context.Context) (*service.KnownIdentifiersResult, error)
+	KnownIDsForSource(ctx context.Context, hostID uuid.UUID, source string) ([]service.KnownExternalContactID, error)
 }
 
 // MacHostHandler handles Mac-daemon HTTP requests + admin UI requests
@@ -395,15 +396,24 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 	api.SendInternalError(c, "commit cursor failed")
 }
 
-// KnownIDs is a stub for the per-source tombstone reconciliation
-// surface. Returns an empty list — the wire shape is the daemon-
-// expected one and the empty list is the correct response on a fresh
-// Pi. The stub body is intentional today: the daemon does not exercise
-// this endpoint outside the token-expiration recovery flow, which is
-// not yet wired. The separate /known-identifiers endpoint below is
-// the cross-source canonical phone/email surface used on every
-// heartbeat.
+// KnownIDs returns the per-(host, source) set of live
+// external_contact source_ids the Pi has for the calling host, paired
+// with each row's last observed content hash. Daemon-only surface
+// driven by the host-auth path (MacHostAuthMiddleware sets the
+// authenticated host on the gin context; the :id consistency check
+// enforces auth-host == URL-host).
+//
+// Wire shape: standard `{success, data, ...}` envelope. data.ids is
+// always a non-nil JSON array of `{"source_id": "...",
+// "last_content_hash": "..." | null}` objects sorted by source_id.
+// Empty array on a fresh CRM or for sources without external_contact
+// rows.
 func (h *MacHostHandler) KnownIDs(c *gin.Context) {
+	host, ok := auth.MacHostFromContext(c)
+	if !ok {
+		api.SendInternalError(c, "missing mac_host context")
+		return
+	}
 	source := c.Param("source")
 	if source == "" {
 		api.SendValidationError(c, "source is required", "")
@@ -413,7 +423,17 @@ func (h *MacHostHandler) KnownIDs(c *gin.Context) {
 		api.SendValidationError(c, "unknown push source", "")
 		return
 	}
-	api.SendSuccess(c, http.StatusOK, gin.H{"ids": []string{}}, nil)
+	ids, err := h.svc.KnownIDsForSource(c.Request.Context(), host.ID, source)
+	if err != nil {
+		logger.Error().Err(err).Msg("known IDs: failed")
+		api.SendInternalError(c, "known IDs failed")
+		return
+	}
+	// Always emit a non-nil slice so the JSON encodes as `[]`, not `null`.
+	if ids == nil {
+		ids = []service.KnownExternalContactID{}
+	}
+	api.SendSuccess(c, http.StatusOK, gin.H{"ids": ids}, nil)
 }
 
 // KnownIdentifiers returns the cross-source canonical phone + email

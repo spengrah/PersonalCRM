@@ -23,6 +23,17 @@ SELECT * FROM mac_host WHERE id = $1;
 SELECT * FROM mac_host
 WHERE id = $1 AND api_key_revoked_at IS NULL;
 
+-- name: GetActiveMacHostByIDForUpdate :one
+-- Tx-bound active-host lookup with row-level write lock. Used by
+-- IngestService for the tx-internal host-liveness check. The
+-- FOR UPDATE clause serializes against concurrent revoke attempts:
+-- a revoke that tries to UPDATE this row blocks until the ingest
+-- batch commits or rolls back. Matches the cursor-commit precedent
+-- in GetMacHostCursorEpoch below.
+SELECT * FROM mac_host
+WHERE id = $1 AND api_key_revoked_at IS NULL
+FOR UPDATE;
+
 -- name: ListMacHosts :many
 SELECT * FROM mac_host
 ORDER BY created_at DESC;

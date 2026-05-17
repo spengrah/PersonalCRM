@@ -339,7 +339,7 @@ v1 := router.Group("/api/v1")
 | **Mac Daemon (host auth)** | `/host/:id/heartbeat` | POST | MacHostHandler | Periodic daemon heartbeat — `Authorization: Bearer <host-key>` + `X-Mac-Host-ID` |
 | | `/host/:id/sync/:source/cursor` | GET | MacHostHandler | Read push-cursor for (host, source) |
 | | `/host/:id/sync/:source/cursor` | POST | MacHostHandler | Commit push-cursor (three-stage CAS) |
-| | `/host/:id/sync/:source/known-ids` | GET | MacHostHandler | Known external-contact IDs stub (PR5 fills body) |
+| | `/host/:id/sync/:source/known-ids` | GET | MacHostHandler | Per-(host, source) live external_contact `{source_id, last_content_hash}` set for daemon tombstone reconciliation |
 | **Mac Daemon (admin)** | `/host` | GET | MacHostHandler | List paired hosts |
 | | `/host/:id` | GET/DELETE | MacHostHandler | Get / revoke host (delete cascades push-cursor rows) |
 | | `/host/pairing-token` | POST | MacHostHandler | Mint single-use pairing token (10-min TTL) |

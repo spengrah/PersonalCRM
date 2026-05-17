@@ -54,17 +54,20 @@ func setupMessagesMessageTest(t *testing.T) (context.Context, *repository.Messag
 	contactRepo := repository.NewContactRepository(database.Queries)
 
 	// Per-test mac_host so HardDeleteByMacHost scopes our cleanup. We
-	// leave the host row in place after the test (no public delete
-	// helper and tests pay a tiny cost for accumulated host rows).
+	// seed a pre-revoked host so the singleton index
+	// idx_mac_host_singleton (which only constrains rows WHERE
+	// api_key_revoked_at IS NULL) never collides with a parallel
+	// tests/api package that holds the live singleton slot. The tests
+	// here only need a valid mac_host UUID as an FK target; they don't
+	// exercise auth or pairing state.
 	macHostRepo := repository.NewMacHostRepository(database.Queries)
 	suffix := randomSuffix(t)
-	host, err := macHostRepo.SeedHostForTest(ctx,
-		"test-host-"+suffix, "test-version", 1, "test-hash-"+suffix, nil, nil)
+	host, err := macHostRepo.SeedRevokedHostForTest(ctx,
+		"test-host-"+suffix, "test-version", 1, "test-hash-"+suffix)
 	require.NoError(t, err)
 
 	cleanup := func() {
 		_ = repo.HardDeleteByMacHost(ctx, host.ID)
-		_, _ = macHostRepo.RevokeHost(ctx, host.ID)
 		database.Close()
 	}
 	return ctx, repo, contactRepo, host.ID, cleanup

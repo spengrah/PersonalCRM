@@ -236,24 +236,33 @@ func mustMarshalExtDelete(p events.ExternalContactDeletedPayload) []byte {
 }
 
 // validUpsertedEnv returns a well-formed external_contact.upserted
-// envelope keyed off the given host + entity id. The source_id uses a
-// stable 64-char hex tail so it satisfies the regex shape.
+// envelope keyed off the given host + entity id. The source_id's hash
+// suffix is computed via the same JCS+SHA-256 recipe the production
+// ingest path expects, so verifyExternalContactInvariants's hash check
+// passes.
 func validUpsertedEnv(host uuid.UUID, entityID string) *events.Envelope {
-	hashHex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	payload := mustMarshalExtUpsert(events.ExternalContactUpsertedPayload{
+		Version:  1,
+		HostID:   host,
+		Source:   "icloud_contacts",
+		EntityID: entityID,
+	})
+	hashHex, err := ComputeContentHash(payload)
+	if err != nil {
+		panic(err)
+	}
 	return &events.Envelope{
 		Source:   "icloud_contacts",
 		SourceID: entityID + "@" + hashHex,
 		Kind:     events.KindExternalContactUpserted,
-		Payload: mustMarshalExtUpsert(events.ExternalContactUpsertedPayload{
-			Version:  1,
-			HostID:   host,
-			Source:   "icloud_contacts",
-			EntityID: entityID,
-		}),
+		Payload:  payload,
 	}
 }
 
-// validDeletedEnv mirrors validUpsertedEnv for the deleted kind.
+// validDeletedEnv mirrors validUpsertedEnv for the deleted kind. The
+// hash suffix here is arbitrary (the delete handler validates against
+// the row's STORED last_content_hash, not against the delete payload);
+// we use a deterministic 64-hex tail for verifier shape tests.
 func validDeletedEnv(host uuid.UUID, entityID string) *events.Envelope {
 	hashHex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	return &events.Envelope{
@@ -331,6 +340,8 @@ func TestVerifyExternalContactInvariants_PayloadVsEnvelopeSource(t *testing.T) {
 			EntityID: "CN-1",
 		}),
 	}
+	// The payload-source check fires before the hash check, so an
+	// arbitrary hash placeholder is fine.
 	rej := verifyExternalContactInvariants(env, host)
 	require.NotNil(t, rej)
 	require.Contains(t, rej.Message, "payload source")
@@ -350,6 +361,7 @@ func TestVerifyExternalContactInvariants_EmptyEntityID(t *testing.T) {
 			EntityID: "",
 		}),
 	}
+	// The entity_id check fires before the hash check.
 	rej := verifyExternalContactInvariants(env, host)
 	require.NotNil(t, rej)
 	require.Contains(t, rej.Message, "entity_id is required")
@@ -507,4 +519,190 @@ func TestHandleExternalContactUpserted_LiveUpsertSkipsRevive(t *testing.T) {
 	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
 	require.Nil(t, rej)
 	require.Equal(t, 0, stubExt.reviveCalls, "ReviveTx must NOT be called on a live first-insert")
+}
+
+// TestVerifyExternalContactInvariants_HashMismatchRejected proves the
+// Pi-side JCS recomputation catches a daemon-supplied source_id whose
+// hash does NOT match the canonical SHA-256(JCS(payload \ {host_id})).
+func TestVerifyExternalContactInvariants_HashMismatchRejected(t *testing.T) {
+	host := uuid.New()
+	env := validUpsertedEnv(host, "CN-1")
+	// Replace the real hash with a different valid-shaped hex string.
+	bogus := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	env.SourceID = "CN-1@" + bogus
+	rej := verifyExternalContactInvariants(env, host)
+	require.NotNil(t, rej)
+	require.Equal(t, ingestRejectExternalContactHashMismatch, rej.Code)
+	require.Contains(t, rej.Message, bogus)
+}
+
+// TestVerifyExternalContactInvariants_HashWithExtraHostIDStillMatches
+// guards against a future implementer accidentally including host_id
+// in the JCS input — sjson.DeleteBytes is the contract.
+func TestVerifyExternalContactInvariants_HashWithExtraHostIDStillMatches(t *testing.T) {
+	host := uuid.New()
+	// validUpsertedEnv already includes host_id in the payload (the
+	// Marshal step encodes the HostID field). The hash recipe strips
+	// host_id before canonicalizing; if the strip stops working, the
+	// hash recomputation would diverge from the source_id suffix.
+	env := validUpsertedEnv(host, "CN-extra")
+	require.Nil(t, verifyExternalContactInvariants(env, host))
+}
+
+// TestHandleExternalContactUpserted_WritesHostIDAndHash confirms the
+// upsert request carries both new fields when the inline handler runs
+// — enforces the application-level invariant that icloud_contacts
+// rows always carry both fields.
+func TestHandleExternalContactUpserted_WritesHostIDAndHash(t *testing.T) {
+	hostID := uuid.New()
+	rowID := uuid.New()
+	liveRow := &repository.ExternalContact{
+		ID:          rowID,
+		Source:      "icloud_contacts",
+		SourceID:    "CN-fields",
+		MatchStatus: repository.MatchStatusUnmatched,
+	}
+	recorder := &recordingExternalContactWriter{
+		stubExternalContactWriter: stubExternalContactWriter{
+			getResp:    nil,
+			getErr:     db.ErrNotFound,
+			upsertResp: liveRow,
+		},
+	}
+	svc := &IngestService{
+		identity:         &stubIdentityMatcher{result: &MatchResult{}},
+		externalContacts: recorder,
+	}
+	env := validUpsertedEnv(hostID, "CN-fields")
+	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	require.Nil(t, rej)
+	require.NotNil(t, recorder.lastUpsert)
+	require.NotNil(t, recorder.lastUpsert.HostID, "HostID must be set on the upsert request")
+	require.Equal(t, hostID, *recorder.lastUpsert.HostID)
+	require.NotNil(t, recorder.lastUpsert.LastContentHash, "LastContentHash must be set on the upsert request")
+	require.Len(t, *recorder.lastUpsert.LastContentHash, 64,
+		"LastContentHash must be the 64-char hex suffix from source_id")
+	// The recorded hash must equal the suffix the verifier already
+	// validated against the JCS recomputation.
+	require.Equal(t, env.SourceID[len(env.SourceID)-64:], *recorder.lastUpsert.LastContentHash)
+}
+
+// TestHandleExternalContactDeleted_HashMatch accepts a delete whose
+// source_id hash equals the stored last_content_hash.
+func TestHandleExternalContactDeleted_HashMatch(t *testing.T) {
+	hash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	rowID := uuid.New()
+	storedRow := &repository.ExternalContact{
+		ID:              rowID,
+		Source:          "icloud_contacts",
+		SourceID:        "CN-del",
+		LastContentHash: &hash,
+	}
+	stubExt := &stubExternalContactWriter{getResp: storedRow}
+	svc := &IngestService{externalContacts: stubExt}
+	env := &events.Envelope{
+		Source:   "icloud_contacts",
+		SourceID: "CN-del@deleted@" + hash,
+		Kind:     events.KindExternalContactDeleted,
+		Payload: mustMarshalExtDelete(events.ExternalContactDeletedPayload{
+			Version: 1, HostID: uuid.New(), Source: "icloud_contacts", EntityID: "CN-del",
+		}),
+	}
+	rej := svc.handleExternalContactDeleted(context.Background(), nil, env, uuid.UUID{})
+	require.Nil(t, rej)
+}
+
+// TestHandleExternalContactDeleted_HashMismatchRejected proves the
+// lookup-based hash check fires when source_id's hash differs from
+// the row's stored last_content_hash.
+func TestHandleExternalContactDeleted_HashMismatchRejected(t *testing.T) {
+	storedHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	claimedHash := "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	storedRow := &repository.ExternalContact{
+		ID:              uuid.New(),
+		Source:          "icloud_contacts",
+		SourceID:        "CN-del",
+		LastContentHash: &storedHash,
+	}
+	stubExt := &stubExternalContactWriter{getResp: storedRow}
+	svc := &IngestService{externalContacts: stubExt}
+	env := &events.Envelope{
+		Source:   "icloud_contacts",
+		SourceID: "CN-del@deleted@" + claimedHash,
+		Kind:     events.KindExternalContactDeleted,
+		Payload: mustMarshalExtDelete(events.ExternalContactDeletedPayload{
+			Version: 1, HostID: uuid.New(), Source: "icloud_contacts", EntityID: "CN-del",
+		}),
+	}
+	rej := svc.handleExternalContactDeleted(context.Background(), nil, env, uuid.UUID{})
+	require.NotNil(t, rej)
+	require.Equal(t, ingestRejectExternalContactDeleteHashMismatch, rej.Code)
+	require.Contains(t, rej.Message, claimedHash)
+	require.Contains(t, rej.Message, storedHash)
+}
+
+// TestHandleExternalContactDeleted_UnknownSentinelAccepted covers the
+// spec line 343 fallback: @deleted@unknown skips the hash check.
+func TestHandleExternalContactDeleted_UnknownSentinelAccepted(t *testing.T) {
+	storedHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	storedRow := &repository.ExternalContact{
+		ID:              uuid.New(),
+		Source:          "icloud_contacts",
+		SourceID:        "CN-del",
+		LastContentHash: &storedHash,
+	}
+	stubExt := &stubExternalContactWriter{getResp: storedRow}
+	svc := &IngestService{externalContacts: stubExt}
+	env := &events.Envelope{
+		Source:   "icloud_contacts",
+		SourceID: "CN-del@deleted@unknown",
+		Kind:     events.KindExternalContactDeleted,
+		Payload: mustMarshalExtDelete(events.ExternalContactDeletedPayload{
+			Version: 1, HostID: uuid.New(), Source: "icloud_contacts", EntityID: "CN-del",
+		}),
+	}
+	rej := svc.handleExternalContactDeleted(context.Background(), nil, env, uuid.UUID{})
+	require.Nil(t, rej, "@unknown sentinel must be accepted even when stored hash exists")
+}
+
+// TestHandleExternalContactDeleted_NullStoredHashAccepted exercises
+// the legacy-row exception: a pre-existing row has last_content_hash=NULL,
+// so the Pi has no reference value to compare against. Accept and
+// soft-delete.
+func TestHandleExternalContactDeleted_NullStoredHashAccepted(t *testing.T) {
+	storedRow := &repository.ExternalContact{
+		ID:              uuid.New(),
+		Source:          "icloud_contacts",
+		SourceID:        "CN-legacy",
+		LastContentHash: nil, // legacy row
+	}
+	stubExt := &stubExternalContactWriter{getResp: storedRow}
+	svc := &IngestService{externalContacts: stubExt}
+	anyHash := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	env := &events.Envelope{
+		Source:   "icloud_contacts",
+		SourceID: "CN-legacy@deleted@" + anyHash,
+		Kind:     events.KindExternalContactDeleted,
+		Payload: mustMarshalExtDelete(events.ExternalContactDeletedPayload{
+			Version: 1, HostID: uuid.New(), Source: "icloud_contacts", EntityID: "CN-legacy",
+		}),
+	}
+	rej := svc.handleExternalContactDeleted(context.Background(), nil, env, uuid.UUID{})
+	require.Nil(t, rej, "legacy row with NULL stored hash must accept any delete hash")
+}
+
+// recordingExternalContactWriter wraps stubExternalContactWriter to
+// snapshot the last UpsertTx request so tests can assert on the
+// values the handler computed (HostID, LastContentHash, etc.).
+type recordingExternalContactWriter struct {
+	stubExternalContactWriter
+	lastUpsert *repository.UpsertExternalContactRequest
+}
+
+func (r *recordingExternalContactWriter) UpsertTx(
+	ctx context.Context, tx pgx.Tx, req repository.UpsertExternalContactRequest,
+) (*repository.ExternalContact, error) {
+	cp := req
+	r.lastUpsert = &cp
+	return r.stubExternalContactWriter.UpsertTx(ctx, tx, req)
 }

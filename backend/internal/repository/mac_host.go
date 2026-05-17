@@ -165,6 +165,28 @@ func (r *MacHostRepository) GetActiveHostByID(ctx context.Context, id uuid.UUID)
 	return convertDbMacHost(row), nil
 }
 
+// GetActiveHostByIDForUpdateTx is the tx-bound, row-locking variant
+// of GetActiveHostByID. The underlying SELECT ... FOR UPDATE blocks
+// any concurrent UPDATE (e.g. RevokeMacHost) on the same row until
+// the caller's tx commits or rolls back. Used by IngestService's
+// per-batch host-liveness check to close the race window between
+// MacHostAuthMiddleware's read and the batch's commit. Returns
+// db.ErrNotFound for both "no such id" and "id is revoked".
+func (r *MacHostRepository) GetActiveHostByIDForUpdateTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id uuid.UUID,
+) (*MacHost, error) {
+	row, err := db.New(tx).GetActiveMacHostByIDForUpdate(ctx, uuidToPgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, fmt.Errorf("get active mac_host for update: %w", err)
+	}
+	return convertDbMacHost(row), nil
+}
+
 // GetHost returns the row for id regardless of revocation status. Used
 // by admin handlers + delete-cascade flow.
 func (r *MacHostRepository) GetHost(ctx context.Context, id uuid.UUID) (*MacHost, error) {
@@ -331,6 +353,31 @@ func (r *MacHostRepository) SeedHostForTest(
 		return nil, fmt.Errorf("seed mac_host heartbeat patch: %w", err)
 	}
 	return convertDbMacHost(patched), nil
+}
+
+// SeedRevokedHostForTest is a test-only helper that inserts a host with
+// api_key_revoked_at already set. Tests that only need a valid mac_host
+// UUID as an FK target (e.g., messages_message.mac_host_id) should use
+// this instead of SeedHostForTest: the singleton index
+// idx_mac_host_singleton only constrains rows WHERE api_key_revoked_at
+// IS NULL, so multiple revoked rows coexist freely. This isolates such
+// tests from parallel packages that exercise the real pairing flow.
+func (r *MacHostRepository) SeedRevokedHostForTest(
+	ctx context.Context,
+	hostname, daemonVersion string,
+	protocolVersion int32,
+	apiKeyHash string,
+) (*MacHost, error) {
+	row, err := r.queries.SeedRevokedMacHost(ctx, db.SeedRevokedMacHostParams{
+		Hostname:        hostname,
+		DaemonVersion:   daemonVersion,
+		ProtocolVersion: protocolVersion,
+		ApiKeyHash:      apiKeyHash,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("seed revoked mac_host: %w", err)
+	}
+	return convertDbMacHost(row), nil
 }
 
 // MacHostPairingTokenRepository handles pairing-token persistence.

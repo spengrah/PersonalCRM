@@ -144,6 +144,38 @@ func (q *Queries) GetActiveMacHostByID(ctx context.Context, id pgtype.UUID) (*Ma
 	return &i, err
 }
 
+const GetActiveMacHostByIDForUpdate = `-- name: GetActiveMacHostByIDForUpdate :one
+SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at FROM mac_host
+WHERE id = $1 AND api_key_revoked_at IS NULL
+FOR UPDATE
+`
+
+// Tx-bound active-host lookup with row-level write lock. Used by
+// IngestService for the tx-internal host-liveness check. The
+// FOR UPDATE clause serializes against concurrent revoke attempts:
+// a revoke that tries to UPDATE this row blocks until the ingest
+// batch commits or rolls back. Matches the cursor-commit precedent
+// in GetMacHostCursorEpoch below.
+func (q *Queries) GetActiveMacHostByIDForUpdate(ctx context.Context, id pgtype.UUID) (*MacHost, error) {
+	row := q.db.QueryRow(ctx, GetActiveMacHostByIDForUpdate, id)
+	var i MacHost
+	err := row.Scan(
+		&i.ID,
+		&i.Hostname,
+		&i.DaemonVersion,
+		&i.ProtocolVersion,
+		&i.LastHeartbeatAt,
+		&i.Permissions,
+		&i.SourceHealth,
+		&i.CursorEpoch,
+		&i.ApiKeyHash,
+		&i.ApiKeyRevokedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}
+
 const GetMacHost = `-- name: GetMacHost :one
 SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at FROM mac_host WHERE id = $1
 `

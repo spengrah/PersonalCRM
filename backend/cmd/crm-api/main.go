@@ -297,6 +297,13 @@ func run() int {
 	// the same instance for the Import / Calendar rematch wiring.
 	externalContactRepoForIngest := repository.NewExternalContactRepository(database.Queries)
 
+	// Mac host repo for the IngestService's per-batch host-liveness
+	// re-check (SELECT ... FOR UPDATE on mac_host inside the batch tx).
+	// Constructed here so the IngestService can take it as a dep; the
+	// host-auth / pairing / heartbeat handlers below construct their
+	// own MacHostService that wraps the same repo instance.
+	macHostRepoForIngest := repository.NewMacHostRepository(database.Queries)
+
 	ingestService := service.NewIngestService(
 		database,
 		eventBus,
@@ -304,6 +311,7 @@ func run() int {
 		messagesMessageRepo,
 		riverClient,
 		externalContactRepoForIngest,
+		macHostRepoForIngest, // host-liveness re-check inside the batch tx
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
@@ -869,7 +877,11 @@ func run() int {
 	// daemon endpoints live behind MacHostAuthMiddleware (sibling
 	// /api/v1 group); the admin endpoints live behind the existing
 	// global API-key middleware.
-	macHostRepo := repository.NewMacHostRepository(database.Queries)
+	// macHostRepoForIngest was constructed earlier (line ~308) so the
+	// IngestService could take it as a HostLivenessChecker dep. Reuse
+	// the same instance here so the host-management service shares the
+	// same repository wrapper.
+	macHostRepo := macHostRepoForIngest
 	pairingTokenRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
 	// Mac cursor commit needs a tx — use the pool-wired SyncRepository.
 	macSyncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -878,6 +890,7 @@ func run() int {
 		pairingTokenRepo,
 		macSyncRepo,
 		contactMethodRepo,
+		externalContactRepoForIngest, // /known-ids reader
 		database.Pool,
 		0, // default bcrypt cost
 	)

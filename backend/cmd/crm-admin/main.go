@@ -329,11 +329,13 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 	pairingTokenRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
 	syncRepo := repository.NewSyncRepository(database.Queries)
 	contactMethodLister := repository.NewContactMethodRepository(database.Queries)
+	externalContactRepo := repository.NewExternalContactRepository(database.Queries)
 	hostService := service.NewMacHostService(
 		hostRepo,
 		pairingTokenRepo,
 		syncRepo,
 		contactMethodLister,
+		externalContactRepo, // /known-ids reader
 		database.Pool,
 		0)
 
