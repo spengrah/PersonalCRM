@@ -49,6 +49,16 @@ public struct SourceState: Codable, Equatable, Sendable {
     public var cursorEpoch: Int64
     /// True once the backfill window has been fully walked.
     public var backfillComplete: Bool
+    /// Last time the scheduler invoked the source's tick — bumped at
+    /// the START of every tick regardless of outcome. Used by
+    /// Doctor's staleness check via `max(lastScheduledAt,
+    /// lastPushedAt)` so a quiet-but-healthy source doesn't look
+    /// stale (lastPushedAt only bumps on a successful publish, which
+    /// a quiet source rarely does).
+    ///
+    /// Additive Codable field — defaults to nil for existing
+    /// `state.json` files written before this column existed.
+    public var lastScheduledAt: Date?
     public var lastPushedAt: Date?
     public var lastErrorAt: Date?
     /// Short human-readable error message. Long errors are truncated.
@@ -58,6 +68,7 @@ public struct SourceState: Codable, Equatable, Sendable {
         cursor: String = "",
         cursorEpoch: Int64 = 0,
         backfillComplete: Bool = false,
+        lastScheduledAt: Date? = nil,
         lastPushedAt: Date? = nil,
         lastErrorAt: Date? = nil,
         lastError: String? = nil
@@ -65,6 +76,7 @@ public struct SourceState: Codable, Equatable, Sendable {
         self.cursor = cursor
         self.cursorEpoch = cursorEpoch
         self.backfillComplete = backfillComplete
+        self.lastScheduledAt = lastScheduledAt
         self.lastPushedAt = lastPushedAt
         self.lastErrorAt = lastErrorAt
         self.lastError = lastError

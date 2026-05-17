@@ -8,20 +8,31 @@ import PackageDescription
 // authoritative scope and target layering rationale.
 //
 // Target layering:
-//   - CRMMacCore             (Foundation only): state, config, plugin protocol,
-//                            StateMutator, SourceHealthSnapshot, PidfileLock,
-//                            normalization parity helpers.
-//   - CRMMacPiClient         (Foundation + CRMMacCore): typed HTTP client.
-//   - CRMMacLifecycle        (Foundation + Core + PiClient): install/uninstall/
-//                            doctor/status/heartbeat workflows + adapter protocols.
-//                            NO system-framework imports — testable anywhere.
-//   - CRMMacMessagesSource   (Foundation + Core + PiClient + GRDB): chat.db
-//                            reader + messages source plugin. GRDB is isolated
-//                            here so other targets stay Foundation-only.
-//   - CRMMacSystem           (Foundation + os.log + Security + Core + Lifecycle):
-//                            production impls of the Lifecycle adapter protocols.
-//   - crm-mac                (executable): composition root; wires CRMMacSystem
-//                            impls into CRMMacLifecycle workflows.
+//   - CRMMacCore                 (Foundation only): state, config, plugin protocol,
+//                                StateMutator, SourceHealthSnapshot, PidfileLock,
+//                                normalization parity helpers, JCS canonicalizer,
+//                                ContactRecord + ContainerInfo + ContainerKind.
+//   - CRMMacPiClient             (Foundation + CRMMacCore): typed HTTP client.
+//   - CRMMacLifecycle            (Foundation + Core + PiClient): install/uninstall/
+//                                doctor/status/heartbeat workflows + adapter
+//                                protocols. NO system-framework imports — testable
+//                                anywhere.
+//   - CRMMacMessagesSource       (Foundation + Core + PiClient + GRDB): chat.db
+//                                reader + messages source plugin. GRDB is isolated
+//                                here so other targets stay Foundation-only.
+//   - CRMMacIcloudContactsSource (Foundation + Contacts + Core + PiClient):
+//                                CNContactStore reader + icloud_contacts source
+//                                plugin. Contacts framework is isolated here.
+//   - CRMMacSystem               (Foundation + os.log + Security + Contacts + Core
+//                                + Lifecycle): production impls of the Lifecycle
+//                                adapter protocols, including the production
+//                                ContactsAuthorizationAdapter +
+//                                ContactContainerEnumerator.
+//   - crm-mac                    (executable): composition root; wires CRMMacSystem
+//                                impls into CRMMacLifecycle workflows. Embeds
+//                                NSContactsUsageDescription via Info.plist
+//                                injection into the Mach-O __TEXT,__info_plist
+//                                section.
 //
 // GRDB.swift is pinned to .upToNextMinor(from: "7.0.0") — i.e. 7.0.x.
 // GRDB 7.10+ declares `swift-tools-version:6.1` which exceeds our 6.0
@@ -48,7 +59,30 @@ let package = Package(
                 "CRMMacPiClient",
                 "CRMMacLifecycle",
                 "CRMMacMessagesSource",
+                "CRMMacIcloudContactsSource",
                 "CRMMacSystem",
+            ],
+            // Info.plist is embedded into the binary via linker
+            // -sectcreate; it must NOT be copied into the Sources/
+            // bundle resources (SPM would warn + try to ship it).
+            exclude: ["Info.plist"],
+            // Embed NSContactsUsageDescription into the executable's
+            // Mach-O __TEXT,__info_plist section so the Contacts
+            // framework can surface the consent prompt on first
+            // requestAccess. SPM has no first-class Info.plist
+            // support for command-line executables; this linker-
+            // section approach is the documented workaround. The CI
+            // smoke step verifies the section is present via
+            // `otool -s __TEXT __info_plist`.
+            linkerSettings: [
+                .unsafeFlags(
+                    [
+                        "-Xlinker", "-sectcreate",
+                        "-Xlinker", "__TEXT",
+                        "-Xlinker", "__info_plist",
+                        "-Xlinker", "Sources/crm-mac/Info.plist",
+                    ],
+                    .when(platforms: [.macOS])),
             ]),
         .target(name: "CRMMacCore"),
         .target(
@@ -63,6 +97,12 @@ let package = Package(
                 "CRMMacCore",
                 "CRMMacPiClient",
                 .product(name: "GRDB", package: "GRDB.swift"),
+            ]),
+        .target(
+            name: "CRMMacIcloudContactsSource",
+            dependencies: [
+                "CRMMacCore",
+                "CRMMacPiClient",
             ]),
         .target(
             name: "CRMMacSystem",
@@ -82,6 +122,9 @@ let package = Package(
                     dependencies: ["CRMMacLifecycle", "CRMMacPiClient"]),
         .testTarget(name: "CRMMacMessagesSourceTests",
                     dependencies: ["CRMMacMessagesSource"],
+                    resources: [.copy("Fixtures")]),
+        .testTarget(name: "CRMMacIcloudContactsSourceTests",
+                    dependencies: ["CRMMacIcloudContactsSource", "CRMMacPiClient"],
                     resources: [.copy("Fixtures")]),
     ]
 )
