@@ -73,7 +73,12 @@ public struct DaemonConfig: Codable, Equatable {
 }
 
 /// Atomic-write JSON wrapper around `config.json`.
-public struct ConfigStore {
+///
+/// `@unchecked Sendable` for the same reason `StateStore` is —
+/// `FileManager` lacks formal `Sendable` despite being documented
+/// thread-safe for the methods we call. The store is always passed
+/// by value and never mutated post-construction.
+public struct ConfigStore: @unchecked Sendable {
     private let fileURL: URL
     private let fileManager: FileManager
 
