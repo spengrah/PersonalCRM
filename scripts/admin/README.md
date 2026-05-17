@@ -16,12 +16,15 @@ CNContactStore resync appears to be a no-op — i.e. `/known-ids`
 returns empty but the daemon's emitted upserts are being absorbed by
 the event log's `(source, source_id)` dedup.
 
-This happens because `external_contact.host_id` is set on first
-INSERT only, so the previous host's rows survive revoke with the
-original ownership. The new host's `/known-ids` filter (`WHERE host_id
-= new_host_id`) returns empty, but the entity content hasn't changed,
-so the new emits dedup-absorb and never create rows owned by the new
-host.
+This happens because the `external_contact` upsert uses
+`COALESCE(host_id, EXCLUDED.host_id)`: rows already owned by the
+previous host's non-NULL `host_id` are preserved unchanged, so the
+new host's `/known-ids` filter (`WHERE host_id = new_host_id`)
+returns empty. The new host's emits dedup-absorb at the event log
+because the entity content hasn't changed, so they never overwrite
+the prior ownership. (Rows that happen to be legacy NULL — created
+before migration 052 or by sources that don't set `host_id` — self-
+heal on first new-host emit and do not need this script.)
 
 **What gets deleted:**
 - Every `external_contact` row with `source = 'icloud_contacts'`

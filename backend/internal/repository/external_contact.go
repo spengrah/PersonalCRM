@@ -73,10 +73,11 @@ type ExternalContact struct {
 	// surfaces through GetBySource (intentionally tombstone-aware for the
 	// mac-daemon revive path).
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
-	// HostID is the paired Mac host that originally inserted this row
-	// (mac-daemon sources only). Populated on first insert and never
-	// updated thereafter, so the row's ownership stays with the
-	// authoring host across content updates.
+	// HostID is the paired Mac host that claimed this row (mac-daemon
+	// sources only). Written on INSERT and on UPDATE via
+	// COALESCE(existing, EXCLUDED) — a NULL row (legacy or never-claimed)
+	// is claimed by the next non-NULL emit; non-NULL ownership is
+	// preserved thereafter across all subsequent upserts.
 	HostID *uuid.UUID `json:"host_id,omitempty"`
 	// LastContentHash is the lowercase-hex SHA-256 of the JCS-
 	// canonicalized payload (minus host_id) that produced this row's
@@ -130,9 +131,10 @@ type UpsertExternalContactRequest struct {
 	Metadata     map[string]any `json:"metadata,omitempty"`
 	SyncedAt     *time.Time     `json:"synced_at,omitempty"`
 	// HostID is set ONLY by mac-daemon ingest paths. The underlying
-	// sqlc query writes it on the INSERT branch only — it is NOT in
-	// the ON CONFLICT DO UPDATE SET list, so the ORIGINAL paired
-	// host's ownership persists across content updates.
+	// sqlc query writes it on INSERT, and on UPDATE via
+	// COALESCE(existing, EXCLUDED) — legacy NULL rows are claimed by
+	// the next non-NULL emit, and non-NULL ownership is preserved
+	// across all subsequent upserts.
 	HostID *uuid.UUID `json:"host_id,omitempty"`
 	// LastContentHash is the lowercase-hex SHA-256 of the JCS-
 	// canonicalized payload (minus host_id). Set by mac-daemon ingest

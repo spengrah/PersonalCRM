@@ -811,13 +811,15 @@ func (s *IngestService) handleExternalContactUpserted(
 
 	// Upsert the row. The underlying query does not touch deleted_at,
 	// crm_contact_id, or match_status on the UPDATE branch. host_id is
-	// written on INSERT only — the ORIGINAL paired host's ownership
-	// persists across re-upserts. last_content_hash
-	// is written on every UPSERT so the /known-ids endpoint always
-	// returns the most recent payload's hash; the value is the
-	// envelope's source_id suffix (already verified upstream against
-	// SHA-256(JCS(payload \ {host_id}))). Concurrent upserts for the
-	// same entity with different content hashes are last-write-wins.
+	// written on INSERT and on UPDATE via COALESCE(existing, EXCLUDED) —
+	// legacy NULL rows are claimed on first non-NULL emit; non-NULL
+	// ownership is preserved across all subsequent upserts.
+	// last_content_hash is written on every UPSERT so the /known-ids
+	// endpoint always returns the most recent payload's hash; the value
+	// is the envelope's source_id suffix (already verified upstream
+	// against SHA-256(JCS(payload \ {host_id}))). Concurrent upserts
+	// for the same entity with different content hashes are
+	// last-write-wins.
 	birthday := parseExternalContactBirthday(p.Birthday)
 	syncedAt := accelerated.GetCurrentTime()
 	contentHash := env.SourceID[len(env.SourceID)-64:]

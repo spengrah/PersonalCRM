@@ -5,16 +5,20 @@
 -- uses the returned hash to construct deterministic delete
 -- source_ids per the mac-daemon spec.
 --
--- host_id is set ONLY on first insert. The UpsertExternalContact
--- query does NOT include it in ON CONFLICT DO UPDATE SET, so the
--- ORIGINAL paired host's ownership persists across content updates.
+-- host_id is set on INSERT, and on UPDATE via
+-- COALESCE(external_contact.host_id, EXCLUDED.host_id). Legacy NULL
+-- rows (created before this migration, or by sources that don't set
+-- host_id) are claimed by the first non-NULL emit; non-NULL
+-- ownership is then preserved across all subsequent upserts.
 --
 -- Re-pair limitation: if a new Mac pairs onto the same Pi (after
--- revoking the previous one), the previous host's rows survive with
--- their original host_id and the new host's /known-ids returns
--- empty. The new host's full resync emits upserts that dedup-absorb
--- at the event-log layer, so the new host never appears to "see"
--- its contacts on the Pi. Operator workaround is the script
+-- revoking the previous one), rows already owned by the previous
+-- host's non-NULL host_id are preserved unchanged — the new host's
+-- /known-ids returns empty for those rows, the new host's full
+-- resync emits upserts that dedup-absorb at the event-log layer, and
+-- the new host never appears to "see" its contacts on the Pi. (Rows
+-- that happen to be legacy NULL self-heal on first emit and do not
+-- need intervention.) Operator workaround for the non-NULL case is
 -- scripts/admin/reset_icloud_contacts.sh, which prompts for
 -- confirmation and hard-deletes all icloud_contacts external_contact
 -- and event-log rows. Single-host operation (same Mac, same Keychain,
