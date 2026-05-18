@@ -121,6 +121,12 @@ public struct InstallerDependencies {
     public let piClientFactory: (URL) -> PiClient
     public let clock: ClockAdapter
     public let logger: LoggerProtocol
+    /// One-shot migration source for installs that predate the
+    /// file-backed FileAPIKeyStore. When non-nil and `keychain` is
+    /// empty, runUpgrade / runRegisterOnly copy from this into
+    /// `keychain` and then delete the legacy entry. Production wires
+    /// the real macOS Keychain; tests leave it nil.
+    public let legacyKeychain: KeychainStore?
 
     public init(
         paths: LifecyclePaths,
@@ -130,7 +136,8 @@ public struct InstallerDependencies {
         launchctl: LaunchctlRunner,
         piClientFactory: @escaping (URL) -> PiClient,
         clock: ClockAdapter,
-        logger: LoggerProtocol
+        logger: LoggerProtocol,
+        legacyKeychain: KeychainStore? = nil
     ) {
         self.paths = paths
         self.filesystem = filesystem
@@ -140,6 +147,7 @@ public struct InstallerDependencies {
         self.piClientFactory = piClientFactory
         self.clock = clock
         self.logger = logger
+        self.legacyKeychain = legacyKeychain
     }
 }
 
@@ -308,6 +316,7 @@ public struct Installer {
         guard deps.filesystem.fileExists(at: deps.paths.configFilePath) else {
             throw InstallError.noExistingInstall
         }
+        try migrateLegacyKeychainIfNeeded()
         guard (try? deps.keychain.readAPIKey()) != nil else {
             throw InstallError.noExistingInstall
         }
@@ -354,6 +363,7 @@ public struct Installer {
         guard deps.filesystem.fileExists(at: deps.paths.configFilePath) else {
             throw InstallError.noExistingInstall
         }
+        try migrateLegacyKeychainIfNeeded()
         guard (try? deps.keychain.readAPIKey()) != nil else {
             throw InstallError.noExistingInstall
         }
@@ -369,6 +379,49 @@ public struct Installer {
     }
 
     // MARK: - shared helpers
+
+    /// One-shot copy of the API key from the legacy macOS Keychain
+    /// into the file-backed FileAPIKeyStore. Idempotent — when the
+    /// primary store already has a value, returns immediately and
+    /// does NOT touch the legacy entry. Once the value has been
+    /// safely written to disk, the legacy Keychain entry is deleted
+    /// best-effort so a later rebuild doesn't re-prompt.
+    private func migrateLegacyKeychainIfNeeded() throws {
+        if (try? deps.keychain.readAPIKey()) != nil {
+            return
+        }
+        guard let legacy = deps.legacyKeychain else {
+            return
+        }
+        let value: String
+        do {
+            value = try legacy.readAPIKey()
+        } catch KeychainStoreError.notFound {
+            return
+        } catch {
+            throw InstallError.keychainFailed(
+                "read legacy keychain: \(error)")
+        }
+        do {
+            try deps.keychain.writeAPIKey(value)
+        } catch {
+            throw InstallError.keychainFailed(
+                "write api-key file during migration: \(error)")
+        }
+        do {
+            try legacy.deleteAPIKey()
+        } catch {
+            // Non-fatal: file is the new source of truth; a stale
+            // Keychain entry can be cleared with `security delete-
+            // generic-password -s xyz.spengrah.crm-mac`.
+            deps.logger.warning("migration: legacy keychain delete failed (non-fatal)", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+        }
+        deps.logger.info("migration: api-key copied from legacy Keychain to file", metadata: [
+            "path": .public(deps.paths.apiKeyFilePath),
+        ])
+    }
 
     /// Preflight detection — returns true when any of the install
     /// artifacts exist, to refuse fresh-install on top of an existing

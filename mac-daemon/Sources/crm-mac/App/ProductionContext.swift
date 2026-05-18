@@ -34,7 +34,7 @@ struct ProductionContext {
         self.logger = OSLogLogger()
         self.filesystem = ProductionFilesystemAdapter()
         self.executable = ProductionExecutableAdapter()
-        self.keychain = ProductionKeychainStore()
+        self.keychain = FileAPIKeyStore(path: systemPaths.apiKeyFile.path)
         self.launchctl = ProductionLaunchctlRunner()
         self.clock = SystemClock()
         self.exitHandler = SystemExitHandler()
@@ -53,7 +53,8 @@ struct ProductionContext {
             launchctl: launchctl,
             piClientFactory: { url in self.piClientFactory(url) },
             clock: clock,
-            logger: logger))
+            logger: logger,
+            legacyKeychain: ProductionKeychainStore()))
     }
 
     func uninstaller() -> Uninstaller {

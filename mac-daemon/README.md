@@ -67,7 +67,7 @@ Without this permission, the daemon cannot read `~/Library/Messages/chat.db` and
 
 ```bash
 ./mac-daemon/.build/release/crm-mac doctor
-# PASS  keychain: api-key present
+# PASS  api-key: present
 # PASS  launchctl: service registered
 # PASS  config_state: host=mac-1 schemaVersion=1
 # PASS  pi_reachability: phones=N emails=N
