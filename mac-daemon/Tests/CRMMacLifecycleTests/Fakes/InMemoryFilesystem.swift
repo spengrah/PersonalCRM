@@ -34,17 +34,74 @@ public final class InMemoryFilesystem: FilesystemAdapter, @unchecked Sendable {
         entries[to] = data
     }
 
+    /// Atomic rename. Supports both file paths and directory paths.
+    /// A directory rename moves the directory entry AND every entry
+    /// (file or sub-directory) whose path begins with the source path
+    /// followed by `/`.
+    ///
+    /// Mimics POSIX `rename(2)` semantics on a NON-EMPTY destination
+    /// directory by throwing `FilesystemError.ioError("destination
+    /// not empty")` — this catches a class of production mistakes
+    /// where the installer accidentally calls rename with a non-empty
+    /// destination instead of using the backup-rename-then-swap
+    /// pattern (plan D8). For files, an existing destination is
+    /// overwritten (the production adapter uses replaceItemAt for
+    /// files, which IS atomic-replace).
     public func rename(from: String, to: String) throws {
-        guard let data = entries[from] else {
+        // File case: simple atomic replace.
+        if let data = entries[from] {
+            entries[to] = data
+            entries.removeValue(forKey: from)
+            return
+        }
+        // Directory case.
+        guard dirs.contains(from) else {
             throw FilesystemError.notFound(from)
         }
-        entries[to] = data
-        entries.removeValue(forKey: from)
+        // Mimic ENOTEMPTY: if the destination directory exists and
+        // has any children, refuse. Empty destination directories are
+        // tolerated (the production `FileManager.moveItem` to an
+        // empty existing dir on the same filesystem behaves similarly
+        // under APFS; we keep the fake strict to surface bugs).
+        if dirs.contains(to) {
+            let prefix = "\(to)/"
+            let hasChildFiles = entries.keys.contains(where: { $0.hasPrefix(prefix) })
+            let hasChildDirs = dirs.contains(where: { $0 != to && $0.hasPrefix(prefix) })
+            if hasChildFiles || hasChildDirs {
+                throw FilesystemError.ioError(
+                    "destination not empty: \(to)")
+            }
+        }
+        let fromPrefix = "\(from)/"
+        // Move all sub-dir entries.
+        let movedDirs = dirs.filter { $0.hasPrefix(fromPrefix) }
+        for d in movedDirs {
+            let suffix = String(d.dropFirst(from.count))  // includes leading "/"
+            dirs.insert("\(to)\(suffix)")
+            dirs.remove(d)
+        }
+        // Move all file entries.
+        let movedFiles = entries.keys.filter { $0.hasPrefix(fromPrefix) }
+        for f in movedFiles {
+            let suffix = String(f.dropFirst(from.count))  // includes leading "/"
+            entries["\(to)\(suffix)"] = entries[f]
+            entries.removeValue(forKey: f)
+        }
+        // Move the dir entry itself.
+        dirs.insert(to)
+        dirs.remove(from)
     }
 
     public func remove(at path: String) throws {
+        // Always remove the named entry (file or dir).
         entries.removeValue(forKey: path)
         dirs.remove(path)
+        // Recursive on directories: drop every descendant path.
+        let prefix = "\(path)/"
+        let childFiles = entries.keys.filter { $0.hasPrefix(prefix) }
+        for f in childFiles { entries.removeValue(forKey: f) }
+        let childDirs = dirs.filter { $0.hasPrefix(prefix) }
+        for d in childDirs { dirs.remove(d) }
     }
 
     public func makeExecutable(at path: String) throws {

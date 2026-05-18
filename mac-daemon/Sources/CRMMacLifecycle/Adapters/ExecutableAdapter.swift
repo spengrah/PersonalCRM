@@ -23,6 +23,16 @@ public protocol ExecutableAdapter {
     /// installer to stage `crm-mac` from wherever the operator
     /// invoked it.
     func currentExecutablePath() throws -> String
-    /// Run `codesign -s - --force --preserve-metadata=... <path>`.
+    /// Single-Mach-O ad-hoc sign. Used during the legacy migration
+    /// cleanup path only — the bare-binary install pre-PR8c.
+    /// `codesign -s - --force --preserve-metadata=... <path>`.
     func adhocCodesign(path: String) throws
+    /// Two-pass ad-hoc sign of a complete `.app` bundle (plan D5):
+    ///   1. `codesign --force --sign - --identifier <id> <bundle>/Contents/MacOS/crm-mac`
+    ///   2. `codesign --force --sign - <bundle>`
+    /// The explicit `--identifier` on pass 1 is the property TCC
+    /// keys on for bundled apps — without it the inner Mach-O can
+    /// keep a build-host-derived identifier (e.g. `crm-mac-<hash>`)
+    /// that churns on every rebuild.
+    func adhocCodesignBundle(bundlePath: String, identifier: String) throws
 }
