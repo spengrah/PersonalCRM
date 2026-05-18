@@ -21,20 +21,20 @@
 //   9. Register the agent with SMAppService.
 //
 // Upgrade sequence (backup-rename-swap):
-//   U1. Validate; read existing config; check legacy migration.
-//   U2. Stop the running daemon (SMAppService.unregister + SIGTERM
-//       via ProcessSignaller; pidfile-poll up to 10s).
-//   U3. Rename existing crm-mac.app -> crm-mac.app.backup.<pid>
-//       (same-parent, empty-destination rename — atomic).
-//   U4. Assemble new bundle at crm-mac.app.tmp.<pid>.
-//   U5. Atomic-rename tmp bundle -> crm-mac.app (destination absent
-//       again because U3 moved the old one).
-//   U6. Substitute placeholder + register.
-//   U7. rm -rf crm-mac.app.backup.<pid> (best-effort).
-//   U8. On any failure between U4 and U6: rm -rf tmp bundle AND
-//       rename backup back to crm-mac.app (rollback). If the restore
-//       itself fails the composed `upgradeRollbackFailed` error
-//       carries both the original failure and the restore failure.
+//   - Validate; read existing config; check legacy migration.
+//   - Stop the running daemon (SMAppService.unregister + SIGTERM
+//     via ProcessSignaller; pidfile-poll up to 10s).
+//   - Rename existing crm-mac.app -> crm-mac.app.backup.<pid>
+//     (same-parent, empty-destination rename — atomic).
+//   - Assemble new bundle at crm-mac.app.tmp.<pid>.
+//   - Atomic-rename tmp bundle -> crm-mac.app (destination absent
+//     again because the prior rename moved the old one).
+//   - Substitute placeholder + register.
+//   - rm -rf crm-mac.app.backup.<pid> (best-effort).
+//   - On any failure between assemble and register: rm -rf tmp
+//     bundle AND rename backup back to crm-mac.app (rollback). If
+//     the restore itself fails the composed `upgradeRollbackFailed`
+//     error carries both the original failure and the restore failure.
 //
 // Legacy migration (`runLegacyMigrationIfNeeded`):
 //   Detects a pre-bundle bare-binary install
@@ -435,7 +435,7 @@ public struct Installer {
                 bundleAppPath: deps.paths.bundleAppPath)
         }
 
-        // U2. Stop the running daemon (if any). On a fresh
+        // Stop the running daemon (if any). On a fresh
         // SMAppService-managed install the agentService.unregister is
         // the canonical way to ask launchd to stop relaunching the
         // daemon; SIGTERM + pidfile-poll handles the actual process
@@ -443,7 +443,7 @@ public struct Installer {
         // running processes.
         try await stopRunningDaemon()
 
-        // U3. Backup the existing bundle (if present — fresh upgrade
+        // Backup the existing bundle (if present — fresh upgrade
         // after a `--register-only` failure may have no bundle).
         let backupPath = backupBundlePath()
         let hadExistingBundle = deps.filesystem.fileExists(
@@ -459,7 +459,7 @@ public struct Installer {
             }
         }
 
-        // U4. Assemble new bundle at tmp path.
+        // Assemble new bundle at tmp path.
         let sourcePath: String
         do {
             sourcePath = try deps.executable.currentExecutablePath()
@@ -507,7 +507,7 @@ public struct Installer {
                 newBundleAtFinalPath: false)
         }
 
-        // U5. Atomic-rename tmp bundle -> final path.
+        // Atomic-rename tmp bundle -> final path.
         do {
             try deps.filesystem.rename(
                 from: tmpBundle,
@@ -521,7 +521,7 @@ public struct Installer {
                 newBundleAtFinalPath: false)
         }
 
-        // U6. Substitute placeholder + register. Rollback on any
+        // Substitute placeholder + register. Rollback on any
         // failure between here and the end of register: remove the
         // new bundle, restore the backup.
         do {
@@ -549,7 +549,7 @@ public struct Installer {
                 newBundleAtFinalPath: true)
         }
 
-        // U7. Cleanup backup (best-effort).
+        // Cleanup backup (best-effort).
         if hadExistingBundle {
             try? deps.filesystem.remove(at: backupPath)
         }

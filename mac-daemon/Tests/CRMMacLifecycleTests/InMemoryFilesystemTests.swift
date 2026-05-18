@@ -1,6 +1,6 @@
 // InMemoryFilesystemTests exercise the in-memory FilesystemAdapter
 // fake's directory-rename support. The InMemoryFilesystem
-// is now used by tests covering the upgrade-path bundle swap (D8) and
+// is used by tests covering the upgrade-path bundle swap and
 // by BundleAssemblerTests; both rely on `rename` working on
 // directories, not just files.
 import XCTest

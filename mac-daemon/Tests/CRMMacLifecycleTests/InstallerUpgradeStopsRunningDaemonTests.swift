@@ -24,7 +24,8 @@ final class InstallerUpgradeStopsRunningDaemonTests: XCTestCase {
         XCTAssertEqual(signaller.sigtermCalls, [98765])
         // Wait was called on the pidfile path.
         XCTAssertEqual(signaller.waitForPidfileReleaseCalls, [paths.pidfilePath])
-        // SMAppService.unregister was called (D8 U2).
+        // SMAppService.unregister was called as part of the
+        // stop-the-running-daemon step.
         XCTAssertGreaterThanOrEqual(agentService.unregisterCalls, 1)
         // Bundle in place after upgrade.
         XCTAssertTrue(fs.fileExists(at: paths.bundleAppPath))
@@ -47,8 +48,8 @@ final class InstallerUpgradeStopsRunningDaemonTests: XCTestCase {
         } catch {
             XCTFail("got \(error)")
         }
-        // Bundle UNCHANGED — no backup-then-swap started because we
-        // refused before U3.
+        // Bundle UNCHANGED — no backup-then-swap started because the
+        // stop step refused before the backup-rename.
         let unchanged = try fs.read(from: paths.bundleBinaryPath)
         XCTAssertEqual(unchanged, Data("old binary".utf8))
     }
