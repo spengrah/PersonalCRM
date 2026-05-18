@@ -50,4 +50,9 @@ public struct DaemonPaths {
     public var runtimeDir: URL {
         configDir
     }
+    /// On-disk plaintext file holding the daemon's API key (0600).
+    /// Replaces the prior macOS Keychain entry — see FileAPIKeyStore.
+    public var apiKeyFile: URL {
+        configDir.appendingPathComponent("api-key")
+    }
 }

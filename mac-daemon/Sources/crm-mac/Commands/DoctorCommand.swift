@@ -7,7 +7,7 @@ import CRMMacLifecycle
 struct DoctorCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "doctor",
-        abstract: "Run health checks: Keychain, launchctl, Pi reachability, config + state files.")
+        abstract: "Run health checks: api-key file, launchctl, Pi reachability, config + state files.")
 
     mutating func run() async throws {
         let ctx = ProductionContext()

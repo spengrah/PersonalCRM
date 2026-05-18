@@ -245,11 +245,11 @@ public struct Doctor {
     private func checkKeychain() -> CheckResult {
         do {
             _ = try deps.keychain.readAPIKey()
-            return CheckResult(name: "keychain", status: .pass, details: "api-key present")
+            return CheckResult(name: "api-key", status: .pass, details: "present")
         } catch let e as KeychainStoreError where e == .notFound {
-            return CheckResult(name: "keychain", status: .fail, details: "api-key not present")
+            return CheckResult(name: "api-key", status: .fail, details: "not present")
         } catch {
-            return CheckResult(name: "keychain", status: .fail, details: String(describing: error))
+            return CheckResult(name: "api-key", status: .fail, details: String(describing: error))
         }
     }
 

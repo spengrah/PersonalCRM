@@ -11,5 +11,6 @@ final class DaemonPathsTests: XCTestCase {
         XCTAssertEqual(paths.plistPath.path, "/Users/alice/Library/LaunchAgents/\(Daemon.label).plist")
         XCTAssertEqual(paths.stdoutLog.path, "/Users/alice/Library/Logs/crm-mac/stdout.log")
         XCTAssertEqual(paths.stderrLog.path, "/Users/alice/Library/Logs/crm-mac/stderr.log")
+        XCTAssertEqual(paths.apiKeyFile.path, "/Users/alice/Library/Application Support/crm-mac/api-key")
     }
 }

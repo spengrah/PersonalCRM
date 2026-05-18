@@ -46,4 +46,8 @@ public struct LifecyclePaths: Equatable {
     /// daemon-running state.  Defaults to the config dir so the same
     /// folder hosts config / state / pid.
     public var runtimeDirPath: String { configDirPath }
+
+    /// On-disk plaintext file holding the daemon's API key (0600).
+    /// Replaces the prior macOS Keychain entry — see FileAPIKeyStore.
+    public var apiKeyFilePath: String { "\(configDirPath)/api-key" }
 }

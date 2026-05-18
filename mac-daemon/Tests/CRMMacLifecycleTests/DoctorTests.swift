@@ -86,7 +86,7 @@ final class DoctorTests: XCTestCase {
             launchctl: FakeLaunchctlRunner(),
             piClient: { _ in PiClient(baseURL: URL(string: "https://x")!, transport: LifecycleMockTransport([]).asTransport(), sleep: noopSleep) }))
         let report = await doctor.run()
-        let keychain = report.results.first(where: { $0.name == "keychain" })!
+        let keychain = report.results.first(where: { $0.name == "api-key" })!
         XCTAssertEqual(keychain.status, .fail)
     }
 
