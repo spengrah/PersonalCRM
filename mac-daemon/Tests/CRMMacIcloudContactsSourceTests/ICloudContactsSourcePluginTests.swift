@@ -800,6 +800,44 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
         XCTAssertNotNil(still, "same-tick delete→add must leave id-X in the cache")
     }
 
+    // MARK: - cache write fails
+
+    func testCacheWriteFailureAbortsBeforeCursorCommit() async throws {
+        // Failure mode: applyUpdates(_:) throws (e.g. disk full).
+        // The plugin must mark unhealthy + abort BEFORE attempting
+        // the cursor commit; the next tick replays from the unmoved
+        // cursor.
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Force the cache file path to be unwritable by making the
+        // parent path a regular file.
+        let blockedParent = dir.appendingPathComponent("blocked")
+        try Data("blocker".utf8).write(to: blockedParent)
+        let cacheURL = blockedParent.appendingPathComponent("nested/cache.json")
+        let reader = StubReader(
+            changeHistoryResult: .success(ChangeHistoryResult(
+                events: [.add(makeRecord(id: "id-1", container: containerA))],
+                newToken: Data([0xDE]))))
+        let pi = ScriptedPi(
+            cursorGet: SourceCursorState(
+                cursor: Data([0xAA]).base64EncodedString(),
+                cursorEpoch: 0, backfillComplete: true),
+            knownIDs: KnownIDsData(ids: []),
+            ingestResult: IngestEventsData(accepted: 1, duplicate: 0, rejected: 0, errors: []),
+            cursorCommitThrows: nil, ingestThrows: nil)
+        let (plugin, _, _, registry, transport) = makePlugin(
+            reader: reader, pi: pi,
+            cacheURL: cacheURL,
+            stateURL: dir.appendingPathComponent("state.json"))
+        try await plugin.tick()
+        XCTAssertFalse(transport.ingestWasAttempted,
+                       "publish must not run when the cache write upstream of it fails")
+        XCTAssertFalse(transport.commitWasAttempted,
+                       "cursor commit must not run when the cache write upstream of it fails")
+        let snap = await registry.read(.icloudContacts)
+        XCTAssertEqual(snap?.lastError, "cache_write_failed")
+    }
+
     // MARK: - hash-mismatch rejection
 
     func testHashMismatchRejectionSetsRecoveryFlagAndHoldsCursor() async throws {
