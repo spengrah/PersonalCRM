@@ -583,7 +583,10 @@ func TestIngestExternalContact_Deleted_LegacyNullHost_SoftDeletes(t *testing.T) 
 	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
 
 	// NULL prior.HostID must pass through the host-scope guard so the
-	// existing soft-delete path keeps working.
+	// existing soft-delete path keeps working. Note: this assertion holds
+	// both with AND without the fix (the guard's `prior.HostID != nil`
+	// check short-circuits on NULL). The test exists as a forward-looking
+	// guard against a future regression that drops NULL through the guard.
 	row := findExtRow(t, env, entityID)
 	require.NotNil(t, row)
 	require.NotNil(t, row.DeletedAt, "NULL-host_id row must still be soft-deletable")
