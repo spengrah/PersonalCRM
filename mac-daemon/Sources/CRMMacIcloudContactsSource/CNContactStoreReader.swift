@@ -344,14 +344,68 @@ public final class CNContactStoreReader: ContactStoreReader, @unchecked Sendable
             birthday: birthday)
     }
 
-    /// CNLabeledValue label normalization — strip Apple's
-    /// `<CNLabelHome>` wrapper down to `home`. Returns nil for an
-    /// empty label so the wire shape omits the key per the Pi's
-    /// omitempty contract.
+    /// CNLabeledValue label normalization — map Apple's well-known
+    /// `CNLabel*` constants to stable, lowercase, locale-independent
+    /// strings. Custom user labels (e.g. "Mom") pass through with the
+    /// wrapper stripped if present, then lowercased.
+    ///
+    /// The previous implementation used
+    /// `CNLabeledValue.localizedString(forLabel:)`, which is
+    /// locale-sensitive: the returned string depends on the host's
+    /// macOS language. Because the label is part of the canonicalized
+    /// payload that feeds SHA-256(JCS(...)), a locale change would
+    /// produce a different hash for an unchanged contact, triggering a
+    /// spurious re-sync and breaking `/known-ids` parity. The map
+    /// keeps the wire shape stable across locales.
     static func localizedLabel(_ raw: String?) -> String? {
         guard let raw, !raw.isEmpty else { return nil }
-        let localized = CNLabeledValue<NSString>.localizedString(forLabel: raw)
-        if localized.isEmpty { return nil }
-        return localized.lowercased()
+        if let mapped = stableLabelMap[raw] {
+            return mapped
+        }
+        // Unknown label. Strip Apple's `_$!<…>!$_` wrapper if present
+        // (covers any CNLabel* constant we haven't enumerated), then
+        // lowercase. Custom user labels lack the wrapper and pass
+        // through with only the lowercase step.
+        let unwrapped = stripCNLabelWrapper(raw)
+        if unwrapped.isEmpty { return nil }
+        return unwrapped.lowercased()
+    }
+
+    /// Stable mapping for the well-known Apple CN label constants.
+    /// Values match what `CNLabeledValue.localizedString(forLabel:)`
+    /// returned under `en_US` at the time this map was authored —
+    /// chosen so an English-locale user's hashes are unchanged across
+    /// the locale-fix migration.
+    private static let stableLabelMap: [String: String] = [
+        // Generic (used by emails, phones, addresses, URLs, dates, …)
+        CNLabelHome: "home",
+        CNLabelWork: "work",
+        CNLabelSchool: "school",
+        CNLabelOther: "other",
+        // Date-specific
+        CNLabelDateAnniversary: "anniversary",
+        // Email-specific
+        CNLabelEmailiCloud: "icloud",
+        // Phone-specific
+        CNLabelPhoneNumberiPhone: "iphone",
+        CNLabelPhoneNumberMobile: "mobile",
+        CNLabelPhoneNumberMain: "main",
+        CNLabelPhoneNumberHomeFax: "home fax",
+        CNLabelPhoneNumberWorkFax: "work fax",
+        CNLabelPhoneNumberOtherFax: "other fax",
+        CNLabelPhoneNumberPager: "pager",
+        // URL-specific
+        CNLabelURLAddressHomePage: "homepage",
+    ]
+
+    /// Strip Apple's `_$!<X>!$_` wrapper if present. Unknown wrapped
+    /// values get a deterministic shorthand instead of leaking the
+    /// raw wrapper into the wire payload.
+    private static func stripCNLabelWrapper(_ s: String) -> String {
+        let prefix = "_$!<"
+        let suffix = ">!$_"
+        guard s.hasPrefix(prefix), s.hasSuffix(suffix) else { return s }
+        let inner = s.dropFirst(prefix.count).dropLast(suffix.count)
+        return String(inner)
     }
 }
