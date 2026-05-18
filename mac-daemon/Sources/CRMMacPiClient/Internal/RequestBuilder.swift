@@ -130,6 +130,16 @@ struct RequestBuilder {
         return req
     }
 
+    func knownIDs(auth: PiAuth, source: String) throws -> URLRequest {
+        let url = try resolve(path:
+            "/api/v1/host/\(auth.hostID.uuidString.lowercased())/sync/\(source)/known-ids")
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        Self.applyAuth(&req, auth: auth)
+        return req
+    }
+
     func ingestEvents(auth: PiAuth, body: IngestEventsBody) throws -> URLRequest {
         let url = try resolve(path: "/api/v1/ingest/events")
         var req = URLRequest(url: url)

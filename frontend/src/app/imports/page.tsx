@@ -31,6 +31,7 @@ const SOURCE_FILTERS = [
   { value: '', label: 'All Sources' },
   { value: 'gcontacts', label: 'Google Contacts' },
   { value: 'gcal_attendee', label: 'Calendar' },
+  { value: 'icloud_contacts', label: 'iCloud Contacts' },
   { value: 'telegram', label: 'Telegram' },
 ] as const
 

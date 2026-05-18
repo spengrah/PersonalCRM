@@ -1,8 +1,9 @@
-// PluginRegistry is the composition point where the daemon's stub
-// plugins and real plugins are registered against the ScheduleRunner.
-// The skeleton ships StubICloudContactsPlugin + the real MessagesSourcePlugin
-// (from CRMMacCore) that log a no-op tick on the configured cadence;
-// real source readers replace those stubs as they land.
+// PluginRegistry is the composition point where source plugins are
+// registered against the ScheduleRunner. Both registered plugins
+// (MessagesSourcePlugin and ICloudContactsSourcePlugin) are real
+// readers backed by their respective source frameworks; the no-op
+// stubs that lived here during the daemon's bring-up phase have
+// been retired.
 import Foundation
 import CRMMacCore
 

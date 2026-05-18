@@ -72,6 +72,10 @@ struct ProductionContext {
             keychain: keychain,
             launchctl: launchctl,
             piClientFactory: { url in self.piClientFactory(url) },
+            contactsAuth: contactsAuthAdapter(),
+            containerEnumerator: contactContainerEnumerator(),
+            tickInterval: 15 * 60,
+            clock: clock,
             logger: logger))
     }
 
@@ -80,5 +84,13 @@ struct ProductionContext {
             paths: paths,
             filesystem: filesystem,
             launchctl: launchctl))
+    }
+
+    func contactsAuthAdapter() -> ContactsAuthorizationAdapter {
+        ProductionContactsAuthorizationAdapter()
+    }
+
+    func contactContainerEnumerator() -> ContactContainerEnumerator {
+        ProductionContactContainerEnumerator()
     }
 }

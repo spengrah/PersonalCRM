@@ -107,12 +107,18 @@ public struct Uninstaller {
 
         var purged = false
         if request.purge {
+            // The icloud_contacts hash cache lives alongside config.json
+            // + state.json; include it in the purge so a re-pair on
+            // the same Mac starts with no stale prior-hash bindings.
+            let icloudHashCachePath = URL(fileURLWithPath: deps.paths.configDirPath)
+                .appendingPathComponent("icloud_contacts_hashes.json").path
             for path in [
                 deps.paths.configFilePath,
                 deps.paths.stateFilePath,
                 deps.paths.binaryPath,
                 deps.paths.stdoutLogPath,
                 deps.paths.stderrLogPath,
+                icloudHashCachePath,
             ] {
                 if deps.filesystem.fileExists(at: path) {
                     try? deps.filesystem.remove(at: path)

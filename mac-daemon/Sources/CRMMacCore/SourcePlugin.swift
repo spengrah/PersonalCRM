@@ -1,6 +1,7 @@
 // SourcePlugin is the contract every per-source poller satisfies.
-// Ships the protocol + two no-op stubs (messages, icloud_contacts);
-// real source readers replace those stubs as they land.
+// Real implementations live in their own targets
+// (CRMMacMessagesSource.MessagesSourcePlugin,
+// CRMMacIcloudContactsSource.ICloudContactsSourcePlugin).
 //
 // The contract is intentionally tiny — the scheduler is owned by
 // CRMMacLifecycle, not by the plugins themselves, so plugins remain
@@ -29,12 +30,13 @@ public struct SourceID: RawRepresentable, Hashable, Codable, ExpressibleByString
 ///
 /// `Sendable` constraint: `PluginRegistry` reads `id`/`tickInterval` from
 /// arbitrary contexts and the scheduler runners spawn a `Task` to invoke
-/// `tick()`. Existing class-based conformers (`HeartbeatLoop`,
-/// `StubICloudContactsPlugin`) must be safe to share across actor boundaries
-/// — they are: stored state is either `let` plus injected protocol-typed
-/// collaborators (themselves `Sendable`) or guarded via the `StateMutator`
-/// actor introduced when source plugins began writing state. New conformers like `MessagesSourcePlugin` are
-/// actors, which are automatically `Sendable`.
+/// `tick()`. Existing class-based conformers (`HeartbeatLoop`) must be
+/// safe to share across actor boundaries — they are: stored state is
+/// either `let` plus injected protocol-typed collaborators (themselves
+/// `Sendable`) or guarded via the `StateMutator` actor introduced when
+/// source plugins began writing state. Actor-based conformers like
+/// `MessagesSourcePlugin` and `ICloudContactsSourcePlugin` are
+/// automatically `Sendable`.
 public protocol SourcePlugin: AnyObject, Sendable {
     /// Stable source identifier; used as the state-file key and
     /// heartbeat-payload key.

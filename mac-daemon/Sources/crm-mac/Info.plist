@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>xyz.spengrah.crm-mac</string>
+	<key>CFBundleName</key>
+	<string>crm-mac</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Personal CRM uses your Contacts to sync your iCloud Contacts to your Pi-based CRM. Data stays between your Mac and your Pi.</string>
+</dict>
+</plist>

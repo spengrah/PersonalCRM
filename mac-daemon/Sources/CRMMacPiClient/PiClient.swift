@@ -87,9 +87,21 @@ public final class PiClient: @unchecked Sendable {
         return try decodeKnownIdentifiers(data: data, http: http)
     }
 
+    /// GET /api/v1/host/:id/sync/:source/known-ids. Returns the
+    /// per-(host, source) set of live external_contact source_ids
+    /// the Pi has on file, paired with each row's last observed
+    /// content hash. Used by the icloud_contacts source plugin's
+    /// recovery flow to drive tombstone reconciliation against the
+    /// live CNContactStore scan.
+    public func knownIDs(auth: PiAuth, source: String) async throws -> KnownIDsData {
+        let request = try builder.knownIDs(auth: auth, source: source)
+        let (data, http) = try await transport.send(request)
+        return try decodeKnownIDs(data: data, http: http)
+    }
+
     /// GET /api/v1/host/:id/sync/:source/cursor.  Returns the
     /// unwrapped cursorResponse data (cursor string + epoch + flag).
-    public func getCursor(auth: PiAuth, source: String) async throws -> MessagesCursorState {
+    public func getCursor(auth: PiAuth, source: String) async throws -> SourceCursorState {
         let request = try builder.getCursor(auth: auth, source: source)
         let (data, http) = try await transport.send(request)
         return try decodeGetCursor(data: data, http: http)
@@ -187,10 +199,29 @@ public final class PiClient: @unchecked Sendable {
         }
     }
 
-    private func decodeGetCursor(data: Data, http: HTTPURLResponse) throws -> MessagesCursorState {
+    private func decodeKnownIDs(data: Data, http: HTTPURLResponse) throws -> KnownIDsData {
         switch http.statusCode {
         case 200:
-            return try decodeSuccess(data: data, type: MessagesCursorState.self)
+            return try decodeSuccess(data: data, type: KnownIDsData.self)
+        case 401:
+            throw PiClientError.authenticationRevoked(
+                message: errorMessage(data) ?? "authentication revoked")
+        case 400...499:
+            throw mapClient4xx(status: http.statusCode, data: data)
+        case 500...599:
+            throw PiClientError.serverError(
+                status: http.statusCode,
+                message: errorMessage(data) ?? "server error \(http.statusCode)")
+        default:
+            throw PiClientError.transport(
+                underlying: "unexpected status \(http.statusCode)")
+        }
+    }
+
+    private func decodeGetCursor(data: Data, http: HTTPURLResponse) throws -> SourceCursorState {
+        switch http.statusCode {
+        case 200:
+            return try decodeSuccess(data: data, type: SourceCursorState.self)
         case 401:
             throw PiClientError.authenticationRevoked(
                 message: errorMessage(data) ?? "authentication revoked")

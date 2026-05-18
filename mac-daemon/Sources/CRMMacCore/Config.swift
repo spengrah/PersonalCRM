@@ -42,17 +42,25 @@ public struct DaemonConfig: Codable, Equatable {
     public var hostname: String
     /// Wall-clock time of install, for support / debugging.
     public var installedAt: Date
+    /// Per-source config blocks. Optional + additive — older
+    /// `config.json` files written before this key landed decode with
+    /// `sources == nil` and continue to work. The icloud_contacts
+    /// source plugin reads `sources?.icloudContacts?.containers` to
+    /// build its CNContainer allowlist.
+    public var sources: DaemonSourcesConfig?
 
     public init(
         piURL: URL,
         hostID: UUID,
         hostname: String,
-        installedAt: Date
+        installedAt: Date,
+        sources: DaemonSourcesConfig? = nil
     ) {
         self.piURL = piURL
         self.hostID = hostID
         self.hostname = hostname
         self.installedAt = installedAt
+        self.sources = sources
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -60,11 +68,17 @@ public struct DaemonConfig: Codable, Equatable {
         case hostID = "host_id"
         case hostname
         case installedAt = "installed_at"
+        case sources
     }
 }
 
 /// Atomic-write JSON wrapper around `config.json`.
-public struct ConfigStore {
+///
+/// `@unchecked Sendable` for the same reason `StateStore` is —
+/// `FileManager` lacks formal `Sendable` despite being documented
+/// thread-safe for the methods we call. The store is always passed
+/// by value and never mutated post-construction.
+public struct ConfigStore: @unchecked Sendable {
     private let fileURL: URL
     private let fileManager: FileManager
 

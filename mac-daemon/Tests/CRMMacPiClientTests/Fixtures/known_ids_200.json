@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "data": {
+    "ids": [
+      {"source_id": "contact-A@abc123", "last_content_hash": "abc123"},
+      {"source_id": "contact-B@def456", "last_content_hash": "def456"},
+      {"source_id": "contact-legacy@h", "last_content_hash": null}
+    ]
+  }
+}

@@ -1,0 +1,285 @@
+{
+  "_meta": {
+    "recipe": "JCS(payload \\ {host_id when strip_host==true}) -> SHA-256 -> lowercase hex",
+    "subset": [
+      "top-level object or array",
+      "string values (no Unicode normalization)",
+      "boolean true/false",
+      "null",
+      "integer numbers within [-2^53+1, +2^53-1]",
+      "nested objects and arrays"
+    ],
+    "unsupported": [
+      "floating-point numbers",
+      "top-level fragments (string/number/bool/null without object or array)",
+      "integers outside the JavaScript safe-integer range"
+    ],
+    "regenerate": "go run ./backend/cmd/dump-external-contact-hash-fixture > backend/internal/service/testdata/external_contact_hash_parity.json"
+  },
+  "entries": [
+    {
+      "name": "empty_object",
+      "note": "trivial empty-object canonical form",
+      "input": {},
+      "strip_host": false,
+      "canonical": "{}",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "empty_array",
+      "note": "trivial empty-array canonical form",
+      "input": [],
+      "strip_host": false,
+      "canonical": "[]",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "name": "single_ascii_string",
+      "note": "object with one ASCII string field",
+      "input": {
+        "name": "Contact A"
+      },
+      "strip_host": false,
+      "canonical": "{\"name\":\"Contact A\"}",
+      "sha256": "d5b968feae683897f2173faccc1d69fd49f47ecbe701f828d86462c3ac3c4c0e"
+    },
+    {
+      "name": "key_sort_swap",
+      "note": "two keys in reverse order canonicalize to sorted form",
+      "input": {
+        "a": 2,
+        "b": 1
+      },
+      "strip_host": false,
+      "canonical": "{\"a\":2,\"b\":1}",
+      "sha256": "d3626ac30a87e6f7a6428233b3c68299976865fa5508e4267c5415c76af7a772"
+    },
+    {
+      "name": "non_ascii_string_bmp",
+      "note": "BMP non-ASCII string (accented latin, CJK)",
+      "input": {
+        "city": "中国",
+        "name": "São Paulo"
+      },
+      "strip_host": false,
+      "canonical": "{\"city\":\"中国\",\"name\":\"São Paulo\"}",
+      "sha256": "5fe6dd931f044d87e46bbc75611201d5cd8796ab271bffa819a28d3a2d7a3982"
+    },
+    {
+      "name": "non_ascii_string_nfd",
+      "note": "NFD decomposed form (e + U+0301 combining acute) must stay byte-distinct from NFC; no normalization is performed",
+      "input": {
+        "name": "é"
+      },
+      "strip_host": false,
+      "canonical": "{\"name\":\"é\"}",
+      "sha256": "6a547588c4055916e090ed61467326046dd52810679d03bfb84d862a7123522e"
+    },
+    {
+      "name": "non_ascii_string_nfc",
+      "note": "NFC precomposed form (U+00E9) must stay byte-distinct from NFD; no normalization is performed",
+      "input": {
+        "name": "é"
+      },
+      "strip_host": false,
+      "canonical": "{\"name\":\"é\"}",
+      "sha256": "2f16b8477146a1b2ba7d6bb7cf7c9979c191cc2838a107dbf5f0d920b4cb3ba1"
+    },
+    {
+      "name": "supplementary_plane_emoji",
+      "note": "Supplementary-plane emoji (U+1F602) emits as literal UTF-8, NOT surrogate-escape",
+      "input": {
+        "face": "😂"
+      },
+      "strip_host": false,
+      "canonical": "{\"face\":\"😂\"}",
+      "sha256": "b2154e9f8101aa73ad03f939c50028d5cbbecab4795b8c9bd14e7cddc1afce8d"
+    },
+    {
+      "name": "control_chars_escaped",
+      "note": "Named control escapes (\\n, \\r, \\t, \\b, \\f) emit short forms",
+      "input": {
+        "s": "a\nb\rc\td\be\ff"
+      },
+      "strip_host": false,
+      "canonical": "{\"s\":\"a\\nb\\rc\\td\\be\\ff\"}",
+      "sha256": "8768e93fce4a22c5e68bb3e1ca93d6875bfe5d1e19e275195db74f43b95102cd"
+    },
+    {
+      "name": "quote_and_backslash_escapes",
+      "note": "Quote and backslash MUST escape; slash MUST NOT",
+      "input": {
+        "s": "a\"b\\c/d"
+      },
+      "strip_host": false,
+      "canonical": "{\"s\":\"a\\\"b\\\\c/d\"}",
+      "sha256": "8bc0c38b54488748f10993b678e6de8080032f56fec6e5657b2597286ff89fe5"
+    },
+    {
+      "name": "low_control_unicode_escape",
+      "note": "Control char < 0x20 outside the named set uses \\u00XX form",
+      "input": {
+        "s": "a\u0001b"
+      },
+      "strip_host": false,
+      "canonical": "{\"s\":\"a\\u0001b\"}",
+      "sha256": "ca2a35d23e9b2481bce2117658dc8005af7911b8fc7faee40c09729c85a01bd7"
+    },
+    {
+      "name": "booleans_and_null",
+      "note": "true / false / null literal forms",
+      "input": {
+        "f": false,
+        "n": null,
+        "t": true
+      },
+      "strip_host": false,
+      "canonical": "{\"f\":false,\"n\":null,\"t\":true}",
+      "sha256": "22e00dc2f7b01420f940fbdbfbdf34fa0667cc6500186495023ba37722cbd05e"
+    },
+    {
+      "name": "integers_boundary",
+      "note": "Zero, positive, negative, and the JavaScript safe-integer boundary 2^53-1",
+      "input": {
+        "max_safe": 9007199254740991,
+        "min_safe": -9007199254740991,
+        "neg": -1,
+        "one": 1,
+        "zero": 0
+      },
+      "strip_host": false,
+      "canonical": "{\"max_safe\":9007199254740991,\"min_safe\":-9007199254740991,\"neg\":-1,\"one\":1,\"zero\":0}",
+      "sha256": "adf6d293ada6c5dd0e1bcd6ab9962ee3cf73f1cf868662a1f27fd26421727b8c"
+    },
+    {
+      "name": "nested_object_with_mixed_keys",
+      "note": "Nested object with ASCII + non-ASCII keys to validate UTF-16 sort",
+      "input": {
+        "outer": {
+          "a": 3,
+          "z": 1,
+          "é": 2
+        },
+        "prefix": "x"
+      },
+      "strip_host": false,
+      "canonical": "{\"outer\":{\"a\":3,\"z\":1,\"é\":2},\"prefix\":\"x\"}",
+      "sha256": "92276baf61e10cdf03ff307a5b72abdacd3bc2ec8a7d2f8fa6b64b074494f71b"
+    },
+    {
+      "name": "array_of_objects",
+      "note": "Array preserves input order; per-element canonicalization",
+      "input": {
+        "items": [
+          {
+            "a": 2,
+            "b": 1
+          },
+          {
+            "c": 3,
+            "d": 4
+          }
+        ]
+      },
+      "strip_host": false,
+      "canonical": "{\"items\":[{\"a\":2,\"b\":1},{\"c\":3,\"d\":4}]}",
+      "sha256": "afcfb8a2fa9d67d4c34fac9aef160ef6408fd7b4803a7c2a918c8a0c01d99aa0"
+    },
+    {
+      "name": "external_contact_upserted_synthetic",
+      "note": "Representative ExternalContactUpsertedPayload-shaped object with synthetic identifiers",
+      "input": {
+        "addresses": [
+          {
+            "formatted": "100 Synthetic St, Nowhere",
+            "type": "home"
+          }
+        ],
+        "birthday": "1990-01-01",
+        "display_name": "Contact A",
+        "emails": [
+          {
+            "primary": true,
+            "type": "home",
+            "value": "a@example.com"
+          }
+        ],
+        "entity_id": "contact-A",
+        "first_name": "Contact",
+        "host_id": "00000000-0000-0000-0000-000000000001",
+        "job_title": "Engineer",
+        "last_name": "A",
+        "metadata": {
+          "container_identifier": "00000000-0000-0000-0000-000000000002"
+        },
+        "organization": "Org X",
+        "phones": [
+          {
+            "primary": true,
+            "type": "mobile",
+            "value": "+10000000001"
+          }
+        ],
+        "source": "icloud_contacts",
+        "version": 1
+      },
+      "strip_host": true,
+      "canonical": "{\"addresses\":[{\"formatted\":\"100 Synthetic St, Nowhere\",\"type\":\"home\"}],\"birthday\":\"1990-01-01\",\"display_name\":\"Contact A\",\"emails\":[{\"primary\":true,\"type\":\"home\",\"value\":\"a@example.com\"}],\"entity_id\":\"contact-A\",\"first_name\":\"Contact\",\"job_title\":\"Engineer\",\"last_name\":\"A\",\"metadata\":{\"container_identifier\":\"00000000-0000-0000-0000-000000000002\"},\"organization\":\"Org X\",\"phones\":[{\"primary\":true,\"type\":\"mobile\",\"value\":\"+10000000001\"}],\"source\":\"icloud_contacts\",\"version\":1}",
+      "sha256": "6dd01f683576cc979fd7d8c9c8b01ef8f6b43727c94e9c44a4ad2168fc0aa3be"
+    },
+    {
+      "name": "external_contact_upserted_strip_host_parity",
+      "note": "Same payload as the prior entry without host_id; canonical + hash MUST equal the strip_host=true case",
+      "input": {
+        "addresses": [
+          {
+            "formatted": "100 Synthetic St, Nowhere",
+            "type": "home"
+          }
+        ],
+        "birthday": "1990-01-01",
+        "display_name": "Contact A",
+        "emails": [
+          {
+            "primary": true,
+            "type": "home",
+            "value": "a@example.com"
+          }
+        ],
+        "entity_id": "contact-A",
+        "first_name": "Contact",
+        "job_title": "Engineer",
+        "last_name": "A",
+        "metadata": {
+          "container_identifier": "00000000-0000-0000-0000-000000000002"
+        },
+        "organization": "Org X",
+        "phones": [
+          {
+            "primary": true,
+            "type": "mobile",
+            "value": "+10000000001"
+          }
+        ],
+        "source": "icloud_contacts",
+        "version": 1
+      },
+      "strip_host": false,
+      "canonical": "{\"addresses\":[{\"formatted\":\"100 Synthetic St, Nowhere\",\"type\":\"home\"}],\"birthday\":\"1990-01-01\",\"display_name\":\"Contact A\",\"emails\":[{\"primary\":true,\"type\":\"home\",\"value\":\"a@example.com\"}],\"entity_id\":\"contact-A\",\"first_name\":\"Contact\",\"job_title\":\"Engineer\",\"last_name\":\"A\",\"metadata\":{\"container_identifier\":\"00000000-0000-0000-0000-000000000002\"},\"organization\":\"Org X\",\"phones\":[{\"primary\":true,\"type\":\"mobile\",\"value\":\"+10000000001\"}],\"source\":\"icloud_contacts\",\"version\":1}",
+      "sha256": "6dd01f683576cc979fd7d8c9c8b01ef8f6b43727c94e9c44a4ad2168fc0aa3be"
+    },
+    {
+      "name": "external_contact_deleted_synthetic",
+      "note": "Representative ExternalContactDeletedPayload-shaped object with synthetic identifiers",
+      "input": {
+        "entity_id": "contact-A",
+        "host_id": "00000000-0000-0000-0000-000000000001",
+        "source": "icloud_contacts",
+        "version": 1
+      },
+      "strip_host": true,
+      "canonical": "{\"entity_id\":\"contact-A\",\"source\":\"icloud_contacts\",\"version\":1}",
+      "sha256": "8bceba8bd2ea236d850632e05389d13f7d9176164022a4d672dd9c91192e26f0"
+    }
+  ]
+}

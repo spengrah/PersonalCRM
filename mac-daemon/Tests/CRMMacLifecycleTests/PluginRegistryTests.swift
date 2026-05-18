@@ -2,12 +2,18 @@ import XCTest
 import CRMMacCore
 @testable import CRMMacLifecycle
 
-/// Local test double — StubMessagesPlugin was removed when
-/// MessagesSourcePlugin (the real implementation) landed; this fake
-/// preserves the prior test coverage of PluginRegistry's wiring
-/// behavior without re-introducing the no-op stub.
+/// Local test doubles — the prior no-op stubs were removed when the
+/// real source plugins (MessagesSourcePlugin, ICloudContactsSourcePlugin)
+/// landed; these fakes preserve PluginRegistry's wiring coverage
+/// without re-introducing scheduler-level stubs.
 private final class FakeMessagesPluginForRegistryTests: SourcePlugin {
     let id: SourceID = .messages
+    let tickInterval: TimeInterval = 60
+    func tick() async throws {}
+}
+
+private final class FakeICloudContactsPluginForRegistryTests: SourcePlugin {
+    let id: SourceID = .icloudContacts
     let tickInterval: TimeInterval = 60
     func tick() async throws {}
 }
@@ -17,7 +23,7 @@ final class PluginRegistryTests: XCTestCase {
         let runner = FakeScheduleRunner()
         let registry = PluginRegistry(runner: runner, logger: NoopLogger())
         let p1 = FakeMessagesPluginForRegistryTests()
-        let p2 = StubICloudContactsPlugin(context: SourceContext(logger: NoopLogger()))
+        let p2 = FakeICloudContactsPluginForRegistryTests()
         registry.registerAll([p1, p2])
         XCTAssertEqual(runner.registrations.count, 2)
         XCTAssertEqual(registry.registrationCount, 2)
