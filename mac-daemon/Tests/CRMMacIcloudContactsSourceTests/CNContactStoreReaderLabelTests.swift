@@ -71,17 +71,32 @@ final class CNContactStoreReaderLabelTests: XCTestCase {
         // a pure dictionary lookup with no Locale access, so if the
         // source contains no call to `localizedString(forLabel:)`,
         // the function is locale-insensitive by construction. Greps
-        // the source rather than trying to swap Locale.current
-        // (which AppKit/Foundation makes effectively impossible
-        // mid-process anyway).
+        // the source (comments stripped) rather than trying to swap
+        // Locale.current (which AppKit/Foundation makes effectively
+        // impossible mid-process anyway).
         let sourceURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()           // Tests/CRMMacIcloudContactsSourceTests
             .deletingLastPathComponent()           // Tests
             .deletingLastPathComponent()           // mac-daemon
             .appendingPathComponent("Sources/CRMMacIcloudContactsSource/CNContactStoreReader.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: sourceURL.path),
+            "expected source at \(sourceURL.path); SPM layout may have changed")
+        let raw = try String(contentsOf: sourceURL, encoding: .utf8)
+        // Strip `// …` line-comments so doc-comment prose that
+        // mentions the API name doesn't trip the assertion. Naive
+        // (doesn't account for `//` inside string literals), but
+        // good enough — the source file has no string literals
+        // containing `//`.
+        let codeOnly = raw
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> String in
+                guard let commentStart = line.range(of: "//") else { return String(line) }
+                return String(line[..<commentStart.lowerBound])
+            }
+            .joined(separator: "\n")
         XCTAssertFalse(
-            source.contains("localizedString(forLabel:"),
+            codeOnly.contains("localizedString(forLabel:"),
             "CNContactStoreReader.swift must not call localizedString(forLabel:) — that call is locale-sensitive and breaks /known-ids hash parity across locales (#312).")
     }
 }

@@ -154,6 +154,16 @@ final class ContentHashParityTests: XCTestCase {
         // reverts to localizedString(forLabel:) or drops an entry
         // from stableLabelMap), the literal-string hash stays the
         // same but the CN-routed hash drifts and this test fails.
+        //
+        // Phone labels deliberately include CNLabelPhoneNumberHomeFax
+        // and CNLabelPhoneNumberAppleWatch — both map to strings
+        // containing a space ("home fax", "apple watch"). The
+        // wrapper-strip fallback would produce "homefax" / unchanged
+        // wrapped-input respectively, so if either entry is dropped
+        // from stableLabelMap the hashes diverge and the test fails.
+        // (Picking only entries whose strip-and-lowercase fallback
+        // coincides with the map value — like CNLabelHome — would
+        // make map-drop regressions silent.)
         let viaCNConstants = ContactRecord(
             identifier: "id-locale",
             containerIdentifier: "container-1",
@@ -164,10 +174,18 @@ final class ContentHashParityTests: XCTestCase {
                 value: "home@example.com",
                 type: CNContactStoreReader.localizedLabel(CNLabelHome),
                 primary: true)],
-            phones: [ContactPhone(
-                value: "+10000000001",
-                type: CNContactStoreReader.localizedLabel(CNLabelPhoneNumberMobile),
-                primary: true)],
+            phones: [
+                ContactPhone(
+                    value: "+10000000001",
+                    type: CNContactStoreReader.localizedLabel(CNLabelPhoneNumberMobile),
+                    primary: true),
+                ContactPhone(
+                    value: "+10000000002",
+                    type: CNContactStoreReader.localizedLabel(CNLabelPhoneNumberHomeFax)),
+                ContactPhone(
+                    value: "+10000000003",
+                    type: CNContactStoreReader.localizedLabel(CNLabelPhoneNumberAppleWatch)),
+            ],
             addresses: [ContactAddress(
                 formatted: "100 Other St",
                 type: CNContactStoreReader.localizedLabel(CNLabelOther))])
@@ -178,7 +196,11 @@ final class ContentHashParityTests: XCTestCase {
             firstName: "Contact",
             lastName: "Locale",
             emails: [ContactEmail(value: "home@example.com", type: "home", primary: true)],
-            phones: [ContactPhone(value: "+10000000001", type: "mobile", primary: true)],
+            phones: [
+                ContactPhone(value: "+10000000001", type: "mobile", primary: true),
+                ContactPhone(value: "+10000000002", type: "home fax"),
+                ContactPhone(value: "+10000000003", type: "apple watch"),
+            ],
             addresses: [ContactAddress(formatted: "100 Other St", type: "other")])
         let hashCN = try hash(for: viaCNConstants)
         let hashLit = try hash(for: viaLiterals)
