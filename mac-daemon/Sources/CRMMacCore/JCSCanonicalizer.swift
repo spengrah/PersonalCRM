@@ -16,8 +16,12 @@
 //     NO surrogate-pair escaping. The `/` character is NOT escaped.
 //     Matches `gowebpki/jcs@v1.0.1/jcs.go:decorateString` byte-for-byte.
 //   - Object keys: sorted lexicographically by UTF-16 code-unit
-//     comparison (matches `gowebpki/jcs`'s sort key). Duplicate keys
-//     after sorting throw `JCSError.duplicateKey`.
+//     comparison (matches `gowebpki/jcs`'s sort key). Duplicate
+//     keys after sorting throw `JCSError.duplicateKey` as a
+//     defense-in-depth tripwire; the canonical path is `Encodable
+//     → JSONEncoder.encode → JSONSerialization.jsonObject →
+//     [String: Any]`, which can never produce duplicate keys
+//     because `Dictionary` deduplicates at construction.
 //   - Numbers: integer-only, restricted to the JavaScript safe-integer
 //     range `[-(2^53-1), +(2^53-1)]`. Floats AND out-of-range integers
 //     trigger a precondition — `gowebpki/jcs` collapses larger integers

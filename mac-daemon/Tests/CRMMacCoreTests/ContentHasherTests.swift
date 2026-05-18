@@ -58,4 +58,21 @@ final class ContentHasherTests: XCTestCase {
         XCTAssertEqual(h1, h2)
         XCTAssertEqual(h1.count, 64)
     }
+
+    /// JSONSerialization silently collapses duplicate JSON keys, so
+    /// a payload like `{"a":1,"a":2}` parses into a single-keyed
+    /// dictionary BEFORE the canonicalizer runs. The hasher
+    /// therefore produces a value rather than throwing — this test
+    /// documents the asymmetry with gowebpki/jcs (which rejects
+    /// duplicate keys at parse time). The daemon's only call site
+    /// is `JSONEncoder.encode(Encodable)`, which never produces
+    /// duplicate keys; this asymmetry is unreachable in production.
+    func testDuplicateKeyParseSilentlyDedupsViaFoundation() throws {
+        let dup = #"{"a":1,"a":2}"#
+        let only = #"{"a":2}"#
+        let h1 = try ContentHasher.contentHash(for: Data(dup.utf8))
+        let h2 = try ContentHasher.contentHash(for: Data(only.utf8))
+        XCTAssertEqual(h1, h2,
+                       "Foundation collapses duplicate keys to the LAST value before canonicalization")
+    }
 }

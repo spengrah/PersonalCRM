@@ -80,21 +80,17 @@ struct InstallCommand: AsyncParsableCommand {
         print("")
 
         // Post-pair: request Contacts permission + run the container
-        // picker. Skipped on --upgrade / --register-only — those flows
+        // picker. Fail the install if permission is denied or the
+        // picker errors out — the operator either has a working
+        // icloud source or they don't; a half-installed state is
+        // worse than a clean failure because the post-success
+        // messages would suggest setup was complete.
+        // Skipped on --upgrade / --register-only — those flows
         // assume the user already accepted the permission prompt.
         let isFreshInstall = !(upgrade || registerOnly)
         if isFreshInstall {
-            do {
-                try await runContactsPermissionFlow(ctx: ctx)
-            } catch {
-                // The pair succeeded; permission/picker failure leaves
-                // the daemon running without the icloud_contacts source
-                // until the operator runs `--re-request-permission`.
-                FileHandle.standardError.write(Data(
-                    "\nWARNING: iCloud Contacts setup did not complete: \(error)\n".utf8))
-                FileHandle.standardError.write(Data(
-                    "Run `crm-mac install --re-request-permission` to retry.\n".utf8))
-            }
+            try await runContactsPermissionFlow(
+                ctx: ctx, mutatingExistingConfig: false)
         }
 
         print("")
@@ -103,8 +99,16 @@ struct InstallCommand: AsyncParsableCommand {
     }
 
     /// Permission + picker flow. Called as part of fresh install AND
-    /// via --re-request-permission.
-    private func runContactsPermissionFlow(ctx: ProductionContext) async throws {
+    /// via --re-request-permission. When the call site is updating
+    /// an existing config (i.e. the daemon may already be running
+    /// with the old allowlist), the writer sets the recovery flag
+    /// FIRST so the next tick reconciles against the new allowlist
+    /// via /known-ids rather than silently advancing past stale
+    /// state.
+    private func runContactsPermissionFlow(
+        ctx: ProductionContext,
+        mutatingExistingConfig: Bool
+    ) async throws {
         let authAdapter = ctx.contactsAuthAdapter()
         let granted = try await authAdapter.requestAccess()
         if !granted {
@@ -142,6 +146,22 @@ struct InstallCommand: AsyncParsableCommand {
         }
         let configStore = ConfigStore(
             fileURL: URL(fileURLWithPath: ctx.paths.configFilePath))
+        if mutatingExistingConfig {
+            // State-write FIRST per the same crash-safety contract
+            // the `configure containers` subcommand follows. A crash
+            // between state and config writes leaves the daemon
+            // recovering against the OLD allowlist on the next tick
+            // — still correct.
+            let stateStore = StateStore(
+                fileURL: URL(fileURLWithPath: ctx.paths.stateFilePath))
+            let mutator = StateMutator(store: stateStore)
+            try await mutator.mutate { state in
+                var src = state.sources["icloud_contacts"] ?? SourceState()
+                src.lastError = "recovery_requested:allowlist_changed"
+                src.lastErrorAt = Date()
+                state.sources["icloud_contacts"] = src
+            }
+        }
         try configStore.saveICloudContactsConfig(
             ICloudContactsConfig(containers: pickedIDs))
         print("iCloud Contacts allowlist saved (\(pickedIDs.count) container(s)).")
@@ -149,14 +169,17 @@ struct InstallCommand: AsyncParsableCommand {
 
     /// Re-request-permission-only flow. Re-runs the permission prompt
     /// and picker WITHOUT touching the existing pair. Used when an
-    /// initial install was aborted at the permission step.
+    /// initial install was aborted at the permission step. Treated
+    /// as an existing-config mutation so the recovery flag is set
+    /// before any allowlist write.
     private func runReRequestPermissionOnly(ctx: ProductionContext) async throws {
         guard FileManager.default.fileExists(atPath: ctx.paths.configFilePath) else {
             FileHandle.standardError.write(Data(
                 "--re-request-permission requires a prior pair; no config.json at \(ctx.paths.configFilePath)\n".utf8))
             throw ExitCode(3)
         }
-        try await runContactsPermissionFlow(ctx: ctx)
+        try await runContactsPermissionFlow(
+            ctx: ctx, mutatingExistingConfig: true)
     }
 
     private static func resolveNonInteractive(

@@ -289,6 +289,11 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
         // calls `applyUpdates([X: newHash])` which cancels the staged
         // removal AND writes the new hash. The end-of-tick commit
         // then drops X only if its final state is still "removed".
+        //
+        // Local shape / hash / encode failures fail-closed: skipping
+        // the event with `continue` and then advancing the cursor
+        // would silently drop the event forever. Instead we abort
+        // the tick so the next tick replays from the unmoved cursor.
         var publishItems: [ICloudContactsPublishItem] = []
         for event in events {
             switch event {
@@ -301,11 +306,13 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
                     payloadBytes = try encodePayload(payload)
                     hash = try ContentHasher.contentHash(for: payloadBytes)
                 } catch {
-                    logger.warning("icloud tick: hash failed", metadata: [
+                    logger.warning("icloud tick: upsert shaping/hash failed", metadata: [
                         "entity_id": .private(record.identifier),
                         "error": .private(String(describing: error)),
                     ])
-                    continue
+                    await abortDiscard()
+                    await markUnhealthy(reason: "upsert_shape_or_hash_failed")
+                    return
                 }
                 let sourceID = SourceIDBuilder.upsertSourceID(
                     entityID: record.identifier, contentHash: hash)
@@ -331,11 +338,13 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
                 do {
                     deletedBytes = try encodeDeletedPayload(deletedPayload)
                 } catch {
-                    logger.warning("icloud tick: encode delete payload failed", metadata: [
+                    logger.warning("icloud tick: delete payload encode failed", metadata: [
                         "entity_id": .private(identifier),
                         "error": .private(String(describing: error)),
                     ])
-                    continue
+                    await abortDiscard()
+                    await markUnhealthy(reason: "delete_encode_failed")
+                    return
                 }
                 let sourceID = SourceIDBuilder.deleteSourceID(
                     entityID: identifier, priorContentHash: prior)
@@ -347,9 +356,13 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
             case .unknown:
                 // Belt-and-suspenders. The delta path's hadUnknown
                 // branch returns before reaching this point; reaching
-                // here would be a bug worth surfacing.
+                // here would be a bug worth surfacing — fail-closed
+                // rather than letting an unknown event slip past.
                 logger.warning("icloud tick: unexpected .unknown event in build phase", metadata: [:])
-                continue
+                await abortDiscard()
+                await setRecoveryFlag(reason: "unknown_event_in_build_phase")
+                await markUnhealthy(reason: "unknown_event_in_build_phase")
+                return
             }
         }
 
