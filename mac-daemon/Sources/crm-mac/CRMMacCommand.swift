@@ -18,5 +18,7 @@ struct CRMMacCommand: AsyncParsableCommand {
             StatusCommand.self,
             ConfigureCommand.self,
             MessagesCommand.self,
+            StopCommand.self,
+            StartCommand.self,
         ])
 }
