@@ -5,6 +5,7 @@
 // StopOps/StartOps, and print the result lines. The logic-under-test
 // lives in CRMMacLifecycle.
 import XCTest
+import CRMMacCore
 @testable import CRMMacLifecycle
 
 final class StopStartTests: XCTestCase {
@@ -123,8 +124,8 @@ final class StopStartTests: XCTestCase {
             statusPollTimeoutSeconds: 1,
             statusPollIntervalNs: 50_000_000)
         XCTAssertEqual(agent.registerCalls, 1)
-        XCTAssertEqual(result.outcome, .registered)
-        XCTAssertEqual(result.finalStatus, .enabled)
+        XCTAssertEqual(result.outcome, AgentRegisterOutcome.registered)
+        XCTAssertEqual(result.finalStatus, AgentServiceStatus.enabled)
         XCTAssertTrue(result.started)
     }
 
@@ -137,8 +138,8 @@ final class StopStartTests: XCTestCase {
             StartOpsDependencies(agentService: agent, logger: NoopLogger()),
             statusPollTimeoutSeconds: 1,
             statusPollIntervalNs: 50_000_000)
-        XCTAssertEqual(result.outcome, .alreadyRegistered)
-        XCTAssertEqual(result.finalStatus, .enabled)
+        XCTAssertEqual(result.outcome, AgentRegisterOutcome.alreadyRegistered)
+        XCTAssertEqual(result.finalStatus, AgentServiceStatus.enabled)
         XCTAssertTrue(result.started)
     }
 
@@ -153,7 +154,7 @@ final class StopStartTests: XCTestCase {
             statusPollTimeoutSeconds: 0.3,
             statusPollIntervalNs: 50_000_000)
         XCTAssertFalse(result.started)
-        XCTAssertEqual(result.finalStatus, .requiresApproval)
+        XCTAssertEqual(result.finalStatus, AgentServiceStatus.requiresApproval)
     }
 
     func testStartExitCode1OnPostRegisterNotEnabled() async throws {
@@ -165,7 +166,7 @@ final class StopStartTests: XCTestCase {
             statusPollTimeoutSeconds: 0.3,
             statusPollIntervalNs: 50_000_000)
         XCTAssertFalse(result.started)
-        XCTAssertEqual(result.finalStatus, .notRegistered)
+        XCTAssertEqual(result.finalStatus, AgentServiceStatus.notRegistered)
     }
 
     func testStartSurfacesRegisterFailure() async {

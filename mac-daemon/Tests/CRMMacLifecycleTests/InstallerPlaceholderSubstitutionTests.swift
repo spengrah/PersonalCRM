@@ -10,6 +10,7 @@
 // substituteInstallPrefixPlaceholder helper would require exposing
 // it; the end-to-end assertion is sufficient.
 import XCTest
+import CRMMacCore
 @testable import CRMMacLifecycle
 @testable import CRMMacPiClient
 

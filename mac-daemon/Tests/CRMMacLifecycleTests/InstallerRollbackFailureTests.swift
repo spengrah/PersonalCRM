@@ -7,6 +7,7 @@
 // Uses a FilesystemAdapter that delegates to InMemoryFilesystem but
 // injects a one-shot rename failure for the restore step.
 import XCTest
+import CRMMacCore
 @testable import CRMMacLifecycle
 @testable import CRMMacPiClient
 

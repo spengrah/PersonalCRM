@@ -31,7 +31,7 @@ final class StatusTests: XCTestCase {
         let report = status.run()
         XCTAssertTrue(report.installed)
         XCTAssertTrue(report.registered)
-        XCTAssertEqual(report.registrationStatus, .enabled)
+        XCTAssertEqual(report.registrationStatus, AgentServiceStatus.enabled)
         XCTAssertEqual(report.configHostname, "mac-1")
         XCTAssertEqual(report.hostID, config.hostID)
         XCTAssertEqual(report.stateSchemaVersion, 1)
@@ -50,7 +50,7 @@ final class StatusTests: XCTestCase {
         let report = status.run()
         XCTAssertFalse(report.installed)
         XCTAssertFalse(report.registered)
-        XCTAssertEqual(report.registrationStatus, .notRegistered)
+        XCTAssertEqual(report.registrationStatus, AgentServiceStatus.notRegistered)
         XCTAssertNil(report.configHostname)
     }
 
@@ -69,7 +69,7 @@ final class StatusTests: XCTestCase {
         let report = status.run()
         XCTAssertTrue(report.installed)
         XCTAssertFalse(report.registered)
-        XCTAssertEqual(report.registrationStatus, .requiresApproval)
+        XCTAssertEqual(report.registrationStatus, AgentServiceStatus.requiresApproval)
     }
 
     // MARK: - icloud_contacts row
