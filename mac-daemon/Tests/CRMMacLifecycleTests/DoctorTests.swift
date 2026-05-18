@@ -6,7 +6,7 @@ import CRMMacCore
 final class DoctorTests: XCTestCase {
 
     /// Convenience constructor: minimal DoctorDependencies with all
-    /// PR8b dependencies stubbed so existing tests don't need to
+    /// adapter dependencies stubbed so existing tests don't need to
     /// thread every adapter through their setup.
     private func makeDeps(
         paths: LifecyclePaths,

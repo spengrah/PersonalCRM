@@ -2,10 +2,11 @@
 // projection of a CNContact + the three value-type helpers
 // (ContactEmail / ContactPhone / ContactAddress).
 //
-// PR8b doesn't emit ContactRecord on the wire (it shapes to
-// ExternalContactUpsertedPayload first), but ContactRecord is the
-// fixture shape every pure-logic test uses, so locking the Codable
-// contract here documents the producer/consumer convention.
+// ContactRecord is not itself a wire shape (the icloud source
+// plugin shapes it to ExternalContactUpsertedPayload first), but
+// it IS the fixture shape every pure-logic test uses, so locking
+// the Codable contract here documents the producer/consumer
+// convention.
 import XCTest
 @testable import CRMMacCore
 

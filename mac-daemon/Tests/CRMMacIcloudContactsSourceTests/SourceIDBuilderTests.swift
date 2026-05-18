@@ -1,9 +1,10 @@
-// SourceIDBuilderTests cover the positive-identity tests that
-// replaced the round-1-draft regex test (which was both redundant
-// AND stricter than the Pi's actual acceptance pattern `^[^@]+@...`).
-//
-// Identifiers with hyphens, underscores, and CNContact's typical
-// alphanumeric-mixed shape all flow through unchanged.
+// SourceIDBuilderTests cover the positive-identity contract:
+// given identifier X and hash Y, upsertSourceID returns "X@Y" and
+// deleteSourceID returns "X@deleted@Y" (or "X@deleted@unknown"
+// when no prior hash is known). The Pi's acceptance pattern is
+// `^[^@]+@...`, so identifiers with hyphens, underscores, and
+// CNContact's typical alphanumeric-mixed shape all flow through
+// unchanged.
 import XCTest
 @testable import CRMMacIcloudContactsSource
 

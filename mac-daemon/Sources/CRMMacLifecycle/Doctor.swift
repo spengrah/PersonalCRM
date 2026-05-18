@@ -234,8 +234,8 @@ public struct Doctor {
         let auth: PiAuth?
         let piURL: URL
         /// Configured iCloud allowlist from `sources.icloud_contacts.containers`.
-        /// Empty when the config file lacks the key (pre-PR8b) or
-        /// the operator hasn't picked any containers yet.
+        /// Empty when the config file lacks the key OR the operator
+        /// hasn't picked any containers yet.
         let icloudAllowlist: [String]
         /// Per-source state for icloud_contacts. Nil when the source
         /// has never ticked.

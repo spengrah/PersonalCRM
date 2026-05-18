@@ -53,7 +53,7 @@ final class StatusTests: XCTestCase {
         XCTAssertNil(report.configHostname)
     }
 
-    // MARK: - PR8b icloud_contacts row
+    // MARK: - icloud_contacts row
 
     func testIcloudContactsRowOmittedWhenNoConfigOrState() throws {
         let paths = TestPaths.make()

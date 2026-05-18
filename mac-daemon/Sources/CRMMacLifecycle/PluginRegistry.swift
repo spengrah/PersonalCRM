@@ -1,8 +1,9 @@
 // PluginRegistry is the composition point where source plugins are
-// registered against the ScheduleRunner. PR8b retired the last of
-// the no-op stubs; both registered plugins (MessagesSourcePlugin
-// and ICloudContactsSourcePlugin) are real readers backed by their
-// respective source frameworks.
+// registered against the ScheduleRunner. Both registered plugins
+// (MessagesSourcePlugin and ICloudContactsSourcePlugin) are real
+// readers backed by their respective source frameworks; the no-op
+// stubs that lived here during the daemon's bring-up phase have
+// been retired.
 import Foundation
 import CRMMacCore
 

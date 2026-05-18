@@ -59,8 +59,7 @@ extension ConfigStore {
     /// containers`) MUST set the icloud_contacts recovery flag in
     /// `state.json` BEFORE invoking this method so a crash between the
     /// state-write and the config-write doesn't leave the daemon in
-    /// a wrong-allowlist + no-recovery state. See plan D-JC3 (revised
-    /// post-Codex-r3 P1-2 for crash-safety ordering).
+    /// a wrong-allowlist + no-recovery state.
     public func saveICloudContactsConfig(_ icloud: ICloudContactsConfig) throws {
         var cfg = try load()
         var sources = cfg.sources ?? DaemonSourcesConfig()

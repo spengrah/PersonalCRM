@@ -8,7 +8,7 @@
 // a typed value rather than a compile failure on `@unknown default`.
 // The container picker's defaults logic (see
 // `ContainerPicker.defaults(for:)`) treats `.unknown` as
-// default-EXCLUDE per the fail-closed policy in plan D-JC9.
+// default-EXCLUDE per the picker's fail-closed policy.
 import Foundation
 
 public enum ContainerKind: Equatable, Hashable, Sendable, Codable {

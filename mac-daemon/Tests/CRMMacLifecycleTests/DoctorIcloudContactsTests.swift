@@ -1,11 +1,13 @@
 // DoctorIcloudContactsTests cover the three icloud_contacts checks
-// PR8b adds to Doctor:
+// Doctor runs:
 //   1. Contacts permission (via ContactsAuthorizationAdapter stub).
 //   2. Allowlist sanity (via ContactContainerEnumerator stub).
-//   3. Last-tick age (max(lastScheduledAt, lastPushedAt) vs 2× tickInterval).
+//   3. Last-tick age (max(lastScheduledAt, lastPushedAt) vs
+//      2× tickInterval).
 //
-// gcontacts overlap is NOT tested — deferred to a follow-up PR (see
-// plan Known v1 limitations item 6).
+// gcontacts overlap is NOT tested — that check requires a Pi-side
+// active-providers endpoint the daemon doesn't yet talk to and is
+// out of scope for the v1 icloud source.
 import XCTest
 import CRMMacCore
 @testable import CRMMacLifecycle

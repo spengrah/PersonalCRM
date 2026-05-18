@@ -4,7 +4,8 @@
 // content hash that goes into the `entity@hash` source_id; the Pi
 // recomputes against `gowebpki/jcs` and rejects on byte mismatch.
 //
-// Scope (subset of RFC 8785 — see plan D-JC1):
+// Scope (a strict subset of RFC 8785 — see ContentHasher for the
+// full hash recipe):
 //   - Root MUST be a JSON object or array. Top-level fragments
 //     (string / number / bool / null) trigger a precondition.
 //   - String values: emit JSON escapes for `\\`, `"`, named control

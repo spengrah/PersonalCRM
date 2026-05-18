@@ -1,7 +1,8 @@
 // ICloudContactsConfigTests cover the ConfigStore extension that
 // loads + saves the icloud_contacts allowlist alongside the rest of
-// the daemon's config. Backward compatibility with pre-PR8b
-// config.json files (no `sources` key) is the critical invariant.
+// the daemon's config. Backward compatibility with older
+// config.json files that don't yet carry the `sources` key is the
+// critical invariant.
 import XCTest
 @testable import CRMMacCore
 
@@ -65,7 +66,7 @@ final class ICloudContactsConfigTests: XCTestCase {
     // MARK: - helpers
 
     private func seedBackwardCompatibleConfig() throws {
-        // Hand-write a config file matching the pre-PR8b shape (no
+        // Hand-write a config file in the older shape (no
         // `sources` key) to exercise the additive-decode path.
         let body = """
         {

@@ -1,7 +1,7 @@
 // SourcePlugin is the contract every per-source poller satisfies.
 // Real implementations live in their own targets
-// (CRMMacMessagesSource.MessagesSourcePlugin, CRMMacIcloudContactsSource.ICloudContactsSourcePlugin).
-// PR8b retired the last of the no-op stubs.
+// (CRMMacMessagesSource.MessagesSourcePlugin,
+// CRMMacIcloudContactsSource.ICloudContactsSourcePlugin).
 //
 // The contract is intentionally tiny — the scheduler is owned by
 // CRMMacLifecycle, not by the plugins themselves, so plugins remain

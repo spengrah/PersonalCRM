@@ -3,13 +3,13 @@
 // InstallRequestParser so it can be unit-tested without standing up
 // the executable target (which has no test target by design).
 //
-// PR8b adds the post-pair Contacts-permission prompt + container
-// picker (per plan D-JC11 + D-JC3). The `--re-request-permission`
-// flag triggers ONLY the permission + picker flow without re-pairing
-// (used when the initial install was aborted at the permission step).
-// `--containers <id1>,<id2>` is the non-interactive form for scripted
-// installs that know the exact CNContainer identifiers from a prior
-// `crm-mac configure containers --list` run.
+// After a successful pair the install flow also requests Contacts
+// permission and runs the iCloud Contacts container picker.
+// `--re-request-permission` re-runs only the permission + picker
+// flow (used when the initial install was aborted at the permission
+// step). `--containers <id1>,<id2>` is the non-interactive form for
+// scripted installs that know the exact CNContainer identifiers
+// from a prior `crm-mac configure containers --list` run.
 import Foundation
 import ArgumentParser
 import CRMMacCore

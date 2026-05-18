@@ -99,8 +99,8 @@ final class ContactHashCacheTwoPhaseTests: XCTestCase {
     }
 
     func testSameTickDeleteThenAddCancelsRemoval() async throws {
-        // Per Codex r3 P2-4: a delete event followed by a re-add in
-        // the same tick must finalize as "upserted", not "deleted".
+        // A delete event followed by a re-add in the same tick must
+        // finalize as "upserted", not "deleted".
         let cache = ContactHashCache(fileURL: fileURL)
         try await cache.load()
         try await cache.applyUpdates(["A": "h1"])

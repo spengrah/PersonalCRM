@@ -4,7 +4,7 @@
 // rendered string to stdout, reads a line of stdin, and feeds it back
 // into `parse(input:containers:)`.
 //
-// Defaults follow plan D-JC9 (revised post-Codex-r1):
+// Defaults:
 //   - .local                                            → include
 //   - .cardDAV AND name.lowercased() == "icloud"        → include
 //   - All other .cardDAV (Google, Yahoo, third-party)   → exclude
@@ -12,8 +12,10 @@
 //   - .unassigned                                       → exclude
 //   - .unknown                                          → exclude (fail-closed)
 //
-// The `all` keyword is NOT accepted (round-1 included it; conflicts
-// with the fail-closed-for-unknown-containers requirement).
+// The `all` keyword is NOT accepted: it would conflict with the
+// fail-closed-for-unknown-containers requirement (a future CardDAV
+// provider would default to excluded but `all` would silently
+// include it).
 import Foundation
 import CRMMacCore
 
@@ -56,8 +58,8 @@ public enum ContainerPicker {
     /// Render the interactive picker prompt: a numbered list with
     /// `[default]` markers next to recommended containers AND a
     /// short hint for containers covered by other providers
-    /// (CardDAV containers with Google/Yahoo names — a UX nudge per
-    /// plan D-JC9, NOT a runtime gate).
+    /// (CardDAV containers with Google/Yahoo names — a UX nudge,
+    /// NOT a runtime gate).
     ///
     /// The output ends with a blank line + the operator instruction
     /// line. The caller appends a `\n` and reads input from stdin.
@@ -90,11 +92,10 @@ public enum ContainerPicker {
         if trimmed.isEmpty {
             return defaults(for: containers)
         }
-        // The `all` keyword used to be accepted in the round-1 plan
-        // draft; it conflicts with the fail-closed-for-unknown
-        // policy (a future CardDAV provider would default to excluded
-        // but `all` would silently include it). Reject explicitly so
-        // the operator can't reach a wrong-allowlist state.
+        // Reject the `all` keyword explicitly: a future CardDAV
+        // provider would default to excluded under fail-closed
+        // policy but `all` would silently include it, leaving the
+        // operator in a wrong-allowlist state.
         if trimmed.lowercased() == "all" {
             throw ContainerPickerError.invalidInput(
                 reason: "the 'all' keyword is not supported; enter explicit comma-separated numbers")

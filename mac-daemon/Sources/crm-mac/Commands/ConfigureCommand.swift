@@ -1,22 +1,26 @@
 // `crm-mac configure` hosts subcommands that mutate non-pair
-// configuration. PR8b adds `containers` for iCloud Contacts
-// allowlist management. Future per-source configs land as sibling
+// configuration. Currently: `containers` for the iCloud Contacts
+// CNContainer allowlist. Future per-source configs land as sibling
 // subcommands.
 //
-// Allowlist-mutation flow (plan D-JC3, revised post-Codex-r3):
+// Allowlist-mutation flow:
 //   1. Enumerate current CNContainers.
 //   2. Run the picker (or accept --containers <id1>,<id2>).
 //   3. Diff against the existing allowlist.
 //   4. On non-empty diff: prompt [y/N]; on yes:
-//      4a. Write recovery flag to state.json FIRST (per Codex r3 P1-2
-//          crash-safety ordering).
-//      4b. Write updated config.json SECOND.
-//      4c. DO NOT reset cursor; DO NOT clear hash cache. The recovery
-//          flow consumes both.
-// A crash between 4a and 4b leaves the daemon recovering against the
-// OLD allowlist — still correct (tombstones removed-upstream contacts,
-// emits no spurious wrong-allowlist contacts). A second `configure
-// containers` run reapplies; idempotent.
+//      4a. Write the recovery flag into state.json FIRST.
+//      4b. Write the updated config.json SECOND.
+//      4c. DO NOT reset cursor; DO NOT clear hash cache. The
+//          recovery flow consumes both.
+//
+// The state-then-config ordering is the crash-safety contract: a
+// crash between 4a and 4b leaves the daemon recovering against the
+// OLD allowlist on the next tick — still correct (tombstones
+// removed-upstream contacts, emits no spurious wrong-allowlist
+// contacts). A second `configure containers` run reapplies and
+// completes the swap; idempotent. The reversed order would produce
+// the wrong-allowlist + no-recovery state the recovery flow is
+// designed to avoid.
 import Foundation
 import ArgumentParser
 import CRMMacCore
@@ -134,11 +138,12 @@ struct ContainersSubcommand: ParsableCommand {
             return
         }
 
-        // Crash-safety ordering (Codex r3 P1-2): state-write FIRST,
-        // config-write SECOND. A crash between leaves the daemon
-        // recovering against the OLD allowlist — still correct;
-        // tombstones removed-upstream contacts. A second run
-        // reapplies the picker output and completes the swap.
+        // Crash-safety ordering: state-write FIRST, config-write
+        // SECOND. A crash between the two leaves the daemon
+        // recovering against the OLD allowlist on its next tick —
+        // still correct (tombstones removed-upstream contacts). A
+        // second run reapplies the picker output and completes the
+        // swap; idempotent.
         let stateStore = StateStore(fileURL: URL(fileURLWithPath: ctx.paths.stateFilePath))
         let mutator = StateMutator(store: stateStore)
         do {
