@@ -10,6 +10,7 @@
 // step would surface here as a hash that differs from the
 // recorded value. Pure-logic; no I/O.
 import XCTest
+import Contacts
 import CRMMacCore
 @testable import CRMMacIcloudContactsSource
 
@@ -143,6 +144,71 @@ final class ContentHashParityTests: XCTestCase {
         let hash = try ContentHasher.contentHash(for: bytes)
         XCTAssertEqual(hash, expectedSHA256,
                        "end-to-end shape→encode→hash must match the Go-side fixture")
+    }
+
+    func testHashStableWhenLabelsCameFromCNConstants() throws {
+        // #312 regression guard: a record whose label strings were
+        // produced by routing CN constants through
+        // CNContactStoreReader.localizedLabel must hash identically
+        // to a record whose label strings were written as literals.
+        // If a future change reintroduces locale-sensitivity (e.g.
+        // reverts to localizedString(forLabel:) or drops an entry
+        // from stableLabelMap), the literal-string hash stays the
+        // same but the CN-routed hash drifts and this test fails.
+        //
+        // Phone labels deliberately include CNLabelPhoneNumberHomeFax
+        // AND CNLabelPhoneNumberWorkFax. Both raw values use Apple's
+        // wrapper with an internal capitalization that the wrapper-
+        // strip fallback CANNOT recover — `_$!<HomeFAX>!$_` →
+        // `"homefax"` (no space), but the map value is `"home fax"`
+        // (with space). So if either entry is dropped from
+        // stableLabelMap the hashes diverge and the test fails.
+        // (Picking only entries whose strip-and-lowercase fallback
+        // coincides with the map value — like CNLabelHome or
+        // CNLabelPhoneNumberAppleWatch (raw `"Apple Watch"`, no
+        // wrapper) — would make map-drop regressions silent.)
+        let viaCNConstants = ContactRecord(
+            identifier: "id-locale",
+            containerIdentifier: "container-1",
+            displayName: "Contact Locale",
+            firstName: "Contact",
+            lastName: "Locale",
+            emails: [ContactEmail(
+                value: "home@example.com",
+                type: CNContactStoreReader.localizedLabel(CNLabelHome),
+                primary: true)],
+            phones: [
+                ContactPhone(
+                    value: "+10000000001",
+                    type: CNContactStoreReader.localizedLabel(CNLabelPhoneNumberMobile),
+                    primary: true),
+                ContactPhone(
+                    value: "+10000000002",
+                    type: CNContactStoreReader.localizedLabel(CNLabelPhoneNumberHomeFax)),
+                ContactPhone(
+                    value: "+10000000003",
+                    type: CNContactStoreReader.localizedLabel(CNLabelPhoneNumberWorkFax)),
+            ],
+            addresses: [ContactAddress(
+                formatted: "100 Other St",
+                type: CNContactStoreReader.localizedLabel(CNLabelOther))])
+        let viaLiterals = ContactRecord(
+            identifier: "id-locale",
+            containerIdentifier: "container-1",
+            displayName: "Contact Locale",
+            firstName: "Contact",
+            lastName: "Locale",
+            emails: [ContactEmail(value: "home@example.com", type: "home", primary: true)],
+            phones: [
+                ContactPhone(value: "+10000000001", type: "mobile", primary: true),
+                ContactPhone(value: "+10000000002", type: "home fax"),
+                ContactPhone(value: "+10000000003", type: "work fax"),
+            ],
+            addresses: [ContactAddress(formatted: "100 Other St", type: "other")])
+        let hashCN = try hash(for: viaCNConstants)
+        let hashLit = try hash(for: viaLiterals)
+        XCTAssertEqual(hashCN, hashLit,
+                       "CN-routed labels must produce the same hash as the pinned literal mapping")
     }
 
     func testHashIncludesEmailAndPhone() throws {
