@@ -35,6 +35,7 @@ final class CNContactStoreReaderLabelTests: XCTestCase {
         XCTAssertEqual(CNContactStoreReader.localizedLabel(CNLabelPhoneNumberWorkFax), "work fax")
         XCTAssertEqual(CNContactStoreReader.localizedLabel(CNLabelPhoneNumberOtherFax), "other fax")
         XCTAssertEqual(CNContactStoreReader.localizedLabel(CNLabelPhoneNumberPager), "pager")
+        XCTAssertEqual(CNContactStoreReader.localizedLabel(CNLabelPhoneNumberAppleWatch), "apple watch")
     }
 
     func testWellKnownEmailAndUrlLabels() {
@@ -63,22 +64,24 @@ final class CNContactStoreReaderLabelTests: XCTestCase {
             "newlabel")
     }
 
-    func testLocaleInsensitive() {
-        // The whole point of #312. Switching the current locale to
-        // anything non-English MUST NOT change the mapped result.
-        // We exercise this via the same well-known input under a
-        // synthetic non-English locale; since the implementation
-        // does NOT consult Locale.current, the assertion holds.
-        let priorLocale = Locale.current
-        defer {
-            _ = priorLocale  // keep the reference; we don't actually swap
-        }
-        // The mapping is a plain Dictionary lookup — no Locale
-        // access. Re-asserting after touching Locale.current proves
-        // there's no hidden caching path that would silently leak
-        // locale state in.
-        _ = Locale(identifier: "tr_TR") // touch a non-Latin-default locale
-        XCTAssertEqual(CNContactStoreReader.localizedLabel(CNLabelHome), "home")
-        XCTAssertEqual(CNContactStoreReader.localizedLabel(CNLabelPhoneNumberMobile), "mobile")
+    func testSourceDoesNotCallLocalizedString() throws {
+        // Structural guarantee for the locale-stability invariant:
+        // `CNContactStoreReader.swift` must not invoke
+        // `CNLabeledValue.localizedString(forLabel:)`. The mapping is
+        // a pure dictionary lookup with no Locale access, so if the
+        // source contains no call to `localizedString(forLabel:)`,
+        // the function is locale-insensitive by construction. Greps
+        // the source rather than trying to swap Locale.current
+        // (which AppKit/Foundation makes effectively impossible
+        // mid-process anyway).
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()           // Tests/CRMMacIcloudContactsSourceTests
+            .deletingLastPathComponent()           // Tests
+            .deletingLastPathComponent()           // mac-daemon
+            .appendingPathComponent("Sources/CRMMacIcloudContactsSource/CNContactStoreReader.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertFalse(
+            source.contains("localizedString(forLabel:"),
+            "CNContactStoreReader.swift must not call localizedString(forLabel:) — that call is locale-sensitive and breaks /known-ids hash parity across locales (#312).")
     }
 }

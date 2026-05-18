@@ -145,6 +145,47 @@ final class ContentHashParityTests: XCTestCase {
                        "end-to-end shape→encode→hash must match the Go-side fixture")
     }
 
+    func testHashStableWhenLabelsCameFromCNConstants() throws {
+        // #312 regression guard: a record whose label strings were
+        // produced by routing CN constants through
+        // CNContactStoreReader.localizedLabel must hash identically
+        // to a record whose label strings were written as literals.
+        // If a future change reintroduces locale-sensitivity (e.g.
+        // reverts to localizedString(forLabel:) or drops an entry
+        // from stableLabelMap), the literal-string hash stays the
+        // same but the CN-routed hash drifts and this test fails.
+        let viaCNConstants = ContactRecord(
+            identifier: "id-locale",
+            containerIdentifier: "container-1",
+            displayName: "Contact Locale",
+            firstName: "Contact",
+            lastName: "Locale",
+            emails: [ContactEmail(
+                value: "home@example.com",
+                type: CNContactStoreReader.localizedLabel(CNLabelHome),
+                primary: true)],
+            phones: [ContactPhone(
+                value: "+10000000001",
+                type: CNContactStoreReader.localizedLabel(CNLabelPhoneNumberMobile),
+                primary: true)],
+            addresses: [ContactAddress(
+                formatted: "100 Other St",
+                type: CNContactStoreReader.localizedLabel(CNLabelOther))])
+        let viaLiterals = ContactRecord(
+            identifier: "id-locale",
+            containerIdentifier: "container-1",
+            displayName: "Contact Locale",
+            firstName: "Contact",
+            lastName: "Locale",
+            emails: [ContactEmail(value: "home@example.com", type: "home", primary: true)],
+            phones: [ContactPhone(value: "+10000000001", type: "mobile", primary: true)],
+            addresses: [ContactAddress(formatted: "100 Other St", type: "other")])
+        let hashCN = try hash(for: viaCNConstants)
+        let hashLit = try hash(for: viaLiterals)
+        XCTAssertEqual(hashCN, hashLit,
+                       "CN-routed labels must produce the same hash as the pinned literal mapping")
+    }
+
     func testHashIncludesEmailAndPhone() throws {
         let baseline = ContactRecord(
             identifier: "id-5",

@@ -357,6 +357,15 @@ public final class CNContactStoreReader: ContactStoreReader, @unchecked Sendable
     /// produce a different hash for an unchanged contact, triggering a
     /// spurious re-sync and breaking `/known-ids` parity. The map
     /// keeps the wire shape stable across locales.
+    ///
+    /// Migration: rows already on the Pi were hashed under the old
+    /// path. Contacts whose labels are all in `stableLabelMap` and
+    /// running under `en_US` see no drift. Any wrapped label NOT in
+    /// the map (a future Apple `CNLabel*` constant we haven't
+    /// enumerated, or a third-party-written wrapper string) will
+    /// re-hash on first sync after this change because the fallback
+    /// strips the wrapper while the old path emitted it raw. One-time
+    /// write amplification, not data loss.
     static func localizedLabel(_ raw: String?) -> String? {
         guard let raw, !raw.isEmpty else { return nil }
         if let mapped = stableLabelMap[raw] {
@@ -371,19 +380,23 @@ public final class CNContactStoreReader: ContactStoreReader, @unchecked Sendable
         return unwrapped.lowercased()
     }
 
-    /// Stable mapping for the well-known Apple CN label constants.
-    /// Values match what `CNLabeledValue.localizedString(forLabel:)`
-    /// returned under `en_US` at the time this map was authored —
-    /// chosen so an English-locale user's hashes are unchanged across
-    /// the locale-fix migration.
+    /// Stable, locale-independent mapping for Apple's well-known CN
+    /// label constants. The string values are the design contract —
+    /// the chosen shorthands happen to coincide with what
+    /// `CNLabeledValue.localizedString(forLabel:)` returns under
+    /// `en_US` (so `en_US` users see no migration hash drift), but the
+    /// invariant we promise is "stable across locales", NOT "tracks
+    /// Apple's localized output." Verify with
+    /// `mac-daemon/Scripts/probe_cn_labels.swift` if you need to
+    /// reconfirm against a current SDK.
     private static let stableLabelMap: [String: String] = [
-        // Generic (used by emails, phones, addresses, URLs, dates, …)
+        // --- Currently-exercised by ContactKeysToFetch (email, phone,
+        // postal address). ---
+        // Generic (used by emails, phones, addresses)
         CNLabelHome: "home",
         CNLabelWork: "work",
         CNLabelSchool: "school",
         CNLabelOther: "other",
-        // Date-specific
-        CNLabelDateAnniversary: "anniversary",
         // Email-specific
         CNLabelEmailiCloud: "icloud",
         // Phone-specific
@@ -394,7 +407,12 @@ public final class CNContactStoreReader: ContactStoreReader, @unchecked Sendable
         CNLabelPhoneNumberWorkFax: "work fax",
         CNLabelPhoneNumberOtherFax: "other fax",
         CNLabelPhoneNumberPager: "pager",
-        // URL-specific
+        CNLabelPhoneNumberAppleWatch: "apple watch",
+        // --- Forward-compat: not exercised today (contactKeysToFetch
+        // doesn't request URL or date-with-label fields), included so a
+        // future field addition doesn't silently fall to the fallback
+        // path. ---
+        CNLabelDateAnniversary: "anniversary",
         CNLabelURLAddressHomePage: "homepage",
     ]
 
