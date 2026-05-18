@@ -3,41 +3,44 @@ import CRMMacCore
 @testable import CRMMacLifecycle
 
 final class UninstallerTests: XCTestCase {
-    func testDefaultRemovesPlistAndKeychain() throws {
+    func testDefaultRemovesBundleAndKeychain() async throws {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
-        try fs.write(Data("plist".utf8), to: paths.plistPath)
+        try fs.createDirectory(at: paths.bundleAppPath)
+        try fs.write(Data("bin".utf8), to: paths.bundleBinaryPath)
+        try fs.write(Data("plist".utf8), to: paths.bundlePlistPath)
+        try fs.write(Data("info".utf8), to: paths.bundleInfoPlistPath)
         try fs.write(Data("config".utf8), to: paths.configFilePath)
-        try fs.write(Data("binary".utf8), to: paths.binaryPath)
         let keychain = InMemoryKeychainStore(initial: "key")
-        let launchctl = FakeLaunchctlRunner()
+        let agentService = FakeAgentService()
         let uninstaller = Uninstaller(UninstallerDependencies(
             paths: paths,
             filesystem: fs,
             keychain: keychain,
-            launchctl: launchctl,
+            agentService: agentService,
+            processSignaller: FakeProcessSignaller(),
             logger: NoopLogger()))
 
-        let summary = try uninstaller.run(UninstallRequest())
-        XCTAssertTrue(summary.bootoutInvoked)
-        XCTAssertTrue(summary.plistDeleted)
+        let summary = try await uninstaller.run(UninstallRequest())
+        XCTAssertTrue(summary.unregisterInvoked)
+        XCTAssertTrue(summary.bundleDeleted)
         XCTAssertTrue(summary.keychainDeleted)
         XCTAssertFalse(summary.purged)
-        XCTAssertEqual(launchctl.bootoutCalls.count, 1)
-        XCTAssertFalse(fs.fileExists(at: paths.plistPath))
+        XCTAssertEqual(agentService.unregisterCalls, 1)
+        XCTAssertFalse(fs.fileExists(at: paths.bundleAppPath))
+        XCTAssertFalse(fs.fileExists(at: paths.bundleBinaryPath))
         XCTAssertNil(keychain.currentValue)
-        // config + binary still present (no --purge).
+        // config still present (no --purge).
         XCTAssertTrue(fs.fileExists(at: paths.configFilePath))
-        XCTAssertTrue(fs.fileExists(at: paths.binaryPath))
     }
 
-    func testPurgeRemovesEverything() throws {
+    func testPurgeRemovesEverything() async throws {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
-        try fs.write(Data("plist".utf8), to: paths.plistPath)
+        try fs.createDirectory(at: paths.bundleAppPath)
+        try fs.write(Data("bin".utf8), to: paths.bundleBinaryPath)
         try fs.write(Data("config".utf8), to: paths.configFilePath)
         try fs.write(Data("state".utf8), to: paths.stateFilePath)
-        try fs.write(Data("binary".utf8), to: paths.binaryPath)
         let icloudHashCachePath = URL(fileURLWithPath: paths.configDirPath)
             .appendingPathComponent("icloud_contacts_hashes.json").path
         try fs.write(Data("{\"schema_version\":1,\"hashes\":{}}".utf8),
@@ -47,22 +50,23 @@ final class UninstallerTests: XCTestCase {
             paths: paths,
             filesystem: fs,
             keychain: keychain,
-            launchctl: FakeLaunchctlRunner(),
+            agentService: FakeAgentService(),
+            processSignaller: FakeProcessSignaller(),
             logger: NoopLogger()))
 
-        let summary = try uninstaller.run(UninstallRequest(purge: true))
+        let summary = try await uninstaller.run(UninstallRequest(purge: true))
         XCTAssertTrue(summary.purged)
         XCTAssertFalse(fs.fileExists(at: paths.configFilePath))
         XCTAssertFalse(fs.fileExists(at: paths.stateFilePath))
-        XCTAssertFalse(fs.fileExists(at: paths.binaryPath))
+        XCTAssertFalse(fs.fileExists(at: paths.bundleAppPath))
         XCTAssertFalse(fs.fileExists(at: icloudHashCachePath),
                        "purge must include icloud_contacts_hashes.json so a re-pair starts clean")
     }
 
-    func testPurgeLeavesIcloudHashCacheWhenNotPurging() throws {
+    func testPurgeLeavesIcloudHashCacheWhenNotPurging() async throws {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
-        try fs.write(Data("plist".utf8), to: paths.plistPath)
+        try fs.createDirectory(at: paths.bundleAppPath)
         let icloudHashCachePath = URL(fileURLWithPath: paths.configDirPath)
             .appendingPathComponent("icloud_contacts_hashes.json").path
         try fs.write(Data("{\"schema_version\":1,\"hashes\":{}}".utf8),
@@ -71,57 +75,89 @@ final class UninstallerTests: XCTestCase {
             paths: paths,
             filesystem: fs,
             keychain: InMemoryKeychainStore(initial: "k"),
-            launchctl: FakeLaunchctlRunner(),
+            agentService: FakeAgentService(),
+            processSignaller: FakeProcessSignaller(),
             logger: NoopLogger()))
-        _ = try uninstaller.run(UninstallRequest(purge: false))
+        _ = try await uninstaller.run(UninstallRequest(purge: false))
         XCTAssertTrue(fs.fileExists(at: icloudHashCachePath),
                       "default uninstall preserves icloud hash cache")
     }
 
-    func testPlistAlreadyAbsentSurfacesAsNotDeleted() throws {
+    func testBundleAlreadyAbsentSurfacesAsNotDeleted() async throws {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
-        // No plist seeded.
+        // No bundle seeded.
         let uninstaller = Uninstaller(UninstallerDependencies(
             paths: paths,
             filesystem: fs,
             keychain: InMemoryKeychainStore(initial: "k"),
-            launchctl: FakeLaunchctlRunner(),
+            agentService: FakeAgentService(),
+            processSignaller: FakeProcessSignaller(),
             logger: NoopLogger()))
-        let summary = try uninstaller.run(UninstallRequest())
-        XCTAssertFalse(summary.plistDeleted, "plist was already absent")
+        let summary = try await uninstaller.run(UninstallRequest())
+        XCTAssertFalse(summary.bundleDeleted, "bundle was already absent")
         XCTAssertTrue(summary.keychainDeleted)
     }
 
-    func testKeychainAlreadyAbsentStillSucceeds() throws {
+    func testKeychainAlreadyAbsentStillSucceeds() async throws {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
-        // No initial Keychain value; deleteAPIKey is idempotent.
         let keychain = InMemoryKeychainStore()
         let uninstaller = Uninstaller(UninstallerDependencies(
             paths: paths,
             filesystem: fs,
             keychain: keychain,
-            launchctl: FakeLaunchctlRunner(),
+            agentService: FakeAgentService(),
+            processSignaller: FakeProcessSignaller(),
             logger: NoopLogger()))
-        let summary = try uninstaller.run(UninstallRequest())
+        let summary = try await uninstaller.run(UninstallRequest())
         XCTAssertTrue(summary.keychainDeleted, "delete on missing entry is a successful no-op")
     }
 
-    func testBootoutNonZeroExitIsTolerated() throws {
+    func testUnregisterErrorIsTolerated() async throws {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
-        var script = FakeLaunchctlRunner.Script()
-        script.bootout = [3]
-        let launchctl = FakeLaunchctlRunner(script: script)
+        try fs.createDirectory(at: paths.bundleAppPath)
+        try fs.write(Data("bin".utf8), to: paths.bundleBinaryPath)
+        var script = FakeAgentService.Script()
+        script.unregisterThrows = .unregistrationFailed("not registered")
+        let agent = FakeAgentService(script: script)
         let uninstaller = Uninstaller(UninstallerDependencies(
             paths: paths,
             filesystem: fs,
-            keychain: InMemoryKeychainStore(),
-            launchctl: launchctl,
+            keychain: InMemoryKeychainStore(initial: "k"),
+            agentService: agent,
+            processSignaller: FakeProcessSignaller(),
             logger: NoopLogger()))
-        let summary = try uninstaller.run(UninstallRequest())
-        XCTAssertEqual(summary.bootoutExitCode, 3)
-        XCTAssertTrue(summary.bootoutInvoked)
+        let summary = try await uninstaller.run(UninstallRequest())
+        // Continues even though unregister threw.
+        XCTAssertTrue(summary.unregisterInvoked)
+        XCTAssertTrue(summary.bundleDeleted)
+        XCTAssertTrue(summary.keychainDeleted)
+    }
+
+    func testLegacyArtifactsCleanedUp() async throws {
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        // Seed both legacy artifacts + a new bundle (post-migration
+        // could-have-been-state where uninstall sweeps the leftovers).
+        try fs.write(Data("legacy plist".utf8), to: paths.legacyPlistPath)
+        try fs.write(Data("legacy bin".utf8), to: paths.legacyBinaryPath)
+        try fs.createDirectory(at: paths.bundleAppPath)
+        try fs.write(Data("new bin".utf8), to: paths.bundleBinaryPath)
+        let uninstaller = Uninstaller(UninstallerDependencies(
+            paths: paths,
+            filesystem: fs,
+            keychain: InMemoryKeychainStore(initial: "k"),
+            agentService: FakeAgentService(),
+            processSignaller: FakeProcessSignaller(),
+            logger: NoopLogger(),
+            legacyLaunchctl: FakeLaunchctlRunner()))
+        let summary = try await uninstaller.run(UninstallRequest())
+        XCTAssertTrue(summary.legacyPlistDeleted)
+        XCTAssertTrue(summary.legacyBinaryDeleted)
+        XCTAssertFalse(fs.fileExists(at: paths.legacyPlistPath))
+        XCTAssertFalse(fs.fileExists(at: paths.legacyBinaryPath))
+        XCTAssertFalse(fs.fileExists(at: paths.bundleAppPath))
     }
 }

@@ -226,6 +226,6 @@ private func requireDaemonNotRunning(paths: LifecyclePaths) throws {
         .appendingPathComponent("daemon.pid").path
     guard FileManager.default.fileExists(atPath: pidPath) else { return }
     FileHandle.standardError.write(Data(
-        "crm-mac daemon appears to be running (pidfile at \(pidPath)). Stop it first: launchctl bootout gui/$(id -u) \(Daemon.label)\n".utf8))
+        "crm-mac daemon appears to be running (pidfile at \(pidPath)). Stop it first: `crm-mac stop`.\n".utf8))
     throw ExitCode(3)
 }

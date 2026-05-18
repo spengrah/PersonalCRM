@@ -4,11 +4,20 @@ import CRMMacCore
 @testable import CRMMacPiClient
 
 final class InstallerPreflightTests: XCTestCase {
-    func testRefusesOnExistingBinary() async {
+    func testRefusesOnExistingBundle() async {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         fs.seedFile(at: "/tmp/source/crm-mac")
-        try? fs.write(Data(), to: paths.binaryPath)
+        try? fs.createDirectory(at: paths.bundleAppPath)
+        let installer = makeInstaller(paths: paths, fs: fs)
+        await assertThrowsAlreadyInstalled(installer)
+    }
+
+    func testRefusesOnExistingLegacyBinary() async {
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        fs.seedFile(at: "/tmp/source/crm-mac")
+        try? fs.write(Data("old".utf8), to: paths.legacyBinaryPath)
         let installer = makeInstaller(paths: paths, fs: fs)
         await assertThrowsAlreadyInstalled(installer)
     }
@@ -31,29 +40,14 @@ final class InstallerPreflightTests: XCTestCase {
         await assertThrowsAlreadyInstalled(installer)
     }
 
-    func testRefusesWhenLaunchctlSpawnFails() async {
-        // The launchctl probe throws (spawn failure) — preflight
-        // treats the inconclusive probe as "existing install" and
-        // refuses, rather than failing open.
+    func testRefusesWhenAgentServiceReportsEnabled() async {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         fs.seedFile(at: "/tmp/source/crm-mac")
-        let launchctl = FakeLaunchctlRunner()
-        launchctl.printServiceThrowsOnce = NSError(
-            domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "spawn refused"])
-        let installer = makeInstaller(paths: paths, fs: fs, launchctl: launchctl)
-        await assertThrowsAlreadyInstalled(installer)
-    }
-
-    func testRefusesWhenLaunchctlReportsRegistered() async {
-        let paths = TestPaths.make()
-        let fs = InMemoryFilesystem()
-        fs.seedFile(at: "/tmp/source/crm-mac")
-        var script = FakeLaunchctlRunner.Script()
-        // bootstrap default 0 is fine; printService 0 means "registered"
-        script.printService = [0]
-        let launchctl = FakeLaunchctlRunner(script: script)
-        let installer = makeInstaller(paths: paths, fs: fs, launchctl: launchctl)
+        var script = FakeAgentService.Script()
+        script.statusSequence = [.enabled]
+        let agent = FakeAgentService(script: script)
+        let installer = makeInstaller(paths: paths, fs: fs, agentService: agent)
         await assertThrowsAlreadyInstalled(installer)
     }
 
@@ -61,7 +55,8 @@ final class InstallerPreflightTests: XCTestCase {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         fs.seedFile(at: "/tmp/source/crm-mac")
-        // Pretend an install exists.
+        try fs.createDirectory(at: paths.bundleAppPath)
+        try fs.write(Data("old".utf8), to: paths.bundleBinaryPath)
         let config = DaemonConfig(
             piURL: URL(string: "https://pi.example.test")!,
             hostID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
@@ -71,13 +66,15 @@ final class InstallerPreflightTests: XCTestCase {
         encoder.dateEncodingStrategy = .iso8601
         try fs.write(try encoder.encode(config), to: paths.configFilePath)
         let keychain = InMemoryKeychainStore(initial: "existing-key")
-        let launchctl = FakeLaunchctlRunner()
+        let exec = FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac")
         let installer = Installer(InstallerDependencies(
             paths: paths,
             filesystem: fs,
-            executable: FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac"),
+            executable: exec,
             keychain: keychain,
-            launchctl: launchctl,
+            agentService: FakeAgentService(),
+            processSignaller: FakeProcessSignaller(),
+            bundleAssembler: BundleAssembler(filesystem: fs, executable: exec),
             piClientFactory: { url in
                 PiClient(
                     baseURL: url,
@@ -92,9 +89,6 @@ final class InstallerPreflightTests: XCTestCase {
             pairingToken: "ignored",
             hostname: "ignored",
             upgrade: true))
-        // Upgrade does NOT POST /host — assert no transport activity.
-        // (LifecycleMockTransport throws on use; reaching here means it
-        // wasn't called.)
     }
 
     // MARK: - helpers
@@ -103,14 +97,17 @@ final class InstallerPreflightTests: XCTestCase {
         paths: LifecyclePaths,
         fs: InMemoryFilesystem,
         keychain: InMemoryKeychainStore = InMemoryKeychainStore(),
-        launchctl: FakeLaunchctlRunner = FakeLaunchctlRunner()
+        agentService: FakeAgentService = FakeAgentService()
     ) -> Installer {
-        Installer(InstallerDependencies(
+        let exec = FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac")
+        return Installer(InstallerDependencies(
             paths: paths,
             filesystem: fs,
-            executable: FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac"),
+            executable: exec,
             keychain: keychain,
-            launchctl: launchctl,
+            agentService: agentService,
+            processSignaller: FakeProcessSignaller(),
+            bundleAssembler: BundleAssembler(filesystem: fs, executable: exec),
             piClientFactory: { url in
                 PiClient(
                     baseURL: url,

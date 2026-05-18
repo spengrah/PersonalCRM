@@ -4,20 +4,24 @@ import CRMMacCore
 @testable import CRMMacPiClient
 
 final class InstallerFreshInstallTests: XCTestCase {
-    func testHappyPathPersistsAndBootstraps() async throws {
+    func testHappyPathPersistsAndRegisters() async throws {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         fs.seedFile(at: "/tmp/source/crm-mac")
         let keychain = InMemoryKeychainStore()
-        let launchctl = FakeLaunchctlRunner()
+        let agentService = FakeAgentService()
+        let signaller = FakeProcessSignaller()
         let transport = LifecycleMockTransport([.respond(status: 200, data: pair200JSON)])
         let exec = FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac")
+        let assembler = BundleAssembler(filesystem: fs, executable: exec)
         let installer = Installer(InstallerDependencies(
             paths: paths,
             filesystem: fs,
             executable: exec,
             keychain: keychain,
-            launchctl: launchctl,
+            agentService: agentService,
+            processSignaller: signaller,
+            bundleAssembler: assembler,
             piClientFactory: { url in
                 PiClient(
                     baseURL: url,
@@ -32,62 +36,65 @@ final class InstallerFreshInstallTests: XCTestCase {
             pairingToken: "tk",
             hostname: "mac-1"))
 
-        XCTAssertEqual(summary.binaryPath, paths.binaryPath)
-        XCTAssertEqual(summary.plistPath, paths.plistPath)
-
-        // Binary is at its final location.
-        XCTAssertTrue(fs.fileExists(at: paths.binaryPath))
+        XCTAssertEqual(summary.bundleBinaryPath, paths.bundleBinaryPath)
+        XCTAssertEqual(summary.bundleAppPath, paths.bundleAppPath)
+        // Bundle structure is in place.
+        XCTAssertTrue(fs.fileExists(at: paths.bundleAppPath))
+        XCTAssertTrue(fs.fileExists(at: paths.bundleBinaryPath))
+        XCTAssertTrue(fs.fileExists(at: paths.bundlePlistPath))
+        XCTAssertTrue(fs.fileExists(at: paths.bundleInfoPlistPath))
         // No leftover tmp.
         XCTAssertFalse(fs.allPaths.contains(where: { $0.contains(".tmp.") }))
-        // Codesign was invoked.
-        XCTAssertEqual(exec.codesignCalls.count, 1)
-        // Config exists and parses with the expected hostname.
+        XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".tmp.") }))
+        // Bundle codesign was invoked once with the right identifier.
+        XCTAssertEqual(exec.bundleCodesignCalls.count, 1)
+        XCTAssertEqual(exec.bundleCodesignCalls.first?.identifier, Daemon.label)
+        // Single-Mach-O codesign (legacy path) was NOT used.
+        XCTAssertEqual(exec.codesignCalls.count, 0)
+        // Config exists + parses.
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let configData = try fs.read(from: paths.configFilePath)
         let cfg = try decoder.decode(DaemonConfig.self, from: configData)
         XCTAssertEqual(cfg.hostname, "mac-1")
-        // State exists and parses with schema version 1.
+        // State exists + parses with schema version 1.
         let stateData = try fs.read(from: paths.stateFilePath)
         let state = try decoder.decode(DaemonState.self, from: stateData)
         XCTAssertEqual(state.schemaVersion, 1)
-        // Keychain holds the api key.
+        // Api-key persisted.
         XCTAssertEqual(keychain.currentValue, "k")
-        // Plist + bootstrap.
-        XCTAssertTrue(fs.fileExists(at: paths.plistPath))
-        XCTAssertEqual(launchctl.bootstrapCalls.count, 1)
+        // SMAppService.register was called.
+        XCTAssertEqual(agentService.registerCalls, 1)
+        // Placeholder substitution happened — the embedded plist no
+        // longer contains __INSTALL_PREFIX__.
+        let plistContent = try fs.read(from: paths.bundlePlistPath)
+        let plistStr = String(data: plistContent, encoding: .utf8) ?? ""
+        XCTAssertFalse(plistStr.contains("__INSTALL_PREFIX__"),
+            "installer must substitute the placeholder")
+        XCTAssertTrue(plistStr.contains(paths.bundleAppPath),
+            "installer must substitute with the real bundle path")
     }
 
     func testDirectoriesCreated() async throws {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         fs.seedFile(at: "/tmp/source/crm-mac")
-        let installer = Installer(InstallerDependencies(
-            paths: paths,
-            filesystem: fs,
-            executable: FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac"),
-            keychain: InMemoryKeychainStore(),
-            launchctl: FakeLaunchctlRunner(),
-            piClientFactory: { url in
-                PiClient(
-                    baseURL: url,
-                    transport: LifecycleMockTransport([.respond(status: 200, data: pair200JSON)]).asTransport(),
-                    sleep: noopSleep)
-            },
-            clock: FixedClock(),
-            logger: NoopLogger()))
+        let exec = FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac")
+        let installer = makeInstaller(paths: paths, fs: fs, exec: exec)
         _ = try await installer.run(InstallRequest(
             piURL: URL(string: "https://pi.example.test")!,
             pairingToken: "tk",
             hostname: "mac-1"))
         XCTAssertTrue(fs.allDirs.contains(paths.configDirPath))
-        XCTAssertTrue(fs.allDirs.contains(paths.binDirPath))
         XCTAssertTrue(fs.allDirs.contains(paths.logsDirPath))
-        XCTAssertTrue(fs.allDirs.contains(paths.launchAgentsDirPath))
+        XCTAssertTrue(fs.allDirs.contains(paths.bundleAppPath))
+        // Legacy bin/ is NOT created on fresh install.
+        XCTAssertFalse(fs.allDirs.contains(paths.binDirPath),
+            "fresh install must NOT create legacy bin/ directory")
     }
 
     func testRequiresHostname() async {
-        let installer = makeInstaller(transportSteps: [])
+        let installer = makeInstaller()
         do {
             _ = try await installer.run(InstallRequest(
                 piURL: URL(string: "https://pi.example.test")!,
@@ -102,7 +109,7 @@ final class InstallerFreshInstallTests: XCTestCase {
     }
 
     func testEmptyPairingTokenRejected() async {
-        let installer = makeInstaller(transportSteps: [])
+        let installer = makeInstaller()
         do {
             _ = try await installer.run(InstallRequest(
                 piURL: URL(string: "https://pi.example.test")!,
@@ -118,20 +125,30 @@ final class InstallerFreshInstallTests: XCTestCase {
 
     // MARK: - helpers
 
-    private func makeInstaller(transportSteps: [LifecycleMockTransport.Step]) -> Installer {
-        let paths = TestPaths.make()
-        let fs = InMemoryFilesystem()
-        fs.seedFile(at: "/tmp/source/crm-mac")
+    private func makeInstaller(
+        paths: LifecyclePaths? = nil,
+        fs: InMemoryFilesystem? = nil,
+        exec: FakeExecutableAdapter? = nil
+    ) -> Installer {
+        let p = paths ?? TestPaths.make()
+        let f = fs ?? {
+            let x = InMemoryFilesystem()
+            x.seedFile(at: "/tmp/source/crm-mac")
+            return x
+        }()
+        let e = exec ?? FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac")
         return Installer(InstallerDependencies(
-            paths: paths,
-            filesystem: fs,
-            executable: FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac"),
+            paths: p,
+            filesystem: f,
+            executable: e,
             keychain: InMemoryKeychainStore(),
-            launchctl: FakeLaunchctlRunner(),
+            agentService: FakeAgentService(),
+            processSignaller: FakeProcessSignaller(),
+            bundleAssembler: BundleAssembler(filesystem: f, executable: e),
             piClientFactory: { url in
                 PiClient(
                     baseURL: url,
-                    transport: LifecycleMockTransport(transportSteps).asTransport(),
+                    transport: LifecycleMockTransport([.respond(status: 200, data: pair200JSON)]).asTransport(),
                     sleep: noopSleep)
             },
             clock: FixedClock(),

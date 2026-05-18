@@ -3,9 +3,11 @@ import XCTest
 
 final class LaunchAgentPlistTests: XCTestCase {
     func testRenderMatchesGoldenFixture() {
+        // Post-rewrite the binary lives inside the bundle, so the
+        // fixture uses the new in-bundle path.
         let plist = LaunchAgentPlist(
             label: Daemon.label,
-            binaryPath: "/Users/example/Library/Application Support/crm-mac/bin/crm-mac",
+            binaryPath: "/Users/example/Library/Application Support/crm-mac/crm-mac.app/Contents/MacOS/crm-mac",
             configDirPath: "/Users/example/Library/Application Support/crm-mac",
             stdoutPath: "/Users/example/Library/Logs/crm-mac/stdout.log",
             stderrPath: "/Users/example/Library/Logs/crm-mac/stderr.log")
@@ -18,7 +20,7 @@ final class LaunchAgentPlistTests: XCTestCase {
             <string>xyz.spengrah.crm-mac</string>
             <key>ProgramArguments</key>
             <array>
-                <string>/Users/example/Library/Application Support/crm-mac/bin/crm-mac</string>
+                <string>/Users/example/Library/Application Support/crm-mac/crm-mac.app/Contents/MacOS/crm-mac</string>
                 <string>daemon</string>
             </array>
             <key>RunAtLoad</key>

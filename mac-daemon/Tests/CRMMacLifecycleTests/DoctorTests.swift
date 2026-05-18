@@ -12,7 +12,7 @@ final class DoctorTests: XCTestCase {
         paths: LifecyclePaths,
         fs: FilesystemAdapter,
         keychain: KeychainStore,
-        launchctl: LaunchctlRunner,
+        agentService: AgentService,
         piClient: @escaping (URL) -> PiClient,
         contactsAuth: ContactsAuthorizationAdapter? = nil,
         containerEnumerator: ContactContainerEnumerator? = nil,
@@ -22,7 +22,7 @@ final class DoctorTests: XCTestCase {
             paths: paths,
             filesystem: fs,
             keychain: keychain,
-            launchctl: launchctl,
+            agentService: agentService,
             piClientFactory: piClient,
             contactsAuth: contactsAuth ?? StubContactsAuthorizationAdapter(),
             containerEnumerator: containerEnumerator ?? StubContactContainerEnumerator(),
@@ -45,16 +45,13 @@ final class DoctorTests: XCTestCase {
         try fs.write(try encoder.encode(config), to: paths.configFilePath)
         try fs.write(try encoder.encode(state), to: paths.stateFilePath)
         let keychain = InMemoryKeychainStore(initial: "key")
-        // The fake's default printService is exit 1 (unregistered);
-        // this test wants the four core checks to PASS, so override
-        // the launchctl probe to "registered".
-        var script = FakeLaunchctlRunner.Script()
-        script.printService = [0]
+        var script = FakeAgentService.Script()
+        script.statusSequence = [.enabled]
         let doctor = Doctor(makeDeps(
             paths: paths,
             fs: fs,
             keychain: keychain,
-            launchctl: FakeLaunchctlRunner(script: script),
+            agentService: FakeAgentService(script: script),
             piClient: { url in
                 PiClient(
                     baseURL: url,
@@ -62,12 +59,6 @@ final class DoctorTests: XCTestCase {
                     sleep: noopSleep)
             }))
         let report = await doctor.run()
-        // 4 core checks (keychain, launchctl, config_state, pi_reachability)
-        // + 3 icloud_contacts checks (permission, allowlist, last_tick).
-        // All four core pass; icloud permission passes (default
-        // .authorized stub) but allowlist + last_tick are non-PASS
-        // because the test config has no icloud allowlist + no
-        // SourceState for icloud_contacts.
         XCTAssertEqual(report.failCount, 0,
                        "no FAILs expected (icloud checks are WARN at worst)")
         let names = report.results.map(\.name)
@@ -83,7 +74,7 @@ final class DoctorTests: XCTestCase {
             paths: paths,
             fs: fs,
             keychain: InMemoryKeychainStore(),
-            launchctl: FakeLaunchctlRunner(),
+            agentService: FakeAgentService(),
             piClient: { _ in PiClient(baseURL: URL(string: "https://x")!, transport: LifecycleMockTransport([]).asTransport(), sleep: noopSleep) }))
         let report = await doctor.run()
         let keychain = report.results.first(where: { $0.name == "api-key" })!
@@ -107,7 +98,7 @@ final class DoctorTests: XCTestCase {
             paths: paths,
             fs: fs,
             keychain: InMemoryKeychainStore(initial: "key"),
-            launchctl: FakeLaunchctlRunner(),
+            agentService: FakeAgentService(),
             piClient: { _ in
                 PiClient(
                     baseURL: URL(string: "https://pi.example.test")!,
@@ -130,7 +121,6 @@ final class DoctorTests: XCTestCase {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         try fs.write(try encoder.encode(config), to: paths.configFilePath)
-        // Schema version 99
         let stateJSON = Data("""
         {"schemaVersion": 99, "sources": {}}
         """.utf8)
@@ -139,26 +129,61 @@ final class DoctorTests: XCTestCase {
             paths: paths,
             fs: fs,
             keychain: InMemoryKeychainStore(initial: "key"),
-            launchctl: FakeLaunchctlRunner(),
+            agentService: FakeAgentService(),
             piClient: { _ in PiClient(baseURL: URL(string: "https://x")!, transport: LifecycleMockTransport([]).asTransport(), sleep: noopSleep) }))
         let report = await doctor.run()
         let configCheck = report.results.first(where: { $0.name == "config_state" })!
         XCTAssertEqual(configCheck.status, .fail)
     }
 
-    func testLaunchctlNotRegisteredWarns() async {
+    func testAgentServiceNotRegisteredWarns() async {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
-        var script = FakeLaunchctlRunner.Script()
-        script.printService = [1]
+        var script = FakeAgentService.Script()
+        script.statusSequence = [.notRegistered]
         let doctor = Doctor(makeDeps(
             paths: paths,
             fs: fs,
             keychain: InMemoryKeychainStore(),
-            launchctl: FakeLaunchctlRunner(script: script),
+            agentService: FakeAgentService(script: script),
             piClient: { _ in PiClient(baseURL: URL(string: "https://x")!, transport: LifecycleMockTransport([]).asTransport(), sleep: noopSleep) }))
         let report = await doctor.run()
-        let lc = report.results.first(where: { $0.name == "launchctl" })!
-        XCTAssertEqual(lc.status, .warn)
+        let check = report.results.first(where: { $0.name == "agent_service" })!
+        XCTAssertEqual(check.status, .warn)
+    }
+
+    func testAgentServiceRequiresApprovalWarns() async {
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        var script = FakeAgentService.Script()
+        script.statusSequence = [.requiresApproval]
+        let doctor = Doctor(makeDeps(
+            paths: paths,
+            fs: fs,
+            keychain: InMemoryKeychainStore(),
+            agentService: FakeAgentService(script: script),
+            piClient: { _ in PiClient(baseURL: URL(string: "https://x")!, transport: LifecycleMockTransport([]).asTransport(), sleep: noopSleep) }))
+        let report = await doctor.run()
+        let check = report.results.first(where: { $0.name == "agent_service" })!
+        XCTAssertEqual(check.status, .warn)
+        XCTAssertTrue(check.details.lowercased().contains("approve"),
+            "requires-approval WARN must mention 'approve' for operator guidance")
+    }
+
+    func testAgentServiceNotFoundFails() async {
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        var script = FakeAgentService.Script()
+        script.statusSequence = [.notFound]
+        let doctor = Doctor(makeDeps(
+            paths: paths,
+            fs: fs,
+            keychain: InMemoryKeychainStore(),
+            agentService: FakeAgentService(script: script),
+            piClient: { _ in PiClient(baseURL: URL(string: "https://x")!, transport: LifecycleMockTransport([]).asTransport(), sleep: noopSleep) }))
+        let report = await doctor.run()
+        let check = report.results.first(where: { $0.name == "agent_service" })!
+        XCTAssertEqual(check.status, .fail)
+        XCTAssertTrue(check.details.contains(paths.bundleAppPath))
     }
 }

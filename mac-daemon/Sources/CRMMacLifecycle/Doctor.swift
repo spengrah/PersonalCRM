@@ -1,12 +1,13 @@
 // Doctor implements `crm-mac doctor`.
 //
-// Four checks:
-//   1. Keychain access (read api-key)
-//   2. Launchd agent presence (`launchctl print` exit 0)
+// Four core checks (plan D10):
+//   1. api-key file (read api-key file)
+//   2. Agent service registration (AgentService.currentStatus)
 //   3. Pi reachability (GET /known-identifiers; 200=PASS, 401=FAIL,
 //      5xx=WARN, network=WARN)
 //   4. Config + state file presence (both parse; state has correct
 //      schemaVersion)
+// Plus three icloud_contacts checks (permission, allowlist, last-tick).
 //
 // Output: array of CheckResult { name, status, details }; exit code
 // equals the number of FAIL entries.
@@ -48,7 +49,7 @@ public struct DoctorDependencies {
     public let paths: LifecyclePaths
     public let filesystem: FilesystemAdapter
     public let keychain: KeychainStore
-    public let launchctl: LaunchctlRunner
+    public let agentService: AgentService
     public let piClientFactory: (URL) -> PiClient
     /// Contacts framework adapters used by the icloud_contacts check.
     /// Tests inject stubs.
@@ -64,7 +65,7 @@ public struct DoctorDependencies {
         paths: LifecyclePaths,
         filesystem: FilesystemAdapter,
         keychain: KeychainStore,
-        launchctl: LaunchctlRunner,
+        agentService: AgentService,
         piClientFactory: @escaping (URL) -> PiClient,
         contactsAuth: ContactsAuthorizationAdapter,
         containerEnumerator: ContactContainerEnumerator,
@@ -75,7 +76,7 @@ public struct DoctorDependencies {
         self.paths = paths
         self.filesystem = filesystem
         self.keychain = keychain
-        self.launchctl = launchctl
+        self.agentService = agentService
         self.piClientFactory = piClientFactory
         self.contactsAuth = contactsAuth
         self.containerEnumerator = containerEnumerator
@@ -94,7 +95,7 @@ public struct Doctor {
     public func run() async -> DoctorReport {
         var results: [CheckResult] = []
         results.append(checkKeychain())
-        results.append(checkLaunchctl())
+        results.append(checkAgentService())
 
         let configCheck = checkConfigAndState()
         results.append(configCheck.result)
@@ -253,21 +254,28 @@ public struct Doctor {
         }
     }
 
-    private func checkLaunchctl() -> CheckResult {
-        do {
-            let inv = try deps.launchctl.printService(label: Daemon.label)
-            if inv.exitCode == 0 {
-                return CheckResult(name: "launchctl", status: .pass, details: "service registered")
-            }
+    private func checkAgentService() -> CheckResult {
+        switch deps.agentService.currentStatus() {
+        case .enabled:
             return CheckResult(
-                name: "launchctl",
-                status: .warn,
-                details: "service not registered (exit \(inv.exitCode))")
-        } catch {
+                name: "agent_service",
+                status: .pass,
+                details: "registered (enabled)")
+        case .requiresApproval:
             return CheckResult(
-                name: "launchctl",
+                name: "agent_service",
                 status: .warn,
-                details: "launchctl invocation failed: \(error)")
+                details: "requires approval — System Settings → General → Login Items → Allow in Background → crm-mac")
+        case .notRegistered:
+            return CheckResult(
+                name: "agent_service",
+                status: .warn,
+                details: "not registered; run `crm-mac install --register-only`")
+        case .notFound:
+            return CheckResult(
+                name: "agent_service",
+                status: .fail,
+                details: "bundle missing at \(deps.paths.bundleAppPath); re-run `crm-mac install --upgrade`")
         }
     }
 

@@ -6,10 +6,10 @@ import CRMMacCore
 final class InstallerFailurePathsTests: XCTestCase {
     private func makeInstaller(
         transport: LifecycleMockTransport,
-        launchctl: FakeLaunchctlRunner = FakeLaunchctlRunner(),
+        agentService: FakeAgentService = FakeAgentService(),
         keychain: InMemoryKeychainStore = InMemoryKeychainStore(),
         executable: FakeExecutableAdapter? = nil
-    ) -> (Installer, InMemoryFilesystem, FakeLaunchctlRunner, InMemoryKeychainStore, LifecyclePaths) {
+    ) -> (Installer, InMemoryFilesystem, FakeAgentService, InMemoryKeychainStore, LifecyclePaths, FakeExecutableAdapter) {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         fs.seedFile(at: "/tmp/source/crm-mac")
@@ -19,7 +19,9 @@ final class InstallerFailurePathsTests: XCTestCase {
             filesystem: fs,
             executable: exec,
             keychain: keychain,
-            launchctl: launchctl,
+            agentService: agentService,
+            processSignaller: FakeProcessSignaller(),
+            bundleAssembler: BundleAssembler(filesystem: fs, executable: exec),
             piClientFactory: { url in
                 PiClient(
                     baseURL: url,
@@ -28,12 +30,12 @@ final class InstallerFailurePathsTests: XCTestCase {
             },
             clock: FixedClock(),
             logger: NoopLogger()))
-        return (installer, fs, launchctl, keychain, paths)
+        return (installer, fs, agentService, keychain, paths, exec)
     }
 
-    func test410CleansTempBinaryAndDoesNotPersist() async {
+    func test410CleansTempBundleAndDoesNotPersist() async {
         let transport = LifecycleMockTransport([.respond(status: 410, data: pair410JSON)])
-        let (installer, fs, launchctl, keychain, paths) = makeInstaller(transport: transport)
+        let (installer, fs, agentService, keychain, paths, _) = makeInstaller(transport: transport)
 
         do {
             _ = try await installer.run(InstallRequest(
@@ -46,21 +48,22 @@ final class InstallerFailurePathsTests: XCTestCase {
         } catch {
             XCTFail("got \(error)")
         }
-        // No artifact at the install location.
-        XCTAssertFalse(fs.fileExists(at: paths.binaryPath))
-        // No tmp file remaining.
+        // No bundle at install location.
+        XCTAssertFalse(fs.fileExists(at: paths.bundleAppPath))
+        // No tmp.
         XCTAssertFalse(fs.allPaths.contains(where: { $0.contains(".tmp.") }))
+        XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".tmp.") }))
         // No config / state / Keychain side effects.
         XCTAssertFalse(fs.fileExists(at: paths.configFilePath))
         XCTAssertFalse(fs.fileExists(at: paths.stateFilePath))
         XCTAssertNil(keychain.currentValue)
-        // No launchctl bootstrap attempted.
-        XCTAssertEqual(launchctl.bootstrapCalls.count, 0)
+        // No agent registration attempted.
+        XCTAssertEqual(agentService.registerCalls, 0)
     }
 
-    func test409CleansTempBinary() async {
+    func test409CleansTempBundle() async {
         let transport = LifecycleMockTransport([.respond(status: 409, data: pair409JSON)])
-        let (installer, fs, _, _, paths) = makeInstaller(transport: transport)
+        let (installer, fs, _, _, paths, _) = makeInstaller(transport: transport)
         do {
             _ = try await installer.run(InstallRequest(
                 piURL: URL(string: "https://pi.example.test")!,
@@ -72,18 +75,15 @@ final class InstallerFailurePathsTests: XCTestCase {
         } catch {
             XCTFail("got \(error)")
         }
-        XCTAssertFalse(fs.fileExists(at: paths.binaryPath))
-        XCTAssertFalse(fs.allPaths.contains(where: { $0.contains(".tmp.") }))
+        XCTAssertFalse(fs.fileExists(at: paths.bundleAppPath))
+        XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".tmp.") }))
     }
 
-    func test5xxCleansTempBinaryAndSurfacesAmbiguous() async {
-        // Pair is no-retry so we expect only 1 attempt; 5xx now
-        // surfaces as ambiguousPair so the operator gets the
-        // list-hosts recovery guidance.
+    func test5xxCleansTempBundleAndSurfacesAmbiguous() async {
         let transport = LifecycleMockTransport([
             .respond(status: 502, data: Data("{}".utf8)),
         ])
-        let (installer, fs, _, _, paths) = makeInstaller(transport: transport)
+        let (installer, fs, _, _, paths, _) = makeInstaller(transport: transport)
         do {
             _ = try await installer.run(InstallRequest(
                 piURL: URL(string: "https://pi.example.test")!,
@@ -95,7 +95,7 @@ final class InstallerFailurePathsTests: XCTestCase {
         } catch {
             XCTFail("got \(error)")
         }
-        XCTAssertFalse(fs.fileExists(at: paths.binaryPath))
+        XCTAssertFalse(fs.fileExists(at: paths.bundleAppPath))
         XCTAssertEqual(transport.invocations.count, 1, "pair must not retry on 5xx")
     }
 
@@ -103,7 +103,7 @@ final class InstallerFailurePathsTests: XCTestCase {
         let transport = LifecycleMockTransport([
             .fail(URLError(.timedOut)),
         ])
-        let (installer, fs, _, _, paths) = makeInstaller(transport: transport)
+        let (installer, fs, _, _, paths, _) = makeInstaller(transport: transport)
         do {
             _ = try await installer.run(InstallRequest(
                 piURL: URL(string: "https://pi.example.test")!,
@@ -115,87 +115,14 @@ final class InstallerFailurePathsTests: XCTestCase {
         } catch {
             XCTFail("got \(error)")
         }
-        XCTAssertFalse(fs.fileExists(at: paths.binaryPath))
+        XCTAssertFalse(fs.fileExists(at: paths.bundleAppPath))
     }
 
-    func testPlistWriteFailureLeavesBinaryInPlaceAsLaunchctlFailed() async throws {
-        let transport = LifecycleMockTransport([.respond(status: 200, data: pair200JSON)])
-        let paths = TestPaths.make()
-        let fs = InMemoryFilesystem()
-        fs.seedFile(at: "/tmp/source/crm-mac")
-        // Fail writes specifically at the plist path. The binary,
-        // config, keychain, and state are all already written by then.
-        fs.failWritesAtPath = paths.plistPath
-        let keychain = InMemoryKeychainStore()
-        let launchctl = FakeLaunchctlRunner()
-        let installer = Installer(InstallerDependencies(
-            paths: paths,
-            filesystem: fs,
-            executable: FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac"),
-            keychain: keychain,
-            launchctl: launchctl,
-            piClientFactory: { url in
-                PiClient(
-                    baseURL: url,
-                    transport: transport.asTransport(),
-                    sleep: noopSleep)
-            },
-            clock: FixedClock(),
-            logger: NoopLogger()))
-        do {
-            _ = try await installer.run(InstallRequest(
-                piURL: URL(string: "https://pi.example.test")!,
-                pairingToken: "tk",
-                hostname: "mac-1"))
-            XCTFail("expected launchctlFailed")
-        } catch InstallError.launchctlFailed(_, let stderr) {
-            XCTAssertTrue(stderr.contains("write plist"), "expected plist context in error, got \(stderr)")
-        } catch {
-            XCTFail("got \(error)")
-        }
-        // Binary IS in place; config + Keychain + state too. Operator
-        // recovers via `crm-mac install --register-only` after fixing
-        // the underlying filesystem issue.
-        XCTAssertTrue(fs.fileExists(at: paths.binaryPath))
-        XCTAssertTrue(fs.fileExists(at: paths.configFilePath))
-        XCTAssertTrue(fs.fileExists(at: paths.stateFilePath))
-        XCTAssertEqual(keychain.currentValue, "k")
-        // launchctl bootstrap was NOT called (we failed before it).
-        XCTAssertEqual(launchctl.bootstrapCalls.count, 0)
-    }
-
-    func testLaunchctlBootstrapFailureLeavesBinaryInPlace() async throws {
-        let transport = LifecycleMockTransport([.respond(status: 200, data: pair200JSON)])
-        var script = FakeLaunchctlRunner.Script()
-        script.bootstrap = [42]
-        let launchctl = FakeLaunchctlRunner(script: script)
-        let (installer, fs, _, keychain, paths) = makeInstaller(
-            transport: transport,
-            launchctl: launchctl)
-        do {
-            _ = try await installer.run(InstallRequest(
-                piURL: URL(string: "https://pi.example.test")!,
-                pairingToken: "tk",
-                hostname: "mac-1"))
-            XCTFail("expected throw")
-        } catch InstallError.launchctlFailed(let code, _) {
-            XCTAssertEqual(code, 42)
-        } catch {
-            XCTFail("got \(error)")
-        }
-        // Binary IS in place. Config + Keychain + state present. Operator
-        // recovers via `crm-mac install --register-only`.
-        XCTAssertTrue(fs.fileExists(at: paths.binaryPath))
-        XCTAssertTrue(fs.fileExists(at: paths.configFilePath))
-        XCTAssertTrue(fs.fileExists(at: paths.stateFilePath))
-        XCTAssertEqual(keychain.currentValue, "k")
-    }
-
-    func testCodesignFailureCleansTempBinaryNoPair() async {
+    func testBundleAssemblyFailureCleansTmpAndDoesNotPair() async {
         let transport = LifecycleMockTransport([.respond(status: 200, data: pair200JSON)])
         let exec = FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac")
-        exec.failCodesignWith = "ad-hoc signing requires Mac developer mode"
-        let (installer, fs, _, _, paths) = makeInstaller(transport: transport, executable: exec)
+        exec.failBundleCodesignWith = "injected codesign failure"
+        let (installer, fs, _, _, paths, _) = makeInstaller(transport: transport, executable: exec)
         do {
             _ = try await installer.run(InstallRequest(
                 piURL: URL(string: "https://pi.example.test")!,
@@ -207,9 +134,76 @@ final class InstallerFailurePathsTests: XCTestCase {
         } catch {
             XCTFail("got \(error)")
         }
-        XCTAssertFalse(fs.fileExists(at: paths.binaryPath))
-        XCTAssertFalse(fs.allPaths.contains(where: { $0.contains(".tmp.") }))
-        // Pair was NOT attempted — codesign failure is pre-pair.
+        // No bundle at final path; no tmp left over; no pair attempt.
+        XCTAssertFalse(fs.fileExists(at: paths.bundleAppPath))
+        XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".tmp.") }))
+        XCTAssertEqual(transport.invocations.count, 0)
+    }
+
+    func testAgentRegistrationFailureLeavesBundleInPlace() async throws {
+        let transport = LifecycleMockTransport([.respond(status: 200, data: pair200JSON)])
+        var script = FakeAgentService.Script()
+        script.registerThrows = .registrationFailed(
+            message: "requires approval", requiresApproval: true)
+        let agent = FakeAgentService(script: script)
+        let (installer, fs, _, keychain, paths, _) = makeInstaller(
+            transport: transport,
+            agentService: agent)
+        do {
+            _ = try await installer.run(InstallRequest(
+                piURL: URL(string: "https://pi.example.test")!,
+                pairingToken: "tk",
+                hostname: "mac-1"))
+            XCTFail("expected throw")
+        } catch InstallError.agentRegistrationFailed(_, let requiresApproval) {
+            XCTAssertTrue(requiresApproval)
+        } catch {
+            XCTFail("got \(error)")
+        }
+        // Bundle, config, state, keychain all in place.
+        XCTAssertTrue(fs.fileExists(at: paths.bundleAppPath))
+        XCTAssertTrue(fs.fileExists(at: paths.configFilePath))
+        XCTAssertTrue(fs.fileExists(at: paths.stateFilePath))
+        XCTAssertEqual(keychain.currentValue, "k")
+    }
+
+    func testInfoPlistWriteFailureCleansTmpAndDoesNotPair() async {
+        // Inject a failure when the assembler writes Info.plist into
+        // the tmp bundle. Assembly fails before pair.
+        let transport = LifecycleMockTransport([.respond(status: 200, data: pair200JSON)])
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        fs.seedFile(at: "/tmp/source/crm-mac")
+        // Compute the expected tmp Info.plist path.
+        let tmpInfoPlist =
+            "\(paths.configDirPath)/crm-mac.app.tmp.\(ProcessInfo.processInfo.processIdentifier)/Contents/Info.plist"
+        fs.failWritesAtPath = tmpInfoPlist
+        let exec = FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac")
+        let installer = Installer(InstallerDependencies(
+            paths: paths,
+            filesystem: fs,
+            executable: exec,
+            keychain: InMemoryKeychainStore(),
+            agentService: FakeAgentService(),
+            processSignaller: FakeProcessSignaller(),
+            bundleAssembler: BundleAssembler(filesystem: fs, executable: exec),
+            piClientFactory: { url in
+                PiClient(baseURL: url, transport: transport.asTransport(), sleep: noopSleep)
+            },
+            clock: FixedClock(),
+            logger: NoopLogger()))
+        do {
+            _ = try await installer.run(InstallRequest(
+                piURL: URL(string: "https://pi.example.test")!,
+                pairingToken: "tk",
+                hostname: "mac-1"))
+            XCTFail("expected throw")
+        } catch InstallError.filesystemFailed {
+            // ok
+        } catch {
+            XCTFail("got \(error)")
+        }
+        XCTAssertFalse(fs.fileExists(at: paths.bundleAppPath))
         XCTAssertEqual(transport.invocations.count, 0)
     }
 }

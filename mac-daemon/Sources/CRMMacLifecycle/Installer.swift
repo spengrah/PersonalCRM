@@ -1,21 +1,46 @@
 // Installer implements `crm-mac install`, `--upgrade`, and
-// `--register-only`.
+// `--register-only` against the SMAppService + crm-mac.app bundle
+// architecture (plan D7, D8).
 //
-// The fresh-install sequence:
+// Fresh-install sequence (plan D8 fresh-install table):
 //   1. Validate inputs.
-//   2. Preflight: refuse if existing install detected unless
-//      --upgrade or --register-only set.
-//   3. mkdir -p config/bin/logs directories.
-//   4. Stage running binary to a temp path; chmod +x; codesign.
+//   2. Preflight: refuse if existing install detected.
+//   3. mkdir -p config/logs directories (NO bin/ — the bare-binary
+//      install location is migration-only).
+//   4. Assemble the new bundle at a tmp path
+//      (`<configDir>/crm-mac.app.tmp.<pid>`) via BundleAssembler.
 //   5. POST /api/v1/host on the Pi.
-//   6. Persist config.json, Keychain api-key, state.json.
-//   7. Atomic-rename temp binary to install path.
-//   8. Write plist + launchctl bootstrap.
+//   6. Persist config.json, api-key file, state.json.
+//   7. Atomic-rename tmp bundle to the install path
+//      (`<configDir>/crm-mac.app`). Destination is absent — preflight
+//      refused otherwise — so it's a same-parent, empty-destination
+//      rename (atomic on APFS).
+//   8. Substitute `__INSTALL_PREFIX__` placeholder in the bundle's
+//      embedded LaunchAgents plist with the real install-time bundle
+//      path.
+//   9. Register the agent with SMAppService.
 //
-// On any failure inside steps 5-6, the temp binary is unlinked. On
-// any failure inside step 7 (rare — same-fs rename), the temp binary
-// is unlinked and operator runs uninstall --purge. On step 8 failure,
-// binary is in place; operator runs `crm-mac install --register-only`.
+// Upgrade sequence (plan D8 U1-U8 — backup-rename-swap):
+//   U1. Validate; read existing config; check legacy migration.
+//   U2. Stop the running daemon (SMAppService.unregister + SIGTERM
+//       via ProcessSignaller; pidfile-poll up to 10s).
+//   U3. Rename existing crm-mac.app -> crm-mac.app.backup.<pid>
+//       (same-parent, empty-destination rename — atomic).
+//   U4. Assemble new bundle at crm-mac.app.tmp.<pid>.
+//   U5. Atomic-rename tmp bundle -> crm-mac.app (destination absent
+//       again because U3 moved the old one).
+//   U6. Substitute placeholder + register.
+//   U7. rm -rf crm-mac.app.backup.<pid> (best-effort).
+//   U8. On any failure between U4 and U6: rm -rf tmp bundle AND
+//       rename backup back to crm-mac.app (rollback).
+//
+// Legacy migration (plan D7 — runLegacyMigrationIfNeeded()):
+//   Detects a pre-bundle bare-binary install
+//   (~/.../bin/crm-mac + ~/Library/LaunchAgents/<label>.plist) and
+//   stops the legacy daemon + bootouts the legacy launchd
+//   registration BEFORE bundle assembly (labels collide between
+//   legacy and SMAppService registrations). After register, deletes
+//   the legacy plist file + bare binary best-effort.
 import Foundation
 import CRMMacCore
 import CRMMacPiClient
@@ -45,15 +70,28 @@ public struct InstallRequest: Equatable {
 public struct InstallSummary: Equatable {
     public let hostID: UUID
     public let cursorEpoch: Int64
-    public let binaryPath: String
-    public let plistPath: String
+    /// Path to the installed daemon binary inside the bundle:
+    /// `<bundleAppPath>/Contents/MacOS/crm-mac`.
+    public let bundleBinaryPath: String
+    /// Path to the assembled bundle: `<bundleAppPath>`. Includes the
+    /// `.app` extension.
+    public let bundleAppPath: String
 
-    public init(hostID: UUID, cursorEpoch: Int64, binaryPath: String, plistPath: String) {
+    public init(
+        hostID: UUID,
+        cursorEpoch: Int64,
+        bundleBinaryPath: String,
+        bundleAppPath: String
+    ) {
         self.hostID = hostID
         self.cursorEpoch = cursorEpoch
-        self.binaryPath = binaryPath
-        self.plistPath = plistPath
+        self.bundleBinaryPath = bundleBinaryPath
+        self.bundleAppPath = bundleAppPath
     }
+
+    /// Pre-rewrite alias preserved for caller print statements that
+    /// historically rendered the binary path.
+    public var binaryPath: String { bundleBinaryPath }
 }
 
 public enum InstallError: Error, CustomStringConvertible {
@@ -61,19 +99,24 @@ public enum InstallError: Error, CustomStringConvertible {
     case invalidPairingToken
     case alreadyInstalled
     case noExistingInstall
-    /// Pair surfaced a typed Pi error (410/409/4xx). Recovery is the
-    /// typed-error specific path (mint a new token, revoke the
-    /// existing host, etc.).
     case pairFailed(PiClientError)
-    /// Pair failed at the transport layer or with a 5xx — the Pi may
-    /// or may not have committed the host row. Operator must run
-    /// `crm-admin --list-hosts` to disambiguate.
     case ambiguousPair(underlying: String)
-    /// Post-pair local persistence (config, Keychain, state, or
-    /// atomic rename) failed AFTER the Pi committed. The host ID is
-    /// carried so the recovery message names it.
     case persistFailed(hostID: UUID, stage: String, underlying: String)
-    case launchctlFailed(exitCode: Int32, stderr: String)
+    /// SMAppService.register() failed. `requiresApproval=true` when
+    /// the underlying NSError code matches
+    /// `kSMErrorLaunchDeniedByUser` (operator denied in
+    /// System Settings → Login Items). All other failures surface
+    /// with `requiresApproval=false`.
+    case agentRegistrationFailed(message: String, requiresApproval: Bool)
+    /// Stop-the-running-daemon timed out during upgrade or migration.
+    /// `pid` is read from the pidfile so the operator can `kill -TERM
+    /// <pid>` manually.
+    case daemonStillRunning(pid: pid_t)
+    /// Legacy launchctl bootout verification (D7 step 2c) reported
+    /// the legacy registration is STILL loaded after the 2-second
+    /// grace period. Operator must manually run
+    /// `launchctl bootout gui/$(id -u)/<label>` and re-run.
+    case legacyBootoutFailed(stderr: String)
     case filesystemFailed(String)
     case codesignFailed(String)
     case keychainFailed(String)
@@ -100,8 +143,17 @@ public enum InstallError: Error, CustomStringConvertible {
                 "To recover: (1) run `crm-mac uninstall --purge` to clear partial local state, " +
                 "(2) on the Pi run `crm-admin --revoke-host \(id.uuidString.lowercased())`, " +
                 "(3) re-mint a token and re-run `crm-mac install`."
-        case .launchctlFailed(let code, let stderr):
-            return "launchctl bootstrap failed (exit \(code)): \(stderr). Binary is installed; run `crm-mac install --register-only` after fixing the underlying issue (System Settings -> Privacy & Security)."
+        case .agentRegistrationFailed(let m, let approval):
+            let suffix = approval
+                ? " Approve crm-mac in System Settings → General → Login Items → Allow in Background, then re-run `crm-mac install --register-only`."
+                : " Address the underlying issue, then re-run `crm-mac install --register-only`."
+            return "agent registration failed: \(m).\(suffix)"
+        case .daemonStillRunning(let pid):
+            return "the running crm-mac daemon (pid=\(pid)) did not exit within the SIGTERM grace period. " +
+                "Recovery: `kill -TERM \(pid)` (or `kill -9 \(pid)` if it's stuck), then re-run."
+        case .legacyBootoutFailed(let stderr):
+            return "legacy launchd registration could not be bootouted: \(stderr). " +
+                "Recovery: `launchctl bootout gui/$(id -u)/\(Daemon.label)`, then re-run `crm-mac install --upgrade`."
         case .filesystemFailed(let m): return "filesystem: \(m)"
         case .codesignFailed(let m): return "codesign: \(m)"
         case .keychainFailed(let m): return "keychain: \(m)"
@@ -110,44 +162,65 @@ public enum InstallError: Error, CustomStringConvertible {
     }
 }
 
-/// All collaborators an Installer needs. Test code instantiates with
-/// fakes; production wires through CRMMacSystem implementations.
+/// All collaborators an Installer needs.
 public struct InstallerDependencies {
     public let paths: LifecyclePaths
     public let filesystem: FilesystemAdapter
     public let executable: ExecutableAdapter
     public let keychain: KeychainStore
-    public let launchctl: LaunchctlRunner
+    public let agentService: AgentService
+    public let processSignaller: ProcessSignaller
+    public let bundleAssembler: BundleAssembler
     public let piClientFactory: (URL) -> PiClient
     public let clock: ClockAdapter
     public let logger: LoggerProtocol
     /// One-shot migration source for installs that predate the
     /// file-backed FileAPIKeyStore. When non-nil and `keychain` is
     /// empty, runUpgrade / runRegisterOnly copy from this into
-    /// `keychain` and then delete the legacy entry. Production wires
-    /// the real macOS Keychain; tests leave it nil.
+    /// `keychain` and then delete the legacy entry.
     public let legacyKeychain: KeychainStore?
+    /// Legacy launchctl runner — used only by the migration path
+    /// (D7 step 2) to bootout the pre-bundle launchd registration.
+    /// Nil in tests that don't exercise migration.
+    public let legacyLaunchctl: LaunchctlRunner?
+
+    /// Timeout (seconds) for the SIGTERM + pidfile-poll on upgrade
+    /// + migration. Default 10s. Override in tests for faster runs.
+    public let stopDaemonTimeoutSeconds: TimeInterval
+    /// Grace period (seconds) after legacy bootout before the
+    /// printService verification probe (D7 step 2c).
+    public let legacyBootoutGraceSeconds: TimeInterval
 
     public init(
         paths: LifecyclePaths,
         filesystem: FilesystemAdapter,
         executable: ExecutableAdapter,
         keychain: KeychainStore,
-        launchctl: LaunchctlRunner,
+        agentService: AgentService,
+        processSignaller: ProcessSignaller,
+        bundleAssembler: BundleAssembler,
         piClientFactory: @escaping (URL) -> PiClient,
         clock: ClockAdapter,
         logger: LoggerProtocol,
-        legacyKeychain: KeychainStore? = nil
+        legacyKeychain: KeychainStore? = nil,
+        legacyLaunchctl: LaunchctlRunner? = nil,
+        stopDaemonTimeoutSeconds: TimeInterval = 10,
+        legacyBootoutGraceSeconds: TimeInterval = 2
     ) {
         self.paths = paths
         self.filesystem = filesystem
         self.executable = executable
         self.keychain = keychain
-        self.launchctl = launchctl
+        self.agentService = agentService
+        self.processSignaller = processSignaller
+        self.bundleAssembler = bundleAssembler
         self.piClientFactory = piClientFactory
         self.clock = clock
         self.logger = logger
         self.legacyKeychain = legacyKeychain
+        self.legacyLaunchctl = legacyLaunchctl
+        self.stopDaemonTimeoutSeconds = stopDaemonTimeoutSeconds
+        self.legacyBootoutGraceSeconds = legacyBootoutGraceSeconds
     }
 }
 
@@ -158,6 +231,12 @@ public struct Installer {
         self.deps = deps
     }
 
+    /// Placeholder string the build-time shell script writes into the
+    /// embedded LaunchAgents plist for the binary path. The installer
+    /// substitutes this with the real install-time bundle path before
+    /// SMAppService.register reads it.
+    public static let installPrefixPlaceholder = "__INSTALL_PREFIX__"
+
     public func run(_ request: InstallRequest) async throws -> InstallSummary {
         if request.upgrade && request.registerOnly {
             throw InstallError.unexpected("--upgrade and --register-only are mutually exclusive")
@@ -166,7 +245,7 @@ public struct Installer {
             return try await runUpgrade()
         }
         if request.registerOnly {
-            return try runRegisterOnly()
+            return try await runRegisterOnly()
         }
         return try await runFreshInstall(request)
     }
@@ -184,8 +263,9 @@ public struct Installer {
             throw InstallError.alreadyInstalled
         }
 
-        // Create supporting directories.
-        for dir in [deps.paths.configDirPath, deps.paths.binDirPath, deps.paths.logsDirPath, deps.paths.launchAgentsDirPath] {
+        // Create supporting directories. NO bin/ — bare binary
+        // location is migration-only.
+        for dir in [deps.paths.configDirPath, deps.paths.logsDirPath] {
             do {
                 try deps.filesystem.createDirectory(at: dir)
             } catch {
@@ -193,26 +273,29 @@ public struct Installer {
             }
         }
 
-        // Stage the running executable to a temp path.
+        // Assemble the new bundle at a tmp path.
         let sourcePath: String
         do {
             sourcePath = try deps.executable.currentExecutablePath()
         } catch {
             throw InstallError.unexpected("currentExecutablePath: \(error)")
         }
-        let tempPath = "\(deps.paths.binDirPath)/crm-mac.tmp.\(ProcessInfo.processInfo.processIdentifier)"
+        let tmpBundle = tmpBundlePath()
+        let launchAgentContent = renderPlaceholderLaunchAgentContent()
+        let infoPlistContent = try loadInfoPlistContent()
         do {
-            try deps.filesystem.copy(from: sourcePath, to: tempPath)
-            try deps.filesystem.makeExecutable(at: tempPath)
+            try deps.bundleAssembler.assemble(BundleAssemblerInput(
+                machoSourcePath: sourcePath,
+                bundlePath: tmpBundle,
+                launchAgentPlistContent: launchAgentContent,
+                infoPlistContent: infoPlistContent,
+                codesignIdentifier: Daemon.label))
+        } catch let err as ExecutableAdapterError {
+            try? deps.filesystem.remove(at: tmpBundle)
+            throw InstallError.codesignFailed("\(err)")
         } catch {
-            try? deps.filesystem.remove(at: tempPath)
-            throw InstallError.filesystemFailed("stage temp binary: \(error)")
-        }
-        do {
-            try deps.executable.adhocCodesign(path: tempPath)
-        } catch {
-            try? deps.filesystem.remove(at: tempPath)
-            throw InstallError.codesignFailed("\(error)")
+            try? deps.filesystem.remove(at: tmpBundle)
+            throw InstallError.filesystemFailed("assemble bundle: \(error)")
         }
 
         // Pair with the Pi.
@@ -225,12 +308,8 @@ public struct Installer {
                 daemonVersion: Daemon.version,
                 protocolVersion: Daemon.protocolVersion)
         } catch let piErr as PiClientError {
-            try? deps.filesystem.remove(at: tempPath)
+            try? deps.filesystem.remove(at: tmpBundle)
             deps.logger.error("pair failed", metadata: ["error": .private(String(describing: piErr))])
-            // Transport / 5xx failures are ambiguous — the Pi may
-            // have committed before the response was lost. Surface a
-            // distinct error so the operator gets the list-hosts
-            // recovery path.
             switch piErr {
             case .transport, .serverError:
                 throw InstallError.ambiguousPair(underlying: String(describing: piErr))
@@ -238,13 +317,11 @@ public struct Installer {
                 throw InstallError.pairFailed(piErr)
             }
         } catch {
-            try? deps.filesystem.remove(at: tempPath)
+            try? deps.filesystem.remove(at: tmpBundle)
             throw InstallError.ambiguousPair(underlying: String(describing: error))
         }
 
-        // Persist config + Keychain + state. On ANY failure unlink the
-        // temp binary and surface persistFailed (with the paired host
-        // ID) so the operator's recovery path is clear.
+        // Persist config + api-key + state.
         do {
             let cfg = DaemonConfig(
                 piURL: request.piURL,
@@ -262,52 +339,52 @@ public struct Installer {
             }
             try writeInitialState(hostID: pairResult.hostID)
         } catch let pErr as InstallError {
-            try? deps.filesystem.remove(at: tempPath)
+            try? deps.filesystem.remove(at: tmpBundle)
             throw pErr
         } catch {
-            try? deps.filesystem.remove(at: tempPath)
+            try? deps.filesystem.remove(at: tmpBundle)
             throw InstallError.persistFailed(
                 hostID: pairResult.hostID,
                 stage: "post-pair persistence",
                 underlying: String(describing: error))
         }
 
-        // Atomic-rename the temp binary into place. Final step
-        // before launchd registration; any failure beyond this point
-        // leaves the binary installed and recovery is
-        // `crm-mac install --register-only`.
+        // Atomic-rename tmp bundle to the install path. Destination
+        // is absent (preflight refused otherwise) — same-parent,
+        // empty-destination rename.
         do {
-            try deps.filesystem.rename(from: tempPath, to: deps.paths.binaryPath)
+            try deps.filesystem.rename(
+                from: tmpBundle,
+                to: deps.paths.bundleAppPath)
         } catch {
-            try? deps.filesystem.remove(at: tempPath)
+            try? deps.filesystem.remove(at: tmpBundle)
             throw InstallError.persistFailed(
                 hostID: pairResult.hostID,
-                stage: "rename temp -> install",
+                stage: "rename tmp bundle -> install",
                 underlying: String(describing: error))
         }
 
-        // Write plist + launchctl bootstrap. Both happen AFTER the
-        // binary + config + Keychain + state are durably installed,
-        // so any failure here leaves the install in a state where
-        // `crm-mac install --register-only` is the recovery path.
+        // Substitute placeholder in the bundle's embedded plist.
         do {
-            try writePlist()
-        } catch let fsErr {
-            throw InstallError.launchctlFailed(
-                exitCode: -1,
-                stderr: "write plist: \(fsErr)")
+            try substituteInstallPrefixPlaceholder(
+                bundlePath: deps.paths.bundleAppPath)
+        } catch {
+            throw InstallError.filesystemFailed(
+                "substitute install prefix: \(error)")
         }
-        try bootstrapAgent()
+
+        // Register the agent.
+        try registerAgent()
 
         deps.logger.info("install: complete", metadata: [
             "host_id": .private(pairResult.hostID.uuidString),
-            "binary": .private(deps.paths.binaryPath),
+            "bundle": .private(deps.paths.bundleAppPath),
         ])
         return InstallSummary(
             hostID: pairResult.hostID,
             cursorEpoch: pairResult.cursorEpoch,
-            binaryPath: deps.paths.binaryPath,
-            plistPath: deps.paths.plistPath)
+            bundleBinaryPath: deps.paths.bundleBinaryPath,
+            bundleAppPath: deps.paths.bundleAppPath)
     }
 
     // MARK: - upgrade
@@ -322,44 +399,117 @@ public struct Installer {
         }
         let cfg = try readConfig()
 
-        // Bootout the running daemon so we can replace the binary.
-        // Failure here is tolerable — bootout returns non-zero when
-        // service isn't loaded, which is fine for upgrade.
-        _ = try? deps.launchctl.bootout(label: Daemon.label)
+        // If a legacy bare-binary install is present, run the one-shot
+        // migration. This stops the legacy daemon + bootouts the
+        // legacy launchd registration BEFORE bundle assembly because
+        // the labels collide.
+        try await runLegacyMigrationIfNeeded()
 
-        // Stage + atomic-rename over the install path.
+        // U2. Stop the running daemon (if any). On a fresh
+        // SMAppService-managed install the agentService.unregister is
+        // the canonical way to ask launchd to stop relaunching the
+        // daemon; SIGTERM + pidfile-poll handles the actual process
+        // exit because SMAppService.unregister does NOT terminate
+        // running processes.
+        try await stopRunningDaemon()
+
+        // U3. Backup the existing bundle (if present — fresh upgrade
+        // after a `--register-only` failure may have no bundle).
+        let backupPath = backupBundlePath()
+        let hadExistingBundle = deps.filesystem.fileExists(
+            at: deps.paths.bundleAppPath)
+        if hadExistingBundle {
+            do {
+                try deps.filesystem.rename(
+                    from: deps.paths.bundleAppPath,
+                    to: backupPath)
+            } catch {
+                throw InstallError.filesystemFailed(
+                    "rename existing bundle to backup: \(error)")
+            }
+        }
+
+        // U4. Assemble new bundle at tmp path.
         let sourcePath: String
         do {
             sourcePath = try deps.executable.currentExecutablePath()
         } catch {
+            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
             throw InstallError.unexpected("currentExecutablePath: \(error)")
         }
-        let tempPath = "\(deps.paths.binDirPath)/crm-mac.tmp.\(ProcessInfo.processInfo.processIdentifier)"
+        let tmpBundle = tmpBundlePath()
+        let launchAgentContent = renderPlaceholderLaunchAgentContent()
+        let infoPlistContent: Data
         do {
-            try deps.filesystem.copy(from: sourcePath, to: tempPath)
-            try deps.filesystem.makeExecutable(at: tempPath)
-            try deps.executable.adhocCodesign(path: tempPath)
-            try deps.filesystem.rename(from: tempPath, to: deps.paths.binaryPath)
+            infoPlistContent = try loadInfoPlistContent()
         } catch {
-            try? deps.filesystem.remove(at: tempPath)
-            throw InstallError.filesystemFailed("upgrade rename: \(error)")
+            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
+            throw InstallError.filesystemFailed(
+                "load info.plist content: \(error)")
         }
-        try writePlist()
-        try bootstrapAgent()
+        do {
+            try deps.bundleAssembler.assemble(BundleAssemblerInput(
+                machoSourcePath: sourcePath,
+                bundlePath: tmpBundle,
+                launchAgentPlistContent: launchAgentContent,
+                infoPlistContent: infoPlistContent,
+                codesignIdentifier: Daemon.label))
+        } catch let err as ExecutableAdapterError {
+            try? deps.filesystem.remove(at: tmpBundle)
+            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
+            throw InstallError.codesignFailed("\(err)")
+        } catch {
+            try? deps.filesystem.remove(at: tmpBundle)
+            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
+            throw InstallError.filesystemFailed("assemble bundle: \(error)")
+        }
+
+        // U5. Atomic-rename tmp bundle -> final path.
+        do {
+            try deps.filesystem.rename(
+                from: tmpBundle,
+                to: deps.paths.bundleAppPath)
+        } catch {
+            try? deps.filesystem.remove(at: tmpBundle)
+            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
+            throw InstallError.filesystemFailed(
+                "rename tmp bundle -> install: \(error)")
+        }
+
+        // U6. Substitute placeholder + register.
+        do {
+            try substituteInstallPrefixPlaceholder(
+                bundlePath: deps.paths.bundleAppPath)
+        } catch {
+            // Rollback: move the new bundle out of the way, restore
+            // backup. The placeholder substitution is a pure-Swift
+            // string replace + write; failure here is rare (write
+            // failure injection in tests) but recoverable.
+            try? deps.filesystem.remove(at: deps.paths.bundleAppPath)
+            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
+            throw InstallError.filesystemFailed(
+                "substitute install prefix: \(error)")
+        }
+        try registerAgent()
+
+        // U7. Cleanup backup (best-effort).
+        if hadExistingBundle {
+            try? deps.filesystem.remove(at: backupPath)
+        }
 
         deps.logger.info("install: upgrade complete", metadata: [
             "host_id": .private(cfg.hostID.uuidString),
         ])
         return InstallSummary(
             hostID: cfg.hostID,
-            cursorEpoch: 0,  // unknown without a heartbeat round-trip
-            binaryPath: deps.paths.binaryPath,
-            plistPath: deps.paths.plistPath)
+            cursorEpoch: 0,
+            bundleBinaryPath: deps.paths.bundleBinaryPath,
+            bundleAppPath: deps.paths.bundleAppPath)
     }
 
     // MARK: - register-only
 
-    private func runRegisterOnly() throws -> InstallSummary {
+    private func runRegisterOnly() async throws -> InstallSummary {
         guard deps.filesystem.fileExists(at: deps.paths.configFilePath) else {
             throw InstallError.noExistingInstall
         }
@@ -369,23 +519,368 @@ public struct Installer {
         }
         let cfg = try readConfig()
 
-        try writePlist()
-        try bootstrapAgent()
+        // If a legacy install is present and the bundle is NOT yet in
+        // place, run migration. The migration assembles the bundle +
+        // registers; we fall through to the no-op-register below.
+        try await runLegacyMigrationIfNeeded()
+
+        // Refuse if the bundle is missing — register-only registers
+        // an EXISTING bundle; if it's not there, the operator wants
+        // --upgrade (which reassembles).
+        guard deps.filesystem.fileExists(at: deps.paths.bundleAppPath) else {
+            throw InstallError.noExistingInstall
+        }
+
+        // Substitute placeholder (idempotent — second-run on an
+        // already-substituted plist is a no-op).
+        do {
+            try substituteInstallPrefixPlaceholder(
+                bundlePath: deps.paths.bundleAppPath)
+        } catch {
+            // Ignore "no placeholder found" errors — happens on the
+            // post-migration retry path. Other write failures bubble.
+            if let fsErr = error as? FilesystemError {
+                throw InstallError.filesystemFailed(
+                    "substitute install prefix: \(fsErr)")
+            }
+            // Else (e.g., InstallError.unexpected from the
+            // already-substituted-no-placeholder branch): tolerate.
+        }
+        try registerAgent()
         return InstallSummary(
             hostID: cfg.hostID,
             cursorEpoch: 0,
-            binaryPath: deps.paths.binaryPath,
-            plistPath: deps.paths.plistPath)
+            bundleBinaryPath: deps.paths.bundleBinaryPath,
+            bundleAppPath: deps.paths.bundleAppPath)
+    }
+
+    // MARK: - legacy migration
+
+    /// Detect + migrate a pre-rewrite bare-binary install (plan D7).
+    /// Three-signal detection:
+    ///   (1) legacy binary at paths.legacyBinaryPath
+    ///   (2) NO bundle at paths.bundleAppPath
+    ///   (3) at least one user-data file present (config/state/api-key)
+    /// Runs ONLY when all three hold; falls through otherwise.
+    private func runLegacyMigrationIfNeeded() async throws {
+        let hasLegacyBinary = deps.filesystem.fileExists(
+            at: deps.paths.legacyBinaryPath)
+        let hasNewBundle = deps.filesystem.fileExists(
+            at: deps.paths.bundleAppPath)
+        let hasUserData =
+            deps.filesystem.fileExists(at: deps.paths.configFilePath) ||
+            deps.filesystem.fileExists(at: deps.paths.stateFilePath) ||
+            ((try? deps.keychain.readAPIKey()) != nil)
+        guard hasLegacyBinary, !hasNewBundle, hasUserData else {
+            return
+        }
+
+        // D7 step 2a — stop the legacy daemon.
+        try await stopLegacyDaemon()
+        // D7 step 2b + 2c — bootout legacy registration + verify gone.
+        try bootoutLegacyAndVerify()
+
+        // D7 steps 3-6 — assemble the bundle + register. Reuse the
+        // fresh-install assembly + register helpers via a private
+        // sub-flow.
+        try await assembleAndRegisterNewBundle()
+
+        // D7 step 7 — best-effort cleanup of legacy files.
+        if deps.filesystem.fileExists(at: deps.paths.legacyPlistPath) {
+            try? deps.filesystem.remove(at: deps.paths.legacyPlistPath)
+        }
+        if deps.filesystem.fileExists(at: deps.paths.legacyBinaryPath) {
+            try? deps.filesystem.remove(at: deps.paths.legacyBinaryPath)
+        }
+        // Tolerate leftover bin/ directory; operator's --purge sweeps it.
+
+        deps.logger.info("legacy migration: complete", metadata: [:])
+    }
+
+    /// D7 step 2a — read the legacy pidfile (same path as the new
+    /// install — the daemon writes to <configDir>/daemon.pid) and
+    /// send SIGTERM; poll for release.
+    private func stopLegacyDaemon() async throws {
+        // The pidfile path is shared between legacy + new install
+        // (both daemons write to <configDir>/daemon.pid).
+        let pidfilePath = deps.paths.pidfilePath
+        guard deps.filesystem.fileExists(at: pidfilePath) else {
+            // No pidfile — legacy daemon not running. Benign.
+            return
+        }
+        let pidData: Data
+        do {
+            pidData = try deps.filesystem.read(from: pidfilePath)
+        } catch {
+            // Pidfile vanished between exists() and read() — race;
+            // treat as not running.
+            return
+        }
+        let raw = String(data: pidData, encoding: .utf8) ?? ""
+        guard let pid = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return
+        }
+        do {
+            try deps.processSignaller.sendSIGTERM(pid: pid)
+        } catch {
+            deps.logger.warning("legacy migration: SIGTERM failed (continuing)", metadata: [
+                "pid": .public("\(pid)"),
+                "error": .private("\(error)"),
+            ])
+        }
+        let released = await deps.processSignaller.waitForPidfileRelease(
+            path: pidfilePath,
+            timeoutSeconds: deps.stopDaemonTimeoutSeconds)
+        if !released {
+            throw InstallError.daemonStillRunning(pid: pid)
+        }
+    }
+
+    /// D7 steps 2b + 2c — bootout legacy launchd registration; verify
+    /// gone via printService probe after grace period.
+    private func bootoutLegacyAndVerify() throws {
+        guard let legacy = deps.legacyLaunchctl else {
+            // No legacy launchctl wired — happens in tests that
+            // don't exercise migration. Treat as already-unloaded.
+            return
+        }
+        let bootoutResult = (try? legacy.bootout(label: Daemon.label))
+            ?? LaunchctlInvocation(arguments: [], exitCode: -1)
+        // D7 step 2c — wait then probe. The grace period is held
+        // open synchronously here because the rest of the migration
+        // (bundle assembly + register) IS the next step; there's no
+        // gain to async-sleeping just this section.
+        Thread.sleep(forTimeInterval: deps.legacyBootoutGraceSeconds)
+        let probe: LaunchctlInvocation
+        do {
+            probe = try legacy.printService(label: Daemon.label)
+        } catch {
+            // Probe failed — best-effort treat as not registered.
+            return
+        }
+        if probe.exitCode == 0 {
+            throw InstallError.legacyBootoutFailed(stderr: bootoutResult.stderr)
+        }
+    }
+
+    /// D7 steps 3-6 — bundle assembly + atomic-rename + substitute
+    /// placeholder + register. Used by the migration path; the fresh
+    /// install flow inlines its own version (which also does
+    /// pair + persist).
+    private func assembleAndRegisterNewBundle() async throws {
+        let sourcePath: String
+        do {
+            sourcePath = try deps.executable.currentExecutablePath()
+        } catch {
+            throw InstallError.unexpected("currentExecutablePath: \(error)")
+        }
+        // Create supporting dirs (idempotent).
+        for dir in [deps.paths.configDirPath, deps.paths.logsDirPath] {
+            try? deps.filesystem.createDirectory(at: dir)
+        }
+        let tmpBundle = tmpBundlePath()
+        let launchAgentContent = renderPlaceholderLaunchAgentContent()
+        let infoPlistContent = try loadInfoPlistContent()
+        do {
+            try deps.bundleAssembler.assemble(BundleAssemblerInput(
+                machoSourcePath: sourcePath,
+                bundlePath: tmpBundle,
+                launchAgentPlistContent: launchAgentContent,
+                infoPlistContent: infoPlistContent,
+                codesignIdentifier: Daemon.label))
+        } catch let err as ExecutableAdapterError {
+            try? deps.filesystem.remove(at: tmpBundle)
+            throw InstallError.codesignFailed("\(err)")
+        } catch {
+            try? deps.filesystem.remove(at: tmpBundle)
+            throw InstallError.filesystemFailed("assemble bundle: \(error)")
+        }
+        do {
+            try deps.filesystem.rename(
+                from: tmpBundle,
+                to: deps.paths.bundleAppPath)
+        } catch {
+            try? deps.filesystem.remove(at: tmpBundle)
+            throw InstallError.filesystemFailed(
+                "rename tmp bundle -> install: \(error)")
+        }
+        do {
+            try substituteInstallPrefixPlaceholder(
+                bundlePath: deps.paths.bundleAppPath)
+        } catch {
+            throw InstallError.filesystemFailed(
+                "substitute install prefix: \(error)")
+        }
+        try registerAgent()
     }
 
     // MARK: - shared helpers
 
+    /// Wrap `agentService.register()`. The wrapper returns an outcome
+    /// enum (registered / alreadyRegistered) — both are success cases
+    /// from the workflow's perspective.
+    private func registerAgent() throws {
+        let outcome: AgentRegisterOutcome
+        do {
+            outcome = try deps.agentService.register()
+        } catch let err as AgentServiceError {
+            switch err {
+            case .registrationFailed(let m, let approval):
+                throw InstallError.agentRegistrationFailed(
+                    message: m, requiresApproval: approval)
+            case .unregistrationFailed, .bundleNotFound:
+                throw InstallError.agentRegistrationFailed(
+                    message: "\(err)", requiresApproval: false)
+            }
+        } catch {
+            throw InstallError.agentRegistrationFailed(
+                message: "\(error)", requiresApproval: false)
+        }
+        switch outcome {
+        case .registered:
+            deps.logger.info("agent registered", metadata: [:])
+        case .alreadyRegistered:
+            deps.logger.info("agent already registered (no-op)", metadata: [:])
+        }
+    }
+
+    /// Stop the running daemon: unregister via SMAppService, SIGTERM
+    /// the process via ProcessSignaller, poll the pidfile.
+    private func stopRunningDaemon() async throws {
+        do {
+            try await deps.agentService.unregister()
+        } catch {
+            // Tolerate — SMAppService.unregister can fail benignly
+            // (not registered). The SIGTERM-and-poll below is the
+            // authoritative stop.
+            deps.logger.warning(
+                "stop daemon: agentService.unregister failed (continuing)",
+                metadata: ["error": .private("\(error)")])
+        }
+        let pidfilePath = deps.paths.pidfilePath
+        guard deps.filesystem.fileExists(at: pidfilePath) else {
+            return
+        }
+        let pidData: Data
+        do {
+            pidData = try deps.filesystem.read(from: pidfilePath)
+        } catch {
+            return
+        }
+        let raw = String(data: pidData, encoding: .utf8) ?? ""
+        guard let pid = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return
+        }
+        do {
+            try deps.processSignaller.sendSIGTERM(pid: pid)
+        } catch {
+            deps.logger.warning(
+                "stop daemon: SIGTERM failed (continuing)",
+                metadata: ["pid": .public("\(pid)"), "error": .private("\(error)")])
+        }
+        let released = await deps.processSignaller.waitForPidfileRelease(
+            path: pidfilePath,
+            timeoutSeconds: deps.stopDaemonTimeoutSeconds)
+        if !released {
+            throw InstallError.daemonStillRunning(pid: pid)
+        }
+    }
+
+    /// Replace `__INSTALL_PREFIX__` in the bundle's embedded
+    /// LaunchAgents plist with the real install-time bundle path.
+    /// Idempotent: re-running on an already-substituted plist (no
+    /// placeholder present) is a no-op success.
+    private func substituteInstallPrefixPlaceholder(bundlePath: String) throws {
+        let plistFile = "\(bundlePath)/\(BundleAssembler.launchAgentPlistRelativePath)"
+        let data: Data
+        do {
+            data = try deps.filesystem.read(from: plistFile)
+        } catch {
+            throw InstallError.filesystemFailed(
+                "read embedded plist: \(error)")
+        }
+        let original = String(data: data, encoding: .utf8) ?? ""
+        let substituted = original.replacingOccurrences(
+            of: Self.installPrefixPlaceholder,
+            with: bundlePath)
+        if substituted == original {
+            // Already substituted — idempotent no-op.
+            return
+        }
+        do {
+            try deps.filesystem.write(
+                Data(substituted.utf8), to: plistFile)
+        } catch {
+            throw InstallError.filesystemFailed(
+                "write substituted plist: \(error)")
+        }
+    }
+
+    /// Render the templated LaunchAgent plist content. Uses
+    /// `__INSTALL_PREFIX__` for the binary-path component so
+    /// `substituteInstallPrefixPlaceholder` can rewrite it post-
+    /// rename. Logs + config dir use the real install-time paths
+    /// (computed from configDirPath / logsDirPath) — those don't
+    /// need substitution.
+    private func renderPlaceholderLaunchAgentContent() -> String {
+        let plist = LaunchAgentPlist(
+            label: Daemon.label,
+            binaryPath: "\(Self.installPrefixPlaceholder)/\(BundleAssembler.machoRelativePath)",
+            configDirPath: deps.paths.configDirPath,
+            stdoutPath: deps.paths.stdoutLogPath,
+            stderrPath: deps.paths.stderrLogPath)
+        return plist.render()
+    }
+
+    /// Load the canonical Info.plist bytes from `Bundle.main`. The
+    /// running binary's Mach-O has the file embedded via
+    /// `__TEXT,__info_plist` (linker flag in Package.swift). On the
+    /// upgrade path the running binary IS already in a bundle, so
+    /// `Bundle.main.infoDictionary` resolves from
+    /// `Contents/Info.plist`. Either path surfaces the same dict.
+    /// Re-serialize to XML for the assembled bundle.
+    ///
+    /// CAUTION: this method exists so production install + upgrade
+    /// can read the canonical Info.plist. Tests use the
+    /// `infoPlistContent` injection on `BundleAssemblerInput`
+    /// directly via fixture bytes — `Bundle.main.infoDictionary`
+    /// from a unit-test process resolves to the test runner's
+    /// bundle, NOT crm-mac's.
+    private func loadInfoPlistContent() throws -> Data {
+        guard let dict = Bundle.main.infoDictionary, !dict.isEmpty else {
+            throw InstallError.unexpected(
+                "Bundle.main.infoDictionary is empty — the running binary is missing the embedded Info.plist section. " +
+                "Check that `make mac-daemon` ran the linker -sectcreate flag.")
+        }
+        do {
+            return try PropertyListSerialization.data(
+                fromPropertyList: dict,
+                format: .xml,
+                options: 0)
+        } catch {
+            throw InstallError.unexpected("serialize Info.plist: \(error)")
+        }
+    }
+
+    private func tmpBundlePath() -> String {
+        return "\(deps.paths.configDirPath)/crm-mac.app.tmp.\(ProcessInfo.processInfo.processIdentifier)"
+    }
+
+    private func backupBundlePath() -> String {
+        return "\(deps.paths.configDirPath)/crm-mac.app.backup.\(ProcessInfo.processInfo.processIdentifier)"
+    }
+
+    private func restoreBundleBackup(from backupPath: String, hadExisting: Bool) throws {
+        guard hadExisting else { return }
+        if deps.filesystem.fileExists(at: backupPath) {
+            try? deps.filesystem.rename(
+                from: backupPath, to: deps.paths.bundleAppPath)
+        }
+    }
+
     /// One-shot copy of the API key from the legacy macOS Keychain
-    /// into the file-backed FileAPIKeyStore. Idempotent — when the
-    /// primary store already has a value, returns immediately and
-    /// does NOT touch the legacy entry. Once the value has been
-    /// safely written to disk, the legacy Keychain entry is deleted
-    /// best-effort so a later rebuild doesn't re-prompt.
+    /// into the file-backed FileAPIKeyStore. Same logic as the
+    /// pre-rewrite Installer.
     private func migrateLegacyKeychainIfNeeded() throws {
         if (try? deps.keychain.readAPIKey()) != nil {
             return
@@ -411,9 +906,6 @@ public struct Installer {
         do {
             try legacy.deleteAPIKey()
         } catch {
-            // Non-fatal: file is the new source of truth; a stale
-            // Keychain entry can be cleared with `security delete-
-            // generic-password -s xyz.spengrah.crm-mac`.
             deps.logger.warning("migration: legacy keychain delete failed (non-fatal)", metadata: [
                 "error": .private(String(describing: error)),
             ])
@@ -423,28 +915,19 @@ public struct Installer {
         ])
     }
 
-    /// Preflight detection — returns true when any of the install
-    /// artifacts exist, to refuse fresh-install on top of an existing
-    /// one.
+    /// Preflight detection — refuses fresh-install when artifacts
+    /// from an existing install are detected. Probes:
+    ///   - bundle present at bundleAppPath
+    ///   - legacy bare binary at legacyBinaryPath
+    ///   - config.json present
+    ///   - api-key file present
+    ///   - agent service reports `.enabled`
     private func existingInstallDetected() -> Bool {
-        if deps.filesystem.fileExists(at: deps.paths.binaryPath) { return true }
+        if deps.filesystem.fileExists(at: deps.paths.bundleAppPath) { return true }
+        if deps.filesystem.fileExists(at: deps.paths.legacyBinaryPath) { return true }
         if deps.filesystem.fileExists(at: deps.paths.configFilePath) { return true }
         if (try? deps.keychain.readAPIKey()) != nil { return true }
-        // Conservative on launchctl spawn failure: treat the probe as
-        // inconclusive and refuse fresh install. The operator can then
-        // use --register-only or --upgrade (both bypass preflight) or
-        // run `crm-mac uninstall --purge` to start clean. Failing
-        // open here would let install proceed on top of a leftover
-        // registration we couldn't see.
-        do {
-            let inv = try deps.launchctl.printService(label: Daemon.label)
-            if inv.exitCode == 0 {
-                return true
-            }
-        } catch {
-            deps.logger.warning("install: launchctl probe failed; treating as existing-install for safety", metadata: [
-                "error": .private(String(describing: error)),
-            ])
+        if deps.agentService.currentStatus() == .enabled {
             return true
         }
         return false
@@ -512,32 +995,6 @@ public struct Installer {
                 hostID: hostID,
                 stage: "write state",
                 underlying: String(describing: error))
-        }
-    }
-
-    private func writePlist() throws {
-        let plist = LaunchAgentPlist(
-            label: Daemon.label,
-            binaryPath: deps.paths.binaryPath,
-            configDirPath: deps.paths.configDirPath,
-            stdoutPath: deps.paths.stdoutLogPath,
-            stderrPath: deps.paths.stderrLogPath).render()
-        do {
-            try deps.filesystem.write(Data(plist.utf8), to: deps.paths.plistPath)
-        } catch {
-            throw InstallError.filesystemFailed("write plist: \(error)")
-        }
-    }
-
-    private func bootstrapAgent() throws {
-        let inv: LaunchctlInvocation
-        do {
-            inv = try deps.launchctl.bootstrap(plistPath: deps.paths.plistPath)
-        } catch {
-            throw InstallError.launchctlFailed(exitCode: -1, stderr: String(describing: error))
-        }
-        if inv.exitCode != 0 {
-            throw InstallError.launchctlFailed(exitCode: inv.exitCode, stderr: inv.stderr)
         }
     }
 }

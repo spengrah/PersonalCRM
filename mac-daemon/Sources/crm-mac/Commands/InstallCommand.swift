@@ -75,8 +75,8 @@ struct InstallCommand: AsyncParsableCommand {
         let summary = try await installer.run(request)
         print("install complete")
         print("  host_id=\(summary.hostID.uuidString.lowercased())")
-        print("  binary=\(summary.binaryPath)")
-        print("  plist=\(summary.plistPath)")
+        print("  bundle=\(summary.bundleAppPath)")
+        print("  binary=\(summary.bundleBinaryPath)")
         print("")
 
         // Post-pair: request Contacts permission + run the container
@@ -94,8 +94,9 @@ struct InstallCommand: AsyncParsableCommand {
         }
 
         print("")
-        print("First launch on this Mac may be blocked by Gatekeeper. If so:")
-        print("  System Settings -> Privacy & Security -> scroll to \"crm-mac was blocked...\" -> Open Anyway")
+        print("If launchd reports the bundle requires approval, open:")
+        print("  System Settings -> General -> Login Items -> Allow in Background -> enable crm-mac")
+        print("Then re-run `crm-mac install --register-only`.")
     }
 
     /// Permission + picker flow. Called as part of fresh install AND
