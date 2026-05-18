@@ -117,6 +117,14 @@ public enum InstallError: Error, CustomStringConvertible {
     /// grace period. Operator must manually run
     /// `launchctl bootout gui/$(id -u)/<label>` and re-run.
     case legacyBootoutFailed(stderr: String)
+    /// Upgrade hit two failures in a row: the original failure that
+    /// triggered rollback, plus a restore-backup failure. The
+    /// operator now has no bundle at the final install path — the
+    /// backup is still at `crm-mac.app.backup.<pid>`. The
+    /// `originalError` describes what tripped the rollback;
+    /// `backupPath` carries the location of the surviving backup so
+    /// the operator can manually `mv` it back.
+    case upgradeRollbackFailed(originalError: String, restoreError: String, backupPath: String)
     case filesystemFailed(String)
     case codesignFailed(String)
     case keychainFailed(String)
@@ -154,6 +162,9 @@ public enum InstallError: Error, CustomStringConvertible {
         case .legacyBootoutFailed(let stderr):
             return "legacy launchd registration could not be bootouted: \(stderr). " +
                 "Recovery: `launchctl bootout gui/$(id -u)/\(Daemon.label)`, then re-run `crm-mac install --upgrade`."
+        case .upgradeRollbackFailed(let original, let restore, let backup):
+            return "upgrade rollback failed. Original failure: \(original). Restore backup also failed: \(restore). " +
+                "The previous bundle is still at \(backup); to recover, manually `mv \(backup) \(backup.replacingOccurrences(of: ".backup.\(ProcessInfo.processInfo.processIdentifier)", with: ""))` (or the equivalent for your shell), then re-run `crm-mac install --register-only`."
         case .filesystemFailed(let m): return "filesystem: \(m)"
         case .codesignFailed(let m): return "codesign: \(m)"
         case .keychainFailed(let m): return "keychain: \(m)"
@@ -402,8 +413,21 @@ public struct Installer {
         // If a legacy bare-binary install is present, run the one-shot
         // migration. This stops the legacy daemon + bootouts the
         // legacy launchd registration BEFORE bundle assembly because
-        // the labels collide.
-        try await runLegacyMigrationIfNeeded()
+        // the labels collide. On success the migration already
+        // assembled + registered the new bundle; clean up legacy
+        // artifacts and return.
+        let migrated = try await runLegacyMigrationIfNeeded()
+        if migrated {
+            cleanupLegacyArtifactsIfAny()
+            deps.logger.info("install: legacy migration complete", metadata: [
+                "host_id": .private(cfg.hostID.uuidString),
+            ])
+            return InstallSummary(
+                hostID: cfg.hostID,
+                cursorEpoch: 0,
+                bundleBinaryPath: deps.paths.bundleBinaryPath,
+                bundleAppPath: deps.paths.bundleAppPath)
+        }
 
         // U2. Stop the running daemon (if any). On a fresh
         // SMAppService-managed install the agentService.unregister is
@@ -434,8 +458,12 @@ public struct Installer {
         do {
             sourcePath = try deps.executable.currentExecutablePath()
         } catch {
-            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
-            throw InstallError.unexpected("currentExecutablePath: \(error)")
+            try rollbackUpgrade(
+                originalError: InstallError.unexpected("currentExecutablePath: \(error)"),
+                tmpBundle: nil,
+                backupPath: backupPath,
+                hadExisting: hadExistingBundle,
+                newBundleAtFinalPath: false)
         }
         let tmpBundle = tmpBundlePath()
         let launchAgentContent = renderPlaceholderLaunchAgentContent()
@@ -443,9 +471,12 @@ public struct Installer {
         do {
             infoPlistContent = try loadInfoPlistContent()
         } catch {
-            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
-            throw InstallError.filesystemFailed(
-                "load info.plist content: \(error)")
+            try rollbackUpgrade(
+                originalError: InstallError.filesystemFailed("load info.plist content: \(error)"),
+                tmpBundle: nil,
+                backupPath: backupPath,
+                hadExisting: hadExistingBundle,
+                newBundleAtFinalPath: false)
         }
         do {
             try deps.bundleAssembler.assemble(BundleAssemblerInput(
@@ -455,13 +486,19 @@ public struct Installer {
                 infoPlistContent: infoPlistContent,
                 codesignIdentifier: Daemon.label))
         } catch let err as ExecutableAdapterError {
-            try? deps.filesystem.remove(at: tmpBundle)
-            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
-            throw InstallError.codesignFailed("\(err)")
+            try rollbackUpgrade(
+                originalError: InstallError.codesignFailed("\(err)"),
+                tmpBundle: tmpBundle,
+                backupPath: backupPath,
+                hadExisting: hadExistingBundle,
+                newBundleAtFinalPath: false)
         } catch {
-            try? deps.filesystem.remove(at: tmpBundle)
-            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
-            throw InstallError.filesystemFailed("assemble bundle: \(error)")
+            try rollbackUpgrade(
+                originalError: InstallError.filesystemFailed("assemble bundle: \(error)"),
+                tmpBundle: tmpBundle,
+                backupPath: backupPath,
+                hadExisting: hadExistingBundle,
+                newBundleAtFinalPath: false)
         }
 
         // U5. Atomic-rename tmp bundle -> final path.
@@ -470,10 +507,12 @@ public struct Installer {
                 from: tmpBundle,
                 to: deps.paths.bundleAppPath)
         } catch {
-            try? deps.filesystem.remove(at: tmpBundle)
-            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
-            throw InstallError.filesystemFailed(
-                "rename tmp bundle -> install: \(error)")
+            try rollbackUpgrade(
+                originalError: InstallError.filesystemFailed("rename tmp bundle -> install: \(error)"),
+                tmpBundle: tmpBundle,
+                backupPath: backupPath,
+                hadExisting: hadExistingBundle,
+                newBundleAtFinalPath: false)
         }
 
         // U6. Substitute placeholder + register. Rollback on any
@@ -483,10 +522,12 @@ public struct Installer {
             try substituteInstallPrefixPlaceholder(
                 bundlePath: deps.paths.bundleAppPath)
         } catch {
-            try? deps.filesystem.remove(at: deps.paths.bundleAppPath)
-            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
-            throw InstallError.filesystemFailed(
-                "substitute install prefix: \(error)")
+            try rollbackUpgrade(
+                originalError: InstallError.filesystemFailed("substitute install prefix: \(error)"),
+                tmpBundle: nil,
+                backupPath: backupPath,
+                hadExisting: hadExistingBundle,
+                newBundleAtFinalPath: true)
         }
         do {
             try registerAgent()
@@ -494,9 +535,12 @@ public struct Installer {
             // Register failed — restore the previous install so the
             // operator isn't left with a stopped daemon + new bundle
             // they can't run. Surface the original register error.
-            try? deps.filesystem.remove(at: deps.paths.bundleAppPath)
-            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
-            throw error
+            try rollbackUpgrade(
+                originalError: error,
+                tmpBundle: nil,
+                backupPath: backupPath,
+                hadExisting: hadExistingBundle,
+                newBundleAtFinalPath: true)
         }
 
         // U7. Cleanup backup (best-effort).
@@ -526,10 +570,18 @@ public struct Installer {
         }
         let cfg = try readConfig()
 
-        // If a legacy install is present and the bundle is NOT yet in
-        // place, run migration. The migration assembles the bundle +
-        // registers; we fall through to the no-op-register below.
-        try await runLegacyMigrationIfNeeded()
+        // If a legacy install is present and no bundle is in place,
+        // run the full migration. It assembles + registers; afterwards
+        // we sweep the legacy files.
+        let migrated = try await runLegacyMigrationIfNeeded()
+        if migrated {
+            cleanupLegacyArtifactsIfAny()
+            return InstallSummary(
+                hostID: cfg.hostID,
+                cursorEpoch: 0,
+                bundleBinaryPath: deps.paths.bundleBinaryPath,
+                bundleAppPath: deps.paths.bundleAppPath)
+        }
 
         // Refuse if the bundle is missing — register-only registers
         // an EXISTING bundle; if it's not there, the operator wants
@@ -538,14 +590,18 @@ public struct Installer {
             throw InstallError.noExistingInstall
         }
 
-        // Substitute placeholder. The helper is idempotent
-        // (already-substituted plist is a no-op) so successful runs
-        // surface no error; ANY thrown error here is a real
-        // filesystem failure and must bubble up rather than be
-        // silently swallowed.
+        // Substitute placeholder (idempotent — already-substituted
+        // plists are a no-op) + register. ANY thrown error from
+        // substitution is a real filesystem failure and propagates.
         try substituteInstallPrefixPlaceholder(
             bundlePath: deps.paths.bundleAppPath)
         try registerAgent()
+        // Partial-migration retry case: if a prior --upgrade got
+        // through assemble + rename but the register failed, the
+        // legacy plist + bare binary are still on disk and step 7
+        // never completed. Sweep them now that register succeeded.
+        // No-op on a fresh install where no legacy artifacts exist.
+        cleanupLegacyArtifactsIfAny()
         return InstallSummary(
             hostID: cfg.hostID,
             cursorEpoch: 0,
@@ -561,20 +617,22 @@ public struct Installer {
     ///   (2) NO bundle at paths.bundleAppPath
     ///   (3) at least one user-data file present (config/state/api-key)
     ///
-    /// On a partial-migration re-entry (the bundle is already in place
-    /// because a prior `--upgrade` got past step 4 but the register
-    /// failed and the operator now reruns `--register-only`), we
-    /// short-circuit the build-the-new half (steps 2-6) but ALWAYS
-    /// run step 7 cleanup if legacy artifacts are still present.
-    /// Leaving the legacy plist on disk is not just cosmetic — macOS
-    /// can re-load it from `~/Library/LaunchAgents/` on next login
-    /// and resurrect the bare-binary service the migration was meant
-    /// to retire.
-    private func runLegacyMigrationIfNeeded() async throws {
+    /// Steps 1-6 only — stop the legacy daemon, bootout the legacy
+    /// launchd registration, assemble the new bundle, register via
+    /// SMAppService. Returns true iff a full migration ran (so the
+    /// caller knows the rest of upgrade/register-only is unneeded).
+    ///
+    /// Step 7 (delete legacy plist + bare binary) is run by the
+    /// CALLER after a successful register, via
+    /// `cleanupLegacyArtifactsIfAny()`. The split matters because a
+    /// partial-migration retry needs to attempt register FIRST and
+    /// only sweep the legacy files if it succeeds — otherwise the
+    /// legacy plist could be deleted while the new bundle is still
+    /// unregistered, leaving the operator with no working install
+    /// even though the legacy install was viable.
+    private func runLegacyMigrationIfNeeded() async throws -> Bool {
         let hasLegacyBinary = deps.filesystem.fileExists(
             at: deps.paths.legacyBinaryPath)
-        let hasLegacyPlist = deps.filesystem.fileExists(
-            at: deps.paths.legacyPlistPath)
         let hasNewBundle = deps.filesystem.fileExists(
             at: deps.paths.bundleAppPath)
         let hasUserData =
@@ -582,34 +640,44 @@ public struct Installer {
             deps.filesystem.fileExists(at: deps.paths.stateFilePath) ||
             ((try? deps.keychain.readAPIKey()) != nil)
 
-        if hasLegacyBinary, !hasNewBundle, hasUserData {
-            // Full migration path.
-            // D7 step 2a — stop the legacy daemon.
-            try await stopLegacyDaemon()
-            // D7 step 2b + 2c — bootout legacy registration + verify gone.
-            try bootoutLegacyAndVerify()
-            // D7 steps 3-6 — assemble the bundle + register.
-            try await assembleAndRegisterNewBundle()
-            // Fall through to step 7 cleanup below.
-        } else if hasNewBundle, hasLegacyBinary || hasLegacyPlist {
-            // Partial-migration recovery: a prior migration assembled
-            // the bundle but didn't finish the cleanup half. Just run
-            // the cleanup (step 7).
-            deps.logger.info("legacy migration: cleaning up leftover artifacts after prior partial migration", metadata: [:])
-        } else {
-            return
+        guard hasLegacyBinary, !hasNewBundle, hasUserData else {
+            return false
         }
+        // D7 step 2a — stop the legacy daemon.
+        try await stopLegacyDaemon()
+        // D7 step 2b + 2c — bootout legacy registration + verify gone.
+        try bootoutLegacyAndVerify()
+        // D7 steps 3-6 — assemble the bundle + register. Cleanup is
+        // deferred to the caller's post-register hook so a register
+        // failure leaves the legacy files in place for the retry.
+        try await assembleAndRegisterNewBundle()
+        return true
+    }
 
-        // D7 step 7 — best-effort cleanup of legacy files.
+    /// D7 step 7 — best-effort delete of legacy plist + bare binary.
+    /// Idempotent and tolerant of "already gone". Called by the
+    /// caller AFTER a successful register so a register-failure
+    /// retry path can still find the legacy artifacts and have them
+    /// participate in the next migration attempt.
+    ///
+    /// Leaving the legacy plist on disk is not just cosmetic — macOS
+    /// can re-load it from `~/Library/LaunchAgents/` on next login
+    /// and resurrect the bare-binary service the migration was meant
+    /// to retire. The post-register cleanup is what guarantees that
+    /// doesn't happen on a successful migration.
+    private func cleanupLegacyArtifactsIfAny() {
+        var didCleanup = false
         if deps.filesystem.fileExists(at: deps.paths.legacyPlistPath) {
             try? deps.filesystem.remove(at: deps.paths.legacyPlistPath)
+            didCleanup = true
         }
         if deps.filesystem.fileExists(at: deps.paths.legacyBinaryPath) {
             try? deps.filesystem.remove(at: deps.paths.legacyBinaryPath)
+            didCleanup = true
         }
-        // Tolerate leftover bin/ directory; operator's --purge sweeps it.
-
-        deps.logger.info("legacy migration: complete", metadata: [:])
+        if didCleanup {
+            deps.logger.info("legacy migration: cleanup complete", metadata: [:])
+        }
     }
 
     /// D7 step 2a — read the legacy pidfile (same path as the new
@@ -915,6 +983,37 @@ public struct Installer {
             ])
             throw error
         }
+    }
+
+    /// Best-effort cleanup-then-restore for the upgrade-path
+    /// rollback. Removes the tmp/new bundle (if present), restores
+    /// the backup, throws back the original failure on success — or
+    /// a composed `upgradeRollbackFailed` if the restore itself fails.
+    /// Callers `throw try rollbackUpgrade(...)` — the helper always
+    /// terminates the call with a throw.
+    private func rollbackUpgrade(
+        originalError: Error,
+        tmpBundle: String?,
+        backupPath: String,
+        hadExisting: Bool,
+        newBundleAtFinalPath: Bool
+    ) throws -> Never {
+        if let tmp = tmpBundle, deps.filesystem.fileExists(at: tmp) {
+            try? deps.filesystem.remove(at: tmp)
+        }
+        if newBundleAtFinalPath,
+           deps.filesystem.fileExists(at: deps.paths.bundleAppPath) {
+            try? deps.filesystem.remove(at: deps.paths.bundleAppPath)
+        }
+        do {
+            try restoreBundleBackup(from: backupPath, hadExisting: hadExisting)
+        } catch let restoreError {
+            throw InstallError.upgradeRollbackFailed(
+                originalError: String(describing: originalError),
+                restoreError: String(describing: restoreError),
+                backupPath: backupPath)
+        }
+        throw originalError
     }
 
     /// One-shot copy of the API key from the legacy macOS Keychain

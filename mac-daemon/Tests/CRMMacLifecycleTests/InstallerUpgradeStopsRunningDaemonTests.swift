@@ -53,6 +53,32 @@ final class InstallerUpgradeStopsRunningDaemonTests: XCTestCase {
         XCTAssertEqual(unchanged, Data("old binary".utf8))
     }
 
+    func testUpgradeMalformedPidfileStillRequiresFlockProbe() async throws {
+        // Per Codex r6 #3 (round-2): a present-but-unparseable
+        // pidfile during upgrade is NOT treated as "daemon not
+        // running". The flock probe is authoritative; if it reports
+        // the lock is still held the upgrade fails with
+        // daemonStillRunning(pid: 0) rather than stomping on a
+        // still-running daemon.
+        let (installer, _, _, signaller, _) = try makeUpgradeHarness(
+            pidfileContents: "garbage-not-a-pid")
+        signaller.nextPidfileReleaseResult = false
+        do {
+            _ = try await installer.run(InstallRequest(
+                piURL: URL(string: "https://x")!,
+                pairingToken: "ignored",
+                hostname: "ignored",
+                upgrade: true))
+            XCTFail("expected daemonStillRunning")
+        } catch InstallError.daemonStillRunning(let pid) {
+            XCTAssertEqual(pid, 0, "unparseable pidfile → pid surfaces as 0")
+        } catch {
+            XCTFail("got \(error)")
+        }
+        // Critically: no SIGTERM was sent (we couldn't parse a pid).
+        XCTAssertEqual(signaller.sigtermCalls.count, 0)
+    }
+
     func testUpgradeSkipsSIGTERMWhenNoPidfile() async throws {
         // No pidfile -> no SIGTERM call. The unregister is still
         // invoked because that's a separate SMAppService call.

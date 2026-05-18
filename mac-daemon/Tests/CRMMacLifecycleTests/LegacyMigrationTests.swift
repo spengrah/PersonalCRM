@@ -126,6 +126,32 @@ final class LegacyMigrationTests: XCTestCase {
         XCTAssertTrue(fs.fileExists(at: paths.legacyPlistPath))
     }
 
+    func testMigrationMalformedPidfileStillRequiresFlockProbe() async throws {
+        // Per Codex r6 #3 (round-2): malformed pidfile on the
+        // migration path must surface daemonStillRunning when the
+        // flock probe says held — same contract as the upgrade and
+        // uninstall paths.
+        let (installer, fs, _, signaller, _, paths, _) = try makeLegacyInstall()
+        try fs.write(Data("not-a-pid".utf8), to: paths.pidfilePath)
+        signaller.nextPidfileReleaseResult = false
+        do {
+            _ = try await installer.run(InstallRequest(
+                piURL: URL(string: "https://x")!,
+                pairingToken: "ignored",
+                hostname: "ignored",
+                upgrade: true))
+            XCTFail("expected daemonStillRunning")
+        } catch InstallError.daemonStillRunning(let pid) {
+            XCTAssertEqual(pid, 0, "unparseable pidfile → pid=0")
+        } catch {
+            XCTFail("got \(error)")
+        }
+        XCTAssertEqual(signaller.sigtermCalls.count, 0)
+        // Legacy install intact (migration didn't proceed).
+        XCTAssertTrue(fs.fileExists(at: paths.legacyBinaryPath))
+        XCTAssertFalse(fs.fileExists(at: paths.bundleAppPath))
+    }
+
     func testMigrationDaemonRefusesToStopFailsCleanly() async throws {
         // Pidfile present + ProcessSignaller's wait returns false ->
         // migration aborts with daemonStillRunning.

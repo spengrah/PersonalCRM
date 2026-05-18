@@ -136,6 +136,35 @@ final class UninstallerTests: XCTestCase {
         XCTAssertTrue(summary.keychainDeleted)
     }
 
+    func testUninstallMalformedPidfileStillProbesFlock() async throws {
+        // Per Codex r6 #3 (round-2): a present-but-unparseable
+        // pidfile during uninstall must NOT short-circuit to
+        // daemon_stopped=true. The flock probe is authoritative.
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        try fs.write(Data("garbage-not-a-pid".utf8), to: paths.pidfilePath)
+        try fs.createDirectory(at: paths.bundleAppPath)
+        try fs.write(Data("bin".utf8), to: paths.bundleBinaryPath)
+        let signaller = FakeProcessSignaller()
+        signaller.nextPidfileReleaseResult = false  // lock still held
+        let uninstaller = Uninstaller(UninstallerDependencies(
+            paths: paths,
+            filesystem: fs,
+            keychain: InMemoryKeychainStore(initial: "k"),
+            agentService: FakeAgentService(),
+            processSignaller: signaller,
+            logger: NoopLogger()))
+        let summary = try await uninstaller.run(UninstallRequest())
+        XCTAssertEqual(signaller.sigtermCalls.count, 0,
+            "no SIGTERM when pid is unparseable")
+        XCTAssertFalse(summary.daemonStopped,
+            "malformed pidfile + flock held → daemon_stopped must be false")
+        // Uninstall is tolerant: bundle still removed even when
+        // daemon_stopped=false (mirrors today's behavior on
+        // unregister-error tolerance).
+        XCTAssertTrue(summary.bundleDeleted)
+    }
+
     func testLegacyArtifactsCleanedUp() async throws {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()

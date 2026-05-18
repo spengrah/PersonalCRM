@@ -9,12 +9,10 @@
 // `~/Library/Application Support/crm-mac/`. The legacy paths
 // (legacyBinaryPath = `~/.../bin/crm-mac`, legacyPlistPath =
 // `~/Library/LaunchAgents/<label>.plist`) are kept for one-shot
-// migration detection + cleanup. The pre-rewrite fields `binaryPath`
-// and `plistPath` are retained as aliases for the legacy locations
-// (NOT the bundle locations) during the transition; downstream
-// callers are being migrated to use the explicit `bundleBinaryPath`
-// / `legacyBinaryPath` / `bundlePlistPath` / `legacyPlistPath` names
-// where the distinction matters.
+// migration detection + cleanup. The pre-rewrite `binaryPath` and
+// `plistPath` fields are retained as DEPRECATED aliases for the
+// BUNDLE locations (per plan D12); the legacy locations have their
+// own dedicated `legacyBinaryPath` / `legacyPlistPath` accessors.
 import Foundation
 
 public struct LifecyclePaths: Equatable {
