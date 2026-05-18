@@ -137,9 +137,9 @@ final class UninstallerTests: XCTestCase {
     }
 
     func testUninstallMalformedPidfileStillProbesFlock() async throws {
-        // Per Codex r6 #3 (round-2): a present-but-unparseable
-        // pidfile during uninstall must NOT short-circuit to
-        // daemon_stopped=true. The flock probe is authoritative.
+        // A present-but-unparseable pidfile during uninstall must
+        // NOT short-circuit to daemon_stopped=true. The flock probe
+        // is authoritative.
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         try fs.write(Data("garbage-not-a-pid".utf8), to: paths.pidfilePath)

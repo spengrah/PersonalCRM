@@ -1,5 +1,5 @@
 // BundleAssemblerTests exercise the Swift install-time bundle
-// assembly logic (per plan D14). The shell-script equivalent
+// assembly logic. The shell-script equivalent
 // (`Scripts/assemble_bundle.sh`) is exercised by
 // `BundleAssemblyParityTests` in CRMMacSystemTests (real Foundation
 // adapter, env-gated). These tests use the InMemoryFilesystem fake

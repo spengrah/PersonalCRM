@@ -1,6 +1,5 @@
 // InstallerPlaceholderSubstitutionTests cover the
-// `__INSTALL_PREFIX__` substitution step (plan D7 step 5, D14
-// InstallerPlaceholderSubstitutionTests). The build-time shell
+// `__INSTALL_PREFIX__` substitution step. The build-time shell
 // script writes the placeholder; the install-time Swift code
 // substitutes it with the real bundle app path before
 // SMAppService.register reads the file.
@@ -54,12 +53,11 @@ final class InstallerPlaceholderSubstitutionTests: XCTestCase {
     }
 
     func testSubstitutionXMLEscapesUnusualPaths() async throws {
-        // Per Codex r6 #5: substituting a raw bundle path into
-        // already-rendered XML breaks `LaunchAgentPlist`'s
-        // XML-escape guarantee for unusual home directory characters
-        // (`&`, `<`, `>`, `"`, `'`). The installer must apply the
-        // same escape function during substitution so the resulting
-        // plist still parses.
+        // Substituting a raw bundle path into already-rendered XML
+        // breaks `LaunchAgentPlist`'s XML-escape guarantee for
+        // unusual home directory characters (`&`, `<`, `>`, `"`,
+        // `'`). The installer must apply the same escape function
+        // during substitution so the resulting plist still parses.
         let paths = LifecyclePaths(
             configDirPath: "/tmp/o&malley/cfg",
             binDirPath: "/tmp/o&malley/cfg/bin",

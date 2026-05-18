@@ -1,6 +1,6 @@
 // Uninstaller implements `crm-mac uninstall`.
 //
-// Default uninstall (plan D9):
+// Default uninstall:
 //   1. Stop the running daemon (SIGTERM via ProcessSignaller +
 //      pidfile-poll up to 10s). Tolerant — uninstall continues even
 //      if the daemon doesn't exit cleanly.

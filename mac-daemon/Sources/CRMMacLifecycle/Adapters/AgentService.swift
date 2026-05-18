@@ -1,5 +1,5 @@
 // AgentService abstracts the SMAppService API surface the
-// install/upgrade/uninstall/doctor/status workflows need (plan D3).
+// install/upgrade/uninstall/doctor/status workflows need.
 // Production impl `ProductionAgentService` (CRMMacSystem) wraps
 // `SMAppService.agent(plistName:)`. The protocol lives in
 // CRMMacLifecycle so the workflows don't depend on the
@@ -83,7 +83,7 @@ public protocol AgentService {
     /// to `AgentServiceError.registrationFailed(requiresApproval: true)`.
     /// All other errors throw `.registrationFailed(requiresApproval: false)`.
     /// See `ProductionAgentService.register()` for the error mapping
-    /// implementation (plan D21).
+    /// implementation.
     func register() throws -> AgentRegisterOutcome
 
     /// Unregister the agent. Async because Apple's

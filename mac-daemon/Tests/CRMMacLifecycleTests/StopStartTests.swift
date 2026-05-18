@@ -1,5 +1,5 @@
 // StopStartTests cover the StopOps + StartOps logic that powers
-// `crm-mac stop` and `crm-mac start` (plan D26). The ArgumentParser
+// `crm-mac stop` and `crm-mac start`. The ArgumentParser
 // shells in mac-daemon/Sources/crm-mac/Commands/{Stop,Start}Command.swift
 // are thin — they only build the dependency struct, delegate to
 // StopOps/StartOps, and print the result lines. The logic-under-test
@@ -51,11 +51,11 @@ final class StopStartTests: XCTestCase {
     }
 
     func testStopMalformedPidfileRequiresFlockProbe() async throws {
-        // Per Codex r6 #3: a present-but-unparseable pidfile must
-        // NOT be treated as "daemon not running". The flock probe is
-        // the authoritative running check; if it reports the lock
-        // is still held (release returns false), stop reports
-        // stopped=false even though we never sent SIGTERM.
+        // A present-but-unparseable pidfile must NOT be treated as
+        // "daemon not running". The flock probe is the authoritative
+        // running check; if it reports the lock is still held
+        // (release returns false), stop reports stopped=false even
+        // though we never sent SIGTERM.
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         try fs.write(Data("garbage-not-a-pid".utf8), to: paths.pidfilePath)

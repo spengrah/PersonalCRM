@@ -1,7 +1,7 @@
 // BundleAssemblyParityTests proves the shell-script bundle-assembly
 // (`mac-daemon/Scripts/assemble_bundle.sh`) and the Swift
 // `BundleAssembler` produce byte-identical bundles when given the
-// SAME source-tree inputs (plan D14).
+// SAME source-tree inputs.
 //
 // Opt-in via the `CRM_MAC_INTEGRATION_TESTS=1` env var. The test
 // shells out to /bin/bash + writes to a tmp work dir + invokes

@@ -1,6 +1,6 @@
-// ProductionAgentService wraps `SMAppService.agent(plistName:)`
-// (per plan D21). Lives in CRMMacSystem so the lifecycle target
-// stays Foundation-only.
+// ProductionAgentService wraps `SMAppService.agent(plistName:)`.
+// Lives in CRMMacSystem so the lifecycle target stays
+// Foundation-only.
 //
 // Tested manually only — SMAppService can't actually register in CI
 // because there's no real bundle on disk and TCC/admin can't be

@@ -1,5 +1,5 @@
 // InstallerUpgradeStopsRunningDaemonTests cover the stop-the-running-
-// daemon step on the upgrade path (plan D7, D8 U2, D24). The Installer
+// daemon step on the upgrade path. The Installer
 // reads the pidfile, sends SIGTERM via ProcessSignaller, and polls
 // for release. Failure during the poll surfaces as
 // InstallError.daemonStillRunning(pid:).
@@ -54,12 +54,11 @@ final class InstallerUpgradeStopsRunningDaemonTests: XCTestCase {
     }
 
     func testUpgradeMalformedPidfileStillRequiresFlockProbe() async throws {
-        // Per Codex r6 #3 (round-2): a present-but-unparseable
-        // pidfile during upgrade is NOT treated as "daemon not
-        // running". The flock probe is authoritative; if it reports
-        // the lock is still held the upgrade fails with
-        // daemonStillRunning(pid: 0) rather than stomping on a
-        // still-running daemon.
+        // A present-but-unparseable pidfile during upgrade is NOT
+        // treated as "daemon not running". The flock probe is
+        // authoritative; if it reports the lock is still held the
+        // upgrade fails with daemonStillRunning(pid: 0) rather than
+        // stomping on a still-running daemon.
         let (installer, _, _, signaller, _) = try makeUpgradeHarness(
             pidfileContents: "garbage-not-a-pid")
         signaller.nextPidfileReleaseResult = false

@@ -130,10 +130,10 @@ final class InstallerUpgradeTests: XCTestCase {
     }
 
     func testUpgradeRegistrationFailureRollsBackToOldBundle() async throws {
-        // Per plan D8 U6/U8 + Codex r6 #1: a register failure during
-        // upgrade must restore the previous install (rollback the
-        // backup-rename-swap) so the operator isn't left with a
-        // stopped daemon + new bundle they can't run.
+        // A register failure during upgrade must restore the
+        // previous install (rollback the backup-rename-swap) so the
+        // operator isn't left with a stopped daemon + new bundle
+        // they can't run.
         let oldInfoBytes = Data("old-info".utf8)
         let (installer, fs, agent, _, paths, _, _) = try prepareExistingInstall(
             bundleFiles: [

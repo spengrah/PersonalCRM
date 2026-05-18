@@ -1,20 +1,20 @@
 // LegacyMigrationTests exercise the runLegacyMigrationIfNeeded()
-// path on the Installer's upgrade + register-only flows (plan D7).
+// path on the Installer's upgrade + register-only flows.
 //
 // The migration runs ONLY when all three signals hold:
 //   1. legacy binary at paths.legacyBinaryPath
 //   2. NO bundle at paths.bundleAppPath
 //   3. user-data present (config or state or api-key)
 //
-// Step order (D7 step 2 BEFORE bundle assembly because legacy +
-// SMAppService share the launchd label):
-//   2a. SIGTERM legacy daemon + pidfile-poll
-//   2b. legacyLaunchctl.bootout
-//   2c. printService probe after grace period (fail if still loaded)
-//   3-4. Assemble bundle at tmp + atomic-rename
-//   5. Substitute __INSTALL_PREFIX__ placeholder
-//   6. SMAppService.register
-//   7a/7b. Delete legacy plist + legacy binary (best-effort).
+// Step order (legacy stop + bootout BEFORE bundle assembly because
+// legacy + SMAppService share the launchd label):
+//   - SIGTERM legacy daemon + pidfile-poll
+//   - legacyLaunchctl.bootout
+//   - printService probe after grace period (fail if still loaded)
+//   - Assemble bundle at tmp + atomic-rename
+//   - Substitute __INSTALL_PREFIX__ placeholder
+//   - SMAppService.register
+//   - Delete legacy plist + legacy binary (best-effort, post-register).
 import XCTest
 import CRMMacCore
 @testable import CRMMacLifecycle
@@ -99,7 +99,7 @@ final class LegacyMigrationTests: XCTestCase {
 
     func testMigrationLegacyBootoutFailureSurfacesTypedError() async throws {
         // Legacy launchctl bootout exit-code is not by itself decisive
-        // (D7 step 2b tolerates non-zero); the printService probe in
+        // (the bootout step tolerates non-zero); the printService probe in
         // step 2c is what fails the migration. Script:
         //   bootout = [99]    (non-zero, ignored)
         //   printService = [0] (service still loaded — fatal)
@@ -127,10 +127,10 @@ final class LegacyMigrationTests: XCTestCase {
     }
 
     func testMigrationMalformedPidfileStillRequiresFlockProbe() async throws {
-        // Per Codex r6 #3 (round-2): malformed pidfile on the
-        // migration path must surface daemonStillRunning when the
-        // flock probe says held — same contract as the upgrade and
-        // uninstall paths.
+        // Malformed pidfile on the migration path must surface
+        // daemonStillRunning when the flock probe says held — same
+        // contract as the upgrade and uninstall paths. A malformed
+        // pidfile must NOT short-circuit to "daemon not running".
         let (installer, fs, _, signaller, _, paths, _) = try makeLegacyInstall()
         try fs.write(Data("not-a-pid".utf8), to: paths.pidfilePath)
         signaller.nextPidfileReleaseResult = false
@@ -176,10 +176,57 @@ final class LegacyMigrationTests: XCTestCase {
         XCTAssertFalse(fs.fileExists(at: paths.bundleAppPath))
     }
 
+    func testUpgradeRetryAfterPartialMigrationCleansLegacyArtifacts() async throws {
+        // A partial migration left the bundle in place + the legacy
+        // plist + binary on disk. The operator reruns with
+        // `--upgrade` (rather than `--register-only`). The upgrade
+        // path's normal swap completes; the post-swap cleanup hook
+        // must still sweep the legacy artifacts so the abandoned
+        // ~/Library/LaunchAgents/<label>.plist doesn't get re-loaded
+        // on next login.
+        let (installer, fs, agentService, _, _, paths, _) = try makeLegacyInstall()
+        // First attempt: register throws.
+        agentService.script.registerThrows = .registrationFailed(
+            message: "denied", requiresApproval: true)
+        do {
+            _ = try await installer.run(InstallRequest(
+                piURL: URL(string: "https://x")!,
+                pairingToken: "ignored",
+                hostname: "ignored",
+                upgrade: true))
+            XCTFail("expected first attempt to fail")
+        } catch InstallError.agentRegistrationFailed {
+            // ok — partial migration state: bundle assembled, register
+            // failed, legacy artifacts still on disk.
+        } catch {
+            XCTFail("first attempt: got \(error)")
+        }
+        XCTAssertTrue(fs.fileExists(at: paths.bundleAppPath))
+        XCTAssertTrue(fs.fileExists(at: paths.legacyBinaryPath))
+        XCTAssertTrue(fs.fileExists(at: paths.legacyPlistPath))
+
+        // Second attempt: clear the register error and retry via
+        // `--upgrade` (the operator's natural choice if they forgot
+        // about the register-only flag). The normal upgrade path
+        // runs (migration short-circuit doesn't fire because the
+        // bundle is already in place); the cleanup hook at the end
+        // of runUpgrade still sweeps the legacy files.
+        agentService.script.registerThrows = nil
+        _ = try await installer.run(InstallRequest(
+            piURL: URL(string: "https://x")!,
+            pairingToken: "ignored",
+            hostname: "ignored",
+            upgrade: true))
+        XCTAssertFalse(fs.fileExists(at: paths.legacyBinaryPath),
+            "upgrade retry must delete the legacy binary")
+        XCTAssertFalse(fs.fileExists(at: paths.legacyPlistPath),
+            "upgrade retry must delete the legacy plist — otherwise launchd can auto-load it on next login")
+    }
+
     func testMigrationRegisterFailureRetryCleansLegacyArtifacts() async throws {
-        // Per Codex r6 #2: if a migration assembles the bundle but
-        // register fails, a subsequent --register-only retry must
-        // complete the step-7 cleanup (delete legacy plist + binary).
+        // If a migration assembles the bundle but register fails, a
+        // subsequent --register-only retry must complete the cleanup
+        // (delete legacy plist + binary).
         // Otherwise the legacy launchd plist survives in
         // ~/Library/LaunchAgents/ and can be auto-loaded on the
         // next login, resurrecting the bare-binary service the

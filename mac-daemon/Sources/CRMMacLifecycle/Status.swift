@@ -8,7 +8,7 @@ import CRMMacCore
 public struct StatusReport: Equatable {
     public let installed: Bool
     public let registered: Bool
-    /// Detailed agent-service registration state (plan D11). Lets the
+    /// Detailed agent-service registration state. Lets the
     /// rendered output distinguish "not registered" from "requires
     /// approval" — both surface as `registered: false`.
     public let registrationStatus: AgentServiceStatus

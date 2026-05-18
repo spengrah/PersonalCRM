@@ -1,5 +1,5 @@
 // InMemoryFilesystemTests exercise the in-memory FilesystemAdapter
-// fake's directory-rename support (plan D14). The InMemoryFilesystem
+// fake's directory-rename support. The InMemoryFilesystem
 // is now used by tests covering the upgrade-path bundle swap (D8) and
 // by BundleAssemblerTests; both rely on `rename` working on
 // directories, not just files.
@@ -51,7 +51,7 @@ final class InMemoryFilesystemTests: XCTestCase {
         // directory — mirrors POSIX rename(2) ENOTEMPTY. This catches
         // a class of production mistakes where the installer
         // accidentally calls rename with a non-empty destination
-        // instead of using backup-rename-then-swap (plan D8 U3-U5).
+        // instead of using the upgrade-path backup-rename-then-swap.
         let fs = InMemoryFilesystem()
         try fs.createDirectory(at: "/src")
         try fs.write(Data("a".utf8), to: "/src/a")

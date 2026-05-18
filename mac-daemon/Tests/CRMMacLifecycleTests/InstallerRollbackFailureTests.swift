@@ -1,5 +1,5 @@
 // InstallerRollbackFailureTests cover the `upgradeRollbackFailed`
-// composed-error path (plan D8 U8 + Codex round-2 #1). If the
+// composed-error path. If the
 // initial register fails AND the backup-restore rename ALSO fails,
 // the installer must surface BOTH errors so the operator knows the
 // previous bundle is stranded at `<bundle>.backup.<pid>`.

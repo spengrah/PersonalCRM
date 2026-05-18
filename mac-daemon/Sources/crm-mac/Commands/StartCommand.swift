@@ -1,5 +1,5 @@
-// `crm-mac start` re-registers the agent after `crm-mac stop` (plan
-// D26). Delegates to CRMMacLifecycle.StartOps so the logic is testable
+// `crm-mac start` re-registers the agent after `crm-mac stop`.
+// Delegates to CRMMacLifecycle.StartOps so the logic is testable
 // against FakeAgentService.
 import ArgumentParser
 import Foundation

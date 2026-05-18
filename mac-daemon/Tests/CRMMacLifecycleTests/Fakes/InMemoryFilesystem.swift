@@ -44,7 +44,7 @@ public final class InMemoryFilesystem: FilesystemAdapter, @unchecked Sendable {
     /// not empty")` — this catches a class of production mistakes
     /// where the installer accidentally calls rename with a non-empty
     /// destination instead of using the backup-rename-then-swap
-    /// pattern (plan D8). For files, an existing destination is
+    /// pattern. For files, an existing destination is
     /// overwritten (the production adapter uses replaceItemAt for
     /// files, which IS atomic-replace).
     public func rename(from: String, to: String) throws {

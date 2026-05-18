@@ -1,6 +1,6 @@
-// ProductionProcessSignaller: POSIX kill + flock primitives (plan
-// D24). Lives in CRMMacSystem so the lifecycle target stays
-// Foundation-only (Darwin imports + raw fcntl/flock here).
+// ProductionProcessSignaller: POSIX kill + flock primitives. Lives
+// in CRMMacSystem so the lifecycle target stays Foundation-only
+// (Darwin imports + raw fcntl/flock here).
 //
 // `waitForPidfileRelease` matches the daemon's `PidfileLock.acquire()`
 // primitive (mac-daemon/Sources/CRMMacCore/PidfileLock.swift): open

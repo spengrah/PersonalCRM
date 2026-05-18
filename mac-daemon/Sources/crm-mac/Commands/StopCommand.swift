@@ -1,5 +1,5 @@
 // `crm-mac stop` halts the running daemon for the duration of an
-// operator maintenance window (plan D26). Delegates to
+// operator maintenance window. Delegates to
 // CRMMacLifecycle.StopOps so the logic is testable against the
 // FakeAgentService + FakeProcessSignaller.
 import ArgumentParser

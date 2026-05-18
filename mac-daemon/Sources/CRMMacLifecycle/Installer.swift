@@ -1,8 +1,8 @@
 // Installer implements `crm-mac install`, `--upgrade`, and
 // `--register-only` against the SMAppService + crm-mac.app bundle
-// architecture (plan D7, D8).
+// architecture.
 //
-// Fresh-install sequence (plan D8 fresh-install table):
+// Fresh-install sequence:
 //   1. Validate inputs.
 //   2. Preflight: refuse if existing install detected.
 //   3. mkdir -p config/logs directories (NO bin/ — the bare-binary
@@ -20,7 +20,7 @@
 //      path.
 //   9. Register the agent with SMAppService.
 //
-// Upgrade sequence (plan D8 U1-U8 — backup-rename-swap):
+// Upgrade sequence (backup-rename-swap):
 //   U1. Validate; read existing config; check legacy migration.
 //   U2. Stop the running daemon (SMAppService.unregister + SIGTERM
 //       via ProcessSignaller; pidfile-poll up to 10s).
@@ -32,15 +32,20 @@
 //   U6. Substitute placeholder + register.
 //   U7. rm -rf crm-mac.app.backup.<pid> (best-effort).
 //   U8. On any failure between U4 and U6: rm -rf tmp bundle AND
-//       rename backup back to crm-mac.app (rollback).
+//       rename backup back to crm-mac.app (rollback). If the restore
+//       itself fails the composed `upgradeRollbackFailed` error
+//       carries both the original failure and the restore failure.
 //
-// Legacy migration (plan D7 — runLegacyMigrationIfNeeded()):
+// Legacy migration (`runLegacyMigrationIfNeeded`):
 //   Detects a pre-bundle bare-binary install
 //   (~/.../bin/crm-mac + ~/Library/LaunchAgents/<label>.plist) and
 //   stops the legacy daemon + bootouts the legacy launchd
 //   registration BEFORE bundle assembly (labels collide between
 //   legacy and SMAppService registrations). After register, deletes
-//   the legacy plist file + bare binary best-effort.
+//   the legacy plist file + bare binary best-effort via
+//   `cleanupLegacyArtifactsIfAny`. The cleanup runs only on a
+//   successful register so a partial-migration retry can still see
+//   the legacy files.
 import Foundation
 import CRMMacCore
 import CRMMacPiClient
@@ -112,10 +117,10 @@ public enum InstallError: Error, CustomStringConvertible {
     /// `pid` is read from the pidfile so the operator can `kill -TERM
     /// <pid>` manually.
     case daemonStillRunning(pid: pid_t)
-    /// Legacy launchctl bootout verification (D7 step 2c) reported
-    /// the legacy registration is STILL loaded after the 2-second
-    /// grace period. Operator must manually run
-    /// `launchctl bootout gui/$(id -u)/<label>` and re-run.
+    /// Legacy launchctl bootout verification reported the legacy
+    /// registration is STILL loaded after the grace period. Operator
+    /// must manually run `launchctl bootout gui/$(id -u)/<label>`
+    /// and re-run.
     case legacyBootoutFailed(stderr: String)
     /// Upgrade hit two failures in a row: the original failure that
     /// triggered rollback, plus a restore-backup failure. The
@@ -190,16 +195,17 @@ public struct InstallerDependencies {
     /// empty, runUpgrade / runRegisterOnly copy from this into
     /// `keychain` and then delete the legacy entry.
     public let legacyKeychain: KeychainStore?
-    /// Legacy launchctl runner — used only by the migration path
-    /// (D7 step 2) to bootout the pre-bundle launchd registration.
-    /// Nil in tests that don't exercise migration.
+    /// Legacy launchctl runner — used only by the migration path to
+    /// bootout the pre-bundle launchd registration. Nil in tests
+    /// that don't exercise migration.
     public let legacyLaunchctl: LaunchctlRunner?
 
     /// Timeout (seconds) for the SIGTERM + pidfile-poll on upgrade
     /// + migration. Default 10s. Override in tests for faster runs.
     public let stopDaemonTimeoutSeconds: TimeInterval
     /// Grace period (seconds) after legacy bootout before the
-    /// printService verification probe (D7 step 2c).
+    /// printService verification probe in the migration's legacy
+    /// bootout check.
     public let legacyBootoutGraceSeconds: TimeInterval
 
     public init(
@@ -548,6 +554,17 @@ public struct Installer {
             try? deps.filesystem.remove(at: backupPath)
         }
 
+        // Partial-migration retry: if the operator reruns
+        // `--upgrade` (rather than `--register-only`) after a prior
+        // legacy-migration register failure, the bundle already
+        // existed at this entry so the migration short-circuit
+        // didn't fire; the normal upgrade path just succeeded.
+        // Legacy artifacts may still be on disk from the earlier
+        // partial migration — sweep them now that the new bundle is
+        // registered. No-op on a fresh upgrade where no legacy
+        // artifacts exist.
+        cleanupLegacyArtifactsIfAny()
+
         deps.logger.info("install: upgrade complete", metadata: [
             "host_id": .private(cfg.hostID.uuidString),
         ])
@@ -611,7 +628,7 @@ public struct Installer {
 
     // MARK: - legacy migration
 
-    /// Detect + migrate a pre-rewrite bare-binary install (plan D7).
+    /// Detect + migrate a pre-rewrite bare-binary install.
     /// Full migration runs when all three signals hold:
     ///   (1) legacy binary at paths.legacyBinaryPath
     ///   (2) NO bundle at paths.bundleAppPath
@@ -643,18 +660,18 @@ public struct Installer {
         guard hasLegacyBinary, !hasNewBundle, hasUserData else {
             return false
         }
-        // D7 step 2a — stop the legacy daemon.
+        // Stop the legacy daemon.
         try await stopLegacyDaemon()
-        // D7 step 2b + 2c — bootout legacy registration + verify gone.
+        // Bootout legacy registration + verify gone.
         try bootoutLegacyAndVerify()
-        // D7 steps 3-6 — assemble the bundle + register. Cleanup is
-        // deferred to the caller's post-register hook so a register
-        // failure leaves the legacy files in place for the retry.
+        // Assemble the bundle + register. Cleanup is deferred to the
+        // caller's post-register hook so a register failure leaves
+        // the legacy files in place for the retry.
         try await assembleAndRegisterNewBundle()
         return true
     }
 
-    /// D7 step 7 — best-effort delete of legacy plist + bare binary.
+    /// Best-effort delete of legacy plist + bare binary.
     /// Idempotent and tolerant of "already gone". Called by the
     /// caller AFTER a successful register so a register-failure
     /// retry path can still find the legacy artifacts and have them
@@ -680,9 +697,9 @@ public struct Installer {
         }
     }
 
-    /// D7 step 2a — read the legacy pidfile (same path as the new
-    /// install — the daemon writes to <configDir>/daemon.pid) and
-    /// send SIGTERM; poll for release.
+    /// Stop the legacy daemon: read the legacy pidfile (same path
+    /// as the new install — the daemon writes to
+    /// <configDir>/daemon.pid) and send SIGTERM; poll for release.
     ///
     /// A present-but-malformed pidfile is NOT treated as "not
     /// running" — the daemon may be alive and we just can't parse its
@@ -721,8 +738,10 @@ public struct Installer {
         }
     }
 
-    /// D7 steps 2b + 2c — bootout legacy launchd registration; verify
-    /// gone via printService probe after grace period.
+    /// Bootout the legacy launchd registration; verify gone via a
+    /// `printService` probe after the configured grace period. If
+    /// the legacy registration is still loaded the migration fails
+    /// with `InstallError.legacyBootoutFailed`.
     private func bootoutLegacyAndVerify() throws {
         guard let legacy = deps.legacyLaunchctl else {
             // No legacy launchctl wired — happens in tests that
@@ -731,7 +750,7 @@ public struct Installer {
         }
         let bootoutResult = (try? legacy.bootout(label: Daemon.label))
             ?? LaunchctlInvocation(arguments: [], exitCode: -1)
-        // D7 step 2c — wait then probe. The grace period is held
+        // Wait then probe. The grace period is held
         // open synchronously here because the rest of the migration
         // (bundle assembly + register) IS the next step; there's no
         // gain to async-sleeping just this section.
@@ -748,10 +767,9 @@ public struct Installer {
         }
     }
 
-    /// D7 steps 3-6 — bundle assembly + atomic-rename + substitute
-    /// placeholder + register. Used by the migration path; the fresh
-    /// install flow inlines its own version (which also does
-    /// pair + persist).
+    /// Bundle assembly + atomic-rename + substitute placeholder +
+    /// register. Used by the migration path; the fresh install flow
+    /// inlines its own version (which also does pair + persist).
     private func assembleAndRegisterNewBundle() async throws {
         let sourcePath: String
         do {

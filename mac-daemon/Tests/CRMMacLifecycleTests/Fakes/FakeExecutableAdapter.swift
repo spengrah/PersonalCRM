@@ -9,8 +9,8 @@ public final class FakeExecutableAdapter: ExecutableAdapter, @unchecked Sendable
 
     /// Records calls to the legacy single-Mach-O `adhocCodesign(path:)`.
     public private(set) var codesignCalls: [String] = []
-    /// Records calls to the two-pass `adhocCodesignBundle(...)` per
-    /// plan D5. Tests assert on these separately from the single-Mach-O
+    /// Records calls to the two-pass `adhocCodesignBundle(...)`.
+    /// Tests assert on these separately from the single-Mach-O
     /// calls — the bundle path means the fresh-install / upgrade
     /// flow is in use, while the single-Mach-O path is migration-only.
     public private(set) var bundleCodesignCalls: [BundleCodesignCall] = []

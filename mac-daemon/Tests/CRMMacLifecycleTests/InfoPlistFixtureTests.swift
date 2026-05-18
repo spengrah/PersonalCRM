@@ -1,7 +1,7 @@
 // InfoPlistFixtureTests validates the canonical Info.plist source file
 // at mac-daemon/Sources/crm-mac/Info.plist. The file is the single
 // source of truth for both the linker -sectcreate embed AND the bundle
-// assembly (per plan D15 + D22). The test reads it directly via
+// assembly. The test reads it directly via
 // #filePath + relative descent rather than as a SwiftPM resource —
 // the file is a BUILD-TIME input to the executable target, not a
 // runtime resource of any test target.
@@ -9,7 +9,10 @@ import XCTest
 @testable import CRMMacLifecycle
 
 final class InfoPlistFixtureTests: XCTestCase {
-    /// The 10 required keys per plan D2.
+    /// The 10 required Info.plist keys for a valid agent app
+    /// bundle: identifier + name + executable + version + short
+    /// version + package type + dict version + LSUIElement +
+    /// minimum system version + contacts usage description.
     private static let requiredKeys: [String] = [
         "CFBundleIdentifier",
         "CFBundleName",

@@ -27,7 +27,7 @@ public protocol ExecutableAdapter {
     /// cleanup path only — the bare-binary install pre-PR8c.
     /// `codesign -s - --force --preserve-metadata=... <path>`.
     func adhocCodesign(path: String) throws
-    /// Two-pass ad-hoc sign of a complete `.app` bundle (plan D5):
+    /// Two-pass ad-hoc sign of a complete `.app` bundle:
     ///   1. `codesign --force --sign - --identifier <id> <bundle>/Contents/MacOS/crm-mac`
     ///   2. `codesign --force --sign - <bundle>`
     /// The explicit `--identifier` on pass 1 is the property TCC

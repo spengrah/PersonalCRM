@@ -36,11 +36,11 @@ final class DaemonPathsTests: XCTestCase {
     }
 
     func testDeprecatedAliasesPointAtBundleLocations() {
-        // Per plan D12: the deprecated `binaryPath` / `plistPath`
-        // aliases point at the BUNDLE locations (the post-rewrite
-        // canonical paths), not at the legacy bare-binary / plist
-        // locations. The legacy locations remain accessible via the
-        // dedicated `legacyBinary` / `legacyPlist` accessors.
+        // The deprecated `binaryPath` / `plistPath` aliases point at
+        // the BUNDLE locations (the post-rewrite canonical paths),
+        // not at the legacy bare-binary / plist locations. The
+        // legacy locations remain accessible via the dedicated
+        // `legacyBinary` / `legacyPlist` accessors.
         let home = URL(fileURLWithPath: "/Users/alice")
         let paths = DaemonPaths(home: home)
         // Use the deprecated property to assert the alias still maps

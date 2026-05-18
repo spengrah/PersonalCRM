@@ -35,7 +35,7 @@
 # Command Line Tools (no full Xcode required): mkdir, cp, chmod,
 # plutil, codesign. No xcodebuild, no swiftc invocation, no lipo.
 #
-# Two-pass codesign per plan D5:
+# Two-pass codesign:
 #   1. Inner Mach-O signed with explicit --identifier xyz.spengrah.crm-mac
 #      (so TCC keys on the bundle ID, not a build-host-derived suffix).
 #   2. Outer bundle seal (no --deep; the inner binary was signed first).
@@ -137,7 +137,7 @@ EOF
 plutil -lint "${BUNDLE_PATH}/Contents/Info.plist" >/dev/null
 plutil -lint "${BUNDLE_PATH}/Contents/Library/LaunchAgents/${LAUNCH_AGENTS_PLIST_NAME}" >/dev/null
 
-# Two-pass codesign (plan D5).
+# Two-pass codesign.
 codesign --force --sign - \
     --identifier "${BUNDLE_IDENTIFIER}" \
     "${BUNDLE_PATH}/Contents/MacOS/crm-mac"

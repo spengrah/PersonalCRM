@@ -1,5 +1,5 @@
 // StopStartOps — the dependency-injected logic for the `crm-mac stop`
-// and `crm-mac start` subcommands (plan D26). Keeps the ArgumentParser
+// and `crm-mac start` subcommands. Keeps the ArgumentParser
 // shells thin: command parses flags, builds the dependency struct,
 // delegates here.
 import Foundation

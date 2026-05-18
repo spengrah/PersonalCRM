@@ -1,6 +1,6 @@
 // Doctor implements `crm-mac doctor`.
 //
-// Four core checks (plan D10):
+// Four core checks:
 //   1. api-key file (read api-key file)
 //   2. Agent service registration (AgentService.currentStatus)
 //   3. Pi reachability (GET /known-identifiers; 200=PASS, 401=FAIL,

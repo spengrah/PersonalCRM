@@ -11,7 +11,7 @@
 // `~/Library/LaunchAgents/<label>.plist`) are kept for one-shot
 // migration detection + cleanup. The pre-rewrite `binaryPath` and
 // `plistPath` fields are retained as DEPRECATED aliases for the
-// BUNDLE locations (per plan D12); the legacy locations have their
+// BUNDLE locations; the legacy locations have their
 // own dedicated `legacyBinaryPath` / `legacyPlistPath` accessors.
 import Foundation
 
