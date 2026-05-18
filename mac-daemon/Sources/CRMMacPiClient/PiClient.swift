@@ -101,7 +101,7 @@ public final class PiClient: @unchecked Sendable {
 
     /// GET /api/v1/host/:id/sync/:source/cursor.  Returns the
     /// unwrapped cursorResponse data (cursor string + epoch + flag).
-    public func getCursor(auth: PiAuth, source: String) async throws -> MessagesCursorState {
+    public func getCursor(auth: PiAuth, source: String) async throws -> SourceCursorState {
         let request = try builder.getCursor(auth: auth, source: source)
         let (data, http) = try await transport.send(request)
         return try decodeGetCursor(data: data, http: http)
@@ -218,10 +218,10 @@ public final class PiClient: @unchecked Sendable {
         }
     }
 
-    private func decodeGetCursor(data: Data, http: HTTPURLResponse) throws -> MessagesCursorState {
+    private func decodeGetCursor(data: Data, http: HTTPURLResponse) throws -> SourceCursorState {
         switch http.statusCode {
         case 200:
-            return try decodeSuccess(data: data, type: MessagesCursorState.self)
+            return try decodeSuccess(data: data, type: SourceCursorState.self)
         case 401:
             throw PiClientError.authenticationRevoked(
                 message: errorMessage(data) ?? "authentication revoked")

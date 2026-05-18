@@ -13,8 +13,12 @@
 //    data: {current_cursor, current_epoch}}
 import Foundation
 
-/// Decoded body of GET cursor endpoint.
-public struct MessagesCursorState: Decodable, Equatable, Sendable {
+/// Decoded body of GET cursor endpoint. Source-agnostic — every
+/// per-source plugin reads this shape from
+/// `/api/v1/host/:id/sync/:source/cursor`. The legacy name
+/// `MessagesCursorState` lives on as a typealias so existing call
+/// sites keep compiling; new code should use `SourceCursorState`.
+public struct SourceCursorState: Decodable, Equatable, Sendable {
     public let cursor: String
     public let cursorEpoch: Int64
     public let backfillComplete: Bool
@@ -31,6 +35,11 @@ public struct MessagesCursorState: Decodable, Equatable, Sendable {
         case backfillComplete  = "backfill_complete"
     }
 }
+
+/// Legacy alias — the type used to be named for the messages source
+/// when it was the only consumer. New code references
+/// `SourceCursorState` directly.
+public typealias MessagesCursorState = SourceCursorState
 
 /// POST cursor request body. Encoded into the request payload.
 struct CommitCursorBody: Encodable, Equatable {
