@@ -1,11 +1,14 @@
 // ICloudContactsSourcePlugin — actor that orchestrates one
 // icloud_contacts tick.
 //
-// Per-tick flow (REVISED per plan §11 — Codex r1/r2/r3 deltas):
-//   1.  Stamp state.sources[icloud_contacts].lastScheduledAt = NOW.
+// Per-tick flow:
+//   1.  Stamp state.sources[icloud_contacts].lastScheduledAt = NOW
+//       so Doctor can read it as the staleness floor even on a
+//       quiet tick.
 //   2.  Authorization probe: .denied/.restricted/.notDetermined →
 //       mark unhealthy + return (no cursor change, no prompt — the
-//       daemon never prompts, only install does).
+//       daemon runs headless; install is the only caller that
+//       prompts).
 //   3.  Load CNContainer allowlist from ICloudContactsConfig.
 //       Empty list → mark unhealthy with no_containers_configured.
 //   4.  Fetch the Pi-side cursor for the source.
@@ -13,7 +16,9 @@
 //       "recovery_requested:"). If set → recovery path.
 //   6.  First-run path (empty cursor AND no recovery flag AND
 //       /known-ids returns empty):
-//         a. Capture currentToken BEFORE the snapshot read.
+//         a. Capture currentToken BEFORE the snapshot read so any
+//            edit during the snapshot window is naturally caught on
+//            the next delta tick (and dedup-absorbed if a no-op).
 //         b. Full fetch via the reader.
 //         c. Filter by allowlist (defense in depth — the reader
 //            already scopes by container).
@@ -24,14 +29,17 @@
 //   7.  Delta path (cursor present, recovery flag NOT set):
 //         a. Walk change history from the cursor.
 //         b. Fail-closed on any .unknown event: set recovery flag,
-//            mark unhealthy, abort.
+//            mark unhealthy, abort. Silently dropping unknown
+//            event subtypes risks losing real updates.
 //         c. For each .add/.update/.delete:
 //              - filter by allowlist (delete events bypass the
 //                filter — they don't carry container info; emit
-//                unconditionally).
-//              - shape upserts; emit .upserted + applyUpdates.
-//              - emit .deleted with prior hash from the cache;
-//                stagePendingRemovals.
+//                unconditionally and let the Pi tombstone by
+//                source_id).
+//              - apply cache changes IN EVENT ORDER so a same-tick
+//                `.delete X` followed by `.update X` ends with the
+//                fresh hash in the live map and the staged removal
+//                cancelled before commit.
 //   8.  Recovery path (entered from 5/6f/7b OR token-invalid in 7a):
 //         a. Capture currentToken BEFORE the scan.
 //         b. GET /known-ids for the source.
@@ -44,17 +52,15 @@
 //              - in both → .upserted (the Pi event-log dedups);
 //                applyUpdates.
 //         e. Use the pre-scan token as the new cursor.
-//   9.  Publish in 100-event batches via ICloudContactsPublisher.
-//       Any hash-mismatch rejection sets the recovery flag AND
-//       aborts further batches in this tick.
+//   9.  Publish in batches via ICloudContactsPublisher. Any
+//       hash-mismatch rejection aborts subsequent batches in this
+//       tick and sets the recovery flag for the next tick.
 //  10.  Commit cursor ONLY if every batch had no rejections AND
 //       no unconfirmed items.
 //  11.  Finalize cache: commitPendingRemovals on success;
-//       discardPendingRemovals on any abort (the per-tick defer
-//       ensures this fires exactly once even on throw paths).
-//
-// The defer ensures `pendingRemovals` can never accumulate across
-// ticks regardless of where the abort happens (per Codex r3 P1-1).
+//       discardPendingRemovals on any abort. The outer tick wraps
+//       runTick() in a do/catch envelope so the discard fires
+//       synchronously before the next tick can stage its own set.
 import Foundation
 import CRMMacCore
 import CRMMacPiClient
@@ -127,60 +133,77 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
     }
 
     public func tick() async throws {
+        // Wrap the whole tick in a do/catch envelope so any abort
+        // path (throw, early return, end-of-tick) deterministically
+        // discards staged cache removals BEFORE the next tick can
+        // start. A previous version used `defer { Task { ... } }`,
+        // which dispatched discard asynchronously and could race
+        // a back-to-back tick into wiping the next tick's freshly
+        // staged removals.
+        do {
+            try await runTick()
+        } catch {
+            // Synchronous discard before re-throwing so the next
+            // tick's stage starts from an empty in-memory set.
+            await cache.discardPendingRemovals()
+            throw error
+        }
+    }
+
+    private func runTick() async throws {
         let tickStart = clock()
-        // Step 1: bump lastScheduledAt for staleness diagnostics —
-        // a quiet-but-healthy source bumps this every tick even when
+        // Bump lastScheduledAt for staleness diagnostics — a
+        // quiet-but-healthy source bumps this every tick even when
         // no events are emitted. Doctor reads this AND lastPushedAt
         // to surface a meaningful staleness signal.
         await updateScheduled(at: tickStart)
         await healthRegistry.update(id, currentHealthSnapshot(
             enabled: true, lastScheduled: tickStart))
 
-        // Per Codex r3 P1-1: per-tick defer ensures the actor's
-        // pendingRemovals set is discarded on ANY abort path — throw,
-        // early return, or normal completion without commit. The
-        // local flag prevents discardPendingRemovals from undoing a
-        // successful commit.
-        var stagedRemovalsCommitted = false
-        let cacheRef = cache
-        defer {
-            if !stagedRemovalsCommitted {
-                Task { await cacheRef.discardPendingRemovals() }
-            }
+        // Local helper: any non-success exit point of this function
+        // calls discardPendingRemovals BEFORE returning so the
+        // actor's pendingRemovals set never leaks across ticks. The
+        // success path skips this in favor of commitPendingRemovals.
+        @Sendable func abortDiscard() async {
+            await self.cache.discardPendingRemovals()
         }
 
-        // Step 2: authorization probe.
+        // Authorization probe.
         let authStatus = authAdapter.authorizationStatus()
         switch authStatus {
         case .authorized, .limited:
             break
         case .notDetermined, .denied, .restricted:
+            await abortDiscard()
             await markUnhealthy(reason: "contacts_permission:\(authStatus)")
             return
         }
 
-        // Step 3: load allowlist.
+        // Load allowlist.
         let allowlist: [String]
         do {
             allowlist = try configSource.load()?.containers ?? []
         } catch {
+            await abortDiscard()
             await markUnhealthy(reason: "config_load_failed")
             return
         }
         if allowlist.isEmpty {
+            await abortDiscard()
             await markUnhealthy(reason: "no_containers_configured")
             return
         }
         let allowSet = Set(allowlist)
 
-        // Step 4: fetch Pi cursor.
-        let cursorState: MessagesCursorState
+        // Fetch Pi cursor.
+        let cursorState: SourceCursorState
         do {
             cursorState = try await piClient.getCursor(auth: auth, source: id.rawValue)
         } catch {
             logger.warning("icloud tick: cursor fetch failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
+            await abortDiscard()
             await markUnhealthy(reason: "cursor_fetch_failed")
             return
         }
@@ -220,9 +243,11 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
                     entryRoute = .firstRun
                 }
             } catch let e as PiClientError {
+                await abortDiscard()
                 await markUnhealthy(reason: "known_ids_fetch_failed:\(e)")
                 return
             } catch {
+                await abortDiscard()
                 await markUnhealthy(reason: "first_run_failed:\(error)")
                 return
             }
@@ -232,6 +257,7 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
                 let (deltaEvents, deltaToken, hadUnknown) =
                     try await deltaWalk(token: cursorBytes!, allowSet: allowSet)
                 if hadUnknown {
+                    await abortDiscard()
                     await setRecoveryFlag(reason: "unknown_change_event")
                     await markUnhealthy(reason: "unknown_change_event")
                     return
@@ -249,17 +275,21 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
                 logger.warning("icloud tick: delta walk failed", metadata: [
                     "error": .private(String(describing: error)),
                 ])
+                await abortDiscard()
                 await markUnhealthy(reason: "delta_walk_failed")
                 return
             }
         }
 
-        // Build publish items from events (shape + hash + record cache updates).
-        // For .upserted: apply update to live cache map immediately.
-        // For .deleted:  stage removal (NOT yet finalized).
+        // Build publish items + apply cache changes IN EVENT ORDER.
+        // Iterating one event at a time preserves the same-tick
+        // sequence semantics: a `.delete X` followed by `.update X`
+        // first stages the removal (live map unchanged so the delete
+        // event carries the correct prior hash), then the update
+        // calls `applyUpdates([X: newHash])` which cancels the staged
+        // removal AND writes the new hash. The end-of-tick commit
+        // then drops X only if its final state is still "removed".
         var publishItems: [ICloudContactsPublishItem] = []
-        var updatesToApply: [String: String] = [:]
-        var removalsToStage: Set<String> = []
         for event in events {
             switch event {
             case .add(let record), .update(let record):
@@ -283,7 +313,16 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
                     sourceID: sourceID,
                     kind: "external_contact.upserted",
                     payloadBytes: payloadBytes))
-                updatesToApply[record.identifier] = hash
+                do {
+                    try await cache.applyUpdates([record.identifier: hash])
+                } catch {
+                    logger.warning("icloud tick: cache.applyUpdates failed", metadata: [
+                        "error": .private(String(describing: error)),
+                    ])
+                    await abortDiscard()
+                    await markUnhealthy(reason: "cache_write_failed")
+                    return
+                }
             case .delete(let identifier):
                 let prior = await cache.get(identifier)
                 let deletedPayload = ICloudContactPayloadShaping.shapeDeleted(
@@ -304,41 +343,27 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
                     sourceID: sourceID,
                     kind: "external_contact.deleted",
                     payloadBytes: deletedBytes))
-                removalsToStage.insert(identifier)
+                await cache.stagePendingRemovals([identifier])
             case .unknown:
-                // Should not appear here; the delta path drops out
-                // of the tick before building publishItems. Belt +
-                // suspenders.
+                // Belt-and-suspenders. The delta path's hadUnknown
+                // branch returns before reaching this point; reaching
+                // here would be a bug worth surfacing.
                 logger.warning("icloud tick: unexpected .unknown event in build phase", metadata: [:])
                 continue
             }
         }
 
-        // Apply updates to the cache IMMEDIATELY (per D-JC2 two-phase
-        // model). Stage removals in-memory; they don't mutate the
-        // file until the cursor commit succeeds.
-        do {
-            try await cache.applyUpdates(updatesToApply)
-        } catch {
-            logger.warning("icloud tick: cache.applyUpdates failed", metadata: [
-                "error": .private(String(describing: error)),
-            ])
-            await markUnhealthy(reason: "cache_write_failed")
-            return
-        }
-        if !removalsToStage.isEmpty {
-            await cache.stagePendingRemovals(removalsToStage)
-        }
-
-        // Publish.
+        // Publish. The publisher aborts subsequent batches on the
+        // first hash-mismatch rejection so the recovery flow can run
+        // on the next tick without compounding the divergence.
         let outcome = await publisher.publish(items: publishItems)
 
-        // Check for hash-mismatch rejection: routes the daemon to a
-        // recovery on the next tick.
+        // A hash-mismatch in any batch must set the recovery flag
+        // BEFORE we decide whether to advance the cursor — the flag
+        // is what routes the next tick into the recovery walk.
         var hadHashMismatch = false
         for r in outcome.rejected {
-            if r.code == "EXTERNAL_CONTACT_HASH_MISMATCH"
-                || r.code == "EXTERNAL_CONTACT_DELETE_HASH_MISMATCH" {
+            if ICloudContactsPublisher.recoveryCodes.contains(r.code) {
                 hadHashMismatch = true
                 break
             }
@@ -352,8 +377,9 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
         let canCommit = outcome.rejected.isEmpty && outcome.unconfirmed == 0
         if !canCommit {
             // Don't advance the cursor; the next tick replays the
-            // same events. cache.discardPendingRemovals runs via the
-            // defer.
+            // same events. Discard the staged removals so they don't
+            // bleed into the replay (the live cache already carries
+            // the prior hashes the .delete events need).
             if !outcome.rejected.isEmpty {
                 logger.warning("icloud tick: per-event rejections; holding cursor", metadata: [
                     "rejected": .public(String(outcome.rejected.count)),
@@ -364,6 +390,7 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
                     "unconfirmed": .public(String(outcome.unconfirmed)),
                 ])
             }
+            await abortDiscard()
             return
         }
 
@@ -380,27 +407,31 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
             logger.warning("icloud tick: cursor commit failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
+            await abortDiscard()
             return
         }
 
         // Cursor committed successfully: finalize cache removals.
         do {
             try await cache.commitPendingRemovals()
-            stagedRemovalsCommitted = true
         } catch {
             // The cursor is already committed but the cache file
-            // write failed — log + leave the live map state intact
-            // (the in-memory removals are still in the actor; next
-            // tick's defer will discard them). The Pi already has
-            // the deletes; replays are idempotent.
+            // write failed — log + drop the staged set so the next
+            // tick's stage starts clean. The Pi already has the
+            // deletes; replays are idempotent.
             logger.warning("icloud tick: cache.commitPendingRemovals failed post-cursor", metadata: [
                 "error": .private(String(describing: error)),
             ])
+            await cache.discardPendingRemovals()
         }
 
-        // Clear recovery flag if we entered via the recovery path
-        // (or had previously set it but the publish succeeded).
-        if entryRoute == .recovery || hadHashMismatch == false {
+        // Clear the recovery flag ONLY when this tick entered via
+        // the recovery path AND completed without a hash mismatch.
+        // Clearing on every successful tick would erase a recovery
+        // request set by an earlier tick whose publish failed
+        // post-stage (and never had a chance to run the recovery
+        // walk).
+        if entryRoute == .recovery && !hadHashMismatch {
             await clearRecoveryFlagIfPresent()
         }
 
@@ -431,9 +462,10 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
     private func firstRunWalk(
         allowSet: Set<String>
     ) async throws -> ([ContactChange], Data) {
-        // Capture the token FIRST (per plan D-JC2 + Codex r1 P1-1).
-        // Any contact edited during the snapshot fetch shows up on
-        // the next delta tick + dedup-absorbs.
+        // Capture the change-history token BEFORE the snapshot
+        // read. Any contact edited during the snapshot fetch is
+        // naturally caught by the next delta tick (and absorbed by
+        // the Pi's content-hash dedup if a no-op).
         let newToken = try reader.currentToken()
         let records = try reader.fullFetch(containerIdentifiers: Array(allowSet))
         var events: [ContactChange] = []

@@ -3,8 +3,7 @@
 // deterministic delete source_ids (`<entity>@deleted@<prior_hash>`)
 // when CNChangeHistoryFetchRequest emits a delete event.
 //
-// Two-phase commit semantics (per plan D-JC2, revised post-Codex-r2 +
-// r3):
+// Two-phase commit semantics:
 //
 //   - applyUpdates(_:) writes additions / replacements IMMEDIATELY to
 //     the live in-memory map AND atomically rewrites the file.
@@ -24,18 +23,15 @@
 //
 //   - discardPendingRemovals() drops the staged set without
 //     mutating the file. Called on cursor-commit failure OR any
-//     tick abort (the per-tick `defer` invokes this if
-//     commitPendingRemovals never ran). Ensures pendingRemovals
-//     cannot accumulate across ticks.
+//     tick abort so pendingRemovals cannot accumulate across ticks.
 //
 // Same-tick `.delete → .update` for the same identifier: applyUpdates
-// ALSO removes the identifier from pendingRemovals (per Codex r3
-// P2-4) so the subsequent commit step only finalizes identifiers
-// whose final state in this tick is genuinely "removed". Without
-// this, a `.delete → .update` sequence would stage X, then write the
-// new hash, then commit-removals would drop X from the live map —
-// next tick would emit `.deleted@unknown` for an entity the Pi
-// already has.
+// ALSO removes the identifier from pendingRemovals so the subsequent
+// commit step only finalizes identifiers whose final state in this
+// tick is genuinely "removed". Without this, a `.delete → .update`
+// sequence would stage X, then write the new hash, then
+// commit-removals would drop X from the live map — next tick would
+// emit `.deleted@unknown` for an entity the Pi already has.
 //
 // The actor serializes all calls so concurrent ticks (or the
 // composition root's read-on-startup) can't interleave file writes.

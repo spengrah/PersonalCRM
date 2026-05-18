@@ -147,11 +147,36 @@ public final class CNContactStoreReader: ContactStoreReader, @unchecked Sendable
                 // CNChangeHistoryUpdateContactEvent does NOT carry a
                 // containerIdentifier — Apple's header only exposes
                 // it on AddContactEvent. Resolve via a follow-up
-                // CNContainer fetch so the plugin's per-event
-                // allowlist filter has the right value.
-                let cid = (try? resolveContainerID(forContactIdentifier: upd.contact.identifier)) ?? ""
-                events.append(.update(Self.mapRecord(
-                    upd.contact, containerIdentifier: cid)))
+                // CNContainer fetch. Three outcomes:
+                //   - hit: forward the update with the resolved id.
+                //   - miss (contact deleted between events): emit a
+                //     synthetic delete so the Pi tombstones it; the
+                //     subsequent .delete event (if any) dedups at the
+                //     Pi's event log.
+                //   - throw: fail-closed with .unknown so the plugin
+                //     holds the cursor + sets the recovery flag.
+                //     Silently emitting with cid="" would drop the
+                //     update under the plugin's allowlist filter and
+                //     still advance the cursor — silent data loss.
+                let resolved: String?
+                do {
+                    resolved = try resolveContainerID(
+                        forContactIdentifier: upd.contact.identifier)
+                } catch {
+                    events.append(.unknown(rawEventDescription:
+                        "resolveContainerID threw for update: \(error)"))
+                    continue
+                }
+                if let cid = resolved {
+                    events.append(.update(Self.mapRecord(
+                        upd.contact, containerIdentifier: cid)))
+                } else {
+                    // Contact has no container — it was deleted
+                    // between the change-history walk and the
+                    // resolve call. Emit as a delete so the Pi
+                    // tombstones the row.
+                    events.append(.delete(identifier: upd.contact.identifier))
+                }
             } else if let del = raw as? CNChangeHistoryDeleteContactEvent {
                 events.append(.delete(identifier: del.contactIdentifier))
             } else if let event = raw as? CNChangeHistoryEvent {
@@ -166,19 +191,24 @@ public final class CNContactStoreReader: ContactStoreReader, @unchecked Sendable
     }
 
     /// Look up the CNContainer identifier for a given contact.
-    /// Returns nil when the contact has been deleted upstream
-    /// between the change-history walk and this lookup, OR when the
-    /// daemon doesn't have permission. Used by `changeHistory` to
-    /// fill in `containerIdentifier` on `.update` events (Apple's
-    /// CNChangeHistoryUpdateContactEvent doesn't carry it).
+    /// Returns nil ONLY when the contact has no matching container
+    /// (deleted upstream between the change-history walk and this
+    /// lookup). Throws on any other framework error so the plugin
+    /// can fail-closed via the `.unknown` event path; previously
+    /// this swallowed errors as nil and the plugin's allowlist
+    /// filter then dropped the update silently while advancing the
+    /// cursor — a silent data-loss path the caller could never
+    /// detect.
     private func resolveContainerID(forContactIdentifier id: String) throws -> String? {
         let predicate = CNContainer.predicateForContainerOfContact(withIdentifier: id)
+        let containers: [CNContainer]
         do {
-            let containers = try store.containers(matching: predicate)
-            return containers.first?.identifier
+            containers = try store.containers(matching: predicate)
         } catch {
-            return nil
+            throw CNContactStoreReaderError.underlying(
+                "containers(matching:predicateForContact id=\(id)): \(error)")
         }
+        return containers.first?.identifier
     }
 
     public func currentToken() throws -> Data {

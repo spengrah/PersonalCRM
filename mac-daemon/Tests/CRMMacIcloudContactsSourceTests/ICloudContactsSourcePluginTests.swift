@@ -110,7 +110,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
     // MARK: - PiClient driver
 
     private struct ScriptedPi {
-        let cursorGet: MessagesCursorState
+        let cursorGet: SourceCursorState
         let knownIDs: KnownIDsData
         let ingestResult: IngestEventsData
         let cursorCommitThrows: Error?
@@ -174,7 +174,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
             }
         }
 
-        private static func encodeCursorEnvelope(_ s: MessagesCursorState) -> Data {
+        private static func encodeCursorEnvelope(_ s: SourceCursorState) -> Data {
             let dict: [String: Any] = [
                 "success": true,
                 "data": [
@@ -296,7 +296,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let reader = StubReader()
         let pi = ScriptedPi(
-            cursorGet: MessagesCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
+            cursorGet: SourceCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
             knownIDs: KnownIDsData(ids: []),
             ingestResult: IngestEventsData(accepted: 0, duplicate: 0, rejected: 0, errors: []),
             cursorCommitThrows: nil, ingestThrows: nil)
@@ -316,7 +316,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let pi = ScriptedPi(
-            cursorGet: MessagesCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
+            cursorGet: SourceCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
             knownIDs: KnownIDsData(ids: []),
             ingestResult: IngestEventsData(accepted: 0, duplicate: 0, rejected: 0, errors: []),
             cursorCommitThrows: nil, ingestThrows: nil)
@@ -333,7 +333,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let pi = ScriptedPi(
-            cursorGet: MessagesCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
+            cursorGet: SourceCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
             knownIDs: KnownIDsData(ids: []),
             ingestResult: IngestEventsData(accepted: 0, duplicate: 0, rejected: 0, errors: []),
             cursorCommitThrows: nil, ingestThrows: nil)
@@ -352,15 +352,15 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
 
     func testFirstRunCapturesTokenBeforeSnapshot() async throws {
         // Critical invariant: currentToken() must be called BEFORE
-        // fullFetch() so any contact edited mid-snapshot is caught by
-        // the next delta tick (Codex r1 P1-1).
+        // fullFetch() so any contact edited mid-snapshot is caught
+        // by the next delta tick.
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let reader = StubReader(
             fullFetchResult: [makeRecord(id: "id-1", container: containerA)],
             currentTokenResult: .success(Data([0xAB, 0xCD])))
         let pi = ScriptedPi(
-            cursorGet: MessagesCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
+            cursorGet: SourceCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
             knownIDs: KnownIDsData(ids: []),
             ingestResult: IngestEventsData(accepted: 1, duplicate: 0, rejected: 0, errors: []),
             cursorCommitThrows: nil, ingestThrows: nil)
@@ -385,7 +385,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
         let reader = StubReader(
             fullFetchResult: [allowedRecord, blockedRecord])
         let pi = ScriptedPi(
-            cursorGet: MessagesCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
+            cursorGet: SourceCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
             knownIDs: KnownIDsData(ids: []),
             ingestResult: IngestEventsData(accepted: 1, duplicate: 0, rejected: 0, errors: []),
             cursorCommitThrows: nil, ingestThrows: nil)
@@ -424,7 +424,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
         let reader = StubReader(
             fullFetchResult: [makeRecord(id: "id-1", container: containerA)])
         let pi = ScriptedPi(
-            cursorGet: MessagesCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
+            cursorGet: SourceCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
             knownIDs: KnownIDsData(ids: []),
             ingestResult: IngestEventsData(accepted: 1, duplicate: 0, rejected: 0, errors: []),
             cursorCommitThrows: nil, ingestThrows: nil)
@@ -447,7 +447,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
         let reader = StubReader(
             fullFetchResult: [makeRecord(id: "id-1", container: containerA)])
         let pi = ScriptedPi(
-            cursorGet: MessagesCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
+            cursorGet: SourceCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
             knownIDs: KnownIDsData(ids: [
                 KnownContactID(sourceID: "id-2@oldhash", lastContentHash: "oldhash"),
             ]),
@@ -491,7 +491,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
                 events: [.unknown(rawEventDescription: "WeirdEvent")],
                 newToken: Data([0xFF]))))
         let pi = ScriptedPi(
-            cursorGet: MessagesCursorState(
+            cursorGet: SourceCursorState(
                 cursor: Data([0xAA]).base64EncodedString(),
                 cursorEpoch: 0, backfillComplete: true),
             knownIDs: KnownIDsData(ids: []),
@@ -526,7 +526,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
                 events: [.add(allowed), .add(blocked)],
                 newToken: Data([0xDE, 0xAD]))))
         let pi = ScriptedPi(
-            cursorGet: MessagesCursorState(
+            cursorGet: SourceCursorState(
                 cursor: Data([0xAA]).base64EncodedString(),
                 cursorEpoch: 0, backfillComplete: true),
             knownIDs: KnownIDsData(ids: []),
@@ -569,7 +569,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
                 events: [.delete(identifier: "id-99")],
                 newToken: Data([0xDE]))))
         let pi = ScriptedPi(
-            cursorGet: MessagesCursorState(
+            cursorGet: SourceCursorState(
                 cursor: Data([0xAA]).base64EncodedString(),
                 cursorEpoch: 0, backfillComplete: true),
             knownIDs: KnownIDsData(ids: []),
@@ -621,7 +621,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
             fullFetchResult: [makeRecord(id: "id-1", container: containerA)])
         let pi = ScriptedPi(
             // Cursor is non-empty; recovery flag overrides cursor.
-            cursorGet: MessagesCursorState(
+            cursorGet: SourceCursorState(
                 cursor: Data([0xAA]).base64EncodedString(),
                 cursorEpoch: 0, backfillComplete: true),
             knownIDs: KnownIDsData(ids: []),
@@ -652,7 +652,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
                 events: [.delete(identifier: "id-1")],
                 newToken: Data([0xDE]))))
         let pi = ScriptedPi(
-            cursorGet: MessagesCursorState(
+            cursorGet: SourceCursorState(
                 cursor: Data([0xAA]).base64EncodedString(),
                 cursorEpoch: 0, backfillComplete: true),
             knownIDs: KnownIDsData(ids: []),
@@ -690,6 +690,118 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
 
     // MARK: - rejection sets recovery flag
 
+    // MARK: - token-invalid recovery
+
+    func testTokenInvalidRoutesToRecoveryAndCommits() async throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Reader throws .tokenInvalid on the delta walk → plugin
+        // routes to recovery (which calls /known-ids + fullFetch).
+        let reader = StubReader(
+            fullFetchResult: [makeRecord(id: "id-1", container: containerA)],
+            changeHistoryResult: .failure(CNContactStoreReaderError.tokenInvalid(
+                underlying: "synthetic")))
+        let pi = ScriptedPi(
+            cursorGet: SourceCursorState(
+                cursor: Data([0xAA]).base64EncodedString(),
+                cursorEpoch: 0, backfillComplete: true),
+            knownIDs: KnownIDsData(ids: [
+                KnownContactID(sourceID: "id-2@oldhash", lastContentHash: "oldhash"),
+            ]),
+            ingestResult: IngestEventsData(accepted: 2, duplicate: 0, rejected: 0, errors: []),
+            cursorCommitThrows: nil, ingestThrows: nil)
+        let (plugin, _, _, _, transport) = makePlugin(
+            reader: reader, pi: pi,
+            cacheURL: dir.appendingPathComponent("cache.json"),
+            stateURL: dir.appendingPathComponent("state.json"))
+        try await plugin.tick()
+        XCTAssertTrue(transport.ingestWasAttempted,
+                      "token-invalid recovery still publishes the scan + tombstones")
+        XCTAssertTrue(transport.commitWasAttempted)
+    }
+
+    // MARK: - mixed delta event sequence
+
+    func testDeltaMixedAddUpdateDeleteAllEmit() async throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let r1 = makeRecord(id: "id-1", container: containerA)
+        let r2 = makeRecord(id: "id-2", container: containerA)
+        let reader = StubReader(
+            changeHistoryResult: .success(ChangeHistoryResult(
+                events: [.add(r1), .update(r2), .delete(identifier: "id-3")],
+                newToken: Data([0xDE]))))
+        let pi = ScriptedPi(
+            cursorGet: SourceCursorState(
+                cursor: Data([0xAA]).base64EncodedString(),
+                cursorEpoch: 0, backfillComplete: true),
+            knownIDs: KnownIDsData(ids: []),
+            ingestResult: IngestEventsData(accepted: 3, duplicate: 0, rejected: 0, errors: []),
+            cursorCommitThrows: nil, ingestThrows: nil)
+        actor BodyCapture {
+            var bodies: [IngestEventsBody] = []
+            func record(_ b: IngestEventsBody) { bodies.append(b) }
+            func snapshot() -> [IngestEventsBody] { bodies }
+        }
+        let capture = BodyCapture()
+        let pub = ICloudContactsPublisher(
+            sender: { _, body in
+                await capture.record(body)
+                return IngestEventsData(
+                    accepted: body.events.count, duplicate: 0,
+                    rejected: 0, errors: [])
+            },
+            auth: testAuth, logger: NoopLogger())
+        let (plugin, _, _, _, _) = makePlugin(
+            reader: reader, pi: pi,
+            cacheURL: dir.appendingPathComponent("cache.json"),
+            stateURL: dir.appendingPathComponent("state.json"),
+            publisher: pub)
+        try await plugin.tick()
+        let bodies = await capture.snapshot()
+        XCTAssertEqual(bodies.first?.events.count, 3)
+        let kinds = bodies.first?.events.map(\.kind) ?? []
+        XCTAssertEqual(kinds.filter { $0 == "external_contact.upserted" }.count, 2)
+        XCTAssertEqual(kinds.filter { $0 == "external_contact.deleted" }.count, 1)
+    }
+
+    // MARK: - same-tick delete then add
+
+    func testSameTickDeleteThenAddPreservesUpsertInCache() async throws {
+        // Event order: [.delete("id-X"), .add(id-X)] — the cache
+        // must end this tick with the NEW hash for id-X (the add)
+        // and NOT drop the entry on commit. This exercises the
+        // plugin's event-order processing AND the cache actor's
+        // applyUpdates-cancels-stagedRemoval contract.
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let record = makeRecord(id: "id-X", container: containerA)
+        let reader = StubReader(
+            changeHistoryResult: .success(ChangeHistoryResult(
+                events: [.delete(identifier: "id-X"), .add(record)],
+                newToken: Data([0xAB]))))
+        let pi = ScriptedPi(
+            cursorGet: SourceCursorState(
+                cursor: Data([0xAA]).base64EncodedString(),
+                cursorEpoch: 0, backfillComplete: true),
+            knownIDs: KnownIDsData(ids: []),
+            ingestResult: IngestEventsData(accepted: 2, duplicate: 0, rejected: 0, errors: []),
+            cursorCommitThrows: nil, ingestThrows: nil)
+        let (plugin, cache, _, _, transport) = makePlugin(
+            reader: reader, pi: pi,
+            cacheURL: dir.appendingPathComponent("cache.json"),
+            stateURL: dir.appendingPathComponent("state.json"))
+        try await plugin.tick()
+        XCTAssertTrue(transport.commitWasAttempted)
+        // The add wrote a new hash for id-X via applyUpdates, which
+        // also cancels the staged removal. After commit, the live
+        // map still has id-X with its new hash.
+        let still = await cache.get("id-X")
+        XCTAssertNotNil(still, "same-tick delete→add must leave id-X in the cache")
+    }
+
+    // MARK: - hash-mismatch rejection
+
     func testHashMismatchRejectionSetsRecoveryFlagAndHoldsCursor() async throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -698,7 +810,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
                 events: [.add(makeRecord(id: "id-1", container: containerA))],
                 newToken: Data([0xDE]))))
         let pi = ScriptedPi(
-            cursorGet: MessagesCursorState(
+            cursorGet: SourceCursorState(
                 cursor: Data([0xAA]).base64EncodedString(),
                 cursorEpoch: 0, backfillComplete: true),
             knownIDs: KnownIDsData(ids: []),

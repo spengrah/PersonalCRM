@@ -4,9 +4,10 @@
 // monotonically-increasing per-event watermark; the cursor is opaque
 // CNChangeHistoryFetchRequest token bytes).
 //
-// Batching: cap at 100 events per batch (plan §11g locked decision;
-// well under the Pi's hard 500-event limit). Body-size cap inherits
-// the messages source's 1 MiB threshold for parity.
+// Batching: cap at 100 events per batch (well under the Pi's hard
+// 500-event limit so a single malformed content_hash on one event
+// doesn't poison an entire 500-batch). Body-size cap inherits the
+// messages source's 1 MiB threshold for parity.
 //
 // Outcome semantics: the plugin uses this to decide whether to
 // (a) advance the cursor, (b) commit pendingRemovals on the hash
@@ -100,11 +101,25 @@ public actor ICloudContactsPublisher {
         self.clock = clock
     }
 
+    /// Codes that signal the daemon must abort further batches in
+    /// this tick AND request a recovery cycle on the next tick. The
+    /// plan's locked semantics: a single hash-mismatch indicates the
+    /// daemon's cache vs Pi's stored hash have diverged; sending more
+    /// events from the same tick risks compounding the divergence.
+    public static let recoveryCodes: Set<String> = [
+        "EXTERNAL_CONTACT_HASH_MISMATCH",
+        "EXTERNAL_CONTACT_DELETE_HASH_MISMATCH",
+    ]
+
     /// Publish `items` in one or more batches sized per
-    /// maxEventsPerBatch and maxBodyBytes. The caller is responsible
-    /// for the cursor + cache commit decision based on the returned
-    /// outcome — only advance when `rejected.isEmpty && unconfirmed
-    /// == 0`.
+    /// maxEventsPerBatch and maxBodyBytes. The caller advances the
+    /// cursor + commits cache removals ONLY when
+    /// `rejected.isEmpty && unconfirmed == 0`. Any per-event
+    /// rejection whose code is in `recoveryCodes` aborts subsequent
+    /// batches; the remaining items are reported as `unconfirmed`.
+    /// Pi-reported `rejected` count vs `errors` count mismatch is
+    /// surfaced as an `unaccountedRejections` term that the caller
+    /// treats the same as `rejected.count > 0` (cursor held).
     public func publish(items: [ICloudContactsPublishItem]) async -> ICloudContactsBatchOutcome {
         if items.isEmpty {
             return ICloudContactsBatchOutcome(
@@ -117,10 +132,11 @@ public actor ICloudContactsPublisher {
         var rejections: [ICloudContactsRejection] = []
         var unconfirmed = 0
         var anyBatchSucceeded = false
+        var sawRecoveryCode = false
 
-        // Split into batches up-front so the pre-emptive size check
-        // doesn't have to recompute encoding twice.
         let batches = splitIntoBatches(items)
+        // Track items in batches not yet attempted so a mid-stream
+        // failure can attribute the right count to `unconfirmed`.
         var remainingItemsAfterBatch = items.count
         for (i, batch) in batches.enumerated() {
             let body = IngestEventsBody(events: batch.map { makeIngestEvent(from: $0) })
@@ -128,12 +144,26 @@ public actor ICloudContactsPublisher {
                 let response = try await sender(auth, body)
                 totalAccepted += response.accepted
                 totalDuplicate += response.duplicate
+                var batchRecoveryHit = false
                 for err in response.errors {
                     guard err.index >= 0, err.index < batch.count else {
+                        // Pi returned a rejection but the index didn't
+                        // map back to a known item. Treat this batch
+                        // as containing one extra rejection we
+                        // couldn't attribute — the plugin's commit
+                        // gate uses the aggregate count, so the
+                        // cursor is correctly held.
+                        rejections.append(ICloudContactsRejection(
+                            sourceID: "<unattributed>", kind: "<unknown>",
+                            code: err.code, message: err.message))
                         logger.warning("icloud publish: out-of-range rejection index", metadata: [
                             "index": .public(String(err.index)),
                             "batch_size": .public(String(batch.count)),
+                            "code": .public(err.code),
                         ])
+                        if Self.recoveryCodes.contains(err.code) {
+                            batchRecoveryHit = true
+                        }
                         continue
                     }
                     let item = batch[err.index]
@@ -146,20 +176,54 @@ public actor ICloudContactsPublisher {
                         "code": .public(err.code),
                         "message": .public(err.message),
                     ])
+                    if Self.recoveryCodes.contains(err.code) {
+                        batchRecoveryHit = true
+                    }
+                }
+                // Pi-reported `rejected` count that exceeds the
+                // `errors` array indicates lost rejection details —
+                // synthesize placeholder entries so the caller's
+                // commit gate (`rejected.isEmpty`) trips correctly.
+                let attributed = response.errors.count
+                if response.rejected > attributed {
+                    let missing = response.rejected - attributed
+                    for _ in 0..<missing {
+                        rejections.append(ICloudContactsRejection(
+                            sourceID: "<unattributed>", kind: "<unknown>",
+                            code: "UNATTRIBUTED_REJECTION",
+                            message: "Pi reported rejected=\(response.rejected) but errors only carries \(attributed) entries"))
+                    }
+                    logger.warning("icloud publish: Pi rejected count exceeds errors[] length", metadata: [
+                        "rejected_count": .public(String(response.rejected)),
+                        "errors_count": .public(String(attributed)),
+                    ])
                 }
                 anyBatchSucceeded = true
                 remainingItemsAfterBatch -= batch.count
+                if batchRecoveryHit {
+                    // Abort: don't send subsequent batches. The
+                    // unsent items count as `unconfirmed` so the
+                    // plugin's gate (`unconfirmed == 0`) holds the
+                    // cursor.
+                    sawRecoveryCode = true
+                    unconfirmed += remainingItemsAfterBatch
+                    break
+                }
             } catch {
                 logger.warning("icloud publish: batch failed", metadata: [
                     "batch_index": .public(String(i)),
                     "batch_size": .public(String(batch.count)),
                     "error": .private(String(describing: error)),
                 ])
-                // Transport failure on this batch leaves all items
-                // in this batch + everything after it unsubmitted.
                 unconfirmed += remainingItemsAfterBatch
                 break
             }
+        }
+
+        if sawRecoveryCode {
+            logger.warning("icloud publish: hash-mismatch rejection aborted subsequent batches", metadata: [
+                "remaining_unconfirmed": .public(String(unconfirmed)),
+            ])
         }
 
         return ICloudContactsBatchOutcome(

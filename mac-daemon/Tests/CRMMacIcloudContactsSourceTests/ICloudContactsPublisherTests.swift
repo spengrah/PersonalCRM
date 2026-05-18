@@ -182,9 +182,11 @@ final class ICloudContactsPublisherTests: XCTestCase {
                        "external_contact.deleted")
     }
 
-    func testRejectionIndexOutOfRangeIsLoggedButIgnored() async {
-        // Pi returning an out-of-range index is anomalous; we log
-        // and skip rather than crash.
+    func testRejectionIndexOutOfRangeIsSurfacedAsUnattributedRejection() async {
+        // Pi returning an out-of-range index is anomalous; we
+        // surface the rejection as an unattributed entry so the
+        // caller's commit gate (`rejected.isEmpty`) holds the
+        // cursor rather than silently advancing.
         let publisher = ICloudContactsPublisher(
             sender: { _, body in
                 IngestEventsData(
@@ -197,8 +199,68 @@ final class ICloudContactsPublisherTests: XCTestCase {
         let items = (1...2).map(makeUpsertItem)
         let outcome = await publisher.publish(items: items)
         XCTAssertEqual(outcome.accepted, 2)
-        XCTAssertTrue(outcome.rejected.isEmpty,
-                      "out-of-range rejection index should be filtered")
+        XCTAssertEqual(outcome.rejected.count, 1,
+                       "out-of-range rejection index must still surface so cursor advance is blocked")
+        XCTAssertEqual(outcome.rejected.first?.sourceID, "<unattributed>")
+    }
+
+    func testPiReportedRejectedCountExceedingErrorsListSynthesizesPlaceholders() async {
+        // The Pi's response carries both `rejected` (count) and
+        // `errors` (array). If they diverge — `rejected > errors.count`
+        // — the publisher must synthesize placeholder rejections so
+        // the caller's commit gate (`rejected.isEmpty`) holds the
+        // cursor rather than silently advancing.
+        let publisher = ICloudContactsPublisher(
+            sender: { _, _ in
+                IngestEventsData(
+                    accepted: 0, duplicate: 0, rejected: 3,
+                    errors: [])
+            },
+            auth: auth, logger: NoopLogger())
+        let outcome = await publisher.publish(items: [makeUpsertItem(index: 1)])
+        XCTAssertEqual(outcome.rejected.count, 3,
+                       "missing error details get synthesized as unattributed entries")
+        XCTAssertTrue(outcome.rejected.allSatisfy {
+            $0.code == "UNATTRIBUTED_REJECTION"
+        })
+    }
+
+    func testHashMismatchAbortsRemainingBatches() async {
+        // The publisher must abort subsequent batches after the
+        // first hash-mismatch rejection so the recovery flow can
+        // run on the next tick without compounding divergence.
+        actor BatchTracker {
+            var batches: Int = 0
+            func bump() -> Int { batches += 1; return batches }
+        }
+        let tracker = BatchTracker()
+        let publisher = ICloudContactsPublisher(
+            sender: { _, body in
+                let n = await tracker.bump()
+                if n == 1 {
+                    return IngestEventsData(
+                        accepted: body.events.count - 1,
+                        duplicate: 0, rejected: 1,
+                        errors: [IngestEventError(
+                            index: 0,
+                            code: "EXTERNAL_CONTACT_HASH_MISMATCH",
+                            message: "diverge")])
+                }
+                return IngestEventsData(
+                    accepted: body.events.count,
+                    duplicate: 0, rejected: 0, errors: [])
+            },
+            auth: auth, logger: NoopLogger())
+        let items = (1...250).map(makeUpsertItem)
+        let outcome = await publisher.publish(items: items)
+        let batchCount = await tracker.batches
+        XCTAssertEqual(batchCount, 1,
+                       "subsequent batches must not be attempted after hash mismatch")
+        XCTAssertEqual(outcome.unconfirmed, 150,
+                       "batches 2 + 3 (100 + 50) are reported as unconfirmed so cursor holds")
+        XCTAssertEqual(outcome.rejected.count, 1)
+        XCTAssertEqual(outcome.rejected.first?.code,
+                       "EXTERNAL_CONTACT_HASH_MISMATCH")
     }
 
     // MARK: - transport failure mid-stream

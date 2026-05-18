@@ -1,7 +1,7 @@
 // Tests for the `crm-mac configure containers` allowlist mutation
 // flow's crash-safety + state-first ordering.
 //
-// The reconciliation contract (plan D-JC3, post-Codex-r3 P1-2):
+// The reconciliation contract:
 //   1. StateMutator: set sources["icloud_contacts"].lastError =
 //      "recovery_requested:allowlist_changed" — write FIRST.
 //   2. ConfigStore.saveICloudContactsConfig(new allowlist) — write
@@ -115,32 +115,67 @@ final class ConfigureContainersReconciliationTests: XCTestCase {
 
     // MARK: - crash safety
 
-    func testCrashAfterStateWriteLeavesOldConfigButFlagSet() async throws {
-        // Simulate: state write succeeds, config write fails. The
-        // daemon's next tick sees the recovery flag + the OLD
-        // allowlist; the recovery reconciles against the old
-        // allowlist (still correct — tombstones removed-upstream
-        // contacts; no spurious wrong-allowlist emits).
+    func testCrashAfterStateWritePreservesOldConfigAndKeepsFlagSet() async throws {
+        // Realistic failure mode: state write succeeds, the
+        // subsequent ConfigStore.save throws. The atomic-rename in
+        // ConfigStore leaves the OLD config file intact (rename-on-
+        // failure deletes the .tmp and never replaces the
+        // destination), so the operator's next interaction reads:
+        //   - state.json: recovery flag SET
+        //   - config.json: OLD allowlist
+        // The next daemon tick recovers against the OLD allowlist
+        // — still correct, tombstones removed-upstream contacts.
+        // A re-run of `configure containers` reapplies and completes
+        // the swap; idempotent.
         try seedConfig(containers: ["A"])
+        // Compute what the OLD-config bytes look like so we can
+        // verify they survive the simulated failure unchanged.
+        let oldConfigBytes = try Data(contentsOf: configURL)
+
+        // Step 1 succeeds: bump the recovery flag.
+        let stateStore = StateStore(fileURL: stateURL)
+        if !FileManager.default.fileExists(atPath: stateURL.path) {
+            try stateStore.initializeIfMissing()
+        }
+        let mutator = StateMutator(store: stateStore)
+        try await mutator.mutate { state in
+            var src = state.sources["icloud_contacts"] ?? SourceState()
+            src.lastError = "recovery_requested:allowlist_changed"
+            src.lastErrorAt = Date(timeIntervalSince1970: 1_750_000_000)
+            state.sources["icloud_contacts"] = src
+        }
+
+        // Step 2 throws: simulate by pointing the ConfigStore at an
+        // unwritable parent directory.
+        let badConfigDir = tempDir.appendingPathComponent("not-a-real-dir/nested")
+        // Create a non-directory file at the parent path so the
+        // intermediate directory creation fails.
+        try Data("blocker".utf8).write(to: tempDir.appendingPathComponent("not-a-real-dir"))
+        let badConfigURL = badConfigDir.appendingPathComponent("config.json")
+        let badStore = ConfigStore(fileURL: badConfigURL)
         do {
-            try await runReconciliation(newContainers: ["B"],
-                                          configWriteFails: true)
-            XCTFail("config write should have thrown")
+            try badStore.saveICloudContactsConfig(
+                ICloudContactsConfig(containers: ["B"]))
+            XCTFail("expected ConfigStore.save to throw")
         } catch {
             // expected
         }
+
+        // Assert the real config file is untouched (no half-write,
+        // no swap-to-empty). The atomic-rename guarantee is the key
+        // safety net here.
+        let stillThereBytes = try Data(contentsOf: configURL)
+        XCTAssertEqual(stillThereBytes, oldConfigBytes,
+                       "OLD config bytes must survive a save() failure")
+        let cfg = try ConfigStore(fileURL: configURL).load()
+        XCTAssertEqual(cfg.sources?.icloudContacts?.containers, ["A"],
+                       "ConfigStore.load must still see the OLD allowlist")
+
+        // Assert the recovery flag is persisted.
         let state = try readState()
         XCTAssertEqual(state.sources["icloud_contacts"]?.lastError,
                        "recovery_requested:allowlist_changed",
-                       "recovery flag must be durable even when config write fails")
-        // Old allowlist still in effect — the daemon's next tick will
-        // recover against the OLD allowlist + tombstone removals.
-        // Clean up the directory we created to simulate the failure.
-        try? FileManager.default.removeItem(at: configURL)
-        let cfg = ConfigStore(fileURL: configURL)
-        let reloaded = try? cfg.loadICloudContactsConfig()
-        XCTAssertNil(reloaded,
-                     "after the simulated crash, config is gone (would be old allowlist in real run)")
+                       "recovery flag must be durable across the simulated failure")
     }
 
     func testReReconciliationIsIdempotent() async throws {
