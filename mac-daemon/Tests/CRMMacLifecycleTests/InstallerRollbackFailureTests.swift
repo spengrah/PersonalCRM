@@ -85,7 +85,11 @@ final class InstallerRollbackFailureTests: XCTestCase {
                 upgrade: true))
             XCTFail("expected upgradeRollbackFailed")
         } catch InstallError.upgradeRollbackFailed(let original, let restore, let backup) {
-            XCTAssertTrue(original.contains("registrationFailed") || original.contains("agentRegistrationFailed"),
+            // The original error is the InstallError.agentRegistrationFailed
+            // case; its `description` renders "agent registration failed: ..."
+            // (lowercase). The composed-error path passes that rendered
+            // string through `String(describing:)`.
+            XCTAssertTrue(original.lowercased().contains("registration") || original.lowercased().contains("registrationfailed"),
                 "original error must describe the register failure; got \(original)")
             XCTAssertTrue(restore.contains("injected rename failure"),
                 "restore error must describe the rename failure; got \(restore)")

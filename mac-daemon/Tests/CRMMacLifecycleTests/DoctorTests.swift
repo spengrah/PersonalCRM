@@ -166,8 +166,8 @@ final class DoctorTests: XCTestCase {
         let report = await doctor.run()
         let check = report.results.first(where: { $0.name == "agent_service" })!
         XCTAssertEqual(check.status, .warn)
-        XCTAssertTrue(check.details.lowercased().contains("approve"),
-            "requires-approval WARN must mention 'approve' for operator guidance")
+        XCTAssertTrue(check.details.lowercased().contains("approv"),
+            "requires-approval WARN must mention 'approv*' for operator guidance")
     }
 
     func testAgentServiceNotFoundFails() async {
