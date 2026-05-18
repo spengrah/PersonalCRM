@@ -23,14 +23,18 @@ struct ProductionContext {
         self.paths = LifecyclePaths(
             configDirPath: systemPaths.configDir.path,
             binDirPath: systemPaths.binDir.path,
-            binaryPath: systemPaths.binaryPath.path,
             configFilePath: systemPaths.configFile.path,
             stateFilePath: systemPaths.stateFile.path,
             launchAgentsDirPath: systemPaths.launchAgentsDir.path,
-            plistPath: systemPaths.plistPath.path,
             logsDirPath: systemPaths.logsDir.path,
             stdoutLogPath: systemPaths.stdoutLog.path,
-            stderrLogPath: systemPaths.stderrLog.path)
+            stderrLogPath: systemPaths.stderrLog.path,
+            bundleAppPath: systemPaths.bundleApp.path,
+            bundleBinaryPath: systemPaths.bundleBinary.path,
+            bundlePlistPath: systemPaths.bundlePlist.path,
+            bundleInfoPlistPath: systemPaths.bundleInfoPlist.path,
+            legacyBinaryPath: systemPaths.legacyBinary.path,
+            legacyPlistPath: systemPaths.legacyPlist.path)
         self.logger = OSLogLogger()
         self.filesystem = ProductionFilesystemAdapter()
         self.executable = ProductionExecutableAdapter()
