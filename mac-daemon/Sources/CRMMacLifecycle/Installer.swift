@@ -162,6 +162,15 @@ public enum InstallError: Error, CustomStringConvertible {
                 : " Address the underlying issue, then re-run `crm-mac install --register-only`."
             return "agent registration failed: \(m).\(suffix)"
         case .daemonStillRunning(let pid):
+            if pid <= 0 {
+                // pid 0 / negative pid: the pidfile was malformed or
+                // unreadable. Telling the operator to `kill -TERM 0`
+                // would target the current process group on POSIX —
+                // catastrophic; could kill unrelated shell/session
+                // processes. Surface the safer recovery path.
+                return "the crm-mac daemon's pidfile was present but unreadable, and the lock did not release within the SIGTERM grace period. " +
+                    "Recovery: identify the daemon process with `pgrep -f crm-mac` then `kill -TERM <pid>` (or `kill -9 <pid>` if stuck), then re-run."
+            }
             return "the running crm-mac daemon (pid=\(pid)) did not exit within the SIGTERM grace period. " +
                 "Recovery: `kill -TERM \(pid)` (or `kill -9 \(pid)` if it's stuck), then re-run."
         case .legacyBootoutFailed(let stderr):
@@ -1030,6 +1039,26 @@ public struct Installer {
                 originalError: String(describing: originalError),
                 restoreError: String(describing: restoreError),
                 backupPath: backupPath)
+        }
+        // The upgrade path called agentService.unregister() before
+        // touching the bundle (to stop the running daemon). After a
+        // successful backup restore the old bundle is back on disk
+        // but is unregistered, so launchd won't relaunch it. Re-register
+        // best-effort so the operator isn't stuck with a stopped
+        // service after a rollback. Re-register failures here are
+        // logged but not folded into the original error — the caller
+        // already has a useful actionable message, and the operator's
+        // worst case after a re-register failure is the same as a
+        // partial-install register failure (run `crm-mac install
+        // --register-only` to retry).
+        if hadExisting {
+            do {
+                _ = try deps.agentService.register()
+            } catch {
+                deps.logger.warning(
+                    "upgrade rollback: re-register of restored backup failed (operator must run `crm-mac install --register-only`)",
+                    metadata: ["error": .private("\(error)")])
+            }
         }
         throw originalError
     }

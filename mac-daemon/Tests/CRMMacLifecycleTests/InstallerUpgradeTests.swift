@@ -164,6 +164,15 @@ final class InstallerUpgradeTests: XCTestCase {
         // No tmp or backup left behind.
         XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".tmp.") }))
         XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".backup.") }))
+        // The rollback must attempt to re-register the restored bundle
+        // (best-effort) — otherwise launchd has no record of the agent
+        // after the upgrade-time unregister, and the daemon stays
+        // stopped despite the file-level rollback succeeding. Total
+        // register calls: 1 (initial, which threw) + 1 (rollback
+        // re-register, which also throws because the fake still has
+        // registerThrows set) = 2.
+        XCTAssertGreaterThanOrEqual(agent.registerCalls, 2,
+            "rollback must attempt to re-register the restored backup")
     }
 
     func testUpgradeAssemblyFailureRollsBackToOldBundle() async throws {
