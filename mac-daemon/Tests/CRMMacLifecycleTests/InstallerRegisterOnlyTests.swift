@@ -63,7 +63,7 @@ final class InstallerRegisterOnlyTests: XCTestCase {
         XCTAssertEqual(exec.bundleCodesignCalls.count, 0)
     }
 
-    func testRegisterOnlyRequiresExistingBundle() async {
+    func testRegisterOnlyRequiresExistingBundle() async throws {
         // Config present + api-key present, but bundle missing — the
         // operator wants `--upgrade`, not register-only.
         let paths = TestPaths.make()
@@ -76,7 +76,8 @@ final class InstallerRegisterOnlyTests: XCTestCase {
             installedAt: Date())
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        try? fs.write(try? encoder.encode(config), to: paths.configFilePath)
+        let configData = try encoder.encode(config)
+        try fs.write(configData, to: paths.configFilePath)
         let exec = FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac")
         let installer = Installer(InstallerDependencies(
             paths: paths,
