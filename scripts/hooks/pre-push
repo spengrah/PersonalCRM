@@ -28,8 +28,9 @@ echo "==============================================================" >&2
 echo "Pre-push: Running checks..." >&2
 echo "==============================================================" >&2
 
-# Check Claude review log for HEAD (mirrors the CI claude-review job locally).
-# Looks for .ai/log/review/<HEAD-sha>.md containing "RESULT=PASS".
+# Check Claude review log for HEAD. Replaces the prior CI claude-review job —
+# /review-head writes the verdict to .ai/log/review/<HEAD-sha>.md, and the push
+# is allowed only if that file contains "RESULT=PASS".
 # Bypass with `git push --no-verify` if you really need to skip.
 check_review_log() {
   local enabled
