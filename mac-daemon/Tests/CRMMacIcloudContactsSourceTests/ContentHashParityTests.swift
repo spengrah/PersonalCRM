@@ -156,14 +156,16 @@ final class ContentHashParityTests: XCTestCase {
         // same but the CN-routed hash drifts and this test fails.
         //
         // Phone labels deliberately include CNLabelPhoneNumberHomeFax
-        // and CNLabelPhoneNumberAppleWatch — both map to strings
-        // containing a space ("home fax", "apple watch"). The
-        // wrapper-strip fallback would produce "homefax" / unchanged
-        // wrapped-input respectively, so if either entry is dropped
-        // from stableLabelMap the hashes diverge and the test fails.
+        // AND CNLabelPhoneNumberWorkFax. Both raw values use Apple's
+        // wrapper with an internal capitalization that the wrapper-
+        // strip fallback CANNOT recover — `_$!<HomeFAX>!$_` →
+        // `"homefax"` (no space), but the map value is `"home fax"`
+        // (with space). So if either entry is dropped from
+        // stableLabelMap the hashes diverge and the test fails.
         // (Picking only entries whose strip-and-lowercase fallback
-        // coincides with the map value — like CNLabelHome — would
-        // make map-drop regressions silent.)
+        // coincides with the map value — like CNLabelHome or
+        // CNLabelPhoneNumberAppleWatch (raw `"Apple Watch"`, no
+        // wrapper) — would make map-drop regressions silent.)
         let viaCNConstants = ContactRecord(
             identifier: "id-locale",
             containerIdentifier: "container-1",
@@ -184,7 +186,7 @@ final class ContentHashParityTests: XCTestCase {
                     type: CNContactStoreReader.localizedLabel(CNLabelPhoneNumberHomeFax)),
                 ContactPhone(
                     value: "+10000000003",
-                    type: CNContactStoreReader.localizedLabel(CNLabelPhoneNumberAppleWatch)),
+                    type: CNContactStoreReader.localizedLabel(CNLabelPhoneNumberWorkFax)),
             ],
             addresses: [ContactAddress(
                 formatted: "100 Other St",
@@ -199,7 +201,7 @@ final class ContentHashParityTests: XCTestCase {
             phones: [
                 ContactPhone(value: "+10000000001", type: "mobile", primary: true),
                 ContactPhone(value: "+10000000002", type: "home fax"),
-                ContactPhone(value: "+10000000003", type: "apple watch"),
+                ContactPhone(value: "+10000000003", type: "work fax"),
             ],
             addresses: [ContactAddress(formatted: "100 Other St", type: "other")])
         let hashCN = try hash(for: viaCNConstants)
