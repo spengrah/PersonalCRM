@@ -46,10 +46,11 @@ public enum ContentHasher {
         // gowebpki/jcs rejects JSON inputs that contain duplicate
         // object keys (after unicode-escape decoding + UTF-16 sort)
         // at parse time. Foundation's JSONSerialization silently
-        // collapses duplicates to the last value, so an externally-
-        // supplied payload that contains duplicate keys would
-        // compute a hash on the Swift side that the Pi-side
-        // verifier rejects.
+        // collapses duplicates to a single value (the specific
+        // winner — first vs last — is implementation-defined and
+        // has varied across OS versions), so an externally-supplied
+        // payload that contains duplicate keys would compute a hash
+        // on the Swift side that the Pi-side verifier rejects.
         //
         // The daemon never feeds external JSON to ContentHasher:
         // every payload flows through `Encodable.encode(to:)` via

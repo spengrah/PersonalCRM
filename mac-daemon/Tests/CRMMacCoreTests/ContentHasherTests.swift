@@ -67,12 +67,24 @@ final class ContentHasherTests: XCTestCase {
     /// duplicate keys at parse time). The daemon's only call site
     /// is `JSONEncoder.encode(Encodable)`, which never produces
     /// duplicate keys; this asymmetry is unreachable in production.
+    ///
+    /// Which duplicate value Foundation keeps (first vs last) is
+    /// implementation-defined and has varied across OS versions, so
+    /// we do NOT lock the test to a specific winner. Instead we
+    /// observe what Foundation kept and assert the hasher is
+    /// consistent with that observation.
     func testDuplicateKeyParseSilentlyDedupsViaFoundation() throws {
         let dup = #"{"a":1,"a":2}"#
-        let only = #"{"a":2}"#
-        let h1 = try ContentHasher.contentHash(for: Data(dup.utf8))
-        let h2 = try ContentHasher.contentHash(for: Data(only.utf8))
+        let dupData = Data(dup.utf8)
+        guard let parsed = try JSONSerialization.jsonObject(with: dupData) as? [String: Any],
+              let kept = parsed["a"] as? NSNumber else {
+            XCTFail("Foundation did not parse duplicate-key payload as expected")
+            return
+        }
+        let canonicalEquivalent = #"{"a":\#(kept.intValue)}"#
+        let h1 = try ContentHasher.contentHash(for: dupData)
+        let h2 = try ContentHasher.contentHash(for: Data(canonicalEquivalent.utf8))
         XCTAssertEqual(h1, h2,
-                       "Foundation collapses duplicate keys to the LAST value before canonicalization")
+                       "hash of duplicate-key payload must match the single-keyed form Foundation collapsed it to")
     }
 }

@@ -162,9 +162,9 @@ final class JCSCanonicalizerTests: XCTestCase {
 
     func testDuplicateKeyDetectedAtCanonicalizeLevel() throws {
         // JSONSerialization deduplicates duplicate keys in input JSON
-        // by keeping the last value, so the canonicalizer's
-        // duplicateKey check is a defense-in-depth code path. Hit
-        // it through the value-API entry point.
+        // (which value it keeps is implementation-defined), so the
+        // canonicalizer's duplicateKey check is a defense-in-depth
+        // code path. Hit it through the value-API entry point.
         // (Using JSONSerialization would lose the duplicate; this
         // test confirms the value path's check fires when both
         // are present in the input.)
