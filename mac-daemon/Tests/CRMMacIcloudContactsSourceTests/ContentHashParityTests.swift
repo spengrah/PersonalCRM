@@ -10,6 +10,7 @@
 // step would surface here as a hash that differs from the
 // recorded value. Pure-logic; no I/O.
 import XCTest
+import Contacts
 import CRMMacCore
 @testable import CRMMacIcloudContactsSource
 
