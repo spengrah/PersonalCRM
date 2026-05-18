@@ -66,16 +66,18 @@ public struct DaemonPaths {
         launchAgentsDir.appendingPathComponent("\(Daemon.label).plist")
     }
 
-    /// Pre-rewrite name for the bare-binary path. Aliased to
-    /// `legacyBinary`. Existing call sites that probe for the legacy
-    /// bare binary keep working while the Installer rewrite is
-    /// rolled out commit-by-commit.
-    public var binaryPath: URL { legacyBinary }
+    /// Deprecated alias for `bundleBinary`. Out-of-tree callers
+    /// reading `binaryPath` should see the in-bundle binary path
+    /// (NOT the legacy bare binary, which has its own dedicated
+    /// accessor `legacyBinary`).
+    @available(*, deprecated, message: "Use bundleBinary (or legacyBinary for migration probes)")
+    public var binaryPath: URL { bundleBinary }
 
-    /// Pre-rewrite name for the launchd plist file. Aliased to
-    /// `legacyPlist`. Post-rewrite the bundle's embedded plist
-    /// supersedes this — SMAppService reads from inside the bundle.
-    public var plistPath: URL { legacyPlist }
+    /// Deprecated alias for `bundlePlist`. Out-of-tree callers
+    /// reading `plistPath` should see the in-bundle plist path.
+    /// The legacy launchd plist remains accessible via `legacyPlist`.
+    @available(*, deprecated, message: "Use bundlePlist (or legacyPlist for migration cleanup)")
+    public var plistPath: URL { bundlePlist }
 
     /// Daemon-runtime directory.  The daemon's PidfileLock writes
     /// `daemon.pid` here so the CLI ops subcommands can detect the

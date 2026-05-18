@@ -53,6 +53,65 @@ final class InstallerPlaceholderSubstitutionTests: XCTestCase {
             "substituted plist must still parse as a valid plist")
     }
 
+    func testSubstitutionXMLEscapesUnusualPaths() async throws {
+        // Per Codex r6 #5: substituting a raw bundle path into
+        // already-rendered XML breaks `LaunchAgentPlist`'s
+        // XML-escape guarantee for unusual home directory characters
+        // (`&`, `<`, `>`, `"`, `'`). The installer must apply the
+        // same escape function during substitution so the resulting
+        // plist still parses.
+        let paths = LifecyclePaths(
+            configDirPath: "/tmp/o&malley/cfg",
+            binDirPath: "/tmp/o&malley/cfg/bin",
+            configFilePath: "/tmp/o&malley/cfg/config.json",
+            stateFilePath: "/tmp/o&malley/cfg/state.json",
+            launchAgentsDirPath: "/tmp/o&malley/LaunchAgents",
+            logsDirPath: "/tmp/o&malley/logs",
+            stdoutLogPath: "/tmp/o&malley/logs/stdout.log",
+            stderrLogPath: "/tmp/o&malley/logs/stderr.log",
+            // The bundle app path contains `&` — XML-significant.
+            bundleAppPath: "/tmp/o&malley/cfg/crm-mac.app",
+            bundleBinaryPath: "/tmp/o&malley/cfg/crm-mac.app/Contents/MacOS/crm-mac",
+            bundlePlistPath: "/tmp/o&malley/cfg/crm-mac.app/Contents/Library/LaunchAgents/\(Daemon.label).plist",
+            bundleInfoPlistPath: "/tmp/o&malley/cfg/crm-mac.app/Contents/Info.plist",
+            legacyBinaryPath: "/tmp/o&malley/cfg/bin/crm-mac",
+            legacyPlistPath: "/tmp/o&malley/LaunchAgents/\(Daemon.label).plist")
+        let fs = InMemoryFilesystem()
+        fs.seedFile(at: "/tmp/source/crm-mac")
+        let exec = FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac")
+        let installer = Installer(InstallerDependencies(
+            paths: paths,
+            filesystem: fs,
+            executable: exec,
+            keychain: InMemoryKeychainStore(),
+            agentService: FakeAgentService(),
+            processSignaller: FakeProcessSignaller(),
+            bundleAssembler: BundleAssembler(filesystem: fs, executable: exec),
+            piClientFactory: { url in
+                PiClient(baseURL: url, transport: LifecycleMockTransport([.respond(status: 200, data: pair200JSON)]).asTransport(), sleep: noopSleep)
+            },
+            clock: FixedClock(),
+            logger: NoopLogger()))
+        _ = try await installer.run(InstallRequest(
+            piURL: URL(string: "https://x")!,
+            pairingToken: "tk",
+            hostname: "mac-1"))
+        // The embedded plist must parse — proves the substitution
+        // didn't break the XML.
+        let plistData = try fs.read(from: paths.bundlePlistPath)
+        XCTAssertNoThrow(
+            try PropertyListSerialization.propertyList(from: plistData, options: [], format: nil),
+            "substitution must XML-escape the bundle path")
+        // The decoded ProgramArguments[0] must round-trip back to the
+        // raw bundle binary path (the escape is invisible to the
+        // plist parser).
+        let parsed = try PropertyListSerialization.propertyList(
+            from: plistData, options: [], format: nil) as! [String: Any]
+        let args = parsed["ProgramArguments"] as! [String]
+        XCTAssertEqual(args.first, paths.bundleBinaryPath,
+            "decoded ProgramArguments[0] must equal the raw bundleBinaryPath after XML-decode")
+    }
+
     func testSubstitutionIdempotentViaRegisterOnly() async throws {
         // Set up an already-installed bundle whose embedded plist
         // has the placeholder already replaced. Run register-only

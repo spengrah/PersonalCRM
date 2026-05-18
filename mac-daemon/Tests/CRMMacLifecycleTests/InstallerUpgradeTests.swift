@@ -129,6 +129,43 @@ final class InstallerUpgradeTests: XCTestCase {
             "upgrade must replace the old bundle content with the new")
     }
 
+    func testUpgradeRegistrationFailureRollsBackToOldBundle() async throws {
+        // Per plan D8 U6/U8 + Codex r6 #1: a register failure during
+        // upgrade must restore the previous install (rollback the
+        // backup-rename-swap) so the operator isn't left with a
+        // stopped daemon + new bundle they can't run.
+        let oldInfoBytes = Data("old-info".utf8)
+        let (installer, fs, agent, _, paths, _, _) = try prepareExistingInstall(
+            bundleFiles: [
+                ("Contents/Info.plist", oldInfoBytes),
+                ("Contents/MacOS/crm-mac", Data("old-binary".utf8)),
+            ])
+        // Make register throw — the swap should have completed first
+        // (so the new bundle is briefly at the final path) then roll
+        // back.
+        agent.script.registerThrows = .registrationFailed(
+            message: "requires approval", requiresApproval: true)
+        do {
+            _ = try await installer.run(InstallRequest(
+                piURL: URL(string: "https://x")!,
+                pairingToken: "ignored",
+                hostname: "ignored",
+                upgrade: true))
+            XCTFail("expected agentRegistrationFailed")
+        } catch InstallError.agentRegistrationFailed {
+            // ok
+        } catch {
+            XCTFail("got \(error)")
+        }
+        // Old bundle restored at the final path.
+        let restored = try fs.read(from: "\(paths.bundleAppPath)/Contents/Info.plist")
+        XCTAssertEqual(restored, oldInfoBytes,
+            "register-failure rollback must restore the original bundle content")
+        // No tmp or backup left behind.
+        XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".tmp.") }))
+        XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".backup.") }))
+    }
+
     func testUpgradeAssemblyFailureRollsBackToOldBundle() async throws {
         let oldInfoBytes = Data("old-info".utf8)
         let (installer, fs, _, _, paths, _, exec) = try prepareExistingInstall(

@@ -150,6 +150,51 @@ final class LegacyMigrationTests: XCTestCase {
         XCTAssertFalse(fs.fileExists(at: paths.bundleAppPath))
     }
 
+    func testMigrationRegisterFailureRetryCleansLegacyArtifacts() async throws {
+        // Per Codex r6 #2: if a migration assembles the bundle but
+        // register fails, a subsequent --register-only retry must
+        // complete the step-7 cleanup (delete legacy plist + binary).
+        // Otherwise the legacy launchd plist survives in
+        // ~/Library/LaunchAgents/ and can be auto-loaded on the
+        // next login, resurrecting the bare-binary service the
+        // migration was meant to retire.
+        let (installer, fs, agentService, _, _, paths, _) = try makeLegacyInstall()
+        // First attempt: register throws.
+        agentService.script.registerThrows = .registrationFailed(
+            message: "denied", requiresApproval: true)
+        do {
+            _ = try await installer.run(InstallRequest(
+                piURL: URL(string: "https://x")!,
+                pairingToken: "ignored",
+                hostname: "ignored",
+                upgrade: true))
+            XCTFail("expected agentRegistrationFailed on first attempt")
+        } catch InstallError.agentRegistrationFailed {
+            // ok — bundle assembled, register failed.
+        } catch {
+            XCTFail("first attempt: got \(error)")
+        }
+        // Bundle IS in place; legacy artifacts still on disk because
+        // step 7 didn't run.
+        XCTAssertTrue(fs.fileExists(at: paths.bundleAppPath))
+        XCTAssertTrue(fs.fileExists(at: paths.legacyBinaryPath))
+        XCTAssertTrue(fs.fileExists(at: paths.legacyPlistPath))
+
+        // Second attempt: clear the script error and retry via
+        // --register-only. The migration's step 7 cleanup must run
+        // even though the build-the-new half is skipped.
+        agentService.script.registerThrows = nil
+        _ = try await installer.run(InstallRequest(
+            piURL: URL(string: "https://x")!,
+            pairingToken: "ignored",
+            hostname: "ignored",
+            registerOnly: true))
+        XCTAssertFalse(fs.fileExists(at: paths.legacyBinaryPath),
+            "register-only retry must delete the legacy binary")
+        XCTAssertFalse(fs.fileExists(at: paths.legacyPlistPath),
+            "register-only retry must delete the legacy plist — otherwise launchd can auto-load it on next login")
+    }
+
     func testMigrationBundleAssemblyFailureLeavesLegacyUnloadedForRetry() async throws {
         let (installer, fs, _, _, _, paths, exec) = try makeLegacyInstall()
         // Inject codesign failure during the migration's bundle

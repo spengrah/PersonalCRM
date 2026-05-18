@@ -80,17 +80,23 @@ public struct LifecyclePaths: Equatable {
         self.legacyPlistPath = legacyPlistPath
     }
 
-    /// Pre-rewrite name for the bare-binary path. Now aliased to
-    /// `legacyBinaryPath` so existing call sites that probe for the
-    /// legacy bare binary keep working while the Installer rewrite
-    /// is rolled out commit-by-commit.
-    public var binaryPath: String { legacyBinaryPath }
+    /// Deprecated alias for `bundleBinaryPath`. The post-rewrite
+    /// daemon binary lives inside the bundle at
+    /// `<bundleAppPath>/Contents/MacOS/crm-mac`; out-of-tree callers
+    /// reading `binaryPath` should see THAT location (not the legacy
+    /// bare binary). The legacy bare binary remains accessible via
+    /// `legacyBinaryPath` for migration code.
+    @available(*, deprecated, message: "Use bundleBinaryPath (or legacyBinaryPath for migration probes)")
+    public var binaryPath: String { bundleBinaryPath }
 
-    /// Pre-rewrite name for the launchd plist file. Now aliased to
-    /// `legacyPlistPath`. Once the installer rewrite lands, the
-    /// bundle's embedded plist supersedes this — SMAppService reads
-    /// the plist from inside the bundle, not from this location.
-    public var plistPath: String { legacyPlistPath }
+    /// Deprecated alias for `bundlePlistPath`. The post-rewrite
+    /// LaunchAgent plist lives inside the bundle at
+    /// `<bundleAppPath>/Contents/Library/LaunchAgents/<label>.plist`;
+    /// out-of-tree callers reading `plistPath` should see THAT
+    /// location. The legacy launchd plist remains accessible via
+    /// `legacyPlistPath` for migration cleanup.
+    @available(*, deprecated, message: "Use bundlePlistPath (or legacyPlistPath for migration cleanup)")
+    public var plistPath: String { bundlePlistPath }
 
     /// Daemon-runtime directory.  The daemon's PidfileLock writes
     /// `daemon.pid` here so the CLI ops subcommands can detect the

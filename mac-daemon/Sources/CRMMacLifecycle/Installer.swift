@@ -476,21 +476,28 @@ public struct Installer {
                 "rename tmp bundle -> install: \(error)")
         }
 
-        // U6. Substitute placeholder + register.
+        // U6. Substitute placeholder + register. Rollback on any
+        // failure between here and the end of register: remove the
+        // new bundle, restore the backup.
         do {
             try substituteInstallPrefixPlaceholder(
                 bundlePath: deps.paths.bundleAppPath)
         } catch {
-            // Rollback: move the new bundle out of the way, restore
-            // backup. The placeholder substitution is a pure-Swift
-            // string replace + write; failure here is rare (write
-            // failure injection in tests) but recoverable.
             try? deps.filesystem.remove(at: deps.paths.bundleAppPath)
             try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
             throw InstallError.filesystemFailed(
                 "substitute install prefix: \(error)")
         }
-        try registerAgent()
+        do {
+            try registerAgent()
+        } catch {
+            // Register failed — restore the previous install so the
+            // operator isn't left with a stopped daemon + new bundle
+            // they can't run. Surface the original register error.
+            try? deps.filesystem.remove(at: deps.paths.bundleAppPath)
+            try? restoreBundleBackup(from: backupPath, hadExisting: hadExistingBundle)
+            throw error
+        }
 
         // U7. Cleanup backup (best-effort).
         if hadExistingBundle {
@@ -531,21 +538,13 @@ public struct Installer {
             throw InstallError.noExistingInstall
         }
 
-        // Substitute placeholder (idempotent — second-run on an
-        // already-substituted plist is a no-op).
-        do {
-            try substituteInstallPrefixPlaceholder(
-                bundlePath: deps.paths.bundleAppPath)
-        } catch {
-            // Ignore "no placeholder found" errors — happens on the
-            // post-migration retry path. Other write failures bubble.
-            if let fsErr = error as? FilesystemError {
-                throw InstallError.filesystemFailed(
-                    "substitute install prefix: \(fsErr)")
-            }
-            // Else (e.g., InstallError.unexpected from the
-            // already-substituted-no-placeholder branch): tolerate.
-        }
+        // Substitute placeholder. The helper is idempotent
+        // (already-substituted plist is a no-op) so successful runs
+        // surface no error; ANY thrown error here is a real
+        // filesystem failure and must bubble up rather than be
+        // silently swallowed.
+        try substituteInstallPrefixPlaceholder(
+            bundlePath: deps.paths.bundleAppPath)
         try registerAgent()
         return InstallSummary(
             hostID: cfg.hostID,
@@ -557,33 +556,49 @@ public struct Installer {
     // MARK: - legacy migration
 
     /// Detect + migrate a pre-rewrite bare-binary install (plan D7).
-    /// Three-signal detection:
+    /// Full migration runs when all three signals hold:
     ///   (1) legacy binary at paths.legacyBinaryPath
     ///   (2) NO bundle at paths.bundleAppPath
     ///   (3) at least one user-data file present (config/state/api-key)
-    /// Runs ONLY when all three hold; falls through otherwise.
+    ///
+    /// On a partial-migration re-entry (the bundle is already in place
+    /// because a prior `--upgrade` got past step 4 but the register
+    /// failed and the operator now reruns `--register-only`), we
+    /// short-circuit the build-the-new half (steps 2-6) but ALWAYS
+    /// run step 7 cleanup if legacy artifacts are still present.
+    /// Leaving the legacy plist on disk is not just cosmetic — macOS
+    /// can re-load it from `~/Library/LaunchAgents/` on next login
+    /// and resurrect the bare-binary service the migration was meant
+    /// to retire.
     private func runLegacyMigrationIfNeeded() async throws {
         let hasLegacyBinary = deps.filesystem.fileExists(
             at: deps.paths.legacyBinaryPath)
+        let hasLegacyPlist = deps.filesystem.fileExists(
+            at: deps.paths.legacyPlistPath)
         let hasNewBundle = deps.filesystem.fileExists(
             at: deps.paths.bundleAppPath)
         let hasUserData =
             deps.filesystem.fileExists(at: deps.paths.configFilePath) ||
             deps.filesystem.fileExists(at: deps.paths.stateFilePath) ||
             ((try? deps.keychain.readAPIKey()) != nil)
-        guard hasLegacyBinary, !hasNewBundle, hasUserData else {
+
+        if hasLegacyBinary, !hasNewBundle, hasUserData {
+            // Full migration path.
+            // D7 step 2a — stop the legacy daemon.
+            try await stopLegacyDaemon()
+            // D7 step 2b + 2c — bootout legacy registration + verify gone.
+            try bootoutLegacyAndVerify()
+            // D7 steps 3-6 — assemble the bundle + register.
+            try await assembleAndRegisterNewBundle()
+            // Fall through to step 7 cleanup below.
+        } else if hasNewBundle, hasLegacyBinary || hasLegacyPlist {
+            // Partial-migration recovery: a prior migration assembled
+            // the bundle but didn't finish the cleanup half. Just run
+            // the cleanup (step 7).
+            deps.logger.info("legacy migration: cleaning up leftover artifacts after prior partial migration", metadata: [:])
+        } else {
             return
         }
-
-        // D7 step 2a — stop the legacy daemon.
-        try await stopLegacyDaemon()
-        // D7 step 2b + 2c — bootout legacy registration + verify gone.
-        try bootoutLegacyAndVerify()
-
-        // D7 steps 3-6 — assemble the bundle + register. Reuse the
-        // fresh-install assembly + register helpers via a private
-        // sub-flow.
-        try await assembleAndRegisterNewBundle()
 
         // D7 step 7 — best-effort cleanup of legacy files.
         if deps.filesystem.fileExists(at: deps.paths.legacyPlistPath) {
@@ -600,32 +615,34 @@ public struct Installer {
     /// D7 step 2a — read the legacy pidfile (same path as the new
     /// install — the daemon writes to <configDir>/daemon.pid) and
     /// send SIGTERM; poll for release.
+    ///
+    /// A present-but-malformed pidfile is NOT treated as "not
+    /// running" — the daemon may be alive and we just can't parse its
+    /// pid. The flock probe is the authoritative running-or-not
+    /// check; we skip SIGTERM but still poll.
     private func stopLegacyDaemon() async throws {
-        // The pidfile path is shared between legacy + new install
-        // (both daemons write to <configDir>/daemon.pid).
         let pidfilePath = deps.paths.pidfilePath
         guard deps.filesystem.fileExists(at: pidfilePath) else {
             // No pidfile — legacy daemon not running. Benign.
             return
         }
-        let pidData: Data
-        do {
-            pidData = try deps.filesystem.read(from: pidfilePath)
-        } catch {
-            // Pidfile vanished between exists() and read() — race;
-            // treat as not running.
-            return
-        }
-        let raw = String(data: pidData, encoding: .utf8) ?? ""
-        guard let pid = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            return
-        }
-        do {
-            try deps.processSignaller.sendSIGTERM(pid: pid)
-        } catch {
-            deps.logger.warning("legacy migration: SIGTERM failed (continuing)", metadata: [
-                "pid": .public("\(pid)"),
-                "error": .private("\(error)"),
+        var pid: pid_t = 0
+        if let pidData = try? deps.filesystem.read(from: pidfilePath),
+           let raw = String(data: pidData, encoding: .utf8),
+           let parsed = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+           parsed > 0 {
+            pid = parsed
+            do {
+                try deps.processSignaller.sendSIGTERM(pid: pid)
+            } catch {
+                deps.logger.warning("legacy migration: SIGTERM failed (continuing)", metadata: [
+                    "pid": .public("\(pid)"),
+                    "error": .private("\(error)"),
+                ])
+            }
+        } else {
+            deps.logger.warning("legacy migration: pidfile present but unreadable/malformed; relying on flock probe", metadata: [
+                "path": .private(pidfilePath),
             ])
         }
         let released = await deps.processSignaller.waitForPidfileRelease(
@@ -746,13 +763,17 @@ public struct Installer {
 
     /// Stop the running daemon: unregister via SMAppService, SIGTERM
     /// the process via ProcessSignaller, poll the pidfile.
+    ///
+    /// If the pidfile exists but its contents are unparseable, the
+    /// flock probe is the authoritative running-or-not check (the
+    /// daemon's PidfileLock holds the same lock the probe acquires).
+    /// We skip SIGTERM but still poll — and if the poll times out,
+    /// surface `daemonStillRunning(pid: 0)` so the upgrade fails
+    /// loudly instead of stomping on a still-running daemon.
     private func stopRunningDaemon() async throws {
         do {
             try await deps.agentService.unregister()
         } catch {
-            // Tolerate — SMAppService.unregister can fail benignly
-            // (not registered). The SIGTERM-and-poll below is the
-            // authoritative stop.
             deps.logger.warning(
                 "stop daemon: agentService.unregister failed (continuing)",
                 metadata: ["error": .private("\(error)")])
@@ -761,22 +782,23 @@ public struct Installer {
         guard deps.filesystem.fileExists(at: pidfilePath) else {
             return
         }
-        let pidData: Data
-        do {
-            pidData = try deps.filesystem.read(from: pidfilePath)
-        } catch {
-            return
-        }
-        let raw = String(data: pidData, encoding: .utf8) ?? ""
-        guard let pid = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            return
-        }
-        do {
-            try deps.processSignaller.sendSIGTERM(pid: pid)
-        } catch {
-            deps.logger.warning(
-                "stop daemon: SIGTERM failed (continuing)",
-                metadata: ["pid": .public("\(pid)"), "error": .private("\(error)")])
+        var pid: pid_t = 0
+        if let pidData = try? deps.filesystem.read(from: pidfilePath),
+           let raw = String(data: pidData, encoding: .utf8),
+           let parsed = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+           parsed > 0 {
+            pid = parsed
+            do {
+                try deps.processSignaller.sendSIGTERM(pid: pid)
+            } catch {
+                deps.logger.warning(
+                    "stop daemon: SIGTERM failed (continuing)",
+                    metadata: ["pid": .public("\(pid)"), "error": .private("\(error)")])
+            }
+        } else {
+            deps.logger.warning("stop daemon: pidfile present but unreadable/malformed; relying on flock probe", metadata: [
+                "path": .private(pidfilePath),
+            ])
         }
         let released = await deps.processSignaller.waitForPidfileRelease(
             path: pidfilePath,
@@ -788,6 +810,10 @@ public struct Installer {
 
     /// Replace `__INSTALL_PREFIX__` in the bundle's embedded
     /// LaunchAgents plist with the real install-time bundle path.
+    /// The bundle path is XML-escaped (via `xmlEscapePlistString`)
+    /// before substitution — home directories containing `&`, `<`,
+    /// `>`, `"`, or `'` would otherwise produce an invalid plist
+    /// even though the renderer claims to handle those characters.
     /// Idempotent: re-running on an already-substituted plist (no
     /// placeholder present) is a no-op success.
     private func substituteInstallPrefixPlaceholder(bundlePath: String) throws {
@@ -800,9 +826,10 @@ public struct Installer {
                 "read embedded plist: \(error)")
         }
         let original = String(data: data, encoding: .utf8) ?? ""
+        let escapedReplacement = xmlEscapePlistString(bundlePath)
         let substituted = original.replacingOccurrences(
             of: Self.installPrefixPlaceholder,
-            with: bundlePath)
+            with: escapedReplacement)
         if substituted == original {
             // Already substituted — idempotent no-op.
             return
@@ -870,11 +897,23 @@ public struct Installer {
         return "\(deps.paths.configDirPath)/crm-mac.app.backup.\(ProcessInfo.processInfo.processIdentifier)"
     }
 
+    /// Restore the previous bundle from `<crm-mac.app>.backup.<pid>`
+    /// during an upgrade rollback. Surfaces the rename failure so the
+    /// caller knows the operator now has neither bundle in place
+    /// (left only with the backup) — distinguish that from the
+    /// happy-rollback case.
     private func restoreBundleBackup(from backupPath: String, hadExisting: Bool) throws {
         guard hadExisting else { return }
-        if deps.filesystem.fileExists(at: backupPath) {
-            try? deps.filesystem.rename(
+        guard deps.filesystem.fileExists(at: backupPath) else { return }
+        do {
+            try deps.filesystem.rename(
                 from: backupPath, to: deps.paths.bundleAppPath)
+        } catch {
+            deps.logger.error("upgrade rollback: restore backup failed", metadata: [
+                "backup": .private(backupPath),
+                "error": .private("\(error)"),
+            ])
+            throw error
         }
     }
 

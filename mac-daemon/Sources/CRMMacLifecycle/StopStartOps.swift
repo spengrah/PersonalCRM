@@ -55,11 +55,19 @@ public enum StopOps {
             ])
         }
 
+        // Decide whether a daemon process is running. A present pidfile
+        // is the signal — we don't conclude "not running" just because
+        // we couldn't parse the pid. If parsing fails we skip the
+        // SIGTERM but still poll the flock (the canonical
+        // "is the daemon alive" probe). If the file is absent the
+        // daemon is definitely not running.
         var pid: pid_t = 0
-        if deps.filesystem.fileExists(at: deps.paths.pidfilePath) {
+        let pidfilePresent = deps.filesystem.fileExists(at: deps.paths.pidfilePath)
+        if pidfilePresent {
             if let data = try? deps.filesystem.read(from: deps.paths.pidfilePath),
                let raw = String(data: data, encoding: .utf8),
-               let parsed = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)) {
+               let parsed = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+               parsed > 0 {
                 pid = parsed
                 do {
                     try deps.processSignaller.sendSIGTERM(pid: pid)
@@ -69,10 +77,17 @@ public enum StopOps {
                         "error": .private("\(error)"),
                     ])
                 }
+            } else {
+                // Pidfile exists but we couldn't parse a pid. Don't
+                // claim a clean stop without verification — fall
+                // through to the flock probe, which is authoritative.
+                deps.logger.warning("stop: pidfile present but unreadable/malformed; relying on flock probe", metadata: [
+                    "path": .private(deps.paths.pidfilePath),
+                ])
             }
         }
         let stopped: Bool
-        if pid == 0 {
+        if !pidfilePresent {
             stopped = true
         } else {
             stopped = await deps.processSignaller.waitForPidfileRelease(

@@ -196,27 +196,31 @@ public struct Uninstaller {
     /// SIGTERM the running daemon if a pidfile is present; poll for
     /// release. Returns true on clean stop or no-pidfile; false on
     /// timeout. Tolerant — never throws.
+    ///
+    /// A present-but-malformed pidfile is NOT treated as "not
+    /// running" — the daemon may be alive and the pidfile is just
+    /// unparseable. We skip SIGTERM but still rely on the flock
+    /// probe (the canonical "is the daemon alive" check).
     private func stopRunningDaemonTolerant() async -> Bool {
         let pidfilePath = deps.paths.pidfilePath
         guard deps.filesystem.fileExists(at: pidfilePath) else {
             return true
         }
-        let pidData: Data
-        do {
-            pidData = try deps.filesystem.read(from: pidfilePath)
-        } catch {
-            return true
-        }
-        let raw = String(data: pidData, encoding: .utf8) ?? ""
-        guard let pid = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            return true
-        }
-        do {
-            try deps.processSignaller.sendSIGTERM(pid: pid)
-        } catch {
-            deps.logger.warning("uninstall: SIGTERM failed (continuing)", metadata: [
-                "pid": .public("\(pid)"),
-                "error": .private("\(error)"),
+        if let pidData = try? deps.filesystem.read(from: pidfilePath),
+           let raw = String(data: pidData, encoding: .utf8),
+           let pid = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+           pid > 0 {
+            do {
+                try deps.processSignaller.sendSIGTERM(pid: pid)
+            } catch {
+                deps.logger.warning("uninstall: SIGTERM failed (continuing)", metadata: [
+                    "pid": .public("\(pid)"),
+                    "error": .private("\(error)"),
+                ])
+            }
+        } else {
+            deps.logger.warning("uninstall: pidfile present but unreadable/malformed; relying on flock probe", metadata: [
+                "path": .private(pidfilePath),
             ])
         }
         return await deps.processSignaller.waitForPidfileRelease(

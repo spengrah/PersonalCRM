@@ -75,7 +75,12 @@ public struct LaunchAgentPlist: Equatable {
 /// Minimal XML escaping for plist `<string>` values. Replaces the
 /// five XML-significant characters so an unusual home directory
 /// path (e.g., `/Users/o'malley`) cannot produce a malformed plist.
-private func xmlEscape(_ s: String) -> String {
+/// Public so the installer can apply the same escaping when
+/// substituting `__INSTALL_PREFIX__` post-render — every path that
+/// lands inside `<string>...</string>` must be escaped, regardless
+/// of whether it went through `LaunchAgentPlist.render()` or was
+/// interpolated afterwards.
+public func xmlEscapePlistString(_ s: String) -> String {
     var out = ""
     out.reserveCapacity(s.count)
     for c in s {
@@ -90,3 +95,7 @@ private func xmlEscape(_ s: String) -> String {
     }
     return out
 }
+
+/// Internal alias preserved for the existing `LaunchAgentPlist.render`
+/// call sites.
+private func xmlEscape(_ s: String) -> String { xmlEscapePlistString(s) }

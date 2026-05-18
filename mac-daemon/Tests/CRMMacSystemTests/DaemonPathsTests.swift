@@ -35,14 +35,20 @@ final class DaemonPathsTests: XCTestCase {
         XCTAssertEqual(paths.apiKeyFile.path, "/Users/alice/Library/Application Support/crm-mac/api-key")
     }
 
-    func testLegacyAliasesMirrorLegacyPaths() {
-        // Pre-rewrite deprecated aliases. Kept while the Installer
-        // rewrite is rolled out commit-by-commit. Both must point at
-        // the LEGACY locations so existing call sites preserve their
-        // semantics.
+    func testDeprecatedAliasesPointAtBundleLocations() {
+        // Per plan D12: the deprecated `binaryPath` / `plistPath`
+        // aliases point at the BUNDLE locations (the post-rewrite
+        // canonical paths), not at the legacy bare-binary / plist
+        // locations. The legacy locations remain accessible via the
+        // dedicated `legacyBinary` / `legacyPlist` accessors.
         let home = URL(fileURLWithPath: "/Users/alice")
         let paths = DaemonPaths(home: home)
-        XCTAssertEqual(paths.binaryPath, paths.legacyBinary)
-        XCTAssertEqual(paths.plistPath, paths.legacyPlist)
+        // Use the deprecated property to assert the alias still maps
+        // to the bundle path.
+        XCTAssertEqual(paths.binaryPath, paths.bundleBinary)
+        XCTAssertEqual(paths.plistPath, paths.bundlePlist)
+        // Legacy paths are separate.
+        XCTAssertNotEqual(paths.binaryPath, paths.legacyBinary)
+        XCTAssertNotEqual(paths.plistPath, paths.legacyPlist)
     }
 }

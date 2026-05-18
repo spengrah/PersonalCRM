@@ -50,6 +50,31 @@ final class StopStartTests: XCTestCase {
             "release returned false → stop result must reflect timeout")
     }
 
+    func testStopMalformedPidfileRequiresFlockProbe() async throws {
+        // Per Codex r6 #3: a present-but-unparseable pidfile must
+        // NOT be treated as "daemon not running". The flock probe is
+        // the authoritative running check; if it reports the lock
+        // is still held (release returns false), stop reports
+        // stopped=false even though we never sent SIGTERM.
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        try fs.write(Data("garbage-not-a-pid".utf8), to: paths.pidfilePath)
+        let signaller = FakeProcessSignaller()
+        signaller.nextPidfileReleaseResult = false  // daemon still alive
+        let result = await StopOps.run(
+            StopOpsDependencies(
+                paths: paths,
+                filesystem: fs,
+                agentService: FakeAgentService(),
+                processSignaller: signaller,
+                logger: NoopLogger()),
+            timeoutSeconds: 1)
+        XCTAssertEqual(signaller.sigtermCalls.count, 0,
+            "no SIGTERM when pid is unparseable")
+        XCTAssertFalse(result.stopped,
+            "malformed pidfile + flock probe says held → must report stopped=false")
+    }
+
     func testStopHandlesAbsentPidfile() async {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
