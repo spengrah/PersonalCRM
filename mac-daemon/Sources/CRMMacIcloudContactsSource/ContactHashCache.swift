@@ -206,8 +206,16 @@ public actor ContactHashCache {
         } catch {
             throw ContactHashCacheError.write("write tmp: \(error)")
         }
+        // replaceItemAt requires the destination to exist (it performs
+        // an atomic-rename swap). On first install the cache file is
+        // absent, so fall back to moveItem in that case. Mirrors the
+        // pattern in ProductionFilesystemAdapter.rename.
         do {
-            _ = try fileManager.replaceItemAt(fileURL, withItemAt: tmpURL)
+            if fileManager.fileExists(atPath: fileURL.path) {
+                _ = try fileManager.replaceItemAt(fileURL, withItemAt: tmpURL)
+            } else {
+                try fileManager.moveItem(at: tmpURL, to: fileURL)
+            }
         } catch {
             try? fileManager.removeItem(at: tmpURL)
             throw ContactHashCacheError.write("rename: \(error)")

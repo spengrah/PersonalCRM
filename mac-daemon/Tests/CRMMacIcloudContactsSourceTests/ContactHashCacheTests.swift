@@ -79,6 +79,26 @@ final class ContactHashCacheTests: XCTestCase {
                        "no updates should not create the file")
     }
 
+    func testApplyUpdatesFirstWriteWithAbsentDestination() async throws {
+        // Regression: on first install the cache file does not exist.
+        // FileManager.replaceItemAt throws when the destination is
+        // absent, so writeFile must fall back to moveItem in that case.
+        // Without the fallback every first-tick write fails, the plugin
+        // marks cache_write_failed, and no iCloud events are ever
+        // synced.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path),
+                       "precondition: destination file should not exist")
+        let cache = ContactHashCache(fileURL: fileURL)
+        try await cache.load()
+        try await cache.applyUpdates(["A": "h1"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path),
+                      "cache file should exist after first applyUpdates")
+        let reload = ContactHashCache(fileURL: fileURL)
+        try await reload.load()
+        let aHash = await reload.get("A")
+        XCTAssertEqual(aHash, "h1")
+    }
+
     func testSchemaVersionAboveSupportedThrows() async throws {
         let body = """
         {"schema_version": 999, "hashes": {}}
