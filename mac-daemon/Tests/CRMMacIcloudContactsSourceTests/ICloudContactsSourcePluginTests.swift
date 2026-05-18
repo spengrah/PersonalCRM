@@ -109,7 +109,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
 
     // MARK: - PiClient driver
 
-    private struct ScriptedPi {
+    fileprivate struct ScriptedPi {
         let cursorGet: SourceCursorState
         let knownIDs: KnownIDsData
         let ingestResult: IngestEventsData
@@ -132,12 +132,12 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
     // responses by endpoint shape (GET cursor, GET known-ids, POST
     // ingest, POST cursor).
     final class MockScriptedTransport: @unchecked Sendable {
-        let plan: ScriptedPi
+        fileprivate let plan: ScriptedPi
         var lastCommittedCursor: String?
         var commitWasAttempted = false
         var ingestWasAttempted = false
 
-        init(plan: ScriptedPi) {
+        fileprivate init(plan: ScriptedPi) {
             self.plan = plan
         }
 
