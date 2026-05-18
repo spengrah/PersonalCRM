@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
@@ -689,6 +690,39 @@ func TestHandleExternalContactDeleted_NullStoredHashAccepted(t *testing.T) {
 	}
 	rej := svc.handleExternalContactDeleted(context.Background(), nil, env, uuid.UUID{})
 	require.Nil(t, rej, "legacy row with NULL stored hash must accept any delete hash")
+}
+
+// TestHandleExternalContactDeleted_CrossHostNoOp proves the host-scope
+// guard: when prior.HostID != authenticatedHostID, the handler returns
+// nil (silent no-op) without calling SoftDeleteTx. softDelErr is set to
+// a sentinel; if the guard didn't fire, that error would surface as a
+// rejection.
+func TestHandleExternalContactDeleted_CrossHostNoOp(t *testing.T) {
+	hostA := uuid.New()
+	hostB := uuid.New()
+	storedHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	storedRow := &repository.ExternalContact{
+		ID:              uuid.New(),
+		Source:          "icloud_contacts",
+		SourceID:        "CN-xhost",
+		HostID:          &hostA,
+		LastContentHash: &storedHash,
+	}
+	stubExt := &stubExternalContactWriter{
+		getResp:    storedRow,
+		softDelErr: errors.New("SoftDeleteTx must not be called"),
+	}
+	svc := &IngestService{externalContacts: stubExt}
+	env := &events.Envelope{
+		Source:   "icloud_contacts",
+		SourceID: "CN-xhost@deleted@" + storedHash,
+		Kind:     events.KindExternalContactDeleted,
+		Payload: mustMarshalExtDelete(events.ExternalContactDeletedPayload{
+			Version: 1, HostID: hostB, Source: "icloud_contacts", EntityID: "CN-xhost",
+		}),
+	}
+	rej := svc.handleExternalContactDeleted(context.Background(), nil, env, hostB)
+	require.Nil(t, rej, "cross-host delete must be a silent no-op")
 }
 
 // recordingExternalContactWriter wraps stubExternalContactWriter to

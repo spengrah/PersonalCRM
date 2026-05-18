@@ -976,7 +976,7 @@ func (s *IngestService) handleExternalContactDeleted(
 	ctx context.Context,
 	tx pgx.Tx,
 	env *events.Envelope,
-	_ uuid.UUID,
+	authenticatedHostID uuid.UUID,
 ) *IngestPerEventRejection {
 	if s.externalContacts == nil {
 		return &IngestPerEventRejection{
@@ -1004,6 +1004,16 @@ func (s *IngestService) handleExternalContactDeleted(
 	}
 	if prior == nil || prior.DeletedAt != nil {
 		// Already tombstoned. Idempotent no-op.
+		return nil
+	}
+	// Host-scope guard: don't let host B tombstone a row owned by host A.
+	// The payload-host check in commonExternalContactInvariants only verifies
+	// the daemon's own claim; this check verifies the stored row's owner.
+	// NULL prior.HostID = legacy row (pre-migration 052 or non-mac source)
+	// → pass through so the self-heal-on-upsert path keeps working.
+	// Silent no-op (not a rejection) so a stranded post-re-pair delete in
+	// the daemon's event queue doesn't stall the cursor.
+	if prior.HostID != nil && *prior.HostID != authenticatedHostID {
 		return nil
 	}
 	// Validate the source_id hash suffix against the row's stored

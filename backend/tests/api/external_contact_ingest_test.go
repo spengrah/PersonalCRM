@@ -504,6 +504,91 @@ func TestIngestExternalContact_Deleted_AlreadyTombstoned_NoOp(t *testing.T) {
 		"second delete must not bump deleted_at on an already-tombstoned row")
 }
 
+func TestIngestExternalContact_Deleted_CrossHost_NoOp(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	ctx := context.Background()
+	entityID := env.sourceIDPrefix + "cross-host-delete"
+
+	// Host A (the env's paired host) creates the row.
+	hostA := env.pairedHostID
+	upEv := buildExtUpsertEvent(t, hostA, entityID, nil)
+	w := postIngestExt(t, env, &hostA, env.pairedHostKey, map[string]any{
+		"events": []any{upEv},
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, 1, parseIngestResp(t, w).Accepted)
+	rowBefore := findExtRow(t, env, entityID)
+	require.NotNil(t, rowBefore)
+	require.Nil(t, rowBefore.DeletedAt)
+	require.NotNil(t, rowBefore.HostID)
+	require.Equal(t, hostA, *rowBefore.HostID, "row must be owned by host A")
+
+	// Revoke A so B can pair (idx_mac_host_singleton allows one active host).
+	require.NoError(t, env.macService.RevokeHost(ctx, hostA))
+
+	// Pair host B.
+	plainB, _, err := env.macService.CreatePairingToken(ctx)
+	require.NoError(t, err)
+	pairB, err := env.macService.PairWithToken(ctx, plainB, "host-b-delete", "0.1.0", 1)
+	require.NoError(t, err)
+
+	// Host B emits a delete for host A's row. Uses the @unknown sentinel,
+	// which is the realistic post-re-pair shape (B's daemon has no local
+	// cache of A's prior content hash).
+	delEv := buildExtDeleteEvent(t, pairB.HostID, entityID)
+	w = postIngestExt(t, env, &pairB.HostID, pairB.APIKey, map[string]any{
+		"events": []any{delEv},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted, "cross-host delete is a silent no-op, counted as accepted")
+	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
+
+	// Row must remain live — host B cannot tombstone a row owned by A.
+	rowAfter := findExtRow(t, env, entityID)
+	require.NotNil(t, rowAfter, "row must still exist")
+	require.Nil(t, rowAfter.DeletedAt, "cross-host delete must NOT tombstone the row")
+	require.NotNil(t, rowAfter.HostID)
+	require.Equal(t, hostA, *rowAfter.HostID, "host ownership unchanged")
+}
+
+func TestIngestExternalContact_Deleted_LegacyNullHost_SoftDeletes(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	ctx := context.Background()
+	entityID := env.sourceIDPrefix + "legacy-null-host-delete"
+
+	// Seed a row directly with NULL host_id (simulates pre-migration-052
+	// rows, or rows from sources that don't set host_id).
+	sourceID := entityID
+	syncedAt := accelerated.GetCurrentTime()
+	tx, err := env.database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	_, err = env.externalRepo.UpsertTx(ctx, tx, repository.UpsertExternalContactRequest{
+		Source:   "icloud_contacts",
+		SourceID: sourceID,
+		HostID:   nil, // legacy NULL
+		SyncedAt: &syncedAt,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+
+	// The currently-paired host emits a delete for the legacy row.
+	delEv := buildExtDeleteEvent(t, env.pairedHostID, entityID)
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{delEv},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
+
+	// NULL prior.HostID must pass through the host-scope guard so the
+	// existing soft-delete path keeps working.
+	row := findExtRow(t, env, entityID)
+	require.NotNil(t, row)
+	require.NotNil(t, row.DeletedAt, "NULL-host_id row must still be soft-deletable")
+}
+
 func TestIngestExternalContact_Upserted_DuplicateContentHash_DedupSkipsHandler(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
 	entityID := env.sourceIDPrefix + "dedup"
