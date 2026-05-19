@@ -635,8 +635,9 @@ func TestHandleExternalContactUpserted_SkipsEmailsThatNormalizeToEmpty(t *testin
 
 // TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_NoMatcherCalls
 // proves that an envelope whose every identifier normalizes to empty
-// still ingests cleanly — no matcher calls, no rejection. This is the
-// "manual-review row" path the issue body endorses.
+// still ingests cleanly — no matcher calls, no rejection. The contact
+// lands as an external_contact row with zero linked identities,
+// available for manual review.
 func TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_NoMatcherCalls(t *testing.T) {
 	rowID := uuid.New()
 	hostID := uuid.New()
@@ -667,8 +668,7 @@ func TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_NoMatc
 // TestHandleExternalContactUpserted_MixedJunkAndValid_CallsMatcherOnceWithValid
 // proves both loops run to completion and the matcher receives exactly
 // the two valid values, in source order (emails first, then phones).
-// This guards the cross-loop interaction documented in the plan: junk
-// in one loop must not short-circuit the other.
+// Junk in one loop must not short-circuit the other.
 func TestHandleExternalContactUpserted_MixedJunkAndValid_CallsMatcherOnceWithValid(t *testing.T) {
 	rowID := uuid.New()
 	hostID := uuid.New()

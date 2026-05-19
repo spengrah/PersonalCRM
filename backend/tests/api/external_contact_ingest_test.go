@@ -711,7 +711,7 @@ func TestIngestExternalContact_VersionTooHigh_Rejected(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// Un-normalizable identifier tests (issue #320)
+// Un-normalizable identifier tests
 //
 // Regression coverage for the daemon cursor stall caused by per-event
 // rejections when a phone/email field normalized to the empty string
@@ -836,8 +836,9 @@ func TestIngestExternalContact_Upserted_AllPhonesNormalizeToEmpty_StillAccepts(t
 		"no identity rows must be created when all phones normalize to empty")
 }
 
-// PhoneLiteralPlus is the exact value surfaced by the PR #318
-// hypothesis-validation run that originally exposed issue #320.
+// PhoneLiteralPlus is a regression test for a literal "+" phone
+// surfacing from real iCloud-contacts data: previously rejected as
+// IDENTITY_MATCH_FAILED, now silently skipped.
 func TestIngestExternalContact_Upserted_PhoneLiteralPlus_RegressionForSurfacedData(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
 	ctx := context.Background()
@@ -1022,10 +1023,10 @@ func TestIngestExternalContact_Upserted_ValidEmailMatchingThenJunkPhone_StillAcc
 	require.Equal(t, repository.MatchStatusMatched, row.MatchStatus)
 }
 
-// BatchWithJunkAndValidContacts is the direct regression for issue
-// #320's cursor-stall failure mode: one junk-only event and one
-// matching event in the same batch. Pre-fix, the junk event would
-// reject and the daemon would hold the cursor. Both must now accept.
+// BatchWithJunkAndValidContacts is the direct regression for the
+// cursor-stall failure mode: one junk-only event and one matching
+// event in the same batch. Pre-fix, the junk event would reject and
+// the daemon would hold the iCloud cursor. Both must now accept.
 func TestIngestExternalContact_Upserted_BatchWithJunkAndValidContacts_BothLand(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
 	entityIDJunk := env.sourceIDPrefix + "batch-junk"
