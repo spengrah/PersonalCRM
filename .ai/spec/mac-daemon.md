@@ -9,7 +9,7 @@
 
 ## Summary
 
-Defines a new Mac-side daemon, `crm-mac` (Swift, launchd-managed), that runs on the user's MacBook and ingests local data sources unreachable from the Pi backend. The daemon publishes events to the existing `/api/v1/ingest/events` endpoint and heartbeats host status to a new `mac_host` model. It establishes five logical data sources (Messages.app, WhatsApp, iCloud Contacts, Anarlog humans, Anarlog sessions) and a phased build order with v1 shipping the daemon framework plus Messages and iCloud Contacts.
+Defines a new Mac-side daemon, `crm-mac` (Swift, launchd-managed), that runs on the user's MacBook and ingests local data sources unreachable from the Pi backend. The daemon publishes events to the existing `/api/v1/ingest/events` endpoint and heartbeats host status to a new `mac_host` model. It establishes six logical data sources (Messages.app, Phone/FaceTime call history, WhatsApp, iCloud Contacts, Anarlog humans, Anarlog sessions) and a phased build order with v1 shipping the daemon framework plus Messages and iCloud Contacts.
 
 Local LLM inference on the Mac is **explicitly out of scope** for this spec.
 
@@ -37,11 +37,12 @@ Local LLM inference on the Mac is **explicitly out of scope** for this spec.
 
 ## Vision
 
-The Mac daemon ingests five logical data sources, publishing events to the Pi:
+The Mac daemon ingests six logical data sources, publishing events to the Pi:
 
 | Source | Strategy | Identifier type emitted | Content fidelity | Backfill floor | Discovery? |
 |---|---|---|---|---|---|
 | `messages` (iMessage + SMS via Messages.app) | event stream | `phone`, `email` (generic — see Identifier Types below) | full text + type tag | 2026-01-01 | no |
+| `phone_calls` (Phone + FaceTime via CallHistoryDB) | event stream | `phone`, `email` (generic; channel via `service_provider` column) | direction, duration, answered/missed, service tag | 2026-01-01 | no |
 | `whatsapp` | event stream | `whatsapp` | full text + type tag | 2026-01-01 | no |
 | `icloud_contacts` | entity sync | n/a (matches via contact methods) | full entity, into existing `external_contact` table | all current | yes |
 | `anarlog_humans` | entity sync | `anarlog_human_id` (new) | full entity | all current | yes |
@@ -51,6 +52,7 @@ The Mac daemon ingests five logical data sources, publishing events to the Pi:
 
 **Polling cadence (per source):**
 - `messages`: scheduled ~60-90s
+- `phone_calls`: scheduled ~60-90s (same cadence as `messages` — both are user-perceived realtime sources gated on the same FDA-protected sqlite stores)
 - `whatsapp`: scheduled ~60-90s
 - `icloud_contacts`: scheduled ~15min (full delta via `CNChangeHistoryFetchRequest`)
 - `anarlog_humans`: scheduled ~5min (mtime-based)
@@ -134,6 +136,21 @@ The pairing token model means there's no admin/bootstrap key in widespread use �
 - **Sender filtering:** the daemon filters chat.db senders against the Pi's canonicalized phone/email identifier set **before** forwarding any message. Only rows whose sender resolves to a known `contact_method` are emitted as `raw_message.*` events. Senders that are not in the CRM — spam, businesses, shortcodes, one-time confirmations, unsaved numbers — never leave the Mac. This subsumes the prior plan's `messages_rematch` worker (no staged-but-unmatched rows exist) and eliminates the need for separate content-pattern or org-name heuristics.
 - **Identifier set source:** `GET /api/v1/host/:id/known-identifiers` returns `{phones: [...], emails: [...]}` from every `contact_method` row in the CRM, canonicalized via the existing `identity/normalize.go` rules (E.164 phones, lowercased emails). The daemon refreshes on every heartbeat tick (~60s) and caches the response. Cross-source by design — phones added via iCloud, Google Contacts, manual entry, or any future source flow through the same endpoint.
 - **Cold-start race recovery (30-day backwards scan):** when a `known-identifiers` refresh yields a newly-added identifier (computed by set-diff against the daemon's previous cache), the daemon performs a one-time backwards scan of chat.db over the last **30 days** for that sender's `handle.id` and forwards any matching rows. The 30-day window covers the "friend-of-a-friend met in a group chat, contact information saved after the fact" case: their prior messages get backdated into the CRM as soon as they appear in `contact_method`. Idempotency comes from the existing event-log `(source, source_id)` dedup — overlap with messages already forwarded via the live cursor is absorbed safely.
+
+#### `phone_calls` (Phone + FaceTime via CallHistoryDB)
+
+- **Source:** `~/Library/Application Support/CallHistoryDB/CallHistory.storedata` (Core Data SQLite). Read-only via GRDB.swift with `?mode=ro&immutable=1`; back-off on `SQLITE_BUSY` (the Phone/FaceTime apps hold a writer lock while a call is in progress). Covers Continuity-mirrored iPhone voice calls, native macOS Phone-app calls (macOS Sequoia+), FaceTime audio, and FaceTime video — all unified in `ZCALLRECORD`.
+- **Cursor:** `MAX(ZDATE)` from `ZCALLRECORD` (Mac absolute time — seconds since 2001-01-01, converted to UTC at emit). Same `backfill_cursor` + `live_cursor` JSON shape as `messages`; install-time max is the live-cursor anchor.
+- **Identifier types emitted:** generic `phone` and `email`. Channel/provenance carried in `source='phone_calls'`, with the specific service (voice / facetime_audio / facetime_video) recorded as a payload column derived from `ZSERVICE_PROVIDER`. Rationale matches `messages`: identifier type describes identifier shape, source describes the integration; FaceTime-only handles (Apple IDs) naturally fall into `email`.
+- **Content:** per-call record — direction (`ZORIGINATED`: 1=outgoing), peer handle (`ZADDRESS`, normalized via existing `identity/normalize.go` E.164/email rules), service (`ZSERVICE_PROVIDER` → enum `voice` | `facetime_audio` | `facetime_video`), answered/missed (`ZANSWERED`), duration in seconds (`ZDURATION`, 0 for unanswered), call timestamp (`ZDATE`), unique ID (`ZUNIQUE_ID` — primary dedup key, globally unique per call across Continuity-paired devices).
+- **Interaction semantics:** each call row → one interaction. Direction inferred from `ZORIGINATED`; duration carried in interaction metadata; missed inbound calls **are** emitted (they're a meaningful outreach signal from the contact — cadence-side logic treats them as inbound), missed outbound calls are emitted with `direction=outbound` and `duration=0` (consistent with "attempted to reach"). `last_contacted` update rules already in [[project_contact_timestamp_semantics]] apply unchanged: inbound bumps `last_contacted`, outbound bumps `last_outreach_at` only.
+- **Aggregation:** **none.** Calls are discrete events with explicit start time and duration — they are *not* burst-windowed. Each call event flows directly through the Pi ingest service inline (Stage 1 only), analogous to `meeting_note.recorded`: in the ingest tx, upsert `phone_call` staging row (dedup by `ZUNIQUE_ID`), match identifier to `contact_id`, create one interaction with `source='phone_calls'` + duration metadata, emit `interaction.recorded`. No Stage 2/3, no `claimed_at` / `claimed_session_ref` columns, no aggregator River job. (Architectural simplification vs `messages` paid by the source itself being simpler.)
+- **Edits / deletes:** CallHistoryDB rows are append-only in normal use. The Phone app's "Clear All Recents" action **does** delete rows; v1 treats deletions as out-of-scope (interactions stay in the CRM). v2 mutation-scan reader (same one needed for messages/whatsapp edits) covers the delete case via `(source, source_id)` reconciliation.
+- **Permission:** Full Disk Access — same gate as `messages`. No new permission prompt if the user has already granted FDA for `messages`.
+- **Discovery role:** none. Same reasoning as `messages` — call handles are phones/emails that any contact source can already supply. Daemon-side filtering uses the same `known-identifiers` set.
+- **Sender filtering:** reuses the `messages` daemon-side filter unchanged. The daemon canonicalizes each call's peer handle and forwards only rows matching the known phone/email set. Spam calls, robocalls, businesses, unsaved numbers never leave the Mac.
+- **Identifier set source:** same `GET /api/v1/host/:id/known-identifiers` endpoint as `messages`. No new endpoint; the existing per-heartbeat refresh covers both sources.
+- **Cold-start race recovery (30-day backwards scan):** identical model to `messages`. When `known-identifiers` diff shows a newly-added identifier, the daemon scans the last 30 days of `ZCALLRECORD` for that handle and forwards any matches. Event-log `(source, source_id)` dedup absorbs overlap.
 
 #### `whatsapp`
 
@@ -236,6 +253,7 @@ Without a claim mechanism, the following race can lose work:
 | `external_contact.deleted` | new | same | n/a — fully inline | set `external_contact.deleted_at = NOW()`. **Does NOT detach `crm_contact_id`** — the `deleted_at` filter already hides the row from match/import queries; preserving the FK enables transparent revive (the upsert path NULLs out `deleted_at` and the prior link remains intact). | n/a |
 | `meeting_note.recorded` (anarlog_sessions) | new | Pi ingest service inline (Stage 1 only) | n/a — fully inline | upsert `meeting_note` staging row (dedup by session UUID), resolve participants via `external_identity` for `anarlog_human_id`, create one interaction per matched participant, emit `interaction.recorded` via existing bus | n/a |
 | `meeting_note.deleted` | new | same | n/a — fully inline | mark staging row `deleted_at = NOW()`; mark the linked interactions soft-deleted via existing interaction soft-delete | n/a |
+| `call.received`, `call.sent` (phone_calls) | new | Pi ingest service inline (Stage 1 only) | n/a — fully inline | upsert `phone_call` staging row (dedup by `ZUNIQUE_ID`), match phone/email identifier via existing matcher, create one interaction with `source='phone_calls'` + duration/service metadata, emit `interaction.recorded` via existing bus | n/a |
 
 **`mac_host.heartbeat` is NOT an event** — it's a dedicated endpoint (`POST /api/v1/host/:id/heartbeat`) writing directly to the `mac_host` table. Heartbeats don't traverse the event bus; they're operational state, not domain events.
 
@@ -280,7 +298,7 @@ type AttachmentMeta struct {
 
 V2 fields are populated by the Mac daemon. Telegram's existing producer continues emitting V1; existing consumer logic unchanged. The aggregator (extracted from telegram, now in `backend/internal/messaging/aggregation`) emits V1 or V2 events depending on source. `InteractionRecorder` consumes both; new V2 fields are passed through to the interaction row's metadata where useful.
 
-`interaction.source` CHECK constraint extended via migration to add `messages`, `whatsapp`, `anarlog_sessions`. `external_sync_state.strategy` CHECK constraint extended to add `push`.
+`interaction.source` CHECK constraint extended via migration to add `messages`, `phone_calls`, `whatsapp`, `anarlog_sessions`. `external_sync_state.strategy` CHECK constraint extended to add `push`.
 
 **Non-message event payloads (new):**
 
@@ -384,6 +402,7 @@ The existing `MessageReceivedPayload` and `MessageSentPayload` (used post-aggreg
 - **`messages_message`** — staging table mirroring `telegram_message`. **Globally unique on `guid`** (iMessage's per-message stable ID — cross-host dedup). Columns include: `guid`, `chat_guid`, `peer_handle`, `peer_normalized`, `text`, `message_type`, `sent_at`, `is_outgoing`, `is_group_chat`, `matched_contact_id`, `interaction_id`, `mac_host_id` (provenance only), `processed_at` (NULL until Stage 3 commits), **`claimed_at` TIMESTAMPTZ** (NULL until aggregator's create path claims; cleared by InteractionRecorder when Stage 3 commits), **`claimed_session_ref` TEXT** (deterministic sourceRef of the pending create-event; cleared by Stage 3). Partial index on `(matched_contact_id) WHERE processed_at IS NULL AND claimed_at IS NULL` to support the aggregator's input filter efficiently.
 - **`whatsapp_message`** — staging table. **Globally unique on `stanza_id`** (WhatsApp server-side message ID). Same column shape as `messages_message` (including `claimed_at` and `claimed_session_ref`) with WhatsApp-specific JIDs. Schema details in implementation plan.
 - **`anarlog_session_message`** (or `meeting_note`) — staging table for anarlog session content. Unique on `anarlog_session_id` (UUID). Columns: session UUID, title, summary, memo, participants JSONB, created_at, `mac_host_id`. **No `claimed_at`/`claimed_session_ref` needed** — anarlog sessions are 1:1 with events (no burst aggregation), so the create-path race doesn't apply.
+- **`phone_call`** — staging table for Phone/FaceTime call records. **Globally unique on `call_unique_id`** (`ZCALLRECORD.ZUNIQUE_ID` — Continuity propagates the same value across paired devices, so two Macs pushing the same call dedup at the staging unique constraint). Columns: `call_unique_id`, `peer_handle`, `peer_normalized`, `service` (`voice` | `facetime_audio` | `facetime_video`), `direction` (`inbound` | `outbound`), `answered` BOOL, `duration_seconds` INT, `started_at` TIMESTAMPTZ, `matched_contact_id`, `interaction_id`, `mac_host_id`. **No `claimed_at`/`claimed_session_ref` needed** — calls are 1:1 with interactions (no burst aggregation). `processed_at` is set in the same ingest tx that creates the interaction.
 
 **Telegram migration:** the existing `telegram_message` table also gains `claimed_at` and `claimed_session_ref` columns via the same migration. The shared aggregator requires them on its source-neutral repository interface. Existing rows backfill with NULL (safe — equivalent to "unclaimed"); the Telegram aggregator's call sites update to use the claim-aware filter.
 
@@ -393,7 +412,7 @@ The existing `MessageReceivedPayload` and `MessageSentPayload` (used post-aggreg
   - **Query rules for `deleted_at`:** every query against `external_contact` must filter `WHERE deleted_at IS NULL` unless explicitly working with tombstones. This includes: identity matching candidate lookups, import-candidate UI listings, duplicate-of-id resolution, rematch-worker scans, and per-source statistics. Mirrors the existing soft-delete pattern across the codebase (per `.ai/rules/core.md`). The upsert path (driven by `external_contact.upserted` events) NULLs out `deleted_at` if the row was previously tombstoned, restoring it transparently.
 - **`external_identity`** — used for `(identifier, identifier_type, source)` tracking. New identifier type `anarlog_human_id`. Existing `imessage_phone` / `imessage_email` types become unused; cleanup migration in a follow-up.
 - **`external_sync_state`** — one row per `(source, account_id)` where `account_id = mac_host.id`. Strategy CHECK constraint extended to include `'push'`. The existing `cursor TEXT` column is sufficient for opaque cursor storage.
-- **`interaction.source`** CHECK constraint extended to include `'messages'`, `'whatsapp'`, `'anarlog_sessions'`.
+- **`interaction.source`** CHECK constraint extended to include `'messages'`, `'phone_calls'`, `'whatsapp'`, `'anarlog_sessions'`.
 - **`sync_log`** — one entry per batch.
 - **`event` table + River workers** — unchanged.
 
@@ -408,6 +427,7 @@ Canonical names per surface. v1 migrations align Mac-introduced sources with the
 | Telegram (existing) | `telegram` | `telegram` | n/a | `telegram` | `telegram` | Telegram |
 | Todoist (existing) | `todoist` | `todoist` | n/a | `todoist` | `todoist` | Todoist |
 | Messages.app (new) | `messages` | `messages` | n/a (no contact entity sync) | `messages` | `messages` | Messages |
+| Phone / FaceTime (new) | `phone_calls` | `phone_calls` | n/a (no contact entity sync) | `phone_calls` | `phone_calls` | Phone & FaceTime |
 | WhatsApp (new) | `whatsapp` | `whatsapp` | n/a | `whatsapp` | `whatsapp` | WhatsApp |
 | iCloud Contacts (new) | `icloud_contacts` | `icloud_contacts` | `icloud_contacts` | n/a (entity sync) | `icloud_contacts` | iCloud Contacts |
 | Anarlog Humans (new) | `anarlog_humans` | `anarlog_humans` | `anarlog_humans` | n/a (entity sync) | `anarlog_humans` | Anarlog Humans |
@@ -429,6 +449,8 @@ Mirror Telegram's pattern. Run on `contact_method.created` (for phone/email-deri
 - `anarlog_sessions_rematch` — on `external_contact.upserted` (with `match_status=matched`) for source=anarlog_humans
 
 **No `messages_rematch` worker.** Messages-source filtering happens **on the Mac daemon** (see "Sender filtering" + "Cold-start race recovery" under the `messages` source description). The daemon never forwards unmatched senders, so no staged-but-unmatched rows exist on the Pi to rematch. New `contact_method` rows are picked up by the daemon's next `known-identifiers` refresh, which triggers a 30-day backwards scan of chat.db for the newly-known sender. If WhatsApp later adopts the same daemon-side filter pattern, its rematch worker becomes redundant too.
+
+**No `phone_calls_rematch` worker** — same reasoning as `messages`. The daemon's `known-identifiers` filter + 30-day backwards scan over `ZCALLRECORD` handles new-contact backfill identically.
 
 #### Endpoints
 
@@ -517,6 +539,8 @@ Same message landing on two Macs is deduplicated at the staging-table unique con
 |---|---|---|
 | `messages` (phone handles) | `phone` (generic) | Messages.app delivers both iMessage and SMS; `imessage_phone` is semantically inaccurate. `source='messages'` carries channel provenance. |
 | `messages` (email handles) | `email` (generic) | Same reasoning. |
+| `phone_calls` (voice + FaceTime audio) | `phone` (generic) | CallHistoryDB carries Continuity voice, native macOS Phone-app voice, and FaceTime audio uniformly; service tier recorded as a payload column, not in identifier type. |
+| `phone_calls` (FaceTime video to Apple ID) | `email` (generic) | FaceTime video calls placed to an Apple ID surface as an email handle in `ZADDRESS`. Same generic mapping as messages. |
 | `whatsapp` | `whatsapp` | Both a contact_method type and an identifier_type with functional dual-mapping (matches `contact_method.whatsapp` AND `contact_method.phone`). Loses match coverage if reduced to generic. |
 | `icloud_contacts` | n/a — matches via individual phone/email contact methods, same as `gcontacts` |
 | `anarlog_humans` | `anarlog_human_id` (new) | UUID identity space, no contact_method mapping; pure storage hook for future session→human→contact resolution. |
@@ -753,6 +777,28 @@ Anchor only; full scope brainstormed before PR8 kicks off.
 - Event publishing: `external_contact.upserted` / `external_contact.deleted` to `POST /api/v1/ingest/events`.
 - Conforms `ICloudContactsSource` to `SourcePlugin` from PR6.
 - Pi-side bits already merged in PR5.
+
+### v1.5 — Phone & FaceTime call history
+
+Small follow-on to v1 that reuses every cross-cutting concern v1 paid for (FDA permission, pairing, `MacHostAuthMiddleware`, ingest-service inline-event pattern from `meeting_note`/`external_contact`, `known-identifiers` filter, push-strategy provider scheduling, Mac settings page). Adds one Swift source reader, one staging table, one set of event kinds, one migration. No aggregator changes (calls are 1:1 with interactions; no burst-windowing).
+
+**Daemon:**
+- Swift `PhoneCalls` reader (GRDB.swift, read-only): opens `~/Library/Application Support/CallHistoryDB/CallHistory.storedata` with `?mode=ro&immutable=1`; back-off on `SQLITE_BUSY`.
+- Schema validation via `PRAGMA table_info` on `ZCALLRECORD` at startup; mark reader unhealthy on column-name drift (Phone/FaceTime DB has migrated in past macOS releases — defence-in-depth).
+- Cursor: `MAX(ZDATE)` from `ZCALLRECORD`. Same `backfill_cursor` + `live_cursor` JSON shape as `messages`.
+- Backfill to 2026-01-01.
+- Reuses the daemon-side `known-identifiers` filter + 30-day backwards-scan logic from v1's `messages` source (extract into a shared helper if not already factored out in PR7).
+- Event publishing: `call.received` / `call.sent` to `POST /api/v1/ingest/events`.
+- Conforms `PhoneCallsSource` to `SourcePlugin` from PR6.
+
+**Pi backend:**
+- New `phone_call` staging table (globally unique on `call_unique_id`).
+- New event kinds: `call.received`, `call.sent`. Ingest service handles both **inline (Stage 1 only)** — the same pattern used for `meeting_note.recorded` and `external_contact.upserted`. No new River jobs.
+- `interaction.source` CHECK constraint extension: add `phone_calls`.
+- `ProviderRegistry` registration for `phone_calls` (Strategy=push); scheduler exclusion already wired in v1.
+- Frontend: `phone_calls` auto-appears in the Integrations list and Mac settings page via the existing rendering paths; new icon/label for `interaction.source='phone_calls'` in the contact timeline.
+
+**Outcome:** Voice calls (Continuity-mirrored, native macOS Phone app, FaceTime audio/video) update `last_contacted` and appear on contact timelines with duration + service tier.
 
 ### v2 — Anarlog (humans + sessions)
 
