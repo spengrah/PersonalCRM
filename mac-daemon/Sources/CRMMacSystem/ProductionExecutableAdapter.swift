@@ -6,8 +6,19 @@ import CRMMacLifecycle
 
 public struct ProductionExecutableAdapter: ExecutableAdapter {
     public let codesignPath: String
-    public init(codesignPath: String = "/usr/bin/codesign") {
+    public let signingIdentity: String?
+
+    public init(
+        codesignPath: String = "/usr/bin/codesign",
+        signingIdentity: String? = ProcessInfo.processInfo.environment["CRM_MAC_CODESIGN_IDENTITY"]
+    ) {
         self.codesignPath = codesignPath
+        let trimmed = signingIdentity?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty, trimmed != "-" {
+            self.signingIdentity = trimmed
+        } else {
+            self.signingIdentity = nil
+        }
     }
 
     public func currentExecutablePath() throws -> String {
@@ -28,18 +39,15 @@ public struct ProductionExecutableAdapter: ExecutableAdapter {
             errorPrefix: "")
     }
 
-    public func adhocCodesignBundle(bundlePath: String, identifier: String) throws {
+    public func codesignBundle(bundlePath: String, identifier: String) throws {
         // Pass 1: inner Mach-O with an explicit --identifier. This
         // overrides whatever identifier Swift's build pipeline embedded
         // (typically the executable name + a build-host-derived
-        // suffix) so the codesign-recorded identifier matches the
-        // bundle ID exactly. TCC for bundled apps keys on this value.
+        // suffix) so the codesign-recorded identifier matches the bundle ID.
         let innerMachoPath = "\(bundlePath)/\(BundleAssembler.machoRelativePath)"
         try runCodesign(
-            arguments: [
+            arguments: signingArguments(identifier: identifier) + [
                 "--force",
-                "--sign", "-",
-                "--identifier", identifier,
                 innerMachoPath,
             ],
             errorPrefix: "inner mach-o ")
@@ -47,12 +55,22 @@ public struct ProductionExecutableAdapter: ExecutableAdapter {
         // in pass 1. --deep is officially discouraged by Apple for
         // signing and reserved for VERIFY-only).
         try runCodesign(
-            arguments: [
+            arguments: signingArguments(identifier: identifier) + [
                 "--force",
-                "--sign", "-",
                 bundlePath,
             ],
             errorPrefix: "bundle seal ")
+    }
+
+    private func signingArguments(identifier: String) -> [String] {
+        var args = [
+            "--sign", signingIdentity ?? "-",
+            "--identifier", identifier,
+        ]
+        if signingIdentity != nil {
+            args.append("--timestamp=none")
+        }
+        return args
     }
 
     private func runCodesign(arguments: [String], errorPrefix: String) throws {

@@ -1,7 +1,7 @@
 // ExecutableAdapter encapsulates the two binary-resolution operations
 // the installer needs:
 //   - "what is the absolute path of the currently-running crm-mac?"
-//   - "ad-hoc codesign this path"
+//   - "codesign this path"
 // Production impl uses Bundle.main.executablePath + a Process
 // shell-out to `codesign`; tests inject a fake that records calls.
 import Foundation
@@ -27,12 +27,12 @@ public protocol ExecutableAdapter {
     /// cleanup path only — the bare-binary install pre-PR8c.
     /// `codesign -s - --force --preserve-metadata=... <path>`.
     func adhocCodesign(path: String) throws
-    /// Two-pass ad-hoc sign of a complete `.app` bundle:
-    ///   1. `codesign --force --sign - --identifier <id> <bundle>/Contents/MacOS/crm-mac`
-    ///   2. `codesign --force --sign - <bundle>`
-    /// The explicit `--identifier` on pass 1 is the property TCC
-    /// keys on for bundled apps — without it the inner Mach-O can
-    /// keep a build-host-derived identifier (e.g. `crm-mac-<hash>`)
-    /// that churns on every rebuild.
-    func adhocCodesignBundle(bundlePath: String, identifier: String) throws
+    /// Two-pass sign of a complete `.app` bundle:
+    ///   1. `codesign --force --sign <identity> --identifier <id> <bundle>/Contents/MacOS/crm-mac`
+    ///   2. `codesign --force --sign <identity> --identifier <id> <bundle>`
+    /// Production uses `CRM_MAC_CODESIGN_IDENTITY` when set, otherwise
+    /// falls back to ad-hoc signing (`--sign -`) for CI/local smoke
+    /// builds. The explicit `--identifier` keeps the inner Mach-O from
+    /// retaining a build-host-derived identifier.
+    func codesignBundle(bundlePath: String, identifier: String) throws
 }

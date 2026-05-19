@@ -2,7 +2,7 @@
 // plist references the real install-time bundle path AT the moment
 // the bundle is codesigned — not after. The plist is a sealed
 // resource under the bundle codesign manifest; modifying it after
-// `adhocCodesignBundle` runs invalidates the seal and SMAppService
+// `codesignBundle` runs invalidates the seal and SMAppService
 // rejects the bundle on subsequent register() calls
 // ("Codesigning failure loading plist ... code: -67054").
 //
@@ -134,7 +134,7 @@ final class InstallerLaunchAgentEmbeddingTests: XCTestCase {
 }
 
 /// Test double that snapshots the embedded LaunchAgent plist at the
-/// instant `adhocCodesignBundle` is called. Lets a test assert what
+/// instant `codesignBundle` is called. Lets a test assert what
 /// the codesign pass actually sealed, separately from what the final
 /// on-disk plist contains.
 final class SnapshottingFakeExecutableAdapter: ExecutableAdapter, @unchecked Sendable {
@@ -159,9 +159,9 @@ final class SnapshottingFakeExecutableAdapter: ExecutableAdapter, @unchecked Sen
         try inner.adhocCodesign(path: path)
     }
 
-    func adhocCodesignBundle(bundlePath: String, identifier: String) throws {
+    func codesignBundle(bundlePath: String, identifier: String) throws {
         let plistPath = "\(bundlePath)/\(BundleAssembler.launchAgentPlistRelativePath)"
         plistAtCodesignTime = try? filesystem.read(from: plistPath)
-        try inner.adhocCodesignBundle(bundlePath: bundlePath, identifier: identifier)
+        try inner.codesignBundle(bundlePath: bundlePath, identifier: identifier)
     }
 }
