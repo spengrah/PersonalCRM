@@ -13,7 +13,7 @@
 //       xyz.spengrah.crm-mac.plist      <- input.launchAgentPlistContent (string)
 //
 // Two-pass codesign is delegated to
-// `ExecutableAdapter.adhocCodesignBundle(bundlePath:identifier:)`.
+// `ExecutableAdapter.codesignBundle(bundlePath:identifier:)`.
 //
 // The caller is responsible for the tmp-path-then-rename pattern; this
 // method writes directly to `bundlePath`. Failure recovery (rollback
@@ -124,12 +124,11 @@ public struct BundleAssembler {
             Data(input.launchAgentPlistContent.utf8),
             to: launchAgentDest)
 
-        // 5. Two-pass ad-hoc codesign: inner Mach-O with
-        //    an explicit `--identifier <bundle-id>` (so TCC keys on
-        //    the bundle ID), then bundle seal. Wrapped in the
-        //    ExecutableAdapter so tests can record + script the
+        // 5. Two-pass codesign: inner Mach-O with an explicit
+        //    `--identifier <bundle-id>`, then bundle seal. Wrapped in
+        //    the ExecutableAdapter so tests can record + script the
         //    codesign invocation without shelling out.
-        try executable.adhocCodesignBundle(
+        try executable.codesignBundle(
             bundlePath: input.bundlePath,
             identifier: input.codesignIdentifier)
     }

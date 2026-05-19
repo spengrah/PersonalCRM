@@ -73,7 +73,10 @@ final class BundleAssemblyParityTests: XCTestCase {
         // shell-script reads.
         let infoPlistBytes = try Data(contentsOf: infoPlistURL)
         let fs = ProductionFilesystemAdapter()
-        let exec = ProductionExecutableAdapter()
+        // Force ad-hoc signing regardless of the developer's shell env so the
+        // parity assertion is deterministic — otherwise a developer with
+        // `CRM_MAC_CODESIGN_IDENTITY` exported runs a different path than CI.
+        let exec = ProductionExecutableAdapter(signingIdentity: nil)
         let assembler = BundleAssembler(filesystem: fs, executable: exec)
         try assembler.assemble(BundleAssemblerInput(
             machoSourcePath: machoSource.path,
@@ -170,6 +173,12 @@ final class BundleAssemblyParityTests: XCTestCase {
             bundlePath.path,
             infoPlistSource.path,
         ]
+        // Strip CRM_MAC_CODESIGN_IDENTITY from the child env so the shell
+        // script signs ad-hoc regardless of the developer's exported shell
+        // env — matches the Swift adapter pinning above.
+        var env = ProcessInfo.processInfo.environment
+        env.removeValue(forKey: "CRM_MAC_CODESIGN_IDENTITY")
+        proc.environment = env
         let outPipe = Pipe(), errPipe = Pipe()
         proc.standardOutput = outPipe
         proc.standardError = errPipe

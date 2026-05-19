@@ -10,7 +10,19 @@
 #   - <info_plist_source> Path to the canonical Info.plist
 #                         (mac-daemon/Sources/crm-mac/Info.plist).
 #
-# Output: a fully-assembled, ad-hoc-codesigned crm-mac.app bundle at
+# Optional:
+#   CRM_MAC_CODESIGN_IDENTITY=<identity>
+#       Sign the bundle with a local codesigning identity instead of
+#       ad-hoc signing. **Local self-signed Code Signing certificate
+#       only** — the script unconditionally appends --timestamp=none
+#       whenever this is set, which would silently strip the trusted
+#       timestamp from a real Apple Developer ID signature. A stable
+#       self-signed cert keeps the designated requirement stable
+#       across rebuilds, which lets FDA grants survive local
+#       development rebuilds (Contacts grants still re-prompt — TCC
+#       Contacts subsystem binds to CDHash regardless of DR).
+#
+# Output: a fully-assembled, codesigned crm-mac.app bundle at
 # <bundle_path> with:
 #
 #   crm-mac.app/Contents/
@@ -36,15 +48,16 @@
 # plutil, codesign. No xcodebuild, no swiftc invocation, no lipo.
 #
 # Two-pass codesign:
-#   1. Inner Mach-O signed with explicit --identifier xyz.spengrah.crm-mac
-#      (so TCC keys on the bundle ID, not a build-host-derived suffix).
-#   2. Outer bundle seal (no --deep; the inner binary was signed first).
+#   1. Inner Mach-O signed with explicit --identifier xyz.spengrah.crm-mac.
+#   2. Outer bundle seal with the same identifier (no --deep; the
+#      inner binary was signed first).
 #
 # Verifications:
 #   - codesign --verify --strict --deep on the bundle (--deep is
 #     Apple-recommended for VERIFICATION only).
 #   - Inner Mach-O Identifier= line matches xyz.spengrah.crm-mac.
 #   - Outer bundle Identifier= line matches xyz.spengrah.crm-mac.
+#   - Certificate-backed signatures do not fall back to a cdhash DR.
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
@@ -57,6 +70,16 @@ BUNDLE_PATH="$2"
 INFO_PLIST_SOURCE="$3"
 BUNDLE_IDENTIFIER="xyz.spengrah.crm-mac"
 LAUNCH_AGENTS_PLIST_NAME="${BUNDLE_IDENTIFIER}.plist"
+CODE_SIGN_IDENTITY="${CRM_MAC_CODESIGN_IDENTITY:-}"
+if [ "${CODE_SIGN_IDENTITY}" = "-" ]; then
+    CODE_SIGN_IDENTITY=""
+fi
+
+if [ -n "${CODE_SIGN_IDENTITY}" ]; then
+    CODESIGN_SIGN_ARGS=(--sign "${CODE_SIGN_IDENTITY}" --timestamp=none)
+else
+    CODESIGN_SIGN_ARGS=(--sign -)
+fi
 
 # Defensive: refuse if no Xcode/CLT is selected. xcode-select -p prints
 # the active developer dir on stdout; we only care that it is non-empty.
@@ -138,10 +161,12 @@ plutil -lint "${BUNDLE_PATH}/Contents/Info.plist" >/dev/null
 plutil -lint "${BUNDLE_PATH}/Contents/Library/LaunchAgents/${LAUNCH_AGENTS_PLIST_NAME}" >/dev/null
 
 # Two-pass codesign.
-codesign --force --sign - \
+codesign --force "${CODESIGN_SIGN_ARGS[@]}" \
     --identifier "${BUNDLE_IDENTIFIER}" \
     "${BUNDLE_PATH}/Contents/MacOS/crm-mac"
-codesign --force --sign - "${BUNDLE_PATH}"
+codesign --force "${CODESIGN_SIGN_ARGS[@]}" \
+    --identifier "${BUNDLE_IDENTIFIER}" \
+    "${BUNDLE_PATH}"
 
 # Triple verification.
 codesign --verify --strict --deep "${BUNDLE_PATH}"
@@ -155,3 +180,28 @@ if [ "${outer_identifier}" != "${BUNDLE_IDENTIFIER}" ]; then
     echo "FAIL: outer bundle Identifier=${outer_identifier}; expected ${BUNDLE_IDENTIFIER}" >&2
     exit 1
 fi
+
+inner_requirement="$(codesign --display -r - "${BUNDLE_PATH}/Contents/MacOS/crm-mac" 2>&1 | sed -n -e 's/^designated => //p' -e 's/^# designated => //p')"
+outer_requirement="$(codesign --display -r - "${BUNDLE_PATH}" 2>&1 | sed -n -e 's/^designated => //p' -e 's/^# designated => //p')"
+
+# Fail loudly if the designated-requirement line couldn't be parsed at
+# all. An empty value would silently bypass the cdhash check below.
+if [ -z "${inner_requirement}" ] || [ -z "${outer_requirement}" ]; then
+    echo "FAIL: could not parse designated requirement from codesign output" >&2
+    echo "inner: ${inner_requirement}" >&2
+    echo "outer: ${outer_requirement}" >&2
+    exit 1
+fi
+
+if [ -n "${CODE_SIGN_IDENTITY}" ]; then
+    if [[ "${inner_requirement}" == *cdhash* ]] || [[ "${outer_requirement}" == *cdhash* ]]; then
+        echo "FAIL: certificate-backed signing produced a cdhash designated requirement" >&2
+        echo "inner: ${inner_requirement}" >&2
+        echo "outer: ${outer_requirement}" >&2
+        exit 1
+    fi
+    echo "signed-with: ${CODE_SIGN_IDENTITY} (certificate-backed; FDA grants persist across rebuilds, Contacts grants do not)"
+else
+    echo "signed-with: ad-hoc (FDA + Contacts grants both reset on rebuild)"
+fi
+echo "designated-requirement: ${outer_requirement}"

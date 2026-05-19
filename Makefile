@@ -38,7 +38,7 @@ help:
 	@echo "  dev-native  - Start dev servers with native PostgreSQL (no Docker)"
 	@echo "  build       - Build both frontend and backend"
 	@echo "  crm-admin   - Build the operator-only admin CLI (backend/crm-admin)"
-	@echo "  mac-daemon  - Build the macOS daemon app bundle (mac-daemon/.build/release/crm-mac.app, ad-hoc signed)"
+	@echo "  mac-daemon  - Build the macOS daemon app bundle (optionally set CRM_MAC_CODESIGN_IDENTITY)"
 	@echo "  sqlc        - Regenerate sqlc code from SQL queries"
 	@echo "  lint        - Run all linters (backend + frontend)"
 	@echo "  clean       - Clean build artifacts"
@@ -260,9 +260,11 @@ crm-admin:
 
 # Mac daemon. Built locally on a Mac; not wired into `make build`
 # because the Pi-side build pipeline has no Swift toolchain.
-# Produces an ad-hoc-signed crm-mac.app bundle at
-# mac-daemon/.build/release/crm-mac.app (per the SMAppService
-# architecture in .ai/log/plan/mac-daemon-app-bundle-rewrite.md).
+# Produces a signed crm-mac.app bundle at mac-daemon/.build/release/crm-mac.app
+# (per the SMAppService architecture in
+# .ai/log/plan/mac-daemon-app-bundle-rewrite.md). Set
+# CRM_MAC_CODESIGN_IDENTITY to use a stable local codesigning identity;
+# otherwise the bundle is ad-hoc signed.
 # Bundle assembly is delegated to Scripts/assemble_bundle.sh — only
 # Command Line Tools (no full Xcode) are required.
 mac-daemon:
