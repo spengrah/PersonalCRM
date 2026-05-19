@@ -41,6 +41,10 @@ Empirical behavior of cert-backed signing (validated against macOS Sequoia):
 
 If `xyz.spengrah.crm-mac` already appears toggled-on in the Contacts pane but a dialog still fires, that's the same quirk — let the prompt drive the regrant.
 
+When switching an existing install from ad-hoc to a local certificate (or vice versa), the designated requirement changes once; both FDA and Contacts will re-prompt on the first launch after the transition. Subsequent rebuilds under the cert-backed path then settle into the "FDA persists, Contacts re-prompts" steady state described above.
+
+The env var is **optional**. To experiment with the daemon without creating a cert, omit it everywhere (build + install + upgrade) and accept the per-rebuild regrant cost. The snippets below all set it; drop the `CRM_MAC_CODESIGN_IDENTITY="..." \` line if you want ad-hoc.
+
 ## Pair + install (manual smoke)
 
 Replace `<pi-host>` with your Pi's reachable hostname and `<pi-url>` with the Pi's HTTPS base URL.

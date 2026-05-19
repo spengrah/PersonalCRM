@@ -5,9 +5,27 @@
 // covers the parts that don't need an actual codesign binary.
 import XCTest
 @testable import CRMMacSystem
+import CRMMacLifecycle
 
 final class ProductionExecutableAdapterTests: XCTestCase {
-    // MARK: - signingIdentity coercion
+    // POSIX env var read by the default initializer expression. Each
+    // test that exercises the default initializer must guarantee its
+    // own setenv/unsetenv state — Swift's default-parameter values are
+    // evaluated at the call site, so the live process env is observable.
+    private let envVar = "CRM_MAC_CODESIGN_IDENTITY"
+
+    override func setUpWithError() throws {
+        // Belt-and-suspenders: explicitly clear the env var before each
+        // test so a developer's shell can't perturb the no-args
+        // initializer cases below.
+        unsetenv(envVar)
+    }
+
+    override func tearDownWithError() throws {
+        unsetenv(envVar)
+    }
+
+    // MARK: - signingIdentity coercion (explicit-arg path)
 
     func testInitWithNilIdentityProducesNilSigningIdentity() {
         let adapter = ProductionExecutableAdapter(signingIdentity: nil)
@@ -44,15 +62,35 @@ final class ProductionExecutableAdapterTests: XCTestCase {
         XCTAssertEqual(adapter.signingIdentity, "CRM Mac Local Code Signing")
     }
 
+    // MARK: - default-initializer reads CRM_MAC_CODESIGN_IDENTITY
+
+    func testDefaultInitWithUnsetEnvProducesNil() {
+        // setUpWithError already unsetenv'd; verify the no-args path.
+        let adapter = ProductionExecutableAdapter()
+        XCTAssertNil(adapter.signingIdentity)
+    }
+
+    func testDefaultInitWithEmptyEnvProducesNil() {
+        setenv(envVar, "", 1)
+        let adapter = ProductionExecutableAdapter()
+        XCTAssertNil(adapter.signingIdentity)
+    }
+
+    func testDefaultInitReadsEnvVarWhenSet() {
+        setenv(envVar, "Some Local Code Signing", 1)
+        let adapter = ProductionExecutableAdapter()
+        XCTAssertEqual(adapter.signingIdentity, "Some Local Code Signing")
+    }
+
     // MARK: - signingArguments
 
     func testAdhocSigningArgumentsOmitTimestampFlag() {
         let adapter = ProductionExecutableAdapter(signingIdentity: nil)
         XCTAssertEqual(
-            adapter.signingArguments(identifier: "xyz.spengrah.crm-mac"),
+            adapter.signingArguments(identifier: Daemon.label),
             [
                 "--sign", "-",
-                "--identifier", "xyz.spengrah.crm-mac",
+                "--identifier", Daemon.label,
             ])
     }
 
@@ -64,10 +102,10 @@ final class ProductionExecutableAdapterTests: XCTestCase {
         let adapter = ProductionExecutableAdapter(
             signingIdentity: "CRM Mac Local Code Signing")
         XCTAssertEqual(
-            adapter.signingArguments(identifier: "xyz.spengrah.crm-mac"),
+            adapter.signingArguments(identifier: Daemon.label),
             [
                 "--sign", "CRM Mac Local Code Signing",
-                "--identifier", "xyz.spengrah.crm-mac",
+                "--identifier", Daemon.label,
                 "--timestamp=none",
             ])
     }

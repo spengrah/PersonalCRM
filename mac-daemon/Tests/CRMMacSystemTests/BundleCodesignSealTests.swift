@@ -70,7 +70,11 @@ final class BundleCodesignSealTests: XCTestCase {
         ).render()
 
         let fs = ProductionFilesystemAdapter()
-        let exec = ProductionExecutableAdapter()
+        // Force ad-hoc signing regardless of the developer's shell env so the
+        // codesign-seal assertion is deterministic — otherwise a developer
+        // with `CRM_MAC_CODESIGN_IDENTITY` exported runs a different path
+        // than CI.
+        let exec = ProductionExecutableAdapter(signingIdentity: nil)
         let assembler = BundleAssembler(filesystem: fs, executable: exec)
         try assembler.assemble(BundleAssemblerInput(
             machoSourcePath: machoSource.path,

@@ -13,9 +13,14 @@
 # Optional:
 #   CRM_MAC_CODESIGN_IDENTITY=<identity>
 #       Sign the bundle with a local codesigning identity instead of
-#       ad-hoc signing. A stable self-signed Code Signing certificate
-#       keeps the designated requirement stable across rebuilds, which
-#       lets TCC grants survive local development rebuilds.
+#       ad-hoc signing. **Local self-signed Code Signing certificate
+#       only** — the script unconditionally appends --timestamp=none
+#       whenever this is set, which would silently strip the trusted
+#       timestamp from a real Apple Developer ID signature. A stable
+#       self-signed cert keeps the designated requirement stable
+#       across rebuilds, which lets FDA grants survive local
+#       development rebuilds (Contacts grants still re-prompt — TCC
+#       Contacts subsystem binds to CDHash regardless of DR).
 #
 # Output: a fully-assembled, codesigned crm-mac.app bundle at
 # <bundle_path> with:
