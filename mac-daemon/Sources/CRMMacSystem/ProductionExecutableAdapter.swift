@@ -136,7 +136,7 @@ public struct ProductionExecutableAdapter: ExecutableAdapter {
     /// whitespace / CR-line-ending edge cases without spawning real
     /// codesign.
     static func parseIdentifier(from output: String) -> String? {
-        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: false) {
+        for rawLine in output.split(omittingEmptySubsequences: false, whereSeparator: { $0.isNewline }) {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard line.hasPrefix("Identifier=") else { continue }
             return String(line.dropFirst("Identifier=".count))
@@ -151,7 +151,7 @@ public struct ProductionExecutableAdapter: ExecutableAdapter {
     /// and `# designated => ...` appear in the wild across macOS
     /// versions; accept both.
     static func parseDesignatedRequirement(from output: String) -> String {
-        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: false) {
+        for rawLine in output.split(omittingEmptySubsequences: false, whereSeparator: { $0.isNewline }) {
             let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.hasPrefix("designated => ") {
                 return String(trimmed.dropFirst("designated => ".count))
