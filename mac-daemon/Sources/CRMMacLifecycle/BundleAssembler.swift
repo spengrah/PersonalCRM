@@ -34,10 +34,13 @@ public struct BundleAssemblerInput: Equatable {
     /// ~/Library/Application Support/crm-mac/crm-mac.app).
     public let bundlePath: String
     /// LaunchAgents plist content. The caller renders it (typically
-    /// via LaunchAgentPlist.render() with the install-time paths AND
-    /// the `__INSTALL_PREFIX__` placeholder for the binary). The
-    /// placeholder substitution is the Installer's concern, NOT
-    /// BundleAssembler's — this method writes the string verbatim.
+    /// via LaunchAgentPlist.render() with the final install-time
+    /// bundle path embedded directly) and this method writes the
+    /// string verbatim. The plist is sealed by the bundle codesign
+    /// pass below, so the caller MUST embed the real install path
+    /// before assemble() runs — modifying the plist after assemble()
+    /// returns would invalidate the codesign seal and SMAppService
+    /// would refuse to load the bundle.
     public let launchAgentPlistContent: String
     /// Info.plist content as raw bytes. The production caller passes
     /// `PropertyListSerialization.data(...)` output rendered from
@@ -111,8 +114,10 @@ public struct BundleAssembler {
         try filesystem.write(input.infoPlistContent, to: infoPlistDest)
 
         // 4. Write the LaunchAgents plist verbatim from the
-        //    caller-provided string. Placeholder substitution
-        //    (`__INSTALL_PREFIX__`) is the Installer's concern.
+        //    caller-provided string. The caller must embed the final
+        //    install-time bundle path before assemble() — the plist is
+        //    a sealed resource under the codesign manifest written in
+        //    step 5.
         let launchAgentDest =
             "\(input.bundlePath)/\(Self.launchAgentPlistRelativePath)"
         try filesystem.write(

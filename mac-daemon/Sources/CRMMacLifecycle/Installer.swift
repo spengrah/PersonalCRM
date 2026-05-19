@@ -7,18 +7,21 @@
 //   2. Preflight: refuse if existing install detected.
 //   3. mkdir -p config/logs directories (NO bin/ — the bare-binary
 //      install location is migration-only).
-//   4. Assemble the new bundle at a tmp path
-//      (`<configDir>/crm-mac.app.tmp.<pid>`) via BundleAssembler.
+//   4. Render the LaunchAgent plist with the final install-time
+//      bundle path embedded directly, then assemble the new bundle at
+//      a tmp path (`<configDir>/crm-mac.app.tmp.<pid>`) via
+//      BundleAssembler. The embedded plist is a sealed resource under
+//      the bundle codesign manifest — embedding the real path BEFORE
+//      codesign keeps the seal intact so subsequent
+//      `SMAppService.register()` calls (e.g. `--register-only`
+//      retries) pass codesign validation.
 //   5. POST /api/v1/host on the Pi.
 //   6. Persist config.json, api-key file, state.json.
 //   7. Atomic-rename tmp bundle to the install path
 //      (`<configDir>/crm-mac.app`). Destination is absent — preflight
 //      refused otherwise — so it's a same-parent, empty-destination
 //      rename (atomic on APFS).
-//   8. Substitute `__INSTALL_PREFIX__` placeholder in the bundle's
-//      embedded LaunchAgents plist with the real install-time bundle
-//      path.
-//   9. Register the agent with SMAppService.
+//   8. Register the agent with SMAppService.
 //
 // Upgrade sequence (backup-rename-swap):
 //   - Validate; read existing config; check legacy migration.
@@ -29,7 +32,7 @@
 //   - Assemble new bundle at crm-mac.app.tmp.<pid>.
 //   - Atomic-rename tmp bundle -> crm-mac.app (destination absent
 //     again because the prior rename moved the old one).
-//   - Substitute placeholder + register.
+//   - Register.
 //   - rm -rf crm-mac.app.backup.<pid> (best-effort).
 //   - On any failure between assemble and register: rm -rf tmp
 //     bundle AND rename backup back to crm-mac.app (rollback). If
@@ -257,12 +260,6 @@ public struct Installer {
         self.deps = deps
     }
 
-    /// Placeholder string the build-time shell script writes into the
-    /// embedded LaunchAgents plist for the binary path. The installer
-    /// substitutes this with the real install-time bundle path before
-    /// SMAppService.register reads it.
-    public static let installPrefixPlaceholder = "__INSTALL_PREFIX__"
-
     public func run(_ request: InstallRequest) async throws -> InstallSummary {
         if request.upgrade && request.registerOnly {
             throw InstallError.unexpected("--upgrade and --register-only are mutually exclusive")
@@ -307,7 +304,8 @@ public struct Installer {
             throw InstallError.unexpected("currentExecutablePath: \(error)")
         }
         let tmpBundle = tmpBundlePath()
-        let launchAgentContent = renderPlaceholderLaunchAgentContent()
+        let launchAgentContent = renderLaunchAgentContent(
+            bundlePath: deps.paths.bundleAppPath)
         let infoPlistContent = try loadInfoPlistContent()
         do {
             try deps.bundleAssembler.assemble(BundleAssemblerInput(
@@ -388,15 +386,6 @@ public struct Installer {
                 hostID: pairResult.hostID,
                 stage: "rename tmp bundle -> install",
                 underlying: String(describing: error))
-        }
-
-        // Substitute placeholder in the bundle's embedded plist.
-        do {
-            try substituteInstallPrefixPlaceholder(
-                bundlePath: deps.paths.bundleAppPath)
-        } catch {
-            throw InstallError.filesystemFailed(
-                "substitute install prefix: \(error)")
         }
 
         // Register the agent.
@@ -481,7 +470,8 @@ public struct Installer {
                 newBundleAtFinalPath: false)
         }
         let tmpBundle = tmpBundlePath()
-        let launchAgentContent = renderPlaceholderLaunchAgentContent()
+        let launchAgentContent = renderLaunchAgentContent(
+            bundlePath: deps.paths.bundleAppPath)
         let infoPlistContent: Data
         do {
             infoPlistContent = try loadInfoPlistContent()
@@ -530,20 +520,8 @@ public struct Installer {
                 newBundleAtFinalPath: false)
         }
 
-        // Substitute placeholder + register. Rollback on any
-        // failure between here and the end of register: remove the
-        // new bundle, restore the backup.
-        do {
-            try substituteInstallPrefixPlaceholder(
-                bundlePath: deps.paths.bundleAppPath)
-        } catch {
-            try rollbackUpgrade(
-                originalError: InstallError.filesystemFailed("substitute install prefix: \(error)"),
-                tmpBundle: nil,
-                backupPath: backupPath,
-                hadExisting: hadExistingBundle,
-                newBundleAtFinalPath: true)
-        }
+        // Register. Rollback on any failure: remove the new bundle,
+        // restore the backup.
         do {
             try registerAgent()
         } catch {
@@ -616,11 +594,9 @@ public struct Installer {
             throw InstallError.noExistingInstall
         }
 
-        // Substitute placeholder (idempotent — already-substituted
-        // plists are a no-op) + register. ANY thrown error from
-        // substitution is a real filesystem failure and propagates.
-        try substituteInstallPrefixPlaceholder(
-            bundlePath: deps.paths.bundleAppPath)
+        // Register the already-installed bundle. The bundle's embedded
+        // plist already references the real install path (rendered at
+        // assembly time, sealed by codesign).
         try registerAgent()
         // Partial-migration retry case: if a prior --upgrade got
         // through assemble + rename but the register failed, the
@@ -776,9 +752,9 @@ public struct Installer {
         }
     }
 
-    /// Bundle assembly + atomic-rename + substitute placeholder +
-    /// register. Used by the migration path; the fresh install flow
-    /// inlines its own version (which also does pair + persist).
+    /// Bundle assembly + atomic-rename + register. Used by the
+    /// migration path; the fresh install flow inlines its own version
+    /// (which also does pair + persist).
     private func assembleAndRegisterNewBundle() async throws {
         let sourcePath: String
         do {
@@ -791,7 +767,8 @@ public struct Installer {
             try? deps.filesystem.createDirectory(at: dir)
         }
         let tmpBundle = tmpBundlePath()
-        let launchAgentContent = renderPlaceholderLaunchAgentContent()
+        let launchAgentContent = renderLaunchAgentContent(
+            bundlePath: deps.paths.bundleAppPath)
         let infoPlistContent = try loadInfoPlistContent()
         do {
             try deps.bundleAssembler.assemble(BundleAssemblerInput(
@@ -815,13 +792,6 @@ public struct Installer {
             try? deps.filesystem.remove(at: tmpBundle)
             throw InstallError.filesystemFailed(
                 "rename tmp bundle -> install: \(error)")
-        }
-        do {
-            try substituteInstallPrefixPlaceholder(
-                bundlePath: deps.paths.bundleAppPath)
-        } catch {
-            throw InstallError.filesystemFailed(
-                "substitute install prefix: \(error)")
         }
         try registerAgent()
     }
@@ -903,51 +873,16 @@ public struct Installer {
         }
     }
 
-    /// Replace `__INSTALL_PREFIX__` in the bundle's embedded
-    /// LaunchAgents plist with the real install-time bundle path.
-    /// The bundle path is XML-escaped (via `xmlEscapePlistString`)
-    /// before substitution — home directories containing `&`, `<`,
-    /// `>`, `"`, or `'` would otherwise produce an invalid plist
-    /// even though the renderer claims to handle those characters.
-    /// Idempotent: re-running on an already-substituted plist (no
-    /// placeholder present) is a no-op success.
-    private func substituteInstallPrefixPlaceholder(bundlePath: String) throws {
-        let plistFile = "\(bundlePath)/\(BundleAssembler.launchAgentPlistRelativePath)"
-        let data: Data
-        do {
-            data = try deps.filesystem.read(from: plistFile)
-        } catch {
-            throw InstallError.filesystemFailed(
-                "read embedded plist: \(error)")
-        }
-        let original = String(data: data, encoding: .utf8) ?? ""
-        let escapedReplacement = xmlEscapePlistString(bundlePath)
-        let substituted = original.replacingOccurrences(
-            of: Self.installPrefixPlaceholder,
-            with: escapedReplacement)
-        if substituted == original {
-            // Already substituted — idempotent no-op.
-            return
-        }
-        do {
-            try deps.filesystem.write(
-                Data(substituted.utf8), to: plistFile)
-        } catch {
-            throw InstallError.filesystemFailed(
-                "write substituted plist: \(error)")
-        }
-    }
-
-    /// Render the templated LaunchAgent plist content. Uses
-    /// `__INSTALL_PREFIX__` for the binary-path component so
-    /// `substituteInstallPrefixPlaceholder` can rewrite it post-
-    /// rename. Logs + config dir use the real install-time paths
-    /// (computed from configDirPath / logsDirPath) — those don't
-    /// need substitution.
-    private func renderPlaceholderLaunchAgentContent() -> String {
+    /// Render the LaunchAgent plist content with the final install-
+    /// time bundle path embedded directly. The plist is a sealed
+    /// resource under the bundle codesign manifest — embedding the
+    /// real path BEFORE the bundle is codesigned (rather than
+    /// substituting after) keeps the seal intact so subsequent
+    /// `SMAppService.register()` calls pass codesign validation.
+    private func renderLaunchAgentContent(bundlePath: String) -> String {
         let plist = LaunchAgentPlist(
             label: Daemon.label,
-            binaryPath: "\(Self.installPrefixPlaceholder)/\(BundleAssembler.machoRelativePath)",
+            binaryPath: "\(bundlePath)/\(BundleAssembler.machoRelativePath)",
             configDirPath: deps.paths.configDirPath,
             stdoutPath: deps.paths.stdoutLogPath,
             stderrPath: deps.paths.stderrLogPath)

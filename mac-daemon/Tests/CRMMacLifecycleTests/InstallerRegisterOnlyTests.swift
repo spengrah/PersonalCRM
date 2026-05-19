@@ -12,8 +12,8 @@ final class InstallerRegisterOnlyTests: XCTestCase {
         try fs.createDirectory(at: paths.bundleAppPath)
         let originalBinary = Data("untouched binary".utf8)
         try fs.write(originalBinary, to: paths.bundleBinaryPath)
-        // Existing embedded plist with placeholder already substituted
-        // (re-running register-only on a healthy install is the
+        // Existing embedded plist already references the install
+        // path (re-running register-only on a healthy install is the
         // common case).
         try fs.write(
             Data("<plist>installed</plist>".utf8),

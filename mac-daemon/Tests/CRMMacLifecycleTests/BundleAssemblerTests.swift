@@ -31,7 +31,7 @@ final class BundleAssemblerTests: XCTestCase {
             <string>xyz.spengrah.crm-mac</string>
             <key>ProgramArguments</key>
             <array>
-                <string>__INSTALL_PREFIX__/Contents/MacOS/crm-mac</string>
+                <string>/tmp/install/crm-mac.app/Contents/MacOS/crm-mac</string>
                 <string>daemon</string>
             </array>
         </dict>

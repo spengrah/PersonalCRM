@@ -65,14 +65,15 @@ final class InstallerFreshInstallTests: XCTestCase {
         XCTAssertEqual(keychain.currentValue, "k")
         // SMAppService.register was called.
         XCTAssertEqual(agentService.registerCalls, 1)
-        // Placeholder substitution happened — the embedded plist no
-        // longer contains __INSTALL_PREFIX__.
+        // The embedded plist references the real install-time bundle
+        // path — rendered with the path embedded BEFORE the bundle
+        // codesign pass so the seal stays intact.
         let plistContent = try fs.read(from: paths.bundlePlistPath)
         let plistStr = String(data: plistContent, encoding: .utf8) ?? ""
         XCTAssertFalse(plistStr.contains("__INSTALL_PREFIX__"),
-            "installer must substitute the placeholder")
+            "installer must not leave a placeholder in the embedded plist")
         XCTAssertTrue(plistStr.contains(paths.bundleAppPath),
-            "installer must substitute with the real bundle path")
+            "embedded plist must reference the real install-time bundle path")
     }
 
     func testDirectoriesCreated() async throws {

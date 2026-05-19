@@ -11,8 +11,8 @@
 //   - SIGTERM legacy daemon + pidfile-poll
 //   - legacyLaunchctl.bootout
 //   - printService probe after grace period (fail if still loaded)
-//   - Assemble bundle at tmp + atomic-rename
-//   - Substitute __INSTALL_PREFIX__ placeholder
+//   - Assemble bundle at tmp (plist embeds the final install path
+//     BEFORE codesign so the seal stays intact) + atomic-rename
 //   - SMAppService.register
 //   - Delete legacy plist + legacy binary (best-effort, post-register).
 import XCTest
