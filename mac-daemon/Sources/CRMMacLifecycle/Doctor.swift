@@ -135,6 +135,17 @@ public struct Doctor {
         var results: [CheckResult] = []
 
         // 1. Permission.
+        //
+        // `.denied` and `.notDetermined` reads from a shell-spawned
+        // doctor process carry NO information about the daemon's
+        // actual TCC state — they're attributed to the parent
+        // terminal, which typically has no Contacts grant. The
+        // launchd-attributed daemon is authoritative, so we WARN with
+        // a message that points the operator at `crm-mac status`
+        // instead of telling them to grant the terminal Contacts
+        // access (which would defeat the bundle-attribution model).
+        // `.restricted` stays FAIL because MDM / parental-controls
+        // really is process-independent.
         let status = deps.contactsAuth.authorizationStatus()
         switch status {
         case .authorized, .limited:
@@ -145,8 +156,8 @@ public struct Doctor {
         case .denied:
             results.append(CheckResult(
                 name: "icloud_contacts.permission",
-                status: .fail,
-                details: "denied — re-run `crm-mac install --re-request-permission`"))
+                status: .warn,
+                details: "indeterminate from shell context — daemon is authoritative. Check `crm-mac status` for the daemon's last-tick auth state."))
         case .restricted:
             results.append(CheckResult(
                 name: "icloud_contacts.permission",
@@ -156,42 +167,57 @@ public struct Doctor {
             results.append(CheckResult(
                 name: "icloud_contacts.permission",
                 status: .warn,
-                details: "not determined — run `crm-mac install --re-request-permission`"))
+                details: "indeterminate from shell context — daemon is authoritative. If the daemon has never ticked, run `crm-mac install --re-request-permission` from this same shell."))
         }
 
         // 2. Allowlist sanity.
+        //
+        // Same shell-attribution caveat as the permission read —
+        // `listContainers()` from a shell-spawned doctor can fail
+        // with `.notAuthorized` even when the daemon under launchd
+        // is fully authorized and ticking. The previous catch
+        // assigned `visible = []`, which made every configured ID
+        // look like an "orphan" — a high-friction false positive.
+        // Now we report enumeration unavailability as its own WARN
+        // state and skip the orphan computation. Either error branch
+        // must fall through to the last-tick check below; neither
+        // may early-return, so a transient enumeration failure
+        // doesn't suppress the unrelated last-tick result.
         if allowlist.isEmpty {
             results.append(CheckResult(
                 name: "icloud_contacts.allowlist",
                 status: .warn,
                 details: "no containers configured; run `crm-mac configure containers`"))
         } else {
-            let visible: [ContainerInfo]
+            let allowlistCheck: CheckResult
             do {
-                visible = try deps.containerEnumerator.listContainers()
+                let visible = try deps.containerEnumerator.listContainers()
+                let visibleIDs = Set(visible.map(\.identifier))
+                let orphans = allowlist.filter { !visibleIDs.contains($0) }
+                if orphans.isEmpty {
+                    allowlistCheck = CheckResult(
+                        name: "icloud_contacts.allowlist",
+                        status: .pass,
+                        details: "\(allowlist.count) container(s) configured; all visible")
+                } else {
+                    let orphanList = orphans.joined(separator: ",")
+                    allowlistCheck = CheckResult(
+                        name: "icloud_contacts.allowlist",
+                        status: .warn,
+                        details: "\(orphans.count) orphaned identifier(s) (no longer visible): \(orphanList)")
+                }
             } catch ContactContainerEnumeratorError.notAuthorized {
-                visible = []
+                allowlistCheck = CheckResult(
+                    name: "icloud_contacts.allowlist",
+                    status: .warn,
+                    details: "\(allowlist.count) configured (visibility check unavailable from shell context — daemon is authoritative)")
             } catch {
-                results.append(CheckResult(
+                allowlistCheck = CheckResult(
                     name: "icloud_contacts.allowlist",
                     status: .warn,
-                    details: "container enumeration failed: \(error)"))
-                return results
+                    details: "container enumeration failed: \(error)")
             }
-            let visibleIDs = Set(visible.map(\.identifier))
-            let orphans = allowlist.filter { !visibleIDs.contains($0) }
-            if orphans.isEmpty {
-                results.append(CheckResult(
-                    name: "icloud_contacts.allowlist",
-                    status: .pass,
-                    details: "\(allowlist.count) container(s) configured; all visible"))
-            } else {
-                let orphanList = orphans.joined(separator: ",")
-                results.append(CheckResult(
-                    name: "icloud_contacts.allowlist",
-                    status: .warn,
-                    details: "\(orphans.count) orphaned identifier(s) (no longer visible): \(orphanList)"))
-            }
+            results.append(allowlistCheck)
         }
 
         // 3. Last-tick age.
