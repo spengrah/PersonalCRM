@@ -16,6 +16,16 @@ import Foundation
 public enum ContainerAllowlistInput {
     /// Split a comma-separated string into trimmed, non-empty
     /// identifier entries. Empty input returns an empty array.
+    ///
+    /// NOTE: an input that parses to `[]` (e.g. `""`, `",,,"`,
+    /// `"   "`) when paired with an existing non-empty allowlist
+    /// is a deliberate request to CLEAR the allowlist — the
+    /// non-interactive write path will bump the recovery flag and
+    /// the daemon will tombstone every previously-synced contact
+    /// on the next tick. There is no confirmation prompt; the
+    /// non-interactive path trusts the operator's stated intent.
+    /// Callers that want a confirmation step should use the
+    /// interactive picker instead.
     public static func parse(_ raw: String) -> [String] {
         raw.split(separator: ",", omittingEmptySubsequences: false)
             .map { $0.trimmingCharacters(in: .whitespaces) }

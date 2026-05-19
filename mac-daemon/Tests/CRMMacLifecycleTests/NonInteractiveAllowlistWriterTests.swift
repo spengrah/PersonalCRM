@@ -216,6 +216,44 @@ final class NonInteractiveAllowlistWriterTests: XCTestCase {
             "state-write must persist even when the subsequent config-write fails")
     }
 
+    // MARK: - 5a. error-classification for state-write failure
+
+    func testWriteStateWriteFailureBubblesUpTypedError() async throws {
+        // Seed an existing allowlist so the state-write branch
+        // runs. Then sabotage the state file by replacing it with
+        // a directory at the same path. The mutator's load() will
+        // throw, the writer should map that to
+        // `.stateWriteFailed`, and the config write should NOT
+        // have happened.
+        try seedConfig(containers: ["A"])
+        let configBytesBefore = try Data(contentsOf: configURL)
+
+        // Point the state store at a directory so any save attempt
+        // throws.
+        try FileManager.default.createDirectory(at: stateURL, withIntermediateDirectories: true)
+
+        let writer = NonInteractiveAllowlistWriter(
+            configStore: ConfigStore(fileURL: configURL),
+            stateStore: StateStore(fileURL: stateURL),
+            mutatingExistingConfig: true)
+
+        do {
+            _ = try await writer.write(pickedIDs: ["B"])
+            XCTFail("expected stateWriteFailed")
+        } catch NonInteractiveAllowlistWriteError.stateWriteFailed {
+            // expected
+        } catch {
+            XCTFail("expected stateWriteFailed, got: \(error)")
+        }
+
+        // Config bytes unchanged — the state-write failure aborted
+        // before the config-write was attempted.
+        XCTAssertEqual(
+            try Data(contentsOf: configURL),
+            configBytesBefore,
+            "config.json must NOT change when the state-write fails first")
+    }
+
     // MARK: - 5b. error-classification for fresh-install config-fail
 
     func testWriteOnFreshInstallSurfacesPlainConfigWriteFailedError() async throws {
@@ -295,9 +333,13 @@ final class NonInteractiveAllowlistWriterTests: XCTestCase {
     }
 
     /// Remove `//` line comments and `/* … */` block comments from
-    /// a Swift source string. Naive (no string-literal awareness)
-    /// but sufficient for the writer file which has no string
-    /// literals containing the forbidden symbols.
+    /// a Swift source string. Deliberately naive — no string-
+    /// literal awareness, no nested-block-comment support. If a
+    /// future writer source adds a string literal containing the
+    /// substrings `//` or `/*`, the stripper will mis-handle it
+    /// and the test may false-pass or false-fail. The writer
+    /// currently has no such literals; if that changes, extend
+    /// this helper before re-running the test.
     private static func stripSwiftComments(_ source: String) -> String {
         var result = ""
         var i = source.startIndex

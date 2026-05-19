@@ -163,6 +163,15 @@ struct ContainersSubcommand: ParsableCommand {
     /// this happens-before relationship across the
     /// DispatchSemaphore, so the holder is the smallest unchecked
     /// boundary.
+    /// Internal-only sentinel for the (effectively unreachable)
+    /// case where the Task body neither succeeds nor throws but
+    /// the semaphore is somehow signalled. Throwing a distinct
+    /// error makes a future regression surface at the actual fault
+    /// point instead of looking like a user-aborted picker run.
+    private enum RunFlowSyncFailure: Error {
+        case taskDidNotComplete
+    }
+
     private static func runFlowSync(
         flow: AllowlistConfigureFlow
     ) throws -> AllowlistConfigureFlow.Outcome {
@@ -185,8 +194,10 @@ struct ContainersSubcommand: ParsableCommand {
         case .success(let outcome): return outcome
         case .failure(let error): throw error
         case .none:
-            // Defensive — the Task body always sets one of the two.
-            throw AllowlistConfigureFlowError.userAborted
+            // Defensive — the Task body always sets one of the
+            // two before signalling. If it didn't, we want a
+            // distinct error that surfaces the fault point.
+            throw RunFlowSyncFailure.taskDidNotComplete
         }
     }
 
