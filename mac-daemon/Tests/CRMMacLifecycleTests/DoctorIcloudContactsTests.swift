@@ -124,6 +124,34 @@ final class DoctorIcloudContactsTests: XCTestCase {
             "icloud_contacts.last_tick must be present even when enumeration is unavailable")
     }
 
+    func testAllowlistEnumerationNotAuthorizedUnderRestrictedAuthFailsAsRestriction() async throws {
+        // When the permission read returns `.restricted` (MDM /
+        // parental controls), an enumeration `.notAuthorized`
+        // throw is NOT a shell-context attribution issue — the
+        // restriction applies process-wide including the daemon.
+        // The allowlist message must reflect that, otherwise the
+        // operator may dismiss a hard failure as a shell-context
+        // quirk.
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let r = await runDoctor(
+            authStatus: .restricted,
+            allowlist: ["c1"],
+            enumerator: StubContactContainerEnumerator(
+                thrownError: ContactContainerEnumeratorError.notAuthorized),
+            sourceState: SourceState(lastScheduledAt: now.addingTimeInterval(-30)),
+            clock: FixedClock(now))
+
+        let check = r.results.first(where: { $0.name == "icloud_contacts.allowlist" })!
+        XCTAssertEqual(check.status, .fail,
+                       "restricted MDM is a hard failure, not a shell-context warning")
+        XCTAssertTrue(
+            check.details.contains("MDM"),
+            "expected restriction-specific wording, got: \(check.details)")
+        XCTAssertFalse(
+            check.details.contains("shell context"),
+            "must NOT attribute restriction to shell context")
+    }
+
     func testAllowlistUnderlyingEnumeratorErrorStillWarnsGenerically() async throws {
         // Regression coverage for the previously-latent `.underlying`
         // early-return bug: a generic enumeration failure used to

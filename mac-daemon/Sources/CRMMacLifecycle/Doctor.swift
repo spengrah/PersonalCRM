@@ -207,10 +207,24 @@ public struct Doctor {
                         details: "\(orphans.count) orphaned identifier(s) (no longer visible): \(orphanList)")
                 }
             } catch ContactContainerEnumeratorError.notAuthorized {
-                allowlistCheck = CheckResult(
-                    name: "icloud_contacts.allowlist",
-                    status: .warn,
-                    details: "\(allowlist.count) configured (visibility check unavailable from shell context — daemon is authoritative)")
+                // `.restricted` blocks Contacts process-wide (MDM /
+                // parental controls), NOT just from the shell. When
+                // the auth read just told us `.restricted`,
+                // attributing the enumeration failure to "shell
+                // context" would lull the operator into ignoring a
+                // genuine hard failure. Report it as a restriction
+                // instead.
+                if status == .restricted {
+                    allowlistCheck = CheckResult(
+                        name: "icloud_contacts.allowlist",
+                        status: .fail,
+                        details: "\(allowlist.count) configured (visibility check blocked by MDM / parental controls)")
+                } else {
+                    allowlistCheck = CheckResult(
+                        name: "icloud_contacts.allowlist",
+                        status: .warn,
+                        details: "\(allowlist.count) configured (visibility check unavailable from shell context — daemon is authoritative)")
+                }
             } catch {
                 allowlistCheck = CheckResult(
                     name: "icloud_contacts.allowlist",
