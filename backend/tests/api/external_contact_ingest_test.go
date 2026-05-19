@@ -3,10 +3,13 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +20,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -704,4 +708,353 @@ func TestIngestExternalContact_VersionTooHigh_Rejected(t *testing.T) {
 	require.Equal(t, 1, resp.Rejected)
 	require.Equal(t, "PAYLOAD_INVALID", resp.Errors[0].Code)
 	require.Contains(t, resp.Errors[0].Message, "upgrade Pi")
+}
+
+// ----------------------------------------------------------------------------
+// Un-normalizable identifier tests (issue #320)
+//
+// Regression coverage for the daemon cursor stall caused by per-event
+// rejections when a phone/email field normalized to the empty string
+// (e.g. "+", "   ", "\t"). All tests assert the envelope is accepted
+// and other (valid) identifiers in the same envelope still produce
+// identity rows / match the seeded contact.
+// ----------------------------------------------------------------------------
+
+// findSeededMethod returns the seeded contact_method value for the
+// given type ("email" or "phone"). Mirrors the inline lookups in
+// existing tests but in one place.
+func findSeededMethod(t *testing.T, env *extContactIngestEnv, methodType string) string {
+	t.Helper()
+	methods, err := env.cmRepo.ListContactMethodsByContact(context.Background(), env.seededContact)
+	require.NoError(t, err)
+	for _, m := range methods {
+		if m.Type == methodType {
+			return m.Value
+		}
+	}
+	t.Fatalf("no seeded %s on env.seededContact", methodType)
+	return ""
+}
+
+// addSeededPhoneWithUniqueDigits attaches a new phone contact_method
+// to env.seededContact whose normalized value embeds a high-entropy
+// digit sequence derived from sourceIDPrefix. The env's default
+// seeded phone uses uuid hex which can normalize to a short digit
+// string (e.g. all-letters suffix yields "+1555"), causing
+// ambiguity with other tests that share the same DB. Tests that
+// match via phone use this helper instead to avoid cross-test
+// collisions on value_normalized.
+func addSeededPhoneWithUniqueDigits(t *testing.T, env *extContactIngestEnv) string {
+	t.Helper()
+	// sourceIDPrefix is "ext-ingest-<uuid8>-"; hash to 10 digits.
+	h := sha256.Sum256([]byte(env.sourceIDPrefix))
+	var b strings.Builder
+	for _, by := range h {
+		if b.Len() >= 10 {
+			break
+		}
+		fmt.Fprintf(&b, "%d", int(by)%10)
+	}
+	phone := "+1" + b.String()
+	_, err := env.cmRepo.CreateContactMethod(context.Background(), repository.CreateContactMethodRequest{
+		ContactID: env.seededContact,
+		Type:      "phone",
+		Value:     phone,
+	})
+	require.NoError(t, err)
+	return phone
+}
+
+func TestIngestExternalContact_Upserted_PhoneJunkPlusValidMatching_MatchesContact(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	ctx := context.Background()
+	entityID := env.sourceIDPrefix + "phone-junk-plus-valid"
+	seededPhone := addSeededPhoneWithUniqueDigits(t, env)
+
+	countBefore, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
+	require.NoError(t, err)
+
+	ev := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Phones = []events.ExternalContactMethodValue{
+			{Value: "+"}, // normalizes to empty — must be silently skipped
+			{Value: seededPhone},
+		}
+	})
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{ev},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
+
+	row := findExtRow(t, env, entityID)
+	require.NotNil(t, row)
+	require.NotNil(t, row.CRMContactID, "valid phone must produce a match")
+	require.Equal(t, env.seededContact, *row.CRMContactID)
+	require.Equal(t, repository.MatchStatusMatched, row.MatchStatus)
+
+	countAfter, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), countAfter-countBefore,
+		"exactly one identity row must be created (for the valid phone, not for \"+\")")
+
+	// Confirm the row that bumped the count is the valid phone, not "+".
+	normalized := identity.Normalize(seededPhone, identity.IdentifierTypePhone)
+	got, err := env.identityRepo.GetByIdentifier(ctx, identity.IdentifierTypePhone, normalized, "icloud_contacts")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+}
+
+func TestIngestExternalContact_Upserted_AllPhonesNormalizeToEmpty_StillAccepts(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	ctx := context.Background()
+	entityID := env.sourceIDPrefix + "phones-all-junk"
+
+	countBefore, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
+	require.NoError(t, err)
+
+	ev := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Phones = []events.ExternalContactMethodValue{{Value: "+"}, {Value: "   "}}
+	})
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{ev},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
+
+	row := findExtRow(t, env, entityID)
+	require.NotNil(t, row)
+	require.Nil(t, row.CRMContactID, "no valid phone → no match")
+	require.Equal(t, repository.MatchStatusUnmatched, row.MatchStatus)
+
+	countAfter, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), countAfter-countBefore,
+		"no identity rows must be created when all phones normalize to empty")
+}
+
+// PhoneLiteralPlus is the exact value surfaced by the PR #318
+// hypothesis-validation run that originally exposed issue #320.
+func TestIngestExternalContact_Upserted_PhoneLiteralPlus_RegressionForSurfacedData(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	ctx := context.Background()
+	entityID := env.sourceIDPrefix + "phone-literal-plus"
+
+	countBefore, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
+	require.NoError(t, err)
+
+	ev := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Phones = []events.ExternalContactMethodValue{{Value: "+"}}
+	})
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{ev},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
+
+	row := findExtRow(t, env, entityID)
+	require.NotNil(t, row)
+	require.Nil(t, row.CRMContactID)
+	require.Equal(t, repository.MatchStatusUnmatched, row.MatchStatus)
+
+	countAfter, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), countAfter-countBefore)
+}
+
+func TestIngestExternalContact_Upserted_EmailJunkPlusValidMatching_MatchesContact(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	ctx := context.Background()
+	entityID := env.sourceIDPrefix + "email-junk-plus-valid"
+	seededEmail := findSeededMethod(t, env, "email")
+
+	countBefore, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
+	require.NoError(t, err)
+
+	ev := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Emails = []events.ExternalContactMethodValue{
+			{Value: "   "}, // normalizes to empty — must be silently skipped
+			{Value: seededEmail},
+		}
+	})
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{ev},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
+
+	row := findExtRow(t, env, entityID)
+	require.NotNil(t, row)
+	require.NotNil(t, row.CRMContactID, "valid email must produce a match")
+	require.Equal(t, env.seededContact, *row.CRMContactID)
+	require.Equal(t, repository.MatchStatusMatched, row.MatchStatus)
+
+	countAfter, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), countAfter-countBefore,
+		"exactly one identity row must be created (for the valid email)")
+
+	normalized := identity.Normalize(seededEmail, identity.IdentifierTypeEmail)
+	got, err := env.identityRepo.GetByIdentifier(ctx, identity.IdentifierTypeEmail, normalized, "icloud_contacts")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+}
+
+func TestIngestExternalContact_Upserted_AllEmailsNormalizeToEmpty_StillAccepts(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	ctx := context.Background()
+	entityID := env.sourceIDPrefix + "emails-all-junk"
+
+	countBefore, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
+	require.NoError(t, err)
+
+	ev := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Emails = []events.ExternalContactMethodValue{{Value: "   "}, {Value: "\t"}}
+	})
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{ev},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
+
+	row := findExtRow(t, env, entityID)
+	require.NotNil(t, row)
+	require.Nil(t, row.CRMContactID)
+	require.Equal(t, repository.MatchStatusUnmatched, row.MatchStatus)
+
+	countAfter, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), countAfter-countBefore)
+}
+
+// EmailWhitespaceOnly is the email-side regression equivalent of
+// PhoneLiteralPlus. Note: do NOT use "@" — that survives normalization
+// and would exercise a different code path.
+func TestIngestExternalContact_Upserted_EmailWhitespaceOnly_RegressionForJunkData(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	ctx := context.Background()
+	entityID := env.sourceIDPrefix + "email-whitespace-only"
+
+	countBefore, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
+	require.NoError(t, err)
+
+	ev := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Emails = []events.ExternalContactMethodValue{{Value: "   "}}
+	})
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{ev},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
+
+	row := findExtRow(t, env, entityID)
+	require.NotNil(t, row)
+	require.Nil(t, row.CRMContactID)
+	require.Equal(t, repository.MatchStatusUnmatched, row.MatchStatus)
+
+	countAfter, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), countAfter-countBefore)
+}
+
+// JunkEmailValidMatchingPhone proves the junk-email skip in the first
+// loop does NOT prevent the phone loop from running and matching.
+func TestIngestExternalContact_Upserted_JunkEmailValidMatchingPhone_MatchesViaPhone(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	entityID := env.sourceIDPrefix + "junk-email-valid-phone"
+	seededPhone := addSeededPhoneWithUniqueDigits(t, env)
+
+	ev := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Emails = []events.ExternalContactMethodValue{{Value: "   "}}
+		p.Phones = []events.ExternalContactMethodValue{{Value: seededPhone}}
+	})
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{ev},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
+
+	row := findExtRow(t, env, entityID)
+	require.NotNil(t, row)
+	require.NotNil(t, row.CRMContactID, "junk email must not block phone-based match")
+	require.Equal(t, env.seededContact, *row.CRMContactID)
+	require.Equal(t, repository.MatchStatusMatched, row.MatchStatus)
+}
+
+// ValidEmailMatchingThenJunkPhone proves the rollback path is gone:
+// pre-fix, a valid email match followed by a "+" phone would have
+// rolled back the whole savepoint (the inner empty-check tripped after
+// state was already written).
+func TestIngestExternalContact_Upserted_ValidEmailMatchingThenJunkPhone_StillAccepted(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	entityID := env.sourceIDPrefix + "valid-email-junk-phone"
+	seededEmail := findSeededMethod(t, env, "email")
+
+	ev := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Emails = []events.ExternalContactMethodValue{{Value: seededEmail}}
+		p.Phones = []events.ExternalContactMethodValue{{Value: "+"}}
+	})
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{ev},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
+
+	row := findExtRow(t, env, entityID)
+	require.NotNil(t, row)
+	require.NotNil(t, row.CRMContactID)
+	require.Equal(t, env.seededContact, *row.CRMContactID)
+	require.Equal(t, repository.MatchStatusMatched, row.MatchStatus)
+}
+
+// BatchWithJunkAndValidContacts is the direct regression for issue
+// #320's cursor-stall failure mode: one junk-only event and one
+// matching event in the same batch. Pre-fix, the junk event would
+// reject and the daemon would hold the cursor. Both must now accept.
+func TestIngestExternalContact_Upserted_BatchWithJunkAndValidContacts_BothLand(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	entityIDJunk := env.sourceIDPrefix + "batch-junk"
+	entityIDValid := env.sourceIDPrefix + "batch-valid"
+	seededPhone := addSeededPhoneWithUniqueDigits(t, env)
+
+	evJunk := buildExtUpsertEvent(t, env.pairedHostID, entityIDJunk, func(p *events.ExternalContactUpsertedPayload) {
+		p.Phones = []events.ExternalContactMethodValue{{Value: "+"}}
+	})
+	evValid := buildExtUpsertEvent(t, env.pairedHostID, entityIDValid, func(p *events.ExternalContactUpsertedPayload) {
+		p.Phones = []events.ExternalContactMethodValue{{Value: seededPhone}}
+	})
+
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{evJunk, evValid},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 2, resp.Accepted, "both events must be accepted; errors: %+v", resp.Errors)
+	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
+
+	rowJunk := findExtRow(t, env, entityIDJunk)
+	require.NotNil(t, rowJunk, "junk-only event must still materialize an external_contact row")
+	require.Nil(t, rowJunk.CRMContactID)
+	require.Equal(t, repository.MatchStatusUnmatched, rowJunk.MatchStatus)
+
+	rowValid := findExtRow(t, env, entityIDValid)
+	require.NotNil(t, rowValid)
+	require.NotNil(t, rowValid.CRMContactID, "valid event must match the seeded contact")
+	require.Equal(t, env.seededContact, *rowValid.CRMContactID)
+	require.Equal(t, repository.MatchStatusMatched, rowValid.MatchStatus)
 }
