@@ -8,6 +8,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -435,15 +436,20 @@ func (s *stubExternalContactWriter) SoftDeleteTx(_ context.Context, _ pgx.Tx, _ 
 }
 
 // stubIdentityMatcher returns a configured MatchResult / error for
-// every MatchOrCreateTx call.
+// every MatchOrCreateTx call. requests records the inputs of each call
+// so tests can assert which raw values reached the matcher (used by the
+// "skip un-normalizable identifiers" tests, which need to prove that
+// junk values like "+" or "   " never even hit the matcher).
 type stubIdentityMatcher struct {
-	result *MatchResult
-	err    error
-	calls  int
+	result   *MatchResult
+	err      error
+	calls    int
+	requests []MatchRequest
 }
 
-func (s *stubIdentityMatcher) MatchOrCreateTx(_ context.Context, _ pgx.Tx, _ MatchRequest) (*MatchResult, error) {
+func (s *stubIdentityMatcher) MatchOrCreateTx(_ context.Context, _ pgx.Tx, req MatchRequest) (*MatchResult, error) {
 	s.calls++
+	s.requests = append(s.requests, req)
 	return s.result, s.err
 }
 
@@ -520,6 +526,181 @@ func TestHandleExternalContactUpserted_LiveUpsertSkipsRevive(t *testing.T) {
 	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
 	require.Nil(t, rej)
 	require.Equal(t, 0, stubExt.reviveCalls, "ReviveTx must NOT be called on a live first-insert")
+}
+
+// upsertEnvWithContactMethods builds an external_contact.upserted
+// envelope with the provided emails/phones. Mirrors validUpsertedEnv
+// but lets callers populate contact-method values, which the
+// un-normalizable-identifier tests need. The source_id hash is
+// recomputed over the actual payload bytes so the envelope would pass
+// verifyExternalContactInvariants if it were run (these unit tests
+// invoke handleExternalContactUpserted directly so the verifier is
+// bypassed regardless, but recomputing keeps the helper honest).
+func upsertEnvWithContactMethods(t *testing.T, host uuid.UUID, entityID string, emails, phones []string) *events.Envelope {
+	t.Helper()
+	em := make([]events.ExternalContactMethodValue, 0, len(emails))
+	for _, v := range emails {
+		em = append(em, events.ExternalContactMethodValue{Value: v})
+	}
+	ph := make([]events.ExternalContactMethodValue, 0, len(phones))
+	for _, v := range phones {
+		ph = append(ph, events.ExternalContactMethodValue{Value: v})
+	}
+	payload := mustMarshalExtUpsert(events.ExternalContactUpsertedPayload{
+		Version:  1,
+		HostID:   host,
+		Source:   "icloud_contacts",
+		EntityID: entityID,
+		Emails:   em,
+		Phones:   ph,
+	})
+	hashHex, err := ComputeContentHash(payload)
+	require.NoError(t, err)
+	return &events.Envelope{
+		Source:   "icloud_contacts",
+		SourceID: entityID + "@" + hashHex,
+		Kind:     events.KindExternalContactUpserted,
+		Payload:  payload,
+	}
+}
+
+// TestHandleExternalContactUpserted_SkipsPhonesThatNormalizeToEmpty
+// proves the call-site pre-check filters phones whose value normalizes
+// to empty (e.g. "+", whitespace-only) BEFORE invoking MatchOrCreateTx.
+// This is the unit-level proof that the cursor-stall fix avoids the
+// lower-layer "empty identifier after normalization" rejection — the
+// matcher never sees those values at all.
+func TestHandleExternalContactUpserted_SkipsPhonesThatNormalizeToEmpty(t *testing.T) {
+	rowID := uuid.New()
+	hostID := uuid.New()
+	liveRow := &repository.ExternalContact{
+		ID:          rowID,
+		Source:      "icloud_contacts",
+		SourceID:    "CN-junk-phone",
+		MatchStatus: repository.MatchStatusUnmatched,
+	}
+	stubExt := &stubExternalContactWriter{
+		getResp:    nil,
+		getErr:     db.ErrNotFound,
+		upsertResp: liveRow,
+	}
+	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
+
+	svc := &IngestService{
+		identity:         stubIdent,
+		externalContacts: stubExt,
+	}
+	env := upsertEnvWithContactMethods(t, hostID, "CN-junk-phone",
+		nil, []string{"+", "   ", "+15551234567"})
+	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	require.Nil(t, rej, "handler must not reject when junk phones are skipped")
+	require.Equal(t, 1, stubIdent.calls, "matcher must be invoked exactly once (for the valid phone)")
+	require.Len(t, stubIdent.requests, 1)
+	require.Equal(t, "+15551234567", stubIdent.requests[0].RawIdentifier)
+	require.Equal(t, identity.IdentifierTypePhone, stubIdent.requests[0].Type)
+}
+
+// TestHandleExternalContactUpserted_SkipsEmailsThatNormalizeToEmpty
+// mirrors the phone case for emails. Whitespace/tab-only values must
+// not reach MatchOrCreateTx.
+func TestHandleExternalContactUpserted_SkipsEmailsThatNormalizeToEmpty(t *testing.T) {
+	rowID := uuid.New()
+	hostID := uuid.New()
+	liveRow := &repository.ExternalContact{
+		ID:          rowID,
+		Source:      "icloud_contacts",
+		SourceID:    "CN-junk-email",
+		MatchStatus: repository.MatchStatusUnmatched,
+	}
+	stubExt := &stubExternalContactWriter{
+		getResp:    nil,
+		getErr:     db.ErrNotFound,
+		upsertResp: liveRow,
+	}
+	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
+
+	svc := &IngestService{
+		identity:         stubIdent,
+		externalContacts: stubExt,
+	}
+	env := upsertEnvWithContactMethods(t, hostID, "CN-junk-email",
+		[]string{"   ", "\t", "ok@example.com"}, nil)
+	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	require.Nil(t, rej, "handler must not reject when junk emails are skipped")
+	require.Equal(t, 1, stubIdent.calls, "matcher must be invoked exactly once (for the valid email)")
+	require.Len(t, stubIdent.requests, 1)
+	require.Equal(t, "ok@example.com", stubIdent.requests[0].RawIdentifier)
+	require.Equal(t, identity.IdentifierTypeEmail, stubIdent.requests[0].Type)
+}
+
+// TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_NoMatcherCalls
+// proves that an envelope whose every identifier normalizes to empty
+// still ingests cleanly — no matcher calls, no rejection. The contact
+// lands as an external_contact row with zero linked identities,
+// available for manual review.
+func TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_NoMatcherCalls(t *testing.T) {
+	rowID := uuid.New()
+	hostID := uuid.New()
+	liveRow := &repository.ExternalContact{
+		ID:          rowID,
+		Source:      "icloud_contacts",
+		SourceID:    "CN-all-junk",
+		MatchStatus: repository.MatchStatusUnmatched,
+	}
+	stubExt := &stubExternalContactWriter{
+		getResp:    nil,
+		getErr:     db.ErrNotFound,
+		upsertResp: liveRow,
+	}
+	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
+
+	svc := &IngestService{
+		identity:         stubIdent,
+		externalContacts: stubExt,
+	}
+	env := upsertEnvWithContactMethods(t, hostID, "CN-all-junk",
+		[]string{"\t"}, []string{"+"})
+	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	require.Nil(t, rej, "handler must accept envelope even if all identifiers normalize to empty")
+	require.Equal(t, 0, stubIdent.calls, "matcher must NOT be invoked when all identifiers are un-normalizable")
+}
+
+// TestHandleExternalContactUpserted_MixedJunkAndValid_CallsMatcherOnceWithValid
+// proves both loops run to completion and the matcher receives exactly
+// the two valid values, in source order (emails first, then phones).
+// Junk in one loop must not short-circuit the other.
+func TestHandleExternalContactUpserted_MixedJunkAndValid_CallsMatcherOnceWithValid(t *testing.T) {
+	rowID := uuid.New()
+	hostID := uuid.New()
+	liveRow := &repository.ExternalContact{
+		ID:          rowID,
+		Source:      "icloud_contacts",
+		SourceID:    "CN-mixed",
+		MatchStatus: repository.MatchStatusUnmatched,
+	}
+	stubExt := &stubExternalContactWriter{
+		getResp:    nil,
+		getErr:     db.ErrNotFound,
+		upsertResp: liveRow,
+	}
+	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
+
+	svc := &IngestService{
+		identity:         stubIdent,
+		externalContacts: stubExt,
+	}
+	env := upsertEnvWithContactMethods(t, hostID, "CN-mixed",
+		[]string{"   ", "ok@example.com"},
+		[]string{"+", "+15551234567"})
+	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	require.Nil(t, rej)
+	require.Equal(t, 2, stubIdent.calls, "matcher must be invoked once per valid identifier")
+	require.Len(t, stubIdent.requests, 2)
+	// Emails loop runs first, then phones.
+	require.Equal(t, "ok@example.com", stubIdent.requests[0].RawIdentifier)
+	require.Equal(t, identity.IdentifierTypeEmail, stubIdent.requests[0].Type)
+	require.Equal(t, "+15551234567", stubIdent.requests[1].RawIdentifier)
+	require.Equal(t, identity.IdentifierTypePhone, stubIdent.requests[1].Type)
 }
 
 // TestVerifyExternalContactInvariants_HashMismatchRejected proves the

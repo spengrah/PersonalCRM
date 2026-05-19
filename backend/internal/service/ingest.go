@@ -897,6 +897,16 @@ func (s *IngestService) handleExternalContactUpserted(
 		if em.Value == "" {
 			continue
 		}
+		// Skip values that normalize to empty (e.g. whitespace-only).
+		// Otherwise MatchOrCreateTx returns an error that the caller
+		// treats as a fatal envelope rejection, stalling daemon cursor
+		// advancement on a single junk field. The internal empty-check
+		// inside MatchOrCreateTx stays as defense-in-depth for other
+		// callers (e.g. handleRawMessage, where a single un-normalizable
+		// peer handle IS a fatal data-quality problem).
+		if identity.Normalize(em.Value, identity.IdentifierTypeEmail) == "" {
+			continue
+		}
 		result, err := s.identity.MatchOrCreateTx(ctx, tx, MatchRequest{
 			RawIdentifier: em.Value,
 			Type:          identity.IdentifierTypeEmail,
@@ -922,6 +932,15 @@ func (s *IngestService) handleExternalContactUpserted(
 	}
 	for _, ph := range p.Phones {
 		if ph.Value == "" {
+			continue
+		}
+		// Skip values that normalize to empty (e.g. "+", whitespace).
+		// Otherwise MatchOrCreateTx returns an error that the caller
+		// treats as a fatal envelope rejection, stalling daemon cursor
+		// advancement on a single junk field. The internal empty-check
+		// inside MatchOrCreateTx stays as defense-in-depth for other
+		// callers.
+		if identity.Normalize(ph.Value, identity.IdentifierTypePhone) == "" {
 			continue
 		}
 		result, err := s.identity.MatchOrCreateTx(ctx, tx, MatchRequest{

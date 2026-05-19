@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher
+.PHONY: help setup dev build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy deploy-pi deploy-mac deploy-all setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -66,9 +66,12 @@ help:
 	@echo "  test-cadence-ultra - Test all cadences in minutes (testing env)"
 	@echo "  test-cadence-fast  - Test all cadences in hours (staging env)"
 	@echo ""
-	@echo "Raspberry Pi Deployment:"
-	@echo "  setup-pi - One-time Pi setup (create user, directories)"
-	@echo "  deploy   - Build and deploy to Pi (requires setup-pi first)"
+	@echo "Deployment:"
+	@echo "  setup-pi   - One-time Pi setup (create user, directories)"
+	@echo "  deploy-pi  - Build and deploy to Pi (requires setup-pi first)"
+	@echo "  deploy-mac - Build and install the Mac daemon (requires CRM_MAC_CODESIGN_IDENTITY)"
+	@echo "  deploy-all - Deploy Pi and Mac daemon — but only those whose source paths changed since last deploy"
+	@echo "  deploy     - Alias for deploy-pi"
 
 # Setup development environment (installs all dev dependencies)
 # Run this first when setting up a new development environment
@@ -288,7 +291,7 @@ test: test-unit test-integration test-frontend
 
 test-unit:
 	@echo "Running backend unit tests..."
-	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... -v -short
+	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... -v -short
 
 test-integration-fast:
 	@echo "Running backend integration tests (default set)..."
@@ -616,9 +619,18 @@ status:
 		ls -lh logs/*.log 2>/dev/null | tail -5 || echo "  No log files found"; \
 	fi
 
-# Raspberry Pi Deployment
-deploy:
+# Deployment
+deploy-pi:
 	@./scripts/deploy.sh
+
+deploy-mac:
+	@./scripts/deploy-mac-daemon.sh
+
+deploy-all:
+	@./scripts/deploy-all.sh
+
+# Backwards-compat alias for `make deploy-pi`.
+deploy: deploy-pi
 
 setup-pi:
 	@./scripts/setup-pi.sh
