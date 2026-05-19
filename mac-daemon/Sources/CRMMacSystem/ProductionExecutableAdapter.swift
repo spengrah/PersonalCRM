@@ -70,13 +70,14 @@ public struct ProductionExecutableAdapter: ExecutableAdapter {
         try verifyBundleCodesign(bundlePath: bundlePath, identifier: identifier)
     }
 
-    /// Post-sign verification — three checks: codesign --verify
-    /// integrity, identifier match (inner + outer), and (cert mode
-    /// only) the designated requirement is not cdhash-anchored and
-    /// not empty.
+    /// Post-sign verification — mirrors the belt-and-suspenders block
+    /// in `Scripts/assemble_bundle.sh`: `codesign --verify --strict
+    /// --deep`, identifier match (inner + outer), and (cert mode
+    /// only) the designated requirement is non-empty + not
+    /// cdhash-anchored for both inner Mach-O and outer bundle.
     func verifyBundleCodesign(bundlePath: String, identifier: String) throws {
         try runCodesign(
-            arguments: ["--verify", "--strict", bundlePath],
+            arguments: ["--verify", "--strict", "--deep", bundlePath],
             errorPrefix: "verify ")
 
         let innerMachoPath = "\(bundlePath)/\(BundleAssembler.machoRelativePath)"
@@ -86,15 +87,14 @@ public struct ProductionExecutableAdapter: ExecutableAdapter {
             path: bundlePath, expected: identifier, label: "outer bundle")
 
         guard signingIdentity != nil else { return }
-        let dr = try displayDesignatedRequirement(path: bundlePath)
-        if dr.isEmpty {
-            throw ExecutableAdapterError.codesignFailed(
-                "could not parse designated requirement for \(bundlePath)")
-        }
-        if dr.contains("cdhash") {
-            throw ExecutableAdapterError.codesignFailed(
-                "cert-backed signing produced a cdhash designated requirement: \(dr)")
-        }
+        // Mirror the shell guard: BOTH inner and outer must have
+        // non-empty, non-cdhash DR. A future refactor that breaks the
+        // inner-pass `--identifier` / `--sign` argv could yield a
+        // cdhash inner DR despite the outer being cert-leaf-anchored.
+        try assertDesignatedRequirementNotCdhash(
+            path: innerMachoPath, label: "inner mach-o")
+        try assertDesignatedRequirementNotCdhash(
+            path: bundlePath, label: "outer bundle")
     }
 
     private func assertIdentifierMatches(
@@ -103,29 +103,56 @@ public struct ProductionExecutableAdapter: ExecutableAdapter {
         let output = try runCodesignCapture(
             arguments: ["--display", "--verbose=2", path],
             errorPrefix: "\(label) display ")
-        for rawLine in output.split(separator: "\n") {
-            let line = String(rawLine)
-            guard line.hasPrefix("Identifier=") else { continue }
-            let actual = String(line.dropFirst("Identifier=".count))
-            if actual != expected {
-                throw ExecutableAdapterError.codesignFailed(
-                    "\(label) identifier mismatch: got '\(actual)', expected '\(expected)'")
-            }
-            return
+        guard let actual = Self.parseIdentifier(from: output) else {
+            throw ExecutableAdapterError.codesignFailed(
+                "\(label) display: no Identifier line in codesign output")
         }
-        throw ExecutableAdapterError.codesignFailed(
-            "\(label) display: no Identifier line in codesign output")
+        if actual != expected {
+            throw ExecutableAdapterError.codesignFailed(
+                "\(label) identifier mismatch: got '\(actual)', expected '\(expected)'")
+        }
     }
 
-    private func displayDesignatedRequirement(path: String) throws -> String {
+    private func assertDesignatedRequirementNotCdhash(
+        path: String, label: String
+    ) throws {
         let output = try runCodesignCapture(
             arguments: ["--display", "-r", "-", path],
-            errorPrefix: "display DR ")
-        for rawLine in output.split(separator: "\n") {
-            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
-            // codesign output format has shifted across macOS versions;
-            // both `designated => ...` and `# designated => ...` appear
-            // in the wild. Accept both.
+            errorPrefix: "\(label) display DR ")
+        let dr = Self.parseDesignatedRequirement(from: output)
+        if dr.isEmpty {
+            throw ExecutableAdapterError.codesignFailed(
+                "\(label): could not parse designated requirement for \(path)")
+        }
+        if dr.contains("cdhash") {
+            throw ExecutableAdapterError.codesignFailed(
+                "\(label): cert-backed signing produced a cdhash designated requirement: \(dr)")
+        }
+    }
+
+    /// Pure parser: extract the `Identifier=` value from `codesign
+    /// --display --verbose=2` output. Returns nil if the marker line
+    /// is absent. Exposed for unit-testing the no-line / trailing-
+    /// whitespace / CR-line-ending edge cases without spawning real
+    /// codesign.
+    static func parseIdentifier(from output: String) -> String? {
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard line.hasPrefix("Identifier=") else { continue }
+            return String(line.dropFirst("Identifier=".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
+    }
+
+    /// Pure parser: extract the designated-requirement text from
+    /// `codesign --display -r -` output. Returns an empty string if
+    /// no `designated => ` line is found. Both `designated => ...`
+    /// and `# designated => ...` appear in the wild across macOS
+    /// versions; accept both.
+    static func parseDesignatedRequirement(from output: String) -> String {
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.hasPrefix("designated => ") {
                 return String(trimmed.dropFirst("designated => ".count))
             }

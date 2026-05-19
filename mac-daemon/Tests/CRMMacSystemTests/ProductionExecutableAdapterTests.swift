@@ -109,4 +109,82 @@ final class ProductionExecutableAdapterTests: XCTestCase {
                 "--timestamp=none",
             ])
     }
+
+    // MARK: - parseIdentifier (post-sign verification)
+
+    func testParseIdentifierFindsMarkerLine() {
+        let output = """
+        Executable=/some/path
+        Identifier=xyz.spengrah.crm-mac
+        Format=app bundle
+        """
+        XCTAssertEqual(
+            ProductionExecutableAdapter.parseIdentifier(from: output),
+            "xyz.spengrah.crm-mac")
+    }
+
+    func testParseIdentifierStripsTrailingCRAndWhitespace() {
+        // codesign output piped through a tty translation layer can
+        // arrive CRLF-terminated; a brittle parser would compare
+        // "xyz.spengrah.crm-mac\r" against the bare identifier and
+        // throw a confusing mismatch error.
+        let output = "Identifier=xyz.spengrah.crm-mac  \r\nFormat=app bundle"
+        XCTAssertEqual(
+            ProductionExecutableAdapter.parseIdentifier(from: output),
+            "xyz.spengrah.crm-mac")
+    }
+
+    func testParseIdentifierReturnsNilWhenMarkerAbsent() {
+        // Defends the install-time verifier's "no Identifier line"
+        // error branch — if a future codesign refactor stops emitting
+        // the marker, the install loudly fails instead of silently
+        // skipping the identifier-match check.
+        let output = "Executable=/some/path\nFormat=app bundle"
+        XCTAssertNil(ProductionExecutableAdapter.parseIdentifier(from: output))
+    }
+
+    // MARK: - parseDesignatedRequirement (post-sign verification)
+
+    func testParseDesignatedRequirementMatchesCertLeafLine() {
+        let output = """
+        Executable=/some/path
+        designated => identifier "xyz.spengrah.crm-mac" and certificate leaf = H"deadbeef"
+        """
+        XCTAssertEqual(
+            ProductionExecutableAdapter.parseDesignatedRequirement(from: output),
+            "identifier \"xyz.spengrah.crm-mac\" and certificate leaf = H\"deadbeef\"")
+    }
+
+    func testParseDesignatedRequirementMatchesHashCommentVariant() {
+        // Older / newer macOS codesign variants emit the requirement
+        // line prefixed with "# " — accept both.
+        let output = """
+        Executable=/some/path
+        # designated => cdhash H"abcd1234"
+        """
+        XCTAssertEqual(
+            ProductionExecutableAdapter.parseDesignatedRequirement(from: output),
+            "cdhash H\"abcd1234\"")
+    }
+
+    func testParseDesignatedRequirementDetectsCdhashAnchor() {
+        // This is the cert-mode regression guard's payload: if
+        // codesign silently produces a cdhash DR despite an identity
+        // being given, the verifier must throw. Parser returns the
+        // cdhash-anchored string; the verifier's `.contains("cdhash")`
+        // check catches it.
+        let output = "designated => cdhash H\"abcd1234\""
+        let dr = ProductionExecutableAdapter.parseDesignatedRequirement(from: output)
+        XCTAssertTrue(dr.contains("cdhash"),
+                      "parser must surface cdhash so verifier can reject it")
+    }
+
+    func testParseDesignatedRequirementReturnsEmptyWhenAbsent() {
+        // Defends the "could not parse designated requirement" throw —
+        // an empty return would otherwise silently bypass the
+        // cdhash-rejection guard in cert mode.
+        let output = "Executable=/some/path\nFormat=app bundle"
+        XCTAssertTrue(
+            ProductionExecutableAdapter.parseDesignatedRequirement(from: output).isEmpty)
+    }
 }
