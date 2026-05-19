@@ -15,6 +15,7 @@ struct StatusCommand: ParsableCommand {
         let report = ctx.status().run()
         print("installed=\(report.installed)")
         print("registered=\(report.registered)")
+        print("registration_status=\(report.registrationStatus.rawValue)")
         if let hostname = report.configHostname {
             print("hostname=\(hostname)")
         }

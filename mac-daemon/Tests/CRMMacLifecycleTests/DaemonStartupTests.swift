@@ -63,14 +63,18 @@ final class DaemonStartupTests: XCTestCase {
         let paths = LifecyclePaths(
             configDirPath: tempDir.path,
             binDirPath: "/dev/null",
-            binaryPath: "/dev/null",
             configFilePath: configURL.path,
             stateFilePath: stateURL.path,
             launchAgentsDirPath: "/dev/null",
-            plistPath: "/dev/null",
             logsDirPath: "/dev/null",
             stdoutLogPath: "/dev/null",
-            stderrLogPath: "/dev/null")
+            stderrLogPath: "/dev/null",
+            bundleAppPath: "/dev/null",
+            bundleBinaryPath: "/dev/null",
+            bundlePlistPath: "/dev/null",
+            bundleInfoPlistPath: "/dev/null",
+            legacyBinaryPath: "/dev/null",
+            legacyPlistPath: "/dev/null")
         let startup = DaemonStartup(paths: paths, keychain: keychain, logger: NoopLogger())
         let artifacts = try startup.run()
         XCTAssertEqual(artifacts.config.hostname, "mac-1")
@@ -84,14 +88,18 @@ final class DaemonStartupTests: XCTestCase {
         let paths = LifecyclePaths(
             configDirPath: tempDir.path,
             binDirPath: "/dev/null",
-            binaryPath: "/dev/null",
             configFilePath: tempDir.appendingPathComponent("config.json").path,
             stateFilePath: tempDir.appendingPathComponent("state.json").path,
             launchAgentsDirPath: "/dev/null",
-            plistPath: "/dev/null",
             logsDirPath: "/dev/null",
             stdoutLogPath: "/dev/null",
-            stderrLogPath: "/dev/null")
+            stderrLogPath: "/dev/null",
+            bundleAppPath: "/dev/null",
+            bundleBinaryPath: "/dev/null",
+            bundlePlistPath: "/dev/null",
+            bundleInfoPlistPath: "/dev/null",
+            legacyBinaryPath: "/dev/null",
+            legacyPlistPath: "/dev/null")
         let startup = DaemonStartup(
             paths: paths,
             keychain: InMemoryKeychainStore(initial: "k"),
@@ -119,14 +127,18 @@ final class DaemonStartupTests: XCTestCase {
         let paths = LifecyclePaths(
             configDirPath: tempDir.path,
             binDirPath: "/dev/null",
-            binaryPath: "/dev/null",
             configFilePath: configURL.path,
             stateFilePath: tempDir.appendingPathComponent("state.json").path,
             launchAgentsDirPath: "/dev/null",
-            plistPath: "/dev/null",
             logsDirPath: "/dev/null",
             stdoutLogPath: "/dev/null",
-            stderrLogPath: "/dev/null")
+            stderrLogPath: "/dev/null",
+            bundleAppPath: "/dev/null",
+            bundleBinaryPath: "/dev/null",
+            bundlePlistPath: "/dev/null",
+            bundleInfoPlistPath: "/dev/null",
+            legacyBinaryPath: "/dev/null",
+            legacyPlistPath: "/dev/null")
         // Empty keychain — no api-key.
         let startup = DaemonStartup(
             paths: paths,
@@ -155,14 +167,18 @@ final class DaemonStartupTests: XCTestCase {
         let paths = LifecyclePaths(
             configDirPath: tempDir.path,
             binDirPath: "/dev/null",
-            binaryPath: "/dev/null",
             configFilePath: configURL.path,
             stateFilePath: tempDir.appendingPathComponent("state.json").path,
             launchAgentsDirPath: "/dev/null",
-            plistPath: "/dev/null",
             logsDirPath: "/dev/null",
             stdoutLogPath: "/dev/null",
-            stderrLogPath: "/dev/null")
+            stderrLogPath: "/dev/null",
+            bundleAppPath: "/dev/null",
+            bundleBinaryPath: "/dev/null",
+            bundlePlistPath: "/dev/null",
+            bundleInfoPlistPath: "/dev/null",
+            legacyBinaryPath: "/dev/null",
+            legacyPlistPath: "/dev/null")
         let startup = DaemonStartup(
             paths: paths,
             keychain: InMemoryKeychainStore(initial: "k"),

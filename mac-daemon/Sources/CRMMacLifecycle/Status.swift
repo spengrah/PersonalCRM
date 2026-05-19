@@ -1,15 +1,17 @@
 // Status implements `crm-mac status`. Shows the daemon's known
-// state without making any network call. The
-// launchctl status is an exit-code-only signal — we do NOT parse the
-// `state = running` line from launchctl print (that's informational,
-// not API).
+// state without making any network call. Reads the agent service
+// registration status via AgentService (replaces the previous
+// launchctl printService probe).
 import Foundation
 import CRMMacCore
 
 public struct StatusReport: Equatable {
     public let installed: Bool
     public let registered: Bool
-    public let registeredExitCode: Int32
+    /// Detailed agent-service registration state. Lets the
+    /// rendered output distinguish "not registered" from "requires
+    /// approval" — both surface as `registered: false`.
+    public let registrationStatus: AgentServiceStatus
     public let configHostname: String?
     public let configPiURL: String?
     public let hostID: UUID?
@@ -28,7 +30,7 @@ public struct StatusReport: Equatable {
     public init(
         installed: Bool,
         registered: Bool,
-        registeredExitCode: Int32,
+        registrationStatus: AgentServiceStatus,
         configHostname: String?,
         configPiURL: String?,
         hostID: UUID?,
@@ -39,7 +41,7 @@ public struct StatusReport: Equatable {
     ) {
         self.installed = installed
         self.registered = registered
-        self.registeredExitCode = registeredExitCode
+        self.registrationStatus = registrationStatus
         self.configHostname = configHostname
         self.configPiURL = configPiURL
         self.hostID = hostID
@@ -155,16 +157,16 @@ public struct MessagesSourceStatus: Equatable {
 public struct StatusDependencies {
     public let paths: LifecyclePaths
     public let filesystem: FilesystemAdapter
-    public let launchctl: LaunchctlRunner
+    public let agentService: AgentService
 
     public init(
         paths: LifecyclePaths,
         filesystem: FilesystemAdapter,
-        launchctl: LaunchctlRunner
+        agentService: AgentService
     ) {
         self.paths = paths
         self.filesystem = filesystem
-        self.launchctl = launchctl
+        self.agentService = agentService
     }
 }
 
@@ -175,14 +177,15 @@ public struct Status {
     }
 
     public func run() -> StatusReport {
-        let installed = deps.filesystem.fileExists(at: deps.paths.binaryPath)
+        // Installed = the bundle is present on disk. Pre-rewrite this
+        // probed the bare-binary path; post-rewrite the bundle path
+        // is the source of truth. The legacy-binary case is a stale
+        // install in transition; treated as not-yet-installed-with-
+        // bundle.
+        let installed = deps.filesystem.fileExists(at: deps.paths.bundleAppPath)
 
-        var registered = false
-        var registeredExit: Int32 = -1
-        if let inv = try? deps.launchctl.printService(label: Daemon.label) {
-            registeredExit = inv.exitCode
-            registered = inv.exitCode == 0
-        }
+        let regStatus = deps.agentService.currentStatus()
+        let registered = regStatus == .enabled
 
         var configHostname: String?
         var configPiURL: String?
@@ -222,10 +225,6 @@ public struct Status {
                         recoveryRequested: (lastError ?? "").hasPrefix("recovery_requested:"),
                         lastError: lastError)
                 } else if icloudContainerCount > 0 {
-                    // Config has containers but state has never
-                    // recorded a tick — surface a placeholder so
-                    // operators see the source is configured but
-                    // hasn't run.
                     icloudStatus = ICloudContactsSourceStatus(
                         lastScheduledAt: nil,
                         lastPushedAt: nil,
@@ -239,7 +238,7 @@ public struct Status {
         return StatusReport(
             installed: installed,
             registered: registered,
-            registeredExitCode: registeredExit,
+            registrationStatus: regStatus,
             configHostname: configHostname,
             configPiURL: configPiURL,
             hostID: hostID,

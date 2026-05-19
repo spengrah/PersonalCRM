@@ -1,14 +1,21 @@
 // Uninstaller implements `crm-mac uninstall`.
 //
 // Default uninstall:
-//   1. launchctl bootout (tolerates non-zero — service may not be loaded)
-//   2. delete plist file
-//   3. delete Keychain entry
-// Does NOT remove config.json / state.json / installed binary.
+//   1. Stop the running daemon (SIGTERM via ProcessSignaller +
+//      pidfile-poll up to 10s). Tolerant — uninstall continues even
+//      if the daemon doesn't exit cleanly.
+//   2. SMAppService.unregister (tolerant of "not registered" errors).
+//   3. Delete the bundle directory at paths.bundleAppPath
+//      (recursive).
+//   4. Delete the api-key entry.
+//   5. Legacy cleanup (unconditional, best-effort): bootout the
+//      legacy launchctl registration if the legacy plist exists;
+//      delete the legacy plist file + legacy bare binary if present.
 //
 // With --purge:
-//   4. additionally remove config.json, state.json, installed binary,
-//      logs (best-effort)
+//   6. additionally remove config.json, state.json, logs, the
+//      icloud_contacts hash cache, and (on purge) the legacy bin/
+//      directory if empty.
 //
 // Pi-side mac_host row is NOT touched — `crm-admin --revoke-host <id>`
 // is the Pi-side knob.
@@ -23,23 +30,45 @@ public struct UninstallRequest: Equatable {
 }
 
 public struct UninstallSummary: Equatable {
-    public let bootoutInvoked: Bool
-    public let bootoutExitCode: Int32
-    public let plistDeleted: Bool
+    /// True iff the SIGTERM + pidfile poll succeeded (or no pidfile
+    /// was present). False if the daemon refused to stop within the
+    /// timeout — uninstall continues regardless; operator can
+    /// `kill -9` separately.
+    public let daemonStopped: Bool
+    /// True iff `agentService.unregister()` was called. The call may
+    /// have thrown an "already not registered" error and still
+    /// returns true here — this field tracks invocation, not
+    /// success.
+    public let unregisterInvoked: Bool
+    /// True iff the bundle directory existed and was removed.
+    public let bundleDeleted: Bool
+    /// True iff the api-key entry existed and was deleted.
     public let keychainDeleted: Bool
+    /// True iff the legacy launchd plist file at
+    /// ~/Library/LaunchAgents/<label>.plist existed and was removed.
+    /// False on a fresh install with no legacy artifacts (the common
+    /// post-rewrite case).
+    public let legacyPlistDeleted: Bool
+    /// True iff the legacy bare binary at <configDir>/bin/crm-mac
+    /// existed and was removed.
+    public let legacyBinaryDeleted: Bool
     public let purged: Bool
 
     public init(
-        bootoutInvoked: Bool,
-        bootoutExitCode: Int32,
-        plistDeleted: Bool,
+        daemonStopped: Bool,
+        unregisterInvoked: Bool,
+        bundleDeleted: Bool,
         keychainDeleted: Bool,
+        legacyPlistDeleted: Bool,
+        legacyBinaryDeleted: Bool,
         purged: Bool
     ) {
-        self.bootoutInvoked = bootoutInvoked
-        self.bootoutExitCode = bootoutExitCode
-        self.plistDeleted = plistDeleted
+        self.daemonStopped = daemonStopped
+        self.unregisterInvoked = unregisterInvoked
+        self.bundleDeleted = bundleDeleted
         self.keychainDeleted = keychainDeleted
+        self.legacyPlistDeleted = legacyPlistDeleted
+        self.legacyBinaryDeleted = legacyBinaryDeleted
         self.purged = purged
     }
 }
@@ -48,21 +77,34 @@ public struct UninstallerDependencies {
     public let paths: LifecyclePaths
     public let filesystem: FilesystemAdapter
     public let keychain: KeychainStore
-    public let launchctl: LaunchctlRunner
+    public let agentService: AgentService
+    public let processSignaller: ProcessSignaller
     public let logger: LoggerProtocol
+    /// Legacy launchctl runner for cleaning up pre-rewrite installs.
+    /// Nil in tests that don't seed legacy artifacts.
+    public let legacyLaunchctl: LaunchctlRunner?
+    /// Timeout (seconds) for the stop-daemon SIGTERM + pidfile poll.
+    /// Default 10s.
+    public let stopDaemonTimeoutSeconds: TimeInterval
 
     public init(
         paths: LifecyclePaths,
         filesystem: FilesystemAdapter,
         keychain: KeychainStore,
-        launchctl: LaunchctlRunner,
-        logger: LoggerProtocol
+        agentService: AgentService,
+        processSignaller: ProcessSignaller,
+        logger: LoggerProtocol,
+        legacyLaunchctl: LaunchctlRunner? = nil,
+        stopDaemonTimeoutSeconds: TimeInterval = 10
     ) {
         self.paths = paths
         self.filesystem = filesystem
         self.keychain = keychain
-        self.launchctl = launchctl
+        self.agentService = agentService
+        self.processSignaller = processSignaller
         self.logger = logger
+        self.legacyLaunchctl = legacyLaunchctl
+        self.stopDaemonTimeoutSeconds = stopDaemonTimeoutSeconds
     }
 }
 
@@ -73,28 +115,38 @@ public struct Uninstaller {
         self.deps = deps
     }
 
-    public func run(_ request: UninstallRequest) throws -> UninstallSummary {
-        // bootout — tolerate non-zero (service may not be loaded).
-        var bootoutExit: Int32 = 0
-        var bootoutInvoked = false
+    public func run(_ request: UninstallRequest) async throws -> UninstallSummary {
+        // 1. Stop the running daemon. Tolerant of failure — the
+        // uninstall continues so config + plist cleanup still runs.
+        let daemonStopped = await stopRunningDaemonTolerant()
+
+        // 2. Unregister via SMAppService. Tolerant of
+        // "already-not-registered" errors.
+        var unregisterInvoked = false
         do {
-            let inv = try deps.launchctl.bootout(label: Daemon.label)
-            bootoutInvoked = true
-            bootoutExit = inv.exitCode
+            try await deps.agentService.unregister()
+            unregisterInvoked = true
         } catch {
-            deps.logger.warning("uninstall: bootout invocation failed", metadata: [
+            unregisterInvoked = true  // we DID call it; it just threw
+            deps.logger.warning("uninstall: agentService.unregister failed (continuing)", metadata: [
                 "error": .private(String(describing: error)),
             ])
         }
 
-        // Delete plist.
-        var plistDeleted = false
-        if deps.filesystem.fileExists(at: deps.paths.plistPath) {
-            try deps.filesystem.remove(at: deps.paths.plistPath)
-            plistDeleted = true
+        // 3. Delete the bundle directory.
+        var bundleDeleted = false
+        if deps.filesystem.fileExists(at: deps.paths.bundleAppPath) {
+            do {
+                try deps.filesystem.remove(at: deps.paths.bundleAppPath)
+                bundleDeleted = true
+            } catch {
+                deps.logger.warning("uninstall: bundle delete failed", metadata: [
+                    "error": .private(String(describing: error)),
+                ])
+            }
         }
 
-        // Delete Keychain entry.
+        // 4. Delete api-key.
         var keychainDeleted = false
         do {
             try deps.keychain.deleteAPIKey()
@@ -105,17 +157,17 @@ public struct Uninstaller {
             ])
         }
 
+        // 5. Legacy cleanup (best-effort).
+        let (legacyPlistDeleted, legacyBinaryDeleted) = cleanupLegacyArtifacts()
+
+        // 6. Purge — remove user-data + logs + icloud hash cache.
         var purged = false
         if request.purge {
-            // The icloud_contacts hash cache lives alongside config.json
-            // + state.json; include it in the purge so a re-pair on
-            // the same Mac starts with no stale prior-hash bindings.
             let icloudHashCachePath = URL(fileURLWithPath: deps.paths.configDirPath)
                 .appendingPathComponent("icloud_contacts_hashes.json").path
             for path in [
                 deps.paths.configFilePath,
                 deps.paths.stateFilePath,
-                deps.paths.binaryPath,
                 deps.paths.stdoutLogPath,
                 deps.paths.stderrLogPath,
                 icloudHashCachePath,
@@ -124,14 +176,88 @@ public struct Uninstaller {
                     try? deps.filesystem.remove(at: path)
                 }
             }
+            // Drop the legacy bin/ dir (empty by this point).
+            if deps.filesystem.fileExists(at: deps.paths.binDirPath) {
+                try? deps.filesystem.remove(at: deps.paths.binDirPath)
+            }
             purged = true
         }
 
         return UninstallSummary(
-            bootoutInvoked: bootoutInvoked,
-            bootoutExitCode: bootoutExit,
-            plistDeleted: plistDeleted,
+            daemonStopped: daemonStopped,
+            unregisterInvoked: unregisterInvoked,
+            bundleDeleted: bundleDeleted,
             keychainDeleted: keychainDeleted,
+            legacyPlistDeleted: legacyPlistDeleted,
+            legacyBinaryDeleted: legacyBinaryDeleted,
             purged: purged)
+    }
+
+    /// SIGTERM the running daemon if a pidfile is present; poll for
+    /// release. Returns true on clean stop or no-pidfile; false on
+    /// timeout. Tolerant — never throws.
+    ///
+    /// A present-but-malformed pidfile is NOT treated as "not
+    /// running" — the daemon may be alive and the pidfile is just
+    /// unparseable. We skip SIGTERM but still rely on the flock
+    /// probe (the canonical "is the daemon alive" check).
+    private func stopRunningDaemonTolerant() async -> Bool {
+        let pidfilePath = deps.paths.pidfilePath
+        guard deps.filesystem.fileExists(at: pidfilePath) else {
+            return true
+        }
+        if let pidData = try? deps.filesystem.read(from: pidfilePath),
+           let raw = String(data: pidData, encoding: .utf8),
+           let pid = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+           pid > 0 {
+            do {
+                try deps.processSignaller.sendSIGTERM(pid: pid)
+            } catch {
+                deps.logger.warning("uninstall: SIGTERM failed (continuing)", metadata: [
+                    "pid": .public("\(pid)"),
+                    "error": .private("\(error)"),
+                ])
+            }
+        } else {
+            deps.logger.warning("uninstall: pidfile present but unreadable/malformed; relying on flock probe", metadata: [
+                "path": .private(pidfilePath),
+            ])
+        }
+        return await deps.processSignaller.waitForPidfileRelease(
+            path: pidfilePath,
+            timeoutSeconds: deps.stopDaemonTimeoutSeconds)
+    }
+
+    /// Best-effort delete of legacy launchd plist + legacy bare
+    /// binary. Returns (plistDeleted, binaryDeleted).
+    private func cleanupLegacyArtifacts() -> (Bool, Bool) {
+        var plistDeleted = false
+        var binaryDeleted = false
+        if deps.filesystem.fileExists(at: deps.paths.legacyPlistPath) {
+            // Bootout the legacy registration if launchctl is wired
+            // (tolerant of non-zero — service may not be loaded).
+            if let legacy = deps.legacyLaunchctl {
+                _ = try? legacy.bootout(label: Daemon.label)
+            }
+            do {
+                try deps.filesystem.remove(at: deps.paths.legacyPlistPath)
+                plistDeleted = true
+            } catch {
+                deps.logger.warning("uninstall: legacy plist delete failed", metadata: [
+                    "error": .private(String(describing: error)),
+                ])
+            }
+        }
+        if deps.filesystem.fileExists(at: deps.paths.legacyBinaryPath) {
+            do {
+                try deps.filesystem.remove(at: deps.paths.legacyBinaryPath)
+                binaryDeleted = true
+            } catch {
+                deps.logger.warning("uninstall: legacy binary delete failed", metadata: [
+                    "error": .private(String(describing: error)),
+                ])
+            }
+        }
+        return (plistDeleted, binaryDeleted)
     }
 }

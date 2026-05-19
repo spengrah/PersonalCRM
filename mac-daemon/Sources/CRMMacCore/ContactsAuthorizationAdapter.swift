@@ -30,7 +30,12 @@ public protocol ContactsAuthorizationAdapter: Sendable {
     func authorizationStatus() -> ContactsAuthorizationStatus
 
     /// Prompt the user for Contacts access. Returns true on grant,
-    /// false on denial. Called only by `crm-mac install` —
-    /// daemon ticks must NOT prompt (the daemon runs headless).
+    /// false on denial. Called by both `crm-mac install` AND the
+    /// daemon's per-tick auth probe when status is `.notDetermined`.
+    /// Calling from the launchd-spawned daemon is what attributes
+    /// the TCC grant to the bundle ID (`xyz.spengrah.crm-mac`); the
+    /// shell-spawned install path attributes to the parent terminal
+    /// and is kept only as the user-driven entry point on a fresh
+    /// pair.
     func requestAccess() async throws -> Bool
 }

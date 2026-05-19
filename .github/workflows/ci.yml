@@ -195,7 +195,7 @@ jobs:
         # test-target dependencies are brittle under SPM.
         run: |
           ./.build/release/crm-mac --help
-          for cmd in daemon install uninstall doctor status configure; do
+          for cmd in daemon install uninstall doctor status configure messages stop start; do
             ./.build/release/crm-mac $cmd --help
           done
 
@@ -222,12 +222,12 @@ jobs:
 
       - name: Smoke — NSContactsUsageDescription embedded in __info_plist
         working-directory: mac-daemon
-        # Per plan D-JC12: SPM has no first-class Info.plist support
-        # for command-line executables. We embed via linker
-        # -sectcreate; if the flag silently drops out (Package.swift
-        # rewrite, SPM behavior change, etc.) the Contacts framework
-        # has no usage description and the consent prompt fails to
-        # appear on first requestAccess. Catch the regression here.
+        # SPM has no first-class Info.plist support for command-line
+        # executables. We embed via linker -sectcreate; if the flag
+        # silently drops out (Package.swift rewrite, SPM behavior
+        # change, etc.) the Contacts framework has no usage description
+        # and the consent prompt fails to appear on first
+        # requestAccess. Catch the regression here.
         run: |
           if ! otool -s __TEXT __info_plist .build/release/crm-mac | grep -q .; then
             echo "FAIL: __TEXT,__info_plist section is empty"
@@ -237,6 +237,63 @@ jobs:
             echo "FAIL: NSContactsUsageDescription key missing from binary"
             exit 1
           fi
+
+      - name: Smoke — bundle assembly under CLT-compatible tools
+        working-directory: mac-daemon
+        # Drives Scripts/assemble_bundle.sh against the release Mach-O.
+        # Asserts bundle structure, plist validity, codesign identifier
+        # parity on both inner Mach-O and outer bundle, and per-key
+        # equality between the source-tree Info.plist and the
+        # assembled bundle's Info.plist (NOT byte-identity — the
+        # install-path code-path uses PropertyListSerialization which
+        # may reorder keys; only key/value equality matters per the
+        # plan's D22).
+        run: |
+          bash Scripts/assemble_bundle.sh \
+            .build/release/crm-mac \
+            .build/release/crm-mac.app \
+            Sources/crm-mac/Info.plist
+          # Bundle structure exists.
+          test -f .build/release/crm-mac.app/Contents/Info.plist
+          test -f .build/release/crm-mac.app/Contents/MacOS/crm-mac
+          test -f .build/release/crm-mac.app/Contents/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
+          # Plists parse.
+          plutil -lint .build/release/crm-mac.app/Contents/Info.plist
+          plutil -lint .build/release/crm-mac.app/Contents/Library/LaunchAgents/xyz.spengrah.crm-mac.plist
+          # Per-key value match between source-tree Info.plist and the
+          # assembled bundle's Info.plist.
+          for key in CFBundleIdentifier CFBundleName CFBundleExecutable CFBundleVersion CFBundleShortVersionString CFBundlePackageType CFBundleInfoDictionaryVersion LSUIElement LSMinimumSystemVersion NSContactsUsageDescription; do
+            src=$(plutil -extract "$key" raw Sources/crm-mac/Info.plist)
+            dst=$(plutil -extract "$key" raw .build/release/crm-mac.app/Contents/Info.plist)
+            if [ "$src" != "$dst" ]; then
+              echo "FAIL: Info.plist key $key differs between source ($src) and bundle ($dst)"
+              exit 1
+            fi
+          done
+          # CFBundleIdentifier in the bundle matches the daemon label.
+          test "$(plutil -extract CFBundleIdentifier raw .build/release/crm-mac.app/Contents/Info.plist)" = "xyz.spengrah.crm-mac"
+          # Outer bundle codesign valid.
+          codesign --verify --strict --deep .build/release/crm-mac.app
+          # Inner Mach-O identifier matches (D5 two-pass sign).
+          codesign --display --verbose=2 .build/release/crm-mac.app/Contents/MacOS/crm-mac 2>&1 \
+            | grep -qE "^Identifier=xyz\.spengrah\.crm-mac$"
+          # Outer bundle identifier matches.
+          codesign --display --verbose=2 .build/release/crm-mac.app 2>&1 \
+            | grep -qE "^Identifier=xyz\.spengrah\.crm-mac$"
+
+      - name: Integration tests — bundle assembly parity + atomic swap
+        working-directory: mac-daemon
+        # Real-Foundation integration tests gated by env var. Covers:
+        #   - BundleAssemblyParityTests: shell + Swift assembly produce
+        #     byte-identical bundles given the same source-tree inputs.
+        #   - BundleSwapAtomicityTests: upgrade-path backup-rename-swap
+        #     uses only empty/absent destinations (no ENOTEMPTY trap).
+        # These tests aren't safe under the default --parallel test
+        # runner because they shell out + write to a tmp dir; opt-in
+        # via env var keeps them out of normal `swift test` runs.
+        env:
+          CRM_MAC_INTEGRATION_TESTS: "1"
+        run: swift test --filter 'BundleAssemblyParityTests|BundleSwapAtomicityTests'
 
   e2e-tests:
     name: E2E Tests

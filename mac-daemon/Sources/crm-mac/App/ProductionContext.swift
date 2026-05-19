@@ -14,7 +14,13 @@ struct ProductionContext {
     let filesystem: FilesystemAdapter
     let executable: ExecutableAdapter
     let keychain: KeychainStore
-    let launchctl: LaunchctlRunner
+    let agentService: AgentService
+    let processSignaller: ProcessSignaller
+    let bundleAssembler: BundleAssembler
+    /// Legacy launchctl runner — only used by the one-shot migration
+    /// + uninstall's legacy-cleanup path. Stays wired even after the
+    /// migration runs because uninstall can run more than once.
+    let legacyLaunchctl: LaunchctlRunner
     let clock: ClockAdapter
     let exitHandler: ExitHandler
 
@@ -23,19 +29,34 @@ struct ProductionContext {
         self.paths = LifecyclePaths(
             configDirPath: systemPaths.configDir.path,
             binDirPath: systemPaths.binDir.path,
-            binaryPath: systemPaths.binaryPath.path,
             configFilePath: systemPaths.configFile.path,
             stateFilePath: systemPaths.stateFile.path,
             launchAgentsDirPath: systemPaths.launchAgentsDir.path,
-            plistPath: systemPaths.plistPath.path,
             logsDirPath: systemPaths.logsDir.path,
             stdoutLogPath: systemPaths.stdoutLog.path,
-            stderrLogPath: systemPaths.stderrLog.path)
+            stderrLogPath: systemPaths.stderrLog.path,
+            bundleAppPath: systemPaths.bundleApp.path,
+            bundleBinaryPath: systemPaths.bundleBinary.path,
+            bundlePlistPath: systemPaths.bundlePlist.path,
+            bundleInfoPlistPath: systemPaths.bundleInfoPlist.path,
+            legacyBinaryPath: systemPaths.legacyBinary.path,
+            legacyPlistPath: systemPaths.legacyPlist.path)
         self.logger = OSLogLogger()
-        self.filesystem = ProductionFilesystemAdapter()
-        self.executable = ProductionExecutableAdapter()
+        let fs = ProductionFilesystemAdapter()
+        let exec = ProductionExecutableAdapter()
+        self.filesystem = fs
+        self.executable = exec
         self.keychain = FileAPIKeyStore(path: systemPaths.apiKeyFile.path)
-        self.launchctl = ProductionLaunchctlRunner()
+        if #available(macOS 13.0, *) {
+            self.agentService = ProductionAgentService(
+                plistName: "\(Daemon.label).plist")
+        } else {
+            fatalError("crm-mac requires macOS 13+ for SMAppService")
+        }
+        self.processSignaller = ProductionProcessSignaller()
+        self.bundleAssembler = BundleAssembler(
+            filesystem: fs, executable: exec)
+        self.legacyLaunchctl = ProductionLaunchctlRunner()
         self.clock = SystemClock()
         self.exitHandler = SystemExitHandler()
     }
@@ -50,11 +71,14 @@ struct ProductionContext {
             filesystem: filesystem,
             executable: executable,
             keychain: keychain,
-            launchctl: launchctl,
+            agentService: agentService,
+            processSignaller: processSignaller,
+            bundleAssembler: bundleAssembler,
             piClientFactory: { url in self.piClientFactory(url) },
             clock: clock,
             logger: logger,
-            legacyKeychain: ProductionKeychainStore()))
+            legacyKeychain: ProductionKeychainStore(),
+            legacyLaunchctl: legacyLaunchctl))
     }
 
     func uninstaller() -> Uninstaller {
@@ -62,8 +86,10 @@ struct ProductionContext {
             paths: paths,
             filesystem: filesystem,
             keychain: keychain,
-            launchctl: launchctl,
-            logger: logger))
+            agentService: agentService,
+            processSignaller: processSignaller,
+            logger: logger,
+            legacyLaunchctl: legacyLaunchctl))
     }
 
     func doctor() -> Doctor {
@@ -71,7 +97,7 @@ struct ProductionContext {
             paths: paths,
             filesystem: filesystem,
             keychain: keychain,
-            launchctl: launchctl,
+            agentService: agentService,
             piClientFactory: { url in self.piClientFactory(url) },
             contactsAuth: contactsAuthAdapter(),
             containerEnumerator: contactContainerEnumerator(),
@@ -84,7 +110,7 @@ struct ProductionContext {
         Status(StatusDependencies(
             paths: paths,
             filesystem: filesystem,
-            launchctl: launchctl))
+            agentService: agentService))
     }
 
     func contactsAuthAdapter() -> ContactsAuthorizationAdapter {

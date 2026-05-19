@@ -148,13 +148,13 @@ final class DoctorIcloudContactsTests: XCTestCase {
         encoder.dateEncodingStrategy = .iso8601
         try! fs.write(try! encoder.encode(config), to: paths.configFilePath)
         try! fs.write(try! encoder.encode(state), to: paths.stateFilePath)
-        var script = FakeLaunchctlRunner.Script()
-        script.printService = [0]
+        var script = FakeAgentService.Script()
+        script.statusSequence = [.enabled]
         let deps = DoctorDependencies(
             paths: paths,
             filesystem: fs,
             keychain: InMemoryKeychainStore(initial: "key"),
-            launchctl: FakeLaunchctlRunner(script: script),
+            agentService: FakeAgentService(script: script),
             piClientFactory: { url in
                 PiClient(
                     baseURL: url,

@@ -5,30 +5,33 @@ import CRMMacCore
 
 final class InstallerUpgradeTests: XCTestCase {
     func testUpgradeDoesNotPostHost() async throws {
-        let (installer, fs, launchctl, _, paths, transport) = try prepareExistingInstall()
+        let (installer, fs, agentService, _, paths, transport, _) = try prepareExistingInstall()
         let summary = try await installer.run(InstallRequest(
             piURL: URL(string: "https://pi.example.test")!,
             pairingToken: "ignored",
             hostname: "ignored",
             upgrade: true))
         XCTAssertEqual(transport.invocations.count, 0, "upgrade must NOT call POST /host")
-        XCTAssertTrue(fs.fileExists(at: paths.binaryPath))
-        // bootout then bootstrap.
-        XCTAssertEqual(launchctl.bootoutCalls.count, 1)
-        XCTAssertEqual(launchctl.bootstrapCalls.count, 1)
-        XCTAssertEqual(summary.binaryPath, paths.binaryPath)
+        XCTAssertTrue(fs.fileExists(at: paths.bundleAppPath))
+        XCTAssertTrue(fs.fileExists(at: paths.bundleBinaryPath))
+        XCTAssertGreaterThanOrEqual(agentService.unregisterCalls, 1)
+        XCTAssertGreaterThanOrEqual(agentService.registerCalls, 1)
+        XCTAssertEqual(summary.bundleBinaryPath, paths.bundleBinaryPath)
     }
 
     func testUpgradeRefusesWithNoExistingInstall() async {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         fs.seedFile(at: "/tmp/source/crm-mac")
+        let exec = FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac")
         let installer = Installer(InstallerDependencies(
             paths: paths,
             filesystem: fs,
-            executable: FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac"),
+            executable: exec,
             keychain: InMemoryKeychainStore(),
-            launchctl: FakeLaunchctlRunner(),
+            agentService: FakeAgentService(),
+            processSignaller: FakeProcessSignaller(),
+            bundleAssembler: BundleAssembler(filesystem: fs, executable: exec),
             piClientFactory: { url in
                 PiClient(
                     baseURL: url,
@@ -55,7 +58,9 @@ final class InstallerUpgradeTests: XCTestCase {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         fs.seedFile(at: "/tmp/source/crm-mac")
-        try fs.write(Data("old binary".utf8), to: paths.binaryPath)
+        // Pre-existing bundle from a prior install.
+        try fs.createDirectory(at: paths.bundleAppPath)
+        try fs.write(Data("old binary".utf8), to: paths.bundleBinaryPath)
         let config = DaemonConfig(
             piURL: URL(string: "https://pi.example.test")!,
             hostID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
@@ -67,13 +72,15 @@ final class InstallerUpgradeTests: XCTestCase {
         // Primary (file-store stand-in) starts empty; legacy holds the key.
         let primary = InMemoryKeychainStore()
         let legacy = InMemoryKeychainStore(initial: "migrating-key")
-        let launchctl = FakeLaunchctlRunner()
+        let exec = FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac")
         let installer = Installer(InstallerDependencies(
             paths: paths,
             filesystem: fs,
-            executable: FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac"),
+            executable: exec,
             keychain: primary,
-            launchctl: launchctl,
+            agentService: FakeAgentService(),
+            processSignaller: FakeProcessSignaller(),
+            bundleAssembler: BundleAssembler(filesystem: fs, executable: exec),
             piClientFactory: { url in
                 PiClient(
                     baseURL: url,
@@ -98,12 +105,116 @@ final class InstallerUpgradeTests: XCTestCase {
         }
     }
 
-    private func prepareExistingInstall() throws -> (Installer, InMemoryFilesystem, FakeLaunchctlRunner, InMemoryKeychainStore, LifecyclePaths, LifecycleMockTransport) {
+    func testUpgradeAtomicallyReplacesExistingBundle() async throws {
+        let (installer, fs, _, _, paths, _, _) = try prepareExistingInstall(
+            bundleFiles: [
+                ("Contents/Info.plist", Data("old-info".utf8)),
+                ("Contents/MacOS/crm-mac", Data("old-binary".utf8)),
+                ("Contents/Library/LaunchAgents/\(Daemon.label).plist", Data("old-plist".utf8)),
+            ])
+        _ = try await installer.run(InstallRequest(
+            piURL: URL(string: "https://pi.example.test")!,
+            pairingToken: "ignored",
+            hostname: "ignored",
+            upgrade: true))
+        XCTAssertTrue(fs.fileExists(at: paths.bundleAppPath))
+        // No leftover .tmp. or .backup. dirs.
+        XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".tmp.") }))
+        XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".backup.") }))
+        XCTAssertFalse(fs.allPaths.contains(where: { $0.contains(".tmp.") }))
+        XCTAssertFalse(fs.allPaths.contains(where: { $0.contains(".backup.") }))
+        // New binary content replaces old.
+        let newBinary = try fs.read(from: paths.bundleBinaryPath)
+        XCTAssertNotEqual(newBinary, Data("old-binary".utf8),
+            "upgrade must replace the old bundle content with the new")
+    }
+
+    func testUpgradeRegistrationFailureRollsBackToOldBundle() async throws {
+        // A register failure during upgrade must restore the
+        // previous install (rollback the backup-rename-swap) so the
+        // operator isn't left with a stopped daemon + new bundle
+        // they can't run.
+        let oldInfoBytes = Data("old-info".utf8)
+        let (installer, fs, agent, _, paths, _, _) = try prepareExistingInstall(
+            bundleFiles: [
+                ("Contents/Info.plist", oldInfoBytes),
+                ("Contents/MacOS/crm-mac", Data("old-binary".utf8)),
+            ])
+        // Make register throw — the swap should have completed first
+        // (so the new bundle is briefly at the final path) then roll
+        // back.
+        agent.script.registerThrows = .registrationFailed(
+            message: "requires approval", requiresApproval: true)
+        do {
+            _ = try await installer.run(InstallRequest(
+                piURL: URL(string: "https://x")!,
+                pairingToken: "ignored",
+                hostname: "ignored",
+                upgrade: true))
+            XCTFail("expected agentRegistrationFailed")
+        } catch InstallError.agentRegistrationFailed {
+            // ok
+        } catch {
+            XCTFail("got \(error)")
+        }
+        // Old bundle restored at the final path.
+        let restored = try fs.read(from: "\(paths.bundleAppPath)/Contents/Info.plist")
+        XCTAssertEqual(restored, oldInfoBytes,
+            "register-failure rollback must restore the original bundle content")
+        // No tmp or backup left behind.
+        XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".tmp.") }))
+        XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".backup.") }))
+        // The rollback must attempt to re-register the restored bundle
+        // (best-effort) — otherwise launchd has no record of the agent
+        // after the upgrade-time unregister, and the daemon stays
+        // stopped despite the file-level rollback succeeding. Total
+        // register calls: 1 (initial, which threw) + 1 (rollback
+        // re-register, which also throws because the fake still has
+        // registerThrows set) = 2.
+        XCTAssertGreaterThanOrEqual(agent.registerCalls, 2,
+            "rollback must attempt to re-register the restored backup")
+    }
+
+    func testUpgradeAssemblyFailureRollsBackToOldBundle() async throws {
+        let oldInfoBytes = Data("old-info".utf8)
+        let (installer, fs, _, _, paths, _, exec) = try prepareExistingInstall(
+            bundleFiles: [
+                ("Contents/Info.plist", oldInfoBytes),
+                ("Contents/MacOS/crm-mac", Data("old-binary".utf8)),
+            ])
+        exec.failBundleCodesignWith = "injected codesign failure"
+        do {
+            _ = try await installer.run(InstallRequest(
+                piURL: URL(string: "https://pi.example.test")!,
+                pairingToken: "ignored",
+                hostname: "ignored",
+                upgrade: true))
+            XCTFail("expected upgrade to fail")
+        } catch InstallError.codesignFailed {
+            // ok
+        } catch {
+            XCTFail("got \(error)")
+        }
+        // Old bundle restored.
+        let restored = try fs.read(from: "\(paths.bundleAppPath)/Contents/Info.plist")
+        XCTAssertEqual(restored, oldInfoBytes,
+            "rollback must restore the original bundle content")
+        XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".tmp.") }))
+        XCTAssertFalse(fs.allDirs.contains(where: { $0.contains(".backup.") }))
+    }
+
+    private func prepareExistingInstall(
+        bundleFiles: [(String, Data)] = []
+    ) throws -> (Installer, InMemoryFilesystem, FakeAgentService, InMemoryKeychainStore, LifecyclePaths, LifecycleMockTransport, FakeExecutableAdapter) {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         fs.seedFile(at: "/tmp/source/crm-mac")
-        // Pretend an install exists.
-        try fs.write(Data("old binary".utf8), to: paths.binaryPath)
+        try fs.createDirectory(at: paths.bundleAppPath)
+        try fs.write(Data("old binary".utf8), to: paths.bundleBinaryPath)
+        for (rel, data) in bundleFiles {
+            let path = "\(paths.bundleAppPath)/\(rel)"
+            try fs.write(data, to: path)
+        }
         let config = DaemonConfig(
             piURL: URL(string: "https://pi.example.test")!,
             hostID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
@@ -114,14 +225,17 @@ final class InstallerUpgradeTests: XCTestCase {
         try fs.write(try encoder.encode(config), to: paths.configFilePath)
 
         let keychain = InMemoryKeychainStore(initial: "existing-key")
-        let launchctl = FakeLaunchctlRunner()
+        let agentService = FakeAgentService()
         let transport = LifecycleMockTransport([])
+        let exec = FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac")
         let installer = Installer(InstallerDependencies(
             paths: paths,
             filesystem: fs,
-            executable: FakeExecutableAdapter(currentExecutablePath: "/tmp/source/crm-mac"),
+            executable: exec,
             keychain: keychain,
-            launchctl: launchctl,
+            agentService: agentService,
+            processSignaller: FakeProcessSignaller(),
+            bundleAssembler: BundleAssembler(filesystem: fs, executable: exec),
             piClientFactory: { url in
                 PiClient(
                     baseURL: url,
@@ -130,6 +244,6 @@ final class InstallerUpgradeTests: XCTestCase {
             },
             clock: FixedClock(),
             logger: NoopLogger()))
-        return (installer, fs, launchctl, keychain, paths, transport)
+        return (installer, fs, agentService, keychain, paths, transport, exec)
     }
 }

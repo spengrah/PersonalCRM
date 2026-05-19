@@ -6,6 +6,20 @@
 	<string>xyz.spengrah.crm-mac</string>
 	<key>CFBundleName</key>
 	<string>crm-mac</string>
+	<key>CFBundleExecutable</key>
+	<string>crm-mac</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Personal CRM uses your Contacts to sync your iCloud Contacts to your Pi-based CRM. Data stays between your Mac and your Pi.</string>
 </dict>

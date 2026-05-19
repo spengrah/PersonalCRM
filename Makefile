@@ -38,7 +38,7 @@ help:
 	@echo "  dev-native  - Start dev servers with native PostgreSQL (no Docker)"
 	@echo "  build       - Build both frontend and backend"
 	@echo "  crm-admin   - Build the operator-only admin CLI (backend/crm-admin)"
-	@echo "  mac-daemon  - Build the macOS daemon binary (mac-daemon/.build/release/crm-mac, ad-hoc signed)"
+	@echo "  mac-daemon  - Build the macOS daemon app bundle (mac-daemon/.build/release/crm-mac.app, ad-hoc signed)"
 	@echo "  sqlc        - Regenerate sqlc code from SQL queries"
 	@echo "  lint        - Run all linters (backend + frontend)"
 	@echo "  clean       - Clean build artifacts"
@@ -258,16 +258,21 @@ crm-admin:
 	@cd backend && go build -o crm-admin cmd/crm-admin/main.go
 	@echo "✓ crm-admin built at backend/crm-admin"
 
-# Mac daemon binary. Built locally on a Mac; not wired into `make
-# build` because the Pi-side build pipeline has no Swift toolchain.
-# Produces an ad-hoc-signed release binary at
-# mac-daemon/.build/release/crm-mac. First Gatekeeper launch may
-# require System Settings -> Privacy & Security approval.
+# Mac daemon. Built locally on a Mac; not wired into `make build`
+# because the Pi-side build pipeline has no Swift toolchain.
+# Produces an ad-hoc-signed crm-mac.app bundle at
+# mac-daemon/.build/release/crm-mac.app (per the SMAppService
+# architecture in .ai/log/plan/mac-daemon-app-bundle-rewrite.md).
+# Bundle assembly is delegated to Scripts/assemble_bundle.sh — only
+# Command Line Tools (no full Xcode) are required.
 mac-daemon:
 	@echo "Building crm-mac (release)..."
 	@cd mac-daemon && swift build -c release
-	@codesign -s - --force mac-daemon/.build/release/crm-mac
-	@echo "✓ crm-mac built at mac-daemon/.build/release/crm-mac"
+	@bash mac-daemon/Scripts/assemble_bundle.sh \
+		mac-daemon/.build/release/crm-mac \
+		mac-daemon/.build/release/crm-mac.app \
+		mac-daemon/Sources/crm-mac/Info.plist
+	@echo "✓ crm-mac.app built at mac-daemon/.build/release/crm-mac.app"
 
 # Run Mac daemon Swift tests locally. Requires Xcode 16 (Swift 6 toolchain).
 # A CI-skipped chat.db smoke test reads ~/Library/Messages/chat.db; that

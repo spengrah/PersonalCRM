@@ -168,12 +168,33 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
             await self.cache.discardPendingRemovals()
         }
 
-        // Authorization probe.
+        // Authorization probe. On `.notDetermined` we trigger
+        // `requestAccess` from the launchd-spawned daemon process so
+        // TCC attributes the grant to the bundle ID
+        // (`responsible == requesting == xyz.spengrah.crm-mac`) and
+        // the grant survives rebuilds. Shell-launched callers (e.g.
+        // `crm-mac install --re-request-permission`) attribute to the
+        // parent terminal instead, so the daemon is the canonical
+        // prompt site.
         let authStatus = authAdapter.authorizationStatus()
         switch authStatus {
         case .authorized, .limited:
             break
-        case .notDetermined, .denied, .restricted:
+        case .notDetermined:
+            let granted: Bool
+            do {
+                granted = try await authAdapter.requestAccess()
+            } catch {
+                await abortDiscard()
+                await markUnhealthy(reason: "contacts_permission:request_failed")
+                return
+            }
+            if !granted {
+                await abortDiscard()
+                await markUnhealthy(reason: "contacts_permission:denied")
+                return
+            }
+        case .denied, .restricted:
             await abortDiscard()
             await markUnhealthy(reason: "contacts_permission:\(authStatus)")
             return

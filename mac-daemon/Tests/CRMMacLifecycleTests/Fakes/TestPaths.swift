@@ -11,16 +11,21 @@ struct TestPaths {
         let binDir = "\(configDir)/bin"
         let logsDir = "\(root)/Library/Logs/crm-mac"
         let agentsDir = "\(root)/Library/LaunchAgents"
+        let bundleApp = "\(configDir)/crm-mac.app"
         return LifecyclePaths(
             configDirPath: configDir,
             binDirPath: binDir,
-            binaryPath: "\(binDir)/crm-mac",
             configFilePath: "\(configDir)/config.json",
             stateFilePath: "\(configDir)/state.json",
             launchAgentsDirPath: agentsDir,
-            plistPath: "\(agentsDir)/\(Daemon.label).plist",
             logsDirPath: logsDir,
             stdoutLogPath: "\(logsDir)/stdout.log",
-            stderrLogPath: "\(logsDir)/stderr.log")
+            stderrLogPath: "\(logsDir)/stderr.log",
+            bundleAppPath: bundleApp,
+            bundleBinaryPath: "\(bundleApp)/Contents/MacOS/crm-mac",
+            bundlePlistPath: "\(bundleApp)/Contents/Library/LaunchAgents/\(Daemon.label).plist",
+            bundleInfoPlistPath: "\(bundleApp)/Contents/Info.plist",
+            legacyBinaryPath: "\(binDir)/crm-mac",
+            legacyPlistPath: "\(agentsDir)/\(Daemon.label).plist")
     }
 }

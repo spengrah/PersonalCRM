@@ -6,7 +6,8 @@ final class StatusTests: XCTestCase {
     func testReportsInstalledAndRegistered() throws {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
-        try fs.write(Data("binary".utf8), to: paths.binaryPath)
+        try fs.createDirectory(at: paths.bundleAppPath)
+        try fs.write(Data("bin".utf8), to: paths.bundleBinaryPath)
         let config = DaemonConfig(
             piURL: URL(string: "https://pi.example.test")!,
             hostID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
@@ -21,17 +22,16 @@ final class StatusTests: XCTestCase {
             lastHeartbeatAt: Date(timeIntervalSince1970: 1_700_001_000))
         try fs.write(try encoder.encode(state), to: paths.stateFilePath)
 
-        // The fake's default printService is exit 1 (unregistered);
-        // this test wants the registered path, so override to exit 0.
-        var script = FakeLaunchctlRunner.Script()
-        script.printService = [0]
+        var script = FakeAgentService.Script()
+        script.statusSequence = [.enabled]
         let status = Status(StatusDependencies(
             paths: paths,
             filesystem: fs,
-            launchctl: FakeLaunchctlRunner(script: script)))
+            agentService: FakeAgentService(script: script)))
         let report = status.run()
         XCTAssertTrue(report.installed)
         XCTAssertTrue(report.registered)
+        XCTAssertEqual(report.registrationStatus, AgentServiceStatus.enabled)
         XCTAssertEqual(report.configHostname, "mac-1")
         XCTAssertEqual(report.hostID, config.hostID)
         XCTAssertEqual(report.stateSchemaVersion, 1)
@@ -41,16 +41,35 @@ final class StatusTests: XCTestCase {
     func testReportsNotInstalledOnFreshSystem() {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
-        var script = FakeLaunchctlRunner.Script()
-        script.printService = [1]
+        var script = FakeAgentService.Script()
+        script.statusSequence = [.notRegistered]
         let status = Status(StatusDependencies(
             paths: paths,
             filesystem: fs,
-            launchctl: FakeLaunchctlRunner(script: script)))
+            agentService: FakeAgentService(script: script)))
         let report = status.run()
         XCTAssertFalse(report.installed)
         XCTAssertFalse(report.registered)
+        XCTAssertEqual(report.registrationStatus, AgentServiceStatus.notRegistered)
         XCTAssertNil(report.configHostname)
+    }
+
+    func testReportsRequiresApprovalDistinctFromNotRegistered() throws {
+        // Bundle present but agent registration requires approval.
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        try fs.createDirectory(at: paths.bundleAppPath)
+        try fs.write(Data("bin".utf8), to: paths.bundleBinaryPath)
+        var script = FakeAgentService.Script()
+        script.statusSequence = [.requiresApproval]
+        let status = Status(StatusDependencies(
+            paths: paths,
+            filesystem: fs,
+            agentService: FakeAgentService(script: script)))
+        let report = status.run()
+        XCTAssertTrue(report.installed)
+        XCTAssertFalse(report.registered)
+        XCTAssertEqual(report.registrationStatus, AgentServiceStatus.requiresApproval)
     }
 
     // MARK: - icloud_contacts row
@@ -62,7 +81,7 @@ final class StatusTests: XCTestCase {
         let report = Status(StatusDependencies(
             paths: paths,
             filesystem: fs,
-            launchctl: FakeLaunchctlRunner())).run()
+            agentService: FakeAgentService())).run()
         XCTAssertNil(report.icloudContacts,
                      "no containers configured + no source state → omit row")
     }
@@ -75,7 +94,7 @@ final class StatusTests: XCTestCase {
         let report = Status(StatusDependencies(
             paths: paths,
             filesystem: fs,
-            launchctl: FakeLaunchctlRunner())).run()
+            agentService: FakeAgentService())).run()
         let icloud = report.icloudContacts!
         XCTAssertEqual(icloud.containerCount, 2)
         XCTAssertNil(icloud.lastScheduledAt)
@@ -93,7 +112,7 @@ final class StatusTests: XCTestCase {
         let report = Status(StatusDependencies(
             paths: paths,
             filesystem: fs,
-            launchctl: FakeLaunchctlRunner())).run()
+            agentService: FakeAgentService())).run()
         let icloud = report.icloudContacts!
         XCTAssertTrue(icloud.recoveryRequested)
         XCTAssertEqual(icloud.lastError, "recovery_requested:allowlist_changed")
@@ -110,7 +129,7 @@ final class StatusTests: XCTestCase {
         let report = Status(StatusDependencies(
             paths: paths,
             filesystem: fs,
-            launchctl: FakeLaunchctlRunner())).run()
+            agentService: FakeAgentService())).run()
         let icloud = report.icloudContacts!
         XCTAssertFalse(icloud.recoveryRequested)
         XCTAssertEqual(icloud.lastError, "contacts_permission:denied")
@@ -119,7 +138,8 @@ final class StatusTests: XCTestCase {
     // MARK: - helpers
 
     private func seedConfigOnly(paths: LifecyclePaths, fs: InMemoryFilesystem) throws {
-        try fs.write(Data("binary".utf8), to: paths.binaryPath)
+        try fs.createDirectory(at: paths.bundleAppPath)
+        try fs.write(Data("bin".utf8), to: paths.bundleBinaryPath)
     }
 
     private func seedConfig(
