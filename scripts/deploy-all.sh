@@ -50,9 +50,13 @@ done
 mkdir -p "$STATE_DIR"
 HEAD_SHA="$(git rev-parse HEAD)"
 
-# Returns 0 (deploy) if state file is missing OR if `git diff` against
-# the recorded SHA reports changes on the given paths. Returns 1 (skip)
-# only when the diff is clean.
+# Returns 0 (deploy) if state file is missing OR if `git diff` reports
+# changes (tracked) OR if there are untracked files under the watched
+# paths. Returns 1 (skip) only when both checks are clean.
+#
+# `git diff --quiet` ignores untracked files, so a new source file
+# under a watched path would be silently skipped. The follow-up
+# `ls-files --others --exclude-standard` covers that gap.
 needs_deploy() {
     local state_file="$1"
     shift
@@ -66,11 +70,16 @@ needs_deploy() {
         echo "  warning: last-deployed SHA $last is not in this repo (rebased away?). Treating as changed." >&2
         return 0
     fi
-    if git diff --quiet "$last" -- "${paths[@]}"; then
-        return 1
-    else
+    if ! git diff --quiet "$last" -- "${paths[@]}"; then
         return 0
     fi
+    # Untracked files under watched paths count as a change.
+    local untracked
+    untracked="$(git ls-files --others --exclude-standard -- "${paths[@]}")"
+    if [ -n "$untracked" ]; then
+        return 0
+    fi
+    return 1
 }
 
 echo "=== Deploy-all (HEAD=$HEAD_SHA) ==="
