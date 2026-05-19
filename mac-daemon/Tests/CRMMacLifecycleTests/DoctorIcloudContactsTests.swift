@@ -91,7 +91,7 @@ final class DoctorIcloudContactsTests: XCTestCase {
     }
 
     func testAllowlistEnumerationNotAuthorizedEmitsShellContextWarning() async throws {
-        // Regression for #321: a shell-spawned doctor previously
+        // Regression test: a shell-spawned doctor previously
         // caught `.notAuthorized` and set `visible = []`, turning
         // every configured ID into a phantom "orphan". The new code
         // reports the enumeration as unavailable instead, AND falls

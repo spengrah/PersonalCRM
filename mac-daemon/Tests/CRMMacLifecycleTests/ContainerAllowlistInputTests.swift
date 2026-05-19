@@ -1,8 +1,10 @@
 // Pure-logic tests for `ContainerAllowlistInput.parse(_:)`. The
 // parser is the input side of the non-interactive
 // `--containers <uuid,uuid,…>` flow. Validation against the visible
-// CNContainer list deliberately does NOT happen here (see issue
-// #322); these tests just lock in the trim + drop-empty behaviour.
+// CNContainer list deliberately does NOT happen here (the
+// non-interactive path skips enumeration entirely so it works from
+// a shell context); these tests just lock in the trim +
+// drop-empty behaviour.
 import XCTest
 @testable import CRMMacLifecycle
 

@@ -1,8 +1,8 @@
 // CallCountingContactsAuth wraps a synthetic ContactsAuthorization
 // adapter and increments per-method invocation counters. Used by
 // `AllowlistConfigureFlowTests` to assert that non-interactive
-// modes make ZERO Contacts authorization calls — the regression
-// guard for issue #322.
+// modes make ZERO Contacts authorization calls (the structural
+// regression guard for shell-context Contacts permission errors).
 import Foundation
 import CRMMacCore
 

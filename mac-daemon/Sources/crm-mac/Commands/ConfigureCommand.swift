@@ -15,13 +15,12 @@
 //     parent terminal rather than the daemon's bundle. The daemon's
 //     next tick under launchd validates against the live container
 //     list and surfaces invalid UUIDs as a recovery-requested
-//     failure. See issue #322.
+//     failure.
 //
 // The dispatch (which mode runs which sequence) lives in
-// `AllowlistConfigureFlow` in CRMMacLifecycle so the regression
-// guard for #322 — non-interactive modes make zero Contacts calls
-// — can be unit-tested. The executable target has no test target
-// by design.
+// `AllowlistConfigureFlow` in CRMMacLifecycle so the zero-Contacts-
+// calls contract on the non-interactive paths can be unit-tested.
+// The executable target has no test target by design.
 //
 // Crash-safety: on a non-empty diff, the recovery flag in
 // `state.json` is bumped FIRST, then `config.json` is replaced.
@@ -75,17 +74,23 @@ struct ContainersSubcommand: ParsableCommand {
                 ? .configureInteractive
                 : .configureNonInteractive(rawContainers: containers))
         let configURL = URL(fileURLWithPath: ctx.paths.configFilePath)
-        // Bind production adapters into Sendable-conformant locals
-        // so the closures captured by `AllowlistConfigureFlow` don't
-        // need to retain the non-Sendable ProductionContext.
-        let auth = ctx.contactsAuthAdapter()
-        let enumerator = ctx.contactContainerEnumerator()
+        // Wire the production adapter factories as lazy closures.
+        // The flow only invokes them on interactive / list modes;
+        // the non-interactive branch never constructs an adapter,
+        // which is the structural regression guard for the
+        // shell-context Contacts permission issue.
+        let authFactory: @Sendable () -> ContactsAuthorizationAdapter = {
+            ProductionContext().contactsAuthAdapter()
+        }
+        let enumeratorFactory: @Sendable () -> ContactContainerEnumerator = {
+            ProductionContext().contactContainerEnumerator()
+        }
         let flow = AllowlistConfigureFlow(
             mode: mode,
             configStore: ConfigStore(fileURL: configURL),
             stateStore: StateStore(fileURL: URL(fileURLWithPath: ctx.paths.stateFilePath)),
-            authAdapter: { auth },
-            enumerator: { enumerator },
+            authAdapter: authFactory,
+            enumerator: enumeratorFactory,
             interactivePicker: { visible in
                 try Self.confirmAndPick(visible: visible, configURL: configURL)
             })
@@ -124,6 +129,25 @@ struct ContainersSubcommand: ParsableCommand {
         } catch let e as ContainerPickerError {
             FileHandle.standardError.write(Data("\(e)\n".utf8))
             throw ExitCode(2)
+        } catch let e as NonInteractiveAllowlistWriteError {
+            // Phase-specific recovery guidance for the partial-write
+            // case: the recovery flag is set in state.json but
+            // config.json was not replaced. The operator should
+            // re-run this command to complete the swap; the next
+            // tick will reconcile against the OLD allowlist
+            // meanwhile (still correct, idempotent).
+            switch e {
+            case .stateWriteFailed(let underlying):
+                FileHandle.standardError.write(Data(
+                    "Failed to set recovery flag in state.json: \(underlying)\n".utf8))
+            case .configWriteFailedAfterStateWrite(let underlying):
+                FileHandle.standardError.write(Data(
+                    "Failed to write config.json: \(underlying)\n  (Recovery flag is set; re-run `crm-mac configure containers` to retry.)\n".utf8))
+            case .configWriteFailed(let underlying):
+                FileHandle.standardError.write(Data(
+                    "Failed to write config.json: \(underlying)\n".utf8))
+            }
+            throw ExitCode(1)
         } catch {
             FileHandle.standardError.write(Data("\(error)\n".utf8))
             throw ExitCode(2)

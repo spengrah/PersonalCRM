@@ -2,7 +2,8 @@
 // ContactContainerEnumerator and increments a per-method
 // invocation counter. Used by `AllowlistConfigureFlowTests` to
 // assert that non-interactive modes make ZERO container-enumeration
-// calls — the regression guard for issue #322.
+// calls (the structural regression guard for shell-context
+// Contacts permission errors).
 import Foundation
 import CRMMacCore
 @testable import CRMMacLifecycle

@@ -200,8 +200,12 @@ final class NonInteractiveAllowlistWriterTests: XCTestCase {
         do {
             _ = try await writer.write(pickedIDs: ["B"])
             XCTFail("expected write to throw when config path is unwritable")
+        } catch NonInteractiveAllowlistWriteError.configWriteFailedAfterStateWrite {
+            // expected: state-write succeeded, config-write failed
+            // → callers should surface the "recovery flag is set;
+            // re-run to retry" guidance.
         } catch {
-            // expected
+            XCTFail("expected configWriteFailedAfterStateWrite, got: \(error)")
         }
 
         // State write ran first and persisted.
@@ -210,6 +214,39 @@ final class NonInteractiveAllowlistWriterTests: XCTestCase {
             state.sources["icloud_contacts"]?.lastError,
             "recovery_requested:allowlist_changed",
             "state-write must persist even when the subsequent config-write fails")
+    }
+
+    // MARK: - 5b. error-classification for fresh-install config-fail
+
+    func testWriteOnFreshInstallSurfacesPlainConfigWriteFailedError() async throws {
+        // Fresh-install + no existing allowlist + sabotaged config
+        // path: no state-write should run, and the resulting error
+        // should be the plain `.configWriteFailed` variant (NOT the
+        // partial-write variant). This drives the CLI wrapper to
+        // emit the simpler "Failed to write config.json" message
+        // without the "recovery flag is set; re-run" guidance.
+        try seedEmptyState()
+        let badConfigURL = tempDir.appendingPathComponent("config-as-dir")
+        try FileManager.default.createDirectory(at: badConfigURL, withIntermediateDirectories: true)
+        let writer = NonInteractiveAllowlistWriter(
+            configStore: ConfigStore(fileURL: badConfigURL),
+            stateStore: StateStore(fileURL: stateURL),
+            mutatingExistingConfig: false)
+
+        do {
+            _ = try await writer.write(pickedIDs: ["X"])
+            XCTFail("expected configWriteFailed")
+        } catch NonInteractiveAllowlistWriteError.configWriteFailed {
+            // expected
+        } catch {
+            XCTFail("expected configWriteFailed, got: \(error)")
+        }
+
+        // No state-write fired.
+        let state = try readState()
+        XCTAssertNil(
+            state.sources["icloud_contacts"]?.lastError,
+            "fresh install with no existing allowlist must not bump the recovery flag")
     }
 
     // MARK: - 6. type-signature regression guard
@@ -226,10 +263,12 @@ final class NonInteractiveAllowlistWriterTests: XCTestCase {
         let writerType: NonInteractiveAllowlistWriter.Type = NonInteractiveAllowlistWriter.self
         XCTAssertNotNil(writerType)
 
-        // Belt-and-suspenders: grep the writer source file for any
-        // re-introduced Contacts adapter symbols. The test source
-        // and the writer source live in the same git tree; resolve
-        // the writer's path relative to this test file.
+        // Belt-and-suspenders: grep the writer source file's
+        // executable code (after stripping line and block comments)
+        // for any re-introduced Contacts adapter symbols. Comments
+        // are allowed to mention these symbols by name as part of
+        // the contract documentation; what matters is that no
+        // production code path imports or invokes them.
         let testFile = URL(fileURLWithPath: #filePath)
         let writerSource = testFile
             .deletingLastPathComponent()                 // CRMMacLifecycleTests
@@ -241,6 +280,7 @@ final class NonInteractiveAllowlistWriterTests: XCTestCase {
             XCTFail("could not read writer source at \(writerSource.path)")
             return
         }
+        let codeOnly = Self.stripSwiftComments(text)
         let forbiddenSymbols = [
             "ContactsAuthorizationAdapter",
             "ContactContainerEnumerator",
@@ -249,10 +289,55 @@ final class NonInteractiveAllowlistWriterTests: XCTestCase {
         ]
         for symbol in forbiddenSymbols {
             XCTAssertFalse(
-                text.contains(symbol),
-                "NonInteractiveAllowlistWriter must not reference \(symbol) — this would re-introduce the issue #322 regression. See \(writerSource.path) for context.")
+                codeOnly.contains(symbol),
+                "NonInteractiveAllowlistWriter must not reference \(symbol) in executable code. See \(writerSource.path).")
         }
-        // Allow "Contacts framework" to appear in a comment, but
-        // not the actual symbols above.
+    }
+
+    /// Remove `//` line comments and `/* … */` block comments from
+    /// a Swift source string. Naive (no string-literal awareness)
+    /// but sufficient for the writer file which has no string
+    /// literals containing the forbidden symbols.
+    private static func stripSwiftComments(_ source: String) -> String {
+        var result = ""
+        var i = source.startIndex
+        var inBlockComment = false
+        var inLineComment = false
+        while i < source.endIndex {
+            let c = source[i]
+            let next = source.index(after: i) < source.endIndex
+                ? source[source.index(after: i)]
+                : Character("\0")
+            if inBlockComment {
+                if c == "*" && next == "/" {
+                    inBlockComment = false
+                    i = source.index(i, offsetBy: 2)
+                    continue
+                }
+                i = source.index(after: i)
+                continue
+            }
+            if inLineComment {
+                if c == "\n" {
+                    inLineComment = false
+                    result.append(c)
+                }
+                i = source.index(after: i)
+                continue
+            }
+            if c == "/" && next == "/" {
+                inLineComment = true
+                i = source.index(i, offsetBy: 2)
+                continue
+            }
+            if c == "/" && next == "*" {
+                inBlockComment = true
+                i = source.index(i, offsetBy: 2)
+                continue
+            }
+            result.append(c)
+            i = source.index(after: i)
+        }
+        return result
     }
 }

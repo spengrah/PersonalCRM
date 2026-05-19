@@ -1,9 +1,9 @@
 // Tests for `AllowlistConfigureFlow` — the dispatcher that decides,
 // per Mode, whether to invoke the Contacts framework adapters
 // before writing the allowlist. The control-flow boundary
-// assertion is the regression guard for issue #322: non-interactive
-// modes must make ZERO calls to the auth adapter or container
-// enumerator.
+// assertion: non-interactive modes must make ZERO calls to the
+// auth adapter or container enumerator (shell-context TCC
+// attribution would otherwise produce misleading errors).
 //
 // Coverage matrix (11 rows total):
 //
@@ -85,7 +85,7 @@ final class AllowlistConfigureFlowTests: XCTestCase {
         try StateStore(fileURL: stateURL).load()
     }
 
-    // MARK: - non-interactive: zero Contacts calls (issue #322 regression guard)
+    // MARK: - non-interactive: zero Contacts calls (regression guard)
 
     func testFreshInstallNonInteractiveMakesZeroContactsCalls() async throws {
         try seedConfig(containers: nil)
@@ -204,11 +204,12 @@ final class AllowlistConfigureFlowTests: XCTestCase {
     }
 
     func testReRequestPermissionInteractiveEqualSetReturnsNoOp() async throws {
-        // Regression guard for the codex-round-3 P1: interactive
-        // no-op MUST propagate as Outcome.noOp, not collapse to
-        // .completedInteractive. The CLI wrapper's outcome switch
-        // distinguishes between "Allowlist updated" and "No
-        // allowlist changes detected" on this case.
+        // Interactive no-op MUST propagate as Outcome.noOp, not
+        // collapse to .completedInteractive. The CLI wrapper's
+        // outcome switch distinguishes between "Allowlist updated"
+        // and "No allowlist changes detected" on this case — and a
+        // re-request-permission run that confirms the same
+        // allowlist must NOT trigger a spurious recovery cycle.
         try seedConfig(containers: ["X"])
         try seedEmptyState()
         let authSpy = CallCountingContactsAuth(grantOnRequest: true)
@@ -252,8 +253,10 @@ final class AllowlistConfigureFlowTests: XCTestCase {
     }
 
     func testConfigureInteractiveEqualSetReturnsNoOp() async throws {
-        // Regression guard for the codex-round-3 P1: see the
-        // re-request-permission counterpart above.
+        // Same invariant as the re-request-permission counterpart
+        // above: a `configure containers` interactive run that
+        // picks the existing allowlist must yield Outcome.noOp and
+        // skip the recovery flag bump.
         try seedConfig(containers: ["X"])
         try seedEmptyState()
         let authSpy = CallCountingContactsAuth(grantOnRequest: true)

@@ -8,15 +8,14 @@
 //   - `crm-mac configure containers --containers <uuid,…>`
 //   - `crm-mac configure containers --list`
 //
-// The contract this flow enforces is the regression guard for
-// issue #322: non-interactive `--containers <uuid,…>` modes must
-// NOT invoke the Contacts framework. Shell-spawned CLI subcommands
-// hit the parent terminal's TCC permission, not the daemon's
-// bundle-attributed permission, so calling `requestAccess()` /
-// `listContainers()` would fail with a misleading error. The
-// non-interactive path trusts the operator-supplied UUIDs; the
-// daemon's next tick under launchd is the authoritative validation
-// point.
+// The contract this flow enforces: non-interactive `--containers
+// <uuid,…>` modes must NOT invoke the Contacts framework.
+// Shell-spawned CLI subcommands hit the parent terminal's TCC
+// permission, not the daemon's bundle-attributed permission, so
+// calling `requestAccess()` / `listContainers()` would fail with a
+// misleading error. The non-interactive path trusts the
+// operator-supplied UUIDs; the daemon's next tick under launchd is
+// the authoritative validation point.
 //
 // Adapters are injected as closures so tests can substitute
 // call-counting spies and assert zero invocations on the

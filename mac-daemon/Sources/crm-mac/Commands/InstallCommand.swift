@@ -16,9 +16,10 @@
 // fresh install or `--re-request-permission`, and whether the
 // operator supplied `--containers` (non-interactive) or wants the
 // picker (interactive). Non-interactive modes deliberately make
-// ZERO Contacts framework calls — see issue #322 — which is why
-// the dispatch lives in the testable lifecycle library rather than
-// inline here.
+// ZERO Contacts framework calls (the shell-context TCC
+// attribution would otherwise fail with a misleading error), which
+// is why the dispatch lives in the testable lifecycle library
+// rather than inline here.
 import Foundation
 import ArgumentParser
 import CRMMacCore
@@ -128,17 +129,23 @@ struct InstallCommand: AsyncParsableCommand {
                 ? .freshInstallInteractive
                 : .freshInstallNonInteractive(rawContainers: containers)
         }
-        // Bind production adapters into Sendable-conformant locals
-        // so the closures captured by `AllowlistConfigureFlow` don't
-        // need to retain the non-Sendable ProductionContext.
-        let auth = ctx.contactsAuthAdapter()
-        let enumerator = ctx.contactContainerEnumerator()
+        // Wire the production adapter factories as lazy closures.
+        // The flow only invokes them on interactive / list modes;
+        // the non-interactive branch never constructs an adapter,
+        // which is the structural regression guard for the
+        // shell-context Contacts permission issue.
+        let authFactory: @Sendable () -> ContactsAuthorizationAdapter = {
+            ProductionContext().contactsAuthAdapter()
+        }
+        let enumeratorFactory: @Sendable () -> ContactContainerEnumerator = {
+            ProductionContext().contactContainerEnumerator()
+        }
         let flow = AllowlistConfigureFlow(
             mode: mode,
             configStore: ConfigStore(fileURL: URL(fileURLWithPath: ctx.paths.configFilePath)),
             stateStore: StateStore(fileURL: URL(fileURLWithPath: ctx.paths.stateFilePath)),
-            authAdapter: { auth },
-            enumerator: { enumerator },
+            authAdapter: authFactory,
+            enumerator: enumeratorFactory,
             interactivePicker: { visible in
                 FileHandle.standardOutput.write(Data(
                     ContainerPicker.render(visible).utf8))
@@ -174,6 +181,24 @@ struct InstallCommand: AsyncParsableCommand {
             // Interactive picker input parsing failed.
             FileHandle.standardError.write(Data("\(e)\n".utf8))
             throw ExitCode(2)
+        } catch let e as NonInteractiveAllowlistWriteError {
+            // Phase-specific recovery guidance for state/config
+            // partial-writes. Mirrors the configure-containers
+            // wrapper so a `--re-request-permission` run that
+            // half-completes points the operator at the right
+            // retry path.
+            switch e {
+            case .stateWriteFailed(let underlying):
+                FileHandle.standardError.write(Data(
+                    "Failed to set recovery flag in state.json: \(underlying)\n".utf8))
+            case .configWriteFailedAfterStateWrite(let underlying):
+                FileHandle.standardError.write(Data(
+                    "Failed to write config.json: \(underlying)\n  (Recovery flag is set; re-run `crm-mac install --re-request-permission` to retry.)\n".utf8))
+            case .configWriteFailed(let underlying):
+                FileHandle.standardError.write(Data(
+                    "Failed to write config.json: \(underlying)\n".utf8))
+            }
+            throw ExitCode(1)
         }
     }
 
