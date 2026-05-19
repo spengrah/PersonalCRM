@@ -79,14 +79,24 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
 
     private final class StubAuthAdapter: ContactsAuthorizationAdapter, @unchecked Sendable {
         let status: ContactsAuthorizationStatus
-        init(_ status: ContactsAuthorizationStatus = .authorized) {
+        let requestAccessResult: Result<Bool, Error>
+        private let recordedRequestAccessCalls = NSCountedSet()
+        init(
+            _ status: ContactsAuthorizationStatus = .authorized,
+            requestAccess: Result<Bool, Error> = .success(true)
+        ) {
             self.status = status
+            self.requestAccessResult = requestAccess
         }
         func authorizationStatus() -> ContactsAuthorizationStatus { status }
         func requestAccess() async throws -> Bool {
-            XCTFail("daemon must NOT call requestAccess; install is the only caller")
-            return false
+            recordedRequestAccessCalls.add("call")
+            switch requestAccessResult {
+            case .success(let v): return v
+            case .failure(let e): throw e
+            }
         }
+        var requestAccessCallCount: Int { recordedRequestAccessCalls.count(for: "call") }
     }
 
     // MARK: - config stub
@@ -244,6 +254,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
     private func makePlugin(
         reader: ContactStoreReader,
         authStatus: ContactsAuthorizationStatus = .authorized,
+        authAdapter: StubAuthAdapter? = nil,
         config: ICloudContactsConfigSource? = nil,
         pi: ScriptedPi,
         cacheURL: URL,
@@ -281,7 +292,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
             publisher: pub,
             cache: cache,
             reader: reader,
-            authAdapter: StubAuthAdapter(authStatus),
+            authAdapter: authAdapter ?? StubAuthAdapter(authStatus),
             configSource: cfg,
             healthRegistry: registry,
             logger: NoopLogger(),
@@ -312,7 +323,7 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
         XCTAssertFalse(transport.commitWasAttempted)
     }
 
-    func testNotDeterminedMarksUnhealthy() async throws {
+    func testNotDeterminedRequestsAccessAndMarksDeniedWhenUserDeclines() async throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let pi = ScriptedPi(
@@ -320,13 +331,41 @@ final class ICloudContactsSourcePluginTests: XCTestCase {
             knownIDs: KnownIDsData(ids: []),
             ingestResult: IngestEventsData(accepted: 0, duplicate: 0, rejected: 0, errors: []),
             cursorCommitThrows: nil, ingestThrows: nil)
+        let auth = StubAuthAdapter(.notDetermined, requestAccess: .success(false))
         let (plugin, _, _, registry, _) = makePlugin(
-            reader: StubReader(), authStatus: .notDetermined, pi: pi,
+            reader: StubReader(), authAdapter: auth, pi: pi,
             cacheURL: dir.appendingPathComponent("cache.json"),
             stateURL: dir.appendingPathComponent("state.json"))
         try await plugin.tick()
+        XCTAssertEqual(auth.requestAccessCallCount, 1,
+                       "daemon must prompt under launchd attribution on .notDetermined")
         let snap = await registry.read(.icloudContacts)
-        XCTAssertEqual(snap?.lastError, "contacts_permission:notDetermined")
+        XCTAssertEqual(snap?.lastError, "contacts_permission:denied",
+                       "post-decline state must be the .denied reason, not .notDetermined")
+    }
+
+    func testNotDeterminedProceedsPastAuthOnGrant() async throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pi = ScriptedPi(
+            cursorGet: SourceCursorState(cursor: "", cursorEpoch: 0, backfillComplete: false),
+            knownIDs: KnownIDsData(ids: []),
+            ingestResult: IngestEventsData(accepted: 0, duplicate: 0, rejected: 0, errors: []),
+            cursorCommitThrows: nil, ingestThrows: nil)
+        let auth = StubAuthAdapter(.notDetermined, requestAccess: .success(true))
+        let (plugin, _, _, registry, _) = makePlugin(
+            reader: StubReader(), authAdapter: auth, pi: pi,
+            cacheURL: dir.appendingPathComponent("cache.json"),
+            stateURL: dir.appendingPathComponent("state.json"))
+        try await plugin.tick()
+        XCTAssertEqual(auth.requestAccessCallCount, 1)
+        let snap = await registry.read(.icloudContacts)
+        // Tick proceeded past the auth probe. The default StubReader
+        // returns no contacts so the tick succeeds without ingesting;
+        // either way, lastError must NOT be a contacts_permission*
+        // marker.
+        XCTAssertFalse(snap?.lastError?.hasPrefix("contacts_permission") ?? false,
+                       "tick must clear the auth probe and proceed; got lastError=\(snap?.lastError ?? "nil")")
     }
 
     func testNoContainersMarksUnhealthy() async throws {
