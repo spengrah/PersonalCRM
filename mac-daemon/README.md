@@ -20,7 +20,7 @@ make mac-daemon
 
 This runs `swift build -c release` from `mac-daemon/`, then assembles + codesigns `crm-mac.app` via `mac-daemon/Scripts/assemble_bundle.sh`. Output: `mac-daemon/.build/release/crm-mac.app`. The script uses CLT-shipped tools only (no `xcodebuild`).
 
-For TCC grants that survive rebuilds without an Apple Developer ID, create a local Code Signing certificate in **Keychain Access → Certificate Assistant → Create a Certificate…**:
+For Full Disk Access grants that survive rebuilds without an Apple Developer ID, create a local Code Signing certificate in **Keychain Access → Certificate Assistant → Create a Certificate…**:
 
 - Name: `CRM Mac Local Code Signing`
 - Identity Type: `Self Signed Root`
@@ -32,9 +32,14 @@ Then build with the same identity every time:
 CRM_MAC_CODESIGN_IDENTITY="CRM Mac Local Code Signing" make mac-daemon
 ```
 
-If `CRM_MAC_CODESIGN_IDENTITY` is unset, the bundle is ad-hoc signed. Ad-hoc builds work, but Contacts + Full Disk Access grants are tied to the rebuilt CDHash and must be re-granted after each rebuild.
+If `CRM_MAC_CODESIGN_IDENTITY` is unset, the bundle is ad-hoc signed. Ad-hoc builds work, but every rebuild changes the CDHash and the designated requirement, so both FDA and Contacts grants must be re-granted after every rebuild.
 
-Switching from ad-hoc to a local certificate changes the designated requirement once. Re-grant Contacts/FDA after the first certificate-backed install; subsequent rebuilds should retain the grants as long as the same certificate is used.
+Empirical behavior of cert-backed signing (validated against macOS Sequoia):
+
+- **FDA grants persist** across rebuilds — the designated requirement is anchored on the certificate leaf, not the CDHash. Add the bundle to FDA once after the first cert-backed install, and subsequent rebuilds keep working without touching that pane.
+- **Contacts grants do NOT persist** — TCC's Contacts subsystem appears to re-evaluate on CDHash change regardless of the designated requirement. Expect the system Contacts permission dialog after every rebuild. The daemon triggers this prompt automatically on its first iCloud tick (no menu hunting); click Allow once per rebuild.
+
+If `xyz.spengrah.crm-mac` already appears toggled-on in the Contacts pane but a dialog still fires, that's the same quirk — let the prompt drive the regrant.
 
 ## Pair + install (manual smoke)
 
@@ -58,10 +63,11 @@ cd /srv/personalcrm
 
 The pairing token is single-use and short-lived (10 minutes).
 
-**On the Mac:** install the daemon. Run the binary from inside the freshly-built bundle so SMAppService picks up the bundle context.
+**On the Mac:** install the daemon. Run the binary from inside the freshly-built bundle so SMAppService picks up the bundle context. The installer re-runs bundle assembly + codesigning, so the env var MUST match what was used at build time — otherwise the installed bundle silently downgrades to ad-hoc and the first FDA grant is bound to a CDHash that the next rebuild invalidates:
 
 ```bash
-./mac-daemon/.build/release/crm-mac.app/Contents/MacOS/crm-mac install \
+CRM_MAC_CODESIGN_IDENTITY="CRM Mac Local Code Signing" \
+    ./mac-daemon/.build/release/crm-mac.app/Contents/MacOS/crm-mac install \
     --pair <token> \
     --pi-url <pi-url> \
     --hostname mac-1
@@ -71,7 +77,7 @@ The pairing token is single-use and short-lived (10 minutes).
 
 After install, macOS will surface the agent in **System Settings → General → Login Items → Allow in Background**. If the daemon fails to start, check that the "crm-mac" entry is toggled on. Ad-hoc fallback builds may surface a Gatekeeper prompt; allow it once.
 
-When using a local Code Signing certificate, pass `CRM_MAC_CODESIGN_IDENTITY` to install/upgrade commands too. The installer reassembles the installed bundle and must sign it with the same identity:
+The same env-var requirement applies to upgrades — the installer reassembles + signs the installed bundle in place:
 
 ```bash
 CRM_MAC_CODESIGN_IDENTITY="CRM Mac Local Code Signing" \
@@ -138,7 +144,7 @@ CRM_MAC_CODESIGN_IDENTITY="CRM Mac Local Code Signing" \
 
 `--upgrade` reads the existing `config.json` + api-key, stops the running daemon (SMAppService.unregister + SIGTERM-and-poll), backs up the existing bundle, assembles the new one at a tmp path, atomic-renames it into place, substitutes the install-prefix placeholder in the embedded LaunchAgents plist, and re-registers via SMAppService. It does NOT call `POST /host`.
 
-The bundle ID (`xyz.spengrah.crm-mac`) is the TCC attribution key, but cross-rebuild grant persistence depends on the designated requirement. Use the same `CRM_MAC_CODESIGN_IDENTITY` for build and upgrade if you want Contacts + Full Disk Access grants to survive rebuilds.
+The bundle ID (`xyz.spengrah.crm-mac`) is the TCC attribution key, but cross-rebuild grant persistence depends on the designated requirement. Use the same `CRM_MAC_CODESIGN_IDENTITY` for build and upgrade if you want **FDA** grants to survive rebuilds. **Contacts grants will still re-prompt** on every rebuild regardless (see Build section for details).
 
 ## Stop / start (maintenance windows)
 
@@ -224,16 +230,18 @@ log stream --predicate 'subsystem == "xyz.spengrah.crm-mac"' --info
 
 ## Troubleshooting
 
-**Contacts or Full Disk Access re-prompts after `make mac-daemon && crm-mac install --upgrade`.** TCC keys grants on the bundle ID + designated requirement. Confirm the designated requirement is certificate-backed and stable across rebuilds:
+**FDA re-prompts after `make mac-daemon && crm-mac install --upgrade`.** TCC keys FDA grants on the bundle ID + designated requirement. Confirm the designated requirement is certificate-backed and stable across rebuilds:
 
 ```bash
 codesign --display -r - ~/Library/Application\ Support/crm-mac/crm-mac.app 2>&1
 # designated => identifier "xyz.spengrah.crm-mac" and certificate leaf = H"..."
 ```
 
-If the requirement contains `cdhash`, the bundle was ad-hoc signed. Rebuild and reinstall with `CRM_MAC_CODESIGN_IDENTITY="CRM Mac Local Code Signing"` set for both commands. If the requirement shows a different identifier (e.g. `crm-mac-<random>`), the two-pass codesign didn't take effect — debug `mac-daemon/Scripts/assemble_bundle.sh`.
+If the requirement contains `cdhash`, the bundle was ad-hoc signed. Rebuild AND reinstall with `CRM_MAC_CODESIGN_IDENTITY="CRM Mac Local Code Signing"` set on both commands — the installer signs the bundle it copies into place, so missing the env var on the install step also produces an ad-hoc DR. If the requirement shows a different identifier (e.g. `crm-mac-<random>`), the two-pass codesign didn't take effect — debug `mac-daemon/Scripts/assemble_bundle.sh`.
 
-If the certificate-backed requirement is stable but TCC still re-prompts, try moving the bundle to `~/Applications/crm-mac.app` (some macOS internals treat `~/Library/Application Support/` differently from `~/Applications/` for SMAppService-managed agents — undocumented).
+**Contacts re-prompts after a rebuild.** Expected even with cert-backed signing — TCC's Contacts subsystem appears to bind to the CDHash regardless of the designated requirement. The daemon will fire the prompt itself on its next iCloud tick; click Allow once. Tracked separately; would require a real Apple Developer ID to resolve.
+
+If everything looks stable but FDA still re-prompts, try moving the bundle to `~/Applications/crm-mac.app` (some macOS internals treat `~/Library/Application Support/` differently from `~/Applications/` for SMAppService-managed agents — undocumented).
 
 ## Testing
 
@@ -294,7 +302,7 @@ The daemon acquires a POSIX advisory lock on `~/Library/Application Support/crm-
 ## Spec deviation notes
 
 - **CI pinned to `macos-15`**, not `macos-latest`. Eliminates the silent image-migration risk; an image deprecation will surface as a loud CI failure in a follow-up PR.
-- **TCC stability.** The bundle identifier `xyz.spengrah.crm-mac` is the responsible-process key TCC uses for the daemon. Cross-rebuild grant stability also requires a stable designated requirement, so local development builds should use `CRM_MAC_CODESIGN_IDENTITY` with a self-signed Code Signing certificate. Ad-hoc fallback builds keep the identifier stable but still get a CDHash-based requirement, so TCC grants reset on rebuild.
+- **TCC stability.** The bundle identifier `xyz.spengrah.crm-mac` is the responsible-process key TCC uses for the daemon. With `CRM_MAC_CODESIGN_IDENTITY` set to a stable self-signed Code Signing certificate, the designated requirement is cert-leaf-anchored and **FDA grants survive rebuilds**. **Contacts grants do not survive rebuilds** under cert-backed signing — TCC's Contacts subsystem appears to bind to the CDHash regardless of designated requirement (would need a real Apple Developer ID to resolve). Ad-hoc fallback builds get a CDHash-based requirement, so both FDA and Contacts grants reset on every rebuild.
 
 ## Limitations (v1)
 

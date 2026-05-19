@@ -62,7 +62,10 @@ public struct ProductionExecutableAdapter: ExecutableAdapter {
             errorPrefix: "bundle seal ")
     }
 
-    private func signingArguments(identifier: String) -> [String] {
+    /// Builds the leading codesign argument list for the current
+    /// `signingIdentity`. Exposed as `internal` so the test target can
+    /// assert that ad-hoc and cert-backed modes produce distinct argv.
+    func signingArguments(identifier: String) -> [String] {
         var args = [
             "--sign", signingIdentity ?? "-",
             "--identifier", identifier,

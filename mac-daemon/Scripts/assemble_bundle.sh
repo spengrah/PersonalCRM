@@ -179,6 +179,15 @@ fi
 inner_requirement="$(codesign --display -r - "${BUNDLE_PATH}/Contents/MacOS/crm-mac" 2>&1 | sed -n -e 's/^designated => //p' -e 's/^# designated => //p')"
 outer_requirement="$(codesign --display -r - "${BUNDLE_PATH}" 2>&1 | sed -n -e 's/^designated => //p' -e 's/^# designated => //p')"
 
+# Fail loudly if the designated-requirement line couldn't be parsed at
+# all. An empty value would silently bypass the cdhash check below.
+if [ -z "${inner_requirement}" ] || [ -z "${outer_requirement}" ]; then
+    echo "FAIL: could not parse designated requirement from codesign output" >&2
+    echo "inner: ${inner_requirement}" >&2
+    echo "outer: ${outer_requirement}" >&2
+    exit 1
+fi
+
 if [ -n "${CODE_SIGN_IDENTITY}" ]; then
     if [[ "${inner_requirement}" == *cdhash* ]] || [[ "${outer_requirement}" == *cdhash* ]]; then
         echo "FAIL: certificate-backed signing produced a cdhash designated requirement" >&2
@@ -186,8 +195,8 @@ if [ -n "${CODE_SIGN_IDENTITY}" ]; then
         echo "outer: ${outer_requirement}" >&2
         exit 1
     fi
-    echo "signed-with: ${CODE_SIGN_IDENTITY} (certificate-backed; TCC grants should survive rebuilds)"
+    echo "signed-with: ${CODE_SIGN_IDENTITY} (certificate-backed; FDA grants persist across rebuilds, Contacts grants do not)"
 else
-    echo "signed-with: ad-hoc (TCC grants reset on rebuild)"
+    echo "signed-with: ad-hoc (FDA + Contacts grants both reset on rebuild)"
 fi
 echo "designated-requirement: ${outer_requirement}"
