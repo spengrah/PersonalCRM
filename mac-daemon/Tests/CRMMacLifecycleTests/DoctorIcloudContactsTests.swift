@@ -29,10 +29,17 @@ final class DoctorIcloudContactsTests: XCTestCase {
         XCTAssertEqual(check.status, .pass)
     }
 
-    func testPermissionDeniedFails() async throws {
+    func testPermissionDeniedWarnsAsIndeterminate() async throws {
+        // `.denied` from a shell-spawned doctor reflects only the
+        // parent terminal's TCC state, not the daemon's — so the
+        // doctor reports it as WARN with a "daemon is authoritative"
+        // hint instead of FAIL.
         let r = await runDoctor(authStatus: .denied)
         let check = r.results.first(where: { $0.name == "icloud_contacts.permission" })!
-        XCTAssertEqual(check.status, .fail)
+        XCTAssertEqual(check.status, .warn)
+        XCTAssertTrue(
+            check.details.contains("indeterminate from shell context"),
+            "expected indeterminate-from-shell-context wording, got: \(check.details)")
     }
 
     func testPermissionRestrictedFails() async throws {
@@ -45,6 +52,9 @@ final class DoctorIcloudContactsTests: XCTestCase {
         let r = await runDoctor(authStatus: .notDetermined)
         let check = r.results.first(where: { $0.name == "icloud_contacts.permission" })!
         XCTAssertEqual(check.status, .warn)
+        XCTAssertTrue(
+            check.details.contains("indeterminate from shell context"),
+            "expected indeterminate-from-shell-context wording, got: \(check.details)")
     }
 
     // MARK: - allowlist
@@ -78,6 +88,93 @@ final class DoctorIcloudContactsTests: XCTestCase {
         let check = r.results.first(where: { $0.name == "icloud_contacts.allowlist" })!
         XCTAssertEqual(check.status, .warn)
         XCTAssertTrue(check.details.contains("c2"))
+    }
+
+    func testAllowlistEnumerationNotAuthorizedEmitsShellContextWarning() async throws {
+        // Regression test: a shell-spawned doctor previously
+        // caught `.notAuthorized` and set `visible = []`, turning
+        // every configured ID into a phantom "orphan". The new code
+        // reports the enumeration as unavailable instead, AND falls
+        // through to the last-tick check.
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let r = await runDoctor(
+            allowlist: ["c1", "c2"],
+            enumerator: StubContactContainerEnumerator(
+                thrownError: ContactContainerEnumeratorError.notAuthorized),
+            sourceState: SourceState(lastScheduledAt: now.addingTimeInterval(-30)),
+            clock: FixedClock(now))
+
+        let check = r.results.first(where: { $0.name == "icloud_contacts.allowlist" })!
+        XCTAssertEqual(check.status, .warn)
+        XCTAssertTrue(
+            check.details.contains("2 configured"),
+            "expected count of configured IDs, got: \(check.details)")
+        XCTAssertTrue(
+            check.details.contains("visibility check unavailable from shell context"),
+            "expected shell-context wording, got: \(check.details)")
+        XCTAssertFalse(
+            check.details.contains("orphaned"),
+            "must NOT report orphans when enumeration is unavailable")
+
+        // Regression assertion: the legacy `return results` path
+        // suppressed last_tick when enumeration failed. The
+        // refactored flow must emit it.
+        XCTAssertNotNil(
+            r.results.first(where: { $0.name == "icloud_contacts.last_tick" }),
+            "icloud_contacts.last_tick must be present even when enumeration is unavailable")
+    }
+
+    func testAllowlistEnumerationNotAuthorizedUnderRestrictedAuthFailsAsRestriction() async throws {
+        // When the permission read returns `.restricted` (MDM /
+        // parental controls), an enumeration `.notAuthorized`
+        // throw is NOT a shell-context attribution issue — the
+        // restriction applies process-wide including the daemon.
+        // The allowlist message must reflect that, otherwise the
+        // operator may dismiss a hard failure as a shell-context
+        // quirk.
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let r = await runDoctor(
+            authStatus: .restricted,
+            allowlist: ["c1"],
+            enumerator: StubContactContainerEnumerator(
+                thrownError: ContactContainerEnumeratorError.notAuthorized),
+            sourceState: SourceState(lastScheduledAt: now.addingTimeInterval(-30)),
+            clock: FixedClock(now))
+
+        let check = r.results.first(where: { $0.name == "icloud_contacts.allowlist" })!
+        XCTAssertEqual(check.status, .fail,
+                       "restricted MDM is a hard failure, not a shell-context warning")
+        XCTAssertTrue(
+            check.details.contains("MDM"),
+            "expected restriction-specific wording, got: \(check.details)")
+        XCTAssertFalse(
+            check.details.contains("shell context"),
+            "must NOT attribute restriction to shell context")
+    }
+
+    func testAllowlistUnderlyingEnumeratorErrorStillWarnsGenerically() async throws {
+        // Regression coverage for the previously-latent `.underlying`
+        // early-return bug: a generic enumeration failure used to
+        // short-circuit out of checkICloudContacts before the
+        // last-tick block. The refactored flow must surface BOTH the
+        // generic-enumeration WARN and the last-tick result.
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let r = await runDoctor(
+            allowlist: ["c1"],
+            enumerator: StubContactContainerEnumerator(
+                thrownError: ContactContainerEnumeratorError.underlying("disk gremlins")),
+            sourceState: SourceState(lastScheduledAt: now.addingTimeInterval(-30)),
+            clock: FixedClock(now))
+
+        let check = r.results.first(where: { $0.name == "icloud_contacts.allowlist" })!
+        XCTAssertEqual(check.status, .warn)
+        XCTAssertTrue(
+            check.details.contains("container enumeration failed"),
+            "expected generic enumeration-failed wording, got: \(check.details)")
+
+        XCTAssertNotNil(
+            r.results.first(where: { $0.name == "icloud_contacts.last_tick" }),
+            "icloud_contacts.last_tick must be present even on generic enumeration failure")
     }
 
     // MARK: - last_tick

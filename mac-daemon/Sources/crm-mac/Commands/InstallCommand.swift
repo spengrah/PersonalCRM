@@ -10,6 +10,16 @@
 // step). `--containers <id1>,<id2>` is the non-interactive form for
 // scripted installs that know the exact CNContainer identifiers
 // from a prior `crm-mac configure containers --list` run.
+//
+// The post-pair flow is dispatched through `AllowlistConfigureFlow`
+// (in CRMMacLifecycle). The flow's Mode encodes whether this is a
+// fresh install or `--re-request-permission`, and whether the
+// operator supplied `--containers` (non-interactive) or wants the
+// picker (interactive). Non-interactive modes deliberately make
+// ZERO Contacts framework calls (the shell-context TCC
+// attribution would otherwise fail with a misleading error), which
+// is why the dispatch lives in the testable lifecycle library
+// rather than inline here.
 import Foundation
 import ArgumentParser
 import CRMMacCore
@@ -100,19 +110,60 @@ struct InstallCommand: AsyncParsableCommand {
     }
 
     /// Permission + picker flow. Called as part of fresh install AND
-    /// via --re-request-permission. When the call site is updating
-    /// an existing config (i.e. the daemon may already be running
-    /// with the old allowlist), the writer sets the recovery flag
-    /// FIRST so the next tick reconciles against the new allowlist
-    /// via /known-ids rather than silently advancing past stale
-    /// state.
+    /// via --re-request-permission. The dispatch (interactive vs
+    /// non-interactive, fresh vs re-request) happens inside
+    /// `AllowlistConfigureFlow`; this wrapper only constructs the
+    /// flow with the appropriate `Mode` and surfaces flow errors as
+    /// stderr + exit codes that match the prior behaviour.
     private func runContactsPermissionFlow(
         ctx: ProductionContext,
         mutatingExistingConfig: Bool
     ) async throws {
-        let authAdapter = ctx.contactsAuthAdapter()
-        let granted = try await authAdapter.requestAccess()
-        if !granted {
+        let mode: AllowlistConfigureFlow.Mode
+        if mutatingExistingConfig {
+            mode = containers.isEmpty
+                ? .reRequestPermissionInteractive
+                : .reRequestPermissionNonInteractive(rawContainers: containers)
+        } else {
+            mode = containers.isEmpty
+                ? .freshInstallInteractive
+                : .freshInstallNonInteractive(rawContainers: containers)
+        }
+        // Wire the production adapter factories as lazy closures.
+        // The flow only invokes them on interactive / list modes;
+        // the non-interactive branch never constructs an adapter,
+        // which is the structural regression guard for the
+        // shell-context Contacts permission issue.
+        let authFactory: @Sendable () -> ContactsAuthorizationAdapter = {
+            ProductionContext().contactsAuthAdapter()
+        }
+        let enumeratorFactory: @Sendable () -> ContactContainerEnumerator = {
+            ProductionContext().contactContainerEnumerator()
+        }
+        let flow = AllowlistConfigureFlow(
+            mode: mode,
+            configStore: ConfigStore(fileURL: URL(fileURLWithPath: ctx.paths.configFilePath)),
+            stateStore: StateStore(fileURL: URL(fileURLWithPath: ctx.paths.stateFilePath)),
+            authAdapter: authFactory,
+            enumerator: enumeratorFactory,
+            interactivePicker: { visible in
+                FileHandle.standardOutput.write(Data(
+                    ContainerPicker.render(visible).utf8))
+                let line = readLine() ?? ""
+                return try ContainerPicker.parse(input: line, containers: visible)
+            })
+        do {
+            let outcome = try await flow.run()
+            switch outcome {
+            case .wrote(let ids), .completedInteractive(let ids):
+                print("iCloud Contacts allowlist saved (\(ids.count) container(s)).")
+            case .noOp:
+                print("No allowlist changes detected.")
+            case .listed:
+                // Unreachable: install flow never uses .configureList.
+                break
+            }
+        } catch AllowlistConfigureFlowError.permissionDenied {
             FileHandle.standardError.write(Data(
                 """
                 Contacts permission denied.
@@ -120,59 +171,42 @@ struct InstallCommand: AsyncParsableCommand {
                 Then run: crm-mac install --re-request-permission
                 """.utf8))
             throw ExitCode(1)
-        }
-        // Permission granted. Run picker.
-        let enumerator = ctx.contactContainerEnumerator()
-        let visible: [ContainerInfo]
-        do {
-            visible = try enumerator.listContainers()
-        } catch {
+        } catch let e as ContactContainerEnumeratorError {
+            // Enumeration failure on the interactive path (the
+            // non-interactive flow doesn't call the enumerator).
             FileHandle.standardError.write(Data(
-                "container enumeration failed: \(error)\n".utf8))
+                "container enumeration failed: \(e)\n".utf8))
+            throw ExitCode(1)
+        } catch let e as ContainerPickerError {
+            // Interactive picker input parsing failed.
+            FileHandle.standardError.write(Data("\(e)\n".utf8))
+            throw ExitCode(2)
+        } catch let e as NonInteractiveAllowlistWriteError {
+            // Phase-specific recovery guidance for state/config
+            // partial-writes. Mirrors the configure-containers
+            // wrapper so a `--re-request-permission` run that
+            // half-completes points the operator at the right
+            // retry path.
+            switch e {
+            case .stateWriteFailed(let underlying):
+                FileHandle.standardError.write(Data(
+                    "Failed to set recovery flag in state.json: \(underlying)\n".utf8))
+            case .configWriteFailedAfterStateWrite(let underlying):
+                FileHandle.standardError.write(Data(
+                    "Failed to write config.json: \(underlying)\n  (Recovery flag is set; re-run `crm-mac install --re-request-permission` to retry.)\n".utf8))
+            case .configWriteFailed(let underlying):
+                FileHandle.standardError.write(Data(
+                    "Failed to write config.json: \(underlying)\n".utf8))
+            }
             throw ExitCode(1)
         }
-        let pickedIDs: [String]
-        if !containers.isEmpty {
-            pickedIDs = try Self.resolveNonInteractive(raw: containers, visible: visible)
-        } else {
-            FileHandle.standardOutput.write(Data(
-                ContainerPicker.render(visible).utf8))
-            let line = readLine() ?? ""
-            do {
-                pickedIDs = try ContainerPicker.parse(input: line, containers: visible)
-            } catch {
-                FileHandle.standardError.write(Data("\(error)\n".utf8))
-                throw ExitCode(2)
-            }
-        }
-        let configStore = ConfigStore(
-            fileURL: URL(fileURLWithPath: ctx.paths.configFilePath))
-        if mutatingExistingConfig {
-            // State-write FIRST per the same crash-safety contract
-            // the `configure containers` subcommand follows. A crash
-            // between state and config writes leaves the daemon
-            // recovering against the OLD allowlist on the next tick
-            // — still correct.
-            let stateStore = StateStore(
-                fileURL: URL(fileURLWithPath: ctx.paths.stateFilePath))
-            let mutator = StateMutator(store: stateStore)
-            try await mutator.mutate { state in
-                var src = state.sources["icloud_contacts"] ?? SourceState()
-                src.lastError = "recovery_requested:allowlist_changed"
-                src.lastErrorAt = Date()
-                state.sources["icloud_contacts"] = src
-            }
-        }
-        try configStore.saveICloudContactsConfig(
-            ICloudContactsConfig(containers: pickedIDs))
-        print("iCloud Contacts allowlist saved (\(pickedIDs.count) container(s)).")
     }
 
     /// Re-request-permission-only flow. Re-runs the permission prompt
     /// and picker WITHOUT touching the existing pair. Used when an
     /// initial install was aborted at the permission step. Treated
     /// as an existing-config mutation so the recovery flag is set
-    /// before any allowlist write.
+    /// before any allowlist write (when the diff is non-empty).
     private func runReRequestPermissionOnly(ctx: ProductionContext) async throws {
         guard FileManager.default.fileExists(atPath: ctx.paths.configFilePath) else {
             FileHandle.standardError.write(Data(
@@ -181,23 +215,5 @@ struct InstallCommand: AsyncParsableCommand {
         }
         try await runContactsPermissionFlow(
             ctx: ctx, mutatingExistingConfig: true)
-    }
-
-    private static func resolveNonInteractive(
-        raw: String,
-        visible: [ContainerInfo]
-    ) throws -> [String] {
-        let visibleIDs = Set(visible.map(\.identifier))
-        let parts = raw.split(separator: ",").map {
-            $0.trimmingCharacters(in: .whitespaces)
-        }
-        for id in parts {
-            if !visibleIDs.contains(id) {
-                FileHandle.standardError.write(Data(
-                    "container identifier \(id) is not in the visible CNContainer list. Run `crm-mac configure containers --list` to see available IDs.\n".utf8))
-                throw ExitCode(2)
-            }
-        }
-        return parts
     }
 }
