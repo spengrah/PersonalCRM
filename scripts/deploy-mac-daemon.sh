@@ -108,10 +108,19 @@ case "$program" in
         echo "(the bootout+register-from-installed dance did not take effect)" >&2
         exit 1
         ;;
-    *)
-        echo "Daemon registered: $program"
-        ;;
 esac
+# Exact-match guard: a non-empty, non-placeholder `program` could still be
+# pointing at the build-dir bundle or some stale path. Anything but the
+# expected install-path binary means SMAppService is caching something we
+# don't control, which is exactly the failure shape this script is meant to
+# prevent.
+if [ "$program" != "$INSTALLED_BIN" ]; then
+    echo "Daemon: registered program does not match expected install path" >&2
+    echo "  expected: $INSTALLED_BIN" >&2
+    echo "  actual:   $program" >&2
+    exit 1
+fi
+echo "Daemon registered: $program"
 
 echo ""
 echo "=== Mac daemon deploy complete ==="
