@@ -77,18 +77,50 @@ echo "=== Installing (upgrade) ==="
 "$BUILD_BINARY" install --upgrade
 echo ""
 
-echo "=== Kickstarting daemon ==="
-launchctl kickstart -k "gui/$(id -u)/$DAEMON_LABEL" || true
+# `install --upgrade` copies a correctly-substituted bundle into the install
+# path, but `SMAppService.register()` reads the CALLING binary's containing-
+# bundle plist — which is the build-dir bundle, whose plist still has the
+# literal `__INSTALL_PREFIX__` placeholder (it's the operator's install path
+# that gets baked in only at install-time-rendering of the install-path
+# bundle's plist). launchd then tries to exec the literal placeholder path
+# and crashes with EX_CONFIG, with the daemon visibly "Lost" on the Pi.
+#
+# Defeat the cache by booting out the stale registration and re-registering
+# from the INSTALLED binary, whose containing-bundle plist already has the
+# real path substituted in.
+INSTALLED_BIN="$INSTALL_BUNDLE/Contents/MacOS/crm-mac"
+echo "=== Re-registering from installed binary (SMAppService cache workaround) ==="
+launchctl bootout "gui/$(id -u)/$DAEMON_LABEL" 2>/dev/null || true
+sleep 1
+"$INSTALLED_BIN" install --register-only
 echo ""
 
 echo "=== Verifying ==="
 sleep 2
-if launchctl print "gui/$(id -u)/$DAEMON_LABEL" >/dev/null 2>&1; then
-    echo "Daemon: registered with launchd"
-else
-    echo "Daemon: NOT found in launchd" >&2
+program="$(launchctl print "gui/$(id -u)/$DAEMON_LABEL" 2>/dev/null | awk -F'= ' '/^\tprogram /{print $2}')"
+case "$program" in
+    "")
+        echo "Daemon: NOT found in launchd" >&2
+        exit 1
+        ;;
+    *__INSTALL_PREFIX__*)
+        echo "Daemon: SMAppService still has __INSTALL_PREFIX__ cached at $program" >&2
+        echo "(the bootout+register-from-installed dance did not take effect)" >&2
+        exit 1
+        ;;
+esac
+# Exact-match guard: a non-empty, non-placeholder `program` could still be
+# pointing at the build-dir bundle or some stale path. Anything but the
+# expected install-path binary means SMAppService is caching something we
+# don't control, which is exactly the failure shape this script is meant to
+# prevent.
+if [ "$program" != "$INSTALLED_BIN" ]; then
+    echo "Daemon: registered program does not match expected install path" >&2
+    echo "  expected: $INSTALLED_BIN" >&2
+    echo "  actual:   $program" >&2
     exit 1
 fi
+echo "Daemon registered: $program"
 
 echo ""
 echo "=== Mac daemon deploy complete ==="
