@@ -104,6 +104,16 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
     /// heartbeat source_health via schemaVersion sub-label (best-
     /// effort; primary visibility is the structured log).
     private var serviceUnknownTotal: Int = 0
+    /// Sticky `last_pushed_at` so it persists across snapshot writes
+    /// (each tick's start-of-tick snapshot would otherwise reset it
+    /// to nil and the host page would only ever see the value emitted
+    /// in the same tick it was set).
+    private var stickyLastPushedAt: Date?
+    /// Sticky cursor string committed in the most recent successful
+    /// push tick. Format: `<ISO ZDATE>:<Z_PK>` (e.g.
+    /// `2026-05-19T02:31:34Z:1966`). Opaque to the daemon; the host
+    /// page parses out the ISO portion for display.
+    private var stickyPushedCursor: String?
 
     public init(
         tickInterval: TimeInterval,
@@ -136,7 +146,10 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
     public func tick() async throws {
         let tickStart = clock()
         await healthRegistry.update(id, currentHealthSnapshot(
-            enabled: true, lastScheduled: tickStart))
+            enabled: true,
+            lastScheduled: tickStart,
+            lastPushed: stickyLastPushedAt,
+            pushedCursorString: stickyPushedCursor))
 
         // Pi protocol_version feature-gate.
         let piVersion = await heartbeatStateProvider.lastKnownPiProtocolVersion
@@ -281,13 +294,16 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
                     baseCursor: lastCommittedCursorJSON,
                     cursorEpoch: cachedEpoch,
                     backfillComplete: working.backfillComplete)
+                let pushedAt = clock()
                 try await writeThroughCursor(
                     newJSON,
                     epoch: cachedEpoch,
                     backfillComplete: working.backfillComplete,
-                    lastPushedAt: clock())
+                    lastPushedAt: pushedAt)
                 cachedCursor = working
                 lastCommittedCursorJSON = newJSON
+                stickyLastPushedAt = pushedAt
+                stickyPushedCursor = formatLiveCursor(working) ?? stickyPushedCursor
                 logger.debug("phone_calls tick: cursor committed", metadata: [
                     "backfill_complete": .public(String(working.backfillComplete)),
                 ])
@@ -309,11 +325,14 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
             logger.warning("phone_calls tick: publish unconfirmed; holding cursor", metadata: [:])
         }
 
-        // Refresh health snapshot.
+        // Refresh health snapshot. `last_pushed_at` + `pushed_cursor`
+        // are sticky across ticks so the host page reflects the most
+        // recent successful push, not just ticks that emit events.
         await healthRegistry.update(id, currentHealthSnapshot(
             enabled: true,
             lastScheduled: tickStart,
-            lastPushed: cursorChanged ? clock() : nil,
+            lastPushed: stickyLastPushedAt,
+            pushedCursorString: stickyPushedCursor,
             backfillComplete: working.backfillComplete))
     }
 
@@ -636,39 +655,51 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
 
     /// Build the heartbeat source_health entry for this source.
     ///
-    /// observedCursor / pushedCursor are deliberately left nil. The
-    /// shared SourceHealthSnapshot type encodes them as Int64, which
-    /// can't represent the (ZDATE seconds Double, Z_PK Int64) tuple
-    /// without precision loss. The host-page UI will show "—" in the
-    /// Cursor column for phone_calls; the source-health-cursor
-    /// representation refactor is tracked as a follow-up (it would
-    /// need a string-typed display column added to SourceHealthSnapshot,
-    /// touching messages + icloud_contacts + the frontend Cursor cell
-    /// renderer). Until then, `crm-mac call-history status` and
-    /// `crm-mac status` are the canonical surfaces for the cursor
-    /// watermark.
+    /// `pushedCursorString` is the composite `<ISO ZDATE>:<Z_PK>`
+    /// representation of the most recent live cursor committed to the
+    /// Pi. The host page splits the ISO portion for display; the
+    /// daemon treats it as an opaque token.
     private func currentHealthSnapshot(
         enabled: Bool,
         lastScheduled: Date,
         lastPushed: Date? = nil,
+        pushedCursorString: String? = nil,
         backfillComplete: Bool? = nil
     ) -> SourceHealthSnapshot {
         SourceHealthSnapshot(
             enabled: enabled,
             lastScheduledAt: lastScheduled,
             lastPushedAt: lastPushed,
-            observedCursor: nil,
-            pushedCursor: nil,
+            observedCursor: pushedCursorString.map(SourceHealthCursor.string),
+            pushedCursor: pushedCursorString.map(SourceHealthCursor.string),
             schemaVersion: schemaHealth?.label,
             backfillComplete: backfillComplete,
             lastError: nil,
             lastErrorAt: nil)
     }
 
+    /// Format the live cursor as `<ISO ZDATE>:<Z_PK>`. ZDATE is the
+    /// Apple-epoch seconds (post-2001-01-01) — we convert to a real
+    /// Date and emit RFC-3339 UTC. Returns nil if the cursor hasn't
+    /// been initialised yet.
+    private func formatLiveCursor(_ cursor: PhoneCallsCursor) -> String? {
+        guard let zdate = cursor.liveCursorZDate, let zPK = cursor.liveCursorZPK else {
+            return nil
+        }
+        let absoluteSeconds = zdate + CallHistoryDBReader.appleEpochOffset
+        let date = Date(timeIntervalSince1970: absoluteSeconds)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return "\(formatter.string(from: date)):\(zPK)"
+    }
+
     private func markUnhealthy(reason: String) async {
         let snap = SourceHealthSnapshot(
             enabled: false,
             lastScheduledAt: clock(),
+            lastPushedAt: stickyLastPushedAt,
+            observedCursor: stickyPushedCursor.map(SourceHealthCursor.string),
+            pushedCursor: stickyPushedCursor.map(SourceHealthCursor.string),
             schemaVersion: schemaHealth?.label,
             lastError: reason,
             lastErrorAt: clock())

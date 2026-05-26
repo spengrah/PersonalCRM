@@ -77,6 +77,11 @@ public actor MessagesSourcePlugin: SourcePlugin {
     /// Last serialized cursor JSON committed to the Pi.  Used as
     /// base_cursor on the next commit.
     private var lastCommittedCursorJSON: String = ""
+    /// Sticky `last_pushed_at` so it persists across snapshot writes
+    /// (each tick's start-of-tick snapshot would otherwise reset it to
+    /// nil and the Pi/UI would only ever see the last_pushed value
+    /// emitted in the same tick it was set).
+    private var stickyLastPushedAt: Date?
 
     public init(
         tickInterval: TimeInterval,
@@ -105,7 +110,9 @@ public actor MessagesSourcePlugin: SourcePlugin {
     public func tick() async throws {
         let tickStart = clock()
         await healthRegistry.update(id, await currentHealthSnapshot(
-            enabled: true, lastScheduled: tickStart))
+            enabled: true,
+            lastScheduled: tickStart,
+            lastPushed: stickyLastPushedAt))
 
         // Open pool + validate schema (cached on success).
         let pool: DatabasePool
@@ -262,11 +269,16 @@ public actor MessagesSourcePlugin: SourcePlugin {
             logger.warning("messages tick: publish unconfirmed; holding cursor", metadata: [:])
         }
 
-        // Refresh health snapshot.
+        // Refresh health snapshot. `last_pushed_at` is sticky across
+        // ticks so the UI reflects the most recent successful push,
+        // not just ticks that emit events.
+        if cursorChanged {
+            stickyLastPushedAt = clock()
+        }
         await healthRegistry.update(id, await currentHealthSnapshot(
             enabled: true,
             lastScheduled: tickStart,
-            lastPushed: cursorChanged ? clock() : nil,
+            lastPushed: stickyLastPushedAt,
             observed: working.liveCursor,
             pushed: working.liveCursor,
             backfillComplete: working.backfillComplete))
@@ -573,8 +585,8 @@ public actor MessagesSourcePlugin: SourcePlugin {
             enabled: enabled,
             lastScheduledAt: lastScheduled,
             lastPushedAt: lastPushed,
-            observedCursor: observed,
-            pushedCursor: pushed,
+            observedCursor: observed.map(SourceHealthCursor.int),
+            pushedCursor: pushed.map(SourceHealthCursor.int),
             schemaVersion: schemaHealth?.label,
             backfillComplete: backfillComplete,
             lastError: nil,
@@ -585,6 +597,7 @@ public actor MessagesSourcePlugin: SourcePlugin {
         let snap = SourceHealthSnapshot(
             enabled: false,
             lastScheduledAt: clock(),
+            lastPushedAt: stickyLastPushedAt,
             schemaVersion: schemaHealth?.label,
             lastError: reason,
             lastErrorAt: clock())
