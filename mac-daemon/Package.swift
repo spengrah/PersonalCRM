@@ -22,6 +22,10 @@ import PackageDescription
 //   - CRMMacMessagesSource       (Foundation + Core + PiClient + GRDB): chat.db
 //                                reader + messages source plugin. GRDB is isolated
 //                                here so other targets stay Foundation-only.
+//   - CRMMacPhoneCallsSource     (Foundation + Core + PiClient + GRDB):
+//                                CallHistoryDB reader + phone_calls source
+//                                plugin. Shares the KnownIdentifiersCache
+//                                in CRMMacCore with CRMMacMessagesSource.
 //   - CRMMacIcloudContactsSource (Foundation + Contacts + Core + PiClient):
 //                                CNContactStore reader + icloud_contacts source
 //                                plugin. Contacts framework is isolated here.
@@ -61,6 +65,7 @@ let package = Package(
                 "CRMMacPiClient",
                 "CRMMacLifecycle",
                 "CRMMacMessagesSource",
+                "CRMMacPhoneCallsSource",
                 "CRMMacIcloudContactsSource",
                 "CRMMacAnarlogSource",
                 "CRMMacSystem",
@@ -96,6 +101,13 @@ let package = Package(
             dependencies: ["CRMMacCore", "CRMMacPiClient"]),
         .target(
             name: "CRMMacMessagesSource",
+            dependencies: [
+                "CRMMacCore",
+                "CRMMacPiClient",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ]),
+        .target(
+            name: "CRMMacPhoneCallsSource",
             dependencies: [
                 "CRMMacCore",
                 "CRMMacPiClient",
@@ -138,6 +150,9 @@ let package = Package(
                     dependencies: ["CRMMacLifecycle", "CRMMacPiClient"]),
         .testTarget(name: "CRMMacMessagesSourceTests",
                     dependencies: ["CRMMacMessagesSource"],
+                    resources: [.copy("Fixtures")]),
+        .testTarget(name: "CRMMacPhoneCallsSourceTests",
+                    dependencies: ["CRMMacPhoneCallsSource"],
                     resources: [.copy("Fixtures")]),
         .testTarget(name: "CRMMacIcloudContactsSourceTests",
                     dependencies: ["CRMMacIcloudContactsSource", "CRMMacPiClient"],
