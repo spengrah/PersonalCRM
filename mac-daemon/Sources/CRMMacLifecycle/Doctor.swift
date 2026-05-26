@@ -298,10 +298,10 @@ public struct Doctor {
     /// Access is the same gate as chat.db (granted once for the
     /// daemon binary), and probing the file just to surface "FDA
     /// missing" would duplicate the messages source's implicit
-    /// signal at the cost of an additional FDA prompt path. FAIL is
-    /// reserved for the path-missing case (Phone.app never ran, or
-    /// a macOS reorg); a missing file with FDA granted is genuinely
-    /// unusual and worth surfacing as FAIL.
+    /// signal at the cost of an additional FDA prompt path. A missing
+    /// file is operator state ("no calls received yet on this Mac"),
+    /// same semantic class as icloud-not-yet-configured — surfaced as
+    /// WARN, not FAIL.
     func checkPhoneCalls() -> CheckResult {
         let path = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(
@@ -314,8 +314,8 @@ public struct Doctor {
         }
         return CheckResult(
             name: "phone_calls.db_path",
-            status: .fail,
-            details: "CallHistoryDB.storedata missing — Phone.app may have never run, or macOS reorganized the path. Expected: \(path.path)")
+            status: .warn,
+            details: "CallHistoryDB.storedata not present yet — macOS creates it once Phone.app or Continuity logs a call. Expected: \(path.path)")
     }
 
     /// Composite check for the icloud_contacts source:
