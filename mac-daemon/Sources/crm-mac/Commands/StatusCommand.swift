@@ -57,6 +57,23 @@ struct StatusCommand: ParsableCommand {
             print("  messages: (no cursor committed yet)")
         }
 
+        if let phoneCalls = report.phoneCalls {
+            print("  phone_calls:")
+            let formatter = ISO8601DateFormatter()
+            let liveDate = phoneCalls.liveCursorZDate
+                .map { formatter.string(from: $0) } ?? "nil"
+            let backfillDate = phoneCalls.backfillCursorZDate
+                .map { formatter.string(from: $0) } ?? "nil"
+            let installMax = phoneCalls.installMaxZDate
+                .map { formatter.string(from: $0) } ?? "nil"
+            print("    live_cursor:        \(liveDate) (Z_PK=\(phoneCalls.liveCursorZPK.map(String.init) ?? "nil"))")
+            print("    backfill_cursor:    \(backfillDate) (Z_PK=\(phoneCalls.backfillCursorZPK.map(String.init) ?? "nil"))")
+            print("    install_max:        \(installMax) (Z_PK=\(phoneCalls.installMaxZPK.map(String.init) ?? "nil"))")
+            print("    backfill_complete:  \(phoneCalls.backfillComplete)")
+        } else {
+            print("  phone_calls: (no cursor committed yet)")
+        }
+
         if let icloud = report.icloudContacts {
             print("  icloud_contacts:")
             print("    containers:         \(icloud.containerCount)")

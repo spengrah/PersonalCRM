@@ -26,6 +26,10 @@ public struct StatusReport: Equatable {
     /// Surfaces last-tick timestamps + recovery-flag visibility.
     /// Nil when state.sources["icloud_contacts"] is absent.
     public let icloudContacts: ICloudContactsSourceStatus?
+    /// Per-source status block for the phone_calls source. Nil when
+    /// state.sources["phone_calls"] is absent OR the cursor JSON
+    /// fails to decode.
+    public let phoneCalls: PhoneCallsSourceStatus?
 
     /// Per-source status block for the anarlog_humans source.
     /// Nil when the source is not configured AND state has no entry.
@@ -46,7 +50,8 @@ public struct StatusReport: Equatable {
         messages: MessagesSourceStatus? = nil,
         icloudContacts: ICloudContactsSourceStatus? = nil,
         anarlogHumans: AnarlogSourceStatus? = nil,
-        anarlogSessions: AnarlogSourceStatus? = nil
+        anarlogSessions: AnarlogSourceStatus? = nil,
+        phoneCalls: PhoneCallsSourceStatus? = nil
     ) {
         self.installed = installed
         self.registered = registered
@@ -60,6 +65,7 @@ public struct StatusReport: Equatable {
         self.icloudContacts = icloudContacts
         self.anarlogHumans = anarlogHumans
         self.anarlogSessions = anarlogSessions
+        self.phoneCalls = phoneCalls
     }
 }
 
@@ -227,6 +233,79 @@ public struct MessagesSourceStatus: Equatable {
     }
 }
 
+/// Subset of PhoneCallsCursor surfaced via `crm-mac status`. The full
+/// PhoneCallsCursorWire struct lives in CRMMacCore; we decode the
+/// watermarks here so Status keeps a self-contained, source-target-
+/// free view of state.
+public struct PhoneCallsSourceStatus: Equatable {
+    public let liveCursorZDate: Date?
+    public let liveCursorZPK: Int64?
+    public let backfillCursorZDate: Date?
+    public let backfillCursorZPK: Int64?
+    public let installMaxZDate: Date?
+    public let installMaxZPK: Int64?
+    public let backfillComplete: Bool
+
+    public init(
+        liveCursorZDate: Date?,
+        liveCursorZPK: Int64?,
+        backfillCursorZDate: Date?,
+        backfillCursorZPK: Int64?,
+        installMaxZDate: Date?,
+        installMaxZPK: Int64?,
+        backfillComplete: Bool
+    ) {
+        self.liveCursorZDate = liveCursorZDate
+        self.liveCursorZPK = liveCursorZPK
+        self.backfillCursorZDate = backfillCursorZDate
+        self.backfillCursorZPK = backfillCursorZPK
+        self.installMaxZDate = installMaxZDate
+        self.installMaxZPK = installMaxZPK
+        self.backfillComplete = backfillComplete
+    }
+
+    /// Decoder mirroring PhoneCallsCursorWire's CodingKeys.
+    private struct CursorJSON: Decodable {
+        let backfillCursorZDate: Date?
+        let backfillCursorZPK: Int64?
+        let liveCursorZDate: Date?
+        let liveCursorZPK: Int64?
+        let installMaxZDate: Date?
+        let installMaxZPK: Int64?
+        let backfillComplete: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case backfillCursorZDate = "backfill_cursor_zdate"
+            case backfillCursorZPK   = "backfill_cursor_z_pk"
+            case liveCursorZDate     = "live_cursor_zdate"
+            case liveCursorZPK       = "live_cursor_z_pk"
+            case installMaxZDate     = "install_max_zdate"
+            case installMaxZPK       = "install_max_z_pk"
+            case backfillComplete    = "backfill_complete"
+        }
+    }
+
+    /// Best-effort decode from the opaque cursor string. Nil on empty
+    /// input or decode failure.
+    public static func decode(opaqueCursor: String) -> PhoneCallsSourceStatus? {
+        if opaqueCursor.isEmpty { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let parsed = try? decoder.decode(CursorJSON.self,
+                                                from: Data(opaqueCursor.utf8)) else {
+            return nil
+        }
+        return PhoneCallsSourceStatus(
+            liveCursorZDate: parsed.liveCursorZDate,
+            liveCursorZPK: parsed.liveCursorZPK,
+            backfillCursorZDate: parsed.backfillCursorZDate,
+            backfillCursorZPK: parsed.backfillCursorZPK,
+            installMaxZDate: parsed.installMaxZDate,
+            installMaxZPK: parsed.installMaxZPK,
+            backfillComplete: parsed.backfillComplete ?? false)
+    }
+}
+
 public struct StatusDependencies {
     public let paths: LifecyclePaths
     public let filesystem: FilesystemAdapter
@@ -283,6 +362,7 @@ public struct Status {
         var icloudStatus: ICloudContactsSourceStatus?
         var anarlogHumansStatus: AnarlogSourceStatus?
         var anarlogSessionsStatus: AnarlogSourceStatus?
+        var phoneCallsStatus: PhoneCallsSourceStatus?
         if let data = try? deps.filesystem.read(from: deps.paths.stateFilePath) {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
@@ -321,6 +401,10 @@ public struct Status {
                     configPresent: anarlogConfig != nil,
                     cursorDecoder: AnarlogSourceStatus.sessionsCursorUUIDCount,
                     schemaLabel: "anarlog_sessions_v1")
+                if let phoneSrc = state.sources["phone_calls"] {
+                    phoneCallsStatus = PhoneCallsSourceStatus.decode(
+                        opaqueCursor: phoneSrc.cursor)
+                }
             }
         }
 
@@ -336,7 +420,8 @@ public struct Status {
             messages: messagesStatus,
             icloudContacts: icloudStatus,
             anarlogHumans: anarlogHumansStatus,
-            anarlogSessions: anarlogSessionsStatus)
+            anarlogSessions: anarlogSessionsStatus,
+            phoneCalls: phoneCallsStatus)
     }
 
     /// Build an AnarlogSourceStatus from a SourceState slot. Returns

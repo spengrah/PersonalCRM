@@ -17,6 +17,7 @@ import CRMMacCore
 import CRMMacIcloudContactsSource
 import CRMMacLifecycle
 import CRMMacMessagesSource
+import CRMMacPhoneCallsSource
 import CRMMacPiClient
 import CRMMacSystem
 
@@ -230,8 +231,39 @@ struct DaemonCommand: AsyncParsableCommand {
             }
         }
 
+        // phone_calls source: CallHistoryDB reader + push provider
+        // (Phase 1.5). Feature-gated against the Pi's protocol_version
+        // via HeartbeatStateProvider — the plugin self-disables when
+        // the Pi reports protocol_version < 2.
+        let callHistoryDBPath = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(
+                "Library/Application Support/CallHistoryDB/CallHistory.storedata")
+        let phoneCallsPublisher = PhoneCallsPublisher(
+            sender: { [piClient] auth, body in
+                try await piClient.ingestEvents(auth: auth, body: body)
+            },
+            auth: auth,
+            logger: logger)
+        let heartbeatStateProvider = StateMutatorHeartbeatStateProvider(mutator: stateMutator)
+        let phoneCallsPlugin = PhoneCallsSourcePlugin(
+            tickInterval: 60,
+            config: PhoneCallsSourceConfig(
+                callHistoryDBPath: callHistoryDBPath,
+                backfillFloor: PhoneCallsCursorWire.defaultBackfillFloor),
+            piClient: piClient,
+            auth: auth,
+            mutator: stateMutator,
+            publisher: phoneCallsPublisher,
+            cache: knownIdentifiersCache,
+            canonicalizer: { HandleNormalization.canonicalize($0) },
+            heartbeatStateProvider: heartbeatStateProvider,
+            healthRegistry: healthRegistry,
+            logger: logger)
+
+
         let plugins: [SourcePlugin] = [
             messagesPlugin,
+            phoneCallsPlugin,
             icloudPlugin,
             anarlogHumansPlugin,
             anarlogSessionsPlugin,
