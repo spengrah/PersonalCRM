@@ -555,10 +555,10 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
     private struct FDAError: Error {}
 
     /// Open CallHistoryDB fresh every tick. `?mode=ro&immutable=1` is
-    /// per spec line 142 (P2-J); the daemon's ~60s tick cadence makes
-    /// reopening cheap, and a long-lived immutable handle would NOT
-    /// see new Phone/FaceTime writes (they're invisible to immutable
-    /// readers by design).
+    /// the documented immutable-read mode; the daemon's ~60s tick
+    /// cadence makes reopening cheap, and a long-lived immutable
+    /// handle would NOT see new Phone/FaceTime writes (they're
+    /// invisible to immutable readers by design).
     private func openFreshPool() async throws -> DatabasePool {
         var grdbConfig = Configuration()
         grdbConfig.readonly = true

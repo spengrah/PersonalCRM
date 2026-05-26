@@ -1,7 +1,7 @@
 // CallHistoryDBReader — GRDB-backed read-only iterator over
 // CallHistoryDB ZCALLRECORD rows.
 //
-// Opens CallHistoryDB with `?mode=ro&immutable=1` per spec line 142.
+// Opens CallHistoryDB with `?mode=ro&immutable=1`.
 // Despite Phone/FaceTime occasionally writing to the DB, immutable=1 is
 // acceptable because (a) the daemon re-opens the DB each tick (~60-90s
 // cadence) so no long-lived handle exists to see stale state, and (b)

@@ -20,7 +20,7 @@ import (
 )
 
 // TestPhoneCallMigration053 verifies the up + down behaviour of migration
-// 053. Three cases per the plan's row-bearing-guard design:
+// 053. Three cases covering the row-bearing-guard semantics:
 //
 //  1. Clean up + empty down: apply 053 up, then 053 down with no rows
 //     in either phone_call or interaction(source='phone_calls'). The

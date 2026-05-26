@@ -1,7 +1,7 @@
 // ServiceDerivation — pure function mapping
 // (ZSERVICE_PROVIDER, ZCALLTYPE) -> CallHistoryDB service enum.
 //
-// The matrix is FROZEN per spec §`phone_calls` source (settled S4):
+// The matrix is FROZEN per spec §`phone_calls` source:
 //
 //   | ZSERVICE_PROVIDER       | ZCALLTYPE | Service          |
 //   |-------------------------|-----------|------------------|

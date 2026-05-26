@@ -447,9 +447,9 @@ type MeetingNoteDeletedPayload struct {
 }
 
 // canonicalCallServices is the set of values accepted by phone_call.service
-// CHECK constraint. Frozen per spec §`phone_calls` source (settled decision
-// S4). Matched verbatim against the migration so payload validation rejects
-// bad values before the CHECK constraint aborts the ingest tx.
+// CHECK constraint. Frozen per spec §`phone_calls` source. Matched verbatim
+// against the migration so payload validation rejects bad values before the
+// CHECK constraint aborts the ingest tx.
 var canonicalCallServices = map[string]struct{}{
 	"voice":          {},
 	"facetime_audio": {},

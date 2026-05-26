@@ -18,7 +18,7 @@ import (
 // inline handler accepts. Mismatches surface as PAYLOAD_INVARIANT.
 // Extend when a new daemon-side phone-call source ships.
 var allowedCallSources = map[string]struct{}{
-	"phone_calls": {},
+	repository.InteractionSourcePhoneCalls: {},
 }
 
 // verifyCallInvariants enforces the cross-field consistency properties
@@ -179,8 +179,8 @@ func (s *IngestService) handleCall(
 
 	// Normalize per-direction invariants before staging. Outbound rows
 	// ignore the daemon's `answered` value (force NULL) and force
-	// has_voicemail FALSE (spec line 421; R4 + R5). The daemon should
-	// already comply; we enforce here as defence-in-depth.
+	// has_voicemail FALSE. The daemon should already comply; we enforce
+	// here as defence-in-depth.
 	var direction string
 	var answeredForStaging *bool
 	hasVoicemail := p.HasVoicemail
@@ -246,13 +246,12 @@ func (s *IngestService) handleCall(
 	descCopy := description
 	recReq := repository.RecordInteractionRequest{
 		ContactID:   contactID,
-		Source:      repository.InteractionSourceMessages, // overwritten below
+		Source:      repository.InteractionSourcePhoneCalls,
 		SourceRef:   &p.CallUniqueID,
 		OccurredAt:  p.StartedAt,
 		Description: &descCopy,
 		Direction:   interactionDirection,
 	}
-	recReq.Source = "phone_calls" // string literal — no exported constant yet to avoid widening InteractionSource* contracts
 
 	res, err := s.contactRecorder.RecordInteractionTx(ctx, tx, true, recReq)
 	if err != nil {
@@ -359,7 +358,7 @@ func (s *IngestService) handleCall(
 }
 
 // decideCallInteraction applies the content-delivered decision table
-// (settled S1; spec §`phone_calls` source, line 146-158). Returns
+// (spec §`phone_calls` source). Returns
 // (createInteraction, direction, description).
 //
 //	| direction | answered | duration | has_voicemail | create | direction      |
@@ -371,7 +370,7 @@ func (s *IngestService) handleCall(
 //	| outbound  | (ignored)| 0        | (forced false)| yes    | outbound       |
 //
 // Note: outbound ALWAYS creates an interaction (the user's
-// "attempted to reach" signal; S3). Description distinguishes
+// "attempted to reach" signal). Description distinguishes
 // connected / voicemail / missed for the future contact-timeline UI.
 func decideCallInteraction(
 	isOutbound bool,

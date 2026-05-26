@@ -16,9 +16,9 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// decideCallInteraction — pure decision-table verification (T1–T5 + T13).
+// decideCallInteraction — pure decision-table verification.
 // Covers every row of the content-delivered cadence table (spec
-// §`phone_calls` source; settled S1, S2, S3).
+// §`phone_calls` source).
 // ---------------------------------------------------------------------------
 
 func TestDecideCallInteraction_AnsweredInbound(t *testing.T) {
@@ -72,7 +72,7 @@ func TestDecideCallInteraction_ConnectedOutbound(t *testing.T) {
 
 func TestDecideCallInteraction_MissedOutbound(t *testing.T) {
 	// T5: outbound missed (duration = 0) → interaction created, the
-	// "attempted to reach" signal (S3). Description marks it "missed".
+	// "attempted to reach" signal. Description marks it "missed".
 	create, dir, desc := decideCallInteraction(true, nil, false, 0, "voice")
 	require.True(t, create)
 	require.Equal(t, "outbound", dir)
@@ -393,7 +393,7 @@ func newCallTestHarness(matchedContactID *uuid.UUID) *callTestHarness {
 // expanded): a missed inbound with no voicemail upserts the staging
 // row, marks it processed with interaction_id=NIL, and does NOT call
 // the contact recorder or the bus. The staging row IS still durable
-// for the future timeline UI (R2).
+// for the future timeline UI.
 func TestHandleCall_MissedInboundNoVoicemail_SkipsInteractionEmit(t *testing.T) {
 	contactID := uuid.New()
 	h := newCallTestHarness(&contactID)
@@ -429,7 +429,7 @@ func TestHandleCall_MissedInboundNoVoicemail_SkipsInteractionEmit(t *testing.T) 
 
 // TestHandleCall_Outbound_ForcesAnsweredNullOnStaging (T11): outbound
 // rows ignore the daemon's `answered` value and write NULL on the
-// staging row. R5 + spec line 421.
+// staging row (spec §`phone_calls` source).
 func TestHandleCall_Outbound_ForcesAnsweredNullOnStaging(t *testing.T) {
 	contactID := uuid.New()
 	h := newCallTestHarness(&contactID)
@@ -473,8 +473,8 @@ func TestHandleCall_Outbound_ForcesAnsweredNullOnStaging(t *testing.T) {
 	require.Len(t, h.phoneCalls.upsertParams, 1)
 	got := h.phoneCalls.upsertParams[0]
 	require.Equal(t, "outbound", got.Direction)
-	require.Nil(t, got.Answered, "outbound must force answered=NULL on staging (R5)")
-	require.False(t, got.HasVoicemail, "outbound must force has_voicemail=FALSE on staging (R4)")
+	require.Nil(t, got.Answered, "outbound must force answered=NULL on staging")
+	require.False(t, got.HasVoicemail, "outbound must force has_voicemail=FALSE on staging")
 }
 
 // TestHandleCall_Replay_ShortCircuitsBusEmit (T6): a re-push of the

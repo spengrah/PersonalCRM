@@ -736,8 +736,8 @@ func (s *IngestService) IngestBatch(
 
 	// Step 6 — end-of-batch aggregator-enqueue. Each enqueue is in the
 	// OUTER tx (not a savepoint) — a failure here rolls the whole
-	// batch back (R4 rationale: partial-enqueue stranding is worse than
-	// a daemon retry).
+	// batch back. Partial-enqueue stranding would be worse than a
+	// daemon retry.
 	for pair := range pendingAggregate {
 		if s.riverClient == nil {
 			// No river client wired (test mode). Skip enqueue; the

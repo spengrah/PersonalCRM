@@ -438,12 +438,12 @@ func run() int {
 	// followUpManager, and eventBus.PublishTx to emit
 	// interaction.recorded + apply cadence + follow-up in the SAME tx
 	// as the phone_call staging row write (spec §`phone_calls`
-	// inline-handler contract; settled S1 content-delivered cadence).
-	// raw_message.* and external_contact.* inline handlers don't need
-	// these four — they were nil before the v1.5 expansion. The
-	// meeting_note.* inline handler reuses contactService via the
-	// ContactInteractionRecorder interface for session-attributed
-	// interaction writes so cadence + follow-up fire correctly.
+	// content-delivered cadence). raw_message.* and external_contact.*
+	// inline handlers don't need these four — they were nil before the
+	// v1.5 expansion. The meeting_note.* inline handler reuses
+	// contactService via the ContactInteractionRecorder interface for
+	// session-attributed interaction writes so cadence + follow-up
+	// fire correctly.
 	ingestService := service.NewIngestService(
 		database,
 		eventBus,

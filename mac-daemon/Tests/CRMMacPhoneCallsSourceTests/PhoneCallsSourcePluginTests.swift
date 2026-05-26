@@ -28,12 +28,15 @@ final class PhoneCallsSourcePluginTests: XCTestCase {
 
     /// Build a plugin instance for protocol-version gate tests. The
     /// CallHistoryDB path is intentionally bogus — these tests should
-    /// not reach the open path.
+    /// not reach the open path on gate-blocked runs, and on gate-passed
+    /// runs the bogus path makes openFreshPool fail so the plugin
+    /// observably marks itself unhealthy. Returns both the plugin and
+    /// the shared health registry so callers can read post-tick state.
     private func makePlugin(
         cache: KnownIdentifiersCache,
         provider: HeartbeatStateProvider,
         mutator: StateMutator
-    ) -> PhoneCallsSourcePlugin {
+    ) -> (PhoneCallsSourcePlugin, SourceHealthRegistry) {
         let auth = PiAuth(hostID: hostID, apiKey: "k")
         let piClient = PiClient(baseURL: URL(string: "https://example.invalid")!,
                                  logger: NoopLogger())
@@ -46,7 +49,8 @@ final class PhoneCallsSourcePluginTests: XCTestCase {
         let config = PhoneCallsSourceConfig(
             callHistoryDBPath: URL(fileURLWithPath: "/dev/null/nope"),
             backfillFloor: PhoneCallsCursor.defaultBackfillFloor)
-        return PhoneCallsSourcePlugin(
+        let registry = SourceHealthRegistry()
+        let plugin = PhoneCallsSourcePlugin(
             tickInterval: 60,
             config: config,
             piClient: piClient,
@@ -56,48 +60,69 @@ final class PhoneCallsSourcePluginTests: XCTestCase {
             cache: cache,
             canonicalizer: { $0 },
             heartbeatStateProvider: provider,
-            healthRegistry: SourceHealthRegistry(),
+            healthRegistry: registry,
             logger: NoopLogger())
+        return (plugin, registry)
     }
 
-    // MARK: - protocol-version gate (T-Swift-11)
+    // MARK: - protocol-version gate
 
     func testProtocolGateBlocksWhenPiVersionTooLow() async throws {
         // Pi reports protocol_version 1; plugin requires >= 2. The
         // tick must short-circuit BEFORE touching the (invalid)
-        // CallHistoryDB path. If the gate fails to short-circuit,
-        // the bogus DB path would surface as a thrown error.
+        // CallHistoryDB path. Observable: the registry snapshot
+        // recorded at tick start carries enabled=true (plugin is wired,
+        // just gated) with no lastPushedAt and no lastError. If the
+        // gate failed to short-circuit, the bogus path would have
+        // marked the plugin unhealthy (enabled=false + lastError set).
         let cache = KnownIdentifiersCache()
         let provider = InMemoryHeartbeatStateProvider(initial: 1)
         let mutator = try makeMutator()
-        let plugin = makePlugin(cache: cache, provider: provider, mutator: mutator)
-        // Must not throw — the gate returns early before any I/O.
+        let (plugin, registry) = makePlugin(cache: cache, provider: provider, mutator: mutator)
         try await plugin.tick()
+        let snap = await registry.read(.phoneCalls)
+        XCTAssertNotNil(snap, "gate-blocked tick should still write the initial enabled snapshot")
+        XCTAssertEqual(snap?.enabled, true, "gate-blocked is silent: enabled stays true")
+        XCTAssertNil(snap?.lastPushedAt, "gate-blocked tick must not record a push")
+        XCTAssertNil(snap?.lastError, "gate-blocked is not an error state")
     }
 
     func testProtocolGateBlocksWhenPiVersionUnknown() async throws {
-        // nil = no heartbeat recorded yet -> wait.
+        // nil = no heartbeat recorded yet -> wait. Same observable
+        // contract as the version-too-low case.
         let cache = KnownIdentifiersCache()
         let provider = InMemoryHeartbeatStateProvider(initial: nil)
         let mutator = try makeMutator()
-        let plugin = makePlugin(cache: cache, provider: provider, mutator: mutator)
+        let (plugin, registry) = makePlugin(cache: cache, provider: provider, mutator: mutator)
         try await plugin.tick()
+        let snap = await registry.read(.phoneCalls)
+        XCTAssertNotNil(snap)
+        XCTAssertEqual(snap?.enabled, true)
+        XCTAssertNil(snap?.lastPushedAt)
+        XCTAssertNil(snap?.lastError)
     }
 
     func testProtocolGatePassesAtRequiredVersion() async throws {
         // Pi reports protocol_version 2. The gate passes; the tick
-        // proceeds to the schema-open step, which throws because the
-        // CallHistoryDB path is bogus. We assert the gate was passed
-        // by relying on the open failure NOT being a "gate blocked"
-        // signal (gate-blocked is silent; open failure is logged but
-        // does not throw because the plugin marks itself unhealthy
-        // and returns).
+        // proceeds to openFreshPool, which fails because the
+        // CallHistoryDB path is bogus. markUnhealthy fires with
+        // either an "open_failed" or "schema_drift" reason depending
+        // on which GRDB error surfaced — both are acceptable post-gate
+        // signals. Observable: registry snapshot has enabled=false and
+        // lastError populated, distinguishing this from the
+        // gate-blocked case above (enabled=true + lastError=nil).
         let cache = KnownIdentifiersCache()
         let provider = InMemoryHeartbeatStateProvider(initial: 2)
         let mutator = try makeMutator()
-        let plugin = makePlugin(cache: cache, provider: provider, mutator: mutator)
-        // Tick must not throw — open failure is caught + marked unhealthy.
+        let (plugin, registry) = makePlugin(cache: cache, provider: provider, mutator: mutator)
         try await plugin.tick()
+        let snap = await registry.read(.phoneCalls)
+        XCTAssertNotNil(snap, "gate-passed tick must have written a snapshot")
+        XCTAssertEqual(snap?.enabled, false, "gate-passed + open-failed must mark unhealthy")
+        let err = snap?.lastError ?? ""
+        XCTAssertTrue(err.contains("open_failed") || err.contains("schema_drift"),
+                      "lastError should encode the open-failure cause, got: \(err)")
+        XCTAssertNotNil(snap?.lastErrorAt, "lastErrorAt must be set when lastError is set")
     }
 
     // MARK: - minimum-protocol-version constant

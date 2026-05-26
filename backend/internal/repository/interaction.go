@@ -20,6 +20,7 @@ const (
 	InteractionSourceTelegram        = "telegram"
 	InteractionSourceMessages        = "messages"
 	InteractionSourceAnarlogSessions = "anarlog_sessions"
+	InteractionSourcePhoneCalls      = "phone_calls"
 )
 
 // Interaction direction constants

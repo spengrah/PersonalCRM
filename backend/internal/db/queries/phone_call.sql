@@ -7,9 +7,18 @@
 --
 -- ON CONFLICT does a no-op so RETURNING reliably returns the existing row,
 -- enabling concurrent dual-host push to converge on a single staging row.
--- We deliberately do NOT overwrite user-visible fields on conflict: a
--- second push of the same call is by definition the same content
--- (CallHistoryDB rows are immutable post-recording).
+-- We deliberately do NOT overwrite user-visible fields on conflict.
+-- CallHistoryDB rows are mostly immutable post-recording, but a missed
+-- inbound call CAN flip ZHASMESSAGE from false -> true once the
+-- corresponding VoicemailService row materializes (typically within a
+-- few seconds of the recording). The first push lands with
+-- has_voicemail=false, and the second is silently deduped by the
+-- event-log (source, source_id) unique BEFORE reaching this query.
+-- Net effect: a late-arriving voicemail flag is dropped — acceptable
+-- for v1.5 because (a) the daemon's ~60-90s tick cadence almost always
+-- observes the voicemail row in the SAME tick, and (b) the staging
+-- row's audit value is unchanged. If this gap matters later, widen the
+-- DO UPDATE to refresh has_voicemail / duration_seconds / answered.
 INSERT INTO phone_call (
     call_unique_id, peer_handle, peer_normalized,
     service, direction, answered, has_voicemail,
