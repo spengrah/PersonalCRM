@@ -469,17 +469,17 @@ func IsCanonicalCallService(s string) bool {
 // handler cross-checks Direction against the kind for defence-in-depth.
 //
 // peer_normalized is the canonicalized form of peer_handle (E.164 phone or
-// lowercased email). The daemon canonicalizes (spec §`phone_calls` payload,
-// line 808); the Pi re-canonicalizes defensively in verifyCallInvariants
-// before trusting the value.
+// lowercased email). The daemon canonicalizes; the Pi re-canonicalizes
+// defensively in verifyCallInvariants before trusting the value.
 //
 // Answered is *bool because the column is three-state: NULL for outbound
-// (ZANSWERED is unreliable; settled S2), true/false for inbound. The
-// daemon forces NULL outbound regardless of source data; the Pi
-// re-normalizes (defence-in-depth per R5).
+// (ZANSWERED is empirically unreliable on outbound rows), true/false for
+// inbound. The daemon forces NULL outbound regardless of source data;
+// the Pi re-normalizes for defence in depth.
 //
 // HasVoicemail is forced FALSE for outbound by both the daemon and the
-// Pi (R4).
+// Pi (the column is semantically inbound-only; iOS reuses it for
+// outbound greeting markers which we deliberately don't surface).
 type CallPayload struct {
 	Version         int       `json:"version"`            // start at 1
 	HostID          uuid.UUID `json:"host_id"`            // authenticated host that observed the row

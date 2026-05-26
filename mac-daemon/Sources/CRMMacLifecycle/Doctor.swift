@@ -293,15 +293,15 @@ public struct Doctor {
 
     /// Phone & FaceTime call-history probe.
     ///
-    /// Phase 1.5 check: assert CallHistoryDB.storedata exists at the
-    /// canonical path. We deliberately do NOT open the SQLite file
-    /// here — Full Disk Access is the same gate as chat.db (granted
-    /// once for the daemon binary), and probing the file just to
-    /// surface "FDA missing" would duplicate the messages source's
-    /// implicit signal at the cost of an additional FDA prompt path.
-    /// FAIL is reserved for the path-missing case (Phone.app never
-    /// ran, or a macOS reorg); a missing file with FDA granted is
-    /// genuinely unusual and worth surfacing as FAIL.
+    /// Assert CallHistoryDB.storedata exists at the canonical path.
+    /// We deliberately do NOT open the SQLite file here — Full Disk
+    /// Access is the same gate as chat.db (granted once for the
+    /// daemon binary), and probing the file just to surface "FDA
+    /// missing" would duplicate the messages source's implicit
+    /// signal at the cost of an additional FDA prompt path. FAIL is
+    /// reserved for the path-missing case (Phone.app never ran, or
+    /// a macOS reorg); a missing file with FDA granted is genuinely
+    /// unusual and worth surfacing as FAIL.
     func checkPhoneCalls() -> CheckResult {
         let path = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(

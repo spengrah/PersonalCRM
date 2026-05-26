@@ -213,10 +213,11 @@ func (s *IngestService) handleCall(
 		}
 	}
 
-	// Apply the interaction-creation decision table (content-delivered
-	// cadence; settled decision S1). Rows return nil interaction when
-	// no interaction should be created — the staging row still exists
-	// for audit + the future contact-timeline UI's union projection.
+	// Apply the interaction-creation decision table — content-delivered
+	// cadence. Rows return nil interaction when no interaction should
+	// be created (missed inbound with no voicemail); the staging row
+	// still exists for audit + the future contact-timeline UI's union
+	// projection.
 	createInteraction, interactionDirection, description := decideCallInteraction(
 		isOutbound,
 		answeredForStaging,

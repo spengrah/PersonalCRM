@@ -9,12 +9,13 @@
 // `peer_normalized` is canonicalized via HandleNormalization (the same
 // helper the messages plugin uses). The Pi re-canonicalizes defensively
 // in verifyCallInvariants and rejects payloads where the two don't
-// match (R-orig-12 + P2-F).
+// match — defense in depth against a misconfigured daemon.
 //
 // `answered` is *bool* (Swift Bool?) — three-state. NULL outbound
-// (ZANSWERED is unreliable per S2); the reader forces nil outbound. The
-// payload omits the key entirely when nil to match the Pi-side
-// `omitempty` JSON tag.
+// because ZANSWERED is empirically unreliable on outbound rows; the
+// reader forces nil outbound regardless of source data. The payload
+// omits the key entirely when nil to match the Pi-side `omitempty`
+// JSON tag.
 import Foundation
 
 /// Direction discriminator. The IngestEvent envelope's `kind` carries

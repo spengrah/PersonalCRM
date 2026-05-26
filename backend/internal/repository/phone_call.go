@@ -12,9 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// Phone call service enum constants. Frozen per spec §`phone_calls` source
-// (settled decision S4). Adding a new service requires both a daemon update
-// and a Pi migration.
+// Phone call service enum constants. Frozen per spec §`phone_calls` source.
+// Adding a new service requires both a daemon update and a Pi migration.
 const (
 	PhoneCallServiceVoice         = "voice"
 	PhoneCallServiceFaceTimeAudio = "facetime_audio"

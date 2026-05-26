@@ -1,35 +1,35 @@
 // PhoneCallsSourcePlugin — actor that orchestrates one phone_calls tick.
 //
 // Per-tick flow:
-//   0. Pi-protocol-version feature-gate (R2-P2-H): consult the
-//      HeartbeatStateProvider; if Pi protocol_version < 2 (or nil),
-//      short-circuit the tick. Heartbeat continues normally — this
-//      gate only inhibits emission of `call.*` events that an older
-//      Pi can't accept.
-//   1. Check schema health: if drifted, set source_health unhealthy
-//      and return.
-//   2. Open CallHistoryDB DatabasePool with `?mode=ro&immutable=1`
-//      (cached on first successful open).
-//   3. If no cached cursor: piClient.getCursor("phone_calls") -> decode
-//      into PhoneCallsCursor; cache locally via StateMutator.
-//   4. If installMaxZDate == nil: capture MAX(ZDATE, Z_PK) into the
-//      in-memory cursor (uncommitted; committed in step 7).
-//   5. KnownIdentifiersCache populated? If not, skip (heartbeat will
-//      fill it). v1.5 defers identifier-scoped scans
-//      (D-DEVIATION-1); we observe + log the newly-added queue but
-//      don't consume it.
-//   6. Backfill batch (descending) + live batch (ascending), each
-//      bounded by the shared PhoneCallsBudget.
-//   7. If the in-memory cursor changed AND every batch was confirmed
-//      with zero rejections: commitCursor; on success write-through
-//      to local state.json. On 409: refresh + abort. On transport
-//      error: log + leave local cache untouched -> return.
-//   8. Update source_health snapshot via the shared registry.
+//   - Pi-protocol-version gate: consult the HeartbeatStateProvider;
+//     if Pi protocol_version < minPiProtocolVersion (or nil), short-
+//     circuit the tick. Heartbeat continues normally — the gate only
+//     inhibits emission of `call.*` events that an older Pi can't
+//     accept.
+//   - Check schema health: drift -> source_health unhealthy + return.
+//   - Open CallHistoryDB DatabasePool with `?mode=ro&immutable=1`
+//     fresh each tick (immutable=1 hides writes from a long-lived
+//     reader, so reopening is required for live cursor advancement).
+//   - Load cursor: piClient.getCursor("phone_calls") -> decode into
+//     PhoneCallsCursor; cache locally via StateMutator.
+//   - Capture install-time MAX(ZDATE, Z_PK) on the first tick. The
+//     live cursor starts at (install_max.zdate, install_max.zPK - 1)
+//     so the first live tick's tuple tie-break includes the
+//     install_max row itself.
+//   - Sender filter: bail if KnownIdentifiersCache isn't populated
+//     yet (heartbeat will fill it). The newly-added queue is observed
+//     + logged but not consumed — identifier-scoped scans are
+//     deferred to a follow-up.
+//   - Backfill batch (descending) + live batch (ascending), each
+//     bounded by the shared PhoneCallsBudget.
+//   - If the in-memory cursor changed AND every batch was confirmed
+//     with zero rejections: commitCursor; on 409 refresh + abort;
+//     on transport error log + leave cache untouched.
+//   - Refresh source_health snapshot via the shared registry.
 //
 // The plugin is the single owner of the GRDB DatabasePool, but shares
-// the KnownIdentifiersCache with CRMMacMessagesSource (R7 + cache
-// moved to CRMMacCore in this PR's earlier commit). All writes to
-// state.json funnel through StateMutator.
+// the KnownIdentifiersCache (in CRMMacCore) with CRMMacMessagesSource.
+// All writes to state.json funnel through StateMutator.
 import Foundation
 import GRDB
 import CRMMacCore
@@ -138,7 +138,7 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
         await healthRegistry.update(id, currentHealthSnapshot(
             enabled: true, lastScheduled: tickStart))
 
-        // STEP 0 — Pi protocol_version feature-gate.
+        // Pi protocol_version feature-gate.
         let piVersion = await heartbeatStateProvider.lastKnownPiProtocolVersion
         let required = CRMMacPhoneCallsSource.minPiProtocolVersion
         guard let pv = piVersion, pv >= required else {
@@ -159,7 +159,7 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
             protocolGateLoggedBlocked = false
         }
 
-        // STEP 1 + 2 — Open pool fresh + validate schema (cached).
+        // Open pool fresh + validate schema (validation cached).
         let pool: DatabasePool
         do {
             pool = try await openFreshPool()
@@ -174,7 +174,7 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
             return
         }
 
-        // STEP 3 — Load cursor.
+        // Load cursor.
         let cursor: PhoneCallsCursor
         do {
             cursor = try await loadOrFetchCursor()
@@ -186,25 +186,37 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
             return
         }
 
-        // STEP 5 — Sender filter populated?
+        // Sender filter populated?
         let populated = await cache.isPopulated
         if !populated {
             logger.debug("phone_calls tick: known-identifiers cache empty; skipping", metadata: [:])
             return
         }
 
-        // STEP 4 — Capture install-time MAX(ZDATE, Z_PK) if needed.
+        // Capture install-time MAX(ZDATE, Z_PK) if needed.
+        // The live cursor starts ONE TICK BEHIND install_max — at
+        // (install_max - epsilon) — so the live forward query
+        // (ZDATE > $1 OR (ZDATE = $1 AND Z_PK > $2)) emits the row at
+        // (install_max.zdate, install_max.z_pk - 1) on the first
+        // tick. Concretely: we set liveCursorZ_PK = install_max.zPK - 1
+        // and liveCursorZDate = install_max.zdate. With ZDATE equal,
+        // the Z_PK > tie-break test fires and includes the install_max
+        // row. The alternative — starting backfill at install_max via
+        // backwardFromExclusive and live at the same tuple via
+        // forwardFromExclusive — would skip the install_max row
+        // forever.
         var working = cursor
         if working.installMaxZDate == nil {
             do {
                 let maxPoint = try await pool.read { try CallHistoryDBReader.maxZDate(db: $0) }
                 if let p = maxPoint {
-                    working.installMaxZDate = Date(
-                        timeIntervalSince1970:
-                            CallHistoryDBReader.appleEpochOffset + p.zdate)
+                    working.installMaxZDate = p.zdate
                     working.installMaxZPK = p.zPK
-                    working.liveCursorZDate = working.installMaxZDate
-                    working.liveCursorZPK = p.zPK
+                    // Live cursor: one Z_PK before install_max so the
+                    // forward query's tie-break includes the install_max
+                    // row on the very first live tick.
+                    working.liveCursorZDate = p.zdate
+                    working.liveCursorZPK = p.zPK - 1
                     logger.info("phone_calls tick: captured install-time MAX(ZDATE, Z_PK)", metadata: [
                         "max_zdate": .public(String(p.zdate)),
                         "max_z_pk": .public(String(p.zPK)),
@@ -226,10 +238,9 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
         var hadRejection = false
         var hadUnconfirmed = false
 
-        // v1.5 deferred: identifier-scoped 30-day backwards scan. We
+        // Identifier-scoped 30-day backwards scan is deferred — we
         // observe the newly-added queue for visibility but do NOT
-        // consume it (parity with the merged messages plugin per
-        // D-DEVIATION-1).
+        // consume it (parity with the merged messages plugin).
         let newlyAdded = await cache.drainNewlyAdded()
         if !newlyAdded.isEmpty {
             logger.info("phone_calls tick: newly-known contacts detected", metadata: [
@@ -237,7 +248,7 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
             ])
         }
 
-        // STEP 6a — Backfill batch (descending).
+        // Backfill batch (descending).
         if !working.backfillComplete, budget.rowsRemaining > 0 {
             let outcome = await runBackfillBatch(
                 pool: pool,
@@ -247,7 +258,7 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
             if outcome.hadUnconfirmedItems { hadUnconfirmed = true }
         }
 
-        // STEP 6b — Live batch (ascending).
+        // Live batch (ascending).
         if !budget.exhausted(now: clock()) {
             let outcome = await runLiveBatch(
                 pool: pool,
@@ -257,8 +268,8 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
             if outcome.hadUnconfirmedItems { hadUnconfirmed = true }
         }
 
-        // STEP 7 — Commit cursor only if changed, no rejections, AND
-        // every item we tried to publish was confirmed.
+        // Commit cursor only if changed, no rejections, AND every
+        // item we tried to publish was confirmed.
         let cursorChanged = working != cursor
         if cursorChanged && !hadRejection && !hadUnconfirmed {
             do {
@@ -298,7 +309,7 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
             logger.warning("phone_calls tick: publish unconfirmed; holding cursor", metadata: [:])
         }
 
-        // STEP 8 — Refresh health snapshot.
+        // Refresh health snapshot.
         await healthRegistry.update(id, currentHealthSnapshot(
             enabled: true,
             lastScheduled: tickStart,
@@ -325,14 +336,14 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
         let upperZDate: Double
         let upperZPK: Int64
         if let bcDate = cursor.backfillCursorZDate, let bcPK = cursor.backfillCursorZPK {
-            upperZDate = bcDate.timeIntervalSince1970 - CallHistoryDBReader.appleEpochOffset
+            upperZDate = bcDate
             upperZPK = bcPK
         } else if let imDate = cursor.installMaxZDate, let imPK = cursor.installMaxZPK {
-            // First descent: start from install_max + 1 effectively
-            // (we use upper = install_max and the SQL is < — so we
-            // skip the install_max row, but live iteration covers
-            // it).
-            upperZDate = imDate.timeIntervalSince1970 - CallHistoryDBReader.appleEpochOffset
+            // First descent: walk DOWN from install_max exclusive.
+            // The install_max row itself is emitted by the live
+            // branch's tie-break (liveCursor.zPK = install_max.zPK -
+            // 1), so backfill safely skips it here.
+            upperZDate = imDate
             upperZPK = imPK
         } else {
             // Empty table: nothing to backfill.
@@ -380,8 +391,6 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
                                 rejected: [], hadUnconfirmedItems: false)
         }
 
-        let floorEpoch = config.backfillFloor.timeIntervalSince1970
-            - CallHistoryDBReader.appleEpochOffset
         let inRange = page.rows.filter { $0.startedAt >= config.backfillFloor }
         let belowFloor = page.rows.count - inRange.count
 
@@ -399,15 +408,12 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
                 && outcome.unconfirmed == 0
         }
         if let bounds = page.scannedBounds, confirmedAllItems {
-            cursor.backfillCursorZDate = Date(
-                timeIntervalSince1970:
-                    CallHistoryDBReader.appleEpochOffset + bounds.min.zdate)
+            cursor.backfillCursorZDate = bounds.min.zdate
             cursor.backfillCursorZPK = bounds.min.zPK
         }
         if confirmedAllItems && (belowFloor > 0 || page.exhausted) {
             cursor.backfillComplete = true
         }
-        _ = floorEpoch  // documented but not currently consumed; kept for symmetry.
 
         return BatchSummary(
             accepted: outcome.accepted,
@@ -426,10 +432,10 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
         let lowerZDate: Double
         let lowerZPK: Int64
         if let lcDate = cursor.liveCursorZDate, let lcPK = cursor.liveCursorZPK {
-            lowerZDate = lcDate.timeIntervalSince1970 - CallHistoryDBReader.appleEpochOffset
+            lowerZDate = lcDate
             lowerZPK = lcPK
         } else if let imDate = cursor.installMaxZDate, let imPK = cursor.installMaxZPK {
-            lowerZDate = imDate.timeIntervalSince1970 - CallHistoryDBReader.appleEpochOffset
+            lowerZDate = imDate
             lowerZPK = imPK
         } else {
             // Empty table: nothing live.
@@ -489,9 +495,7 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
                 && outcome.unconfirmed == 0
         }
         if let bounds = page.scannedBounds, confirmedAllItems {
-            cursor.liveCursorZDate = Date(
-                timeIntervalSince1970:
-                    CallHistoryDBReader.appleEpochOffset + bounds.max.zdate)
+            cursor.liveCursorZDate = bounds.max.zdate
             cursor.liveCursorZPK = bounds.max.zPK
         }
 
@@ -631,6 +635,19 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
 
     // MARK: - health surface
 
+    /// Build the heartbeat source_health entry for this source.
+    ///
+    /// observedCursor / pushedCursor are deliberately left nil. The
+    /// shared SourceHealthSnapshot type encodes them as Int64, which
+    /// can't represent the (ZDATE seconds Double, Z_PK Int64) tuple
+    /// without precision loss. The host-page UI will show "—" in the
+    /// Cursor column for phone_calls; the source-health-cursor
+    /// representation refactor is tracked as a follow-up (it would
+    /// need a string-typed display column added to SourceHealthSnapshot,
+    /// touching messages + icloud_contacts + the frontend Cursor cell
+    /// renderer). Until then, `crm-mac call-history status` and
+    /// `crm-mac status` are the canonical surfaces for the cursor
+    /// watermark.
     private func currentHealthSnapshot(
         enabled: Bool,
         lastScheduled: Date,

@@ -4,12 +4,14 @@ import CRMMacCore
 
 final class PhoneCallsCursorWireTests: XCTestCase {
     func testEncodeDecodeRoundTrip() throws {
+        // ZDATE values include sub-second precision to verify the
+        // Double encoding preserves it (vs. ISO-8601 second-truncated).
         let original = PhoneCallsCursor(
-            backfillCursorZDate: Date(timeIntervalSince1970: 1_700_000_000),
+            backfillCursorZDate: 721_692_400.123456,
             backfillCursorZPK: 42,
-            liveCursorZDate: Date(timeIntervalSince1970: 1_750_000_000),
+            liveCursorZDate: 771_692_400.654321,
             liveCursorZPK: 100,
-            installMaxZDate: Date(timeIntervalSince1970: 1_750_000_000),
+            installMaxZDate: 771_692_400.654321,
             installMaxZPK: 100,
             backfillFloorSentAt: PhoneCallsCursor.defaultBackfillFloor,
             backfillComplete: false,
@@ -17,6 +19,8 @@ final class PhoneCallsCursorWireTests: XCTestCase {
         let json = try PhoneCallsCursorCodec.encode(original)
         let decoded = try PhoneCallsCursorCodec.decode(json)
         XCTAssertEqual(decoded, original)
+        // Sub-second precision survives the round-trip.
+        XCTAssertEqual(decoded?.backfillCursorZDate, 721_692_400.123456)
     }
 
     func testDecodeEmptyStringReturnsNil() throws {

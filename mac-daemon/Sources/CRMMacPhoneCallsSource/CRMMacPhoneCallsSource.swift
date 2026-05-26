@@ -15,10 +15,10 @@
 //   - PhoneCallsSourcePlugin.swift SourcePlugin actor + tick orchestration
 //
 // The HandleNormalization helper lives in CRMMacMessagesSource and is
-// re-used here (peer canonicalization on the daemon side per S R2-P2-H).
-// The KnownIdentifiersCache moved to CRMMacCore in this PR's earlier
-// commit; both messages + phone_calls plugins share a single cache
-// instance.
+// injected as a closure so this target stays free of a cross-source
+// dep. The KnownIdentifiersCache lives in CRMMacCore; both messages
+// and phone_calls plugins share a single cache instance via the
+// daemon composition root.
 import Foundation
 
 public enum CRMMacPhoneCallsSource {
@@ -26,9 +26,11 @@ public enum CRMMacPhoneCallsSource {
     /// to the Pi-side payload contract.
     public static let payloadVersion: Int = 1
 
-    /// Minimum Pi-reported `protocol_version` the source requires before
-    /// it activates. Pi PR 1.5 bumped its `ProtocolVersion` constant to
-    /// 2 to advertise `call.*` event-kind support; daemons with this
-    /// gate refuse to emit `call.*` events to older Pi instances.
+    /// Minimum Pi-reported `protocol_version` the source requires
+    /// before it activates. Protocol version 2 added `call.*`
+    /// event-kind support on the Pi side; daemons with this gate
+    /// refuse to emit `call.*` events to older Pi instances and
+    /// remain operational for the messages + icloud_contacts
+    /// sources.
     public static let minPiProtocolVersion: Int32 = 2
 }

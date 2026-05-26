@@ -10,6 +10,15 @@ struct StatusCommand: ParsableCommand {
         commandName: "status",
         abstract: "Print the daemon's installation + heartbeat status.")
 
+    /// Format an Apple-epoch Double (seconds since 2001-01-01 UTC) as
+    /// an ISO-8601 UTC timestamp string. Returns "nil" when the input
+    /// is nil.
+    private func formatAppleEpoch(_ value: Double?) -> String {
+        guard let v = value else { return "nil" }
+        let date = Date(timeIntervalSince1970: 978_307_200 + v)
+        return ISO8601DateFormatter().string(from: date)
+    }
+
     mutating func run() throws {
         let ctx = ProductionContext()
         let report = ctx.status().run()
@@ -59,13 +68,9 @@ struct StatusCommand: ParsableCommand {
 
         if let phoneCalls = report.phoneCalls {
             print("  phone_calls:")
-            let formatter = ISO8601DateFormatter()
-            let liveDate = phoneCalls.liveCursorZDate
-                .map { formatter.string(from: $0) } ?? "nil"
-            let backfillDate = phoneCalls.backfillCursorZDate
-                .map { formatter.string(from: $0) } ?? "nil"
-            let installMax = phoneCalls.installMaxZDate
-                .map { formatter.string(from: $0) } ?? "nil"
+            let liveDate = formatAppleEpoch(phoneCalls.liveCursorZDate)
+            let backfillDate = formatAppleEpoch(phoneCalls.backfillCursorZDate)
+            let installMax = formatAppleEpoch(phoneCalls.installMaxZDate)
             print("    live_cursor:        \(liveDate) (Z_PK=\(phoneCalls.liveCursorZPK.map(String.init) ?? "nil"))")
             print("    backfill_cursor:    \(backfillDate) (Z_PK=\(phoneCalls.backfillCursorZPK.map(String.init) ?? "nil"))")
             print("    install_max:        \(installMax) (Z_PK=\(phoneCalls.installMaxZPK.map(String.init) ?? "nil"))")

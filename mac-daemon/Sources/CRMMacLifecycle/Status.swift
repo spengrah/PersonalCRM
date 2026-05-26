@@ -237,21 +237,25 @@ public struct MessagesSourceStatus: Equatable {
 /// PhoneCallsCursorWire struct lives in CRMMacCore; we decode the
 /// watermarks here so Status keeps a self-contained, source-target-
 /// free view of state.
+///
+/// ZDATE values are Apple-epoch seconds (Doubles). The presenter
+/// converts to a human-readable UTC timestamp via the `Date(timeInterval
+/// Since1970:)` helper plus the Apple-epoch offset constant (978307200).
 public struct PhoneCallsSourceStatus: Equatable {
-    public let liveCursorZDate: Date?
+    public let liveCursorZDate: Double?
     public let liveCursorZPK: Int64?
-    public let backfillCursorZDate: Date?
+    public let backfillCursorZDate: Double?
     public let backfillCursorZPK: Int64?
-    public let installMaxZDate: Date?
+    public let installMaxZDate: Double?
     public let installMaxZPK: Int64?
     public let backfillComplete: Bool
 
     public init(
-        liveCursorZDate: Date?,
+        liveCursorZDate: Double?,
         liveCursorZPK: Int64?,
-        backfillCursorZDate: Date?,
+        backfillCursorZDate: Double?,
         backfillCursorZPK: Int64?,
-        installMaxZDate: Date?,
+        installMaxZDate: Double?,
         installMaxZPK: Int64?,
         backfillComplete: Bool
     ) {
@@ -266,11 +270,11 @@ public struct PhoneCallsSourceStatus: Equatable {
 
     /// Decoder mirroring PhoneCallsCursorWire's CodingKeys.
     private struct CursorJSON: Decodable {
-        let backfillCursorZDate: Date?
+        let backfillCursorZDate: Double?
         let backfillCursorZPK: Int64?
-        let liveCursorZDate: Date?
+        let liveCursorZDate: Double?
         let liveCursorZPK: Int64?
-        let installMaxZDate: Date?
+        let installMaxZDate: Double?
         let installMaxZPK: Int64?
         let backfillComplete: Bool?
 

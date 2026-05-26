@@ -1,5 +1,5 @@
 // PhoneCallsCursorWire — JSON-packed envelope of the Pi-side opaque
-// cursor for the phone_calls source (phase 1.5).
+// cursor for the phone_calls source.
 //
 // Lives in CRMMacCore so both CRMMacPhoneCallsSource (which produces +
 // consumes the cursor in the source plugin) and any future CLI ops
@@ -8,44 +8,56 @@
 // The cursor primitive differs from MessagesCursorWire: CallHistoryDB's
 // ZCALLRECORD table is keyed on a (ZDATE, Z_PK) pair, not a single
 // monotonic ROWID. ZDATE is Apple-epoch SECONDS since 2001-01-01 (Core
-// Data's CFAbsoluteTime convention). Two calls can share a wall-clock
+// Data's CFAbsoluteTime convention), stored as a SQLite REAL — so
+// fractional sub-second precision IS used by CallHistoryDB and must be
+// preserved across cursor round-trip. Two calls can share a wall-clock
 // second; the Z_PK tie-breaker prevents skipping a boundary row.
 //
 // Live iteration uses: WHERE (ZDATE > $1) OR (ZDATE = $1 AND Z_PK > $2)
 // Backfill uses: WHERE (ZDATE < $1) OR (ZDATE = $1 AND Z_PK < $2)
 //
+// Encoding: ZDATE is encoded as a raw Double (seconds since the Apple
+// epoch) rather than an ISO-8601 string so the sub-second part is
+// preserved verbatim. Using ISO-8601 without fractional-seconds would
+// truncate to whole seconds and cause backfill descent to skip rows
+// and live descent to duplicate them across restart.
+//
 // Unlike MessagesCursorWire, this struct does NOT carry a pendingScans
-// queue. v1.5 defers identifier-scoped scans to a follow-up (D-DEVIATION-1
-// in the plan); the natural-backfill-descent + sender-filter posture
-// matches the merged messages plugin's v1 simplification. The
-// knownIdentifiersHash IS carried for restart-time change detection.
+// queue. The 30-day identifier-scoped scan is deferred to a follow-up;
+// the natural-backfill-descent + sender-filter posture matches the
+// merged messages plugin's behavior. The knownIdentifiersHash IS
+// carried for restart-time change detection.
 import Foundation
 
 public struct PhoneCallsCursorWire: Codable, Equatable, Sendable {
-    /// ZDATE floor for backfill (Apple-epoch seconds, encoded as Date).
+    /// ZDATE floor for backfill (Apple-epoch seconds, Double).
     /// Backfill walks DOWN from this paired with `backfillCursorZPK`.
     /// Nil before the install-time floor has been captured.
-    public var backfillCursorZDate: Date?
+    public var backfillCursorZDate: Double?
 
     /// Z_PK tie-breaker paired with `backfillCursorZDate`. Nil iff
     /// `backfillCursorZDate` is nil.
     public var backfillCursorZPK: Int64?
 
-    /// ZDATE at-or-below which live events have been emitted. Walks UP
-    /// from `installMaxZDate`.
-    public var liveCursorZDate: Date?
+    /// ZDATE at-or-below which live events have been emitted (Apple-
+    /// epoch seconds, Double). Walks UP from `installMaxZDate`.
+    public var liveCursorZDate: Double?
 
     /// Z_PK tie-breaker paired with `liveCursorZDate`.
     public var liveCursorZPK: Int64?
 
     /// Install-time MAX(ZDATE), captured lazily on the first tick.
-    public var installMaxZDate: Date?
+    /// Apple-epoch seconds (Double).
+    public var installMaxZDate: Double?
 
     /// Install-time Z_PK paired with `installMaxZDate`.
     public var installMaxZPK: Int64?
 
     /// 2026-01-01 floor (same constant as messages). Older
-    /// CallHistoryDB rows are not emitted.
+    /// CallHistoryDB rows are not emitted. Kept as a Date for parity
+    /// with the messages cursor's wire shape (this column is
+    /// human-debug-readable; sub-second precision is not meaningful
+    /// for a chronological floor).
     public var backfillFloorSentAt: Date
 
     /// True once `backfillCursor*` has reached `backfillFloorSentAt`.
@@ -53,10 +65,8 @@ public struct PhoneCallsCursorWire: Codable, Equatable, Sendable {
 
     /// SHA-256 (lowercase hex) of the sorted canonical known-
     /// identifiers set as of the last successful heartbeat-diff.
-    /// Used after restart to detect changes — equal hash means no
-    /// work, different hash means a contact was added/removed
-    /// offline. v1.5 does NOT auto-queue scans on diff
-    /// (D-DEVIATION-1); the hash is recorded for future use.
+    /// Used after restart to detect changes; v1.5 does not consume
+    /// this on diff (recorded for future use).
     public var knownIdentifiersHash: String?
 
     /// 2026-01-01T00:00:00Z — the spec-defined backfill floor.
@@ -65,11 +75,11 @@ public struct PhoneCallsCursorWire: Codable, Equatable, Sendable {
     public static let defaultBackfillFloor = Date(timeIntervalSince1970: 1_767_225_600)
 
     public init(
-        backfillCursorZDate: Date? = nil,
+        backfillCursorZDate: Double? = nil,
         backfillCursorZPK: Int64? = nil,
-        liveCursorZDate: Date? = nil,
+        liveCursorZDate: Double? = nil,
         liveCursorZPK: Int64? = nil,
-        installMaxZDate: Date? = nil,
+        installMaxZDate: Double? = nil,
         installMaxZPK: Int64? = nil,
         backfillFloorSentAt: Date,
         backfillComplete: Bool = false,
@@ -101,8 +111,9 @@ public struct PhoneCallsCursorWire: Codable, Equatable, Sendable {
 
 public enum PhoneCallsCursorWireCodec {
     /// JSON-encode a cursor for storage in the Pi-side opaque string.
-    /// Uses ISO-8601 date encoding (without fractional seconds) to
-    /// match the Pi-side JSON shape.
+    /// Uses ISO-8601 date encoding for the human-readable floor; ZDATE
+    /// fields are raw Doubles so sub-second precision survives the
+    /// round-trip.
     public static func encode(_ cursor: PhoneCallsCursorWire) throws -> String {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

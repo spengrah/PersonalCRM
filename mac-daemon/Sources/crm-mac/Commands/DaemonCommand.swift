@@ -231,10 +231,11 @@ struct DaemonCommand: AsyncParsableCommand {
             }
         }
 
-        // phone_calls source: CallHistoryDB reader + push provider
-        // (Phase 1.5). Feature-gated against the Pi's protocol_version
-        // via HeartbeatStateProvider — the plugin self-disables when
-        // the Pi reports protocol_version < 2.
+        // phone_calls source: CallHistoryDB reader + push provider.
+        // Feature-gated against the Pi's protocol_version via
+        // HeartbeatStateProvider — the plugin self-disables when the
+        // Pi reports protocol_version < phone_calls's required
+        // minimum.
         let callHistoryDBPath = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(
                 "Library/Application Support/CallHistoryDB/CallHistory.storedata")
