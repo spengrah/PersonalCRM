@@ -14,7 +14,7 @@ BEGIN
 END $$;
 ALTER TABLE interaction DROP CONSTRAINT interaction_source_check;
 ALTER TABLE interaction ADD CONSTRAINT interaction_source_check
-    CHECK (source IN ('manual', 'gcal', 'todoist', 'telegram', 'messages'));
+    CHECK (source IN ('manual', 'gcal', 'todoist', 'telegram', 'messages', 'anarlog_sessions'));
 
 -- 1. Drop phone_call — guard on row count first. If any rows exist
 --    (processed or not), the operator must export them out-of-band before

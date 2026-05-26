@@ -1,4 +1,4 @@
--- 053_phone_call.up.sql
+-- 055_phone_call.up.sql
 -- Mac daemon Phase 1.5: phone_call staging table + interaction.source CHECK
 -- extension for 'phone_calls'. Spec: .ai/spec/mac-daemon.md §`phone_calls`
 -- source (~lines 140-170), §`phone_call` staging table (~line 421),
@@ -69,9 +69,9 @@ CREATE INDEX idx_phone_call_mac_host
 -- ============================================================================
 -- 2. interaction.source CHECK extension: add 'phone_calls'
 -- ============================================================================
--- Existing constraint (after migration 049): CHECK (source IN ('manual',
--- 'gcal', 'todoist', 'telegram', 'messages')). This migration adds
--- 'phone_calls'.
+-- Existing constraint (after migration 053_meeting_note): CHECK (source IN
+-- ('manual', 'gcal', 'todoist', 'telegram', 'messages', 'anarlog_sessions')).
+-- This migration adds 'phone_calls' to the cumulative set.
 ALTER TABLE interaction DROP CONSTRAINT interaction_source_check;
 ALTER TABLE interaction ADD CONSTRAINT interaction_source_check
-    CHECK (source IN ('manual', 'gcal', 'todoist', 'telegram', 'messages', 'phone_calls'));
+    CHECK (source IN ('manual', 'gcal', 'todoist', 'telegram', 'messages', 'anarlog_sessions', 'phone_calls'));

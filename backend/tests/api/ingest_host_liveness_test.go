@@ -77,6 +77,10 @@ func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 		nil, // interactions unused
 		nil, // identityLookup unused
 		nil, // contactSvc unused
+		nil, // phoneCalls unused
+		nil, // contactRecorder unused
+		nil, // cadence unused
+		nil, // followUp unused
 	)
 
 	// Build a structurally-valid envelope so the batch precondition
@@ -146,7 +150,7 @@ func TestIngest_HostLivenessNil_SkipsCheck(t *testing.T) {
 	eventBus := events.NewBus(database.Pool, nil, eventRepo)
 
 	// nil hostLiveness — recheck is skipped.
-	svc := service.NewIngestService(database, eventBus, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewIngestService(database, eventBus, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	// An empty batch passes the precondition layer immediately and
 	// never opens a tx. The test confirms wiring without the recheck
@@ -253,7 +257,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	eventBus := events.NewBus(database.Pool, nil, eventRepo)
-	svc := service.NewIngestService(database, eventBus, identityService, nil, nil, blocker, hostRepo, nil, nil, nil, nil, nil)
+	svc := service.NewIngestService(database, eventBus, identityService, nil, nil, blocker, hostRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	entityID := "concurrent-revoke-" + uuid.NewString()[:8]
 	payload, err := events.Marshal(events.KindExternalContactUpserted, events.ExternalContactUpsertedPayload{

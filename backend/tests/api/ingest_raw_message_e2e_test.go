@@ -144,7 +144,7 @@ func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T
 	recorderShim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 
 	// Now wire the ingest service + handler.
-	ingestService := service.NewIngestService(database, bus, identityService, messagesRepo, riverClient, nil, hostRepo, nil, nil, nil, nil, nil)
+	ingestService := service.NewIngestService(database, bus, identityService, messagesRepo, riverClient, nil, hostRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	gin.SetMode(gin.TestMode)
