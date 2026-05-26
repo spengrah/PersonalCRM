@@ -52,7 +52,8 @@ final class MessagesPublisherTests: XCTestCase {
     }
 
     func testAllDuplicatesAdvancesCursor() async {
-        // Plan §R5: dedup counts the same as accepted for cursor advance.
+        // Dedup counts the same as accepted for cursor advance — the Pi
+        // already has the row, so the daemon must not re-emit it forever.
         let publisher = MessagesPublisher(
             sender: { _, body in
                 IngestEventsData(accepted: 0,

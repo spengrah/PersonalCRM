@@ -29,15 +29,18 @@ CREATE TABLE phone_call (
     -- Canonicalized handle (E.164 phone or lowercased email). Daemon emits
     -- both raw and normalized per spec §`phone_calls` payload (line 808).
     peer_normalized TEXT NOT NULL,
-    -- Derived service enum. The set is frozen per S4 settled decision.
+    -- Derived service enum. The set is frozen; adding a new service requires
+    -- a coordinated daemon + Pi migration (see ServiceDerivation.swift).
     service TEXT NOT NULL CHECK (service IN ('voice', 'facetime_audio', 'facetime_video')),
     -- Direction: 'inbound' = received, 'outbound' = sent. Mirrors event kind.
     direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
-    -- NULLable, only set for inbound rows (ZANSWERED is unreliable outbound
-    -- per S2). Outbound rows store NULL even if payload sets a value.
+    -- NULLable, only set for inbound rows. CallHistoryDB's ZANSWERED is
+    -- unreliable for outbound calls (frequently FALSE even on connected
+    -- outbound calls), so outbound rows store NULL even if payload sets a value.
     answered BOOLEAN,
-    -- ZHASMESSAGE: voicemail-was-left flag (inbound only; forced FALSE for
-    -- outbound per R4).
+    -- ZHASMESSAGE: voicemail-was-left flag. Only meaningful for inbound;
+    -- forced FALSE for outbound (a "voicemail" left by the caller has no
+    -- analog in the outbound direction).
     has_voicemail BOOLEAN NOT NULL DEFAULT FALSE,
     -- ZDURATION in whole seconds. 0 for missed inbound and missed outbound.
     duration_seconds INTEGER NOT NULL DEFAULT 0,
@@ -46,7 +49,9 @@ CREATE TABLE phone_call (
     -- Resolved contact (set by Pi ingest service identity-match).
     matched_contact_id UUID REFERENCES contact(id) ON DELETE SET NULL,
     -- Interaction this staging row was rolled into. NULLable forever for
-    -- missed-inbound-no-voicemail rows (content-delivered cadence; S1).
+    -- missed-inbound-no-voicemail rows (content-delivered cadence: a call
+    -- you missed and where the caller left no voicemail conveys no content,
+    -- so no interaction is recorded).
     interaction_id UUID REFERENCES interaction(id) ON DELETE SET NULL,
     -- Provenance: which Mac pushed this row.
     mac_host_id UUID REFERENCES mac_host(id) ON DELETE SET NULL,

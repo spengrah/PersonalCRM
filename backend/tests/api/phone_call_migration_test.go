@@ -20,7 +20,8 @@ import (
 )
 
 // TestPhoneCallMigration053 verifies the up + down behaviour of migration
-// 053. Three cases covering the row-bearing-guard semantics:
+// 053. The down migration refuses to drop data-bearing structures if rows
+// referencing them still exist. Three cases:
 //
 //  1. Clean up + empty down: apply 053 up, then 053 down with no rows
 //     in either phone_call or interaction(source='phone_calls'). The
