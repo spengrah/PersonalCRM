@@ -114,9 +114,14 @@ actor RecordingHeartbeatStateWriter: HeartbeatStateWriter {
     struct Record: Equatable {
         let at: Date
         let cursorEpoch: Int64
+        let protocolVersion: Int32
     }
     private(set) var records: [Record] = []
-    func recordSuccessfulHeartbeat(at: Date, cursorEpoch: Int64) async throws {
-        records.append(Record(at: at, cursorEpoch: cursorEpoch))
+    func recordSuccessfulHeartbeat(
+        at: Date,
+        cursorEpoch: Int64,
+        protocolVersion: Int32
+    ) async throws {
+        records.append(Record(at: at, cursorEpoch: cursorEpoch, protocolVersion: protocolVersion))
     }
 }
