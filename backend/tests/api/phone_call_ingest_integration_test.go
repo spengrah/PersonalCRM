@@ -69,6 +69,7 @@ type phoneCallIngestEnv struct {
 	cmRepo         *repository.ContactMethodRepository
 	eventRepo      *repository.EventRepository
 	interactionRpo *repository.InteractionRepository
+	claimRepo      *repository.EventConsumerClaimRepository
 	pairedHostID   uuid.UUID
 	pairedHostKey  string
 	seededContact  uuid.UUID
@@ -278,6 +279,7 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 		cmRepo:         contactMethodRepo,
 		eventRepo:      eventRepo,
 		interactionRpo: interactionRepo,
+		claimRepo:      eventClaimRepo,
 		pairedHostID:   pair.HostID,
 		pairedHostKey:  pair.APIKey,
 		seededContact:  contactID,
@@ -435,6 +437,19 @@ func TestIngestCall_Inbound_RecordsInteractionAndBumpsLastContacted(t *testing.T
 	require.NoError(t, err)
 	require.NotNil(t, contact.LastContacted, "inbound interaction must bump last_contacted")
 	require.Nil(t, contact.LastOutreachAt, "inbound must NOT bump last_outreach_at")
+
+	// (e) inline cadence + follow-up legs ran. Both consumers write an
+	// event_consumer_claim row under their consumer name; a missing
+	// claim would mean the inline HandleEvent never fired (and the
+	// queued re-delivery is no-op too, since this test uses
+	// TestOnly river workers). Asserting on the claims proves both
+	// inline legs of handleCall executed against the published event.
+	cadenceClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerCadenceUpdater)
+	require.NoError(t, err)
+	require.True(t, cadenceClaimed, "inline cadence apply must have claimed the interaction.recorded event")
+	followUpClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerFollowUpManager)
+	require.NoError(t, err)
+	require.True(t, followUpClaimed, "inline follow-up apply must have claimed the interaction.recorded event")
 }
 
 // TestIngestCall_Outbound_BumpsLastOutreachAt mirrors the inbound test
@@ -474,6 +489,20 @@ func TestIngestCall_Outbound_BumpsLastOutreachAt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, contact.LastOutreachAt, "outbound interaction must bump last_outreach_at")
 	require.Nil(t, contact.LastContacted, "outbound must NOT bump last_contacted")
+
+	// Inline cadence + follow-up legs both ran for the outbound path
+	// (mirrors the inbound assertion). FollowUpManager's outbound
+	// branch is the path that returns the post-commit refresh closure
+	// for contacts with a pending follow-up task; here no task exists
+	// so the closure is nil, but the claim row lands either way.
+	recordedEv, err := env.eventRepo.FindEventBySource(ctx, "phone_calls", interaction.ID.String())
+	require.NoError(t, err)
+	cadenceClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerCadenceUpdater)
+	require.NoError(t, err)
+	require.True(t, cadenceClaimed, "outbound: inline cadence apply must have claimed the event")
+	followUpClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerFollowUpManager)
+	require.NoError(t, err)
+	require.True(t, followUpClaimed, "outbound: inline follow-up apply must have claimed the event")
 }
 
 // TestIngestCall_MissedInboundNoVoicemail_NoInteractionWritten covers

@@ -105,12 +105,16 @@ final class PhoneCallsSourcePluginTests: XCTestCase {
     func testProtocolGatePassesAtRequiredVersion() async throws {
         // Pi reports protocol_version 2. The gate passes; the tick
         // proceeds to openFreshPool, which fails because the
-        // CallHistoryDB path is bogus. markUnhealthy fires with
-        // either an "open_failed" or "schema_drift" reason depending
-        // on which GRDB error surfaced — both are acceptable post-gate
-        // signals. Observable: registry snapshot has enabled=false and
-        // lastError populated, distinguishing this from the
-        // gate-blocked case above (enabled=true + lastError=nil).
+        // CallHistoryDB path is bogus. The exact failure reason
+        // depends on the GRDB / SQLite error code SQLite returns for
+        // `/dev/null/nope`: CANTOPEN/AUTH/PERM map to `fda_required`
+        // via isFDAError, schema validation maps to `schema_drift:*`,
+        // anything else maps to `open_failed: ...`. All three are
+        // post-gate failure signals; we just assert the plugin
+        // observably marked itself unhealthy (enabled=false +
+        // lastError populated), distinguishing this from the
+        // gate-blocked branch above which leaves enabled=true and
+        // lastError=nil.
         let cache = KnownIdentifiersCache()
         let provider = InMemoryHeartbeatStateProvider(initial: 2)
         let mutator = try makeMutator()
@@ -120,8 +124,12 @@ final class PhoneCallsSourcePluginTests: XCTestCase {
         XCTAssertNotNil(snap, "gate-passed tick must have written a snapshot")
         XCTAssertEqual(snap?.enabled, false, "gate-passed + open-failed must mark unhealthy")
         let err = snap?.lastError ?? ""
-        XCTAssertTrue(err.contains("open_failed") || err.contains("schema_drift"),
-                      "lastError should encode the open-failure cause, got: \(err)")
+        XCTAssertFalse(err.isEmpty, "lastError must be populated for the gate-passed failure path")
+        let acceptable = err.contains("open_failed") ||
+                         err.contains("schema_drift") ||
+                         err.contains("fda_required")
+        XCTAssertTrue(acceptable,
+                      "lastError should encode a known open-failure cause, got: \(err)")
         XCTAssertNotNil(snap?.lastErrorAt, "lastErrorAt must be set when lastError is set")
     }
 
