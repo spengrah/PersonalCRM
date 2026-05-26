@@ -367,6 +367,24 @@ type OauthCredential struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 }
 
+type PhoneCall struct {
+	ID               pgtype.UUID        `json:"id"`
+	CallUniqueID     string             `json:"call_unique_id"`
+	PeerHandle       string             `json:"peer_handle"`
+	PeerNormalized   string             `json:"peer_normalized"`
+	Service          string             `json:"service"`
+	Direction        string             `json:"direction"`
+	Answered         pgtype.Bool        `json:"answered"`
+	HasVoicemail     bool               `json:"has_voicemail"`
+	DurationSeconds  int32              `json:"duration_seconds"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
+	InteractionID    pgtype.UUID        `json:"interaction_id"`
+	MacHostID        pgtype.UUID        `json:"mac_host_id"`
+	ProcessedAt      pgtype.Timestamptz `json:"processed_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
 type PromptQuery struct {
 	ID          pgtype.UUID        `json:"id"`
 	Query       string             `json:"query"`

@@ -495,6 +495,8 @@ type Querier interface {
 	// best-non-blank ordering for legacy rows where no resolved=true history
 	// exists yet.
 	GetPeerEntityByUserID(ctx context.Context, peerUserID pgtype.Int8) (*GetPeerEntityByUserIDRow, error)
+	// Lookup by call_unique_id. Returns ErrNoRows on miss.
+	GetPhoneCallByUniqueID(ctx context.Context, callUniqueID string) (*PhoneCall, error)
 	GetSyncLog(ctx context.Context, id pgtype.UUID) (*ExternalSyncLog, error)
 	// External Sync State Queries
 	GetSyncState(ctx context.Context, id pgtype.UUID) (*ExternalSyncState, error)
@@ -533,6 +535,16 @@ type Querier interface {
 	// next run. Scoped by mac_host_id so tests can pass a fresh mac_host UUID
 	// per run and clean only their own rows.
 	HardDeleteMessagesMessagesByMacHost(ctx context.Context, macHostID pgtype.UUID) error
+	// Test-only helper: deletes a single phone_call row by call_unique_id.
+	// Used by migration round-trip tests to clear the staging row before the
+	// down migration's row-bearing guard runs.
+	HardDeletePhoneCallByUniqueID(ctx context.Context, callUniqueID string) error
+	// Test-only helper. Cleanup needs hard-delete because the upsert does not
+	// support a soft-delete escape hatch (phone_call has no deleted_at column —
+	// staging rows have no aggregator-driven lifecycle). Scoped by mac_host_id
+	// so tests can pass a fresh mac_host UUID per run and clean only their own
+	// rows.
+	HardDeletePhoneCallsByMacHost(ctx context.Context, macHostID pgtype.UUID) error
 	// GetTelegramMessageByReplyTo removed: identical to GetTelegramMessage.
 	// Use GetMessage repo method for reply resolution.
 	// Test-only: hard-deletes telegram_message rows whose telegram_chat_id
@@ -744,6 +756,11 @@ type Querier interface {
 	//     to the existing interaction on the original attempt.
 	MarkMessagesMessagesProcessedForSession(ctx context.Context, arg MarkMessagesMessagesProcessedForSessionParams) (int64, error)
 	MarkPairingTokenConsumed(ctx context.Context, arg MarkPairingTokenConsumedParams) (*MacHostPairingToken, error)
+	// Marks the staging row as processed and links it to the resulting
+	// interaction. interaction_id is NULLable: missed-inbound-no-voicemail rows
+	// get processed_at set but interaction_id stays NULL forever (content-
+	// delivered cadence semantics; spec §`phone_calls` source).
+	MarkPhoneCallProcessed(ctx context.Context, arg MarkPhoneCallProcessedParams) error
 	// Non-tx variant used by the engine's extend/promote/bridge paths only,
 	// which do not publish events and do not claim rows. Clearing the claim
 	// columns lets a future pass see the row as "done" rather than "claimed".
@@ -1046,6 +1063,18 @@ type Querier interface {
 	UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesMessageParams) (*MessagesMessage, error)
 	// Insert or update an OAuth credential
 	UpsertOAuthCredential(ctx context.Context, arg UpsertOAuthCredentialParams) (*OauthCredential, error)
+	// Insert with no-op on call_unique_id conflict. peer_normalized comes from
+	// the daemon (canonicalized via HandleNormalization). matched_contact_id
+	// comes from the Pi ingest service identity-match path. mac_host_id is
+	// provenance — cross-host dedup is by call_unique_id (Apple's Continuity
+	// propagates the same value across hosts).
+	//
+	// ON CONFLICT does a no-op so RETURNING reliably returns the existing row,
+	// enabling concurrent dual-host push to converge on a single staging row.
+	// We deliberately do NOT overwrite user-visible fields on conflict: a
+	// second push of the same call is by definition the same content
+	// (CallHistoryDB rows are immutable post-recording).
+	UpsertPhoneCall(ctx context.Context, arg UpsertPhoneCallParams) (*PhoneCall, error)
 	// Used by ChannelAccessHasher — only updates access_hash, preserves existing pts.
 	UpsertTelegramChannelAccessHash(ctx context.Context, arg UpsertTelegramChannelAccessHashParams) (*TelegramChannelState, error)
 	UpsertTelegramChannelState(ctx context.Context, arg UpsertTelegramChannelStateParams) (*TelegramChannelState, error)
