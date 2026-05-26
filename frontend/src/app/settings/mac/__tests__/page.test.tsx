@@ -67,4 +67,23 @@ describe('renderCursorCell', () => {
     const out = renderCursorCell('messages', { observed_cursor: 'o' }, undefined)
     expect(out).toBe('o')
   })
+
+  it('stringifies numeric pushed_cursor for messages (was rendering dash)', () => {
+    const out = renderCursorCell('messages', { pushed_cursor: 207431 }, undefined)
+    expect(out).toBe('207431')
+  })
+
+  it('renders only the ISO portion of phone_calls composite cursor', () => {
+    const out = renderCursorCell(
+      'phone_calls',
+      { pushed_cursor: '2026-05-19T02:31:34Z:1966' },
+      undefined
+    )
+    expect(out).toBe('2026-05-19T02:31:34Z')
+  })
+
+  it('falls back to raw cursor when phone_calls cursor cannot be parsed', () => {
+    const out = renderCursorCell('phone_calls', { pushed_cursor: 'malformed-cursor' }, undefined)
+    expect(out).toBe('malformed-cursor')
+  })
 })
