@@ -86,4 +86,5 @@ export const macHostKeys = {
   all: ['mac-hosts'] as const,
   list: () => [...macHostKeys.all, 'list'] as const,
   detail: (id: string) => [...macHostKeys.all, 'detail', id] as const,
+  sourceCounts: (id: string) => [...macHostKeys.all, 'source-counts', id] as const,
 }

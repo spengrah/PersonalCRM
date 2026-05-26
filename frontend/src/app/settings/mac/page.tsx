@@ -6,7 +6,12 @@ import { Cpu, ArrowLeft, RefreshCw, Trash2, Copy, AlertTriangle } from 'lucide-r
 
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
-import { useCreatePairingToken, useDeleteMacHost, useMacHosts } from '@/hooks/use-mac-hosts'
+import {
+  useCreatePairingToken,
+  useDeleteMacHost,
+  useMacHostSourceCounts,
+  useMacHosts,
+} from '@/hooks/use-mac-hosts'
 import type { MacHost } from '@/lib/mac-hosts-api'
 
 const HEARTBEAT_FRESH_MS = 5 * 60 * 1000
@@ -181,7 +186,7 @@ export default function MacSettingsPage() {
                             </div>
                           </dl>
                           <PermissionsBadges permissions={host.permissions} />
-                          <SourceHealthTable health={host.source_health} />
+                          <SourceHealthTable health={host.source_health} hostId={host.id} />
                         </div>
                         <Button
                           variant="outline"
@@ -367,16 +372,66 @@ interface SourceHealthEntry {
   last_pushed_at?: string
   observed_cursor?: string
   pushed_cursor?: string
+  backfill_complete?: boolean
   last_error?: string
   [key: string]: unknown
 }
 
 interface SourceHealthTableProps {
   health: Record<string, unknown>
+  hostId: string
 }
 
-function SourceHealthTable({ health }: SourceHealthTableProps) {
+// Source-name → human-readable label. Sources not in this map render
+// the raw source string (matches the pre-fix behaviour for unknown
+// sources).
+const SOURCE_LABELS: Record<string, string> = {
+  messages: 'Messages',
+  icloud_contacts: 'iCloud Contacts',
+  phone_calls: 'Phone & FaceTime',
+}
+
+/**
+ * renderCursorCell decides what to display in the Cursor column for
+ * a single source row (issue #327). Exported for the unit test that
+ * locks the per-source branches.
+ *
+ * The interim fix is narrow: when a source is in
+ * `BACKFILL_PROGRESS_SOURCES` and its `backfill_complete` flag is
+ * true, swap the dash for `<N> contacts ✓` where `N` is the live
+ * external_contact row count for that host+source. Everything else
+ * falls through to the previous `pushed_cursor ?? observed_cursor ??
+ * '—'` rendering — so messages keeps its rowid, phone_calls renders
+ * its own cursor, etc.
+ *
+ * Future sources that ship a 'caught up' indicator should add their
+ * key to `BACKFILL_PROGRESS_SOURCES` rather than adding more
+ * if-branches here.
+ */
+const BACKFILL_PROGRESS_SOURCES = new Set(['icloud_contacts'])
+
+export function renderCursorCell(
+  source: string,
+  entry: SourceHealthEntry,
+  counts: Record<string, number> | undefined
+): string {
+  if (BACKFILL_PROGRESS_SOURCES.has(source) && entry.backfill_complete === true) {
+    const n = counts?.[source]
+    if (typeof n === 'number') {
+      return `${n} contacts ✓`
+    }
+    // counts not yet loaded / missing — graceful fallback to dash so
+    // the row still renders. We deliberately don't fall through to
+    // the pushed_cursor branch because an iCloud row's cursor is a
+    // change-token, not a number (the whole point of #327).
+    return '—'
+  }
+  return entry.pushed_cursor ?? entry.observed_cursor ?? '—'
+}
+
+function SourceHealthTable({ health, hostId }: SourceHealthTableProps) {
   const entries = Object.entries(health || {})
+  const { data: counts } = useMacHostSourceCounts(hostId)
   if (entries.length === 0) return null
   return (
     <div className="mt-3" data-testid="source-health">
@@ -396,14 +451,15 @@ function SourceHealthTable({ health }: SourceHealthTableProps) {
               typeof raw === 'object' && raw !== null
                 ? (raw as SourceHealthEntry)
                 : ({} as SourceHealthEntry)
+            const label = SOURCE_LABELS[source] ?? source
             return (
               <tr key={source} className="border-t border-gray-100">
-                <td className="px-2 py-1 font-mono">{source}</td>
+                <td className="px-2 py-1">{label}</td>
                 <td className="px-2 py-1 text-gray-700">
                   {entry.last_pushed_at ? new Date(entry.last_pushed_at).toLocaleString() : '—'}
                 </td>
                 <td className="px-2 py-1 font-mono text-gray-700 truncate max-w-xs">
-                  {entry.pushed_cursor ?? entry.observed_cursor ?? '—'}
+                  {renderCursorCell(source, entry, counts)}
                 </td>
                 <td className="px-2 py-1 text-red-700">
                   {entry.last_error && entry.last_error !== '' ? entry.last_error : ''}

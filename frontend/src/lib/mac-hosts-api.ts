@@ -59,4 +59,20 @@ export const macHostsApi = {
   createPairingToken: async (): Promise<PairingTokenResponse> => {
     return apiClient.post<PairingTokenResponse>('/api/v1/host/pairing-token')
   },
+
+  /**
+   * GET /api/v1/host/:id/source-counts — per-source live external_contact
+   * counts for the host. Powers the Hosts page's per-source 'caught up'
+   * indicator that replaces the misleading numeric cursor for sources
+   * like icloud_contacts whose cursor isn't a row id (issue #327).
+   *
+   * Sources with zero rows are omitted by the server; callers should
+   * treat a missing key as 'no rows yet'.
+   */
+  getSourceCounts: async (id: string): Promise<Record<string, number>> => {
+    const resp = await apiClient.get<{ counts: Record<string, number> }>(
+      `/api/v1/host/${id}/source-counts`
+    )
+    return resp.counts ?? {}
+  },
 }
