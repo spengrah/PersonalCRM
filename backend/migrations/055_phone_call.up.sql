@@ -1,8 +1,8 @@
 -- 055_phone_call.up.sql
 -- Mac daemon Phase 1.5: phone_call staging table + interaction.source CHECK
--- extension for 'phone_calls'. Spec: .ai/spec/mac-daemon.md §`phone_calls`
--- source (~lines 140-170), §`phone_call` staging table (~line 421),
--- §`interaction.source` CHECK (~line 431).
+-- extension for 'phone_calls'. See .ai/spec/mac-daemon.md (the `phone_calls`
+-- source section, the `phone_call` staging-table definition, and the
+-- `interaction.source` CHECK).
 
 -- ============================================================================
 -- 1. phone_call staging table
@@ -27,7 +27,7 @@ CREATE TABLE phone_call (
     -- Raw ZADDRESS from CallHistoryDB (phone or email).
     peer_handle TEXT NOT NULL,
     -- Canonicalized handle (E.164 phone or lowercased email). Daemon emits
-    -- both raw and normalized per spec §`phone_calls` payload (line 808).
+    -- both raw and normalized per the `phone_calls` payload spec.
     peer_normalized TEXT NOT NULL,
     -- Derived service enum. The set is frozen; adding a new service requires
     -- a coordinated daemon + Pi migration (see ServiceDerivation.swift).

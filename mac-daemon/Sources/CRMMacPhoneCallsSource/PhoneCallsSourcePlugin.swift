@@ -562,13 +562,12 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
     private func openFreshPool() async throws -> DatabasePool {
         var grdbConfig = Configuration()
         grdbConfig.readonly = true
-        // Spec line 142 specifies `?mode=ro&immutable=1`. GRDB's
-        // DatabasePool accepts a URI when prefixed with `file:`;
-        // SQLite parses the query string. immutable=1 enables full
-        // crash-resilience guarantees from SQLite (no WAL coherence
-        // overhead) at the cost of NOT seeing writes from the
-        // CallHistoryDB writer. The reopen-every-tick pattern above
-        // converts that into normal polling.
+        // Open in immutable read-only mode. GRDB's DatabasePool accepts
+        // a URI when prefixed with `file:`; SQLite parses the query
+        // string. immutable=1 enables full crash-resilience guarantees
+        // from SQLite (no WAL coherence overhead) at the cost of NOT
+        // seeing writes from the CallHistoryDB writer. The reopen-every-
+        // tick pattern above converts that into normal polling.
         let uri = "file://\(config.callHistoryDBPath.path)?mode=ro&immutable=1"
         let pool: DatabasePool
         do {
