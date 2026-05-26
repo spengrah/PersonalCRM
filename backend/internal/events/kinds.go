@@ -59,6 +59,17 @@ const (
 	// linkage state machine.
 	KindMeetingNoteRecorded Kind = "meeting_note.recorded"
 	KindMeetingNoteDeleted  Kind = "meeting_note.deleted"
+
+	// Daemon-emitted phone-call events. Published by the Mac daemon's
+	// CallHistoryDB watcher against /api/v1/ingest/events with
+	// host-auth. NOT consumed by any bus consumer — IngestService
+	// processes them inline within the per-event savepoint
+	// (identity match → phone_call staging upsert → optional
+	// interaction insert + cadence apply, per the content-delivered
+	// decision table; spec §`phone_calls` source). The event-log row
+	// exists for audit + (source, source_id) dedup on retries.
+	KindCallReceived Kind = "call.received"
+	KindCallSent     Kind = "call.sent"
 )
 
 // AllKinds enumerates every defined Kind. Used by tests to guard that
@@ -81,6 +92,8 @@ var AllKinds = []Kind{
 	KindExternalContactDeleted,
 	KindMeetingNoteRecorded,
 	KindMeetingNoteDeleted,
+	KindCallReceived,
+	KindCallSent,
 }
 
 // Envelope is the wire/DB shape passed through Bus.Publish. Payload is
@@ -433,6 +446,55 @@ type MeetingNoteDeletedPayload struct {
 	SourceID string    `json:"source_id"` // anarlog session UUID
 }
 
+// canonicalCallServices is the set of values accepted by phone_call.service
+// CHECK constraint. Frozen per spec §`phone_calls` source (settled decision
+// S4). Matched verbatim against the migration so payload validation rejects
+// bad values before the CHECK constraint aborts the ingest tx.
+var canonicalCallServices = map[string]struct{}{
+	"voice":          {},
+	"facetime_audio": {},
+	"facetime_video": {},
+}
+
+// IsCanonicalCallService reports whether s is one of the three allowed
+// phone_call.service values. Used by ValidatePayload for call.* kinds.
+func IsCanonicalCallService(s string) bool {
+	_, ok := canonicalCallServices[s]
+	return ok
+}
+
+// CallPayload is the payload for KindCallReceived and KindCallSent,
+// emitted by the Mac daemon's CallHistoryDB watcher. One struct serves
+// both kinds; the discriminator is the kind, and the inline ingest
+// handler cross-checks Direction against the kind for defence-in-depth.
+//
+// peer_normalized is the canonicalized form of peer_handle (E.164 phone or
+// lowercased email). The daemon canonicalizes (spec §`phone_calls` payload,
+// line 808); the Pi re-canonicalizes defensively in verifyCallInvariants
+// before trusting the value.
+//
+// Answered is *bool because the column is three-state: NULL for outbound
+// (ZANSWERED is unreliable; settled S2), true/false for inbound. The
+// daemon forces NULL outbound regardless of source data; the Pi
+// re-normalizes (defence-in-depth per R5).
+//
+// HasVoicemail is forced FALSE for outbound by both the daemon and the
+// Pi (R4).
+type CallPayload struct {
+	Version         int       `json:"version"`            // start at 1
+	HostID          uuid.UUID `json:"host_id"`            // authenticated host that observed the row
+	Source          string    `json:"source"`             // currently "phone_calls"
+	CallUniqueID    string    `json:"call_unique_id"`     // ZCALLRECORD.ZUNIQUE_ID; primary dedup key
+	PeerHandle      string    `json:"peer_handle"`        // raw ZADDRESS as observed in CallHistoryDB
+	PeerNormalized  string    `json:"peer_normalized"`    // canonicalized via HandleNormalization
+	Service         string    `json:"service"`            // voice | facetime_audio | facetime_video
+	Direction       string    `json:"direction"`          // inbound | outbound (mirrors kind)
+	Answered        *bool     `json:"answered,omitempty"` // inbound only; omit/NULL for outbound
+	HasVoicemail    bool      `json:"has_voicemail"`      // always false for outbound
+	DurationSeconds int32     `json:"duration_seconds"`   // ZDURATION; 0 for missed
+	StartedAt       time.Time `json:"started_at"`         // ZDATE converted to UTC
+}
+
 // kindPayloadTypes is the canonical Kind → payload-type registry used by
 // Marshal and Unmarshal to assert type-vs-kind consistency at runtime. Add
 // a row each time a new Kind + payload struct are introduced. Keep in sync
@@ -455,6 +517,8 @@ var kindPayloadTypes = map[Kind]reflect.Type{
 	KindExternalContactDeleted:  reflect.TypeOf(ExternalContactDeletedPayload{}),
 	KindMeetingNoteRecorded:     reflect.TypeOf(MeetingNoteRecordedPayload{}),
 	KindMeetingNoteDeleted:      reflect.TypeOf(MeetingNoteDeletedPayload{}),
+	KindCallReceived:            reflect.TypeOf(CallPayload{}),
+	KindCallSent:                reflect.TypeOf(CallPayload{}),
 }
 
 // IsKnownKind reports whether kind has a registered payload type. Used by
@@ -561,6 +625,52 @@ func ValidatePayload(env *Envelope) error {
 		if _, err := uuid.Parse(p.SourceID); err != nil {
 			return fmt.Errorf("validate %s: source_id must be a UUID: %w", env.Kind, err)
 		}
+	case KindCallReceived, KindCallSent:
+		p := dst.(*CallPayload)
+		if err := validateCallPayload(env.Kind, p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateCallPayload enforces the per-kind invariants for CallPayload:
+// service enum membership, direction-vs-kind agreement, non-empty
+// call_unique_id and peer_handle/peer_normalized, non-negative duration.
+// Cross-checks are conservative — the inline ingest handler runs further
+// invariants (re-canonicalize peer, identity match), but rejecting at the
+// payload boundary keeps malformed events out of the event-log entirely.
+func validateCallPayload(kind Kind, p *CallPayload) error {
+	if p.HostID == uuid.Nil {
+		return fmt.Errorf("validate %s: host_id is required", kind)
+	}
+	if p.CallUniqueID == "" {
+		return fmt.Errorf("validate %s: call_unique_id is required", kind)
+	}
+	if p.PeerHandle == "" {
+		return fmt.Errorf("validate %s: peer_handle is required", kind)
+	}
+	if p.PeerNormalized == "" {
+		return fmt.Errorf("validate %s: peer_normalized is required", kind)
+	}
+	if p.Service == "" || !IsCanonicalCallService(p.Service) {
+		return fmt.Errorf("validate %s: service %q is not in the canonical set", kind, p.Service)
+	}
+	switch kind {
+	case KindCallReceived:
+		if p.Direction != "" && p.Direction != "inbound" {
+			return fmt.Errorf("validate %s: direction must be \"inbound\" or empty, got %q", kind, p.Direction)
+		}
+	case KindCallSent:
+		if p.Direction != "" && p.Direction != "outbound" {
+			return fmt.Errorf("validate %s: direction must be \"outbound\" or empty, got %q", kind, p.Direction)
+		}
+	}
+	if p.DurationSeconds < 0 {
+		return fmt.Errorf("validate %s: duration_seconds must be non-negative, got %d", kind, p.DurationSeconds)
+	}
+	if p.StartedAt.IsZero() {
+		return fmt.Errorf("validate %s: started_at is required", kind)
 	}
 	return nil
 }

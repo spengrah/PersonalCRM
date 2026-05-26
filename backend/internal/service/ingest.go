@@ -320,6 +320,8 @@ var hostAuthAllowedKinds = map[events.Kind]struct{}{
 	events.KindExternalContactDeleted:  {},
 	events.KindMeetingNoteRecorded:     {},
 	events.KindMeetingNoteDeleted:      {},
+	events.KindCallReceived:            {},
+	events.KindCallSent:                {},
 }
 
 // isHostOnlyKind reports whether the kind is in the host-auth
@@ -351,6 +353,12 @@ func isExternalContactKind(k events.Kind) bool {
 // meeting_note.* daemon-emitted events.
 func isMeetingNoteKind(k events.Kind) bool {
 	return k == events.KindMeetingNoteRecorded || k == events.KindMeetingNoteDeleted
+}
+
+// isCallKind reports whether the kind is one of the call.* daemon-emitted
+// phone-call events.
+func isCallKind(k events.Kind) bool {
+	return k == events.KindCallReceived || k == events.KindCallSent
 }
 
 // pendingAggregateKey is the (source, contactID) pair used to dedupe
