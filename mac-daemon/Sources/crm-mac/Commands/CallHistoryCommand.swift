@@ -3,10 +3,17 @@
 //
 // Top-level:
 //   crm-mac call-history backfill --restart [--yes]
+//   crm-mac call-history status
 //
-// Refuses to run while the daemon is up (pidfile-lock guard). Commits
-// changes Pi-side via the GET -> mutate -> POST CAS flow; local
-// state.json mirrors via the daemon's next tick.
+// `backfill` refuses to run while the daemon is up (pidfile-lock guard).
+// `status` is a read-only convenience that mirrors the phone_calls
+// slice of `crm-mac status` for callers who only want the source-
+// specific lines.
+//
+// A debug `dump --limit N` subcommand is intentionally deferred to a
+// follow-up — it would need to open CallHistoryDB read-only with FDA
+// granted, which the support workflow rarely needs (the Pi-side
+// staging table covers most "what did the daemon see" questions).
 import Foundation
 import ArgumentParser
 import CRMMacCore
@@ -20,7 +27,34 @@ struct CallHistoryCommand: ParsableCommand {
         abstract: "Operator commands for the Phone & FaceTime call-history source.",
         subcommands: [
             CallHistoryBackfillCommand.self,
+            CallHistoryStatusCommand.self,
         ])
+}
+
+struct CallHistoryStatusCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "status",
+        abstract: "Print the phone_calls source's cursor + backfill state.")
+
+    mutating func run() throws {
+        let ctx = ProductionContext()
+        let report = ctx.status().run()
+        if let phoneCalls = report.phoneCalls {
+            let formatter = ISO8601DateFormatter()
+            let liveDate = phoneCalls.liveCursorZDate
+                .map { formatter.string(from: $0) } ?? "nil"
+            let backfillDate = phoneCalls.backfillCursorZDate
+                .map { formatter.string(from: $0) } ?? "nil"
+            let installMax = phoneCalls.installMaxZDate
+                .map { formatter.string(from: $0) } ?? "nil"
+            print("live_cursor=\(liveDate) (Z_PK=\(phoneCalls.liveCursorZPK.map(String.init) ?? "nil"))")
+            print("backfill_cursor=\(backfillDate) (Z_PK=\(phoneCalls.backfillCursorZPK.map(String.init) ?? "nil"))")
+            print("install_max=\(installMax) (Z_PK=\(phoneCalls.installMaxZPK.map(String.init) ?? "nil"))")
+            print("backfill_complete=\(phoneCalls.backfillComplete)")
+        } else {
+            print("(no cursor committed yet)")
+        }
+    }
 }
 
 struct CallHistoryBackfillCommand: AsyncParsableCommand {

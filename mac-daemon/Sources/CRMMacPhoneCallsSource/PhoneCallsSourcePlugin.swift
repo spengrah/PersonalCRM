@@ -83,9 +83,11 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
     private let clock: @Sendable () -> Date
     private let healthRegistry: SourceHealthRegistry
 
-    /// Cached pool, opened lazily on first successful tick.
-    private var pool: DatabasePool?
-    /// Cached schema health. Validated on first open.
+    /// Cached schema health. Validated on first successful open. We
+    /// do NOT cache the DatabasePool itself: `?mode=ro&immutable=1`
+    /// trades observability of new writes for crash-resilience, so
+    /// we MUST reopen the pool every tick to see calls made since the
+    /// last tick.
     private var schemaHealth: CallHistorySchemaHealth?
     /// Cached cursor + epoch loaded from local state.json or fetched
     /// from the Pi on first tick.
@@ -157,10 +159,10 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
             protocolGateLoggedBlocked = false
         }
 
-        // STEP 1 + 2 — Open pool + validate schema.
+        // STEP 1 + 2 — Open pool fresh + validate schema (cached).
         let pool: DatabasePool
         do {
-            pool = try await openOrCached()
+            pool = try await openFreshPool()
         } catch let SchemaDriftError.drift(table, missing) {
             await markUnhealthy(reason: "schema_drift:\(table).\(missing.sorted().first ?? "?")")
             return
@@ -383,7 +385,7 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
         let inRange = page.rows.filter { $0.startedAt >= config.backfillFloor }
         let belowFloor = page.rows.count - inRange.count
 
-        let publishItems = filterAndShape(rows: inRange)
+        let publishItems = await filterAndShape(rows: inRange)
         let outcome = await publisher.publish(items: publishItems)
 
         budget.consume(rows: page.rows.count)
@@ -473,7 +475,7 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
                                 rejected: [], hadUnconfirmedItems: false)
         }
 
-        let publishItems = filterAndShape(rows: page.rows)
+        let publishItems = await filterAndShape(rows: page.rows)
         let outcome = await publisher.publish(items: publishItems)
 
         budget.consume(rows: page.rows.count)
@@ -503,22 +505,24 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
     /// Apply sender filter + shape to publishable form. Missed-no-
     /// voicemail rows ARE forwarded (the Pi decides interaction
     /// creation via the decision table); the daemon's job is to push
-    /// every call.
-    private func filterAndShape(rows: [CallHistoryRow]) -> [PhoneCallPublishItem] {
+    /// every call whose peer is in the known-identifiers set.
+    private func filterAndShape(rows: [CallHistoryRow]) async -> [PhoneCallPublishItem] {
+        // Take a snapshot of the cache once per call so per-row
+        // membership checks are O(1) Set lookups (instead of N
+        // round-trips through the actor). The snapshot is a
+        // defensive copy from KnownIdentifiersCache.snapshot().
+        let knownSet = await cache.snapshot()
         var out: [PhoneCallPublishItem] = []
         out.reserveCapacity(rows.count)
         for row in rows {
             guard let rawAddr = row.address, !rawAddr.isEmpty else { continue }
             let canonical = canonicalizer(rawAddr)
             if canonical.isEmpty { continue }
-            // We can't await cache.contains here without making the
-            // surrounding function async — but the cache is an actor
-            // so caller already awaited isPopulated upstream. The
-            // filter is best-effort: we run it via a synchronous
-            // shortcut by taking a snapshot. The CRMMacMessagesSource
-            // plugin does the await variant; here we mirror that —
-            // see filterAndShapeAsync below for the canonical impl.
-            _ = canonical
+            // Sender filter: drop rows whose canonical peer is not in
+            // the known-identifiers cache. The Pi would identity-
+            // match-fail and reject the event anyway, holding the
+            // cursor; filtering here keeps the cursor advancing.
+            if !knownSet.contains(canonical) { continue }
             // Service derivation already happened in the reader.
             guard let (kind, payload) = CallPayloadShaping.shape(
                 row: row,
@@ -546,19 +550,21 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
 
     private struct FDAError: Error {}
 
-    private func openOrCached() async throws -> DatabasePool {
-        if let cached = pool, schemaHealth == .ok {
-            return cached
-        }
+    /// Open CallHistoryDB fresh every tick. `?mode=ro&immutable=1` is
+    /// per spec line 142 (P2-J); the daemon's ~60s tick cadence makes
+    /// reopening cheap, and a long-lived immutable handle would NOT
+    /// see new Phone/FaceTime writes (they're invisible to immutable
+    /// readers by design).
+    private func openFreshPool() async throws -> DatabasePool {
         var grdbConfig = Configuration()
         grdbConfig.readonly = true
-        // Spec line 142 specifies `?mode=ro&immutable=1`. GRDB doesn't
-        // surface the URL query directly; equivalent: SQLite open flags
-        // SQLITE_OPEN_READONLY (covered by `readonly = true`) + a
-        // `PRAGMA query_only = 1`-equivalent via the `immutable=1`
-        // path. GRDB 7's DatabasePool initializer accepts a path; the
-        // URI form below threads `mode=ro&immutable=1` through SQLite's
-        // own URI parser.
+        // Spec line 142 specifies `?mode=ro&immutable=1`. GRDB's
+        // DatabasePool accepts a URI when prefixed with `file:`;
+        // SQLite parses the query string. immutable=1 enables full
+        // crash-resilience guarantees from SQLite (no WAL coherence
+        // overhead) at the cost of NOT seeing writes from the
+        // CallHistoryDB writer. The reopen-every-tick pattern above
+        // converts that into normal polling.
         let uri = "file://\(config.callHistoryDBPath.path)?mode=ro&immutable=1"
         let pool: DatabasePool
         do {
@@ -567,15 +573,21 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
             if isFDAError(dbError) { throw FDAError() }
             throw dbError
         }
-        let health = try await pool.read { try CallHistoryDBSchemaValidator.validate(db: $0) }
-        schemaHealth = health
-        switch health {
-        case .ok:
-            self.pool = pool
-            return pool
-        case .drift(let table, let missing):
-            throw SchemaDriftError.drift(table: table, missing: missing)
+        // Schema validation: only run on first successful open or when
+        // a previous open recorded drift (so the operator's "doctor"
+        // probe can re-validate after a macOS upgrade). The result is
+        // stable across pool reopens.
+        if schemaHealth == nil || schemaHealth != .ok {
+            let health = try await pool.read { try CallHistoryDBSchemaValidator.validate(db: $0) }
+            schemaHealth = health
+            switch health {
+            case .ok:
+                return pool
+            case .drift(let table, let missing):
+                throw SchemaDriftError.drift(table: table, missing: missing)
+            }
         }
+        return pool
     }
 
     private func isFDAError(_ err: DatabaseError) -> Bool {

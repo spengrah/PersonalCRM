@@ -57,7 +57,7 @@ type SeedExternalContactInput struct {
 	DisplayName  string         `json:"display_name,omitempty" validate:"omitempty,max=255"`
 	FirstName    string         `json:"first_name,omitempty" validate:"omitempty,max=255"`
 	LastName     string         `json:"last_name,omitempty" validate:"omitempty,max=255"`
-	Source       string         `json:"source,omitempty" validate:"omitempty,oneof=test telegram gcontacts gcal_attendee"`
+	Source       string         `json:"source,omitempty" validate:"omitempty,oneof=test telegram gcontacts gcal_attendee icloud_contacts"`
 	Emails       []string       `json:"emails,omitempty"`
 	Phones       []string       `json:"phones,omitempty"`
 	Organization string         `json:"organization,omitempty"`
