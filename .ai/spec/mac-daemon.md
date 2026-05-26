@@ -802,6 +802,8 @@ Small follow-on to v1 that reuses every cross-cutting concern v1 paid for (FDA p
 
 ### v2 — Anarlog (humans + sessions)
 
+> Matching and discovery logic for `anarlog_sessions` is refined in [`mac-daemon-phase-2-anarlog-matching.md`](./mac-daemon-phase-2-anarlog-matching.md). The bullets below describe the daemon-side readers and the baseline Pi-side wiring; the sidecar spec supersedes the "participant resolution + per-matched-participant interaction creation" bullet with a fuller design that handles session↔calendar linkage, untagged orphans, title parsing, and conflict resolution.
+
 - File-format inspection sub-task (research already done; see `.ai/log/plan/mac-daemon-research-findings.md`).
 - Swift readers (`AnarlogHumans` mtime-based, `AnarlogSessions` FSEvents + safety poll).
 - New identifier type `anarlog_human_id` in `external_identity` enum.
