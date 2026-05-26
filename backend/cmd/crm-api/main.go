@@ -48,6 +48,7 @@ import (
 	"personal-crm/backend/internal/icloudcontacts"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/messages"
+	"personal-crm/backend/internal/phonecalls"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
@@ -742,6 +743,12 @@ func run() int {
 		// in ListDueAccounts.
 		providerRegistry.Register(icloudcontacts.New())
 		logger.Info().Msg("iCloud Contacts push provider registered")
+
+		// Register the Phone & FaceTime call-history push provider
+		// (phase 1.5). Same push-only semantics — data lands via the
+		// Mac daemon's call.received / call.sent events.
+		providerRegistry.Register(phonecalls.New())
+		logger.Info().Msg("Phone & FaceTime push provider registered")
 
 		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
 
