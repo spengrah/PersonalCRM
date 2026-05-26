@@ -124,11 +124,14 @@ func TestMacHostService_KnownIdentifiers_NilRepoErrors(t *testing.T) {
 // for KnownIDsForSource unit tests. The pgx.Tx is unused at this
 // layer.
 type stubExternalContactReader struct {
-	resp      []KnownExternalContactID
-	err       error
-	gotHostID uuid.UUID
-	gotSource string
-	callCount int
+	resp        []KnownExternalContactID
+	err         error
+	gotHostID   uuid.UUID
+	gotSource   string
+	callCount   int
+	countsResp  map[string]int
+	countsErr   error
+	countsCalls int
 }
 
 func (s *stubExternalContactReader) ListKnownIDsByHostAndSource(
@@ -138,6 +141,13 @@ func (s *stubExternalContactReader) ListKnownIDsByHostAndSource(
 	s.gotHostID = hostID
 	s.gotSource = source
 	return s.resp, s.err
+}
+
+func (s *stubExternalContactReader) CountByHostAndSource(
+	_ context.Context, _ uuid.UUID,
+) (map[string]int, error) {
+	s.countsCalls++
+	return s.countsResp, s.countsErr
 }
 
 func TestMacHostService_KnownIDsForSource_HappyPath(t *testing.T) {

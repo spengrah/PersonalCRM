@@ -72,6 +72,13 @@ type Querier interface {
 	// Count events for a specific contact
 	CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	// Counts live external_contact rows per source, scoped to a host. Powers
+	// the GET /api/v1/host/:id/source-counts endpoint (issue #327). Filters
+	// match the "caught up" semantic the Hosts page UI needs:
+	//   - deleted_at IS NULL: excludes tombstoned rows.
+	//   - duplicate_of_id IS NULL: excludes merge-dupe rows that the import
+	//     UI doesn't surface.
+	CountExternalContactsByHostAndSource(ctx context.Context, hostID pgtype.UUID) ([]*CountExternalContactsByHostAndSourceRow, error)
 	CountIdentitiesBySource(ctx context.Context, source string) (int64, error)
 	// Counts river_job rows that represent an in-flight SyncProviderAccountJob
 	// for the given (source, account_id). Used by

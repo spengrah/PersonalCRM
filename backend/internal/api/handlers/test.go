@@ -69,6 +69,11 @@ type SeedExternalContactInput struct {
 type SeedExternalContactsRequest struct {
 	Prefix   string                     `json:"prefix" validate:"required,min=1,max=50"`
 	Contacts []SeedExternalContactInput `json:"contacts" validate:"required,min=1,max=100,dive"`
+	// HostID associates the seeded rows with a specific mac_host. Used
+	// by host-scoped tests (e.g., the GET /host/:id/source-counts
+	// endpoint). Optional — when unset, rows are seeded with NULL
+	// host_id.
+	HostID *string `json:"host_id,omitempty" validate:"omitempty,uuid"`
 }
 
 // SeedExternalContactsResponse represents the response from seeding external contacts
@@ -104,6 +109,16 @@ func (h *TestHandler) SeedExternalContacts(c *gin.Context) {
 
 	now := accelerated.GetCurrentTime()
 	ids := make([]string, 0, len(req.Contacts))
+
+	var hostUUID *uuid.UUID
+	if req.HostID != nil && *req.HostID != "" {
+		parsed, parseErr := uuid.Parse(*req.HostID)
+		if parseErr != nil {
+			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "invalid host_id", parseErr.Error())
+			return
+		}
+		hostUUID = &parsed
+	}
 
 	for i, input := range req.Contacts {
 		// Build email entries
@@ -143,6 +158,7 @@ func (h *TestHandler) SeedExternalContacts(c *gin.Context) {
 		upsertReq := repository.UpsertExternalContactRequest{
 			Source:   source,
 			SourceID: fmt.Sprintf("%s-%s-%d", req.Prefix, sourceIDSuffix, i),
+			HostID:   hostUUID,
 			Emails:   emails,
 			Phones:   phones,
 			Metadata: input.Metadata,

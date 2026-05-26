@@ -58,6 +58,7 @@ func RegisterMacHostAdminRoutes(v1 *gin.RouterGroup, handler *MacHostHandler) {
 	{
 		host.GET("", handler.ListHosts)
 		host.GET("/:id", handler.GetHostAdmin)
+		host.GET("/:id/source-counts", handler.GetSourceCounts)
 		host.DELETE("/:id", handler.DeleteHost)
 		host.POST("/pairing-token", handler.CreatePairingToken)
 	}

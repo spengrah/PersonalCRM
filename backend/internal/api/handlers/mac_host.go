@@ -33,6 +33,7 @@ type MacHostService interface {
 	RevokeHost(ctx context.Context, id uuid.UUID) error
 	KnownIdentifiers(ctx context.Context) (*service.KnownIdentifiersResult, error)
 	KnownIDsForSource(ctx context.Context, hostID uuid.UUID, source string) ([]service.KnownExternalContactID, error)
+	GetSourceCounts(ctx context.Context, hostID uuid.UUID) (map[string]int, error)
 }
 
 // MacHostHandler handles Mac-daemon HTTP requests + admin UI requests
@@ -492,6 +493,36 @@ func (h *MacHostHandler) GetHostAdmin(c *gin.Context) {
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, toMacHostView(host), nil)
+}
+
+// sourceCountsResponse is the response body for GetSourceCounts. Maps
+// raw source string (e.g. "icloud_contacts") to live-row count.
+// Sources with zero rows are omitted by the underlying SQL GROUP BY,
+// so the map is a sparse "sources that have at least one row".
+type sourceCountsResponse struct {
+	Counts map[string]int `json:"counts"`
+}
+
+// GetSourceCounts returns per-source live external_contact counts for
+// the host. Admin endpoint (global API key); powers the Hosts page's
+// "Cursor" column substitute for icloud_contacts (issue #327).
+func (h *MacHostHandler) GetSourceCounts(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		api.SendValidationError(c, "invalid id", err.Error())
+		return
+	}
+	counts, err := h.svc.GetSourceCounts(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			api.SendNotFound(c, "Mac host")
+			return
+		}
+		logger.Error().Err(err).Msg("get source counts: failed")
+		api.SendInternalError(c, "get source counts failed")
+		return
+	}
+	api.SendSuccess(c, http.StatusOK, sourceCountsResponse{Counts: counts}, nil)
 }
 
 // DeleteHost is the admin revoke path. Revokes the host's api_key and
