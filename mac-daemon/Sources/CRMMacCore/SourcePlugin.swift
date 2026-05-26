@@ -25,6 +25,7 @@ public struct SourceID: RawRepresentable, Hashable, Codable, ExpressibleByString
     public static let icloudContacts: SourceID = "icloud_contacts"
     public static let anarlogHumans: SourceID = "anarlog_humans"
     public static let anarlogSessions: SourceID = "anarlog_sessions"
+    public static let phoneCalls: SourceID = "phone_calls"
 }
 
 /// A poller of one external source. The stub implementations log a
