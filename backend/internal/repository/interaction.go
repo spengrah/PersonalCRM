@@ -206,6 +206,31 @@ func (r *InteractionRepository) SoftDeleteInteraction(ctx context.Context, id uu
 	return r.queries.SoftDeleteInteraction(ctx, uuidToPgUUID(id))
 }
 
+// SoftDeleteInteractionTx is the tx-bound variant of SoftDeleteInteraction.
+// Used by the meeting_note inline handler's re-sync diff path and the
+// meeting_note.deleted cascade so the soft-delete commits atomically
+// with the meeting_note row update.
+func (r *InteractionRepository) SoftDeleteInteractionTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
+	return db.New(tx).SoftDeleteInteraction(ctx, uuidToPgUUID(id))
+}
+
+// ListSessionAttributedInteractionsTx returns all live interactions
+// attributed to a specific anarlog session (source_ref starts with the
+// `anarlog:<session-uuid>:` prefix). Used by the re-sync diff path to
+// compute the (existing - desired) set that needs soft-deleting and by
+// the meeting_note.deleted cascade. Caller owns the tx lifecycle.
+func (r *InteractionRepository) ListSessionAttributedInteractionsTx(ctx context.Context, tx pgx.Tx, sourceRefPrefix string) ([]Interaction, error) {
+	dbInteractions, err := db.New(tx).ListSessionAttributedInteractions(ctx, pgtype.Text{String: sourceRefPrefix, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Interaction, len(dbInteractions))
+	for i, dbInteraction := range dbInteractions {
+		out[i] = convertDbInteraction(dbInteraction)
+	}
+	return out, nil
+}
+
 // FindBySourceRef finds an existing interaction by contact, source, and source_ref
 func (r *InteractionRepository) FindBySourceRef(ctx context.Context, contactID uuid.UUID, source string, sourceRef string) (*Interaction, error) {
 	dbInteraction, err := r.queries.FindInteractionBySourceRef(ctx, db.FindInteractionBySourceRefParams{
