@@ -19,6 +19,15 @@ const (
 	IdentifierTypeIMessageEmail IdentifierType = "imessage_email"
 	IdentifierTypeIMessagePhone IdentifierType = "imessage_phone"
 	IdentifierTypeWhatsApp      IdentifierType = "whatsapp"
+	// IdentifierTypeAnarlogHuman is the anarlog-internal human UUID
+	// (UUID v4 string) emitted by the Mac daemon's anarlog_humans
+	// plugin. Used as the lookup key for resolving
+	// meeting_note.participant_ids into CRM contact_ids. Anarlog UUIDs
+	// are not normalizable (already canonical) and do not search
+	// against contact_method rows — the contact_id link comes from the
+	// associated external_contact's email/phone match (or from a user
+	// import via the Import handler).
+	IdentifierTypeAnarlogHuman IdentifierType = "anarlog_human_id"
 )
 
 // ContactMethodType represents contact method types from the contact_method table
@@ -36,9 +45,11 @@ var nonDigitRegex = regexp.MustCompile(`\D`)
 
 // Normalize returns the normalized form of an identifier based on its type.
 // Normalization rules:
-// - Email: lowercase, trim whitespace
-// - Phone: strip all non-digits, normalize to E.164 format
-// - Telegram: remove @ prefix, lowercase
+//   - Email: lowercase, trim whitespace
+//   - Phone: strip all non-digits, normalize to E.164 format
+//   - Telegram: remove @ prefix, lowercase
+//   - AnarlogHuman: trim whitespace, lowercase (UUIDs are case-insensitive;
+//     lowercasing keeps lookups deterministic against the daemon's emit form)
 func Normalize(raw string, idType IdentifierType) string {
 	switch idType {
 	case IdentifierTypeEmail, IdentifierTypeIMessageEmail:
@@ -47,6 +58,8 @@ func Normalize(raw string, idType IdentifierType) string {
 		return normalizePhone(raw)
 	case IdentifierTypeTelegram:
 		return normalizeTelegram(raw)
+	case IdentifierTypeAnarlogHuman:
+		return strings.ToLower(strings.TrimSpace(raw))
 	default:
 		return strings.TrimSpace(raw)
 	}
