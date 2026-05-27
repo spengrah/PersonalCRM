@@ -36,13 +36,17 @@ public enum AnarlogHumanFrontmatterParser {
         guard let text = String(data: fileBytes, encoding: .utf8) else {
             return nil
         }
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        // Normalize line endings before splitting. Swift's
+        // `split(separator: "\n")` operates on Character (grapheme
+        // clusters) and treats `\r\n` as a single grapheme — so a
+        // naive split on `\n` would never separate CRLF-terminated
+        // lines. Rewriting CR/CRLF to LF first avoids that pitfall
+        // and also tolerates classic Mac line endings.
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
             .map { String($0) }
-        // Allow either Unix or Windows line endings — Foundation's
-        // split-on-`\n` leaves trailing `\r` which we strip.
-        lines = lines.map { line in
-            line.hasSuffix("\r") ? String(line.dropLast()) : line
-        }
         // The frontmatter must open with `---` on the first non-empty
         // line. We're strict here: a missing opener means the file
         // isn't an Anarlog human note and we return nil so the caller
