@@ -1,6 +1,5 @@
 // Package anarlog holds anarlog-specific domain heuristics that don't
-// belong in the generic matching/ normalization package. The two
-// initial surfaces are:
+// belong in the generic matching/ normalization package. Surfaces:
 //
 //   - ExtractNameTokens: a pure-Go heuristic that turns a session
 //     title (free-form string) into a list of normalized name tokens.
@@ -20,7 +19,7 @@ import (
 // keepTokenRegex enforces the spec's "starts with uppercase, alphabetic,
 // length 2..30" invariant on extracted tokens. ASCII-only by design;
 // diacritic / non-Latin names are silently dropped (spec philosophy:
-// "heuristics, not NLP"). The taggin path (anarlog_human_id) catches
+// "heuristics, not NLP"). The tagging path (anarlog_human_id) catches
 // names that fall through.
 var keepTokenRegex = regexp.MustCompile(`^[A-Z][a-zA-Z]{1,29}$`)
 

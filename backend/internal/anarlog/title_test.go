@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
-// TestExtractNameTokens covers the D2 fixture table from the PR plan
-// plus the word-boundary cases added per Codex round-1 review.
+// TestExtractNameTokens covers meta-token stripping, separator
+// splitting, the keep regex, stopwords, dedup, and word-boundary
+// protection.
 func TestExtractNameTokens(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -76,7 +77,8 @@ func TestExtractNameTokens(t *testing.T) {
 		// Unicode (out of scope per spec).
 		{"unicode_diacritic_dropped", "José / Bob", []string{"Bob"}},
 
-		// Word-boundary protection (Codex round-1 P2#1).
+		// Word-boundary protection: substring matches of meta-tokens
+		// in a real name must not strip the name.
 		{"word_boundary_monica", "Monica and Bob", []string{"Monica", "Bob"}},
 		{"word_boundary_callie", "Callie sync", []string{"Callie"}},
 		{"word_boundary_pranav", "Pranav sync", []string{"Pranav"}},

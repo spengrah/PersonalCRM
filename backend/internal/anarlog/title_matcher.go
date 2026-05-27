@@ -23,10 +23,10 @@ const (
 
 	// titleConfidenceFloor is the minimum similarity required for the
 	// top match to be accepted. PostgreSQL pg_trgm.similarity() values
-	// for "Alice" against "Alice Smith" land in the ~0.38-0.45 range
-	// (verified against seeded test data); 0.38 catches the common
-	// case while leaving false positives bounded by the collision-gap.
-	// Re-tune iteratively from dogfooding (OPEN-T2).
+	// for a first-name token against a 2-part full_name land in the
+	// ~0.38-0.45 range; 0.38 catches the common case while leaving
+	// false positives bounded by the collision-gap. Tune iteratively
+	// against real-world dogfooding signal.
 	titleConfidenceFloor = 0.38
 
 	// titleFindLimit is the result-cap fed to FindSimilarContacts. The

@@ -13,14 +13,26 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 )
 
-// titleCaser title-cases lowered tokens so on-disk display_name is
-// stable regardless of caller casing. Constructed once; safe for
-// concurrent use per the cases package contract.
-var titleCaser = cases.Title(language.English)
+// asciiTitleCase lower-cases the input then upper-cases the first byte
+// if it's a-z. Concurrency-safe with no shared mutable state. The
+// extractor's keep regex (^[A-Z][a-zA-Z]{1,29}$) guarantees ASCII
+// input, so this byte-level approach is correct for every token the
+// discovery writer can receive.
+func asciiTitleCase(s string) string {
+	if s == "" {
+		return s
+	}
+	lower := strings.ToLower(s)
+	first := lower[0]
+	if first >= 'a' && first <= 'z' {
+		b := []byte(lower)
+		b[0] = first - 'a' + 'A'
+		return string(b)
+	}
+	return lower
+}
 
 // externalContactUpserter is the narrow interface the discovery writer
 // needs from ExternalContactRepository — UpsertTx only. Lets tests
@@ -61,7 +73,7 @@ func (w *DiscoveryWriter) UpsertTitleCandidateTx(
 	if normalizedToken == "" {
 		return fmt.Errorf("normalizedToken must be non-empty")
 	}
-	displayTitleCased := titleCaser.String(strings.ToLower(displayToken))
+	displayTitleCased := asciiTitleCase(displayToken)
 	sourceID := computeAnarlogTitleSourceID(normalizedToken, sessionUUID)
 	now := accelerated.GetCurrentTime()
 
