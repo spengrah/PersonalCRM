@@ -7,9 +7,13 @@
 //     inhibits emission of `call.*` events that an older Pi can't
 //     accept.
 //   - Check schema health: drift -> source_health unhealthy + return.
-//   - Open CallHistoryDB DatabasePool with `?mode=ro&immutable=1`
-//     fresh each tick (immutable=1 hides writes from a long-lived
-//     reader, so reopening is required for live cursor advancement).
+//   - Open CallHistoryDB DatabasePool with `?mode=ro` (NOT
+//     `immutable=1`) fresh each tick. CallHistoryDB's WAL accumulates
+//     for days between macOS-driven checkpoints, and `immutable=1`
+//     hides every WAL-resident write from the reader, so we'd miss
+//     every call between checkpoints. Reopening per tick keeps the
+//     handle short-lived; SQLITE_BUSY retries cover concurrent
+//     writers (Phone.app / FaceTime / Continuity).
 //   - Load cursor: piClient.getCursor("phone_calls") -> decode into
 //     PhoneCallsCursor; cache locally via StateMutator.
 //   - Capture install-time MAX(ZDATE, Z_PK) on the first tick. The
@@ -84,10 +88,10 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
     private let healthRegistry: SourceHealthRegistry
 
     /// Cached schema health. Validated on first successful open. We
-    /// do NOT cache the DatabasePool itself: `?mode=ro&immutable=1`
-    /// trades observability of new writes for crash-resilience, so
-    /// we MUST reopen the pool every tick to see calls made since the
-    /// last tick.
+    /// do NOT cache the DatabasePool itself: a fresh handle per tick
+    /// keeps reads short-lived, which matters because Phone.app /
+    /// FaceTime / Continuity write to CallHistoryDB concurrently and
+    /// SQLite's WAL coherence guarantees are per-connection-snapshot.
     private var schemaHealth: CallHistorySchemaHealth?
     /// Cached cursor + epoch loaded from local state.json or fetched
     /// from the Pi on first tick.
@@ -573,21 +577,28 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
 
     private struct FDAError: Error {}
 
-    /// Open CallHistoryDB fresh every tick. `?mode=ro&immutable=1` is
-    /// the documented immutable-read mode; the daemon's ~60s tick
-    /// cadence makes reopening cheap, and a long-lived immutable
-    /// handle would NOT see new Phone/FaceTime writes (they're
-    /// invisible to immutable readers by design).
+    /// Open CallHistoryDB fresh every tick. We use `?mode=ro` and
+    /// deliberately do NOT pass `immutable=1` — Phone.app, FaceTime,
+    /// and Continuity write to CallHistoryDB while the daemon runs,
+    /// and `immutable=1` would tell SQLite to ignore the WAL entirely
+    /// and serve only the install-time snapshot of the main DB file.
+    /// macOS does not checkpoint CallHistoryDB's WAL on any
+    /// predictable cadence (we've observed `CallHistory.storedata`
+    /// stale by days while `CallHistory.storedata-wal` is megabytes
+    /// of live writes), so an immutable reader would silently miss
+    /// every call between checkpoints. The reopen-every-tick pattern
+    /// keeps each handle short-lived; transient writer-lock contention
+    /// surfaces as SQLITE_BUSY and is absorbed by GRDB's default
+    /// DatabasePool busy-retry policy.
     private func openFreshPool() async throws -> DatabasePool {
         var grdbConfig = Configuration()
         grdbConfig.readonly = true
-        // Open in immutable read-only mode. GRDB's DatabasePool accepts
+        // Open in WAL-aware read-only mode. GRDB's DatabasePool accepts
         // a URI when prefixed with `file:`; SQLite parses the query
-        // string. immutable=1 enables full crash-resilience guarantees
-        // from SQLite (no WAL coherence overhead) at the cost of NOT
-        // seeing writes from the CallHistoryDB writer. The reopen-every-
-        // tick pattern above converts that into normal polling.
-        let uri = "file://\(config.callHistoryDBPath.path)?mode=ro&immutable=1"
+        // string. We do NOT add `immutable=1` — see the doc comment
+        // above for the WAL-visibility rationale. This mirrors the
+        // Messages plugin's openOrCached() at MessagesSourcePlugin.swift.
+        let uri = "file://\(config.callHistoryDBPath.path)?mode=ro"
         let pool: DatabasePool
         do {
             pool = try DatabasePool(path: uri, configuration: grdbConfig)
