@@ -84,7 +84,7 @@ func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T
 	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, rematchSvc)
 	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false)
 	contactSvc.SetCadenceUpdater(cadenceUpdater)
-	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, nil, nil, database.Pool, 4)
+	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, nil, nil, nil, database.Pool, 4)
 
 	// River client — wires the real MessagingAggregateForContactWorker
 	// (so the e2e test runs through the aggregator), the

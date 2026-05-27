@@ -911,7 +911,8 @@ func run() int {
 		pairingTokenRepo,
 		macSyncRepo,
 		contactMethodRepo,
-		externalContactRepoForIngest, // /known-ids reader
+		externalContactRepoForIngest, // /known-ids reader (external_contact)
+		meetingNoteRepoForIngest,     // /known-ids reader (anarlog_sessions)
 		database.Pool,
 		0, // default bcrypt cost
 	)
