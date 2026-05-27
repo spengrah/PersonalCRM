@@ -19,14 +19,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestPhoneCallMigration053 verifies the up + down behaviour of migration
-// 053. The down migration refuses to drop data-bearing structures if rows
+// TestPhoneCallMigration055 verifies the up + down behaviour of migration
+// 055. The down migration refuses to drop data-bearing structures if rows
 // referencing them still exist. Three cases:
 //
-//  1. Clean up + empty down: apply 053 up, then 053 down with no rows
+//  1. Clean up + empty down: apply 055 up, then 055 down with no rows
 //     in either phone_call or interaction(source='phone_calls'). The
 //     down must succeed; phone_call table dropped, CHECK reverted to
-//     the pre-053 set.
+//     the pre-055 set (which still includes 'anarlog_sessions' added
+//     by migration 053).
 //  2. Down refuses while phone_call rows exist: apply up, insert a
 //     phone_call row via the repository, attempt down. Guard raises.
 //     Hard-delete the row, re-run down — succeeds.
@@ -36,9 +37,9 @@ import (
 //     rows regardless of deleted_at), re-run down — succeeds.
 //
 // Gated by MAC_HOST_MIGRATION_TEST because this test mutates shared
-// schema (rolls down to 052, re-applies 053). Same isolation reasoning
+// schema (rolls down to 054, re-applies 055). Same isolation reasoning
 // as TestMacHostMigrations.
-func TestPhoneCallMigration053(t *testing.T) {
+func TestPhoneCallMigration055(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -71,16 +72,16 @@ func TestPhoneCallMigration053(t *testing.T) {
 		}
 	})
 
-	// Roll down to 052 so we can re-apply 053 from scratch.
+	// Roll down to 054 so we can re-apply 055 from scratch.
 	mig, err := newMigrator(databaseURL)
 	require.NoError(t, err)
-	require.NoError(t, mig.Migrate(52), "migrate to 052")
+	require.NoError(t, mig.Migrate(54), "migrate to 054")
 	closeMigrator(t, mig)
 
-	// Apply 053 — phone_call table created, CHECK extended.
+	// Apply 055 — phone_call table created, CHECK extended.
 	mig, err = newMigrator(databaseURL)
 	require.NoError(t, err)
-	require.NoError(t, mig.Steps(1), "053 up")
+	require.NoError(t, mig.Steps(1), "055 up")
 	closeMigrator(t, mig)
 
 	cfg := config.TestConfig()
@@ -100,13 +101,13 @@ func TestPhoneCallMigration053(t *testing.T) {
 	t.Run("CleanDown", func(t *testing.T) {
 		mig, err := newMigrator(databaseURL)
 		require.NoError(t, err)
-		require.NoError(t, mig.Steps(-1), "053 down with empty tables must succeed")
+		require.NoError(t, mig.Steps(-1), "055 down with empty tables must succeed")
 		closeMigrator(t, mig)
 
 		// Re-apply for the next sub-tests.
 		mig, err = newMigrator(databaseURL)
 		require.NoError(t, err)
-		require.NoError(t, mig.Steps(1), "053 up (re-apply)")
+		require.NoError(t, mig.Steps(1), "055 up (re-apply)")
 		closeMigrator(t, mig)
 	})
 
@@ -136,25 +137,25 @@ func TestPhoneCallMigration053(t *testing.T) {
 		mig, err := newMigrator(databaseURL)
 		require.NoError(t, err)
 		downErr := mig.Steps(-1)
-		require.Error(t, downErr, "053 down must fail while phone_call rows exist")
+		require.Error(t, downErr, "055 down must fail while phone_call rows exist")
 		assert.True(t,
 			strings.Contains(downErr.Error(), "cannot drop phone_call") ||
 				strings.Contains(downErr.Error(), "phone_call"),
 			"error should mention phone_call guard, got: %v", downErr)
-		require.NoError(t, mig.Force(53), "clear dirty migration flag")
+		require.NoError(t, mig.Force(55), "clear dirty migration flag")
 		closeMigrator(t, mig)
 
 		// Hard-delete the row, then down succeeds.
 		require.NoError(t, phoneCallRepo.HardDeleteByUniqueID(ctx, uniqueID))
 		mig, err = newMigrator(databaseURL)
 		require.NoError(t, err)
-		require.NoError(t, mig.Steps(-1), "053 down with no phone_call rows must succeed")
+		require.NoError(t, mig.Steps(-1), "055 down with no phone_call rows must succeed")
 		closeMigrator(t, mig)
 
 		// Re-apply for the next sub-test.
 		mig, err = newMigrator(databaseURL)
 		require.NoError(t, err)
-		require.NoError(t, mig.Steps(1), "053 up (re-apply)")
+		require.NoError(t, mig.Steps(1), "055 up (re-apply)")
 		closeMigrator(t, mig)
 	})
 
@@ -181,12 +182,12 @@ func TestPhoneCallMigration053(t *testing.T) {
 		mig, err := newMigrator(databaseURL)
 		require.NoError(t, err)
 		downErr := mig.Steps(-1)
-		require.Error(t, downErr, "053 down must fail while phone_calls interactions exist")
+		require.Error(t, downErr, "055 down must fail while phone_calls interactions exist")
 		assert.True(t,
 			strings.Contains(downErr.Error(), "phone_calls") ||
 				strings.Contains(downErr.Error(), "interaction.source"),
 			"error should mention phone_calls/source guard, got: %v", downErr)
-		require.NoError(t, mig.Force(53), "clear dirty migration flag")
+		require.NoError(t, mig.Force(55), "clear dirty migration flag")
 		closeMigrator(t, mig)
 
 		// Hard-delete (NOT soft-delete: the guard counts rows regardless
@@ -195,7 +196,7 @@ func TestPhoneCallMigration053(t *testing.T) {
 
 		mig, err = newMigrator(databaseURL)
 		require.NoError(t, err)
-		require.NoError(t, mig.Steps(-1), "053 down with no phone_calls interactions must succeed")
+		require.NoError(t, mig.Steps(-1), "055 down with no phone_calls interactions must succeed")
 		closeMigrator(t, mig)
 
 		// Confirm the CHECK reverted: inserting a phone_calls
@@ -208,15 +209,15 @@ func TestPhoneCallMigration053(t *testing.T) {
 			OccurredAt: accelerated.GetCurrentTime().Truncate(time.Microsecond),
 			Direction:  repository.InteractionDirectionInbound,
 		})
-		require.Error(t, err, "phone_calls source must be rejected after 053 down")
+		require.Error(t, err, "phone_calls source must be rejected after 055 down")
 		assert.True(t, strings.Contains(err.Error(), "interaction_source_check") ||
 			strings.Contains(err.Error(), "check constraint"),
 			"error should mention check constraint, got: %v", err)
 
-		// Re-apply 053 so subsequent cleanup is consistent.
+		// Re-apply 055 so subsequent cleanup is consistent.
 		mig, err = newMigrator(databaseURL)
 		require.NoError(t, err)
-		require.NoError(t, mig.Steps(1), "053 up (re-apply for cleanup)")
+		require.NoError(t, mig.Steps(1), "055 up (re-apply for cleanup)")
 		closeMigrator(t, mig)
 	})
 
