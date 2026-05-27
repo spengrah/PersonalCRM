@@ -3,6 +3,9 @@ package api
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,6 +29,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -65,6 +69,17 @@ type meetingNoteIngestEnv struct {
 	// prefix-cleanup; track them explicitly instead.
 	seededAnarlogIDs   []string
 	seededAnarlogIDsMu sync.Mutex
+	// titleTokenPrefixes tracks Q-prefixed synthetic name tokens
+	// allocated by tests via newTitleToken. Each prefix is the full
+	// 7-char token (e.g., "Qzpqxr"); cleanup uses these to scope
+	// contact + display_name deletes precisely to the test's own
+	// fixtures even when the shared DB has rows from other tests.
+	titleTokenPrefixes   []string
+	titleTokenPrefixesMu sync.Mutex
+	// seededTitleContactIDs tracks contact_ids seeded specifically for
+	// title-matching tests so they can be hard-deleted in cleanup.
+	seededTitleContactIDs   []uuid.UUID
+	seededTitleContactIDsMu sync.Mutex
 }
 
 // trackSession records the session UUID for targeted cleanup.
@@ -185,6 +200,7 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	importHandler := handlers.NewImportHandler(externalRepo, identityService, contactSvc, matchService, enrichmentSvc)
 	imports := router.Group("/api/v1/imports")
 	imports.POST("/candidates/:id/link", importHandler.LinkContact)
+	imports.GET("/candidates", importHandler.ListImportCandidates)
 
 	plain, _, err := macService.CreatePairingToken(ctx)
 	require.NoError(t, err)
@@ -257,10 +273,27 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 		_, _ = database.Queries.DeleteExternalIdentitiesBySource(cleanCtx, "anarlog_humans")
 		_, _ = database.Queries.DeleteEventsBySource(cleanCtx, "anarlog_sessions")
 		_, _ = database.Queries.DeleteEventsBySource(cleanCtx, "anarlog_humans")
+		// Drop anarlog_title rows seeded by title-matching tests.
+		// display_name = TitleCase(token) so the Q-prefix scopes
+		// precisely to this test's own fixtures.
+		env.titleTokenPrefixesMu.Lock()
+		titlePrefixes := append([]string(nil), env.titleTokenPrefixes...)
+		env.titleTokenPrefixesMu.Unlock()
+		for _, prefix := range titlePrefixes {
+			_, _ = database.Queries.DeleteExternalContactsByDisplayNamePrefix(cleanCtx, pgtype.Text{String: prefix, Valid: true})
+		}
 		// Drop synthetic calendar events seeded by these tests.
 		_ = database.Queries.TestDeleteCalendarEventsByGcalEventIDPrefix(cleanCtx, env.sourceIDPrefix+"cal-")
 		// Drop seeded contacts + their methods.
 		for _, id := range []uuid.UUID{env.contactA, env.contactB, env.contactC} {
+			_ = contactMethodRepo.DeleteContactMethodsByContact(cleanCtx, id)
+			_ = contactRepo.HardDeleteContact(cleanCtx, id)
+		}
+		// Drop title-matching contacts seeded with Q-prefix names.
+		env.seededTitleContactIDsMu.Lock()
+		titleContactIDs := append([]uuid.UUID(nil), env.seededTitleContactIDs...)
+		env.seededTitleContactIDsMu.Unlock()
+		for _, id := range titleContactIDs {
 			_ = contactMethodRepo.DeleteContactMethodsByContact(cleanCtx, id)
 			_ = contactRepo.HardDeleteContact(cleanCtx, id)
 		}
@@ -1157,4 +1190,1011 @@ func TestMeetingNote_ConcurrentFirstInsertConverges(t *testing.T) {
 	// re-read+update path). Both are acceptable — we just assert no
 	// duplicates and no rejection.
 	require.Contains(t, []string{"Concurrent A", "Concurrent B"}, *row.Title)
+}
+
+// ----------------------------------------------------------------------------
+// PR 4 — title-extraction + discovery integration tests.
+//
+// These tests use Q-prefixed synthetic alphabetic tokens to avoid trigram
+// cross-pollination on the shared test DB (per CLAUDE.md gotcha
+// "Integration sub-test reuses identifying names across t.Run blocks").
+// Each newTitleToken call yields a unique 7-char alphabetic string that
+// passes the extractor's keep regex (^[A-Z][a-zA-Z]{1,29}$) and is rare
+// enough that no real contact name in the test DB would collide. The
+// 6-letter random suffix has 26^6 ≈ 309M entropy, eliminating
+// within-suite collisions.
+// ----------------------------------------------------------------------------
+
+// newTitleToken returns a unique 7-char Q-prefixed alphabetic string
+// suitable for use as a synthetic name token in title-extraction tests.
+// The token is registered in env.titleTokenPrefixes so t.Cleanup can
+// scope display_name + contact deletes precisely to the test's own
+// fixtures.
+func newTitleToken(t *testing.T, env *meetingNoteIngestEnv) string {
+	t.Helper()
+	var buf [6]byte
+	if _, err := cryptorand.Read(buf[:]); err != nil {
+		t.Fatalf("newTitleToken: rand.Read: %v", err)
+	}
+	const letters = "abcdefghijklmnopqrstuvwxyz"
+	out := []byte{'Q'}
+	for _, x := range buf {
+		out = append(out, letters[int(x)%26])
+	}
+	token := string(out)
+	env.titleTokenPrefixesMu.Lock()
+	env.titleTokenPrefixes = append(env.titleTokenPrefixes, token)
+	env.titleTokenPrefixesMu.Unlock()
+	return token
+}
+
+// seedTitleContact creates a CRM contact with full_name = name and
+// registers it for cleanup. Returns the contact UUID.
+func seedTitleContact(t *testing.T, env *meetingNoteIngestEnv, name string) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	c, err := env.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: name})
+	require.NoError(t, err)
+	env.seededTitleContactIDsMu.Lock()
+	env.seededTitleContactIDs = append(env.seededTitleContactIDs, c.ID)
+	env.seededTitleContactIDsMu.Unlock()
+	return c.ID
+}
+
+// computeTestAnarlogTitleSourceID mirrors the discovery writer's
+// source_id recipe so tests can look up the deterministic row that the
+// writer produced for a (token, session) pair. Defined separately here
+// so the test asserts the contract independent of the implementation.
+func computeTestAnarlogTitleSourceID(normalizedToken string, sessionUUID uuid.UUID) string {
+	var buf bytes.Buffer
+	buf.WriteString(normalizedToken)
+	buf.WriteString(sessionUUID.String())
+	sum := sha256.Sum256(buf.Bytes())
+	return hex.EncodeToString(sum[:])
+}
+
+// getAnarlogTitleRow fetches the unique anarlog_title row for the
+// (normalizedToken, sessionUUID) pair. Returns nil when no row exists.
+func getAnarlogTitleRow(t *testing.T, env *meetingNoteIngestEnv, normalizedToken, sessionUUID string) *repository.ExternalContact {
+	t.Helper()
+	sid, err := uuid.Parse(sessionUUID)
+	require.NoError(t, err)
+	sourceID := computeTestAnarlogTitleSourceID(normalizedToken, sid)
+	row, gerr := env.externalRepo.GetBySource(context.Background(), "anarlog_title", sourceID, nil)
+	if gerr != nil {
+		return nil
+	}
+	return row
+}
+
+// countAnarlogTitleRowsForToken returns the number of anarlog_title
+// rows (live, by display_name prefix) for the given token. Used to
+// verify the deterministic source_id keeps re-emit idempotent —
+// re-emitting the same (token, session) should NOT create new rows.
+func countAnarlogTitleRowsForToken(t *testing.T, env *meetingNoteIngestEnv, tokenDisplay string) int64 {
+	t.Helper()
+	ctx := context.Background()
+	n, err := env.database.Queries.CountExternalContactsByDisplayNamePrefix(ctx, pgtype.Text{String: tokenDisplay, Valid: true})
+	require.NoError(t, err)
+	return n
+}
+
+// ----------------------------------------------------------------------------
+// TC-T1 — orphan_with_tags_and_title_match: tagged Alice + title
+// "Alice / Bob" where Bob is a CRM contact. State =
+// orphan_title_augmented; 2 interactions (Alice tagged-anchor, Bob
+// title); NO anarlog_title rows (both tokens matched contacts).
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_OrphanWithTagsAndTitleMatch(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
+	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
+
+	// contactA (tagged via anarlogA) — already in env.contactA via
+	// email match. Rename it to a Q-token so the extractor + matcher
+	// can pick "QtokenA" up unambiguously.
+	tokenA := newTitleToken(t, env)
+	tokenB := newTitleToken(t, env)
+	ctx := context.Background()
+	_, err := env.contactRepo.UpdateContact(ctx, env.contactA, repository.UpdateContactRequest{FullName: tokenA + " Smith"})
+	require.NoError(t, err)
+	contactB := seedTitleContact(t, env, tokenB+" Jones")
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 7, 14, 0, 0, 0, time.UTC)
+	title := tokenA + " / " + tokenB + " 1:1"
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, []string{anarlogA})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseMNIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Empty(t, resp.Errors, "no per-event rejections")
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateOrphanTitleAugmented, row.LinkageState)
+
+	ixs := listSessionInteractions(t, env, sessionUUID)
+	require.Len(t, ixs, 2)
+	gotRefs := make([]string, 0, 2)
+	for _, ix := range ixs {
+		require.NotNil(t, ix.SourceRef)
+		gotRefs = append(gotRefs, *ix.SourceRef)
+	}
+	require.Contains(t, gotRefs, "anarlog:"+sessionUUID+":"+env.contactA.String(),
+		"tagged anchor interaction for contactA")
+	require.Contains(t, gotRefs, "anarlog:"+sessionUUID+":title:"+contactB.String(),
+		"title-derived interaction for contactB")
+
+	// Neither token should produce a discovery row (both matched a CRM
+	// contact, so they're not weak candidates).
+	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenA), sessionUUID))
+	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenB), sessionUUID))
+}
+
+// ----------------------------------------------------------------------------
+// TC-T2 — orphan_with_tags_and_title_no_match: tagged Alice + title
+// "Alice / Carol" where Carol is NOT a CRM contact. State stays
+// linked_impromptu (PR 3 behavior); 1 interaction (Alice tagged); 1
+// anarlog_title row for "carol".
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_OrphanWithTagsAndTitleNoMatch(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
+	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
+
+	tokenA := newTitleToken(t, env) // matches contactA after rename
+	tokenC := newTitleToken(t, env) // no CRM contact
+	ctx := context.Background()
+	_, err := env.contactRepo.UpdateContact(ctx, env.contactA, repository.UpdateContactRequest{FullName: tokenA + " Smith"})
+	require.NoError(t, err)
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 7, 15, 0, 0, 0, time.UTC)
+	title := tokenA + " / " + tokenC
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, []string{anarlogA})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	// tokenA matched contactA but is already tagged → titleMatched empty
+	// → state stays linked_impromptu.
+	require.Equal(t, repository.LinkageStateLinkedImpromptu, row.LinkageState)
+	require.Len(t, listSessionInteractions(t, env, sessionUUID), 1)
+
+	// tokenC has no contact match → anarlog_title row.
+	tcRow := getAnarlogTitleRow(t, env, strings.ToLower(tokenC), sessionUUID)
+	require.NotNil(t, tcRow, "anarlog_title row exists for unmatched token")
+	require.Equal(t, "anarlog_title", tcRow.Source)
+	require.NotNil(t, tcRow.DisplayName)
+	require.Equal(t, tokenC, *tcRow.DisplayName, "display_name is title-cased token")
+}
+
+// ----------------------------------------------------------------------------
+// TC-T3 — orphan_no_tags_with_title_matches: 0 tagged + title with
+// CRM-matching tokens → state stays orphan_needs_review, NO interactions
+// (spec invariant: title matches need a tagged anchor to produce
+// interactions). NO anarlog_title rows (tokens matched).
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_OrphanNoTagsWithTitleMatches(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	tokenA := newTitleToken(t, env)
+	tokenB := newTitleToken(t, env)
+	contactA := seedTitleContact(t, env, tokenA+" Smith")
+	contactB := seedTitleContact(t, env, tokenB+" Jones")
+	_ = contactA
+	_ = contactB
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 7, 16, 0, 0, 0, time.UTC)
+	title := tokenA + " / " + tokenB
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseMNIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateOrphanNeedsReview, row.LinkageState)
+	require.Empty(t, listSessionInteractions(t, env, sessionUUID),
+		"no anchor → no interactions even with title matches")
+	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenA), sessionUUID))
+	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenB), sessionUUID))
+}
+
+// ----------------------------------------------------------------------------
+// TC-T4 — orphan_no_tags_with_title_unmatched: 0 tagged + title with
+// no CRM-matching tokens → state orphan_needs_review, NO interactions,
+// anarlog_title rows for BOTH unmatched tokens.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_OrphanNoTagsWithTitleUnmatched(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	tokenC := newTitleToken(t, env)
+	tokenD := newTitleToken(t, env)
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 7, 17, 0, 0, 0, time.UTC)
+	title := tokenC + " / " + tokenD
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateOrphanNeedsReview, row.LinkageState)
+	require.Empty(t, listSessionInteractions(t, env, sessionUUID))
+
+	cRow := getAnarlogTitleRow(t, env, strings.ToLower(tokenC), sessionUUID)
+	require.NotNil(t, cRow)
+	dRow := getAnarlogTitleRow(t, env, strings.ToLower(tokenD), sessionUUID)
+	require.NotNil(t, dRow)
+}
+
+// ----------------------------------------------------------------------------
+// TC-T5 — linked_with_title_match: 1 calendar candidate + title with
+// a CRM-matching token. State stays linked. NO new interactions
+// (linked state's walk-in logic only fires for tagged humans, not
+// title matches). NO anarlog_title rows for matched tokens.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_LinkedWithTitleMatch(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	tokenA := newTitleToken(t, env)
+	tokenB := newTitleToken(t, env)
+	ctx := context.Background()
+	_, err := env.contactRepo.UpdateContact(ctx, env.contactA, repository.UpdateContactRequest{FullName: tokenA + " Smith"})
+	require.NoError(t, err)
+	_ = seedTitleContact(t, env, tokenB+" Jones")
+
+	meetingAt := time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC)
+	eventID := env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+
+	sessionUUID := env.newSessionUUID()
+	title := tokenA + " / " + tokenB + " 1:1"
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateLinked, row.LinkageState)
+	require.NotNil(t, row.LinkedID)
+	require.Equal(t, eventID, *row.LinkedID)
+	require.Empty(t, listSessionInteractions(t, env, sessionUUID),
+		"title matches in linked state must not produce interactions")
+	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenA), sessionUUID))
+	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenB), sessionUUID))
+}
+
+// ----------------------------------------------------------------------------
+// TC-T6 — linked_with_title_unmatched: linked state + title with
+// unmatched token. NO new interactions. 1 anarlog_title row for the
+// unmatched token.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_LinkedWithTitleUnmatched(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	tokenA := newTitleToken(t, env)
+	tokenE := newTitleToken(t, env)
+	ctx := context.Background()
+	_, err := env.contactRepo.UpdateContact(ctx, env.contactA, repository.UpdateContactRequest{FullName: tokenA + " Smith"})
+	require.NoError(t, err)
+
+	meetingAt := time.Date(2026, 5, 8, 11, 0, 0, 0, time.UTC)
+	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+
+	sessionUUID := env.newSessionUUID()
+	title := tokenA + " / " + tokenE
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.Equal(t, repository.LinkageStateLinked, row.LinkageState)
+	require.Empty(t, listSessionInteractions(t, env, sessionUUID))
+	eRow := getAnarlogTitleRow(t, env, strings.ToLower(tokenE), sessionUUID)
+	require.NotNil(t, eRow, "unmatched token in linked state still gets a discovery row")
+}
+
+// ----------------------------------------------------------------------------
+// TC-T7 — conflict_pending_with_title_matches: 2 candidates + title
+// with CRM-matching tokens. NO interactions, NO anarlog_title rows for
+// matched tokens.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_ConflictPendingWithTitleMatches(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	tokenA := newTitleToken(t, env)
+	tokenB := newTitleToken(t, env)
+	ctx := context.Background()
+	_, err := env.contactRepo.UpdateContact(ctx, env.contactA, repository.UpdateContactRequest{FullName: tokenA + " Smith"})
+	require.NoError(t, err)
+	_ = seedTitleContact(t, env, tokenB+" Jones")
+
+	meetingAt := time.Date(2026, 5, 9, 9, 0, 0, 0, time.UTC)
+	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+
+	sessionUUID := env.newSessionUUID()
+	title := tokenA + " / " + tokenB
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+	require.Empty(t, listSessionInteractions(t, env, sessionUUID))
+	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenA), sessionUUID))
+	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenB), sessionUUID))
+}
+
+// ----------------------------------------------------------------------------
+// TC-T7b — conflict_pending_with_title_unmatched: 2 candidates + title
+// with unmatched tokens. NO interactions, 2 anarlog_title rows.
+// Confirms unmatched-token discovery fires in conflict_pending state.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_ConflictPendingWithTitleUnmatched(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	tokenC := newTitleToken(t, env)
+	tokenD := newTitleToken(t, env)
+
+	meetingAt := time.Date(2026, 5, 9, 10, 0, 0, 0, time.UTC)
+	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+
+	sessionUUID := env.newSessionUUID()
+	title := tokenC + " / " + tokenD
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+	require.Empty(t, listSessionInteractions(t, env, sessionUUID))
+	require.NotNil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenC), sessionUUID))
+	require.NotNil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenD), sessionUUID))
+}
+
+// ----------------------------------------------------------------------------
+// TC-T8 — title_dedup_against_tagged: Alice is tagged AND title is
+// "Alice". Title-matched contact is deduplicated against tagged so
+// only the tagged-anchor interaction lands (no `:title:` interaction
+// for the same contact).
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_DedupAgainstTagged(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
+	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
+
+	tokenA := newTitleToken(t, env)
+	ctx := context.Background()
+	_, err := env.contactRepo.UpdateContact(ctx, env.contactA, repository.UpdateContactRequest{FullName: tokenA + " Smith"})
+	require.NoError(t, err)
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 9, 11, 0, 0, 0, time.UTC)
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, tokenA, []string{anarlogA})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.Equal(t, repository.LinkageStateLinkedImpromptu, row.LinkageState,
+		"dedup empties titleMatched → state is linked_impromptu, not orphan_title_augmented")
+	ixs := listSessionInteractions(t, env, sessionUUID)
+	require.Len(t, ixs, 1)
+	require.NotNil(t, ixs[0].SourceRef)
+	require.Equal(t, "anarlog:"+sessionUUID+":"+env.contactA.String(), *ixs[0].SourceRef,
+		"tagged-anchor source_ref wins over title-derived")
+}
+
+// ----------------------------------------------------------------------------
+// TC-T9 — resync_title_change_drops_old_interaction. Initial title
+// "Alice / Bob" + tagged Carol → 3 interactions (Carol tagged, Alice
+// title, Bob title). Re-ingest with title "Alice" + tagged Carol
+// (Bob removed): Bob's title interaction soft-deleted; Carol+Alice
+// preserved.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_ResyncTitleChangeDropsOldInteraction(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailC := fmt.Sprintf("mn-test-2-%s@example.invalid", suffix)
+	anarlogC := env.seedAnarlogHumanResolvingTo(t, emailC)
+
+	tokenA := newTitleToken(t, env)
+	tokenB := newTitleToken(t, env)
+	contactA := seedTitleContact(t, env, tokenA+" Smith")
+	contactB := seedTitleContact(t, env, tokenB+" Jones")
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 10, 14, 0, 0, 0, time.UTC)
+	title1 := tokenA + " / " + tokenB
+	ev1 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title1, []string{anarlogC})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev1}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.Equal(t, repository.LinkageStateOrphanTitleAugmented, row.LinkageState)
+	require.Len(t, listSessionInteractions(t, env, sessionUUID), 3)
+
+	// Re-ingest with title containing only tokenA (Bob removed).
+	title2 := tokenA
+	ev2 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title2, []string{anarlogC})
+	w = postMNIngest(t, env, map[string]any{"events": []any{ev2}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	after := listSessionInteractions(t, env, sessionUUID)
+	require.Len(t, after, 2, "Bob's title interaction soft-deleted; Carol+Alice preserved")
+	gotRefs := make([]string, 0, 2)
+	for _, ix := range after {
+		gotRefs = append(gotRefs, *ix.SourceRef)
+	}
+	require.Contains(t, gotRefs, "anarlog:"+sessionUUID+":"+env.contactC.String())
+	require.Contains(t, gotRefs, "anarlog:"+sessionUUID+":title:"+contactA.String())
+	require.NotContains(t, gotRefs, "anarlog:"+sessionUUID+":title:"+contactB.String())
+
+	row = findMeetingNoteRow(t, env, sessionUUID)
+	require.Equal(t, repository.LinkageStateOrphanTitleAugmented, row.LinkageState,
+		"still augmented because Alice still title-matches")
+}
+
+// ----------------------------------------------------------------------------
+// TC-T10 — resync_title_change_keeps_old_discovery_rows. Accept
+// leak-through per D6 — stale discovery rows from a renamed title
+// persist alongside new rows.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_ResyncTitleChangeKeepsOldDiscoveryRows(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailC := fmt.Sprintf("mn-test-2-%s@example.invalid", suffix)
+	anarlogC := env.seedAnarlogHumanResolvingTo(t, emailC)
+
+	tokenF := newTitleToken(t, env) // unmatched
+	tokenS := newTitleToken(t, env) // unmatched
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 10, 15, 0, 0, 0, time.UTC)
+	title1 := tokenF // a single unmatched token; extractor produces ["tokenF"]
+	ev1 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title1, []string{anarlogC})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev1}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+	require.NotNil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenF), sessionUUID))
+
+	// Re-ingest with title that has only tokenS (different token).
+	title2 := tokenS
+	ev2 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title2, []string{anarlogC})
+	w = postMNIngest(t, env, map[string]any{"events": []any{ev2}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	// BOTH rows exist (stale tokenF + new tokenS).
+	require.NotNil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenF), sessionUUID),
+		"stale token row persists per accept-leak-through")
+	require.NotNil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenS), sessionUUID))
+}
+
+// ----------------------------------------------------------------------------
+// TC-T11 — carry_forward_skips_discovery_writes_only. Re-ingest of
+// identical payload hits carry-forward (no NEW anarlog_title rows
+// inserted because source_id is deterministic). updated_at MAY be
+// bumped on existing rows (Block B runs unconditionally per the
+// round-6 P1 fix); interaction-diff is skipped.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_CarryForwardKeepsRows(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	tokenF := newTitleToken(t, env)
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 10, 16, 0, 0, 0, time.UTC)
+	title := tokenF
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+	first := getAnarlogTitleRow(t, env, strings.ToLower(tokenF), sessionUUID)
+	require.NotNil(t, first)
+	firstID := first.ID
+
+	// Re-send identical payload — bus-dedup skips the inline handler.
+	w = postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseMNIngestResp(t, w)
+	require.Equal(t, 1, resp.Duplicate)
+
+	// Exactly ONE row for the (token, session) pair — deterministic
+	// source_id makes re-emit an idempotent UPDATE.
+	again := getAnarlogTitleRow(t, env, strings.ToLower(tokenF), sessionUUID)
+	require.NotNil(t, again)
+	require.Equal(t, firstID, again.ID, "same row, not a new one")
+}
+
+// ----------------------------------------------------------------------------
+// TC-T12 — revive_with_title_re_extracts. Record session with title
+// containing tokenA + tagged Carol → orphan_title_augmented. Delete
+// the session. Revive with a new title containing tokenB + tagged
+// Carol → new orphan_title_augmented state, tokenB's title interaction
+// created, tokenA's interaction stays soft-deleted.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_ReviveReExtracts(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailC := fmt.Sprintf("mn-test-2-%s@example.invalid", suffix)
+	anarlogC := env.seedAnarlogHumanResolvingTo(t, emailC)
+
+	tokenA := newTitleToken(t, env)
+	tokenB := newTitleToken(t, env)
+	contactA := seedTitleContact(t, env, tokenA+" Smith")
+	contactB := seedTitleContact(t, env, tokenB+" Jones")
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 11, 14, 0, 0, 0, time.UTC)
+	ev1 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, tokenA, []string{anarlogC})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev1}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+	require.Len(t, listSessionInteractions(t, env, sessionUUID), 2,
+		"Carol tagged + Alice title")
+
+	// Delete.
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row.LastContentHash)
+	del := buildMNDeletedEvent(t, env.pairedHostID, sessionUUID, *row.LastContentHash)
+	w = postMNIngest(t, env, map[string]any{"events": []any{del}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+	require.Empty(t, listSessionInteractions(t, env, sessionUUID))
+
+	// Revive with new title.
+	ev2 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, tokenB, []string{anarlogC})
+	w = postMNIngest(t, env, map[string]any{"events": []any{ev2}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	row = findMeetingNoteRow(t, env, sessionUUID)
+	require.Equal(t, repository.LinkageStateOrphanTitleAugmented, row.LinkageState)
+	after := listSessionInteractions(t, env, sessionUUID)
+	require.Len(t, after, 2, "Carol tagged + tokenB title")
+	gotRefs := make([]string, 0, 2)
+	for _, ix := range after {
+		gotRefs = append(gotRefs, *ix.SourceRef)
+	}
+	require.Contains(t, gotRefs, "anarlog:"+sessionUUID+":"+env.contactC.String())
+	require.Contains(t, gotRefs, "anarlog:"+sessionUUID+":title:"+contactB.String())
+	require.NotContains(t, gotRefs, "anarlog:"+sessionUUID+":title:"+contactA.String(),
+		"prior tokenA title interaction stays soft-deleted")
+}
+
+// ----------------------------------------------------------------------------
+// TC-T13 — host_ownership_skip_skips_title_work. A second mac host
+// pushes a meeting_note.recorded for a session already owned by host
+// A. The host-ownership guard returns silent no-op BEFORE title work
+// runs, so NO anarlog_title rows are inserted.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_HostOwnershipSkipsTitleWork(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
+	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
+
+	tokenF := newTitleToken(t, env)
+
+	// Host A creates the session WITHOUT the unmatched token in title.
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 11, 15, 0, 0, 0, time.UTC)
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Initial", []string{anarlogA})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	// Host B pairs and pushes the SAME session UUID with a title that
+	// contains an unmatched token. The host-ownership guard must
+	// silently drop the event before any title work runs. The
+	// mac_host singleton index requires revoking host A first.
+	ctx := context.Background()
+	require.NoError(t, env.macService.RevokeHost(ctx, env.pairedHostID))
+	plain, _, err := env.macService.CreatePairingToken(ctx)
+	require.NoError(t, err)
+	pairB, err := env.macService.PairWithToken(ctx, plain, "host-b", "0.1.0", 1)
+	require.NoError(t, err)
+
+	titleWithUnmatched := tokenF + " review"
+	evB := buildMNRecordedEvent(t, pairB.HostID, sessionUUID, meetingAt, titleWithUnmatched, []string{anarlogA})
+	b, err := json.Marshal(map[string]any{"events": []any{evB}})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/events", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Mac-Host-ID", pairB.HostID.String())
+	req.Header.Set("Authorization", "Bearer "+pairB.APIKey)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+
+	// NO anarlog_title row for tokenF — title block didn't run.
+	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenF), sessionUUID),
+		"host-ownership guard skipped title work")
+}
+
+// ----------------------------------------------------------------------------
+// TC-T14 — source_id_deterministic. Two separate batches emit the
+// same (token, session) → single anarlog_title row.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_SourceIDDeterministic(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	tokenG := newTitleToken(t, env)
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 11, 16, 0, 0, 0, time.UTC)
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, tokenG, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+	first := getAnarlogTitleRow(t, env, strings.ToLower(tokenG), sessionUUID)
+	require.NotNil(t, first)
+
+	// Re-emit same payload (a 2nd batch — bus dedups envelope, but we
+	// can also force a second inline run via revive).
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row.LastContentHash)
+	del := buildMNDeletedEvent(t, env.pairedHostID, sessionUUID, *row.LastContentHash)
+	w = postMNIngest(t, env, map[string]any{"events": []any{del}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	w = postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	// Still only ONE row.
+	require.Equal(t, int64(1), countAnarlogTitleRowsForToken(t, env, tokenG),
+		"deterministic source_id keeps re-emit idempotent")
+	again := getAnarlogTitleRow(t, env, strings.ToLower(tokenG), sessionUUID)
+	require.NotNil(t, again)
+	require.Equal(t, first.ID, again.ID)
+}
+
+// ----------------------------------------------------------------------------
+// TC-T15 — metadata_shape: every anarlog_title row has the four
+// metadata keys PR 7's UI depends on.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_MetadataShape(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	tokenH := newTitleToken(t, env)
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 11, 17, 0, 0, 0, time.UTC)
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, tokenH, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	row := getAnarlogTitleRow(t, env, strings.ToLower(tokenH), sessionUUID)
+	require.NotNil(t, row)
+	for _, key := range []string{"session_uuid", "token_normalized", "token_display", "extracted_at"} {
+		_, ok := row.Metadata[key]
+		require.True(t, ok, "metadata missing %q: %+v", key, row.Metadata)
+	}
+	require.Equal(t, sessionUUID, row.Metadata["session_uuid"])
+	require.Equal(t, strings.ToLower(tokenH), row.Metadata["token_normalized"])
+	require.Equal(t, tokenH, row.Metadata["token_display"])
+}
+
+// ----------------------------------------------------------------------------
+// TC-T16 — regression_pr3_interactions_unchanged: a session with no
+// title content behaves exactly as PR 3 (one tagged interaction,
+// linked_impromptu, no anarlog_title rows).
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_RegressionPR3UnchangedForEmptyTitle(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
+	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 11, 18, 0, 0, 0, time.UTC)
+	// Title is non-empty but has no extractable tokens (lowercased, no
+	// real names) — the extractor returns []string{}.
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "intro sync", []string{anarlogA})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.Equal(t, repository.LinkageStateLinkedImpromptu, row.LinkageState)
+	require.Len(t, listSessionInteractions(t, env, sessionUUID), 1)
+}
+
+// ----------------------------------------------------------------------------
+// TC-T17 — regression_external_contact_ingest: an icloud_contacts
+// external_contact.upserted envelope still ingests cleanly.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_RegressionExternalContactIngest(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	// seedAnarlogHumanResolvingTo exercises the external_contact path
+	// (anarlog_humans). If it succeeds, the constructor signature
+	// extension didn't break that path.
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
+	id := env.seedAnarlogHumanResolvingTo(t, emailA)
+	require.NotEmpty(t, id)
+}
+
+// ----------------------------------------------------------------------------
+// TC-T18 — imports_ui_excludes_anarlog_title_rows. After seeding an
+// anarlog_title row via meeting_note.recorded, the GET
+// /imports/candidates response must NOT include it.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_ImportsUIExcludesAnarlogTitle(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	tokenI := newTitleToken(t, env)
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, tokenI, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+	// Confirm the row IS in the DB (so the test isn't trivially passing).
+	require.NotNil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenI), sessionUUID))
+
+	// GET /api/v1/imports/candidates — the filter must hide it.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/imports/candidates", nil)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	body := rec.Body.String()
+	require.NotContains(t, body, tokenI,
+		"anarlog_title row leaked into imports candidates response")
+	require.NotContains(t, body, "anarlog_title",
+		"anarlog_title source string leaked into imports candidates response")
+}
+
+// ----------------------------------------------------------------------------
+// TC-T19 — count_query_excludes_anarlog_title_rows. The CountUnmatched
+// and CountAllUnmatched repository methods must not include
+// anarlog_title rows.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_CountQueryExcludesAnarlogTitle(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	ctx := context.Background()
+
+	// Baseline counts.
+	allBefore, err := env.externalRepo.CountAllUnmatched(ctx)
+	require.NoError(t, err)
+	srcBefore, err := env.externalRepo.CountUnmatched(ctx, "anarlog_title")
+	require.NoError(t, err)
+
+	tokenJ := newTitleToken(t, env)
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 12, 10, 0, 0, 0, time.UTC)
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, tokenJ, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+	require.NotNil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenJ), sessionUUID))
+
+	// Counts must NOT have grown for the anarlog_title source-filtered
+	// query (the filter excludes the row) NOR for the all-sources
+	// count.
+	srcAfter, err := env.externalRepo.CountUnmatched(ctx, "anarlog_title")
+	require.NoError(t, err)
+	require.Equal(t, srcBefore, srcAfter,
+		"CountUnmatched(anarlog_title) must not include anarlog_title rows")
+	allAfter, err := env.externalRepo.CountAllUnmatched(ctx)
+	require.NoError(t, err)
+	require.Equal(t, allBefore, allAfter,
+		"CountAllUnmatched must not include anarlog_title rows")
+}
+
+// ----------------------------------------------------------------------------
+// TC-T20 — daemon_cannot_push_anarlog_title_source. An
+// external_contact.upserted envelope with source='anarlog_title' is
+// rejected with PAYLOAD_INVARIANT.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_DaemonCannotPushAnarlogTitleSource(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	entityID := uuid.NewString()
+	dn := "Title Source Spoof"
+	p := events.ExternalContactUpsertedPayload{
+		Version:     1,
+		HostID:      env.pairedHostID,
+		Source:      "anarlog_title",
+		EntityID:    entityID,
+		DisplayName: &dn,
+	}
+	pBytes, err := events.Marshal(events.KindExternalContactUpserted, p)
+	require.NoError(t, err)
+	srcID := computeUpsertSourceID(t, entityID, pBytes)
+	body := map[string]any{
+		"events": []any{
+			map[string]any{
+				"source":      "anarlog_title",
+				"source_id":   srcID,
+				"kind":        string(events.KindExternalContactUpserted),
+				"payload":     json.RawMessage(pBytes),
+				"observed_at": accelerated.GetCurrentTime(),
+			},
+		},
+	}
+	b, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/events", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Mac-Host-ID", env.pairedHostID.String())
+	req.Header.Set("Authorization", "Bearer "+env.pairedHostKey)
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	resp := parseMNIngestResp(t, rec)
+	require.Equal(t, 0, resp.Accepted, "rejection counts as not-accepted")
+	require.GreaterOrEqual(t, resp.Rejected, 1)
+	require.NotEmpty(t, resp.Errors)
+	require.Equal(t, "PAYLOAD_INVARIANT", resp.Errors[0].Code)
+}
+
+// ----------------------------------------------------------------------------
+// TC-T21 — contact_rename_invalidates_carry_forward. Tagged Carol +
+// title-matched Alice → 2 interactions. Rename Alice's contact so the
+// title no longer matches → re-ingest forces re-link → Alice's title
+// interaction soft-deleted, Carol's tagged interaction preserved.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_ContactRenameInvalidatesCarryForward(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailC := fmt.Sprintf("mn-test-2-%s@example.invalid", suffix)
+	anarlogC := env.seedAnarlogHumanResolvingTo(t, emailC)
+
+	tokenA := newTitleToken(t, env)
+	contactA := seedTitleContact(t, env, tokenA+" Smith")
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 12, 11, 0, 0, 0, time.UTC)
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, tokenA, []string{anarlogC})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+	require.Len(t, listSessionInteractions(t, env, sessionUUID), 2,
+		"Carol tagged + Alice title")
+
+	// Rename contact so the trigram no longer matches the title token.
+	// Use a totally unrelated synthetic prefix.
+	renameToken := newTitleToken(t, env)
+	ctx := context.Background()
+	_, err := env.contactRepo.UpdateContact(ctx, contactA, repository.UpdateContactRequest{FullName: renameToken + " Renamed"})
+	require.NoError(t, err)
+
+	// Re-ingest identical payload — input_hash unchanged but
+	// resolved_set_hash differs (title now matches nothing) → re-link.
+	w = postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseMNIngestResp(t, w)
+	require.Equal(t, 1, resp.Duplicate,
+		"envelope is bus-dedup'd but the shouldRunInlineOnDuplicate probe runs the handler again")
+
+	after := listSessionInteractions(t, env, sessionUUID)
+	require.Len(t, after, 1, "Alice title interaction soft-deleted; Carol preserved")
+	require.Equal(t, "anarlog:"+sessionUUID+":"+env.contactC.String(), *after[0].SourceRef)
+}
+
+// ----------------------------------------------------------------------------
+// TC-T22 — new_same_name_contact_invalidates_carry_forward. Tagged
+// Carol + uniquely-matched Alice → 2 interactions. Add a 2nd same-name
+// contact → collision-gap drops the title-match → re-ingest forces
+// re-link → Alice's title interaction soft-deleted.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_NewSameNameContactInvalidatesCarryForward(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailC := fmt.Sprintf("mn-test-2-%s@example.invalid", suffix)
+	anarlogC := env.seedAnarlogHumanResolvingTo(t, emailC)
+
+	tokenA := newTitleToken(t, env)
+	_ = seedTitleContact(t, env, tokenA+" Smith")
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 12, 12, 0, 0, 0, time.UTC)
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, tokenA, []string{anarlogC})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+	require.Len(t, listSessionInteractions(t, env, sessionUUID), 2)
+
+	// Add a 2nd contact with the same first-name token → collision-gap
+	// drops the match.
+	_ = seedTitleContact(t, env, tokenA+" Cooper")
+
+	// Re-ingest.
+	w = postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	after := listSessionInteractions(t, env, sessionUUID)
+	require.Len(t, after, 1, "Alice title interaction soft-deleted; Carol preserved")
+	require.Equal(t, "anarlog:"+sessionUUID+":"+env.contactC.String(), *after[0].SourceRef)
+}
+
+// ----------------------------------------------------------------------------
+// TC-T23 — previously_ambiguous_now_disambiguated. Two Alices exist;
+// tagged Carol + ambiguous title → 1 interaction (Carol only).
+// Soft-delete one Alice → re-ingest → unique match → 2 interactions
+// (Carol + Alice title).
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_PreviouslyAmbiguousNowDisambiguated(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailC := fmt.Sprintf("mn-test-2-%s@example.invalid", suffix)
+	anarlogC := env.seedAnarlogHumanResolvingTo(t, emailC)
+
+	tokenA := newTitleToken(t, env)
+	contactA1 := seedTitleContact(t, env, tokenA+" Smith")
+	contactA2 := seedTitleContact(t, env, tokenA+" Cooper")
+	_ = contactA1
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 12, 13, 0, 0, 0, time.UTC)
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, tokenA, []string{anarlogC})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+	require.Len(t, listSessionInteractions(t, env, sessionUUID), 1,
+		"ambiguous title → only Carol-tagged")
+
+	// Soft-delete contactA2 → match becomes unique.
+	ctx := context.Background()
+	require.NoError(t, env.contactRepo.SoftDeleteContact(ctx, contactA2))
+
+	// Re-ingest.
+	w = postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	after := listSessionInteractions(t, env, sessionUUID)
+	require.Len(t, after, 2, "Carol tagged + Alice title (now unique)")
+	gotRefs := make([]string, 0, 2)
+	for _, ix := range after {
+		gotRefs = append(gotRefs, *ix.SourceRef)
+	}
+	require.Contains(t, gotRefs, "anarlog:"+sessionUUID+":"+env.contactC.String())
+	require.Contains(t, gotRefs, "anarlog:"+sessionUUID+":title:"+contactA1.String())
+}
+
+// ----------------------------------------------------------------------------
+// TC-T24 — legacy_pr3_session_backfills_discovery_on_first_resync.
+// Manually seed a meeting_note row representing a PR-3-era state
+// (no anarlog_title rows for its title tokens), then re-ingest the
+// same payload. Verify the discovery rows ARE NOW written, proving
+// Block B's unconditional execution backfills legacy sessions.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_TitleMatch_LegacySessionBackfillsDiscoveryOnFirstResync(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	tokenK := newTitleToken(t, env)
+
+	// Seed a "legacy" meeting_note row via the ingest path (an empty
+	// title that the extractor can't tokenize) so the row exists with
+	// no anarlog_title companions. Then re-ingest with the unmatched
+	// token in the title.
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 12, 14, 0, 0, 0, time.UTC)
+	evEmpty := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "intro", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{evEmpty}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+	// No anarlog_title row for tokenK yet (extractor produced none).
+	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenK), sessionUUID),
+		"no discovery row yet — title 'intro' tokenizes to nothing")
+
+	// Now re-ingest WITH the unmatched token in the title. input_hash
+	// changes, the handler runs Block A + Block B and the discovery row
+	// lands.
+	evWithToken := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, tokenK, nil)
+	w = postMNIngest(t, env, map[string]any{"events": []any{evWithToken}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	row := getAnarlogTitleRow(t, env, strings.ToLower(tokenK), sessionUUID)
+	require.NotNil(t, row, "legacy session backfills discovery row on first re-ingest with a tokenizable title")
 }

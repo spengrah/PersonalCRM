@@ -715,6 +715,9 @@ type Querier interface {
 	ListTelegramChatConfigs(ctx context.Context) ([]*TelegramChatConfig, error)
 	ListTelegramChatConfigsForBackfill(ctx context.Context) ([]*TelegramChatConfig, error)
 	ListTelegramMessagesByChatUnprocessed(ctx context.Context, telegramChatID int64) ([]*TelegramMessage, error)
+	// The `source != 'anarlog_title'` filter excludes weak token-aggregated
+	// discovery rows from the per-source Imports UI list. anarlog_title
+	// rows are surfaced through a dedicated grouped-by-token UI surface.
 	ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	ListUnmatchedIdentities(ctx context.Context, arg ListUnmatchedIdentitiesParams) ([]*ExternalIdentity, error)
 	// Distinct contact IDs with at least one eligible (unprocessed AND
