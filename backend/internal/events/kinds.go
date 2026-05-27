@@ -49,6 +49,16 @@ const (
 	// (source, source_id) dedup on retries.
 	KindExternalContactUpserted Kind = "external_contact.upserted"
 	KindExternalContactDeleted  Kind = "external_contact.deleted"
+
+	// Daemon-emitted meeting-note (anarlog session) events. Published
+	// by the Mac daemon's anarlog_sessions plugin. NOT consumed by any
+	// bus consumer — IngestService processes them inline within the
+	// per-event savepoint (linkage-detection algorithm: calendar window
+	// match, tagged-participant resolve, walk-in supplemental). See
+	// .ai/spec/mac-daemon-phase-2-anarlog-matching.md for the full
+	// linkage state machine.
+	KindMeetingNoteRecorded Kind = "meeting_note.recorded"
+	KindMeetingNoteDeleted  Kind = "meeting_note.deleted"
 )
 
 // AllKinds enumerates every defined Kind. Used by tests to guard that
@@ -69,6 +79,8 @@ var AllKinds = []Kind{
 	KindRawMessageSent,
 	KindExternalContactUpserted,
 	KindExternalContactDeleted,
+	KindMeetingNoteRecorded,
+	KindMeetingNoteDeleted,
 }
 
 // Envelope is the wire/DB shape passed through Bus.Publish. Payload is
@@ -386,6 +398,41 @@ type ExternalContactDeletedPayload struct {
 	EntityID string    `json:"entity_id"` // CNContact identifier
 }
 
+// MeetingNoteRecordedPayload is the payload for KindMeetingNoteRecorded,
+// emitted by the Mac daemon's anarlog_sessions plugin on a session
+// add/update. Inline-processed by IngestService (linkage detection +
+// re-sync diff + needs_attention surfacing). NOT consumed by any bus
+// consumer.
+//
+// SourceID is the anarlog session UUID (the envelope's source_id wraps
+// this with the content-hash suffix per spec line 362). ParticipantIDs
+// are anarlog_human UUIDs that the handler resolves to CRM contacts via
+// the external_identity row planted by the anarlog_humans path.
+type MeetingNoteRecordedPayload struct {
+	Version        int       `json:"version"`   // start at 1
+	HostID         uuid.UUID `json:"host_id"`   // authenticated host
+	Source         string    `json:"source"`    // "anarlog_sessions"
+	SourceID       string    `json:"source_id"` // anarlog session UUID
+	Title          *string   `json:"title,omitempty"`
+	MeetingAt      time.Time `json:"meeting_at"`
+	Summary        *string   `json:"summary,omitempty"`
+	Memo           *string   `json:"memo,omitempty"`
+	ParticipantIDs []string  `json:"participant_ids,omitempty"` // anarlog_human UUIDs
+	Tags           []string  `json:"tags,omitempty"`
+}
+
+// MeetingNoteDeletedPayload is the payload for KindMeetingNoteDeleted,
+// emitted on a session delete (or tombstone reconciliation). The
+// handler soft-deletes the meeting_note row AND explicitly soft-deletes
+// every session-attributed interaction (since UPDATE deleted_at does
+// NOT trigger ON DELETE CASCADE). Unknown session UUID → silent no-op.
+type MeetingNoteDeletedPayload struct {
+	Version  int       `json:"version"`   // start at 1
+	HostID   uuid.UUID `json:"host_id"`   // authenticated host
+	Source   string    `json:"source"`    // "anarlog_sessions"
+	SourceID string    `json:"source_id"` // anarlog session UUID
+}
+
 // kindPayloadTypes is the canonical Kind → payload-type registry used by
 // Marshal and Unmarshal to assert type-vs-kind consistency at runtime. Add
 // a row each time a new Kind + payload struct are introduced. Keep in sync
@@ -406,6 +453,8 @@ var kindPayloadTypes = map[Kind]reflect.Type{
 	KindRawMessageSent:          reflect.TypeOf(RawMessageSentPayload{}),
 	KindExternalContactUpserted: reflect.TypeOf(ExternalContactUpsertedPayload{}),
 	KindExternalContactDeleted:  reflect.TypeOf(ExternalContactDeletedPayload{}),
+	KindMeetingNoteRecorded:     reflect.TypeOf(MeetingNoteRecordedPayload{}),
+	KindMeetingNoteDeleted:      reflect.TypeOf(MeetingNoteDeletedPayload{}),
 }
 
 // IsKnownKind reports whether kind has a registered payload type. Used by
@@ -487,6 +536,30 @@ func ValidatePayload(env *Envelope) error {
 		}
 		if p.HostID == uuid.Nil {
 			return fmt.Errorf("validate %s: host_id is required", env.Kind)
+		}
+	case KindMeetingNoteRecorded:
+		p := dst.(*MeetingNoteRecordedPayload)
+		if p.HostID == uuid.Nil {
+			return fmt.Errorf("validate %s: host_id is required", env.Kind)
+		}
+		if _, err := uuid.Parse(p.SourceID); err != nil {
+			return fmt.Errorf("validate %s: source_id must be a UUID: %w", env.Kind, err)
+		}
+		if p.MeetingAt.IsZero() {
+			return fmt.Errorf("validate %s: meeting_at is required", env.Kind)
+		}
+		for i, pid := range p.ParticipantIDs {
+			if _, err := uuid.Parse(pid); err != nil {
+				return fmt.Errorf("validate %s: participant_ids[%d] not a UUID: %w", env.Kind, i, err)
+			}
+		}
+	case KindMeetingNoteDeleted:
+		p := dst.(*MeetingNoteDeletedPayload)
+		if p.HostID == uuid.Nil {
+			return fmt.Errorf("validate %s: host_id is required", env.Kind)
+		}
+		if _, err := uuid.Parse(p.SourceID); err != nil {
+			return fmt.Errorf("validate %s: source_id must be a UUID: %w", env.Kind, err)
 		}
 	}
 	return nil
