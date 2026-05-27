@@ -17,56 +17,54 @@ public enum AnarlogTimestampParser {
 
     /// Parse an anarlog-emitted ISO-8601 timestamp string. Tolerant of
     /// the variants observed across Anarlog versions; returns nil on
-    /// formats none of the strategies handle.
+    /// formats none of the strategies handle. Fractional seconds beyond
+    /// milliseconds are truncated — Anarlog timestamps are session
+    /// `created_at` values that we never compare at sub-millisecond
+    /// resolution, and `ISO8601DateFormatter` only handles 3 fractional
+    /// digits.
     public static func parse(_ raw: String) -> Date? {
-        // Strategy 1: ISO8601DateFormatter with fractional seconds + Z.
-        // Handles `2026-03-16T20:34:49.936Z`.
+        let normalized = truncateFractionalToMillis(raw)
+
+        // Strategy 1: ISO8601DateFormatter with fractional seconds.
+        // Handles `2026-03-16T20:34:49.936Z` and (post-truncation)
+        // `2026-03-04T07:40:49.531+00:00`.
         let iso1 = ISO8601DateFormatter()
         iso1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = iso1.date(from: raw) { return d }
+        if let d = iso1.date(from: normalized) { return d }
 
         // Strategy 2: ISO8601DateFormatter without fractional seconds.
         // Handles `2026-03-16T20:34:49Z`.
         let iso2 = ISO8601DateFormatter()
         iso2.formatOptions = [.withInternetDateTime]
-        if let d = iso2.date(from: raw) { return d }
+        if let d = iso2.date(from: normalized) { return d }
 
-        // Strategy 3: ISO8601DateFormatter with fractional seconds +
-        // explicit offset (`+00:00`). The .withFractionalSeconds option
-        // is sticky enough that the same formatter handles both Z and
-        // +HH:MM suffixes, but we use the same combination as Strategy
-        // 1 with .withTimeZone instead of the default `Z`-style.
-        // ISO8601DateFormatter coerces `+00:00` → UTC under
-        // .withInternetDateTime; covered already by Strategy 1.
-
-        // Strategy 4: manual DateFormatter for microsecond precision
-        // with `+HH:MM` offset. ISO8601DateFormatter caps fractional
-        // seconds at milliseconds in some platform builds; the manual
-        // `SSSSSS` format pattern handles up to 6 digits.
-        //
-        // Pattern: `2026-03-04T07:40:49.531658+00:00`.
-        let manualMicroOffset = DateFormatter()
-        manualMicroOffset.locale = Locale(identifier: "en_US_POSIX")
-        manualMicroOffset.timeZone = TimeZone(secondsFromGMT: 0)
-        manualMicroOffset.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX"
-        if let d = manualMicroOffset.date(from: raw) { return d }
-
-        // Strategy 5: manual DateFormatter for microsecond precision
-        // with a `Z` suffix. Pattern: `2026-03-04T07:40:49.531658Z`.
-        let manualMicroZ = DateFormatter()
-        manualMicroZ.locale = Locale(identifier: "en_US_POSIX")
-        manualMicroZ.timeZone = TimeZone(secondsFromGMT: 0)
-        manualMicroZ.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'"
-        if let d = manualMicroZ.date(from: raw) { return d }
-
-        // Strategy 6: manual DateFormatter for no fractional seconds
+        // Strategy 3: manual DateFormatter for no fractional seconds
         // with offset. Pattern: `2026-03-16T20:34:49+00:00`.
         let manualOffset = DateFormatter()
         manualOffset.locale = Locale(identifier: "en_US_POSIX")
         manualOffset.timeZone = TimeZone(secondsFromGMT: 0)
         manualOffset.dateFormat = "yyyy-MM-dd'T'HH:mm:ssXXX"
-        if let d = manualOffset.date(from: raw) { return d }
+        if let d = manualOffset.date(from: normalized) { return d }
 
         return nil
+    }
+
+    /// Trim fractional seconds longer than 3 digits (`.531658` → `.531`).
+    /// Anarlog emits microseconds for humans / `_meta.json`; we collapse
+    /// to milliseconds so a single ISO8601DateFormatter pass handles
+    /// every input. No-op when fractional seconds are absent or already
+    /// ≤3 digits.
+    private static func truncateFractionalToMillis(_ raw: String) -> String {
+        guard let dot = raw.firstIndex(of: ".") else { return raw }
+        let after = raw.index(after: dot)
+        // Scan digits after the dot.
+        var end = after
+        while end < raw.endIndex, raw[end].isNumber {
+            end = raw.index(after: end)
+        }
+        let fractionDigits = raw.distance(from: after, to: end)
+        guard fractionDigits > 3 else { return raw }
+        let keep = raw.index(after, offsetBy: 3)
+        return String(raw[..<keep]) + String(raw[end...])
     }
 }

@@ -25,25 +25,23 @@ final class AnarlogTimestampParserTests: XCTestCase {
     }
 
     func testMicrosecondsWithOffset() throws {
+        // Anarlog emits microsecond precision for `_meta.json` /
+        // human-frontmatter `created_at`. We truncate to milliseconds
+        // since we never compare timestamps at sub-millisecond
+        // resolution.
         let raw = "2026-03-04T07:40:49.531658+00:00"
         let date = try XCTUnwrap(AnarlogTimestampParser.parse(raw))
-        // Re-format via manual DateFormatter with microsecond precision
-        // and `Z` to verify round-trip into UTC.
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'"
-        XCTAssertEqual(f.string(from: date), "2026-03-04T07:40:49.531658Z")
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        XCTAssertEqual(f.string(from: date), "2026-03-04T07:40:49.531Z")
     }
 
     func testMicrosecondsWithZ() throws {
         let raw = "2026-03-04T07:40:49.531658Z"
         let date = try XCTUnwrap(AnarlogTimestampParser.parse(raw))
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'"
-        XCTAssertEqual(f.string(from: date), raw)
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        XCTAssertEqual(f.string(from: date), "2026-03-04T07:40:49.531Z")
     }
 
     func testNoFractionalWithOffset() throws {
@@ -57,12 +55,10 @@ final class AnarlogTimestampParserTests: XCTestCase {
     func testNonZeroOffsetParses() throws {
         let raw = "2026-03-16T20:34:49.123456-05:00"
         let date = try XCTUnwrap(AnarlogTimestampParser.parse(raw))
-        // 20:34 -05:00 == 01:34 next day UTC.
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'"
-        XCTAssertEqual(f.string(from: date), "2026-03-17T01:34:49.123456Z")
+        // 20:34 -05:00 == 01:34 next day UTC; fractional truncated to ms.
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        XCTAssertEqual(f.string(from: date), "2026-03-17T01:34:49.123Z")
     }
 
     func testEmptyReturnsNil() {
