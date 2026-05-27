@@ -48,6 +48,42 @@ func NewIdentityService(identityRepo *repository.IdentityRepository) *IdentitySe
 	}
 }
 
+// BackfillAnarlogIdentityForImport links the external_identity row
+// keyed by an anarlog_human_id to the supplied CRM contact, mirroring
+// the email/phone identity-link logic that runs at external_contact
+// upsert time. Returns nil + no-op when no identity row exists yet,
+// or when the existing identity is already linked to a different
+// contact (manual user intent wins). Returns an error on any
+// underlying repository failure so the caller can surface a 500.
+//
+// Used by the import handler after a user-driven import/link of an
+// anarlog_humans external_contact. Keeps the handler clean of direct
+// repository.IdentityRepository calls.
+func (s *IdentityService) BackfillAnarlogIdentityForImport(ctx context.Context, anarlogHumanID string, contactID uuid.UUID) error {
+	identities, err := s.identityRepo.FindIdentitiesByAnarlogHumanID(ctx, anarlogHumanID)
+	if err != nil {
+		return fmt.Errorf("anarlog import backfill: lookup identity: %w", err)
+	}
+	for _, ident := range identities {
+		if ident.ContactID != nil && *ident.ContactID != contactID {
+			logger.Warn().
+				Str("anarlog_human_id", anarlogHumanID).
+				Str("existing_contact_id", ident.ContactID.String()).
+				Str("import_contact_id", contactID.String()).
+				Msg("anarlog import backfill: identity already linked to different contact; skipping")
+			continue
+		}
+		if _, err := s.identityRepo.LinkToContact(ctx, repository.LinkIdentityRequest{
+			IdentityID: ident.ID,
+			ContactID:  contactID,
+			MatchType:  repository.MatchTypeManual,
+		}); err != nil {
+			return fmt.Errorf("anarlog import backfill: link identity: %w", err)
+		}
+	}
+	return nil
+}
+
 // MatchOrCreate finds a matching contact or creates an unmatched identity record.
 // This is the main entry point for identity matching during sync operations.
 //

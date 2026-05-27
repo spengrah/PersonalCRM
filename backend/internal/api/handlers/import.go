@@ -31,18 +31,16 @@ type PostImportHook interface {
 	OnPeerLinked(ctx context.Context, peerUserID int64, peerUsername string, contactID uuid.UUID) error
 }
 
-// ImportHandler intentionally holds direct repository references
-// (externalRepo, identityRepo) alongside service references. This
-// breaks the canonical handler→service→repository layering — kept as
-// a documented exception because the existing import flow already
-// reads/writes external_contact directly (GetByID, UpdateMatch,
-// Ignore) and bouncing those through a service wrapper would be
-// pure-passthrough code with no semantic gain. The identityRepo
-// dependency follows the same convention so the anarlog backfill
-// stays cohesive with the rest of the handler.
+// ImportHandler holds the dependencies the import endpoints need. It
+// keeps a direct externalRepo reference because the existing import
+// flow reads/writes external_contact across most methods (GetByID,
+// UpdateMatch, Ignore) and a passthrough service wrapper would add
+// indirection without semantic gain. The anarlog identity backfill is
+// routed through identitySvc so handler code does not call the
+// identity repository directly.
 type ImportHandler struct {
 	externalRepo   *repository.ExternalContactRepository
-	identityRepo   *repository.IdentityRepository
+	identitySvc    *service.IdentityService
 	contactSvc     *service.ContactService
 	matchSvc       *service.ImportMatchService
 	enricher       *service.EnrichmentService
@@ -50,21 +48,21 @@ type ImportHandler struct {
 	postImportHook PostImportHook
 }
 
-// NewImportHandler creates a new import handler. identityRepo may be
+// NewImportHandler creates a new import handler. identitySvc may be
 // nil for callers that don't exercise the anarlog_humans backfill
 // path; when nil the import flow silently skips the anarlog identity
 // update (the meeting_note re-sync path then re-resolves as unmatched,
 // which matches the no-backfill baseline behavior).
 func NewImportHandler(
 	externalRepo *repository.ExternalContactRepository,
-	identityRepo *repository.IdentityRepository,
+	identitySvc *service.IdentityService,
 	contactSvc *service.ContactService,
 	matchSvc *service.ImportMatchService,
 	enricher *service.EnrichmentService,
 ) *ImportHandler {
 	return &ImportHandler{
 		externalRepo: externalRepo,
-		identityRepo: identityRepo,
+		identitySvc:  identitySvc,
 		contactSvc:   contactSvc,
 		matchSvc:     matchSvc,
 		enricher:     enricher,
@@ -413,8 +411,14 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 
 	// Anarlog-humans backfill: link the anarlog_human_id identity row
 	// to the imported contact so a future meeting_note.recorded re-sync
-	// resolves the human and produces the right interaction.
-	h.backfillAnarlogIdentity(ctx, external, contact.ID)
+	// resolves the human and produces the right interaction. Surfaces
+	// errors as 500 because a silent failure would leave the user with
+	// an imported contact whose anarlog sessions don't link to it.
+	if err := h.backfillAnarlogIdentity(ctx, external, contact.ID); err != nil {
+		logger.Error().Err(err).Str("external_id", id.String()).Msg("anarlog import backfill failed")
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link anarlog identity to imported contact", err.Error())
+		return
+	}
 
 	api.SendSuccess(c, http.StatusCreated, response, nil)
 }
@@ -575,8 +579,13 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 
 	// Anarlog-humans backfill: link the anarlog_human_id identity row
 	// to the linked contact so a future meeting_note.recorded re-sync
-	// resolves the human and produces the right interaction.
-	h.backfillAnarlogIdentity(ctx, external, crmContactID)
+	// resolves the human and produces the right interaction. Surfaces
+	// errors as 500 — see ImportContact above for the rationale.
+	if err := h.backfillAnarlogIdentity(ctx, external, crmContactID); err != nil {
+		logger.Error().Err(err).Str("external_id", id.String()).Msg("anarlog import backfill failed")
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link anarlog identity to linked contact", err.Error())
+		return
+	}
 
 	api.SendSuccess(c, http.StatusOK, LinkContactResponse{
 		ExternalContact: updated,
@@ -603,42 +612,15 @@ func (h *ImportHandler) triggerPostImportHook(ctx context.Context, external *rep
 	}
 }
 
-// backfillAnarlogIdentity links the anarlog_human_id external_identity
-// row (planted by handleExternalContactUpserted at ingest time) to the
-// supplied CRM contact. Mirrors the email/phone identity-link logic
-// that already runs for other import paths. Best-effort: a failure
-// here logs a warning but does not roll back the import — the worst
-// outcome is that the next meeting_note.recorded re-sync resolves the
-// human as unmatched (the same as the no-backfill baseline).
-func (h *ImportHandler) backfillAnarlogIdentity(ctx context.Context, external *repository.ExternalContact, contactID uuid.UUID) {
-	if h.identityRepo == nil || external == nil || external.Source != "anarlog_humans" {
-		return
+// backfillAnarlogIdentity routes through IdentityService so the handler
+// stays free of direct repository calls. Returns nil + no-op when the
+// external_contact is not from the anarlog_humans source, or when
+// identitySvc is nil (test wiring).
+func (h *ImportHandler) backfillAnarlogIdentity(ctx context.Context, external *repository.ExternalContact, contactID uuid.UUID) error {
+	if h.identitySvc == nil || external == nil || external.Source != "anarlog_humans" {
+		return nil
 	}
-	identities, err := h.identityRepo.FindIdentitiesByAnarlogHumanID(ctx, external.SourceID)
-	if err != nil {
-		logger.Warn().Err(err).Str("anarlog_human_id", external.SourceID).Msg("anarlog import backfill: failed to lookup identity")
-		return
-	}
-	for _, ident := range identities {
-		// Skip identities that are already linked to a different
-		// contact — manual user intent should not be silently
-		// overwritten by an import.
-		if ident.ContactID != nil && *ident.ContactID != contactID {
-			logger.Warn().
-				Str("anarlog_human_id", external.SourceID).
-				Str("existing_contact_id", ident.ContactID.String()).
-				Str("import_contact_id", contactID.String()).
-				Msg("anarlog import backfill: identity already linked to different contact; skipping")
-			continue
-		}
-		if _, err := h.identityRepo.LinkToContact(ctx, repository.LinkIdentityRequest{
-			IdentityID: ident.ID,
-			ContactID:  contactID,
-			MatchType:  repository.MatchTypeManual,
-		}); err != nil {
-			logger.Warn().Err(err).Str("anarlog_human_id", external.SourceID).Msg("anarlog import backfill: failed to link identity")
-		}
-	}
+	return h.identitySvc.BackfillAnarlogIdentityForImport(ctx, external.SourceID, contactID)
 }
 
 // toEnrichmentMethodSelections converts handler selections to service format

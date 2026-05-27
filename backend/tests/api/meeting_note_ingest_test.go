@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,6 +53,28 @@ type meetingNoteIngestEnv struct {
 	contactA uuid.UUID // associated with anarlogHumanA via email match
 	contactB uuid.UUID // associated with anarlogHumanB via email match
 	contactC uuid.UUID // associated with anarlogHumanC via email match (used for RS2 drift)
+	// sessionUUIDs records every session UUID a test asks the env to
+	// remember via trackSession; t.Cleanup hard-deletes interactions
+	// scoped to those UUIDs only (no broad sweeps on the shared DB).
+	sessionUUIDs   []string
+	sessionUUIDsMu sync.Mutex
+}
+
+// trackSession records the session UUID for targeted cleanup.
+func (e *meetingNoteIngestEnv) trackSession(sessionUUID string) {
+	e.sessionUUIDsMu.Lock()
+	defer e.sessionUUIDsMu.Unlock()
+	e.sessionUUIDs = append(e.sessionUUIDs, sessionUUID)
+}
+
+// newSessionUUID generates a fresh session UUID AND registers it for
+// targeted cleanup. Tests must use this in place of uuid.NewString()
+// for every session they create so t.Cleanup can scope deletes
+// precisely (the shared test DB does not tolerate broad sweeps).
+func (e *meetingNoteIngestEnv) newSessionUUID() string {
+	sid := uuid.NewString()
+	e.trackSession(sid)
+	return sid
 }
 
 func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
@@ -144,7 +167,7 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	matchService := service.NewImportMatchService(contactRepo)
 	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil)
 	enrichmentSvc.SetCadenceUpdater(wireCadenceUpdaterForAPITest(t, database, contactSvc))
-	importHandler := handlers.NewImportHandler(externalRepo, identityRepo, contactSvc, matchService, enrichmentSvc)
+	importHandler := handlers.NewImportHandler(externalRepo, identityService, contactSvc, matchService, enrichmentSvc)
 	imports := router.Group("/api/v1/imports")
 	imports.POST("/candidates/:id/link", importHandler.LinkContact)
 
@@ -190,9 +213,16 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	t.Cleanup(func() {
 		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		// Drop interactions seeded by these tests (covers anarlog session refs).
-		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(cleanCtx, "anarlog_sessions", "anarlog:"+env.sourceIDPrefix+"%")
-		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(cleanCtx, "anarlog_sessions", "anarlog:%")
+		// Drop interactions for the session UUIDs this test created
+		// (scoped per-session — no broad anarlog:% sweep). Each test
+		// uses env.newSessionUUID() so the slice covers every session
+		// the test produced.
+		env.sessionUUIDsMu.Lock()
+		sessions := append([]string(nil), env.sessionUUIDs...)
+		env.sessionUUIDsMu.Unlock()
+		for _, sid := range sessions {
+			_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(cleanCtx, "anarlog_sessions", "anarlog:"+sid+":%")
+		}
 		// Drop meeting_note rows seeded by these tests. Session UUIDs
 		// are caller-generated random UUIDs (no exploitable prefix), so
 		// scope by the paired mac_host_id this test created.
@@ -408,7 +438,7 @@ func listSessionInteractions(t *testing.T, env *meetingNoteIngestEnv, sessionUUI
 // ----------------------------------------------------------------------------
 func TestMeetingNote_OrphanNoTagged(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
-	sessionUUID := uuid.NewString()
+	sessionUUID := env.newSessionUUID()
 	meetingAt := time.Date(2026, 5, 1, 14, 30, 0, 0, time.UTC)
 	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Orphan Session", nil)
 	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
@@ -446,7 +476,7 @@ func TestMeetingNote_LinkedImpromptu(t *testing.T) {
 	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
 	anarlogB := env.seedAnarlogHumanResolvingTo(t, emailB)
 
-	sessionUUID := uuid.NewString()
+	sessionUUID := env.newSessionUUID()
 	meetingAt := time.Date(2026, 5, 1, 15, 0, 0, 0, time.UTC)
 	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Impromptu Session", []string{anarlogA, anarlogB})
 	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
@@ -483,7 +513,7 @@ func TestMeetingNote_OneCandidateNoTagged(t *testing.T) {
 	meetingAt := time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC)
 	eventID := env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA, env.contactB})
 
-	sessionUUID := uuid.NewString()
+	sessionUUID := env.newSessionUUID()
 	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Linked Session", nil)
 	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -517,7 +547,7 @@ func TestMeetingNote_OneCandidateWalkin(t *testing.T) {
 	emailB := fmt.Sprintf("mn-test-1-%s@example.invalid", suffix)
 	anarlogB := env.seedAnarlogHumanResolvingTo(t, emailB)
 
-	sessionUUID := uuid.NewString()
+	sessionUUID := env.newSessionUUID()
 	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Linked + Walkin", []string{anarlogB})
 	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -546,7 +576,7 @@ func TestMeetingNote_TwoCandidatesConflict(t *testing.T) {
 	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
 	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
 
-	sessionUUID := uuid.NewString()
+	sessionUUID := env.newSessionUUID()
 	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Conflict Session", nil)
 	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -574,7 +604,7 @@ func TestMeetingNote_DeleteCascadesToInteractions(t *testing.T) {
 	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
 	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
 
-	sessionUUID := uuid.NewString()
+	sessionUUID := env.newSessionUUID()
 	meetingAt := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
 	rec := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Will Delete", []string{anarlogA})
 	w := postMNIngest(t, env, map[string]any{"events": []any{rec}})
@@ -636,7 +666,7 @@ func TestMeetingNote_ResyncCarryForward(t *testing.T) {
 	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
 	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
 
-	sessionUUID := uuid.NewString()
+	sessionUUID := env.newSessionUUID()
 	meetingAt := time.Date(2026, 5, 5, 14, 0, 0, 0, time.UTC)
 	rec := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Same Title", []string{anarlogA})
 	w := postMNIngest(t, env, map[string]any{"events": []any{rec}})
@@ -675,7 +705,7 @@ func TestMeetingNote_ResyncDiffsInteractions(t *testing.T) {
 	anarlogB := env.seedAnarlogHumanResolvingTo(t, emailB)
 	anarlogC := env.seedAnarlogHumanResolvingTo(t, emailC)
 
-	sessionUUID := uuid.NewString()
+	sessionUUID := env.newSessionUUID()
 	meetingAt := time.Date(2026, 5, 6, 14, 0, 0, 0, time.UTC)
 
 	rec1 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Initial", []string{anarlogA, anarlogB})
@@ -713,7 +743,7 @@ func TestMeetingNote_ResyncRefreshesInteractionContent(t *testing.T) {
 	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
 	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
 
-	sessionUUID := uuid.NewString()
+	sessionUUID := env.newSessionUUID()
 	firstMeetingAt := time.Date(2026, 5, 20, 14, 0, 0, 0, time.UTC)
 	rec1 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, firstMeetingAt, "First Title", []string{anarlogA})
 	w := postMNIngest(t, env, map[string]any{"events": []any{rec1}})
@@ -759,7 +789,7 @@ func TestMeetingNote_DedupesByContactID(t *testing.T) {
 	anarlog2 := env.seedAnarlogHumanResolvingTo(t, emailA)
 	require.NotEqual(t, anarlog1, anarlog2)
 
-	sessionUUID := uuid.NewString()
+	sessionUUID := env.newSessionUUID()
 	meetingAt := time.Date(2026, 5, 7, 14, 0, 0, 0, time.UTC)
 	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Dedup Test", []string{anarlog1, anarlog2})
 	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
@@ -772,7 +802,7 @@ func TestMeetingNote_DedupesByContactID(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// TC-IM1 (round-1 P1#4): import flow backfills the anarlog identity row;
+// TC-IM1: import flow backfills the anarlog identity row;
 // subsequent meeting_note re-sync resolves the human.
 // ----------------------------------------------------------------------------
 func TestMeetingNote_ImportBackfillResolvesOnResync(t *testing.T) {
@@ -786,7 +816,7 @@ func TestMeetingNote_ImportBackfillResolvesOnResync(t *testing.T) {
 
 	// First meeting_note.recorded → orphan_needs_review (unresolved tag,
 	// 0 candidates).
-	sessionUUID := uuid.NewString()
+	sessionUUID := env.newSessionUUID()
 	meetingAt := time.Date(2026, 5, 8, 14, 0, 0, 0, time.UTC)
 	rec1 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Pre-Import", []string{anarlogX})
 	w := postMNIngest(t, env, map[string]any{"events": []any{rec1}})
@@ -849,7 +879,7 @@ func TestMeetingNote_ImportBackfillResolvesOnResync(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// TC-RV1 (round-1 P0#1): delete then re-record identical content →
+// TC-RV1: delete then re-record identical content →
 // row revives (deleted_at cleared), interactions reinserted.
 // ----------------------------------------------------------------------------
 func TestMeetingNote_DeleteThenReviveIdenticalContent(t *testing.T) {
@@ -859,7 +889,7 @@ func TestMeetingNote_DeleteThenReviveIdenticalContent(t *testing.T) {
 	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
 	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
 
-	sessionUUID := uuid.NewString()
+	sessionUUID := env.newSessionUUID()
 	meetingAt := time.Date(2026, 5, 9, 14, 0, 0, 0, time.UTC)
 	rec := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Revive Me", []string{anarlogA})
 
@@ -926,7 +956,7 @@ func TestMeetingNote_AnarlogHumanIdentityRegistered(t *testing.T) {
 func TestMeetingNote_KnownIDsForAnarlogSessions(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	meetingAt := time.Date(2026, 5, 10, 14, 0, 0, 0, time.UTC)
-	sessions := []string{uuid.NewString(), uuid.NewString(), uuid.NewString()}
+	sessions := []string{env.newSessionUUID(), env.newSessionUUID(), env.newSessionUUID()}
 	for _, sid := range sessions {
 		ev := buildMNRecordedEvent(t, env.pairedHostID, sid, meetingAt, "Known IDs Test", nil)
 		w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
@@ -962,4 +992,134 @@ func TestMeetingNote_KnownIDsForAnarlogSessions(t *testing.T) {
 	for _, sid := range sessions {
 		require.True(t, gotIDs[sid], "expected session %s in known-ids response", sid)
 	}
+}
+
+// ----------------------------------------------------------------------------
+// TC-D3: meeting_note.deleted with hash mismatch is rejected with
+// MEETING_NOTE_DELETE_HASH_MISMATCH (no cascade fires).
+// ----------------------------------------------------------------------------
+func TestMeetingNote_DeleteHashMismatchRejected(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 14, 9, 0, 0, 0, time.UTC)
+	rec := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Will Mismatch", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{rec}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	// Build a delete envelope with a hash that does NOT match the stored
+	// last_content_hash and is NOT the @unknown sentinel.
+	wrongHash := strings.Repeat("a", 64)
+	del := buildMNDeletedEvent(t, env.pairedHostID, sessionUUID, wrongHash)
+	w = postMNIngest(t, env, map[string]any{"events": []any{del}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseMNIngestResp(t, w)
+	require.Equal(t, 1, resp.Rejected)
+	require.Len(t, resp.Errors, 1)
+	require.Equal(t, "MEETING_NOTE_DELETE_HASH_MISMATCH", resp.Errors[0].Code)
+
+	// Row remains live + tracked.
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Nil(t, row.DeletedAt, "rejected delete must not tombstone the row")
+}
+
+// ----------------------------------------------------------------------------
+// TC-OW1: a cross-host meeting_note.deleted is a silent no-op (the host
+// that owns the row keeps it live).
+// ----------------------------------------------------------------------------
+func TestMeetingNote_DeleteCrossHostSilentNoOp(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	// Seed a session owned by env.pairedHostID.
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)
+	rec := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Owned by host A", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{rec}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	priorRow := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, priorRow)
+	require.NotNil(t, priorRow.LastContentHash)
+	priorHash := *priorRow.LastContentHash
+
+	// Pair a second host (B). The mac_host singleton index requires
+	// revoking the first one before pairing; production singleton
+	// behavior is what the cross-host guard ultimately defends against.
+	// For this test we just need a distinct host_id for the second
+	// auth path; revoke + re-pair simulates the scenario.
+	ctx := context.Background()
+	require.NoError(t, env.macService.RevokeHost(ctx, env.pairedHostID))
+	plainB, _, err := env.macService.CreatePairingToken(ctx)
+	require.NoError(t, err)
+	pairB, err := env.macService.PairWithToken(ctx, plainB, "meeting-note-test-B", "0.1.0", 1)
+	require.NoError(t, err)
+	require.NotEqual(t, env.pairedHostID, pairB.HostID)
+
+	// Host B tries to delete the row owned by host A. The handler logs
+	// a warn + silently no-ops; accepted=1, no DB change.
+	delBody := buildMNDeletedEvent(t, pairB.HostID, sessionUUID, priorHash)
+	bodyBytes, _ := json.Marshal(map[string]any{"events": []any{delBody}})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/events", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Mac-Host-ID", pairB.HostID.String())
+	req.Header.Set("Authorization", "Bearer "+pairB.APIKey)
+	wB := httptest.NewRecorder()
+	env.router.ServeHTTP(wB, req)
+	require.Equal(t, http.StatusOK, wB.Code, "body: %s", wB.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, wB).Accepted)
+
+	// Row still live + still owned by host A.
+	stillRow := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, stillRow)
+	require.Nil(t, stillRow.DeletedAt, "cross-host delete must NOT tombstone the row")
+	require.NotNil(t, stillRow.MacHostID)
+	require.Equal(t, env.pairedHostID, *stillRow.MacHostID, "ownership preserved")
+}
+
+// ----------------------------------------------------------------------------
+// TC-CR1: concurrent first-inserts for the same session UUID converge
+// via ON CONFLICT DO NOTHING + the re-read into the update path.
+// Uses two goroutines firing in parallel; a sync.WaitGroup serializes
+// the start so both batches' tx.Begin run within ~1ms.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_ConcurrentFirstInsertConverges(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 15, 14, 0, 0, 0, time.UTC)
+
+	// Build two recorded events for the same session with DIFFERENT
+	// content (different titles → different content hashes → different
+	// envelope source_ids → both pass bus-dedup → both reach the
+	// insert path → one wins, the other falls through to update).
+	rec1 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Concurrent A", nil)
+	rec2 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Concurrent B", nil)
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	results := make(chan int, 2)
+	for _, ev := range []map[string]any{rec1, rec2} {
+		wg.Add(1)
+		go func(payload map[string]any) {
+			defer wg.Done()
+			<-start // release together
+			w := postMNIngest(t, env, map[string]any{"events": []any{payload}})
+			results <- w.Code
+		}(ev)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	for code := range results {
+		require.Equal(t, http.StatusOK, code, "both batches must succeed")
+	}
+
+	// Exactly ONE live meeting_note row exists.
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Nil(t, row.DeletedAt)
+	// Final state is one of the two payloads (last writer wins on the
+	// re-read+update path). Both are acceptable — we just assert no
+	// duplicates and no rejection.
+	require.Contains(t, []string{"Concurrent A", "Concurrent B"}, *row.Title)
 }

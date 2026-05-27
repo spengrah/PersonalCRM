@@ -1047,8 +1047,8 @@ func TestComputeMeetingNoteInputHash_StableAcrossOrder(t *testing.T) {
 }
 
 // TestComputeMeetingNoteInputHash_TitleAffectsHash confirms the title
-// is part of the recipe — PR 4's title-parser does not have to
-// migrate hashes (round-1 P1#3 fix).
+// is part of the recipe — a future title-parser does not have to
+// migrate hashes.
 func TestComputeMeetingNoteInputHash_TitleAffectsHash(t *testing.T) {
 	at := time.Date(2026, 5, 1, 14, 30, 0, 0, time.UTC)
 	ids := []string{"uuid-1"}
@@ -1150,9 +1150,9 @@ func TestDecideLinkage_OneCandidate_TaggedNotInAttendees_AddsWalkin(t *testing.T
 	require.Equal(t, cB, desired[0].ContactID)
 }
 
-// TestDecideLinkage_MultipleCandidates_ConflictPending verifies PR 3
-// always lands on conflict_pending for 2+ candidates (Step 3
-// disambiguation is PR 5).
+// TestDecideLinkage_MultipleCandidates_ConflictPending verifies the
+// handler always lands on conflict_pending for 2+ candidates (the
+// participant-signal disambiguation flow is deferred).
 func TestDecideLinkage_MultipleCandidates_ConflictPending(t *testing.T) {
 	sessionID := uuid.New()
 	cands := []repository.LinkageCandidate{

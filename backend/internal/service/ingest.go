@@ -197,13 +197,14 @@ type CalendarLinkageReader interface {
 }
 
 // InteractionWriter is the narrow surface for the re-sync diff path
-// (list session-attributed live interactions, soft-delete obsoletes,
-// refresh content fields when the payload changed) and the
-// meeting_note.deleted cascade. Concrete is *repository.InteractionRepository.
+// (list session-attributed live interactions, soft-delete obsoletes)
+// and the meeting_note.deleted cascade. Refreshes of existing
+// interactions go through ContactInteractionRecorder.ExtendInteractionTx
+// instead so cadence stays under the sole-writer invariant. Concrete
+// is *repository.InteractionRepository.
 type InteractionWriter interface {
 	ListSessionAttributedInteractionsTx(ctx context.Context, tx pgx.Tx, sourceRefPrefix string) ([]repository.Interaction, error)
 	SoftDeleteInteractionTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error
-	UpdateInteractionTimestampTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, occurredAt time.Time, description *string) (*repository.Interaction, error)
 }
 
 // AnarlogIdentityLookup is the narrow surface used by the
@@ -220,10 +221,11 @@ type AnarlogIdentityLookup interface {
 
 // ContactInteractionRecorder is the narrow surface for routing
 // session-attributed interaction writes through the higher-level
-// ContactService.RecordInteractionTx (so cadence updates + follow-up
-// evaluation fire correctly). Concrete is *ContactService.
+// ContactService methods (so cadence updates + follow-up evaluation
+// fire correctly on both inserts and refreshes). Concrete is *ContactService.
 type ContactInteractionRecorder interface {
 	RecordInteractionTx(ctx context.Context, tx pgx.Tx, publishesEvent bool, req repository.RecordInteractionRequest) (*RecordInteractionResult, error)
+	ExtendInteractionTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) (func(context.Context), error)
 }
 
 // IngestService persists pre-validated event envelopes inside a single
@@ -1997,13 +1999,13 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		// in-both: existing source_ref still desired → refresh the
 		// content fields (occurred_at + description) when the payload
 		// changed so the timeline view reflects the latest meeting_at
-		// and title. Cadence updates are NOT re-applied here: the
-		// FindBySourceRefTx short-circuit inside RecordInteractionTx
-		// would return IsReplay=true on a re-INSERT anyway, and
-		// re-running cadence on a content-only edit would not change
-		// the result.
-		for ref, x := range existingByRef {
-			if _, want := desiredByRef[ref]; !want {
+		// and title. Routes through ContactService.ExtendInteractionTx
+		// which re-applies cadence (last_contacted / contact_by) via
+		// the sole-writer path and returns a follow-up closure to run
+		// after commit — direct UPDATE would leave cadence stale.
+		for ref, d := range desiredByRef {
+			x, have := existingByRef[ref]
+			if !have {
 				continue
 			}
 			needsRefresh := !x.OccurredAt.Equal(p.MeetingAt) ||
@@ -2011,11 +2013,15 @@ func (s *IngestService) handleMeetingNoteRecorded(
 			if !needsRefresh {
 				continue
 			}
-			if _, err := s.interactions.UpdateInteractionTimestampTx(ctx, tx, x.ID, p.MeetingAt, p.Title); err != nil {
+			refreshFn, err := s.contactSvc.ExtendInteractionTx(ctx, tx, x.ID, d.ContactID, repository.InteractionDirectionMutual, p.MeetingAt, p.Title)
+			if err != nil {
 				return nil, nil, &IngestPerEventRejection{
 					Code:    ingestRejectInteractionWriteFailed,
 					Message: fmt.Sprintf("refresh session interaction: %s", err.Error()),
 				}
+			}
+			if refreshFn != nil {
+				followUps = append(followUps, refreshFn)
 			}
 		}
 		// to_add = desired \ existing (route through ContactService so
