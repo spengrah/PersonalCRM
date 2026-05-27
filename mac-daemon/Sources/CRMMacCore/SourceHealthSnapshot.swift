@@ -11,6 +11,43 @@
 // snapshot into the heartbeat body.
 import Foundation
 
+/// Source-defined cursor watermark. Encoded as the underlying JSON
+/// type (number for sources whose cursor is naturally numeric — e.g.
+/// messages.ROWID — and string for composite cursors like phone_calls'
+/// `<ISO ZDATE>:<Z_PK>` tuple). The Pi stores the raw JSON; the host
+/// page renders both shapes.
+public enum SourceHealthCursor: Equatable, Sendable {
+    case int(Int64)
+    case string(String)
+}
+
+extension SourceHealthCursor: Codable {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let v = try? c.decode(Int64.self) {
+            self = .int(v)
+            return
+        }
+        if let v = try? c.decode(String.self) {
+            self = .string(v)
+            return
+        }
+        throw DecodingError.typeMismatch(
+            SourceHealthCursor.self,
+            DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "expected Int64 or String for source cursor"))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .int(let v):    try c.encode(v)
+        case .string(let v): try c.encode(v)
+        }
+    }
+}
+
 /// Health surface for a single source.  Mirrors the heartbeat JSON
 /// keys consumed on the Pi side; encoded as part of the heartbeat
 /// body via HeartbeatBodyBuilder.
@@ -27,13 +64,14 @@ public struct SourceHealthSnapshot: Codable, Equatable, Sendable {
     public var lastPushedAt: Date?
 
     /// Source-defined cursor watermark observed at last poll. For
-    /// messages this is `liveCursor` (chat.db message.ROWID).
-    public var observedCursor: Int64?
+    /// messages this is `liveCursor` (chat.db message.ROWID); for
+    /// phone_calls it's the composite `<ISO ZDATE>:<Z_PK>` string.
+    public var observedCursor: SourceHealthCursor?
 
     /// Source-defined cursor watermark last successfully committed
     /// Pi-side. May lag behind `observedCursor` if a batch was
     /// observed but not yet committed (e.g. mid-publish).
-    public var pushedCursor: Int64?
+    public var pushedCursor: SourceHealthCursor?
 
     /// Schema version label (e.g. "chat_db_v1" or
     /// "chat_db_drift:message.guid" — see SchemaHealth.label in
@@ -53,8 +91,8 @@ public struct SourceHealthSnapshot: Codable, Equatable, Sendable {
         enabled: Bool = false,
         lastScheduledAt: Date? = nil,
         lastPushedAt: Date? = nil,
-        observedCursor: Int64? = nil,
-        pushedCursor: Int64? = nil,
+        observedCursor: SourceHealthCursor? = nil,
+        pushedCursor: SourceHealthCursor? = nil,
         schemaVersion: String? = nil,
         backfillComplete: Bool? = nil,
         lastError: String? = nil,

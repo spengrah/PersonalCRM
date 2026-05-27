@@ -1,5 +1,5 @@
 import XCTest
-@testable import CRMMacMessagesSource
+@testable import CRMMacCore
 
 final class KnownIdentifiersCacheTests: XCTestCase {
     func testEmptyCacheStartsUnpopulated() async {

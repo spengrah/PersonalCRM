@@ -81,11 +81,13 @@ type ContactMethodLister interface {
 type KnownExternalContactID = repository.KnownExternalContactID
 
 // ExternalContactReader is the narrow surface MacHostService needs for
-// the per-(host, source) /known-ids endpoint. Concrete is
+// the per-(host, source) /known-ids endpoint and the per-host
+// /source-counts endpoint. Concrete is
 // *repository.ExternalContactRepository. Defined here so the service
 // can be unit-tested with a stub.
 type ExternalContactReader interface {
 	ListKnownIDsByHostAndSource(ctx context.Context, hostID uuid.UUID, source string) ([]KnownExternalContactID, error)
+	CountByHostAndSource(ctx context.Context, hostID uuid.UUID) (map[string]int, error)
 }
 
 // MeetingNoteReader is the narrow surface MacHostService needs for the
@@ -207,6 +209,36 @@ func (s *MacHostService) KnownIDsForSource(
 		return nil, fmt.Errorf("known IDs: external_contact repository not wired")
 	}
 	return s.externalContactRepo.ListKnownIDsByHostAndSource(ctx, hostID, source)
+}
+
+// GetSourceCounts returns a per-source count of live external_contact
+// rows owned by hostID. Powers GET /api/v1/host/:id/source-counts
+// (issue #327). Returns db.ErrNotFound when the host doesn't exist;
+// returns an empty map when the host has no external_contact rows.
+//
+// The host-existence pre-check is what lets the handler distinguish
+// 404 ("no such host") from 200 with empty counts ("host has no
+// rows"). Without it, the count query returns an empty result for both
+// cases.
+func (s *MacHostService) GetSourceCounts(
+	ctx context.Context,
+	hostID uuid.UUID,
+) (map[string]int, error) {
+	if s.externalContactRepo == nil {
+		return nil, fmt.Errorf("source counts: external_contact repository not wired")
+	}
+	if _, err := s.hostRepo.GetHost(ctx, hostID); err != nil {
+		// Propagate db.ErrNotFound for the handler's 404 mapping.
+		return nil, err
+	}
+	counts, err := s.externalContactRepo.CountByHostAndSource(ctx, hostID)
+	if err != nil {
+		return nil, err
+	}
+	if counts == nil {
+		counts = map[string]int{}
+	}
+	return counts, nil
 }
 
 // CreatePairingToken mints a new short-lived pairing token. Returns

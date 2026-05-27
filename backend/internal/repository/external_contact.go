@@ -712,6 +712,29 @@ func (r *ExternalContactRepository) ListKnownIDsByHostAndSource(
 	return out, nil
 }
 
+// CountByHostAndSource returns a per-source count of live
+// external_contact rows owned by host_id. Tombstoned + merge-dupe rows
+// are excluded. Powers GET /api/v1/host/:id/source-counts (issue #327).
+// Returns nil on zero rows so the caller can distinguish "no rows
+// matched" from "query failed".
+func (r *ExternalContactRepository) CountByHostAndSource(
+	ctx context.Context,
+	hostID uuid.UUID,
+) (map[string]int, error) {
+	rows, err := r.queries.CountExternalContactsByHostAndSource(ctx, pgtype.UUID{Bytes: hostID, Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("count external_contact by host+source: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]int, len(rows))
+	for _, row := range rows {
+		out[row.Source] = int(row.Count)
+	}
+	return out, nil
+}
+
 // DeleteBySourceForTest hard-deletes ALL external_contact rows for a
 // given source string. TEST ONLY: production code must not call this;
 // it bypasses the tombstone contract and the crm_contact_id /

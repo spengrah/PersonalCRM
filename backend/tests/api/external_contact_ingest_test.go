@@ -97,6 +97,10 @@ func setupExtContactIngestEnv(t *testing.T) *extContactIngestEnv {
 		nil,      // interactions unused
 		nil,      // identityLookup unused
 		nil,      // contactSvc unused
+		nil,      // phoneCalls unused on external_contact path
+		nil,      // contactRecorder unused
+		nil,      // cadence unused
+		nil,      // followUp unused
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 

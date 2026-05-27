@@ -48,6 +48,7 @@ import (
 	"personal-crm/backend/internal/icloudcontacts"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/messages"
+	"personal-crm/backend/internal/phonecalls"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
@@ -316,6 +317,17 @@ func run() int {
 	meetingNoteRepoForIngest := repository.NewMeetingNoteRepository(database.Queries)
 	calendarRepoForIngest := repository.NewCalendarEventRepository(database.Queries)
 
+	// PhoneCall repository for the IngestService's call.* inline
+	// handler (phase 1.5).
+	phoneCallRepoForIngest := repository.NewPhoneCallRepository(database.Queries)
+
+	// Note: ingestService construction is hoisted DOWN to after
+	// contactService / cadenceUpdater / followUpManager are built —
+	// the call.* inline handler needs those collaborators to emit
+	// interaction.recorded + apply cadence/follow-up in the same tx
+	// as the staging-row write. See the construction near
+	// "ingestService := service.NewIngestService" further below.
+
 	// Rematch service — constructed above ContactService so it can be
 	// passed as the RematchRegistry constructor arg. Handlers register
 	// later once their dependencies are constructed.
@@ -323,26 +335,6 @@ func run() int {
 
 	// Initialize services
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, rematchService)
-
-	// ingestService is constructed AFTER contactService because the
-	// inline meeting_note.recorded handler routes session-attributed
-	// interaction writes through ContactService.RecordInteractionTx so
-	// cadence updates + follow-up evaluation fire correctly.
-	ingestService := service.NewIngestService(
-		database,
-		eventBus,
-		identityServiceForIngest,
-		messagesMessageRepo,
-		riverClient,
-		externalContactRepoForIngest,
-		macHostRepoForIngest, // host-liveness re-check inside the batch tx
-		meetingNoteRepoForIngest,
-		calendarRepoForIngest,
-		interactionRepo,
-		identityRepoForIngest,
-		contactService,
-	)
-	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	// Telegram message repo construction (hoisted above the
 	// InteractionRecorder wiring so the consumer can mark messages
@@ -440,6 +432,37 @@ func run() int {
 		cadenceUpdater,
 		followUpManager,
 	)
+
+	// IngestService — hoisted here so the call.* inline handler can
+	// reuse contactService.RecordInteractionTx, cadenceUpdater,
+	// followUpManager, and eventBus.PublishTx to emit
+	// interaction.recorded + apply cadence + follow-up in the SAME tx
+	// as the phone_call staging row write (spec §`phone_calls`
+	// content-delivered cadence). raw_message.* and external_contact.*
+	// inline handlers don't need these four — they were nil before the
+	// v1.5 expansion. The meeting_note.* inline handler reuses
+	// contactService via the ContactInteractionRecorder interface for
+	// session-attributed interaction writes so cadence + follow-up
+	// fire correctly.
+	ingestService := service.NewIngestService(
+		database,
+		eventBus,
+		identityServiceForIngest,
+		messagesMessageRepo,
+		riverClient,
+		externalContactRepoForIngest,
+		macHostRepoForIngest, // host-liveness re-check inside the batch tx
+		meetingNoteRepoForIngest,
+		calendarRepoForIngest,
+		interactionRepo,
+		identityRepoForIngest,
+		contactService,
+		phoneCallRepoForIngest,
+		contactService,
+		cadenceUpdater,
+		followUpManager,
+	)
+	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	// Register the consumer worker. The worker is registered UNCONDITIONALLY —
 	// river rejects unknown job kinds at dequeue time, so having the worker
@@ -720,6 +743,12 @@ func run() int {
 		// in ListDueAccounts.
 		providerRegistry.Register(icloudcontacts.New())
 		logger.Info().Msg("iCloud Contacts push provider registered")
+
+		// Register the Phone & FaceTime call-history push provider
+		// (phase 1.5). Same push-only semantics — data lands via the
+		// Mac daemon's call.received / call.sent events.
+		providerRegistry.Register(phonecalls.New())
+		logger.Info().Msg("Phone & FaceTime push provider registered")
 
 		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
 

@@ -140,6 +140,10 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 		interactionRepo,
 		identityRepo,
 		contactSvc,
+		nil, // phoneCalls unused on meeting_note path
+		nil, // contactRecorder unused
+		nil, // cadence unused
+		nil, // followUp unused
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 

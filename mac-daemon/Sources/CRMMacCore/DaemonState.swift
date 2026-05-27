@@ -19,20 +19,31 @@ public struct DaemonState: Codable, Equatable, Sendable {
     /// Last successful heartbeat response from the Pi. Nil until first
     /// heartbeat after install.
     public var lastHeartbeatAt: Date?
+    /// Pi-reported `protocol_version` from the most recent successful
+    /// heartbeat. Used by source plugins to feature-gate themselves
+    /// against older Pi instances (e.g. phone_calls requires Pi
+    /// protocol_version >= 2 because the Pi must accept `call.*` event
+    /// kinds). Nil means no successful heartbeat has been recorded yet.
+    ///
+    /// Additive Codable field — defaults to nil for existing
+    /// `state.json` files written before this field existed.
+    public var lastKnownPiProtocolVersion: Int32?
     /// Per-source cursor state. Keys are stable source identifiers
-    /// (`"messages"`, `"icloud_contacts"`). Empty until source
-    /// readers begin committing cursors.
+    /// (`"messages"`, `"icloud_contacts"`, `"phone_calls"`). Empty
+    /// until source readers begin committing cursors.
     public var sources: [String: SourceState]
 
     public init(
         schemaVersion: Int = 1,
         hostID: UUID? = nil,
         lastHeartbeatAt: Date? = nil,
+        lastKnownPiProtocolVersion: Int32? = nil,
         sources: [String: SourceState] = [:]
     ) {
         self.schemaVersion = schemaVersion
         self.hostID = hostID
         self.lastHeartbeatAt = lastHeartbeatAt
+        self.lastKnownPiProtocolVersion = lastKnownPiProtocolVersion
         self.sources = sources
     }
 }

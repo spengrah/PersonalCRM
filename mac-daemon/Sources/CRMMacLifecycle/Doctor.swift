@@ -7,7 +7,9 @@
 //      5xx=WARN, network=WARN)
 //   4. Config + state file presence (both parse; state has correct
 //      schemaVersion)
-// Plus three icloud_contacts checks (permission, allowlist, last-tick).
+// Plus three icloud_contacts checks (permission, allowlist, last-tick)
+// and one phone_calls probe (CallHistoryDB file existence + FDA
+// readability).
 //
 // Output: array of CheckResult { name, status, details }; exit code
 // equals the number of FAIL entries.
@@ -119,6 +121,7 @@ public struct Doctor {
             config: configCheck.anarlogConfig,
             humansSource: configCheck.anarlogHumansSourceState,
             sessionsSource: configCheck.anarlogSessionsSourceState))
+        results.append(checkPhoneCalls())
         return DoctorReport(results: results)
     }
 
@@ -286,6 +289,33 @@ public struct Doctor {
             name: sourceName,
             status: .pass,
             details: "last activity \(Int(age))s ago")
+    }
+
+    /// Phone & FaceTime call-history probe.
+    ///
+    /// Assert CallHistoryDB.storedata exists at the canonical path.
+    /// We deliberately do NOT open the SQLite file here — Full Disk
+    /// Access is the same gate as chat.db (granted once for the
+    /// daemon binary), and probing the file just to surface "FDA
+    /// missing" would duplicate the messages source's implicit
+    /// signal at the cost of an additional FDA prompt path. A missing
+    /// file is operator state ("no calls received yet on this Mac"),
+    /// same semantic class as icloud-not-yet-configured — surfaced as
+    /// WARN, not FAIL.
+    func checkPhoneCalls() -> CheckResult {
+        let path = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(
+                "Library/Application Support/CallHistoryDB/CallHistory.storedata")
+        if deps.filesystem.fileExists(at: path.path) {
+            return CheckResult(
+                name: "phone_calls.db_path",
+                status: .pass,
+                details: "CallHistoryDB.storedata present at \(path.path)")
+        }
+        return CheckResult(
+            name: "phone_calls.db_path",
+            status: .warn,
+            details: "CallHistoryDB.storedata not present yet — macOS creates it once Phone.app or Continuity logs a call. Expected: \(path.path)")
     }
 
     /// Composite check for the icloud_contacts source:

@@ -158,6 +158,103 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await deleteAllMacHosts(request)
   })
 
+  test('renders icloud_contacts contact count when backfill_complete (#327)', async ({
+    page,
+    request,
+  }) => {
+    await deleteAllMacHosts(request)
+    const hostId = await seedMacHost(request, {
+      hostname: 'e2e-icloud-host',
+      daemon_version: '0.1.2',
+      protocol_version: 2,
+      source_health: {
+        icloud_contacts: {
+          last_pushed_at: '2026-05-01T00:00:00Z',
+          backfill_complete: true,
+        },
+      },
+    })
+
+    // Seed external_contact rows for the host so the count is non-zero.
+    const seedPrefix = `e2e-icloud-${Date.now()}`
+    const seedResp = await request.post(`${API_URL}/api/v1/test/seed/external-contacts`, {
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
+      data: {
+        prefix: seedPrefix,
+        host_id: hostId,
+        contacts: [
+          { display_name: 'iCloud A', source: 'icloud_contacts', emails: ['a@example.com'] },
+          { display_name: 'iCloud B', source: 'icloud_contacts', emails: ['b@example.com'] },
+          { display_name: 'iCloud C', source: 'icloud_contacts', emails: ['c@example.com'] },
+        ],
+      },
+    })
+    expect(seedResp.ok()).toBe(true)
+
+    const listPromise = page.waitForResponse(
+      resp => resp.url().endsWith('/api/v1/host') && resp.request().method() === 'GET',
+      { timeout: 15_000 }
+    )
+    const countsPromise = page.waitForResponse(
+      resp =>
+        resp.url().includes('/api/v1/host/' + hostId + '/source-counts') &&
+        resp.request().method() === 'GET',
+      { timeout: 15_000 }
+    )
+    await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
+    await listPromise
+    await countsPromise
+
+    const row = page.getByTestId('mac-host-row').first()
+    await expect(row).toBeVisible({ timeout: 10_000 })
+    const sourceHealth = row.getByTestId('source-health')
+    await expect(sourceHealth).toBeVisible()
+
+    // The Cursor cell renders the contact count + checkmark instead of
+    // the misleading change-token / dash.
+    await expect(sourceHealth.getByText('3 contacts ✓')).toBeVisible()
+
+    // Cleanup.
+    await deleteAllMacHosts(request)
+  })
+
+  test('renders dash for icloud_contacts when backfill_complete is false (#327)', async ({
+    page,
+    request,
+  }) => {
+    await deleteAllMacHosts(request)
+    await seedMacHost(request, {
+      hostname: 'e2e-icloud-host-incomplete',
+      daemon_version: '0.1.2',
+      protocol_version: 2,
+      source_health: {
+        icloud_contacts: {
+          last_pushed_at: '2026-05-01T00:00:00Z',
+          backfill_complete: false,
+        },
+      },
+    })
+
+    const listPromise = page.waitForResponse(
+      resp => resp.url().endsWith('/api/v1/host') && resp.request().method() === 'GET',
+      { timeout: 15_000 }
+    )
+    await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
+    await listPromise
+
+    const row = page.getByTestId('mac-host-row').first()
+    const sourceHealth = row.getByTestId('source-health')
+    await expect(sourceHealth).toBeVisible({ timeout: 10_000 })
+
+    // While backfill is in progress, the cell stays as a dash; no
+    // numeric substitution happens.
+    const rows = sourceHealth.locator('tbody tr')
+    const icloudRow = rows.first()
+    await expect(icloudRow.locator('td').nth(2)).toHaveText('—')
+
+    await deleteAllMacHosts(request)
+  })
+
   test('uninstall flow removes a paired host', async ({ page, request }) => {
     await deleteAllMacHosts(request)
     await seedMacHost(request, { hostname: 'e2e-uninstall-me', protocol_version: 1 })

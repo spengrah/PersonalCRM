@@ -69,9 +69,13 @@ public final class HeartbeatLoop: SourcePlugin {
             sourceHealth: sourceHealthData)
         do {
             let result = try await piClient.heartbeat(auth: auth, body: body)
-            try await stateWriter.recordSuccessfulHeartbeat(at: clock.now(), cursorEpoch: result.cursorEpoch)
+            try await stateWriter.recordSuccessfulHeartbeat(
+                at: clock.now(),
+                cursorEpoch: result.cursorEpoch,
+                protocolVersion: result.protocolVersion)
             logger.debug("heartbeat ok", metadata: [
                 "cursor_epoch": .public(String(result.cursorEpoch)),
+                "pi_protocol_version": .public(String(result.protocolVersion)),
             ])
             // Refresh known-identifiers after a successful heartbeat.
             // Errors here MUST NOT propagate as heartbeat failures —
@@ -111,14 +115,28 @@ public final class HeartbeatLoop: SourcePlugin {
 /// `async throws` because production impls funnel through the
 /// `StateMutator` actor to serialize writes with other `state.json`
 /// writers (source plugins).
+///
+/// `protocolVersion` is the Pi-reported `protocol_version` from the
+/// heartbeat response. Production impls persist it into
+/// `DaemonState.lastKnownPiProtocolVersion` so source plugins can
+/// feature-gate themselves against older Pi instances (e.g. the
+/// phone_calls source requires Pi protocol_version >= 2).
 public protocol HeartbeatStateWriter: Sendable {
-    func recordSuccessfulHeartbeat(at: Date, cursorEpoch: Int64) async throws
+    func recordSuccessfulHeartbeat(
+        at: Date,
+        cursorEpoch: Int64,
+        protocolVersion: Int32
+    ) async throws
 }
 
 /// No-op writer for tests / smoke that don't care about state.
 public final class DiscardingHeartbeatStateWriter: HeartbeatStateWriter {
     public init() {}
-    public func recordSuccessfulHeartbeat(at: Date, cursorEpoch: Int64) async throws {}
+    public func recordSuccessfulHeartbeat(
+        at: Date,
+        cursorEpoch: Int64,
+        protocolVersion: Int32
+    ) async throws {}
 }
 
 /// Source-health JSON builder for the heartbeat body.  Production

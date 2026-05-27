@@ -53,3 +53,17 @@ export function useCreatePairingToken() {
     mutationFn: () => macHostsApi.createPairingToken(),
   })
 }
+
+/**
+ * useMacHostSourceCounts fetches per-source external_contact counts for
+ * a host (issue #327). Polled on the same 10s window as the list query
+ * so the 'caught up' indicator stays fresh while the page is open.
+ */
+export function useMacHostSourceCounts(id: string) {
+  return useQuery({
+    queryKey: macHostKeys.sourceCounts(id),
+    queryFn: () => macHostsApi.getSourceCounts(id),
+    enabled: Boolean(id),
+    refetchInterval: 10_000,
+  })
+}

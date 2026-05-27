@@ -534,9 +534,10 @@ func TestKindPayloadTypes_CoversAllKinds(t *testing.T) {
 // declares 10 base kinds (9 raw-signal + 1 derived), plus the two
 // daemon-emitted raw_message.* kinds (messages source), plus the two
 // external_contact.* kinds (iCloud Contacts source), plus the two
-// meeting_note.* kinds (anarlog_sessions source).
+// meeting_note.* kinds (anarlog_sessions source), plus the two call.*
+// kinds (phone_calls source, v1.5).
 func TestAllKinds_ExpectedCount(t *testing.T) {
-	require.Len(t, AllKinds, 16)
+	require.Len(t, AllKinds, 18)
 }
 
 // TestIsKnownKind_CoversAllKinds is the positive side: every Kind declared
@@ -641,6 +642,27 @@ func buildCanonicalPayload(t *testing.T, kind Kind) json.RawMessage {
 		raw, err := Marshal(kind, MeetingNoteDeletedPayload{
 			Version: 1, HostID: uuid.New(), Source: "anarlog_sessions",
 			SourceID: uuid.NewString(),
+		})
+		require.NoError(t, err)
+		return raw
+	case KindCallReceived:
+		answered := true
+		raw, err := Marshal(kind, CallPayload{
+			Version: 1, HostID: uuid.New(), Source: "phone_calls",
+			CallUniqueID: "C-canonical-1", PeerHandle: "+15551234567",
+			PeerNormalized: "+15551234567", Service: "voice", Direction: "inbound",
+			Answered: &answered, HasVoicemail: false, DurationSeconds: 42,
+			StartedAt: at,
+		})
+		require.NoError(t, err)
+		return raw
+	case KindCallSent:
+		raw, err := Marshal(kind, CallPayload{
+			Version: 1, HostID: uuid.New(), Source: "phone_calls",
+			CallUniqueID: "C-canonical-2", PeerHandle: "+15551234567",
+			PeerNormalized: "+15551234567", Service: "facetime_audio", Direction: "outbound",
+			Answered: nil, HasVoicemail: false, DurationSeconds: 120,
+			StartedAt: at,
 		})
 		require.NoError(t, err)
 		return raw
@@ -1132,4 +1154,140 @@ func TestMarshalUnmarshal_MeetingNoteRecorded_RoundTrip(t *testing.T) {
 	require.True(t, original.MeetingAt.Equal(decoded.MeetingAt))
 	require.Equal(t, *original.Title, *decoded.Title)
 	require.Equal(t, *original.Summary, *decoded.Summary)
+}
+
+// ----------------------------------------------------------------------------
+// call.* payload tests.
+// ----------------------------------------------------------------------------
+
+// TestValidatePayload_Call_RejectsBadInputs covers the per-kind value
+// checks for CallPayload: unknown service, mismatched direction-vs-kind,
+// empty required fields, negative duration.
+func TestValidatePayload_Call_RejectsBadInputs(t *testing.T) {
+	host := uuid.New()
+	at := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name   string
+		kind   Kind
+		mutate func(p *CallPayload)
+		errSub string
+	}{
+		{
+			name:   "unknown service",
+			kind:   KindCallReceived,
+			mutate: func(p *CallPayload) { p.Service = "skype" },
+			errSub: "service",
+		},
+		{
+			name:   "service empty",
+			kind:   KindCallReceived,
+			mutate: func(p *CallPayload) { p.Service = "" },
+			errSub: "service",
+		},
+		{
+			name:   "direction-vs-kind mismatch (received with outbound)",
+			kind:   KindCallReceived,
+			mutate: func(p *CallPayload) { p.Direction = "outbound" },
+			errSub: "direction",
+		},
+		{
+			name:   "direction-vs-kind mismatch (sent with inbound)",
+			kind:   KindCallSent,
+			mutate: func(p *CallPayload) { p.Direction = "inbound" },
+			errSub: "direction",
+		},
+		{
+			name:   "empty call_unique_id",
+			kind:   KindCallReceived,
+			mutate: func(p *CallPayload) { p.CallUniqueID = "" },
+			errSub: "call_unique_id",
+		},
+		{
+			name:   "empty peer_handle",
+			kind:   KindCallReceived,
+			mutate: func(p *CallPayload) { p.PeerHandle = "" },
+			errSub: "peer_handle",
+		},
+		{
+			name:   "empty peer_normalized",
+			kind:   KindCallReceived,
+			mutate: func(p *CallPayload) { p.PeerNormalized = "" },
+			errSub: "peer_normalized",
+		},
+		{
+			name:   "negative duration",
+			kind:   KindCallReceived,
+			mutate: func(p *CallPayload) { p.DurationSeconds = -1 },
+			errSub: "duration_seconds",
+		},
+		{
+			name:   "zero started_at",
+			kind:   KindCallReceived,
+			mutate: func(p *CallPayload) { p.StartedAt = time.Time{} },
+			errSub: "started_at",
+		},
+		{
+			name:   "empty host_id",
+			kind:   KindCallReceived,
+			mutate: func(p *CallPayload) { p.HostID = uuid.Nil },
+			errSub: "host_id",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			answered := true
+			p := CallPayload{
+				Version: 1, HostID: host, Source: "phone_calls",
+				CallUniqueID: "C-bad-input", PeerHandle: "+15551234567",
+				PeerNormalized: "+15551234567", Service: "voice", Direction: "inbound",
+				Answered: &answered, HasVoicemail: false, DurationSeconds: 1,
+				StartedAt: at,
+			}
+			tc.mutate(&p)
+			raw, err := Marshal(tc.kind, p)
+			require.NoError(t, err)
+			env := &Envelope{Kind: tc.kind, Payload: raw}
+			err = ValidatePayload(env)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.errSub)
+		})
+	}
+}
+
+// TestMarshalUnmarshal_CallPayload round-trips a connected inbound and a
+// missed outbound call.
+func TestMarshalUnmarshal_CallPayload(t *testing.T) {
+	host := uuid.New()
+	at := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+
+	answered := true
+	inbound := CallPayload{
+		Version: 1, HostID: host, Source: "phone_calls",
+		CallUniqueID: "uniq-in-1", PeerHandle: "+1 (555) 123-4567",
+		PeerNormalized: "+15551234567", Service: "voice", Direction: "inbound",
+		Answered: &answered, HasVoicemail: false, DurationSeconds: 30,
+		StartedAt: at,
+	}
+	raw, err := Marshal(KindCallReceived, inbound)
+	require.NoError(t, err)
+	env := &Envelope{Kind: KindCallReceived, Payload: raw}
+	var decoded CallPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.Equal(t, inbound, decoded)
+
+	missedOutbound := CallPayload{
+		Version: 1, HostID: host, Source: "phone_calls",
+		CallUniqueID: "uniq-out-1", PeerHandle: "user@example.com",
+		PeerNormalized: "user@example.com", Service: "facetime_audio", Direction: "outbound",
+		Answered: nil, HasVoicemail: false, DurationSeconds: 0,
+		StartedAt: at,
+	}
+	raw, err = Marshal(KindCallSent, missedOutbound)
+	require.NoError(t, err)
+	env = &Envelope{Kind: KindCallSent, Payload: raw}
+	decoded = CallPayload{}
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.Equal(t, missedOutbound, decoded)
 }

@@ -19,7 +19,11 @@ public final class OnDiskHeartbeatStateWriter: HeartbeatStateWriter {
         self.logger = logger
     }
 
-    public func recordSuccessfulHeartbeat(at: Date, cursorEpoch: Int64) async throws {
+    public func recordSuccessfulHeartbeat(
+        at: Date,
+        cursorEpoch: Int64,
+        protocolVersion: Int32
+    ) async throws {
         do {
             try await mutator.mutate { state in
                 state.lastHeartbeatAt = at
@@ -30,12 +34,39 @@ public final class OnDiskHeartbeatStateWriter: HeartbeatStateWriter {
                 // backup-restore detection); persistence of that signal
                 // is a per-source concern.
                 _ = cursorEpoch
+                // protocolVersion IS persisted so source plugins can
+                // feature-gate themselves against older Pi instances
+                // without taking a StateMutator dep. Read via
+                // HeartbeatStateProvider.lastKnownPiProtocolVersion.
+                state.lastKnownPiProtocolVersion = protocolVersion
             }
         } catch {
             logger.warning("heartbeat: state persist failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
             throw error
+        }
+    }
+}
+
+/// Production `HeartbeatStateProvider` backed by `StateMutator`.
+/// Reads `lastKnownPiProtocolVersion` from `state.json` via the same
+/// actor that serializes writes, so a plugin's read never observes a
+/// torn write.
+public final class StateMutatorHeartbeatStateProvider: HeartbeatStateProvider {
+    private let mutator: StateMutator
+
+    public init(mutator: StateMutator) {
+        self.mutator = mutator
+    }
+
+    public var lastKnownPiProtocolVersion: Int32? {
+        get async {
+            // StateMutator.read returns a copy of DaemonState; if the
+            // read fails (corrupt state.json), treat as "no Pi version
+            // known" — equivalent to no heartbeat recorded yet.
+            let snap = try? await mutator.read()
+            return snap?.lastKnownPiProtocolVersion
         }
     }
 }

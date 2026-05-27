@@ -228,6 +228,41 @@ type ContactInteractionRecorder interface {
 	ExtendInteractionTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) (func(context.Context), error)
 }
 
+// PhoneCallWriter is the narrow surface for the per-event phone_call
+// staging path. Concrete is *repository.PhoneCallRepository.
+type PhoneCallWriter interface {
+	UpsertCallTx(ctx context.Context, tx pgx.Tx, params repository.UpsertPhoneCallParams) (*repository.PhoneCall, error)
+	MarkProcessedTx(ctx context.Context, tx pgx.Tx, params repository.MarkProcessedParams) error
+}
+
+// ContactRecorder is the narrow surface IngestService needs for the
+// inline interaction.recorded path. Concrete is *ContactService.
+// publishesEvent=true populates res.PrevCadence + res.CadenceAtEmit on
+// the returned result so the caller can attach them to the
+// interaction.recorded event it publishes itself; the service does NOT
+// publish the event (mirrors consumer/interaction_recorder.go).
+type ContactRecorder interface {
+	RecordInteractionTx(
+		ctx context.Context, tx pgx.Tx, publishesEvent bool, req repository.RecordInteractionRequest,
+	) (*repository.RecordInteractionResult, error)
+}
+
+// CadenceApplier is the narrow surface IngestService needs to inline-
+// apply cadence after publishing interaction.recorded. Concrete is
+// *consumer.CadenceUpdater.
+type CadenceApplier interface {
+	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
+}
+
+// FollowUpApplier is the narrow surface IngestService needs to inline-
+// apply follow-up after publishing interaction.recorded. Concrete is
+// *consumer.FollowUpManager. Returns a post-commit closure (non-nil on
+// the refresh branch) that the caller folds into a batch-level
+// post-commit slice so the Todoist item_update runs outside the tx.
+type FollowUpApplier interface {
+	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (postCommit func(context.Context), err error)
+}
+
 // IngestService persists pre-validated event envelopes inside a single
 // transaction. All envelopes in a batch commit together or roll back
 // together — spec §3.5 "all-or-nothing on unexpected errors."
@@ -256,6 +291,10 @@ type IngestService struct {
 	interactions     InteractionWriter
 	identityLookup   AnarlogIdentityLookup
 	contactSvc       ContactInteractionRecorder
+	phoneCalls       PhoneCallWriter
+	contactRecorder  ContactRecorder
+	cadence          CadenceApplier
+	followUp         FollowUpApplier
 }
 
 // NewIngestService builds an IngestService. Per-kind dependencies may
@@ -287,6 +326,10 @@ func NewIngestService(
 	interactions InteractionWriter,
 	identityLookup AnarlogIdentityLookup,
 	contactSvc ContactInteractionRecorder,
+	phoneCalls PhoneCallWriter,
+	contactRecorder ContactRecorder,
+	cadence CadenceApplier,
+	followUp FollowUpApplier,
 ) *IngestService {
 	return &IngestService{
 		database:         database,
@@ -301,6 +344,10 @@ func NewIngestService(
 		interactions:     interactions,
 		identityLookup:   identityLookup,
 		contactSvc:       contactSvc,
+		phoneCalls:       phoneCalls,
+		contactRecorder:  contactRecorder,
+		cadence:          cadence,
+		followUp:         followUp,
 	}
 }
 
@@ -320,6 +367,8 @@ var hostAuthAllowedKinds = map[events.Kind]struct{}{
 	events.KindExternalContactDeleted:  {},
 	events.KindMeetingNoteRecorded:     {},
 	events.KindMeetingNoteDeleted:      {},
+	events.KindCallReceived:            {},
+	events.KindCallSent:                {},
 }
 
 // isHostOnlyKind reports whether the kind is in the host-auth
@@ -351,6 +400,12 @@ func isExternalContactKind(k events.Kind) bool {
 // meeting_note.* daemon-emitted events.
 func isMeetingNoteKind(k events.Kind) bool {
 	return k == events.KindMeetingNoteRecorded || k == events.KindMeetingNoteDeleted
+}
+
+// isCallKind reports whether the kind is one of the call.* daemon-emitted
+// phone-call events.
+func isCallKind(k events.Kind) bool {
+	return k == events.KindCallReceived || k == events.KindCallSent
 }
 
 // pendingAggregateKey is the (source, contactID) pair used to dedupe
@@ -454,9 +509,13 @@ func (s *IngestService) IngestBatch(
 	pendingAggregate := make(map[pendingAggregateKey]struct{})
 
 	// batchPostCommit accumulates post-commit closures returned by
-	// per-event handlers (currently only meeting_note.recorded routes
-	// session interactions through ContactService.RecordInteractionTx,
-	// whose FollowUpFn fires the FollowUpManager after commit).
+	// per-event handlers — meeting_note.recorded routes session
+	// interactions through ContactService.RecordInteractionTx whose
+	// FollowUpFn fires the FollowUpManager after commit, and the
+	// inline call handler returns FollowUpManager.HandleEvent
+	// closures. They run AFTER tx.Commit so any external HTTP work
+	// (Todoist item_update) does not stall the connection inside the
+	// tx.
 	var batchPostCommit []func(context.Context)
 
 	for i, env := range envs {
@@ -473,7 +532,7 @@ func (s *IngestService) IngestBatch(
 				perEventRejections = append(perEventRejections, IngestPerEventRejection{
 					Index:   originalIdx,
 					Code:    ingestRejectUnsupportedHostAuthKind,
-					Message: fmt.Sprintf("kind %q not allowed on host-auth path; daemon only emits raw_message.* / external_contact.* / meeting_note.*", env.Kind),
+					Message: fmt.Sprintf("kind %q not allowed on host-auth path; daemon only emits raw_message.* / external_contact.* / meeting_note.* / call.*", env.Kind),
 				})
 				continue
 			}
@@ -505,6 +564,12 @@ func (s *IngestService) IngestBatch(
 			}
 		} else if isMeetingNoteKind(env.Kind) {
 			if rejection := verifyMeetingNoteInvariants(env, *hostID); rejection != nil {
+				rejection.Index = originalIdx
+				perEventRejections = append(perEventRejections, *rejection)
+				continue
+			}
+		} else if isCallKind(env.Kind) {
+			if rejection := verifyCallInvariants(env, *hostID); rejection != nil {
 				rejection.Index = originalIdx
 				perEventRejections = append(perEventRejections, *rejection)
 				continue
@@ -631,6 +696,19 @@ func (s *IngestService) IngestBatch(
 					}
 					continue
 				}
+			case isCallKind(env.Kind):
+				postCommit, rejection := s.handleCall(ctx, sp, env, *hostID, env.Kind == events.KindCallSent)
+				if rejection != nil {
+					rejection.Index = originalIdx
+					perEventRejections = append(perEventRejections, *rejection)
+					if rbErr := sp.Rollback(ctx); rbErr != nil {
+						return 0, 0, nil, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
+					}
+					continue
+				}
+				if postCommit != nil {
+					batchPostCommit = append(batchPostCommit, postCommit)
+				}
 			}
 		}
 
@@ -658,8 +736,8 @@ func (s *IngestService) IngestBatch(
 
 	// Step 6 — end-of-batch aggregator-enqueue. Each enqueue is in the
 	// OUTER tx (not a savepoint) — a failure here rolls the whole
-	// batch back (R4 rationale: partial-enqueue stranding is worse than
-	// a daemon retry).
+	// batch back. Partial-enqueue stranding would be worse than a
+	// daemon retry.
 	for pair := range pendingAggregate {
 		if s.riverClient == nil {
 			// No river client wired (test mode). Skip enqueue; the
@@ -683,12 +761,13 @@ func (s *IngestService) IngestBatch(
 		return 0, 0, nil, nil, fmt.Errorf("commit: %w", commitErr)
 	}
 	// Execute post-commit follow-up closures (FollowUpFn returned by
-	// ContactService.RecordInteractionTx). Run sequentially since
-	// FollowUpManager updates contact_task rows that may share a
-	// contact; the volume per batch is bounded by len(envs) so this
-	// is cheap. Each closure is itself best-effort: a failure inside
-	// the followup logic is logged inside FollowUpManager and does
-	// NOT roll back the batch (the interactions already committed).
+	// ContactService.RecordInteractionTx for meeting_note.recorded; also
+	// FollowUpManager refresh-branch Todoist item_update closures from
+	// the inline call handler). Run sequentially AFTER tx.Commit so any
+	// external HTTP work doesn't stall the connection inside the tx.
+	// Each closure is best-effort: failures are logged inside the
+	// closure and do NOT roll back the batch (the interactions already
+	// committed).
 	for _, fn := range batchPostCommit {
 		fn(ctx)
 	}
