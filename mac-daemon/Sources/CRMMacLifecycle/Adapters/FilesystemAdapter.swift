@@ -8,11 +8,16 @@ import Foundation
 public enum FilesystemError: Error, Equatable, CustomStringConvertible {
     case notFound(String)
     case ioError(String)
+    /// EACCES on a read attempt. Distinct from ioError so callers
+    /// can surface a "permission denied" branch (Doctor uses this to
+    /// produce `anarlog:files_folders_permission_denied`).
+    case permissionDenied(String)
 
     public var description: String {
         switch self {
         case .notFound(let p): return "filesystem: not found: \(p)"
         case .ioError(let m): return "filesystem: io: \(m)"
+        case .permissionDenied(let p): return "filesystem: permission denied: \(p)"
         }
     }
 }
@@ -35,4 +40,30 @@ public protocol FilesystemAdapter {
     func write(_ data: Data, to path: String) throws
     /// Read bytes from a file. Throws notFound if missing.
     func read(from path: String) throws -> Data
+    /// List children of a directory (filenames only). Throws
+    /// `permissionDenied` on EACCES so the Doctor can distinguish
+    /// "path missing" from "path present but unreadable". Default
+    /// impl provided for backward-compat with existing test fakes.
+    func listDirectory(at path: String) throws -> [String]
+    /// True when `path` is a directory; false for files and missing
+    /// paths. Default impl returns false so existing fakes don't
+    /// break; production impl + the in-memory Doctor fake both
+    /// override.
+    func isDirectory(at path: String) -> Bool
+}
+
+public extension FilesystemAdapter {
+    /// Default impl returns an empty list so existing FilesystemAdapter
+    /// conformers (in-memory installer fakes, etc.) don't break. The
+    /// production impl + Doctor's anarlog probes use the real
+    /// implementation; the installer doesn't touch listDirectory at all.
+    func listDirectory(at path: String) throws -> [String] {
+        _ = path
+        return []
+    }
+
+    func isDirectory(at path: String) -> Bool {
+        _ = path
+        return false
+    }
 }

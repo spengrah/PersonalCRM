@@ -78,5 +78,43 @@ struct StatusCommand: ParsableCommand {
         } else {
             print("  icloud_contacts: (no containers configured; run `crm-mac configure containers`)")
         }
+
+        renderAnarlog("anarlog_humans", report.anarlogHumans)
+        renderAnarlog("anarlog_sessions", report.anarlogSessions)
+    }
+
+    private func renderAnarlog(_ name: String, _ status: AnarlogSourceStatus?) {
+        guard let s = status else {
+            print("  \(name): (no anarlog config; run `crm-mac configure anarlog --help`)")
+            return
+        }
+        print("  \(name):")
+        print("    enabled:            \(s.enabled)")
+        let formatter = ISO8601DateFormatter()
+        print("    last_scheduled_at:  \(s.lastScheduledAt.map { formatter.string(from: $0) } ?? "never")")
+        print("    last_pushed_at:     \(s.lastPushedAt.map { formatter.string(from: $0) } ?? "never")")
+        // cursorUUIDCount is nil for two distinct reasons:
+        //   1. no state slot yet (source never ticked) → render as
+        //      "never"
+        //   2. state present but cursor JSON is malformed → render as
+        //      "(decode_error)"
+        // last_scheduled_at being nil tells us which case we're in
+        // (state.lastScheduledAt is bumped at the TOP of every tick,
+        // before any decode can happen).
+        let countRendering: String
+        if s.cursorUUIDCount == nil && s.lastScheduledAt == nil {
+            countRendering = "never"
+        } else if let n = s.cursorUUIDCount {
+            countRendering = String(n)
+        } else {
+            countRendering = "(decode_error)"
+        }
+        print("    cursor_uuid_count:  \(countRendering)")
+        print("    schema_version:     \(s.schemaVersion)")
+        if s.recoveryRequested {
+            print("    recovery_requested: YES (\(s.lastError ?? "unknown reason"))")
+        } else if let err = s.lastError {
+            print("    last_error:         \(err)")
+        }
     }
 }

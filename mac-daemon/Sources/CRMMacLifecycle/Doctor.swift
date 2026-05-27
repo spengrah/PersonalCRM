@@ -115,7 +115,177 @@ public struct Doctor {
         results.append(contentsOf: checkICloudContacts(
             allowlist: configCheck.icloudAllowlist,
             sourceState: configCheck.icloudSourceState))
+        results.append(contentsOf: checkAnarlog(
+            config: configCheck.anarlogConfig,
+            humansSource: configCheck.anarlogHumansSourceState,
+            sessionsSource: configCheck.anarlogSessionsSourceState))
         return DoctorReport(results: results)
+    }
+
+    /// Composite check for the anarlog reader sources. Each enable
+    /// flag flips independently between not_configured + active. Path
+    /// + subdir + permission probes happen once and surface as
+    /// shared `anarlog:*` results so the operator sees one row per
+    /// failure instead of two near-identical rows.
+    private func checkAnarlog(
+        config: AnarlogConfig?,
+        humansSource: SourceState?,
+        sessionsSource: SourceState?
+    ) -> [CheckResult] {
+        var results: [CheckResult] = []
+
+        // Per-source enable flag — emit one info/warn row per source.
+        guard let cfg = config else {
+            results.append(CheckResult(
+                name: "anarlog_humans",
+                status: .warn,
+                details: "not_configured (run `crm-mac configure anarlog --path <abs> --enable both`)"))
+            results.append(CheckResult(
+                name: "anarlog_sessions",
+                status: .warn,
+                details: "not_configured (run `crm-mac configure anarlog --path <abs> --enable both`)"))
+            return results
+        }
+        results.append(CheckResult(
+            name: "anarlog_humans",
+            status: cfg.humansEnabled ? .pass : .warn,
+            details: cfg.humansEnabled
+                ? "enabled (root=\(cfg.rootPath))"
+                : "not_configured (disabled)"))
+        results.append(CheckResult(
+            name: "anarlog_sessions",
+            status: cfg.sessionsEnabled ? .pass : .warn,
+            details: cfg.sessionsEnabled
+                ? "enabled (root=\(cfg.rootPath))"
+                : "not_configured (disabled)"))
+
+        // Only run filesystem probes if at least one source is enabled.
+        guard cfg.humansEnabled || cfg.sessionsEnabled else {
+            return results
+        }
+
+        let rootPath = (cfg.rootPath as NSString).expandingTildeInPath
+        guard deps.filesystem.fileExists(at: rootPath) else {
+            results.append(CheckResult(
+                name: "anarlog:path_missing",
+                status: .fail,
+                details: "configured path does not exist: \(rootPath)"))
+            return results
+        }
+
+        if cfg.humansEnabled {
+            let humansPath = (rootPath as NSString).appendingPathComponent("humans")
+            if !deps.filesystem.fileExists(at: humansPath) {
+                results.append(CheckResult(
+                    name: "anarlog:humans_subdir_missing",
+                    status: .warn,
+                    details: "humans/ subdirectory not found under \(rootPath)"))
+            } else {
+                // Probe readability and count files via listDirectory.
+                // A FilesystemError.permissionDenied is the TCC
+                // Files & Folders rejection — surface it as
+                // `anarlog:files_folders_permission_denied` so the
+                // operator knows to grant the permission.
+                do {
+                    let entries = try deps.filesystem.listDirectory(at: humansPath)
+                    let mdCount = entries.filter { $0.hasSuffix(".md") }.count
+                    results.append(CheckResult(
+                        name: "anarlog:humans_count",
+                        status: .pass,
+                        details: "\(mdCount) human file(s) in \(humansPath)"))
+                } catch FilesystemError.permissionDenied {
+                    results.append(CheckResult(
+                        name: "anarlog:files_folders_permission_denied",
+                        status: .fail,
+                        details: "EACCES on \(humansPath); grant Files & Folders to crm-mac in System Settings"))
+                } catch {
+                    results.append(CheckResult(
+                        name: "anarlog:humans_count",
+                        status: .warn,
+                        details: "list humans/ failed: \(error)"))
+                }
+                if let humansSource {
+                    results.append(lastTickResult(
+                        sourceName: "anarlog_humans.last_tick",
+                        state: humansSource,
+                        intervalSeconds: 5 * 60))
+                }
+            }
+        }
+        if cfg.sessionsEnabled {
+            let sessionsPath = (rootPath as NSString).appendingPathComponent("sessions")
+            if !deps.filesystem.fileExists(at: sessionsPath) {
+                results.append(CheckResult(
+                    name: "anarlog:sessions_subdir_missing",
+                    status: .warn,
+                    details: "sessions/ subdirectory not found under \(rootPath)"))
+            } else {
+                do {
+                    let entries = try deps.filesystem.listDirectory(at: sessionsPath)
+                    // Sessions are UUID-named DIRECTORIES. Best-effort
+                    // count entries that (a) match the 8-4-4-4-12
+                    // UUID shape AND (b) are actually directories on
+                    // disk — a bare file named like a UUID is junk
+                    // that the reader skips, so it shouldn't inflate
+                    // the count. Uses a 36-char + 4-hyphen shape
+                    // probe rather than the full UUID validator to
+                    // keep Doctor free of any anarlog-target dep.
+                    let sessionCount = entries
+                        .filter { $0.count == 36 && $0.filter { $0 == "-" }.count == 4 }
+                        .filter { name in
+                            let path = (sessionsPath as NSString).appendingPathComponent(name)
+                            return deps.filesystem.isDirectory(at: path)
+                        }
+                        .count
+                    results.append(CheckResult(
+                        name: "anarlog:sessions_count",
+                        status: .pass,
+                        details: "\(sessionCount) session(s) in \(sessionsPath)"))
+                } catch FilesystemError.permissionDenied {
+                    results.append(CheckResult(
+                        name: "anarlog:files_folders_permission_denied",
+                        status: .fail,
+                        details: "EACCES on \(sessionsPath); grant Files & Folders to crm-mac in System Settings"))
+                } catch {
+                    results.append(CheckResult(
+                        name: "anarlog:sessions_count",
+                        status: .warn,
+                        details: "list sessions/ failed: \(error)"))
+                }
+                if let sessionsSource {
+                    results.append(lastTickResult(
+                        sourceName: "anarlog_sessions.last_tick",
+                        state: sessionsSource,
+                        intervalSeconds: 60 * 60))
+                }
+            }
+        }
+        return results
+    }
+
+    private func lastTickResult(
+        sourceName: String,
+        state: SourceState,
+        intervalSeconds: TimeInterval
+    ) -> CheckResult {
+        let bumps = [state.lastScheduledAt, state.lastPushedAt].compactMap { $0 }
+        guard let latest = bumps.max() else {
+            return CheckResult(
+                name: sourceName,
+                status: .warn,
+                details: "no tick recorded yet")
+        }
+        let age = deps.clock.now().timeIntervalSince(latest)
+        if age > 2 * intervalSeconds {
+            return CheckResult(
+                name: sourceName,
+                status: .warn,
+                details: "last activity \(Int(age))s ago (threshold \(Int(2 * intervalSeconds))s)")
+        }
+        return CheckResult(
+            name: sourceName,
+            status: .pass,
+            details: "last activity \(Int(age))s ago")
     }
 
     /// Composite check for the icloud_contacts source:
@@ -267,9 +437,9 @@ public struct Doctor {
     }
 
     /// Aggregate of the config+state check that downstream callers
-    /// (Pi reachability + icloud_contacts) need to inspect. Named for
-    /// self-documentation where the prior 3-tuple shape required
-    /// positional unwrap.
+    /// (Pi reachability + icloud_contacts + anarlog) need to inspect.
+    /// Named for self-documentation where the prior 3-tuple shape
+    /// required positional unwrap.
     private struct ConfigAndStateResult {
         let result: CheckResult
         let auth: PiAuth?
@@ -281,6 +451,13 @@ public struct Doctor {
         /// Per-source state for icloud_contacts. Nil when the source
         /// has never ticked.
         let icloudSourceState: SourceState?
+        /// Configured anarlog config (path + enable flags). Nil when
+        /// the config file lacks the `sources.anarlog` key.
+        let anarlogConfig: AnarlogConfig?
+        /// Per-source state for the anarlog reader plugins. Nil when
+        /// the source has never ticked.
+        let anarlogHumansSourceState: SourceState?
+        let anarlogSessionsSourceState: SourceState?
     }
 
     private func checkKeychain() -> CheckResult {
@@ -321,24 +498,36 @@ public struct Doctor {
 
     private func checkConfigAndState() -> ConfigAndStateResult {
         let placeholderURL = URL(string: "https://localhost")!
-        guard deps.filesystem.fileExists(at: deps.paths.configFilePath) else {
+        // Local helper closure so each early-return path produces a
+        // fully-populated ConfigAndStateResult without 9 near-identical
+        // call sites going stale when a new field lands on the struct.
+        func failure(
+            details: String,
+            cfg: DaemonConfig? = nil,
+            state: DaemonState? = nil
+        ) -> ConfigAndStateResult {
+            let icloud = cfg?.sources?.icloudContacts?.containers ?? []
+            let anarlog = cfg?.sources?.anarlog
             return ConfigAndStateResult(
-                result: CheckResult(name: "config_state", status: .fail, details: "config.json missing"),
+                result: CheckResult(
+                    name: "config_state", status: .fail, details: details),
                 auth: nil,
-                piURL: placeholderURL,
-                icloudAllowlist: [],
-                icloudSourceState: nil)
+                piURL: cfg?.piURL ?? placeholderURL,
+                icloudAllowlist: icloud,
+                icloudSourceState: state?.sources["icloud_contacts"],
+                anarlogConfig: anarlog,
+                anarlogHumansSourceState: state?.sources["anarlog_humans"],
+                anarlogSessionsSourceState: state?.sources["anarlog_sessions"])
+        }
+
+        guard deps.filesystem.fileExists(at: deps.paths.configFilePath) else {
+            return failure(details: "config.json missing")
         }
         let configData: Data
         do {
             configData = try deps.filesystem.read(from: deps.paths.configFilePath)
         } catch {
-            return ConfigAndStateResult(
-                result: CheckResult(name: "config_state", status: .fail, details: "read config.json: \(error)"),
-                auth: nil,
-                piURL: placeholderURL,
-                icloudAllowlist: [],
-                icloudSourceState: nil)
+            return failure(details: "read config.json: \(error)")
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -346,57 +535,34 @@ public struct Doctor {
         do {
             cfg = try decoder.decode(DaemonConfig.self, from: configData)
         } catch {
-            return ConfigAndStateResult(
-                result: CheckResult(name: "config_state", status: .fail, details: "decode config.json: \(error)"),
-                auth: nil,
-                piURL: placeholderURL,
-                icloudAllowlist: [],
-                icloudSourceState: nil)
+            return failure(details: "decode config.json: \(error)")
         }
         let icloudAllowlist = cfg.sources?.icloudContacts?.containers ?? []
+        let anarlogConfig = cfg.sources?.anarlog
 
         guard deps.filesystem.fileExists(at: deps.paths.stateFilePath) else {
-            return ConfigAndStateResult(
-                result: CheckResult(name: "config_state", status: .fail, details: "state.json missing"),
-                auth: nil,
-                piURL: cfg.piURL,
-                icloudAllowlist: icloudAllowlist,
-                icloudSourceState: nil)
+            return failure(details: "state.json missing", cfg: cfg)
         }
         let stateData: Data
         do {
             stateData = try deps.filesystem.read(from: deps.paths.stateFilePath)
         } catch {
-            return ConfigAndStateResult(
-                result: CheckResult(name: "config_state", status: .fail, details: "read state.json: \(error)"),
-                auth: nil,
-                piURL: cfg.piURL,
-                icloudAllowlist: icloudAllowlist,
-                icloudSourceState: nil)
+            return failure(details: "read state.json: \(error)", cfg: cfg)
         }
         let state: DaemonState
         do {
             state = try decoder.decode(DaemonState.self, from: stateData)
         } catch {
-            return ConfigAndStateResult(
-                result: CheckResult(name: "config_state", status: .fail, details: "decode state.json: \(error)"),
-                auth: nil,
-                piURL: cfg.piURL,
-                icloudAllowlist: icloudAllowlist,
-                icloudSourceState: nil)
+            return failure(details: "decode state.json: \(error)", cfg: cfg)
         }
         if state.schemaVersion != DaemonState.currentSchemaVersion {
-            return ConfigAndStateResult(
-                result: CheckResult(
-                    name: "config_state",
-                    status: .fail,
-                    details: "state schemaVersion=\(state.schemaVersion); expected \(DaemonState.currentSchemaVersion)"),
-                auth: nil,
-                piURL: cfg.piURL,
-                icloudAllowlist: icloudAllowlist,
-                icloudSourceState: state.sources["icloud_contacts"])
+            return failure(
+                details: "state schemaVersion=\(state.schemaVersion); expected \(DaemonState.currentSchemaVersion)",
+                cfg: cfg, state: state)
         }
         let icloudSourceState = state.sources["icloud_contacts"]
+        let anarlogHumansState = state.sources["anarlog_humans"]
+        let anarlogSessionsState = state.sources["anarlog_sessions"]
         let apiKey: String
         do {
             apiKey = try deps.keychain.readAPIKey()
@@ -409,7 +575,10 @@ public struct Doctor {
                 auth: nil,
                 piURL: cfg.piURL,
                 icloudAllowlist: icloudAllowlist,
-                icloudSourceState: icloudSourceState)
+                icloudSourceState: icloudSourceState,
+                anarlogConfig: anarlogConfig,
+                anarlogHumansSourceState: anarlogHumansState,
+                anarlogSessionsSourceState: anarlogSessionsState)
         }
         return ConfigAndStateResult(
             result: CheckResult(
@@ -419,7 +588,10 @@ public struct Doctor {
             auth: PiAuth(hostID: cfg.hostID, apiKey: apiKey),
             piURL: cfg.piURL,
             icloudAllowlist: icloudAllowlist,
-            icloudSourceState: icloudSourceState)
+            icloudSourceState: icloudSourceState,
+            anarlogConfig: anarlogConfig,
+            anarlogHumansSourceState: anarlogHumansState,
+            anarlogSessionsSourceState: anarlogSessionsState)
     }
 
     private func checkPiReachability(auth: PiAuth, piURL: URL) async -> CheckResult {

@@ -106,4 +106,24 @@ public struct ProductionFilesystemAdapter: FilesystemAdapter {
             throw FilesystemError.ioError("read \(path): \(error.localizedDescription)")
         }
     }
+
+    public func listDirectory(at path: String) throws -> [String] {
+        do {
+            return try fm.contentsOfDirectory(atPath: path)
+        } catch let nsErr as NSError where nsErr.domain == NSCocoaErrorDomain &&
+            (nsErr.code == NSFileReadNoPermissionError ||
+             nsErr.code == NSFileReadCorruptFileError) {
+            throw FilesystemError.permissionDenied(path)
+        } catch let posixErr as POSIXError where posixErr.code == .EACCES {
+            throw FilesystemError.permissionDenied(path)
+        } catch {
+            throw FilesystemError.ioError("listDirectory \(path): \(error.localizedDescription)")
+        }
+    }
+
+    public func isDirectory(at path: String) -> Bool {
+        var isDir: ObjCBool = false
+        let exists = fm.fileExists(atPath: path, isDirectory: &isDir)
+        return exists && isDir.boolValue
+    }
 }

@@ -12,6 +12,7 @@
 //   - state.json missing/corrupt/schema mismatch: 5
 import Foundation
 import ArgumentParser
+import CRMMacAnarlogSource
 import CRMMacCore
 import CRMMacIcloudContactsSource
 import CRMMacLifecycle
@@ -151,16 +152,102 @@ struct DaemonCommand: AsyncParsableCommand {
             healthRegistry: healthRegistry,
             logger: logger)
 
+        // Anarlog reader sources. Both plugins share the AnarlogConfig
+        // slot in config.json; both default-disabled until the
+        // operator runs `crm-mac configure anarlog --enable …`.
+        // The sessions plugin also gets an FSEvents watcher that
+        // fires its tick() when ANY file under the configured
+        // sessions/ directory changes; the watcher's start() is gated
+        // on the config being present + sessions enabled at startup.
+        let anarlogFilesystem = ProductionAnarlogFilesystem()
+        let anarlogConfigSource = AnarlogConfigStoreSource(store: configStore)
+        let anarlogHumansPublisher = AnarlogHumansPublisher(
+            sender: { [piClient] auth, body in
+                try await piClient.ingestEvents(auth: auth, body: body)
+            },
+            auth: auth, logger: logger)
+        let anarlogHumansPlugin = AnarlogHumansSourcePlugin(
+            piClient: piClient,
+            auth: auth,
+            mutator: stateMutator,
+            publisher: anarlogHumansPublisher,
+            filesystem: anarlogFilesystem,
+            configSource: anarlogConfigSource,
+            healthRegistry: healthRegistry,
+            logger: logger)
+        let anarlogSessionsPublisher = AnarlogSessionsPublisher(
+            sender: { [piClient] auth, body in
+                try await piClient.ingestEvents(auth: auth, body: body)
+            },
+            auth: auth, logger: logger)
+        let anarlogSessionsPlugin = AnarlogSessionsSourcePlugin(
+            piClient: piClient,
+            auth: auth,
+            mutator: stateMutator,
+            publisher: anarlogSessionsPublisher,
+            filesystem: anarlogFilesystem,
+            configSource: anarlogConfigSource,
+            healthRegistry: healthRegistry,
+            logger: logger)
+
+        // FSEvents watcher for the sessions plugin. We start the
+        // watcher only when the config is loadable + sessions is
+        // enabled; a runtime config change (operator runs `configure
+        // anarlog --enable sessions` while daemon is running) is
+        // refused by the configure command (requireDaemonNotRunning)
+        // so a stop+start cycle is required to pick up new state.
+        var sessionsWatcher: AnarlogFSEventsWatcher?
+        if let cfg = try? configStore.loadAnarlogConfig(), cfg.sessionsEnabled {
+            let sessionsPath = AnarlogPathResolver
+                .sessionsDir(rootPath: cfg.rootPath).path
+            let watcher = AnarlogFSEventsWatcher(
+                path: sessionsPath,
+                logger: logger,
+                onChange: { [weak anarlogSessionsPlugin, weak logger] in
+                    // Wrap in do/catch so a thrown error from tick()
+                    // is logged rather than silently swallowed
+                    // (silent FSEvents-trigger error swallowing
+                    // would otherwise hide tick failures from the log).
+                    Task {
+                        do {
+                            try await anarlogSessionsPlugin?.tick()
+                        } catch {
+                            logger?.warning(
+                                "anarlog_sessions: FSEvents-triggered tick failed",
+                                metadata: [
+                                    "error": .private(String(describing: error)),
+                                ])
+                        }
+                    }
+                })
+            do {
+                try watcher.start()
+                sessionsWatcher = watcher
+            } catch {
+                logger.warning("anarlog_sessions: FSEvents start failed", metadata: [
+                    "error": .private(String(describing: error)),
+                ])
+            }
+        }
+
         let plugins: [SourcePlugin] = [
             messagesPlugin,
             icloudPlugin,
+            anarlogHumansPlugin,
+            anarlogSessionsPlugin,
         ]
         let scheduler = DispatchSourceScheduleRunner(logger: logger)
+        // preShutdown hook stops the FSEvents watcher before plugins
+        // are cancelled — without this ordering a late FSEvents
+        // callback can fire into a half-cancelled sessions actor.
         let runner = DaemonRunner(
             heartbeat: heartbeat,
             plugins: plugins,
             runner: scheduler,
-            logger: logger)
+            logger: logger,
+            preShutdown: { [sessionsWatcher] in
+                sessionsWatcher?.stop()
+            })
 
         // Block until SIGTERM / SIGINT. DispatchSource lets the actor
         // wake on signal delivery; the explicit SIG_IGN on each is

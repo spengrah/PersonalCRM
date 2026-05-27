@@ -16,21 +16,32 @@ public final class DaemonRunner {
     private let plugins: [SourcePlugin]
     private let runner: ScheduleRunner
     private let logger: LoggerProtocol
+    private let preShutdown: (@Sendable () async -> Void)?
 
     public init(
         heartbeat: SourcePlugin,
         plugins: [SourcePlugin],
         runner: ScheduleRunner,
-        logger: LoggerProtocol
+        logger: LoggerProtocol,
+        preShutdown: (@Sendable () async -> Void)? = nil
     ) {
         self.heartbeat = heartbeat
         self.plugins = plugins
         self.runner = runner
         self.logger = logger
+        self.preShutdown = preShutdown
     }
 
     /// Start all plugins; await cancellation. Returns when the
     /// caller-provided `awaitShutdown` closure completes.
+    ///
+    /// The optional `preShutdown` closure (set at construction time)
+    /// runs AFTER `awaitShutdown` returns but BEFORE registered
+    /// plugins are cancelled. This is the hook the anarlog sessions
+    /// FSEvents watcher uses to stop its CFRunLoop stream cleanly
+    /// before the actor that owns it is torn down — without this
+    /// ordering the watcher can fire a late callback into a
+    /// half-cancelled actor.
     public func run(awaitShutdown: () async -> Void) async {
         let registry = PluginRegistry(runner: runner, logger: logger)
         registry.registerAll([heartbeat] + plugins)
@@ -38,6 +49,9 @@ public final class DaemonRunner {
             "plugin_count": .public(String(registry.registrationCount)),
         ])
         await awaitShutdown()
+        if let preShutdown {
+            await preShutdown()
+        }
         registry.cancelAll()
         logger.info("daemon: shutdown")
     }

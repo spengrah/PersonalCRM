@@ -29,13 +29,24 @@ public struct ICloudContactsConfig: Codable, Equatable, Sendable {
 /// nil. Future per-source configs live as additional fields here.
 public struct DaemonSourcesConfig: Codable, Equatable, Sendable {
     public var icloudContacts: ICloudContactsConfig?
+    /// Per-anarlog-reader config (shared by anarlog_humans and
+    /// anarlog_sessions plugins). Optional — older config files
+    /// written before this key landed decode with `anarlog == nil`
+    /// and the plugins surface as "not_configured" until the operator
+    /// runs `crm-mac configure anarlog`.
+    public var anarlog: AnarlogConfig?
 
-    public init(icloudContacts: ICloudContactsConfig? = nil) {
+    public init(
+        icloudContacts: ICloudContactsConfig? = nil,
+        anarlog: AnarlogConfig? = nil
+    ) {
         self.icloudContacts = icloudContacts
+        self.anarlog = anarlog
     }
 
     private enum CodingKeys: String, CodingKey {
         case icloudContacts = "icloud_contacts"
+        case anarlog
     }
 }
 
