@@ -299,6 +299,56 @@ crm-mac start
 
 `--since` accepts a simple duration: `30d`, `12h`, `60m`, `3600s`.
 
+### `crm-mac configure anarlog ...`
+
+Configure the Anarlog notes reader sources. Both `anarlog_humans` and `anarlog_sessions` share a single root path (typically `~/Documents/notes/meetings`) and each has its own enable flag — both default false. The daemon must be stopped for all mutations.
+
+```bash
+crm-mac stop
+
+# First run — set the path and turn both sources on.
+crm-mac configure anarlog --path ~/Documents/notes/meetings --enable both
+
+# Enable / disable individually.
+crm-mac configure anarlog --enable humans
+crm-mac configure anarlog --disable sessions
+
+# Reset the Pi-side cursor (the next daemon start re-walks from scratch).
+crm-mac configure anarlog --reset-cursor humans       # or sessions, or both
+
+crm-mac start
+```
+
+Persisted under `sources.anarlog` in `~/Library/Application Support/crm-mac/config.json`:
+
+```json
+{
+  "sources": {
+    "anarlog": {
+      "root_path": "/Users/you/Documents/notes/meetings",
+      "humans_enabled": true,
+      "sessions_enabled": true
+    }
+  }
+}
+```
+
+The humans plugin polls every ~5 min (`NSBackgroundActivityScheduler`); the sessions plugin is FSEvents-driven (notified within ~1.5s of any file change under `sessions/`) with an hourly safety poll for catchup and tombstone detection.
+
+### Anarlog: Files & Folders permission
+
+The daemon reads `humans/*.md` and `sessions/<uuid>/{_meta.json, _summary.md?, _memo.md?}` directly from the Anarlog notes folder, which lives under `~/Documents/`. macOS protects `~/Documents` via TCC; the daemon needs **Files & Folders** access for the configured path.
+
+System Settings - Privacy & Security - Files & Folders - crm-mac - enable Documents Folder.
+
+If permission was revoked after grant (Doctor reports `anarlog:files_folders_permission_denied`), reset and reprompt:
+
+```bash
+tccutil reset SystemPolicyDocumentsFolder xyz.spengrah.crm-mac
+crm-mac stop
+crm-mac start
+```
+
 ## Daemon-running guard
 
 The daemon acquires a POSIX advisory lock on `~/Library/Application Support/crm-mac/daemon.pid` on start; the ops subcommands acquire-or-refuse it before mutating cursor state. Stale PID recovery is automatic — if the daemon crashed without releasing the lock, the next startup detects the dead PID, unlinks the pidfile, and re-acquires.
