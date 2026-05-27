@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/anarlog"
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
@@ -127,6 +128,8 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, service.NewRematchService())
 	contactSvc.SetCadenceUpdater(wireCadenceUpdaterForAPITest(t, database, contactSvc))
 
+	titleMatcher := anarlog.NewTitleMatcher(contactRepo)
+	titleDiscoveryWriter := anarlog.NewDiscoveryWriter(externalRepo)
 	ingestService := service.NewIngestService(
 		database,
 		eventBus,
@@ -144,6 +147,8 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 		nil, // contactRecorder unused
 		nil, // cadence unused
 		nil, // followUp unused
+		titleMatcher,
+		titleDiscoveryWriter,
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 

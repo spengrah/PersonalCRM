@@ -53,6 +53,8 @@ const (
 	ingestRejectLinkageQueryFailed                = "LINKAGE_QUERY_FAILED"
 	ingestRejectParticipantResolveFailed          = "PARTICIPANT_RESOLVE_FAILED"
 	ingestRejectInteractionWriteFailed            = "INTERACTION_WRITE_FAILED"
+	ingestRejectTitleMatchFailed                  = "TITLE_MATCH_FAILED"
+	ingestRejectTitleDiscoveryUpsertFailed        = "TITLE_DISCOVERY_UPSERT_FAILED"
 )
 
 // ErrHostRevokedDuringBatch is returned by IngestBatch when the
@@ -263,6 +265,21 @@ type FollowUpApplier interface {
 	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (postCommit func(context.Context), err error)
 }
 
+// IngestTitleMatcher is the narrow surface the meeting_note.recorded
+// handler uses to disambiguate a single title-extracted name token to
+// a CRM contact. Concrete is *anarlog.TitleMatcher.
+type IngestTitleMatcher interface {
+	MatchTitleToken(ctx context.Context, token string) (*repository.ContactMatch, error)
+}
+
+// IngestTitleDiscoveryWriter is the narrow surface the meeting_note
+// handler uses to persist anarlog_title weak-candidate rows for tokens
+// that didn't resolve to an existing CRM contact. Concrete is
+// *anarlog.DiscoveryWriter.
+type IngestTitleDiscoveryWriter interface {
+	UpsertTitleCandidateTx(ctx context.Context, tx pgx.Tx, sessionUUID uuid.UUID, normalizedToken, displayToken string) error
+}
+
 // IngestService persists pre-validated event envelopes inside a single
 // transaction. All envelopes in a batch commit together or roll back
 // together — spec §3.5 "all-or-nothing on unexpected errors."
@@ -295,6 +312,8 @@ type IngestService struct {
 	contactRecorder  ContactRecorder
 	cadence          CadenceApplier
 	followUp         FollowUpApplier
+	titleMatcher     IngestTitleMatcher
+	discovery        IngestTitleDiscoveryWriter
 }
 
 // NewIngestService builds an IngestService. Per-kind dependencies may
@@ -309,10 +328,11 @@ type IngestService struct {
 // concrete repository so the race window between auth and commit is
 // closed.
 //
-// meetingNotes/calendar/interactions/identityLookup/contactSvc are the
-// meeting_note.* inline handler's dependency set. Passing nil here is
-// supported for callers that don't need the meeting_note path; the
-// handler returns PAYLOAD_INVARIANT for missing wiring.
+// meetingNotes/calendar/interactions/identityLookup/contactSvc/
+// titleMatcher/discovery are the meeting_note.* inline handler's
+// dependency set. Passing nil here is supported for callers that don't
+// need the meeting_note path; the handler returns PAYLOAD_INVARIANT for
+// missing wiring.
 func NewIngestService(
 	database *db.Database,
 	bus *events.Bus,
@@ -330,6 +350,8 @@ func NewIngestService(
 	contactRecorder ContactRecorder,
 	cadence CadenceApplier,
 	followUp FollowUpApplier,
+	titleMatcher IngestTitleMatcher,
+	discovery IngestTitleDiscoveryWriter,
 ) *IngestService {
 	return &IngestService{
 		database:         database,
@@ -348,6 +370,8 @@ func NewIngestService(
 		contactRecorder:  contactRecorder,
 		cadence:          cadence,
 		followUp:         followUp,
+		titleMatcher:     titleMatcher,
+		discovery:        discovery,
 	}
 }
 
@@ -1781,7 +1805,8 @@ func (s *IngestService) handleMeetingNoteRecorded(
 	authenticatedHostID uuid.UUID,
 ) (*NeedsAttentionItem, []func(context.Context), *IngestPerEventRejection) {
 	if s.meetingNotes == nil || s.calendar == nil || s.interactions == nil ||
-		s.identityLookup == nil || s.contactSvc == nil {
+		s.identityLookup == nil || s.contactSvc == nil ||
+		s.titleMatcher == nil || s.discovery == nil {
 		return nil, nil, &IngestPerEventRejection{
 			Code:    ingestRejectPayloadInvariant,
 			Message: "ingest service was not configured for meeting_note processing",
