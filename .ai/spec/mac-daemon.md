@@ -170,7 +170,7 @@ The pairing token model means there's no admin/bootstrap key in widespread use �
 
 #### `whatsapp`
 
-- **Source:** `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/` — primary DB `ChatStorage.sqlite`. Secondary: `ContactsV2.sqlite`, `ExtChatDB/ExtChatDatabase.sqlite`. Read-only via GRDB.swift with `?mode=ro&immutable=1` and backoff on `SQLITE_CANTOPEN`/`SQLITE_BUSY` (WhatsApp.app holds locks while running).
+- **Source:** `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/` — primary DB `ChatStorage.sqlite`. Secondary: `ContactsV2.sqlite`, `ExtChatDB/ExtChatDatabase.sqlite`. Read-only via GRDB.swift with `?mode=ro` and backoff on `SQLITE_CANTOPEN`/`SQLITE_BUSY` (WhatsApp.app holds locks while running). **AUDIT before adding `immutable=1`:** validate WhatsApp's WAL-checkpoint cadence on the developer's machine first. `phone_calls` shipped with `immutable=1` and silently missed every WAL-resident write for 8+ days because macOS rarely checkpoints CallHistoryDB; WhatsApp.app may have the same pattern.
 - **Cursor:** `ZWAMESSAGE.ZSORT` (monotonic integer, indexed).
 - **Identifier type emitted:** `whatsapp`. Rationale: `whatsapp` is both a `contact_method.type` (added in migration 008) and an identifier_type with dual-mapping behavior (matches `contact_method.whatsapp` AND `contact_method.phone`). Functional matching difference vs generic `phone` — preserves matches against contacts that have explicitly tagged WhatsApp methods.
 - **Content:** message body (`ZWAMESSAGE.ZTEXT`), `ZSTANZAID` (server-side message ID — primary dedup key across hosts), chat JID, sender JID, `ZISFROMME`, group membership via `ZWAGROUPMEMBER`, media type tag from `ZWAMEDIAITEM.ZMEDIATYPE`. Optional media metadata: filename, size, no content.

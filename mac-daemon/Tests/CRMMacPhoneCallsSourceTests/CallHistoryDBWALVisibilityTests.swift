@@ -89,13 +89,13 @@ final class CallHistoryDBWALVisibilityTests: XCTestCase {
     /// 2025-01-01T00:00:00Z in Apple-epoch seconds.
     private let baseZDate: Double = 1_735_689_600 - 978_307_200
 
-    /// Production-path open: mirrors PhoneCallsSourcePlugin.openFreshPool()
-    /// without the surrounding actor / schema-validation scaffolding.
-    /// MUST stay in sync with the URI shape used in production.
+    /// Production-path open: reuses `PhoneCallsSourcePlugin.callHistoryDBURI`
+    /// to build the exact URI production uses, so a future change to the
+    /// URI shape lands in both call sites simultaneously.
     private func openProductionReader(at path: String) throws -> DatabasePool {
         var config = Configuration()
         config.readonly = true
-        let uri = "file://\(path)?mode=ro"
+        let uri = PhoneCallsSourcePlugin.callHistoryDBURI(for: URL(fileURLWithPath: path))
         return try DatabasePool(path: uri, configuration: config)
     }
 

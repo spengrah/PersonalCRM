@@ -88,10 +88,13 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
     private let healthRegistry: SourceHealthRegistry
 
     /// Cached schema health. Validated on first successful open. We
-    /// do NOT cache the DatabasePool itself: a fresh handle per tick
-    /// keeps reads short-lived, which matters because Phone.app /
-    /// FaceTime / Continuity write to CallHistoryDB concurrently and
-    /// SQLite's WAL coherence guarantees are per-connection-snapshot.
+    /// do NOT cache the DatabasePool itself: reopening per tick is
+    /// defensive against FDA-permission revocation between ticks (a
+    /// long-lived pool wouldn't re-exercise the FDA check). SQLite
+    /// WAL mode supports concurrent readers + one writer without
+    /// per-connection-snapshot issues, so this is belt-and-suspenders
+    /// rather than a correctness requirement — `MessagesSourcePlugin`
+    /// keeps a cached pool and observes new writes on each transaction.
     private var schemaHealth: CallHistorySchemaHealth?
     /// Cached cursor + epoch loaded from local state.json or fetched
     /// from the Pi on first tick.
@@ -601,9 +604,12 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
         // Open in WAL-aware read-only mode. GRDB's DatabasePool accepts
         // a URI when prefixed with `file:`; SQLite parses the query
         // string. We do NOT add `immutable=1` — see the doc comment
-        // above for the WAL-visibility rationale. This mirrors the
-        // Messages plugin's openOrCached() at MessagesSourcePlugin.swift.
-        let uri = "file://\(config.callHistoryDBPath.path)?mode=ro"
+        // above for the WAL-visibility rationale. The Messages plugin
+        // achieves the same WAL-aware read-only property via a bare
+        // path + `Configuration.readonly = true`; the URI vs bare-path
+        // shape is incidental, but the absence of `immutable=1` is
+        // the load-bearing invariant for picking up uncheckpointed writes.
+        let uri = Self.callHistoryDBURI(for: config.callHistoryDBPath)
         let pool: DatabasePool
         do {
             pool = try DatabasePool(path: uri, configuration: grdbConfig)
@@ -677,18 +683,26 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
     /// at for phone_calls even on a healthy-but-quiet tick. Failures
     /// are logged-and-swallowed: a state.json write hiccup must not
     /// abort the tick.
-    private func updateScheduled(at date: Date) async {
+    internal func updateScheduled(at date: Date) async {
         do {
             try await mutator.mutate { state in
-                var src = state.sources["phone_calls"] ?? SourceState(cursor: "")
+                var src = state.sources[self.id.rawValue] ?? SourceState()
                 src.lastScheduledAt = date
-                state.sources["phone_calls"] = src
+                state.sources[self.id.rawValue] = src
             }
         } catch {
             logger.warning("phone_calls tick: lastScheduledAt mutate failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
         }
+    }
+
+    /// Construct the SQLite URI used by `openFreshPool`. Exposed as a
+    /// static helper so tests can exercise the exact production URI
+    /// shape without re-implementing it; if this changes, both code
+    /// paths stay in sync.
+    internal static func callHistoryDBURI(for path: URL) -> String {
+        "file://\(path.path)?mode=ro"
     }
 
     // MARK: - health surface

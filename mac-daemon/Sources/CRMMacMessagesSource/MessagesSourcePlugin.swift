@@ -586,12 +586,12 @@ public actor MessagesSourcePlugin: SourcePlugin {
     /// at for messages even on a healthy-but-quiet tick. Failures
     /// are logged-and-swallowed: a state.json write hiccup must not
     /// abort the tick.
-    private func updateScheduled(at date: Date) async {
+    internal func updateScheduled(at date: Date) async {
         do {
             try await mutator.mutate { state in
-                var src = state.sources["messages"] ?? SourceState(cursor: "")
+                var src = state.sources[self.id.rawValue] ?? SourceState()
                 src.lastScheduledAt = date
-                state.sources["messages"] = src
+                state.sources[self.id.rawValue] = src
             }
         } catch {
             logger.warning("messages tick: lastScheduledAt mutate failed", metadata: [

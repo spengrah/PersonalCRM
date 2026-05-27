@@ -127,6 +127,50 @@ final class MessagesSourcePluginTests: XCTestCase {
         XCTAssertFalse(piCalled, "publisher must not be invoked when cache is empty")
     }
 
+    // MARK: - lastScheduledAt persistence
+
+    func testTickPersistsLastScheduledAtToState() async throws {
+        // The plugin's tick() writes `lastScheduledAt` to state.json at
+        // the very top — even a tick that short-circuits on an empty
+        // known-identifiers cache must persist the field. Without this
+        // persistence, Doctor / debugging tools have no reliable
+        // cross-source liveness signal — the in-memory
+        // SourceHealthRegistry is heartbeat-payload-only.
+        let dbURL = try makeChatDB()
+        let store = makeStateStore()
+        try store.save(DaemonState(schemaVersion: 1))
+        let mutator = StateMutator(store: store)
+        let cache = KnownIdentifiersCache(initial: [])
+        let plugin = MessagesSourcePlugin(
+            tickInterval: 60,
+            config: MessagesSourceConfig(
+                chatDBPath: dbURL,
+                backfillFloor: backfillFloor),
+            piClient: makePiClientThatNeverFiresIngestPath(),
+            auth: auth,
+            mutator: mutator,
+            publisher: MessagesPublisher(
+                sender: { _, _ in
+                    IngestEventsData(accepted: 0, duplicate: 0,
+                                      rejected: 0, errors: [])
+                },
+                auth: auth, logger: NoopLogger()),
+            cache: cache,
+            healthRegistry: SourceHealthRegistry(),
+            logger: NoopLogger())
+
+        let beforeTick = Date()
+        try await plugin.tick()
+        let state = try await mutator.read()
+        let scheduled = state.sources[SourceID.messages.rawValue]?.lastScheduledAt
+        XCTAssertNotNil(scheduled, "tick() must persist lastScheduledAt to state.json")
+        if let scheduled {
+            XCTAssertGreaterThanOrEqual(
+                scheduled, beforeTick.addingTimeInterval(-1),
+                "lastScheduledAt must be set to a clock value near the tick start")
+        }
+    }
+
     // MARK: - smoke: full tick flow with populated cache
 
     /// End-to-end orchestration: cache pre-populated with the seeded
