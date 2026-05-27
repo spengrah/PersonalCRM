@@ -133,6 +133,31 @@ final class PhoneCallsSourcePluginTests: XCTestCase {
         XCTAssertNotNil(snap?.lastErrorAt, "lastErrorAt must be set when lastError is set")
     }
 
+    // MARK: - lastScheduledAt persistence
+
+    func testTickPersistsLastScheduledAtToState() async throws {
+        // The plugin's tick() writes `lastScheduledAt` to state.json on
+        // every invocation, BEFORE the protocol-version gate, so even a
+        // gate-blocked tick must persist the field. Without this
+        // persistence, Doctor / debugging tools have no reliable
+        // cross-source liveness signal — the in-memory
+        // SourceHealthRegistry is heartbeat-payload-only.
+        let cache = KnownIdentifiersCache()
+        let provider = InMemoryHeartbeatStateProvider(initial: 1) // gate-blocked
+        let mutator = try makeMutator()
+        let (plugin, _) = makePlugin(cache: cache, provider: provider, mutator: mutator)
+        let beforeTick = Date()
+        try await plugin.tick()
+        let state = try await mutator.read()
+        let scheduled = state.sources[SourceID.phoneCalls.rawValue]?.lastScheduledAt
+        XCTAssertNotNil(scheduled, "tick() must persist lastScheduledAt to state.json")
+        if let scheduled {
+            XCTAssertGreaterThanOrEqual(
+                scheduled, beforeTick.addingTimeInterval(-1),
+                "lastScheduledAt must be set to a clock value near the tick start")
+        }
+    }
+
     // MARK: - minimum-protocol-version constant
 
     func testMinPiProtocolVersionIsExposed() {
