@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -158,7 +159,14 @@ func convertDbMeetingNote(row *db.MeetingNote) (*MeetingNote, error) {
 	mn.DeletedAt = pgTimestamptzToTimePtr(row.DeletedAt)
 	if len(row.Participants) > 0 {
 		if err := json.Unmarshal(row.Participants, &mn.Participants); err != nil {
-			mn.Participants = []string{}
+			// Participants is a JSONB array we write ourselves via
+			// participantsJSON; a decode failure here means the column
+			// was corrupted or a non-array shape was inserted by a
+			// future writer. Surface the error rather than silently
+			// returning an empty list — downstream linkage logic
+			// would treat a corrupted row as "no tagged participants"
+			// and silently drop the user-visible tags.
+			return nil, fmt.Errorf("decode meeting_note.participants for id %s: %w", mn.ID, err)
 		}
 	} else {
 		mn.Participants = []string{}

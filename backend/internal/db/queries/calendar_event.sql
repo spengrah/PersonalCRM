@@ -163,7 +163,7 @@ WHERE id = @event_id::uuid
 -- idx_calendar_event_start (partial index on start_time WHERE
 -- status != 'cancelled' — already exists from migration 016). The
 -- output includes matched_contact_ids so the linkage handler can
--- compute walk-in supplementals (Step 5).
+-- compute walk-in supplementals.
 SELECT * FROM calendar_event
 WHERE start_time BETWEEN sqlc.arg('window_start') AND sqlc.arg('window_end')
   AND status != 'cancelled'

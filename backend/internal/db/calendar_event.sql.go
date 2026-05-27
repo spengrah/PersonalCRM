@@ -75,7 +75,7 @@ type FindCalendarEventsInWindowParams struct {
 // idx_calendar_event_start (partial index on start_time WHERE
 // status != 'cancelled' — already exists from migration 016). The
 // output includes matched_contact_ids so the linkage handler can
-// compute walk-in supplementals (Step 5).
+// compute walk-in supplementals.
 func (q *Queries) FindCalendarEventsInWindow(ctx context.Context, arg FindCalendarEventsInWindowParams) ([]*CalendarEvent, error) {
 	rows, err := q.db.Query(ctx, FindCalendarEventsInWindow, arg.WindowStart, arg.WindowEnd)
 	if err != nil {

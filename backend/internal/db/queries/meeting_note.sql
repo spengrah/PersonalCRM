@@ -58,9 +58,8 @@ WHERE anarlog_session_id = sqlc.arg('anarlog_session_id')
 -- Tombstone-aware lookup that holds a row-level lock for the duration of
 -- the caller's tx. Used by the meeting_note.recorded inline handler so a
 -- concurrent re-sync for the same session UUID serializes behind the
--- first writer (see service/ingest.go handleMeetingNoteRecorded step 2).
--- Returns tombstoned rows too — the revive path inspects DeletedAt to
--- decide between revive and re-link branches.
+-- first writer. Returns tombstoned rows too — the revive path inspects
+-- DeletedAt to decide between revive and re-link branches.
 SELECT * FROM meeting_note
 WHERE anarlog_session_id = sqlc.arg('anarlog_session_id')
 FOR UPDATE;

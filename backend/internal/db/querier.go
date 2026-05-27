@@ -265,7 +265,7 @@ type Querier interface {
 	// idx_calendar_event_start (partial index on start_time WHERE
 	// status != 'cancelled' — already exists from migration 016). The
 	// output includes matched_contact_ids so the linkage handler can
-	// compute walk-in supplementals (Step 5).
+	// compute walk-in supplementals.
 	FindCalendarEventsInWindow(ctx context.Context, arg FindCalendarEventsInWindowParams) ([]*CalendarEvent, error)
 	// peer_phone is stored raw from MTProto (typically digits only); contact_method
 	// value_normalized is E.164 with leading '+'. Compare on digits-only.
@@ -459,9 +459,8 @@ type Querier interface {
 	// Tombstone-aware lookup that holds a row-level lock for the duration of
 	// the caller's tx. Used by the meeting_note.recorded inline handler so a
 	// concurrent re-sync for the same session UUID serializes behind the
-	// first writer (see service/ingest.go handleMeetingNoteRecorded step 2).
-	// Returns tombstoned rows too — the revive path inspects DeletedAt to
-	// decide between revive and re-link branches.
+	// first writer. Returns tombstoned rows too — the revive path inspects
+	// DeletedAt to decide between revive and re-link branches.
 	GetMeetingNoteBySessionIDForUpdate(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error)
 	// Lookup by guid (primary external identifier). Used by reply-target
 	// resolution.
@@ -679,9 +678,10 @@ type Querier interface {
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
 	// Returns all live interactions attributed to a specific anarlog session
-	// (both Step 4 orphan-with-tags and Step 5 walk-in supplemental). Used by
-	// the re-sync diff path in the meeting_note.recorded inline handler to
-	// compute the (existing - desired) set that needs soft-deleting.
+	// (both impromptu / orphan-with-tags entries and walk-in supplementals).
+	// Used by the re-sync diff path in the meeting_note.recorded inline
+	// handler to compute the (existing - desired) set that needs
+	// soft-deleting.
 	ListSessionAttributedInteractions(ctx context.Context, sourceRefPrefix pgtype.Text) ([]*Interaction, error)
 	// Lists rows with matched_contact_id IS NULL — i.e., rows that the
 	// ingest service accepted into staging but couldn't match to a contact

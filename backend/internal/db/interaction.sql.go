@@ -464,9 +464,10 @@ ORDER BY source_ref
 `
 
 // Returns all live interactions attributed to a specific anarlog session
-// (both Step 4 orphan-with-tags and Step 5 walk-in supplemental). Used by
-// the re-sync diff path in the meeting_note.recorded inline handler to
-// compute the (existing - desired) set that needs soft-deleting.
+// (both impromptu / orphan-with-tags entries and walk-in supplementals).
+// Used by the re-sync diff path in the meeting_note.recorded inline
+// handler to compute the (existing - desired) set that needs
+// soft-deleting.
 func (q *Queries) ListSessionAttributedInteractions(ctx context.Context, sourceRefPrefix pgtype.Text) ([]*Interaction, error) {
 	rows, err := q.db.Query(ctx, ListSessionAttributedInteractions, sourceRefPrefix)
 	if err != nil {

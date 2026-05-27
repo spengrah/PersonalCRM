@@ -378,8 +378,8 @@ func (r *CalendarEventRepository) DeleteEventsByAccount(ctx context.Context, goo
 
 // FindLinkageCandidatesTx returns candidate calendar_event rows for the
 // meeting_note.recorded inline handler's linkage-detection algorithm.
-// Filters cancelled events and orders by start_time ASC. PR 3 ships
-// with calendar-only candidates; when the phone_call table lands,
+// Filters cancelled events and orders by start_time ASC. Calendar is
+// the only candidate dimension today; when the phone_call table lands,
 // callers will combine this with PhoneCallRepository.FindLinkageCandidatesTx
 // and dedupe in the service layer. Caller owns the tx lifecycle.
 func (r *CalendarEventRepository) FindLinkageCandidatesTx(ctx context.Context, tx pgx.Tx, windowStart, windowEnd time.Time) ([]LinkageCandidate, error) {
