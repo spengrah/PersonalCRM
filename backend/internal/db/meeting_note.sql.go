@@ -12,7 +12,7 @@ import (
 )
 
 const GetMeetingNoteBySessionID = `-- name: GetMeetingNoteBySessionID :one
-SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at FROM meeting_note
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at FROM meeting_note
 WHERE anarlog_session_id = $1
   AND deleted_at IS NULL
 `
@@ -35,6 +35,82 @@ func (q *Queries) GetMeetingNoteBySessionID(ctx context.Context, anarlogSessionI
 		&i.LinkageState,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.InputHash,
+		&i.ResolvedSetHash,
+		&i.LastContentHash,
+		&i.MeetingAt,
+	)
+	return &i, err
+}
+
+const GetMeetingNoteBySessionIDForUpdate = `-- name: GetMeetingNoteBySessionIDForUpdate :one
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at FROM meeting_note
+WHERE anarlog_session_id = $1
+FOR UPDATE
+`
+
+// Tombstone-aware lookup that holds a row-level lock for the duration of
+// the caller's tx. Used by the meeting_note.recorded inline handler so a
+// concurrent re-sync for the same session UUID serializes behind the
+// first writer. Returns tombstoned rows too — the revive path inspects
+// DeletedAt to decide between revive and re-link branches.
+func (q *Queries) GetMeetingNoteBySessionIDForUpdate(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error) {
+	row := q.db.QueryRow(ctx, GetMeetingNoteBySessionIDForUpdate, anarlogSessionID)
+	var i MeetingNote
+	err := row.Scan(
+		&i.ID,
+		&i.AnarlogSessionID,
+		&i.Title,
+		&i.Summary,
+		&i.Memo,
+		&i.Participants,
+		&i.MacHostID,
+		&i.LinkedKind,
+		&i.LinkedID,
+		&i.LinkageState,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.InputHash,
+		&i.ResolvedSetHash,
+		&i.LastContentHash,
+		&i.MeetingAt,
+	)
+	return &i, err
+}
+
+const GetTombstonedMeetingNoteBySessionID = `-- name: GetTombstonedMeetingNoteBySessionID :one
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at FROM meeting_note
+WHERE anarlog_session_id = $1
+  AND deleted_at IS NOT NULL
+LIMIT 1
+`
+
+// Probe used by the dispatch loop's revive-bypass: when a duplicate
+// meeting_note.recorded event arrives (same source_id, content unchanged)
+// and a tombstoned row exists, the inline handler still runs so it can
+// revive instead of silently leaving the row tombstoned. Filters
+// explicitly to tombstoned rows because the live partial-unique index
+// already covers the live-row case.
+func (q *Queries) GetTombstonedMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error) {
+	row := q.db.QueryRow(ctx, GetTombstonedMeetingNoteBySessionID, anarlogSessionID)
+	var i MeetingNote
+	err := row.Scan(
+		&i.ID,
+		&i.AnarlogSessionID,
+		&i.Title,
+		&i.Summary,
+		&i.Memo,
+		&i.Participants,
+		&i.MacHostID,
+		&i.LinkedKind,
+		&i.LinkedID,
+		&i.LinkageState,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.InputHash,
+		&i.ResolvedSetHash,
+		&i.LastContentHash,
+		&i.MeetingAt,
 	)
 	return &i, err
 }
@@ -50,7 +126,11 @@ INSERT INTO meeting_note (
     mac_host_id,
     linked_kind,
     linked_id,
-    linkage_state
+    linkage_state,
+    input_hash,
+    resolved_set_hash,
+    last_content_hash,
+    meeting_at
 ) VALUES (
     $1,
     $2,
@@ -60,28 +140,47 @@ INSERT INTO meeting_note (
     $6,
     $7,
     $8,
-    $9
+    $9,
+    $10,
+    $11,
+    $12,
+    $13
 )
-RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at
+ON CONFLICT (anarlog_session_id) WHERE deleted_at IS NULL DO NOTHING
+RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at
 `
 
 type InsertMeetingNoteParams struct {
-	AnarlogSessionID pgtype.UUID `json:"anarlog_session_id"`
-	Title            pgtype.Text `json:"title"`
-	Summary          pgtype.Text `json:"summary"`
-	Memo             pgtype.Text `json:"memo"`
-	Participants     []byte      `json:"participants"`
-	MacHostID        pgtype.UUID `json:"mac_host_id"`
-	LinkedKind       pgtype.Text `json:"linked_kind"`
-	LinkedID         pgtype.UUID `json:"linked_id"`
-	LinkageState     string      `json:"linkage_state"`
+	AnarlogSessionID pgtype.UUID        `json:"anarlog_session_id"`
+	Title            pgtype.Text        `json:"title"`
+	Summary          pgtype.Text        `json:"summary"`
+	Memo             pgtype.Text        `json:"memo"`
+	Participants     []byte             `json:"participants"`
+	MacHostID        pgtype.UUID        `json:"mac_host_id"`
+	LinkedKind       pgtype.Text        `json:"linked_kind"`
+	LinkedID         pgtype.UUID        `json:"linked_id"`
+	LinkageState     string             `json:"linkage_state"`
+	InputHash        string             `json:"input_hash"`
+	ResolvedSetHash  string             `json:"resolved_set_hash"`
+	LastContentHash  pgtype.Text        `json:"last_content_hash"`
+	MeetingAt        pgtype.Timestamptz `json:"meeting_at"`
 }
 
 // Meeting Note queries
 // Spec: .ai/spec/mac-daemon-phase-2-anarlog-matching.md
 // Inserts a meeting_note staging row. linkage_state must be supplied by the
 // caller (the ingest tx computes it from the linkage detection algorithm);
-// no DB-level default exists.
+// no DB-level default exists. input_hash / resolved_set_hash /
+// last_content_hash / meeting_at are supplied verbatim per the re-sync
+// diff algorithm (see service/ingest.go handleMeetingNoteRecorded).
+//
+// ON CONFLICT DO NOTHING handles the concurrent first-insert race against
+// the partial unique index idx_meeting_note_session_id WHERE deleted_at IS
+// NULL. When two concurrent batches try to first-insert the same session
+// UUID, one wins and the other receives zero rows back; the caller then
+// re-reads with FOR UPDATE and falls through to the update path. sqlc :one
+// returns ErrNoRows in that case, which the repository translates to
+// db.ErrNotFound.
 func (q *Queries) InsertMeetingNote(ctx context.Context, arg InsertMeetingNoteParams) (*MeetingNote, error) {
 	row := q.db.QueryRow(ctx, InsertMeetingNote,
 		arg.AnarlogSessionID,
@@ -93,6 +192,10 @@ func (q *Queries) InsertMeetingNote(ctx context.Context, arg InsertMeetingNotePa
 		arg.LinkedKind,
 		arg.LinkedID,
 		arg.LinkageState,
+		arg.InputHash,
+		arg.ResolvedSetHash,
+		arg.LastContentHash,
+		arg.MeetingAt,
 	)
 	var i MeetingNote
 	err := row.Scan(
@@ -108,6 +211,238 @@ func (q *Queries) InsertMeetingNote(ctx context.Context, arg InsertMeetingNotePa
 		&i.LinkageState,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.InputHash,
+		&i.ResolvedSetHash,
+		&i.LastContentHash,
+		&i.MeetingAt,
+	)
+	return &i, err
+}
+
+const ListKnownMeetingNoteIDsByHost = `-- name: ListKnownMeetingNoteIDsByHost :many
+SELECT anarlog_session_id::text AS source_id, last_content_hash
+FROM meeting_note
+WHERE mac_host_id = $1 AND deleted_at IS NULL
+ORDER BY source_id
+`
+
+type ListKnownMeetingNoteIDsByHostRow struct {
+	SourceID        string      `json:"source_id"`
+	LastContentHash pgtype.Text `json:"last_content_hash"`
+}
+
+// Returns (source_id, last_content_hash) for every live meeting_note
+// row owned by the given mac_host. Powers GET
+// /api/v1/host/:id/sync/anarlog_sessions/known-ids. Tombstoned rows are
+// excluded — the daemon's set-diff reconciliation requires that rows
+// the Pi has soft-deleted are NOT reported as known.
+func (q *Queries) ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID pgtype.UUID) ([]*ListKnownMeetingNoteIDsByHostRow, error) {
+	rows, err := q.db.Query(ctx, ListKnownMeetingNoteIDsByHost, macHostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListKnownMeetingNoteIDsByHostRow{}
+	for rows.Next() {
+		var i ListKnownMeetingNoteIDsByHostRow
+		if err := rows.Scan(&i.SourceID, &i.LastContentHash); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ReviveMeetingNote = `-- name: ReviveMeetingNote :one
+UPDATE meeting_note SET
+    deleted_at        = NULL,
+    title             = $1,
+    summary           = $2,
+    memo              = $3,
+    participants      = $4,
+    linked_kind       = $5,
+    linked_id         = $6,
+    linkage_state     = $7,
+    input_hash        = $8,
+    resolved_set_hash = $9,
+    last_content_hash = $10,
+    meeting_at        = $11
+WHERE id = $12 AND deleted_at IS NOT NULL
+RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at
+`
+
+type ReviveMeetingNoteParams struct {
+	Title           pgtype.Text        `json:"title"`
+	Summary         pgtype.Text        `json:"summary"`
+	Memo            pgtype.Text        `json:"memo"`
+	Participants    []byte             `json:"participants"`
+	LinkedKind      pgtype.Text        `json:"linked_kind"`
+	LinkedID        pgtype.UUID        `json:"linked_id"`
+	LinkageState    string             `json:"linkage_state"`
+	InputHash       string             `json:"input_hash"`
+	ResolvedSetHash string             `json:"resolved_set_hash"`
+	LastContentHash pgtype.Text        `json:"last_content_hash"`
+	MeetingAt       pgtype.Timestamptz `json:"meeting_at"`
+	ID              pgtype.UUID        `json:"id"`
+}
+
+// Clears deleted_at + writes the full updatable column set in a single
+// statement so a tombstoned row that re-receives meeting_note.recorded
+// comes back live with the new content. Defensive WHERE deleted_at IS
+// NOT NULL keeps it idempotent across concurrent revive races.
+func (q *Queries) ReviveMeetingNote(ctx context.Context, arg ReviveMeetingNoteParams) (*MeetingNote, error) {
+	row := q.db.QueryRow(ctx, ReviveMeetingNote,
+		arg.Title,
+		arg.Summary,
+		arg.Memo,
+		arg.Participants,
+		arg.LinkedKind,
+		arg.LinkedID,
+		arg.LinkageState,
+		arg.InputHash,
+		arg.ResolvedSetHash,
+		arg.LastContentHash,
+		arg.MeetingAt,
+		arg.ID,
+	)
+	var i MeetingNote
+	err := row.Scan(
+		&i.ID,
+		&i.AnarlogSessionID,
+		&i.Title,
+		&i.Summary,
+		&i.Memo,
+		&i.Participants,
+		&i.MacHostID,
+		&i.LinkedKind,
+		&i.LinkedID,
+		&i.LinkageState,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.InputHash,
+		&i.ResolvedSetHash,
+		&i.LastContentHash,
+		&i.MeetingAt,
+	)
+	return &i, err
+}
+
+const SoftDeleteMeetingNoteBySessionID = `-- name: SoftDeleteMeetingNoteBySessionID :exec
+UPDATE meeting_note SET deleted_at = NOW()
+WHERE anarlog_session_id = $1 AND deleted_at IS NULL
+`
+
+// Tombstones the live row for a session UUID. last_content_hash,
+// input_hash, meeting_at are preserved on the row so a future revive
+// has the prior content snapshot available. Idempotent (no-op when no
+// live row exists).
+func (q *Queries) SoftDeleteMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, SoftDeleteMeetingNoteBySessionID, anarlogSessionID)
+	return err
+}
+
+const TestHardDeleteMeetingNotesByHostID = `-- name: TestHardDeleteMeetingNotesByHostID :exec
+DELETE FROM meeting_note
+WHERE mac_host_id = $1
+`
+
+// TEST ONLY. Hard-deletes every meeting_note row owned by the given
+// mac_host. Used by t.Cleanup when the test seeds meeting_notes with
+// system-generated UUIDs (no exploitable prefix). Covers both live and
+// tombstoned rows.
+func (q *Queries) TestHardDeleteMeetingNotesByHostID(ctx context.Context, macHostID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, TestHardDeleteMeetingNotesByHostID, macHostID)
+	return err
+}
+
+const TestHardDeleteMeetingNotesBySessionIDPrefix = `-- name: TestHardDeleteMeetingNotesBySessionIDPrefix :exec
+DELETE FROM meeting_note
+WHERE anarlog_session_id::text LIKE $1::text
+`
+
+// TEST ONLY. Hard-deletes meeting_note rows whose session UUID (as text)
+// starts with the given prefix. Used by t.Cleanup to remove fixtures
+// inserted by a test. Covers both live and tombstoned rows.
+func (q *Queries) TestHardDeleteMeetingNotesBySessionIDPrefix(ctx context.Context, sessionIDPrefix string) error {
+	_, err := q.db.Exec(ctx, TestHardDeleteMeetingNotesBySessionIDPrefix, sessionIDPrefix)
+	return err
+}
+
+const UpdateMeetingNoteOnResync = `-- name: UpdateMeetingNoteOnResync :one
+UPDATE meeting_note SET
+    title             = $1,
+    summary           = $2,
+    memo              = $3,
+    participants      = $4,
+    linked_kind       = $5,
+    linked_id         = $6,
+    linkage_state     = $7,
+    input_hash        = $8,
+    resolved_set_hash = $9,
+    last_content_hash = $10,
+    meeting_at        = $11
+WHERE id = $12 AND deleted_at IS NULL
+RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at
+`
+
+type UpdateMeetingNoteOnResyncParams struct {
+	Title           pgtype.Text        `json:"title"`
+	Summary         pgtype.Text        `json:"summary"`
+	Memo            pgtype.Text        `json:"memo"`
+	Participants    []byte             `json:"participants"`
+	LinkedKind      pgtype.Text        `json:"linked_kind"`
+	LinkedID        pgtype.UUID        `json:"linked_id"`
+	LinkageState    string             `json:"linkage_state"`
+	InputHash       string             `json:"input_hash"`
+	ResolvedSetHash string             `json:"resolved_set_hash"`
+	LastContentHash pgtype.Text        `json:"last_content_hash"`
+	MeetingAt       pgtype.Timestamptz `json:"meeting_at"`
+	ID              pgtype.UUID        `json:"id"`
+}
+
+// Single update query used for both carry-forward and re-link branches
+// of the re-sync algorithm. Caller controls the values: carry-forward
+// passes the prior linkage values, re-link passes the recomputed values.
+// Avoids two near-identical queries.
+//
+// The deleted_at filter prevents stomping on a tombstoned row (revive
+// runs its own UPDATE path that also clears deleted_at).
+func (q *Queries) UpdateMeetingNoteOnResync(ctx context.Context, arg UpdateMeetingNoteOnResyncParams) (*MeetingNote, error) {
+	row := q.db.QueryRow(ctx, UpdateMeetingNoteOnResync,
+		arg.Title,
+		arg.Summary,
+		arg.Memo,
+		arg.Participants,
+		arg.LinkedKind,
+		arg.LinkedID,
+		arg.LinkageState,
+		arg.InputHash,
+		arg.ResolvedSetHash,
+		arg.LastContentHash,
+		arg.MeetingAt,
+		arg.ID,
+	)
+	var i MeetingNote
+	err := row.Scan(
+		&i.ID,
+		&i.AnarlogSessionID,
+		&i.Title,
+		&i.Summary,
+		&i.Memo,
+		&i.Participants,
+		&i.MacHostID,
+		&i.LinkedKind,
+		&i.LinkedID,
+		&i.LinkageState,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.InputHash,
+		&i.ResolvedSetHash,
+		&i.LastContentHash,
+		&i.MeetingAt,
 	)
 	return &i, err
 }

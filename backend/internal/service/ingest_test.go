@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/db"
@@ -22,18 +24,20 @@ import (
 // pool, so the test proves the short-circuit works.
 func TestIngestService_EmptyBatch_FastPath(t *testing.T) {
 	svc := &IngestService{} // no DB, no bus — fast path must not touch them
-	accepted, duplicate, rejections, err := svc.IngestBatch(context.Background(), nil, nil, nil)
+	accepted, duplicate, rejections, needsAttention, err := svc.IngestBatch(context.Background(), nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, accepted)
 	require.Equal(t, 0, duplicate)
 	require.Empty(t, rejections)
+	require.Empty(t, needsAttention)
 
 	// Same for an explicit zero-length slice.
-	accepted, duplicate, rejections, err = svc.IngestBatch(context.Background(), []*events.Envelope{}, []int{}, nil)
+	accepted, duplicate, rejections, needsAttention, err = svc.IngestBatch(context.Background(), []*events.Envelope{}, []int{}, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, accepted)
 	require.Equal(t, 0, duplicate)
 	require.Empty(t, rejections)
+	require.Empty(t, needsAttention)
 }
 
 // TestIngestService_RejectsNilEnvelope guards against a caller bug where
@@ -41,7 +45,7 @@ func TestIngestService_EmptyBatch_FastPath(t *testing.T) {
 // inside the publish loop once a transaction is open.
 func TestIngestService_RejectsNilEnvelope(t *testing.T) {
 	svc := &IngestService{} // precondition check fires before DB access
-	_, _, _, err := svc.IngestBatch(context.Background(), []*events.Envelope{nil}, []int{0}, nil)
+	_, _, _, _, err := svc.IngestBatch(context.Background(), []*events.Envelope{nil}, []int{0}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "envelope at index 0 is nil")
 }
@@ -54,7 +58,7 @@ func TestIngestService_RejectsNilEnvelope(t *testing.T) {
 func TestIngestService_RejectsPreAssignedID(t *testing.T) {
 	svc := &IngestService{} // precondition check fires before DB access
 	env := &events.Envelope{ID: uuid.New()}
-	_, _, _, err := svc.IngestBatch(context.Background(), []*events.Envelope{env}, []int{0}, nil)
+	_, _, _, _, err := svc.IngestBatch(context.Background(), []*events.Envelope{env}, []int{0}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "pre-assigned ID")
 }
@@ -65,7 +69,7 @@ func TestIngestService_RejectsPreAssignedID(t *testing.T) {
 func TestIngestService_RejectsLenMismatchOnOriginalIndices(t *testing.T) {
 	svc := &IngestService{}
 	env := &events.Envelope{} // valid (uuid.Nil)
-	_, _, _, err := svc.IngestBatch(context.Background(), []*events.Envelope{env}, []int{0, 1}, nil)
+	_, _, _, _, err := svc.IngestBatch(context.Background(), []*events.Envelope{env}, []int{0, 1}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "originalIndices length")
 }
@@ -322,7 +326,7 @@ func TestVerifyExternalContactInvariants_HostMismatch(t *testing.T) {
 func TestVerifyExternalContactInvariants_SourceMismatch(t *testing.T) {
 	host := uuid.New()
 	env := validUpsertedEnv(host, "CN-1")
-	env.Source = "anarlog_humans"
+	env.Source = "gcontacts" // not in allowedExternalContactSources
 	rej := verifyExternalContactInvariants(env, host)
 	require.NotNil(t, rej)
 	require.Contains(t, rej.Message, "not supported")
@@ -920,4 +924,244 @@ func (r *recordingExternalContactWriter) UpsertTx(
 	cp := req
 	r.lastUpsert = &cp
 	return r.stubExternalContactWriter.UpsertTx(ctx, tx, req)
+}
+
+// ----------------------------------------------------------------------------
+// meeting_note.* invariant + helper unit tests
+// ----------------------------------------------------------------------------
+
+// TestIsMeetingNoteKind exercises the kind-classifier helper.
+func TestIsMeetingNoteKind(t *testing.T) {
+	require.True(t, isMeetingNoteKind(events.KindMeetingNoteRecorded))
+	require.True(t, isMeetingNoteKind(events.KindMeetingNoteDeleted))
+	require.False(t, isMeetingNoteKind(events.KindExternalContactUpserted))
+	require.False(t, isMeetingNoteKind(events.KindMessageReceived))
+}
+
+// validMeetingNoteRecordedEnv constructs a structurally-valid envelope
+// for verifyMeetingNoteInvariants tests. The content hash is computed
+// per the canonical recipe so the verifier's hash check passes.
+func validMeetingNoteRecordedEnv(t *testing.T, host uuid.UUID, sessionUUID string) *events.Envelope {
+	t.Helper()
+	title := "Test Session"
+	p := events.MeetingNoteRecordedPayload{
+		Version:   1,
+		HostID:    host,
+		Source:    "anarlog_sessions",
+		SourceID:  sessionUUID,
+		Title:     &title,
+		MeetingAt: time.Date(2026, 5, 1, 14, 30, 0, 0, time.UTC),
+	}
+	pBytes, err := events.Marshal(events.KindMeetingNoteRecorded, p)
+	require.NoError(t, err)
+	hashHex, err := ComputeContentHash(pBytes)
+	require.NoError(t, err)
+	return &events.Envelope{
+		Source:   "anarlog_sessions",
+		SourceID: sessionUUID + "@" + hashHex,
+		Kind:     events.KindMeetingNoteRecorded,
+		Payload:  pBytes,
+	}
+}
+
+func TestVerifyMeetingNoteInvariants_HappyPath(t *testing.T) {
+	host := uuid.New()
+	env := validMeetingNoteRecordedEnv(t, host, uuid.NewString())
+	require.Nil(t, verifyMeetingNoteInvariants(env, host))
+}
+
+func TestVerifyMeetingNoteInvariants_HostMismatch(t *testing.T) {
+	authHost := uuid.New()
+	otherHost := uuid.New()
+	env := validMeetingNoteRecordedEnv(t, otherHost, uuid.NewString())
+	rej := verifyMeetingNoteInvariants(env, authHost)
+	require.NotNil(t, rej)
+	require.Equal(t, ingestRejectPayloadInvariant, rej.Code)
+	require.Contains(t, rej.Message, "host_id")
+}
+
+func TestVerifyMeetingNoteInvariants_SourceMismatch(t *testing.T) {
+	host := uuid.New()
+	env := validMeetingNoteRecordedEnv(t, host, uuid.NewString())
+	env.Source = "icloud_contacts" // not in allowedMeetingNoteSources
+	rej := verifyMeetingNoteInvariants(env, host)
+	require.NotNil(t, rej)
+	require.Contains(t, rej.Message, "not supported")
+}
+
+func TestVerifyMeetingNoteInvariants_NonUUIDSourceID(t *testing.T) {
+	host := uuid.New()
+	// Hand-craft payload with non-UUID source_id; ValidatePayload would
+	// also catch this at the handler boundary, but verifyMeetingNoteInvariants
+	// runs the service-side check for defense-in-depth.
+	p := events.MeetingNoteRecordedPayload{
+		Version: 1, HostID: host, Source: "anarlog_sessions",
+		SourceID: "not-a-uuid", MeetingAt: accelerated.GetCurrentTime(),
+	}
+	pBytes, err := events.Marshal(events.KindMeetingNoteRecorded, p)
+	require.NoError(t, err)
+	env := &events.Envelope{Source: "anarlog_sessions", SourceID: "not-a-uuid@" + strings.Repeat("a", 64),
+		Kind: events.KindMeetingNoteRecorded, Payload: pBytes}
+	rej := verifyMeetingNoteInvariants(env, host)
+	require.NotNil(t, rej)
+	require.Contains(t, rej.Message, "not a UUID")
+}
+
+func TestVerifyMeetingNoteInvariants_HashMismatch(t *testing.T) {
+	host := uuid.New()
+	env := validMeetingNoteRecordedEnv(t, host, uuid.NewString())
+	// Tamper with the source_id hash suffix while keeping the regex shape.
+	tampered := env.SourceID[:len(env.SourceID)-64] + strings.Repeat("0", 64)
+	env.SourceID = tampered
+	rej := verifyMeetingNoteInvariants(env, host)
+	require.NotNil(t, rej)
+	require.Equal(t, ingestRejectMeetingNoteHashMismatch, rej.Code)
+}
+
+func TestVerifyMeetingNoteInvariants_DeleteAcceptsUnknownSentinel(t *testing.T) {
+	host := uuid.New()
+	sessionUUID := uuid.NewString()
+	p := events.MeetingNoteDeletedPayload{
+		Version: 1, HostID: host, Source: "anarlog_sessions", SourceID: sessionUUID,
+	}
+	pBytes, err := events.Marshal(events.KindMeetingNoteDeleted, p)
+	require.NoError(t, err)
+	env := &events.Envelope{Source: "anarlog_sessions", SourceID: sessionUUID + "@deleted@unknown",
+		Kind: events.KindMeetingNoteDeleted, Payload: pBytes}
+	require.Nil(t, verifyMeetingNoteInvariants(env, host))
+}
+
+// TestComputeMeetingNoteInputHash_StableAcrossOrder confirms that the
+// input hash is invariant under participant_id order — sorting happens
+// inside the recipe.
+func TestComputeMeetingNoteInputHash_StableAcrossOrder(t *testing.T) {
+	at := time.Date(2026, 5, 1, 14, 30, 0, 0, time.UTC)
+	title := "Same Title"
+	a := []string{"uuid-1", "uuid-2", "uuid-3"}
+	b := []string{"uuid-3", "uuid-1", "uuid-2"}
+	hashA, err := computeMeetingNoteInputHash(at, &title, a)
+	require.NoError(t, err)
+	hashB, err := computeMeetingNoteInputHash(at, &title, b)
+	require.NoError(t, err)
+	require.Equal(t, hashA, hashB)
+}
+
+// TestComputeMeetingNoteInputHash_TitleAffectsHash confirms the title
+// is part of the recipe — a future title-parser does not have to
+// migrate hashes.
+func TestComputeMeetingNoteInputHash_TitleAffectsHash(t *testing.T) {
+	at := time.Date(2026, 5, 1, 14, 30, 0, 0, time.UTC)
+	ids := []string{"uuid-1"}
+	a := "Alpha"
+	b := "Bravo"
+	hashA, err := computeMeetingNoteInputHash(at, &a, ids)
+	require.NoError(t, err)
+	hashB, err := computeMeetingNoteInputHash(at, &b, ids)
+	require.NoError(t, err)
+	require.NotEqual(t, hashA, hashB)
+}
+
+// TestComputeResolvedSetHash_StableAcrossOrder confirms order
+// independence for the resolved-contact-id set hash.
+func TestComputeResolvedSetHash_StableAcrossOrder(t *testing.T) {
+	id1 := uuid.New()
+	id2 := uuid.New()
+	id3 := uuid.New()
+	hashA, err := computeResolvedSetHash([]uuid.UUID{id1, id2, id3})
+	require.NoError(t, err)
+	hashB, err := computeResolvedSetHash([]uuid.UUID{id3, id1, id2})
+	require.NoError(t, err)
+	require.Equal(t, hashA, hashB)
+}
+
+// TestDecideLinkage_NoCandidatesNoTagged returns orphan_needs_review
+// with no interactions.
+func TestDecideLinkage_NoCandidatesNoTagged(t *testing.T) {
+	sessionID := uuid.New()
+	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, nil)
+	require.Equal(t, repository.LinkageStateOrphanNeedsReview, state)
+	require.Nil(t, kind)
+	require.Nil(t, id)
+	require.Empty(t, desired)
+}
+
+// TestDecideLinkage_NoCandidatesWithTagged returns linked_impromptu and
+// one interaction per resolved tagged contact.
+func TestDecideLinkage_NoCandidatesWithTagged(t *testing.T) {
+	sessionID := uuid.New()
+	cA := uuid.New()
+	cB := uuid.New()
+	resolved := []resolvedTag{
+		{AnarlogID: "human-a", ContactID: cA},
+		{AnarlogID: "human-b", ContactID: cB},
+	}
+	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, resolved)
+	require.Equal(t, repository.LinkageStateLinkedImpromptu, state)
+	require.Nil(t, kind)
+	require.Nil(t, id)
+	require.Len(t, desired, 2)
+	refA := "anarlog:" + sessionID.String() + ":" + cA.String()
+	refB := "anarlog:" + sessionID.String() + ":" + cB.String()
+	gotRefs := []string{desired[0].SourceRef, desired[1].SourceRef}
+	require.Contains(t, gotRefs, refA)
+	require.Contains(t, gotRefs, refB)
+}
+
+// TestDecideLinkage_OneCandidate_WalkinPresent_NoSupplement verifies
+// that a tagged contact already in the event's matched_contact_ids
+// does NOT produce a walk-in interaction.
+func TestDecideLinkage_OneCandidate_WalkinPresent_NoSupplement(t *testing.T) {
+	sessionID := uuid.New()
+	cA := uuid.New()
+	cand := repository.LinkageCandidate{
+		Kind:               "event",
+		ID:                 uuid.New(),
+		OccurredAt:         accelerated.GetCurrentTime(),
+		AttendeeContactIDs: []uuid.UUID{cA},
+	}
+	resolved := []resolvedTag{{AnarlogID: "human-a", ContactID: cA}}
+	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, resolved)
+	require.Equal(t, repository.LinkageStateLinked, state)
+	require.NotNil(t, kind)
+	require.Equal(t, "event", *kind)
+	require.NotNil(t, id)
+	require.Equal(t, cand.ID, *id)
+	require.Empty(t, desired, "tagged contact already in event attendees → no walk-in")
+}
+
+// TestDecideLinkage_OneCandidate_TaggedNotInAttendees_AddsWalkin
+// fires the walk-in supplemental interaction for the missing contact.
+func TestDecideLinkage_OneCandidate_TaggedNotInAttendees_AddsWalkin(t *testing.T) {
+	sessionID := uuid.New()
+	cA := uuid.New() // in attendees
+	cB := uuid.New() // tagged but NOT in attendees → walk-in
+	cand := repository.LinkageCandidate{
+		Kind:               "event",
+		ID:                 uuid.New(),
+		AttendeeContactIDs: []uuid.UUID{cA},
+	}
+	resolved := []resolvedTag{{AnarlogID: "human-b", ContactID: cB}}
+	state, kind, _, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, resolved)
+	require.Equal(t, repository.LinkageStateLinked, state)
+	require.Equal(t, "event", *kind)
+	require.Len(t, desired, 1)
+	expectedRef := "anarlog:" + sessionID.String() + ":walkin:" + cB.String()
+	require.Equal(t, expectedRef, desired[0].SourceRef)
+	require.Equal(t, cB, desired[0].ContactID)
+}
+
+// TestDecideLinkage_MultipleCandidates_ConflictPending verifies the
+// handler always lands on conflict_pending for 2+ candidates (the
+// participant-signal disambiguation flow is deferred).
+func TestDecideLinkage_MultipleCandidates_ConflictPending(t *testing.T) {
+	sessionID := uuid.New()
+	cands := []repository.LinkageCandidate{
+		{Kind: "event", ID: uuid.New()},
+		{Kind: "event", ID: uuid.New()},
+	}
+	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
+	require.Nil(t, kind)
+	require.Nil(t, id)
+	require.Empty(t, desired)
 }

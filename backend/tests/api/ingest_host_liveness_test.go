@@ -72,6 +72,11 @@ func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 		nil, // river unused
 		externalRepo,
 		liveness,
+		nil, // meetingNotes unused
+		nil, // calendar unused
+		nil, // interactions unused
+		nil, // identityLookup unused
+		nil, // contactSvc unused
 	)
 
 	// Build a structurally-valid envelope so the batch precondition
@@ -96,7 +101,7 @@ func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 		ObservedAt: accelerated.GetCurrentTime(),
 	}
 
-	accepted, duplicate, rejections, err := svc.IngestBatch(
+	accepted, duplicate, rejections, _, err := svc.IngestBatch(
 		ctx, []*events.Envelope{env}, []int{0}, &hostID,
 	)
 	require.Error(t, err, "batch must abort when liveness check reports revoked host")
@@ -141,12 +146,12 @@ func TestIngest_HostLivenessNil_SkipsCheck(t *testing.T) {
 	eventBus := events.NewBus(database.Pool, nil, eventRepo)
 
 	// nil hostLiveness — recheck is skipped.
-	svc := service.NewIngestService(database, eventBus, nil, nil, nil, nil, nil)
+	svc := service.NewIngestService(database, eventBus, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	// An empty batch passes the precondition layer immediately and
 	// never opens a tx. The test confirms wiring without the recheck
 	// does not panic.
-	accepted, duplicate, rejections, err := svc.IngestBatch(ctx, nil, nil, nil)
+	accepted, duplicate, rejections, _, err := svc.IngestBatch(ctx, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, accepted)
 	require.Equal(t, 0, duplicate)
@@ -218,7 +223,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	externalRepo := repository.NewExternalContactRepository(database.Queries)
-	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, nil, externalRepo, database.Pool, 4)
+	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, nil, externalRepo, nil, database.Pool, 4)
 	identityRepo := repository.NewIdentityRepository(database.Queries)
 	identityService := service.NewIdentityService(identityRepo)
 
@@ -248,7 +253,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	eventBus := events.NewBus(database.Pool, nil, eventRepo)
-	svc := service.NewIngestService(database, eventBus, identityService, nil, nil, blocker, hostRepo)
+	svc := service.NewIngestService(database, eventBus, identityService, nil, nil, blocker, hostRepo, nil, nil, nil, nil, nil)
 
 	entityID := "concurrent-revoke-" + uuid.NewString()[:8]
 	payload, err := events.Marshal(events.KindExternalContactUpserted, events.ExternalContactUpsertedPayload{
@@ -276,7 +281,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 	}
 	batchDone := make(chan batchResult, 1)
 	go func() {
-		acc, _, _, err := svc.IngestBatch(
+		acc, _, _, _, err := svc.IngestBatch(
 			ctx, []*events.Envelope{env}, []int{0}, &pair.HostID,
 		)
 		batchDone <- batchResult{accepted: acc, err: err}

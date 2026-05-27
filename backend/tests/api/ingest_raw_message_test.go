@@ -71,7 +71,7 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
-	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, nil, nil, database.Pool, 4)
+	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, nil, nil, nil, database.Pool, 4)
 
 	identityRepo := repository.NewIdentityRepository(database.Queries)
 	identityService := service.NewIdentityService(identityRepo)
@@ -121,6 +121,11 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 		riverClient,
 		nil,
 		hostRepo,
+		nil, // meetingNotes unused
+		nil, // calendar unused
+		nil, // interactions unused
+		nil, // identityLookup unused
+		nil, // contactSvc unused
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 

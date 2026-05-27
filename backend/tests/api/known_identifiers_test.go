@@ -55,7 +55,7 @@ func setupKnownIDsEnv(t *testing.T) *knownIDsEnv {
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
-	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, contactMethodRepo, nil, database.Pool, 4)
+	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, contactMethodRepo, nil, nil, database.Pool, 4)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)

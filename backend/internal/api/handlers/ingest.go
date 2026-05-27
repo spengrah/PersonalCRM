@@ -57,6 +57,11 @@ const eventsRawMessageMaxKnownVersion = 1
 // "upgrade Pi" rejection semantics as raw_message.* (above).
 const eventsExternalContactMaxKnownVersion = 1
 
+// eventsMeetingNoteMaxKnownVersion is the highest meeting_note.*
+// payload Version the Pi knows how to process. Same "upgrade Pi"
+// rejection semantics as raw_message.* / external_contact.* above.
+const eventsMeetingNoteMaxKnownVersion = 1
+
 // IngestHandler exposes POST /api/v1/ingest/events. Registered only when
 // cfg.Features.EnableEventBusIngest is true (spec §3.9).
 type IngestHandler struct {
@@ -110,11 +115,25 @@ type IngestError struct {
 // IngestResponse matches the spec §3.5 happy-path shape literally —
 // deliberately NOT wrapped in api.APIResponse. External daemons are
 // contract consumers and the wrapping would be a spec deviation.
+//
+// NeedsAttention is populated by the meeting_note.recorded inline
+// handler when a session lands in a state requiring user attention
+// (conflict_pending or orphan_needs_review). Emitted with `omitempty`
+// so daemons unaware of the field see a backward-compatible response.
 type IngestResponse struct {
-	Accepted  int           `json:"accepted"`
-	Duplicate int           `json:"duplicate"`
-	Rejected  int           `json:"rejected"`
-	Errors    []IngestError `json:"errors"`
+	Accepted       int                  `json:"accepted"`
+	Duplicate      int                  `json:"duplicate"`
+	Rejected       int                  `json:"rejected"`
+	Errors         []IngestError        `json:"errors"`
+	NeedsAttention []NeedsAttentionItem `json:"needs_attention,omitempty"`
+}
+
+// NeedsAttentionItem is the per-session attention record surfaced in
+// IngestResponse. SessionID is the anarlog session UUID; Reason is
+// one of "orphan" | "conflict" (mirrors the service-layer constants).
+type NeedsAttentionItem struct {
+	SessionID string `json:"session_id"`
+	Reason    string `json:"reason"`
 }
 
 // IngestEvents is the HTTP handler for POST /api/v1/ingest/events.
@@ -220,7 +239,7 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 		return
 	}
 
-	accepted, duplicate, perEventRejections, err := h.ingestService.IngestBatch(c.Request.Context(), envsToIngest, originalIndices, hostID)
+	accepted, duplicate, perEventRejections, needsAttention, err := h.ingestService.IngestBatch(c.Request.Context(), envsToIngest, originalIndices, hostID)
 	if err != nil {
 		// Host revoked between auth-middleware validation and the
 		// batch's tx-internal FOR UPDATE lock — return 401 so the
@@ -248,18 +267,35 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 		})
 	}
 
+	// Map the service-layer NeedsAttentionItem to the handler-layer
+	// JSON shape. omitempty on the response field means nil/empty
+	// slice produces a wire-compatible response for daemons that
+	// haven't shipped the consumer yet.
+	var responseNeedsAttention []NeedsAttentionItem
+	if len(needsAttention) > 0 {
+		responseNeedsAttention = make([]NeedsAttentionItem, len(needsAttention))
+		for i, na := range needsAttention {
+			responseNeedsAttention[i] = NeedsAttentionItem{
+				SessionID: na.SessionID,
+				Reason:    na.Reason,
+			}
+		}
+	}
+
 	logger.Info().
 		Int("batch_size", len(req.Events)).
 		Int("accepted", accepted).
 		Int("duplicate", duplicate).
 		Int("rejected", len(ingestErrors)).
+		Int("needs_attention", len(responseNeedsAttention)).
 		Msg("event batch ingested")
 
 	c.JSON(http.StatusOK, IngestResponse{
-		Accepted:  accepted,
-		Duplicate: duplicate,
-		Rejected:  len(ingestErrors),
-		Errors:    ingestErrors,
+		Accepted:       accepted,
+		Duplicate:      duplicate,
+		Rejected:       len(ingestErrors),
+		Errors:         ingestErrors,
+		NeedsAttention: responseNeedsAttention,
 	})
 }
 
@@ -355,6 +391,25 @@ func validateIngestEvent(index int, ev IngestEventRequest) *IngestError {
 		}
 	}
 
+	// meeting_note.* kinds: same "upgrade Pi" version-envelope check as
+	// the other daemon-emitted kinds. ValidatePayload already enforces
+	// source_id parses as a UUID and host_id is non-zero — we add the
+	// payload-version check + empty source_id guard here so the daemon
+	// gets a clear MISSING_FIELD / PAYLOAD_INVALID rather than a
+	// service-layer PAYLOAD_INVARIANT for the same root cause.
+	if kind == events.KindMeetingNoteRecorded || kind == events.KindMeetingNoteDeleted {
+		if ev.SourceID == "" {
+			return &IngestError{
+				Index:   index,
+				Code:    ingestCodeMissingField,
+				Message: "source_id is required for meeting_note.* kinds",
+			}
+		}
+		if rerr := validateMeetingNotePayloadVersion(index, kind, ev); rerr != nil {
+			return rerr
+		}
+	}
+
 	return nil
 }
 
@@ -378,6 +433,28 @@ func validateExternalContactPayloadVersion(index int, kind events.Kind, ev Inges
 		return &IngestError{Index: index, Code: ingestCodePayloadInvalid,
 			Message: fmt.Sprintf("%s payload version %d exceeds max known %d; upgrade Pi",
 				kind, versionEnvelope.Version, eventsExternalContactMaxKnownVersion)}
+	}
+	return nil
+}
+
+// validateMeetingNotePayloadVersion enforces the version envelope on
+// both meeting_note.* kinds. Same shape and behaviour as the
+// external_contact variant above.
+func validateMeetingNotePayloadVersion(index int, kind events.Kind, ev IngestEventRequest) *IngestError {
+	var versionEnvelope struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(ev.Payload, &versionEnvelope); err != nil {
+		return &IngestError{Index: index, Code: ingestCodePayloadInvalid, Message: err.Error()}
+	}
+	if versionEnvelope.Version < 1 {
+		return &IngestError{Index: index, Code: ingestCodePayloadInvalid,
+			Message: fmt.Sprintf("%s payload: version must be >=1 (got %d)", kind, versionEnvelope.Version)}
+	}
+	if versionEnvelope.Version > eventsMeetingNoteMaxKnownVersion {
+		return &IngestError{Index: index, Code: ingestCodePayloadInvalid,
+			Message: fmt.Sprintf("%s payload version %d exceeds max known %d; upgrade Pi",
+				kind, versionEnvelope.Version, eventsMeetingNoteMaxKnownVersion)}
 	}
 	return nil
 }

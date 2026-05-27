@@ -85,7 +85,7 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
-	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, contactMethodRepo, nil, database.Pool, 4)
+	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, contactMethodRepo, nil, nil, database.Pool, 4)
 
 	identityRepo := repository.NewIdentityRepository(database.Queries)
 	identityService := service.NewIdentityService(identityRepo)
@@ -100,7 +100,7 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 	// match-flip path errors after Bus.PublishTx + UpsertTx +
 	// MatchOrCreateTx have already written rows inside the savepoint.
 	failingWriter := &failingMatchExternalContactWriter{inner: externalRepo}
-	ingestService := service.NewIngestService(database, eventBus, identityService, nil, nil, failingWriter, hostRepo)
+	ingestService := service.NewIngestService(database, eventBus, identityService, nil, nil, failingWriter, hostRepo, nil, nil, nil, nil, nil)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	gin.SetMode(gin.TestMode)

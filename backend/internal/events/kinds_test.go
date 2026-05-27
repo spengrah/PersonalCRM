@@ -533,9 +533,10 @@ func TestKindPayloadTypes_CoversAllKinds(t *testing.T) {
 // deletions from AllKinds without updating the spec. Current spec (§3.2)
 // declares 10 base kinds (9 raw-signal + 1 derived), plus the two
 // daemon-emitted raw_message.* kinds (messages source), plus the two
-// external_contact.* kinds (iCloud Contacts source).
+// external_contact.* kinds (iCloud Contacts source), plus the two
+// meeting_note.* kinds (anarlog_sessions source).
 func TestAllKinds_ExpectedCount(t *testing.T) {
-	require.Len(t, AllKinds, 14)
+	require.Len(t, AllKinds, 16)
 }
 
 // TestIsKnownKind_CoversAllKinds is the positive side: every Kind declared
@@ -626,6 +627,20 @@ func buildCanonicalPayload(t *testing.T, kind Kind) json.RawMessage {
 		raw, err := Marshal(kind, ExternalContactDeletedPayload{
 			Version: 1, HostID: uuid.New(), Source: "icloud_contacts",
 			EntityID: "CN-canonical-2",
+		})
+		require.NoError(t, err)
+		return raw
+	case KindMeetingNoteRecorded:
+		raw, err := Marshal(kind, MeetingNoteRecordedPayload{
+			Version: 1, HostID: uuid.New(), Source: "anarlog_sessions",
+			SourceID: uuid.NewString(), MeetingAt: at,
+		})
+		require.NoError(t, err)
+		return raw
+	case KindMeetingNoteDeleted:
+		raw, err := Marshal(kind, MeetingNoteDeletedPayload{
+			Version: 1, HostID: uuid.New(), Source: "anarlog_sessions",
+			SourceID: uuid.NewString(),
 		})
 		require.NoError(t, err)
 		return raw
@@ -982,4 +997,139 @@ func TestExternalContactPayload_JSONShape(t *testing.T) {
 	require.False(t, hasBirthday, "birthday should be omitted when nil")
 	_, hasMetadata := asMap["metadata"]
 	require.False(t, hasMetadata, "metadata should be omitted when nil")
+}
+
+// ----------------------------------------------------------------------------
+// meeting_note.* payload tests.
+// ----------------------------------------------------------------------------
+
+func makeMeetingNoteRecordedRaw(t *testing.T, mutate func(*MeetingNoteRecordedPayload)) json.RawMessage {
+	t.Helper()
+	title := "Sample Session"
+	p := MeetingNoteRecordedPayload{
+		Version:        1,
+		HostID:         uuid.New(),
+		Source:         "anarlog_sessions",
+		SourceID:       uuid.NewString(),
+		Title:          &title,
+		MeetingAt:      time.Date(2026, 5, 1, 14, 30, 0, 0, time.UTC),
+		ParticipantIDs: []string{uuid.NewString(), uuid.NewString()},
+	}
+	if mutate != nil {
+		mutate(&p)
+	}
+	b, err := json.Marshal(p)
+	require.NoError(t, err)
+	return json.RawMessage(b)
+}
+
+func TestValidatePayload_MeetingNoteRecorded_AcceptsValid(t *testing.T) {
+	env := &Envelope{Kind: KindMeetingNoteRecorded, Payload: makeMeetingNoteRecordedRaw(t, nil)}
+	require.NoError(t, ValidatePayload(env))
+}
+
+func TestValidatePayload_MeetingNoteRecorded_RejectsZeroHostID(t *testing.T) {
+	env := &Envelope{Kind: KindMeetingNoteRecorded, Payload: makeMeetingNoteRecordedRaw(t, func(p *MeetingNoteRecordedPayload) {
+		p.HostID = uuid.Nil
+	})}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "host_id is required")
+}
+
+func TestValidatePayload_MeetingNoteRecorded_RejectsNonUUIDSourceID(t *testing.T) {
+	env := &Envelope{Kind: KindMeetingNoteRecorded, Payload: makeMeetingNoteRecordedRaw(t, func(p *MeetingNoteRecordedPayload) {
+		p.SourceID = "not-a-uuid"
+	})}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "source_id must be a UUID")
+}
+
+func TestValidatePayload_MeetingNoteRecorded_RejectsZeroMeetingAt(t *testing.T) {
+	env := &Envelope{Kind: KindMeetingNoteRecorded, Payload: makeMeetingNoteRecordedRaw(t, func(p *MeetingNoteRecordedPayload) {
+		p.MeetingAt = time.Time{}
+	})}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "meeting_at is required")
+}
+
+func TestValidatePayload_MeetingNoteRecorded_RejectsNonUUIDParticipant(t *testing.T) {
+	env := &Envelope{Kind: KindMeetingNoteRecorded, Payload: makeMeetingNoteRecordedRaw(t, func(p *MeetingNoteRecordedPayload) {
+		p.ParticipantIDs = []string{uuid.NewString(), "not-a-uuid"}
+	})}
+	err := ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "participant_ids[1] not a UUID")
+}
+
+func TestValidatePayload_MeetingNoteDeleted_AcceptsValid(t *testing.T) {
+	p := MeetingNoteDeletedPayload{
+		Version:  1,
+		HostID:   uuid.New(),
+		Source:   "anarlog_sessions",
+		SourceID: uuid.NewString(),
+	}
+	raw, err := json.Marshal(p)
+	require.NoError(t, err)
+	env := &Envelope{Kind: KindMeetingNoteDeleted, Payload: raw}
+	require.NoError(t, ValidatePayload(env))
+}
+
+func TestValidatePayload_MeetingNoteDeleted_RejectsZeroHostID(t *testing.T) {
+	p := MeetingNoteDeletedPayload{
+		Version:  1,
+		Source:   "anarlog_sessions",
+		SourceID: uuid.NewString(),
+	}
+	raw, err := json.Marshal(p)
+	require.NoError(t, err)
+	env := &Envelope{Kind: KindMeetingNoteDeleted, Payload: raw}
+	err = ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "host_id is required")
+}
+
+func TestValidatePayload_MeetingNoteDeleted_RejectsNonUUIDSourceID(t *testing.T) {
+	p := MeetingNoteDeletedPayload{
+		Version:  1,
+		HostID:   uuid.New(),
+		Source:   "anarlog_sessions",
+		SourceID: "not-a-uuid",
+	}
+	raw, err := json.Marshal(p)
+	require.NoError(t, err)
+	env := &Envelope{Kind: KindMeetingNoteDeleted, Payload: raw}
+	err = ValidatePayload(env)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "source_id must be a UUID")
+}
+
+func TestMarshalUnmarshal_MeetingNoteRecorded_RoundTrip(t *testing.T) {
+	title := "Round-Trip Test"
+	summary := "session summary"
+	original := MeetingNoteRecordedPayload{
+		Version:        1,
+		HostID:         uuid.New(),
+		Source:         "anarlog_sessions",
+		SourceID:       uuid.NewString(),
+		Title:          &title,
+		MeetingAt:      time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC),
+		Summary:        &summary,
+		ParticipantIDs: []string{uuid.NewString(), uuid.NewString()},
+		Tags:           []string{"tag-a", "tag-b"},
+	}
+	raw, err := Marshal(KindMeetingNoteRecorded, original)
+	require.NoError(t, err)
+	env := &Envelope{Kind: KindMeetingNoteRecorded, Payload: raw}
+	var decoded MeetingNoteRecordedPayload
+	require.NoError(t, Unmarshal(env, &decoded))
+	require.Equal(t, original.SourceID, decoded.SourceID)
+	require.Equal(t, original.HostID, decoded.HostID)
+	require.Equal(t, original.ParticipantIDs, decoded.ParticipantIDs)
+	require.Equal(t, original.Tags, decoded.Tags)
+	require.True(t, original.MeetingAt.Equal(decoded.MeetingAt))
+	require.Equal(t, *original.Title, *decoded.Title)
+	require.Equal(t, *original.Summary, *decoded.Summary)
 }

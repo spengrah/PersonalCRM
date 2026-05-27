@@ -455,6 +455,49 @@ func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactIn
 	return items, nil
 }
 
+const ListSessionAttributedInteractions = `-- name: ListSessionAttributedInteractions :many
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction FROM interaction
+WHERE source = 'anarlog_sessions'
+  AND source_ref LIKE $1
+  AND deleted_at IS NULL
+ORDER BY source_ref
+`
+
+// Returns all live interactions attributed to a specific anarlog session
+// (both impromptu / orphan-with-tags entries and walk-in supplementals).
+// Used by the re-sync diff path in the meeting_note.recorded inline
+// handler to compute the (existing - desired) set that needs
+// soft-deleting.
+func (q *Queries) ListSessionAttributedInteractions(ctx context.Context, sourceRefPrefix pgtype.Text) ([]*Interaction, error) {
+	rows, err := q.db.Query(ctx, ListSessionAttributedInteractions, sourceRefPrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*Interaction{}
+	for rows.Next() {
+		var i Interaction
+		if err := rows.Scan(
+			&i.ID,
+			&i.ContactID,
+			&i.Source,
+			&i.SourceRef,
+			&i.OccurredAt,
+			&i.Description,
+			&i.CreatedAt,
+			&i.DeletedAt,
+			&i.Direction,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const SoftDeleteInteraction = `-- name: SoftDeleteInteraction :exec
 UPDATE interaction SET deleted_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL

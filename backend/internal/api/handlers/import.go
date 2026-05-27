@@ -31,8 +31,16 @@ type PostImportHook interface {
 	OnPeerLinked(ctx context.Context, peerUserID int64, peerUsername string, contactID uuid.UUID) error
 }
 
+// ImportHandler holds the dependencies the import endpoints need. It
+// keeps a direct externalRepo reference because the existing import
+// flow reads/writes external_contact across most methods (GetByID,
+// UpdateMatch, Ignore) and a passthrough service wrapper would add
+// indirection without semantic gain. The anarlog identity backfill is
+// routed through identitySvc so handler code does not call the
+// identity repository directly.
 type ImportHandler struct {
 	externalRepo   *repository.ExternalContactRepository
+	identitySvc    *service.IdentityService
 	contactSvc     *service.ContactService
 	matchSvc       *service.ImportMatchService
 	enricher       *service.EnrichmentService
@@ -40,15 +48,21 @@ type ImportHandler struct {
 	postImportHook PostImportHook
 }
 
-// NewImportHandler creates a new import handler
+// NewImportHandler creates a new import handler. identitySvc may be
+// nil for callers that don't exercise the anarlog_humans backfill
+// path; when nil the import flow silently skips the anarlog identity
+// update (the meeting_note re-sync path then re-resolves as unmatched,
+// which matches the no-backfill baseline behavior).
 func NewImportHandler(
 	externalRepo *repository.ExternalContactRepository,
+	identitySvc *service.IdentityService,
 	contactSvc *service.ContactService,
 	matchSvc *service.ImportMatchService,
 	enricher *service.EnrichmentService,
 ) *ImportHandler {
 	return &ImportHandler{
 		externalRepo: externalRepo,
+		identitySvc:  identitySvc,
 		contactSvc:   contactSvc,
 		matchSvc:     matchSvc,
 		enricher:     enricher,
@@ -395,6 +409,17 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	// Post-import hook: back-link Telegram message history
 	h.triggerPostImportHook(ctx, external, contact.ID)
 
+	// Anarlog-humans backfill: link the anarlog_human_id identity row
+	// to the imported contact so a future meeting_note.recorded re-sync
+	// resolves the human and produces the right interaction. Surfaces
+	// errors as 500 because a silent failure would leave the user with
+	// an imported contact whose anarlog sessions don't link to it.
+	if err := h.backfillAnarlogIdentity(ctx, external, contact.ID); err != nil {
+		logger.Error().Err(err).Str("external_id", id.String()).Msg("anarlog import backfill failed")
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link anarlog identity to imported contact", err.Error())
+		return
+	}
+
 	api.SendSuccess(c, http.StatusCreated, response, nil)
 }
 
@@ -552,6 +577,16 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	// Post-import hook: back-link Telegram message history
 	h.triggerPostImportHook(ctx, external, crmContactID)
 
+	// Anarlog-humans backfill: link the anarlog_human_id identity row
+	// to the linked contact so a future meeting_note.recorded re-sync
+	// resolves the human and produces the right interaction. Surfaces
+	// errors as 500 — see ImportContact above for the rationale.
+	if err := h.backfillAnarlogIdentity(ctx, external, crmContactID); err != nil {
+		logger.Error().Err(err).Str("external_id", id.String()).Msg("anarlog import backfill failed")
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link anarlog identity to linked contact", err.Error())
+		return
+	}
+
 	api.SendSuccess(c, http.StatusOK, LinkContactResponse{
 		ExternalContact: updated,
 		RematchJobID:    nilStringPtrFromUUID(rematchJobID),
@@ -575,6 +610,17 @@ func (h *ImportHandler) triggerPostImportHook(ctx context.Context, external *rep
 	if err := h.postImportHook.OnPeerLinked(ctx, peerUserID, peerUsername, contactID); err != nil {
 		logger.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: post-import hook failed")
 	}
+}
+
+// backfillAnarlogIdentity routes through IdentityService so the handler
+// stays free of direct repository calls. Returns nil + no-op when the
+// external_contact is not from the anarlog_humans source, or when
+// identitySvc is nil (test wiring).
+func (h *ImportHandler) backfillAnarlogIdentity(ctx context.Context, external *repository.ExternalContact, contactID uuid.UUID) error {
+	if h.identitySvc == nil || external == nil || external.Source != "anarlog_humans" {
+		return nil
+	}
+	return h.identitySvc.BackfillAnarlogIdentityForImport(ctx, external.SourceID, contactID)
 }
 
 // toEnrichmentMethodSelections converts handler selections to service format

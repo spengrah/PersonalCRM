@@ -335,7 +335,8 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		pairingTokenRepo,
 		syncRepo,
 		contactMethodLister,
-		externalContactRepo, // /known-ids reader
+		externalContactRepo, // /known-ids reader (external_contact)
+		repository.NewMeetingNoteRepository(database.Queries), // /known-ids reader (anarlog_sessions)
 		database.Pool,
 		0)
 

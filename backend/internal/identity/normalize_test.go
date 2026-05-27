@@ -179,6 +179,52 @@ func TestNormalizeWhatsApp(t *testing.T) {
 	assert.Equal(t, "+15551234567", result)
 }
 
+func TestNormalizeAnarlogHuman(t *testing.T) {
+	// Anarlog UUIDs are already canonical; Normalize trims whitespace
+	// and lowercases so case-mixed daemon emits compare equal to stored.
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "canonical uuid",
+			input:    "fe0e4dd9-30b3-4c2b-9c80-6c7eb1f44a91",
+			expected: "fe0e4dd9-30b3-4c2b-9c80-6c7eb1f44a91",
+		},
+		{
+			name:     "uppercase uuid",
+			input:    "FE0E4DD9-30B3-4C2B-9C80-6C7EB1F44A91",
+			expected: "fe0e4dd9-30b3-4c2b-9c80-6c7eb1f44a91",
+		},
+		{
+			name:     "with whitespace",
+			input:    "  fe0e4dd9-30b3-4c2b-9c80-6c7eb1f44a91  ",
+			expected: "fe0e4dd9-30b3-4c2b-9c80-6c7eb1f44a91",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Normalize(tt.input, IdentifierTypeAnarlogHuman)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestMapIdentifierTypeToContactMethodTypes_AnarlogHumanReturnsNil(t *testing.T) {
+	// Anarlog UUIDs do not search against contact_method rows directly
+	// — the contact_id linkage comes from the associated
+	// external_contact's email/phone match path. Returning nil keeps
+	// the identity-service search path short-circuiting.
+	result := MapIdentifierTypeToContactMethodTypes(IdentifierTypeAnarlogHuman)
+	assert.Nil(t, result)
+}
+
 func TestMapIdentifierTypeToContactMethodTypes(t *testing.T) {
 	tests := []struct {
 		name     string

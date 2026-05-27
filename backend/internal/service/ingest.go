@@ -5,10 +5,13 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,6 +24,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/gowebpki/jcs"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -42,6 +46,13 @@ const (
 	ingestRejectExternalContactDeleteFailed       = "EXTERNAL_CONTACT_DELETE_FAILED"
 	ingestRejectExternalContactHashMismatch       = "EXTERNAL_CONTACT_HASH_MISMATCH"
 	ingestRejectExternalContactDeleteHashMismatch = "EXTERNAL_CONTACT_DELETE_HASH_MISMATCH"
+	ingestRejectMeetingNoteUpsertFailed           = "MEETING_NOTE_UPSERT_FAILED"
+	ingestRejectMeetingNoteDeleteFailed           = "MEETING_NOTE_DELETE_FAILED"
+	ingestRejectMeetingNoteHashMismatch           = "MEETING_NOTE_HASH_MISMATCH"
+	ingestRejectMeetingNoteDeleteHashMismatch     = "MEETING_NOTE_DELETE_HASH_MISMATCH"
+	ingestRejectLinkageQueryFailed                = "LINKAGE_QUERY_FAILED"
+	ingestRejectParticipantResolveFailed          = "PARTICIPANT_RESOLVE_FAILED"
+	ingestRejectInteractionWriteFailed            = "INTERACTION_WRITE_FAILED"
 )
 
 // ErrHostRevokedDuringBatch is returned by IngestBatch when the
@@ -57,6 +68,15 @@ var ErrHostRevokedDuringBatch = errors.New("host revoked during ingest batch")
 // PAYLOAD_INVARIANT. Extend when a new daemon-side source ships.
 var allowedExternalContactSources = map[string]struct{}{
 	"icloud_contacts": {},
+	"anarlog_humans":  {},
+}
+
+// allowedMeetingNoteSources is the set of envelope.Source values the
+// meeting_note.* inline handler accepts. Currently only the
+// daemon-emitted anarlog_sessions source. Mismatches surface as
+// PAYLOAD_INVARIANT.
+var allowedMeetingNoteSources = map[string]struct{}{
+	"anarlog_sessions": {},
 }
 
 // reExternalContactUpsertSourceID matches the envelope SourceID shape
@@ -70,6 +90,22 @@ var reExternalContactUpsertSourceID = regexp.MustCompile(`^[^@]+@[a-f0-9]{64}$`)
 // `<entity_uuid>@deleted@<sha256-hex>` or `<entity_uuid>@deleted@unknown`.
 var reExternalContactDeleteSourceID = regexp.MustCompile(`^[^@]+@deleted@([a-f0-9]{64}|unknown)$`)
 
+// reMeetingNoteUpsertSourceID matches the envelope SourceID shape for
+// meeting_note.recorded events: `<session_uuid>@<sha256-hex>`. The
+// session-UUID portion is structurally checked by the regex; the
+// inline verifier additionally enforces it parses as a UUID.
+var reMeetingNoteUpsertSourceID = regexp.MustCompile(`^[^@]+@[a-f0-9]{64}$`)
+
+// reMeetingNoteDeleteSourceID matches the envelope SourceID shape for
+// meeting_note.deleted events: `<session_uuid>@deleted@<sha256-hex>` or
+// `<session_uuid>@deleted@unknown`.
+var reMeetingNoteDeleteSourceID = regexp.MustCompile(`^[^@]+@deleted@([a-f0-9]{64}|unknown)$`)
+
+// meetingNoteDeleteUnknownSuffix is the spec-defined fallback suffix
+// on meeting_note.deleted source_ids when the daemon has no local
+// cache of the prior content hash. Mirrors externalContactDeleteUnknownSuffix.
+const meetingNoteDeleteUnknownSuffix = "@deleted@unknown"
+
 // IngestPerEventRejection is a per-event domain rejection emitted by the
 // service-layer inline handlers. Index is the caller-original index from
 // originalIndices, NOT the compacted in-service position — so the HTTP
@@ -79,6 +115,25 @@ type IngestPerEventRejection struct {
 	Code    string
 	Message string
 }
+
+// NeedsAttentionItem is a service-layer record surfaced to the daemon
+// after a meeting_note.recorded event lands in a state that requires
+// user attention (conflict_pending or orphan_needs_review). The
+// dispatch loop appends one item per qualifying event AFTER the
+// per-event savepoint commits successfully — never on the rollback
+// path. The handler maps this to the HTTP response's needs_attention
+// field for the daemon to consume.
+type NeedsAttentionItem struct {
+	SessionID string
+	Reason    string
+}
+
+// NeedsAttentionReason* are the canonical reason strings for
+// NeedsAttentionItem. The daemon pattern-matches on these.
+const (
+	NeedsAttentionReasonConflict = "conflict"
+	NeedsAttentionReasonOrphan   = "orphan"
+)
 
 // JobInsertTxer is the narrow surface for transactional River inserts.
 // Concrete is *river.Client[pgx.Tx]. Interface keeps the service
@@ -123,6 +178,56 @@ type HostLivenessChecker interface {
 	GetActiveHostByIDForUpdateTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.MacHost, error)
 }
 
+// MeetingNoteWriter is the narrow surface for the meeting_note.*
+// inline handlers. Concrete is *repository.MeetingNoteRepository.
+type MeetingNoteWriter interface {
+	GetMeetingNoteBySessionIDForUpdateTx(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID) (*repository.MeetingNote, error)
+	GetTombstonedMeetingNoteBySessionIDTx(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID) (*repository.MeetingNote, error)
+	InsertMeetingNoteTx(ctx context.Context, tx pgx.Tx, params repository.InsertMeetingNoteParams) (*repository.MeetingNote, error)
+	UpdateMeetingNoteOnResyncTx(ctx context.Context, tx pgx.Tx, params repository.UpdateMeetingNoteOnResyncParams) (*repository.MeetingNote, error)
+	ReviveMeetingNoteTx(ctx context.Context, tx pgx.Tx, params repository.ReviveMeetingNoteParams) (*repository.MeetingNote, error)
+	SoftDeleteMeetingNoteBySessionIDTx(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID) error
+}
+
+// CalendarLinkageReader is the narrow surface the meeting_note
+// handler needs to enumerate candidate calendar events in a time
+// window. Concrete is *repository.CalendarEventRepository.
+type CalendarLinkageReader interface {
+	FindLinkageCandidatesTx(ctx context.Context, tx pgx.Tx, windowStart, windowEnd time.Time) ([]repository.LinkageCandidate, error)
+}
+
+// InteractionWriter is the narrow surface for the re-sync diff path
+// (list session-attributed live interactions, soft-delete obsoletes)
+// and the meeting_note.deleted cascade. Refreshes of existing
+// interactions go through ContactInteractionRecorder.ExtendInteractionTx
+// instead so cadence stays under the sole-writer invariant. Concrete
+// is *repository.InteractionRepository.
+type InteractionWriter interface {
+	ListSessionAttributedInteractionsTx(ctx context.Context, tx pgx.Tx, sourceRefPrefix string) ([]repository.Interaction, error)
+	SoftDeleteInteractionTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error
+}
+
+// AnarlogIdentityLookup is the narrow surface used by the
+// meeting_note.recorded handler to resolve payload participant_ids
+// (anarlog_human UUIDs) into CRM contact_ids. Concrete is
+// *repository.IdentityRepository. Also covers the LinkTx variant used
+// by handleExternalContactUpserted to wire the anarlog identity row's
+// contact_id when the underlying external_contact's email/phone
+// resolved a contact.
+type AnarlogIdentityLookup interface {
+	FindContactIDByAnarlogHumanIDTx(ctx context.Context, tx pgx.Tx, anarlogHumanID string) (*uuid.UUID, error)
+	LinkIdentityToContactTx(ctx context.Context, tx pgx.Tx, req repository.LinkIdentityRequest) (*repository.ExternalIdentity, error)
+}
+
+// ContactInteractionRecorder is the narrow surface for routing
+// session-attributed interaction writes through the higher-level
+// ContactService methods (so cadence updates + follow-up evaluation
+// fire correctly on both inserts and refreshes). Concrete is *ContactService.
+type ContactInteractionRecorder interface {
+	RecordInteractionTx(ctx context.Context, tx pgx.Tx, publishesEvent bool, req repository.RecordInteractionRequest) (*RecordInteractionResult, error)
+	ExtendInteractionTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) (func(context.Context), error)
+}
+
 // IngestService persists pre-validated event envelopes inside a single
 // transaction. All envelopes in a batch commit together or roll back
 // together — spec §3.5 "all-or-nothing on unexpected errors."
@@ -146,6 +251,11 @@ type IngestService struct {
 	riverClient      JobInsertTxer
 	externalContacts ExternalContactWriter
 	hostLiveness     HostLivenessChecker
+	meetingNotes     MeetingNoteWriter
+	calendar         CalendarLinkageReader
+	interactions     InteractionWriter
+	identityLookup   AnarlogIdentityLookup
+	contactSvc       ContactInteractionRecorder
 }
 
 // NewIngestService builds an IngestService. Per-kind dependencies may
@@ -159,6 +269,11 @@ type IngestService struct {
 // batch trusts the auth-middleware's read. Production always wires a
 // concrete repository so the race window between auth and commit is
 // closed.
+//
+// meetingNotes/calendar/interactions/identityLookup/contactSvc are the
+// meeting_note.* inline handler's dependency set. Passing nil here is
+// supported for callers that don't need the meeting_note path; the
+// handler returns PAYLOAD_INVARIANT for missing wiring.
 func NewIngestService(
 	database *db.Database,
 	bus *events.Bus,
@@ -167,6 +282,11 @@ func NewIngestService(
 	riverClient JobInsertTxer,
 	externalContacts ExternalContactWriter,
 	hostLiveness HostLivenessChecker,
+	meetingNotes MeetingNoteWriter,
+	calendar CalendarLinkageReader,
+	interactions InteractionWriter,
+	identityLookup AnarlogIdentityLookup,
+	contactSvc ContactInteractionRecorder,
 ) *IngestService {
 	return &IngestService{
 		database:         database,
@@ -176,6 +296,11 @@ func NewIngestService(
 		riverClient:      riverClient,
 		externalContacts: externalContacts,
 		hostLiveness:     hostLiveness,
+		meetingNotes:     meetingNotes,
+		calendar:         calendar,
+		interactions:     interactions,
+		identityLookup:   identityLookup,
+		contactSvc:       contactSvc,
 	}
 }
 
@@ -193,6 +318,8 @@ var hostAuthAllowedKinds = map[events.Kind]struct{}{
 	events.KindRawMessageSent:          {},
 	events.KindExternalContactUpserted: {},
 	events.KindExternalContactDeleted:  {},
+	events.KindMeetingNoteRecorded:     {},
+	events.KindMeetingNoteDeleted:      {},
 }
 
 // isHostOnlyKind reports whether the kind is in the host-auth
@@ -220,6 +347,12 @@ func isExternalContactKind(k events.Kind) bool {
 	return k == events.KindExternalContactUpserted || k == events.KindExternalContactDeleted
 }
 
+// isMeetingNoteKind reports whether the kind is one of the
+// meeting_note.* daemon-emitted events.
+func isMeetingNoteKind(k events.Kind) bool {
+	return k == events.KindMeetingNoteRecorded || k == events.KindMeetingNoteDeleted
+}
+
 // pendingAggregateKey is the (source, contactID) pair used to dedupe
 // aggregator enqueues within a single batch.
 type pendingAggregateKey struct {
@@ -228,7 +361,7 @@ type pendingAggregateKey struct {
 }
 
 // IngestBatch persists envs in one pgx transaction. Returns
-// (accepted, duplicate, perEventRejections, err):
+// (accepted, duplicate, perEventRejections, needsAttention, err):
 //
 //   - accepted: number of envelopes whose INSERT produced a fresh row.
 //   - duplicate: number of envelopes whose INSERT hit the (source,
@@ -240,10 +373,14 @@ type pendingAggregateKey struct {
 //     caller-original position from originalIndices, so the handler can
 //     append them to the response's errors[] field with correct
 //     indexing.
+//   - needsAttention: meeting_note.recorded events whose final
+//     linkage_state requires user attention (conflict_pending or
+//     orphan_needs_review). Appended only after the per-event savepoint
+//     commits; nil when no qualifying events occurred.
 //   - err: any unexpected DB/infrastructure failure (begin-tx, publish-
 //     tx, savepoint commit, end-of-batch aggregator enqueue, outer
-//     commit). The whole tx rolls back in this case; counts are zero
-//     and perEventRejections is nil on error return.
+//     commit). The whole tx rolls back in this case; all return values
+//     are zero on error return.
 //
 // Precondition: every envelope MUST have env.ID == uuid.Nil on entry
 // (the env.ID-sentinel duplicate-detection contract relies on it).
@@ -260,22 +397,22 @@ func (s *IngestService) IngestBatch(
 	envs []*events.Envelope,
 	originalIndices []int,
 	hostID *uuid.UUID,
-) (accepted, duplicate int, perEventRejections []IngestPerEventRejection, err error) {
+) (accepted, duplicate int, perEventRejections []IngestPerEventRejection, needsAttention []NeedsAttentionItem, err error) {
 	if len(envs) == 0 {
-		return 0, 0, nil, nil
+		return 0, 0, nil, nil, nil
 	}
 	if len(originalIndices) != len(envs) {
-		return 0, 0, nil, fmt.Errorf(
+		return 0, 0, nil, nil, fmt.Errorf(
 			"ingest: originalIndices length %d does not match envs length %d",
 			len(originalIndices), len(envs))
 	}
 
 	for i, env := range envs {
 		if env == nil {
-			return 0, 0, nil, fmt.Errorf("ingest: envelope at index %d is nil", i)
+			return 0, 0, nil, nil, fmt.Errorf("ingest: envelope at index %d is nil", i)
 		}
 		if env.ID != uuid.Nil {
-			return 0, 0, nil, fmt.Errorf(
+			return 0, 0, nil, nil, fmt.Errorf(
 				"ingest: envelope at index %d has a pre-assigned ID; IngestBatch "+
 					"requires ID=uuid.Nil so the duplicate sentinel works", i)
 		}
@@ -283,7 +420,7 @@ func (s *IngestService) IngestBatch(
 
 	tx, err := s.database.Pool.Begin(ctx)
 	if err != nil {
-		return 0, 0, nil, fmt.Errorf("begin tx: %w", err)
+		return 0, 0, nil, nil, fmt.Errorf("begin tx: %w", err)
 	}
 	// Rollback on any non-commit return. Safe to call after Commit: pgx
 	// returns ErrTxClosed which we ignore. If rollback itself fails and no
@@ -308,20 +445,27 @@ func (s *IngestService) IngestBatch(
 	if hostID != nil && s.hostLiveness != nil {
 		if _, livenessErr := s.hostLiveness.GetActiveHostByIDForUpdateTx(ctx, tx, *hostID); livenessErr != nil {
 			if errors.Is(livenessErr, db.ErrNotFound) {
-				return 0, 0, nil, ErrHostRevokedDuringBatch
+				return 0, 0, nil, nil, ErrHostRevokedDuringBatch
 			}
-			return 0, 0, nil, fmt.Errorf("re-validate host liveness: %w", livenessErr)
+			return 0, 0, nil, nil, fmt.Errorf("re-validate host liveness: %w", livenessErr)
 		}
 	}
 
 	pendingAggregate := make(map[pendingAggregateKey]struct{})
 
+	// batchPostCommit accumulates post-commit closures returned by
+	// per-event handlers (currently only meeting_note.recorded routes
+	// session interactions through ContactService.RecordInteractionTx,
+	// whose FollowUpFn fires the FollowUpManager after commit).
+	var batchPostCommit []func(context.Context)
+
 	for i, env := range envs {
 		originalIdx := originalIndices[i]
 
 		// Step 1 — host-auth allowlist enforcement.
-		//   * Host-only kinds (raw_message.*, external_contact.*) are
-		//     allowed ONLY on the host-auth path (hostID != nil).
+		//   * Host-only kinds (raw_message.*, external_contact.*,
+		//     meeting_note.*) are allowed ONLY on the host-auth path
+		//     (hostID != nil).
 		//   * Other kinds (Pi internal publishers) are allowed ONLY on
 		//     the global-key path (hostID == nil).
 		if hostID != nil {
@@ -329,7 +473,7 @@ func (s *IngestService) IngestBatch(
 				perEventRejections = append(perEventRejections, IngestPerEventRejection{
 					Index:   originalIdx,
 					Code:    ingestRejectUnsupportedHostAuthKind,
-					Message: fmt.Sprintf("kind %q not allowed on host-auth path; daemon only emits raw_message.* and external_contact.*", env.Kind),
+					Message: fmt.Sprintf("kind %q not allowed on host-auth path; daemon only emits raw_message.* / external_contact.* / meeting_note.*", env.Kind),
 				})
 				continue
 			}
@@ -359,6 +503,12 @@ func (s *IngestService) IngestBatch(
 				perEventRejections = append(perEventRejections, *rejection)
 				continue
 			}
+		} else if isMeetingNoteKind(env.Kind) {
+			if rejection := verifyMeetingNoteInvariants(env, *hostID); rejection != nil {
+				rejection.Index = originalIdx
+				perEventRejections = append(perEventRejections, *rejection)
+				continue
+			}
 		}
 
 		// Step 3 — open a savepoint so per-event domain failures roll
@@ -366,7 +516,7 @@ func (s *IngestService) IngestBatch(
 		// staging row) rather than poisoning the outer batch tx.
 		sp, spErr := tx.Begin(ctx)
 		if spErr != nil {
-			return 0, 0, nil, fmt.Errorf("begin savepoint for index %d (original %d): %w", i, originalIdx, spErr)
+			return 0, 0, nil, nil, fmt.Errorf("begin savepoint for index %d (original %d): %w", i, originalIdx, spErr)
 		}
 
 		// Step 4 — durable publish to event log. PublishTx is idempotent
@@ -380,22 +530,54 @@ func (s *IngestService) IngestBatch(
 		// to per-event rejection here.
 		if pubErr := s.bus.PublishTx(ctx, sp, env); pubErr != nil {
 			if rbErr := sp.Rollback(ctx); rbErr != nil {
-				return 0, 0, nil, fmt.Errorf("publish event index %d (original %d): %w (rollback: %v)", i, originalIdx, pubErr, rbErr)
+				return 0, 0, nil, nil, fmt.Errorf("publish event index %d (original %d): %w (rollback: %v)", i, originalIdx, pubErr, rbErr)
 			}
-			return 0, 0, nil, fmt.Errorf("publish event index %d (original %d): %w", i, originalIdx, pubErr)
+			return 0, 0, nil, nil, fmt.Errorf("publish event index %d (original %d): %w", i, originalIdx, pubErr)
 		}
 
 		isDuplicate := env.ID == uuid.Nil
 
 		// Step 5 — inline handler for daemon-emitted kinds. On
-		// duplicate (Step 4 detected a dedup hit) we SKIP the inline
-		// handler entirely: re-running identity-match + re-upserting
+		// duplicate (Step 4 detected a dedup hit) we normally SKIP the
+		// inline handler entirely: re-running identity-match + re-upserting
 		// staging on every duplicate would spuriously bump
 		// external_identity.last_seen_at and re-add the row to
 		// pendingAggregate (raw_message), or re-revive a row whose
 		// content hash hasn't actually changed (external_contact).
 		// The guard makes a duplicate re-submit a true no-op.
-		if !isDuplicate {
+		//
+		// Exception for meeting_note.recorded: the spec-defined
+		// source_id is `<session_uuid>@<content_hash>`. A tombstoned
+		// session that is later re-recorded with identical content
+		// produces the SAME source_id and hits the bus-dedup path —
+		// without the probe the inline handler is skipped and the row
+		// stays tombstoned. The same probe also covers participant
+		// resolution drift on live rows after an import.
+		runInline := !isDuplicate
+		if isDuplicate {
+			should, probeErr := s.shouldRunInlineOnDuplicate(ctx, sp, env)
+			if probeErr != nil {
+				if rbErr := sp.Rollback(ctx); rbErr != nil {
+					return 0, 0, nil, nil, fmt.Errorf("probe revive-bypass for index %d (original %d): %w (rollback: %v)", i, originalIdx, probeErr, rbErr)
+				}
+				return 0, 0, nil, nil, fmt.Errorf("probe revive-bypass for index %d (original %d): %w", i, originalIdx, probeErr)
+			}
+			runInline = should
+		}
+
+		// Per-event optional accumulator items. Captured during the
+		// handler's run and appended to the batch-level slice ONLY
+		// after the savepoint commits — never on the rollback path
+		// (single-point append).
+		var pendingNA *NeedsAttentionItem
+		// pendingFollowUps holds the post-commit closures returned by
+		// ContactService.RecordInteractionTx for any session-attributed
+		// interactions written by handleMeetingNoteRecorded. Executed
+		// once the outer tx commits so the cadence-task + Todoist side
+		// effects fire correctly.
+		var pendingFollowUps []func(context.Context)
+
+		if runInline {
 			switch {
 			case isRawMessageKind(env.Kind):
 				contactID, rejection := s.handleRawMessage(ctx, sp, env, *hostID)
@@ -403,7 +585,7 @@ func (s *IngestService) IngestBatch(
 					rejection.Index = originalIdx
 					perEventRejections = append(perEventRejections, *rejection)
 					if rbErr := sp.Rollback(ctx); rbErr != nil {
-						return 0, 0, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
+						return 0, 0, nil, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
 					}
 					continue
 				}
@@ -415,7 +597,7 @@ func (s *IngestService) IngestBatch(
 					rejection.Index = originalIdx
 					perEventRejections = append(perEventRejections, *rejection)
 					if rbErr := sp.Rollback(ctx); rbErr != nil {
-						return 0, 0, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
+						return 0, 0, nil, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
 					}
 					continue
 				}
@@ -424,7 +606,28 @@ func (s *IngestService) IngestBatch(
 					rejection.Index = originalIdx
 					perEventRejections = append(perEventRejections, *rejection)
 					if rbErr := sp.Rollback(ctx); rbErr != nil {
-						return 0, 0, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
+						return 0, 0, nil, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
+					}
+					continue
+				}
+			case env.Kind == events.KindMeetingNoteRecorded:
+				naItem, followUps, rejection := s.handleMeetingNoteRecorded(ctx, sp, env, *hostID)
+				if rejection != nil {
+					rejection.Index = originalIdx
+					perEventRejections = append(perEventRejections, *rejection)
+					if rbErr := sp.Rollback(ctx); rbErr != nil {
+						return 0, 0, nil, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
+					}
+					continue
+				}
+				pendingNA = naItem
+				pendingFollowUps = followUps
+			case env.Kind == events.KindMeetingNoteDeleted:
+				if rejection := s.handleMeetingNoteDeleted(ctx, sp, env, *hostID); rejection != nil {
+					rejection.Index = originalIdx
+					perEventRejections = append(perEventRejections, *rejection)
+					if rbErr := sp.Rollback(ctx); rbErr != nil {
+						return 0, 0, nil, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
 					}
 					continue
 				}
@@ -432,7 +635,18 @@ func (s *IngestService) IngestBatch(
 		}
 
 		if commitErr := sp.Commit(ctx); commitErr != nil {
-			return 0, 0, nil, fmt.Errorf("commit savepoint %d (original %d): %w", i, originalIdx, commitErr)
+			return 0, 0, nil, nil, fmt.Errorf("commit savepoint %d (original %d): %w", i, originalIdx, commitErr)
+		}
+
+		// Post-commit: append the per-event needs_attention item, if any.
+		if pendingNA != nil {
+			needsAttention = append(needsAttention, *pendingNA)
+		}
+		// Collect post-commit follow-up closures for execution after
+		// the outer tx commits. Discarding them here would silently lose
+		// follow-up task side effects on session-attributed interactions.
+		if len(pendingFollowUps) > 0 {
+			batchPostCommit = append(batchPostCommit, pendingFollowUps...)
 		}
 
 		if isDuplicate {
@@ -460,15 +674,25 @@ func (s *IngestService) IngestBatch(
 		if _, insErr := s.riverClient.InsertTx(ctx, tx, args, &river.InsertOpts{
 			UniqueOpts: consumerjobs.MessagingAggregateUniqueOpts(),
 		}); insErr != nil {
-			return 0, 0, nil, fmt.Errorf("enqueue messaging aggregate (contact=%s source=%s): %w",
+			return 0, 0, nil, nil, fmt.Errorf("enqueue messaging aggregate (contact=%s source=%s): %w",
 				pair.ContactID, pair.Source, insErr)
 		}
 	}
 
 	if commitErr := tx.Commit(ctx); commitErr != nil {
-		return 0, 0, nil, fmt.Errorf("commit: %w", commitErr)
+		return 0, 0, nil, nil, fmt.Errorf("commit: %w", commitErr)
 	}
-	return accepted, duplicate, perEventRejections, nil
+	// Execute post-commit follow-up closures (FollowUpFn returned by
+	// ContactService.RecordInteractionTx). Run sequentially since
+	// FollowUpManager updates contact_task rows that may share a
+	// contact; the volume per batch is bounded by len(envs) so this
+	// is cheap. Each closure is itself best-effort: a failure inside
+	// the followup logic is logged inside FollowUpManager and does
+	// NOT roll back the batch (the interactions already committed).
+	for _, fn := range batchPostCommit {
+		fn(ctx)
+	}
+	return accepted, duplicate, perEventRejections, needsAttention, nil
 }
 
 // handleRawMessage runs the per-event domain logic for raw_message.*
@@ -893,6 +1117,18 @@ func (s *IngestService) handleExternalContactUpserted(
 		external.MatchStatus == repository.MatchStatusUnmatched &&
 		external.DuplicateOfID == nil
 	matched := false
+	// matchedContactID tracks the CRM contact_id resolved by the
+	// email/phone match loops. The local `external` struct is from the
+	// initial UpsertTx and does NOT reflect the subsequent UpdateMatchTx
+	// write — capture the resolution separately so downstream logic
+	// (e.g., anarlog identity linking) sees the freshly-matched contact.
+	// On re-upsert / revive (canSetMatchOnRow=false) we fall back to the
+	// existing external.CRMContactID since that's the source of truth
+	// for the preserved match.
+	var matchedContactID *uuid.UUID
+	if external != nil && external.CRMContactID != nil {
+		matchedContactID = external.CRMContactID
+	}
 	for _, em := range p.Emails {
 		if em.Value == "" {
 			continue
@@ -928,6 +1164,7 @@ func (s *IngestService) handleExternalContactUpserted(
 				}
 			}
 			matched = true
+			matchedContactID = result.ContactID
 		}
 	}
 	for _, ph := range p.Phones {
@@ -964,8 +1201,54 @@ func (s *IngestService) handleExternalContactUpserted(
 				}
 			}
 			matched = true
+			matchedContactID = result.ContactID
 		}
 	}
+
+	// Anarlog-humans identity registration. For source='anarlog_humans'
+	// only, write an external_identity row keyed by the anarlog_human_id
+	// itself so the meeting_note.recorded handler can resolve
+	// participant_ids → CRM contact_ids via FindContactIDByAnarlogHumanIDTx.
+	// If the email/phone path above resolved a contact_id, link the new
+	// identity row to it in the same tx. The Import-handler backfill
+	// (handlers/import.go) covers the "tag now, import later" path.
+	if env.Source == "anarlog_humans" && s.identityLookup != nil {
+		result, idErr := s.identity.MatchOrCreateTx(ctx, tx, MatchRequest{
+			RawIdentifier: p.EntityID,
+			Type:          identity.IdentifierTypeAnarlogHuman,
+			Source:        env.Source,
+			SourceID:      &p.EntityID,
+			DisplayName:   p.DisplayName,
+		})
+		if idErr != nil {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectIdentityMatchFailed,
+				Message: fmt.Sprintf("identity match (anarlog_human_id): %s", idErr.Error()),
+			}
+		}
+		// If the external_contact's email/phone resolved a CRM contact
+		// AND the new anarlog identity row is unmatched, link it.
+		// Defensive guards: only link when both sides have populated
+		// pointers AND the identity row is genuinely unmatched (avoid
+		// clobbering a manual link from a prior import). matchedContactID
+		// reflects the freshly-resolved contact from the email/phone
+		// loops above (the local external struct is stale across the
+		// UpdateMatchTx write).
+		if matchedContactID != nil &&
+			result != nil && result.Identity != nil && result.Identity.ContactID == nil {
+			if _, linkErr := s.identityLookup.LinkIdentityToContactTx(ctx, tx, repository.LinkIdentityRequest{
+				IdentityID: result.Identity.ID,
+				ContactID:  *matchedContactID,
+				MatchType:  repository.MatchTypeExact,
+			}); linkErr != nil {
+				return &IngestPerEventRejection{
+					Code:    ingestRejectIdentityMatchFailed,
+					Message: fmt.Sprintf("link anarlog_human_id identity to contact: %s", linkErr.Error()),
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1138,4 +1421,877 @@ func toRepoAddressEntries(in []events.ExternalContactAddressValue) []repository.
 		})
 	}
 	return out
+}
+
+// verifyMeetingNoteInvariants enforces the cross-field consistency
+// properties for meeting_note.* envelopes. Returns a
+// *IngestPerEventRejection (caller fills in Index) on any violation,
+// nil on success.
+//
+// Properties checked (mirrors verifyExternalContactInvariants):
+//  1. payload decodes cleanly into the per-kind struct.
+//  2. payload.HostID matches the authenticated host.
+//  3. env.Source is in allowedMeetingNoteSources.
+//  4. payload.Source matches env.Source.
+//  5. payload.SourceID parses as a UUID.
+//  6. env.SourceID matches the kind's content-hash discriminator shape
+//     AND its entity prefix matches payload.SourceID.
+//  7. For upsert: recompute SHA-256(JCS(payload \ {host_id})) and assert
+//     it equals the 64-char hex suffix on env.SourceID. Mismatch is
+//     MEETING_NOTE_HASH_MISMATCH (delete uses the stored-hash lookup
+//     path inside the handler — same convention as external_contact).
+func verifyMeetingNoteInvariants(env *events.Envelope, authenticatedHostID uuid.UUID) *IngestPerEventRejection {
+	switch env.Kind {
+	case events.KindMeetingNoteRecorded:
+		var p events.MeetingNoteRecordedPayload
+		if err := json.Unmarshal(env.Payload, &p); err != nil {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectPayloadInvalid,
+				Message: fmt.Sprintf("decode meeting_note.recorded payload: %s", err.Error()),
+			}
+		}
+		if rej := commonMeetingNoteInvariants(env, authenticatedHostID, p.HostID, p.Source, p.SourceID); rej != nil {
+			return rej
+		}
+		if !reMeetingNoteUpsertSourceID.MatchString(env.SourceID) {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectPayloadInvariant,
+				Message: "meeting_note.recorded source_id must match <session_uuid>@<sha256-hex>",
+			}
+		}
+		if !strings.HasPrefix(env.SourceID, p.SourceID+"@") {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectPayloadInvariant,
+				Message: "meeting_note.recorded source_id entity prefix does not match payload source_id",
+			}
+		}
+		computedHash, hashErr := ComputeContentHash(env.Payload)
+		if hashErr != nil {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectPayloadInvalid,
+				Message: fmt.Sprintf("compute content hash: %s", hashErr.Error()),
+			}
+		}
+		claimedHash := env.SourceID[len(env.SourceID)-64:]
+		if computedHash != claimedHash {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectMeetingNoteHashMismatch,
+				Message: fmt.Sprintf("source_id hash %s does not match computed JCS hash %s", claimedHash, computedHash),
+			}
+		}
+		return nil
+	case events.KindMeetingNoteDeleted:
+		var p events.MeetingNoteDeletedPayload
+		if err := json.Unmarshal(env.Payload, &p); err != nil {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectPayloadInvalid,
+				Message: fmt.Sprintf("decode meeting_note.deleted payload: %s", err.Error()),
+			}
+		}
+		if rej := commonMeetingNoteInvariants(env, authenticatedHostID, p.HostID, p.Source, p.SourceID); rej != nil {
+			return rej
+		}
+		if !reMeetingNoteDeleteSourceID.MatchString(env.SourceID) {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectPayloadInvariant,
+				Message: "meeting_note.deleted source_id must match <session_uuid>@deleted@<sha256-hex|unknown>",
+			}
+		}
+		if !strings.HasPrefix(env.SourceID, p.SourceID+"@deleted@") {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectPayloadInvariant,
+				Message: "meeting_note.deleted source_id entity prefix does not match payload source_id",
+			}
+		}
+		return nil
+	default:
+		return &IngestPerEventRejection{
+			Code:    ingestRejectPayloadInvariant,
+			Message: fmt.Sprintf("verifyMeetingNoteInvariants: unexpected kind %q", env.Kind),
+		}
+	}
+}
+
+// commonMeetingNoteInvariants enforces the host/source/source_id
+// checks shared by both meeting_note.* kinds.
+func commonMeetingNoteInvariants(
+	env *events.Envelope,
+	authenticatedHostID uuid.UUID,
+	payloadHostID uuid.UUID,
+	payloadSource string,
+	payloadSourceID string,
+) *IngestPerEventRejection {
+	if payloadHostID != authenticatedHostID {
+		return &IngestPerEventRejection{
+			Code:    ingestRejectPayloadInvariant,
+			Message: "payload host_id does not match authenticated host",
+		}
+	}
+	if _, ok := allowedMeetingNoteSources[env.Source]; !ok {
+		return &IngestPerEventRejection{
+			Code:    ingestRejectPayloadInvariant,
+			Message: fmt.Sprintf("env.source %q not supported on meeting_note.* kinds", env.Source),
+		}
+	}
+	if payloadSource != env.Source {
+		return &IngestPerEventRejection{
+			Code:    ingestRejectPayloadInvariant,
+			Message: "payload source does not match envelope source",
+		}
+	}
+	if payloadSourceID == "" {
+		return &IngestPerEventRejection{
+			Code:    ingestRejectPayloadInvariant,
+			Message: "payload source_id is required",
+		}
+	}
+	if _, err := uuid.Parse(payloadSourceID); err != nil {
+		return &IngestPerEventRejection{
+			Code:    ingestRejectPayloadInvariant,
+			Message: fmt.Sprintf("payload source_id %q is not a UUID", payloadSourceID),
+		}
+	}
+	return nil
+}
+
+// linkageWindow is the symmetric ± window around payload.MeetingAt that
+// FindLinkageCandidatesTx searches for calendar (and future phone_call)
+// rows. 15 minutes per sidecar spec §Linkage detection algorithm.
+const linkageWindow = 15 * time.Minute
+
+// shouldRunInlineOnDuplicate is the dispatch-loop probe that allows
+// the inline handler to run even when Bus.PublishTx flagged the event
+// as a duplicate. For meeting_note.recorded specifically there are two
+// scenarios where the duplicate must NOT be a no-op:
+//
+//  1. The underlying row is tombstoned and needs revive consideration
+//     (delete then re-record identical content scenario).
+//  2. The row is live but the participant→contact resolution may have
+//     drifted since the original ingest (the user imported a previously-
+//     unmatched anarlog_humans candidate, so the resolved_set_hash
+//     would now differ). The carry-forward branch detects whether work
+//     is actually needed via hash compare and short-circuits when not.
+//
+// Returning true unconditionally for live + tombstoned meeting_note
+// rows is safe: the handler's carry-forward branch is cheap (single
+// UPDATE on the content fields) when nothing changed. Other kinds keep
+// the "duplicate is a true no-op" contract.
+func (s *IngestService) shouldRunInlineOnDuplicate(ctx context.Context, tx pgx.Tx, env *events.Envelope) (bool, error) {
+	if env.Kind != events.KindMeetingNoteRecorded || s.meetingNotes == nil {
+		return false, nil
+	}
+	var p events.MeetingNoteRecordedPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		// Decode failure here is unexpected — the dispatch loop already
+		// ran verifyMeetingNoteInvariants which decodes successfully.
+		// Surface as an error so the batch rolls back.
+		return false, fmt.Errorf("inline-on-duplicate probe: decode payload: %w", err)
+	}
+	sessionID, parseErr := uuid.Parse(p.SourceID)
+	if parseErr != nil {
+		return false, fmt.Errorf("inline-on-duplicate probe: parse session UUID: %w", parseErr)
+	}
+	// Tombstone-aware FOR UPDATE — returns the row whether live or
+	// soft-deleted. Either case means the inline handler should run.
+	// db.ErrNotFound is the no-prior-row case (e.g. concurrent first
+	// insert that lost the race) — in that case the original
+	// duplicate-skip semantics apply.
+	_, err := s.meetingNotes.GetMeetingNoteBySessionIDForUpdateTx(ctx, tx, sessionID)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, db.ErrNotFound) {
+		return false, nil
+	}
+	return false, fmt.Errorf("inline-on-duplicate probe: lookup row: %w", err)
+}
+
+// meetingNoteInputHashRecipe is the canonical (meeting_at, title,
+// sorted participant_ids) tuple that the inline handler hashes to
+// detect "matching inputs changed" on re-sync.
+type meetingNoteInputHashRecipe struct {
+	MeetingAt      string   `json:"meeting_at"`
+	Title          *string  `json:"title"`
+	ParticipantIDs []string `json:"participant_ids"`
+}
+
+// computeMeetingNoteInputHash returns the lowercase-hex SHA-256 of a
+// stable canonicalization of (meeting_at, title, sorted participant_ids).
+// Title is included so a future title-parser does not have to migrate
+// hashes. Summary and memo are intentionally excluded — they're content
+// fields, not matching inputs.
+func computeMeetingNoteInputHash(meetingAt time.Time, title *string, participantIDs []string) (string, error) {
+	sorted := append([]string(nil), participantIDs...)
+	sort.Strings(sorted)
+	recipe := meetingNoteInputHashRecipe{
+		MeetingAt:      meetingAt.UTC().Format(time.RFC3339Nano),
+		Title:          title,
+		ParticipantIDs: sorted,
+	}
+	raw, err := json.Marshal(recipe)
+	if err != nil {
+		return "", fmt.Errorf("marshal input hash recipe: %w", err)
+	}
+	canonical, err := jcs.Transform(raw)
+	if err != nil {
+		return "", fmt.Errorf("jcs canonicalize input hash recipe: %w", err)
+	}
+	sum := sha256.Sum256(canonical)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// computeResolvedSetHash returns the lowercase-hex SHA-256 of a
+// stable canonicalization of the resolved contact-UUID set. Used to
+// detect when participant→contact resolution changes between events
+// for the same session (e.g., after a user imports a previously-
+// unmatched anarlog_humans candidate).
+func computeResolvedSetHash(contactIDs []uuid.UUID) (string, error) {
+	strs := make([]string, len(contactIDs))
+	for i, id := range contactIDs {
+		strs[i] = id.String()
+	}
+	sort.Strings(strs)
+	raw, err := json.Marshal(strs)
+	if err != nil {
+		return "", fmt.Errorf("marshal resolved set: %w", err)
+	}
+	canonical, err := jcs.Transform(raw)
+	if err != nil {
+		return "", fmt.Errorf("jcs canonicalize resolved set: %w", err)
+	}
+	sum := sha256.Sum256(canonical)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// resolvedTag is the (anarlog_human_id, contact_id) pair produced by
+// the participant-resolution step. The handler deduplicates by
+// contact_id so two anarlog humans mapping to the same CRM contact
+// produce exactly one interaction.
+type resolvedTag struct {
+	AnarlogID string
+	ContactID uuid.UUID
+}
+
+// desiredInteraction is a single (contact_id, source_ref) pair the
+// linkage logic decided should be persisted. Computed before the
+// re-sync diff so we can compare against the existing set.
+type desiredInteraction struct {
+	ContactID uuid.UUID
+	SourceRef string
+}
+
+// handleMeetingNoteRecorded runs the per-event domain logic for a
+// meeting_note.recorded envelope inside the per-event savepoint.
+//
+// Implements the full linkage-detection algorithm per
+// .ai/spec/mac-daemon-phase-2-anarlog-matching.md §Linkage detection.
+// Participant-signal disambiguation is deferred; the handler always
+// lands on conflict_pending when 2+ calendar candidates match. Re-sync
+// diff and the revive-on-tombstone branch share the same code path.
+//
+// Returns (needsAttention, followUps, rejection): needsAttention is
+// non-nil when the final linkage_state requires user attention
+// (conflict_pending or orphan_needs_review). followUps carries the
+// post-commit closures returned by RecordInteractionTx for the new
+// session-attributed interactions (so FollowUpManager fires after
+// the outer tx commits). rejection != nil rolls back the savepoint.
+func (s *IngestService) handleMeetingNoteRecorded(
+	ctx context.Context,
+	tx pgx.Tx,
+	env *events.Envelope,
+	authenticatedHostID uuid.UUID,
+) (*NeedsAttentionItem, []func(context.Context), *IngestPerEventRejection) {
+	if s.meetingNotes == nil || s.calendar == nil || s.interactions == nil ||
+		s.identityLookup == nil || s.contactSvc == nil {
+		return nil, nil, &IngestPerEventRejection{
+			Code:    ingestRejectPayloadInvariant,
+			Message: "ingest service was not configured for meeting_note processing",
+		}
+	}
+
+	// followUps accumulates post-commit closures returned by
+	// ContactService.RecordInteractionTx so the dispatch loop can run
+	// them after the outer tx commits. FollowUpManager updates
+	// contact_task rows + may schedule Todoist work; running it inside
+	// the tx would hold the lock across an external HTTP call.
+	var followUps []func(context.Context)
+
+	var p events.MeetingNoteRecordedPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		return nil, nil, &IngestPerEventRejection{
+			Code:    ingestRejectPayloadInvalid,
+			Message: fmt.Sprintf("decode meeting_note.recorded payload: %s", err.Error()),
+		}
+	}
+	sessionID, parseErr := uuid.Parse(p.SourceID)
+	if parseErr != nil {
+		return nil, nil, &IngestPerEventRejection{
+			Code:    ingestRejectPayloadInvalid,
+			Message: fmt.Sprintf("parse session UUID: %s", parseErr.Error()),
+		}
+	}
+
+	// content hash from envelope source_id (already verified upstream
+	// by verifyMeetingNoteInvariants → ComputeContentHash match).
+	contentHash := env.SourceID[len(env.SourceID)-64:]
+	payloadHostID := p.HostID
+	_ = payloadHostID // referenced for clarity in payload→insert mapping
+
+	// 1. Acquire row lock + read existing meeting_note row (tombstone-
+	//    aware). FOR UPDATE serializes concurrent re-syncs for the same
+	//    session UUID.
+	prior, getErr := s.meetingNotes.GetMeetingNoteBySessionIDForUpdateTx(ctx, tx, sessionID)
+	if getErr != nil && !errors.Is(getErr, db.ErrNotFound) {
+		return nil, nil, &IngestPerEventRejection{
+			Code:    ingestRejectMeetingNoteUpsertFailed,
+			Message: fmt.Sprintf("pre-read meeting_note: %s", getErr.Error()),
+		}
+	}
+
+	// 2. Host-ownership guard. Mirrors handleExternalContactDeleted.
+	//    Non-NULL stored host_id that differs from authenticated host →
+	//    warn-log + silent no-op (rejection nil, needs_attention nil).
+	if prior != nil && prior.MacHostID != nil && *prior.MacHostID != authenticatedHostID {
+		logger.Warn().
+			Str("source", env.Source).
+			Str("session_id", p.SourceID).
+			Str("prior_host_id", prior.MacHostID.String()).
+			Str("authenticated_host_id", authenticatedHostID.String()).
+			Msg("meeting_note.recorded dropped: row owned by a different host")
+		return nil, nil, nil
+	}
+
+	// 3. Resolve tagged participants (anarlog_human UUIDs → CRM
+	//    contact_ids). Dedupe by contact_id so two anarlog humans
+	//    mapping to the same CRM contact produce ONE interaction.
+	resolvedTagged := make([]resolvedTag, 0, len(p.ParticipantIDs))
+	seenContactIDs := make(map[uuid.UUID]struct{}, len(p.ParticipantIDs))
+	for _, pid := range p.ParticipantIDs {
+		contactID, lookupErr := s.identityLookup.FindContactIDByAnarlogHumanIDTx(ctx, tx, pid)
+		if lookupErr != nil {
+			return nil, nil, &IngestPerEventRejection{
+				Code:    ingestRejectParticipantResolveFailed,
+				Message: fmt.Sprintf("resolve participant %s: %s", pid, lookupErr.Error()),
+			}
+		}
+		if contactID == nil {
+			continue
+		}
+		if _, dup := seenContactIDs[*contactID]; dup {
+			continue
+		}
+		seenContactIDs[*contactID] = struct{}{}
+		resolvedTagged = append(resolvedTagged, resolvedTag{AnarlogID: pid, ContactID: *contactID})
+	}
+
+	// 4. Compute hashes. Stable order: input hash uses sorted
+	//    participant_ids; resolved-set hash uses sorted resolved
+	//    contact_ids.
+	newInputHash, err := computeMeetingNoteInputHash(p.MeetingAt, p.Title, p.ParticipantIDs)
+	if err != nil {
+		return nil, nil, &IngestPerEventRejection{
+			Code:    ingestRejectMeetingNoteUpsertFailed,
+			Message: fmt.Sprintf("compute input hash: %s", err.Error()),
+		}
+	}
+	resolvedContactIDs := make([]uuid.UUID, len(resolvedTagged))
+	for i, r := range resolvedTagged {
+		resolvedContactIDs[i] = r.ContactID
+	}
+	newResolvedSetHash, err := computeResolvedSetHash(resolvedContactIDs)
+	if err != nil {
+		return nil, nil, &IngestPerEventRejection{
+			Code:    ingestRejectMeetingNoteUpsertFailed,
+			Message: fmt.Sprintf("compute resolved set hash: %s", err.Error()),
+		}
+	}
+
+	// 5. Decide the branch:
+	//    a) prior == nil          → first-insert (run linkage + insert).
+	//    b) prior tombstoned      → revive (run linkage + revive update).
+	//    c) prior live, hashes
+	//       unchanged            → carry-forward (update content fields only).
+	//    d) prior live, any hash
+	//       changed              → re-link (run linkage + diff interactions).
+	revivePath := prior != nil && prior.DeletedAt != nil
+	carryForward := prior != nil && !revivePath &&
+		prior.InputHash == newInputHash &&
+		prior.ResolvedSetHash == newResolvedSetHash
+
+	var (
+		finalLinkageState   string
+		finalLinkedKind     *string
+		finalLinkedID       *uuid.UUID
+		desired             []desiredInteraction
+		candidatesLen       int
+		interactionsCreated int
+		interactionsDropped int
+	)
+
+	if carryForward {
+		// Preserve prior linkage. No interaction writes.
+		finalLinkageState = prior.LinkageState
+		finalLinkedKind = prior.LinkedKind
+		finalLinkedID = prior.LinkedID
+	} else {
+		// First-insert, revive, or re-link → run linkage fresh.
+		windowStart := p.MeetingAt.Add(-linkageWindow)
+		windowEnd := p.MeetingAt.Add(linkageWindow)
+		candidates, candErr := s.calendar.FindLinkageCandidatesTx(ctx, tx, windowStart, windowEnd)
+		if candErr != nil {
+			return nil, nil, &IngestPerEventRejection{
+				Code:    ingestRejectLinkageQueryFailed,
+				Message: fmt.Sprintf("find linkage candidates: %s", candErr.Error()),
+			}
+		}
+		candidatesLen = len(candidates)
+		finalLinkageState, finalLinkedKind, finalLinkedID, desired = decideLinkage(p, sessionID, candidates, resolvedTagged)
+	}
+
+	// 6. Write meeting_note row. Branch on first-insert / revive /
+	//    carry-forward / re-link. The repository params are nearly
+	//    identical across branches; only the destination method differs.
+	params := repository.InsertMeetingNoteParams{
+		AnarlogSessionID: sessionID,
+		Title:            p.Title,
+		Summary:          p.Summary,
+		Memo:             p.Memo,
+		Participants:     p.ParticipantIDs,
+		MacHostID:        &authenticatedHostID,
+		LinkedKind:       finalLinkedKind,
+		LinkedID:         finalLinkedID,
+		LinkageState:     finalLinkageState,
+		InputHash:        newInputHash,
+		ResolvedSetHash:  newResolvedSetHash,
+		LastContentHash:  &contentHash,
+		MeetingAt:        p.MeetingAt,
+	}
+	switch {
+	case prior == nil:
+		if _, err := s.meetingNotes.InsertMeetingNoteTx(ctx, tx, params); err != nil {
+			if !errors.Is(err, db.ErrNotFound) {
+				return nil, nil, &IngestPerEventRejection{
+					Code:    ingestRejectMeetingNoteUpsertFailed,
+					Message: fmt.Sprintf("insert meeting_note: %s", err.Error()),
+				}
+			}
+			// Concurrent first-insert won the race against the partial
+			// unique index. Re-read the row (held with FOR UPDATE for
+			// the rest of this tx) and fall through to the update path
+			// so this event's content + linkage values land via UPDATE
+			// instead of erroring as PAYLOAD_INVARIANT.
+			racedRow, getErr := s.meetingNotes.GetMeetingNoteBySessionIDForUpdateTx(ctx, tx, sessionID)
+			if getErr != nil {
+				return nil, nil, &IngestPerEventRejection{
+					Code:    ingestRejectMeetingNoteUpsertFailed,
+					Message: fmt.Sprintf("re-read meeting_note after concurrent insert: %s", getErr.Error()),
+				}
+			}
+			updateParams := repository.UpdateMeetingNoteOnResyncParams{
+				ID:              racedRow.ID,
+				Title:           p.Title,
+				Summary:         p.Summary,
+				Memo:            p.Memo,
+				Participants:    p.ParticipantIDs,
+				LinkedKind:      finalLinkedKind,
+				LinkedID:        finalLinkedID,
+				LinkageState:    finalLinkageState,
+				InputHash:       newInputHash,
+				ResolvedSetHash: newResolvedSetHash,
+				LastContentHash: &contentHash,
+				MeetingAt:       p.MeetingAt,
+			}
+			if _, err := s.meetingNotes.UpdateMeetingNoteOnResyncTx(ctx, tx, updateParams); err != nil {
+				return nil, nil, &IngestPerEventRejection{
+					Code:    ingestRejectMeetingNoteUpsertFailed,
+					Message: fmt.Sprintf("update meeting_note after concurrent insert: %s", err.Error()),
+				}
+			}
+		}
+	case revivePath:
+		reviveParams := repository.ReviveMeetingNoteParams{
+			ID:              prior.ID,
+			Title:           p.Title,
+			Summary:         p.Summary,
+			Memo:            p.Memo,
+			Participants:    p.ParticipantIDs,
+			LinkedKind:      finalLinkedKind,
+			LinkedID:        finalLinkedID,
+			LinkageState:    finalLinkageState,
+			InputHash:       newInputHash,
+			ResolvedSetHash: newResolvedSetHash,
+			LastContentHash: &contentHash,
+			MeetingAt:       p.MeetingAt,
+		}
+		if _, err := s.meetingNotes.ReviveMeetingNoteTx(ctx, tx, reviveParams); err != nil {
+			return nil, nil, &IngestPerEventRejection{
+				Code:    ingestRejectMeetingNoteUpsertFailed,
+				Message: fmt.Sprintf("revive meeting_note: %s", err.Error()),
+			}
+		}
+	default:
+		updateParams := repository.UpdateMeetingNoteOnResyncParams{
+			ID:              prior.ID,
+			Title:           p.Title,
+			Summary:         p.Summary,
+			Memo:            p.Memo,
+			Participants:    p.ParticipantIDs,
+			LinkedKind:      finalLinkedKind,
+			LinkedID:        finalLinkedID,
+			LinkageState:    finalLinkageState,
+			InputHash:       newInputHash,
+			ResolvedSetHash: newResolvedSetHash,
+			LastContentHash: &contentHash,
+			MeetingAt:       p.MeetingAt,
+		}
+		if _, err := s.meetingNotes.UpdateMeetingNoteOnResyncTx(ctx, tx, updateParams); err != nil {
+			return nil, nil, &IngestPerEventRejection{
+				Code:    ingestRejectMeetingNoteUpsertFailed,
+				Message: fmt.Sprintf("update meeting_note: %s", err.Error()),
+			}
+		}
+	}
+
+	// 7. Apply interaction writes — carry-forward path skips both
+	//    sides; first-insert/revive insert the full desired set;
+	//    re-link diffs against the existing live set and adds/drops
+	//    accordingly. Calendar/phone-call interactions are NEVER
+	//    touched here — we filter by source='anarlog_sessions' +
+	//    source_ref prefix.
+	if !carryForward {
+		sourceRefPrefix := fmt.Sprintf("anarlog:%s:%%", sessionID.String())
+		existing, listErr := s.interactions.ListSessionAttributedInteractionsTx(ctx, tx, sourceRefPrefix)
+		if listErr != nil {
+			return nil, nil, &IngestPerEventRejection{
+				Code:    ingestRejectInteractionWriteFailed,
+				Message: fmt.Sprintf("list session-attributed interactions: %s", listErr.Error()),
+			}
+		}
+		existingByRef := make(map[string]repository.Interaction, len(existing))
+		for _, x := range existing {
+			if x.SourceRef != nil {
+				existingByRef[*x.SourceRef] = x
+			}
+		}
+		desiredByRef := make(map[string]desiredInteraction, len(desired))
+		for _, d := range desired {
+			desiredByRef[d.SourceRef] = d
+		}
+		// to_drop = existing \ desired
+		for ref, x := range existingByRef {
+			if _, want := desiredByRef[ref]; want {
+				continue
+			}
+			if err := s.interactions.SoftDeleteInteractionTx(ctx, tx, x.ID); err != nil {
+				return nil, nil, &IngestPerEventRejection{
+					Code:    ingestRejectInteractionWriteFailed,
+					Message: fmt.Sprintf("soft-delete obsolete interaction: %s", err.Error()),
+				}
+			}
+			logger.Warn().
+				Str("event", "session_re_sync_dropped").
+				Str("session_id", p.SourceID).
+				Str("source_ref", ref).
+				Msg("meeting_note re-sync soft-deleted obsolete session interaction")
+			interactionsDropped++
+		}
+		// in-both: existing source_ref still desired → refresh the
+		// content fields (occurred_at + description) when the payload
+		// changed so the timeline view reflects the latest meeting_at
+		// and title. Routes through ContactService.ExtendInteractionTx
+		// which re-applies cadence (last_contacted / contact_by) via
+		// the sole-writer path and returns a follow-up closure to run
+		// after commit — direct UPDATE would leave cadence stale.
+		for ref, d := range desiredByRef {
+			x, have := existingByRef[ref]
+			if !have {
+				continue
+			}
+			needsRefresh := !x.OccurredAt.Equal(p.MeetingAt) ||
+				!stringPtrEqual(x.Description, p.Title)
+			if !needsRefresh {
+				continue
+			}
+			refreshFn, err := s.contactSvc.ExtendInteractionTx(ctx, tx, x.ID, d.ContactID, repository.InteractionDirectionMutual, p.MeetingAt, p.Title)
+			if err != nil {
+				return nil, nil, &IngestPerEventRejection{
+					Code:    ingestRejectInteractionWriteFailed,
+					Message: fmt.Sprintf("refresh session interaction: %s", err.Error()),
+				}
+			}
+			if refreshFn != nil {
+				followUps = append(followUps, refreshFn)
+			}
+		}
+		// to_add = desired \ existing (route through ContactService so
+		// cadence + follow-up evaluation fire correctly). Capture the
+		// FollowUpFn closures so the dispatch loop can run them after
+		// the outer tx commits.
+		for ref, d := range desiredByRef {
+			if _, have := existingByRef[ref]; have {
+				continue
+			}
+			sourceRef := d.SourceRef
+			req := repository.RecordInteractionRequest{
+				ContactID:   d.ContactID,
+				Source:      repository.InteractionSourceAnarlogSessions,
+				SourceRef:   &sourceRef,
+				OccurredAt:  p.MeetingAt,
+				Description: p.Title,
+				Direction:   repository.InteractionDirectionMutual,
+			}
+			res, err := s.contactSvc.RecordInteractionTx(ctx, tx, false, req)
+			if err != nil {
+				return nil, nil, &IngestPerEventRejection{
+					Code:    ingestRejectInteractionWriteFailed,
+					Message: fmt.Sprintf("record session interaction: %s", err.Error()),
+				}
+			}
+			if res != nil && res.FollowUpFn != nil {
+				followUps = append(followUps, res.FollowUpFn)
+			}
+			interactionsCreated++
+		}
+	}
+
+	// 8. Single-point needs_attention computation. The caller appends
+	//    this AFTER savepoint commit so a rollback path cannot leak an
+	//    item into the batch accumulator.
+	var needs *NeedsAttentionItem
+	switch finalLinkageState {
+	case repository.LinkageStateConflictPending:
+		needs = &NeedsAttentionItem{SessionID: p.SourceID, Reason: NeedsAttentionReasonConflict}
+	case repository.LinkageStateOrphanNeedsReview:
+		needs = &NeedsAttentionItem{SessionID: p.SourceID, Reason: NeedsAttentionReasonOrphan}
+	}
+
+	// 9. Structured log line for observability.
+	priorInputHash := ""
+	priorResolvedSetHash := ""
+	if prior != nil {
+		priorInputHash = prior.InputHash
+		priorResolvedSetHash = prior.ResolvedSetHash
+	}
+	linkedKindStr := ""
+	linkedIDStr := ""
+	if finalLinkedKind != nil {
+		linkedKindStr = *finalLinkedKind
+	}
+	if finalLinkedID != nil {
+		linkedIDStr = finalLinkedID.String()
+	}
+	logger.Info().
+		Str("event", "linkage_decision").
+		Str("session_id", p.SourceID).
+		Int("candidates", candidatesLen).
+		Str("linkage_state", finalLinkageState).
+		Str("linked_kind", linkedKindStr).
+		Str("linked_id", linkedIDStr).
+		Int("tagged_total", len(p.ParticipantIDs)).
+		Int("tagged_resolved", len(resolvedTagged)).
+		Int("tagged_unresolved", len(p.ParticipantIDs)-len(resolvedTagged)).
+		Int("interactions_created", interactionsCreated).
+		Int("interactions_dropped", interactionsDropped).
+		Bool("revive_path", revivePath).
+		Bool("carry_forward", carryForward).
+		Bool("input_hash_changed", priorInputHash != newInputHash).
+		Bool("resolved_set_changed", priorResolvedSetHash != newResolvedSetHash).
+		Msg("meeting_note linkage decision")
+
+	return needs, followUps, nil
+}
+
+// decideLinkage implements the spec's linkage-detection algorithm.
+// Participant-signal disambiguation is deferred. Returns the linkage
+// state, linked_kind/id pointers, and the desired session-attributed
+// interaction set.
+//
+//   - 0 candidates, no tagged humans → orphan_needs_review (no
+//     interactions).
+//   - 0 candidates, ≥1 resolved tagged human → linked_impromptu (one
+//     interaction per resolved contact).
+//   - 1 candidate → linked. A walk-in supplemental interaction is
+//     emitted for each resolved tagged contact NOT already in the
+//     event's matched_contact_ids.
+//   - 2+ candidates → conflict_pending. The current implementation
+//     never disambiguates; participant-signal scoring lands in a
+//     future revision.
+func decideLinkage(
+	p events.MeetingNoteRecordedPayload,
+	sessionID uuid.UUID,
+	candidates []repository.LinkageCandidate,
+	resolvedTagged []resolvedTag,
+) (state string, linkedKind *string, linkedID *uuid.UUID, desired []desiredInteraction) {
+	switch len(candidates) {
+	case 0:
+		if len(resolvedTagged) == 0 {
+			return repository.LinkageStateOrphanNeedsReview, nil, nil, nil
+		}
+		out := make([]desiredInteraction, 0, len(resolvedTagged))
+		for _, r := range resolvedTagged {
+			out = append(out, desiredInteraction{
+				ContactID: r.ContactID,
+				SourceRef: fmt.Sprintf("anarlog:%s:%s", sessionID.String(), r.ContactID.String()),
+			})
+		}
+		return repository.LinkageStateLinkedImpromptu, nil, nil, out
+	case 1:
+		cand := candidates[0]
+		kind := cand.Kind
+		id := cand.ID
+		// Walk-in supplemental: per tagged contact NOT in event
+		// attendees, add one walk-in interaction.
+		attendees := make(map[uuid.UUID]struct{}, len(cand.AttendeeContactIDs))
+		for _, aid := range cand.AttendeeContactIDs {
+			attendees[aid] = struct{}{}
+		}
+		walkins := make([]desiredInteraction, 0)
+		for _, r := range resolvedTagged {
+			if _, present := attendees[r.ContactID]; present {
+				continue
+			}
+			walkins = append(walkins, desiredInteraction{
+				ContactID: r.ContactID,
+				SourceRef: fmt.Sprintf("anarlog:%s:walkin:%s", sessionID.String(), r.ContactID.String()),
+			})
+		}
+		return repository.LinkageStateLinked, &kind, &id, walkins
+	default:
+		return repository.LinkageStateConflictPending, nil, nil, nil
+	}
+}
+
+// handleMeetingNoteDeleted runs the per-event domain logic for a
+// meeting_note.deleted envelope inside the per-event savepoint.
+//
+// Behavior:
+//   - Unknown session → silent no-op (event-log row preserved).
+//   - Already tombstoned → idempotent no-op.
+//   - Host-ownership mismatch → warn-log + silent no-op (mirrors
+//     handleExternalContactDeleted at service/ingest.go:1037).
+//   - Live row + hash-mismatch (and not @unknown sentinel, and stored
+//     hash non-NULL) → MEETING_NOTE_DELETE_HASH_MISMATCH.
+//   - Live row → soft-delete all session-attributed interactions
+//     (source='anarlog_sessions' AND source_ref LIKE 'anarlog:<sid>:%')
+//     and soft-delete the meeting_note row. The interaction cascade is
+//     explicit because UPDATE deleted_at does NOT trigger ON DELETE
+//     CASCADE (CLAUDE.md gotcha).
+func (s *IngestService) handleMeetingNoteDeleted(
+	ctx context.Context,
+	tx pgx.Tx,
+	env *events.Envelope,
+	authenticatedHostID uuid.UUID,
+) *IngestPerEventRejection {
+	if s.meetingNotes == nil || s.interactions == nil {
+		return &IngestPerEventRejection{
+			Code:    ingestRejectPayloadInvariant,
+			Message: "ingest service was not configured for meeting_note processing",
+		}
+	}
+
+	var p events.MeetingNoteDeletedPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		return &IngestPerEventRejection{
+			Code:    ingestRejectPayloadInvalid,
+			Message: fmt.Sprintf("decode meeting_note.deleted payload: %s", err.Error()),
+		}
+	}
+	sessionID, parseErr := uuid.Parse(p.SourceID)
+	if parseErr != nil {
+		return &IngestPerEventRejection{
+			Code:    ingestRejectPayloadInvalid,
+			Message: fmt.Sprintf("parse session UUID: %s", parseErr.Error()),
+		}
+	}
+
+	prior, getErr := s.meetingNotes.GetMeetingNoteBySessionIDForUpdateTx(ctx, tx, sessionID)
+	if getErr != nil {
+		if errors.Is(getErr, db.ErrNotFound) {
+			// Unknown session — silent no-op.
+			return nil
+		}
+		return &IngestPerEventRejection{
+			Code:    ingestRejectMeetingNoteDeleteFailed,
+			Message: fmt.Sprintf("pre-read meeting_note: %s", getErr.Error()),
+		}
+	}
+	if prior == nil || prior.DeletedAt != nil {
+		// Already tombstoned. Idempotent no-op.
+		return nil
+	}
+
+	// Host-ownership guard. Mirrors handleExternalContactDeleted.
+	if prior.MacHostID != nil && *prior.MacHostID != authenticatedHostID {
+		logger.Warn().
+			Str("source", env.Source).
+			Str("session_id", p.SourceID).
+			Str("prior_host_id", prior.MacHostID.String()).
+			Str("authenticated_host_id", authenticatedHostID.String()).
+			Msg("meeting_note.deleted dropped: row owned by a different host")
+		return nil
+	}
+
+	// Hash-mismatch check (same three exceptions as
+	// handleExternalContactDeleted: @unknown sentinel, NULL stored
+	// hash, already-tombstoned — handled above).
+	if !strings.HasSuffix(env.SourceID, meetingNoteDeleteUnknownSuffix) && prior.LastContentHash != nil {
+		claimed := env.SourceID[len(env.SourceID)-64:]
+		if *prior.LastContentHash != claimed {
+			return &IngestPerEventRejection{
+				Code: ingestRejectMeetingNoteDeleteHashMismatch,
+				Message: fmt.Sprintf(
+					"delete source_id hash %s does not match stored last_content_hash %s for session %s",
+					claimed, *prior.LastContentHash, p.SourceID),
+			}
+		}
+	}
+
+	// Cascade soft-delete to session-attributed interactions. UPDATE
+	// deleted_at does NOT trigger ON DELETE CASCADE — must do this
+	// explicitly (CLAUDE.md gotcha).
+	sourceRefPrefix := fmt.Sprintf("anarlog:%s:%%", sessionID.String())
+	existing, listErr := s.interactions.ListSessionAttributedInteractionsTx(ctx, tx, sourceRefPrefix)
+	if listErr != nil {
+		return &IngestPerEventRejection{
+			Code:    ingestRejectMeetingNoteDeleteFailed,
+			Message: fmt.Sprintf("list session-attributed interactions: %s", listErr.Error()),
+		}
+	}
+	for _, ix := range existing {
+		if err := s.interactions.SoftDeleteInteractionTx(ctx, tx, ix.ID); err != nil {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectMeetingNoteDeleteFailed,
+				Message: fmt.Sprintf("soft-delete session interaction: %s", err.Error()),
+			}
+		}
+		ref := ""
+		if ix.SourceRef != nil {
+			ref = *ix.SourceRef
+		}
+		logger.Warn().
+			Str("event", "session_tombstoned").
+			Str("session_id", p.SourceID).
+			Str("source_ref", ref).
+			Msg("meeting_note tombstoned cascaded soft-delete to session interaction")
+	}
+
+	if err := s.meetingNotes.SoftDeleteMeetingNoteBySessionIDTx(ctx, tx, sessionID); err != nil {
+		return &IngestPerEventRejection{
+			Code:    ingestRejectMeetingNoteDeleteFailed,
+			Message: fmt.Sprintf("soft-delete meeting_note: %s", err.Error()),
+		}
+	}
+	return nil
+}
+
+// stringPtrEqual reports whether two *string pointers point to the
+// same string value (nil == nil; nil != "x").
+func stringPtrEqual(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }

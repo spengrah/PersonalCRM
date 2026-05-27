@@ -468,3 +468,64 @@ func (r *IdentityRepository) UpdateMessageCount(ctx context.Context, id uuid.UUI
 	ident := convertDbIdentity(dbIdentity)
 	return &ident, nil
 }
+
+// LinkIdentityToContactTx is the tx-bound variant of LinkToContact.
+// Used by the inline external_contact handler's anarlog identity
+// registration path so the contact-id link commits atomically with the
+// external_contact upsert. Caller owns the tx lifecycle.
+func (r *IdentityRepository) LinkIdentityToContactTx(ctx context.Context, tx pgx.Tx, req LinkIdentityRequest) (*ExternalIdentity, error) {
+	params := db.LinkIdentityToContactParams{
+		ID:        uuidToPgUUID(req.IdentityID),
+		ContactID: uuidToPgUUID(req.ContactID),
+		MatchType: pgtype.Text{String: string(req.MatchType), Valid: true},
+	}
+	if req.MatchConfidence != nil {
+		params.MatchConfidence = pgtype.Float8{Float64: *req.MatchConfidence, Valid: true}
+	}
+	dbIdentity, err := db.New(tx).LinkIdentityToContact(ctx, params)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	ident := convertDbIdentity(dbIdentity)
+	return &ident, nil
+}
+
+// FindContactIDByAnarlogHumanIDTx returns the linked CRM contact_id for
+// a given anarlog_human_id identifier, or (nil, nil) when no identity
+// row exists or the row is unmatched. Used by the meeting_note.recorded
+// inline handler to resolve payload.participant_ids into contact_ids.
+// Caller owns the tx lifecycle.
+func (r *IdentityRepository) FindContactIDByAnarlogHumanIDTx(ctx context.Context, tx pgx.Tx, anarlogHumanID string) (*uuid.UUID, error) {
+	dbIdentity, err := db.New(tx).FindIdentityByAnarlogHumanID(ctx, anarlogHumanID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !dbIdentity.ContactID.Valid {
+		return nil, nil
+	}
+	id := uuid.UUID(dbIdentity.ContactID.Bytes)
+	return &id, nil
+}
+
+// FindIdentitiesByAnarlogHumanID returns 0 or 1 external_identity rows
+// keyed by anarlog_human_id (the unique constraint on
+// (identifier, identifier_type, source) guarantees at most one). Used
+// by the Import handler's anarlog backfill to locate the identity row
+// to link to the imported CRM contact.
+func (r *IdentityRepository) FindIdentitiesByAnarlogHumanID(ctx context.Context, anarlogHumanID string) ([]ExternalIdentity, error) {
+	dbIdentities, err := r.queries.FindIdentitiesByAnarlogHumanID(ctx, anarlogHumanID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ExternalIdentity, len(dbIdentities))
+	for i, di := range dbIdentities {
+		out[i] = convertDbIdentity(di)
+	}
+	return out, nil
+}

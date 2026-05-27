@@ -91,3 +91,28 @@ LIMIT $2 OFFSET $3;
 
 -- name: CountIdentitiesBySource :one
 SELECT COUNT(*) FROM external_identity WHERE source = $1;
+
+-- name: FindIdentityByAnarlogHumanID :one
+-- Lookup hook used by the meeting_note.recorded inline handler to
+-- resolve a payload's participant_ids (anarlog UUIDs) into CRM
+-- contact_ids. The (identifier, identifier_type, source) triple is
+-- unique, so this returns at most one row. The identifier_type is
+-- pinned to 'anarlog_human_id' and the source to 'anarlog_humans'
+-- (the only writer of these rows).
+SELECT * FROM external_identity
+WHERE identifier_type = 'anarlog_human_id'
+  AND source = 'anarlog_humans'
+  AND identifier = sqlc.arg('anarlog_human_id');
+
+-- name: FindIdentitiesByAnarlogHumanID :many
+-- Used by the Import handler's anarlog backfill — when a user imports
+-- an anarlog_humans external_contact, the associated anarlog_human_id
+-- identity row's contact_id is linked to the imported CRM contact. The
+-- (identifier, identifier_type, source) triple is unique so this
+-- normally returns a 0- or 1-row slice; the list shape matches
+-- FindIdentitiesByIdentifier for consistency with the existing
+-- repository surface.
+SELECT * FROM external_identity
+WHERE identifier_type = 'anarlog_human_id'
+  AND source = 'anarlog_humans'
+  AND identifier = sqlc.arg('anarlog_human_id');

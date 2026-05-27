@@ -63,7 +63,7 @@ func setupKnownIDsByHostEnv(t *testing.T) *knownIDsByHostEnv {
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	externalRepo := repository.NewExternalContactRepository(database.Queries)
-	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, contactMethodRepo, externalRepo, database.Pool, 4)
+	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, contactMethodRepo, externalRepo, nil, database.Pool, 4)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
