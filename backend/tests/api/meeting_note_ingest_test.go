@@ -204,6 +204,30 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	imports.POST("/candidates/:id/link", importHandler.LinkContact)
 	imports.GET("/candidates", importHandler.ListImportCandidates)
 
+	// Wire the PR 5 user-driven resolve-link + needs-attention routes
+	// behind the global API-key middleware so resolve-link tests
+	// exercise the same code path as production.
+	meetingNoteLinkageTargets := &mnTestLinkageTargetReader{
+		calendarRepo:  calendarRepo,
+		phoneCallRepo: phoneCallRepo,
+	}
+	meetingNoteService := service.NewMeetingNoteService(
+		database,
+		meetingRepo,
+		meetingRepo,
+		meetingNoteLinkageTargets,
+		identityRepo,
+		titleMatcher,
+		titleDiscoveryWriter,
+		interactionRepo,
+		contactSvc,
+	)
+	meetingNoteHandler := handlers.NewMeetingNoteHandler(meetingNoteService)
+	mnGroup := router.Group("/api/v1/meeting-notes")
+	mnGroup.Use(auth.APIKeyMiddleware(cfg))
+	mnGroup.GET("/needs-attention", meetingNoteHandler.ListNeedsAttention)
+	mnGroup.POST("/:id/resolve-link", meetingNoteHandler.ResolveLink)
+
 	plain, _, err := macService.CreatePairingToken(ctx)
 	require.NoError(t, err)
 	pair, err := macService.PairWithToken(ctx, plain, "meeting-note-test", "0.1.0", 1)
@@ -630,8 +654,9 @@ func TestMeetingNote_OneCandidateWalkin(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// TC-L7: 2+ calendar candidates → conflict_pending, no interactions,
-// needs_attention with reason=conflict.
+// TC-L7: 2+ calendar candidates with no tagged humans → conflict_pending
+// (empty implied set yields no Step 3 winner). The persisted snapshot
+// must include both candidates with overlap_count=0.
 // ----------------------------------------------------------------------------
 func TestMeetingNote_TwoCandidatesConflict(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
@@ -654,6 +679,125 @@ func TestMeetingNote_TwoCandidatesConflict(t *testing.T) {
 	require.Empty(t, listSessionInteractions(t, env, sessionUUID))
 	require.Len(t, resp.NeedsAttention, 1)
 	require.Equal(t, "conflict", resp.NeedsAttention[0].Reason)
+
+	// PR 5 invariant: conflict_candidates snapshot is persisted on the
+	// row. The empty implied set → both entries have overlap_count=0.
+	require.NotEmpty(t, row.ConflictCandidates, "snapshot must be persisted on conflict_pending")
+	var snap []repository.ConflictCandidateSummary
+	require.NoError(t, json.Unmarshal(row.ConflictCandidates, &snap))
+	require.Len(t, snap, 2)
+	for _, s := range snap {
+		require.Equal(t, 0, s.OverlapCount, "no tagged humans → overlap 0")
+	}
+}
+
+// ----------------------------------------------------------------------------
+// TC-D-Step3-StrictWinner: 2 candidates with a tagged participant
+// matching one of them yields the strict winner via Step 3 → state=linked.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_Step3_StrictWinnerViaTagged(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-")
+	suffix = strings.TrimSuffix(suffix, "-")
+	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
+	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
+
+	meetingAt := time.Date(2026, 5, 6, 9, 0, 0, 0, time.UTC)
+	winningEvent := env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Strict Winner Session", []string{anarlogA})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseMNIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Empty(t, resp.NeedsAttention, "strict winner auto-links → no needs_attention")
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateLinked, row.LinkageState)
+	require.NotNil(t, row.LinkedKind)
+	require.Equal(t, "event", *row.LinkedKind)
+	require.NotNil(t, row.LinkedID)
+	require.Equal(t, winningEvent, *row.LinkedID)
+	require.Empty(t, row.ConflictCandidates, "snapshot cleared on auto-link")
+	// contactA is already in the winning event's attendees → no walk-in.
+	require.Empty(t, listSessionInteractions(t, env, sessionUUID))
+}
+
+// ----------------------------------------------------------------------------
+// TC-D-Step3-TiedConflict: 2 candidates with tagged matching BOTH yields
+// no Step 3 winner; state stays conflict_pending and the snapshot
+// records both with overlap_count=1.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_Step3_TiedOverlapYieldsConflict(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-")
+	suffix = strings.TrimSuffix(suffix, "-")
+	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
+	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
+
+	meetingAt := time.Date(2026, 5, 6, 11, 0, 0, 0, time.UTC)
+	// Both events have contactA in attendees → tied at overlap=1.
+	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA, env.contactB})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactA, env.contactC})
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Tied Session", []string{anarlogA})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseMNIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Len(t, resp.NeedsAttention, 1)
+	require.Equal(t, "conflict", resp.NeedsAttention[0].Reason)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+	require.NotEmpty(t, row.ConflictCandidates)
+	var snap []repository.ConflictCandidateSummary
+	require.NoError(t, json.Unmarshal(row.ConflictCandidates, &snap))
+	require.Len(t, snap, 2)
+	require.Equal(t, 1, snap[0].OverlapCount)
+	require.Equal(t, 1, snap[1].OverlapCount)
+}
+
+// ----------------------------------------------------------------------------
+// TC-RS5: Re-ingest a conflict_pending row with unchanged inputs →
+// carry-forward fires; the conflict_candidates snapshot is preserved
+// verbatim. Regression for the P1#3 fix.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_Step3_ResyncCarryForwardPreservesSnapshot(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := time.Date(2026, 5, 6, 13, 0, 0, 0, time.UTC)
+	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Carry Forward Session", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	rowFirst := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, rowFirst)
+	require.Equal(t, repository.LinkageStateConflictPending, rowFirst.LinkageState)
+	require.NotEmpty(t, rowFirst.ConflictCandidates)
+	firstSnapshotBytes := append([]byte(nil), rowFirst.ConflictCandidates...)
+
+	// Re-ingest the SAME event payload. The dispatch path runs the
+	// inline-on-duplicate probe → handler executes again with identical
+	// hashes → carry-forward branch fires; conflict_candidates is
+	// preserved.
+	w = postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	rowSecond := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, rowSecond)
+	require.Equal(t, repository.LinkageStateConflictPending, rowSecond.LinkageState)
+	require.JSONEq(t, string(firstSnapshotBytes), string(rowSecond.ConflictCandidates),
+		"carry-forward must preserve conflict_candidates verbatim")
 }
 
 // ----------------------------------------------------------------------------
@@ -1505,21 +1649,27 @@ func TestMeetingNote_TitleMatch_LinkedWithTitleUnmatched(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// TC-T7 — conflict_pending_with_title_matches: 2 candidates + title
-// with CRM-matching tokens. NO interactions, NO anarlog_title rows for
-// matched tokens.
+// TC-T7 — title_matches_drive_step3_strict_winner: 2 candidates whose
+// only differentiator is a title-token-matched contact. The Step 3
+// implied set includes title-matched contacts per spec §Step 3.1, so
+// the candidate whose attendees overlap a title-matched contact wins
+// and auto-links. NO discovery rows for matched tokens (gated by
+// linked state).
 // ----------------------------------------------------------------------------
-func TestMeetingNote_TitleMatch_ConflictPendingWithTitleMatches(t *testing.T) {
+func TestMeetingNote_TitleMatch_StrictWinnerViaTitleToken(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	tokenA := newTitleToken(t, env)
 	tokenB := newTitleToken(t, env)
 	ctx := context.Background()
+	// tokenA matches contactA (who is in event 1 attendees), tokenB
+	// matches a brand-new contact not in any event → only event 1
+	// gains overlap from the title matches → strict winner.
 	_, err := env.contactRepo.UpdateContact(ctx, env.contactA, repository.UpdateContactRequest{FullName: tokenA + " Smith"})
 	require.NoError(t, err)
 	_ = seedTitleContact(t, env, tokenB+" Jones")
 
 	meetingAt := time.Date(2026, 5, 9, 9, 0, 0, 0, time.UTC)
-	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	winningEvent := env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
 	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
 
 	sessionUUID := env.newSessionUUID()
@@ -1530,7 +1680,14 @@ func TestMeetingNote_TitleMatch_ConflictPendingWithTitleMatches(t *testing.T) {
 	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
 
 	row := findMeetingNoteRow(t, env, sessionUUID)
-	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+	require.Equal(t, repository.LinkageStateLinked, row.LinkageState,
+		"title-matched contact in event 1 makes it the strict Step 3 winner")
+	require.NotNil(t, row.LinkedKind)
+	require.Equal(t, "event", *row.LinkedKind)
+	require.NotNil(t, row.LinkedID)
+	require.Equal(t, winningEvent, *row.LinkedID)
+	// Linked state suppresses title-derived interactions and discovery
+	// rows for matched tokens (same invariant as case 1 in decideLinkage).
 	require.Empty(t, listSessionInteractions(t, env, sessionUUID))
 	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenA), sessionUUID))
 	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenB), sessionUUID))
@@ -2241,4 +2398,225 @@ func TestMeetingNote_TitleMatch_LegacySessionBackfillsDiscoveryOnCarryForward(t 
 		"Block B must run on the carry-forward path so legacy sessions backfill discovery rows")
 	require.NotEqual(t, firstRowID, backfilled.ID,
 		"this is a NEW row (hard-deleted prior) — proves Block B re-emitted via UPSERT")
+}
+
+// mnTestLinkageTargetReader adapts the calendar + phone_call repositories
+// into the polymorphic service.LinkageTargetReader interface used by
+// MeetingNoteService. Mirrors the production adapter in cmd/crm-api/main.go.
+type mnTestLinkageTargetReader struct {
+	calendarRepo  *repository.CalendarEventRepository
+	phoneCallRepo *repository.PhoneCallRepository
+}
+
+func (r *mnTestLinkageTargetReader) GetEventByID(ctx context.Context, id uuid.UUID) (*repository.CalendarEvent, error) {
+	return r.calendarRepo.GetByID(ctx, id)
+}
+
+func (r *mnTestLinkageTargetReader) GetPhoneCallByID(ctx context.Context, id uuid.UUID) (*repository.PhoneCall, error) {
+	return r.phoneCallRepo.GetCallByID(ctx, id)
+}
+
+// postResolveLink posts to the resolve-link endpoint with the given
+// body and returns the response recorder.
+func postResolveLink(t *testing.T, env *meetingNoteIngestEnv, mnID string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/meeting-notes/"+mnID+"/resolve-link", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", env.apiKey)
+	w := httptest.NewRecorder()
+	env.router.ServeHTTP(w, req)
+	return w
+}
+
+// getNeedsAttention GETs the needs-attention list, returning the
+// response recorder.
+func getNeedsAttention(t *testing.T, env *meetingNoteIngestEnv, hostID string) *httptest.ResponseRecorder {
+	t.Helper()
+	path := "/api/v1/meeting-notes/needs-attention"
+	if hostID != "" {
+		path += "?host_id=" + hostID
+	}
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("X-API-Key", env.apiKey)
+	w := httptest.NewRecorder()
+	env.router.ServeHTTP(w, req)
+	return w
+}
+
+// TestResolveLink_LinkToEventSuccess — seed a conflict_pending row,
+// post action=link with the winning candidate, verify the row transitions
+// to linked and the snapshot is cleared.
+func TestResolveLink_LinkToEventSuccess(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := time.Date(2026, 5, 7, 9, 0, 0, 0, time.UTC)
+	eventA := env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	eventB := env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+	_ = eventB
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Resolve Link Session", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+
+	w = postResolveLink(t, env, row.ID.String(), map[string]any{
+		"action": "link",
+		"kind":   "event",
+		"id":     eventA.String(),
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	updated := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, updated)
+	require.Equal(t, repository.LinkageStateLinked, updated.LinkageState)
+	require.NotNil(t, updated.LinkedKind)
+	require.Equal(t, "event", *updated.LinkedKind)
+	require.NotNil(t, updated.LinkedID)
+	require.Equal(t, eventA, *updated.LinkedID)
+	require.Empty(t, updated.ConflictCandidates, "snapshot cleared on link")
+}
+
+// TestResolveLink_AlreadyLinkedReturns409 — calling resolve-link on a
+// row that's not in conflict_pending returns 409.
+func TestResolveLink_AlreadyLinkedReturns409(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := time.Date(2026, 5, 7, 10, 0, 0, 0, time.UTC)
+	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Already Linked", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateLinked, row.LinkageState, "single candidate auto-links")
+
+	w = postResolveLink(t, env, row.ID.String(), map[string]any{"action": "none_of_these"})
+	require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+}
+
+// TestResolveLink_IDNotInSnapshotReturns400 — picking an event UUID that
+// wasn't in the persisted snapshot returns 400.
+func TestResolveLink_IDNotInSnapshotReturns400(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := time.Date(2026, 5, 7, 11, 0, 0, 0, time.UTC)
+	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Not In Snapshot", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+
+	w = postResolveLink(t, env, row.ID.String(), map[string]any{
+		"action": "link",
+		"kind":   "event",
+		"id":     uuid.NewString(), // random UUID not in snapshot
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	require.Contains(t, w.Body.String(), "not one of the recorded candidates")
+}
+
+// TestResolveLink_UnknownMeetingNoteReturns404 — resolve on a random UUID
+// returns 404.
+func TestResolveLink_UnknownMeetingNoteReturns404(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	w := postResolveLink(t, env, uuid.NewString(), map[string]any{"action": "none_of_these"})
+	require.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+}
+
+// TestResolveLink_NoneOfTheseToLinkedImpromptu — conflict_pending row
+// with a tagged participant, "none of these" promotes to
+// linked_impromptu with one interaction per resolved tagged contact.
+func TestResolveLink_NoneOfTheseToLinkedImpromptu(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-")
+	suffix = strings.TrimSuffix(suffix, "-")
+	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
+	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
+
+	meetingAt := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	// Two candidates with no overlap with anarlogA → conflict_pending.
+	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactB})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactC})
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Impromptu via NoneOfThese", []string{anarlogA})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+	prevHash := row.ResolvedSetHash
+
+	w = postResolveLink(t, env, row.ID.String(), map[string]any{"action": "none_of_these"})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	updated := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, updated)
+	require.Equal(t, repository.LinkageStateLinkedImpromptu, updated.LinkageState)
+	require.Nil(t, updated.LinkedKind)
+	require.Nil(t, updated.LinkedID)
+	require.Empty(t, updated.ConflictCandidates)
+	// Resolved-set-hash recomputed; new value reflects the implied set.
+	require.NotEmpty(t, updated.ResolvedSetHash)
+	_ = prevHash // hashes here are equal because the recipe is the same set; covered by D11 matrix.
+
+	ixs := listSessionInteractions(t, env, sessionUUID)
+	require.Len(t, ixs, 1, "one interaction per resolved tagged contact")
+	require.NotNil(t, ixs[0].SourceRef)
+	require.Equal(t, "anarlog:"+sessionUUID+":"+env.contactA.String(), *ixs[0].SourceRef)
+}
+
+// TestListNeedsAttention_BasicProjection — seed a conflict_pending row
+// and verify the needs-attention list includes it with a populated
+// candidates array.
+func TestListNeedsAttention_BasicProjection(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := time.Date(2026, 5, 7, 13, 0, 0, 0, time.UTC)
+	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Needs Attention Session", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	// Scope the list to this test's mac_host so other parallel tests'
+	// rows don't pollute the assertion.
+	w = getNeedsAttention(t, env, env.pairedHostID.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var resp struct {
+		Success bool                                 `json:"success"`
+		Data    []service.NeedsAttentionItemResponse `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.True(t, resp.Success)
+	require.NotEmpty(t, resp.Data)
+	var found *service.NeedsAttentionItemResponse
+	for i := range resp.Data {
+		if resp.Data[i].AnarlogSessionID.String() == sessionUUID {
+			found = &resp.Data[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "needs-attention list must contain our seeded row")
+	require.Equal(t, repository.LinkageStateConflictPending, found.LinkageState)
+	require.Len(t, found.Candidates, 2, "both event candidates projected")
+	for _, c := range found.Candidates {
+		require.False(t, c.TargetMissing)
+		require.NotNil(t, c.Preview)
+	}
 }
