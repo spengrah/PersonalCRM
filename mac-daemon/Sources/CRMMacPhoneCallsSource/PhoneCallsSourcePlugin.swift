@@ -89,12 +89,12 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
 
     /// Cached schema health. Validated on first successful open. We
     /// do NOT cache the DatabasePool itself: reopening per tick is
-    /// defensive against FDA-permission revocation between ticks (a
-    /// long-lived pool wouldn't re-exercise the FDA check). SQLite
-    /// WAL mode supports concurrent readers + one writer without
-    /// per-connection-snapshot issues, so this is belt-and-suspenders
-    /// rather than a correctness requirement — `MessagesSourcePlugin`
-    /// keeps a cached pool and observes new writes on each transaction.
+    /// defensive against FDA-permission revocation, so revocation
+    /// surfaces at open-time rather than mid-read. SQLite WAL mode
+    /// supports concurrent readers + one writer without per-connection-
+    /// snapshot issues, so this is belt-and-suspenders rather than a
+    /// correctness requirement — `MessagesSourcePlugin` keeps a cached
+    /// pool and observes new writes on each transaction.
     private var schemaHealth: CallHistorySchemaHealth?
     /// Cached cursor + epoch loaded from local state.json or fetched
     /// from the Pi on first tick.
@@ -683,7 +683,7 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
     /// at for phone_calls even on a healthy-but-quiet tick. Failures
     /// are logged-and-swallowed: a state.json write hiccup must not
     /// abort the tick.
-    internal func updateScheduled(at date: Date) async {
+    private func updateScheduled(at date: Date) async {
         do {
             try await mutator.mutate { state in
                 var src = state.sources[self.id.rawValue] ?? SourceState()
