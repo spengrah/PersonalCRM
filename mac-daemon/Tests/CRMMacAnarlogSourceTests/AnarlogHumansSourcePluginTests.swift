@@ -1,14 +1,14 @@
 // Tests for the AnarlogHumansSourcePlugin per-tick orchestrator.
 //
-// Focus: the P0 invariants flagged in the Codex review rounds:
-//   - TC-H6: file becomes malformed (frontmatter corrupted) but
-//     remains physically present → 0 delete events, cursor entry
-//     PRESERVED (the prior cursor entry survives to the new cursor)
-//   - TC-H7: file becomes oversized → 0 delete events, cursor entry
+// Focus: the carry-forward invariants:
+//   - file becomes malformed (frontmatter corrupted) but remains
+//     physically present → 0 delete events, cursor entry PRESERVED
+//     (the prior cursor entry survives to the new cursor)
+//   - file becomes oversized → 0 delete events, cursor entry
 //     PRESERVED
-//   - TC-H11/H12: hash-mismatch → recovery flag set; subsequent tick
-//     enters recovery path
-//   - TC-H19: bootstrap route + Pi-known UUID present but malformed
+//   - hash-mismatch → recovery flag set; subsequent tick enters
+//     recovery path
+//   - bootstrap route + Pi-known UUID present but malformed
 //     synthesizes cursor entry from /known-ids; no event emitted
 //
 // Mocks: an in-memory AnarlogFilesystem stub that returns canned
@@ -48,6 +48,10 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
 
         func exists(_ path: String) -> Bool {
             files[path] != nil || directories.contains(path)
+        }
+
+        func isDirectory(_ path: String) -> Bool {
+            directories.contains(path)
         }
 
         func isReadableDirectory(_ path: String) -> Bool {
@@ -265,7 +269,7 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
         return "0a18829e-12b6-40f6-93f8-6307973\(String(padded.suffix(5)))"
     }
 
-    // MARK: - TC-H1..H5 happy paths
+    // MARK: - happy paths
 
     func testEmptyHumansDirYieldsEmptyCursor() async throws {
         let rig = makeRig(files: [])
@@ -346,7 +350,7 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
         XCTAssertEqual(rig.transport.committedCursor, "{}")
     }
 
-    // MARK: - TC-H6 P0 — malformed file does NOT tombstone
+    // MARK: - carry-forward invariant: malformed file does NOT tombstone
 
     func testTC_H6_MalformedFilePreservesCursorAndEmitsNoDelete() async throws {
         let u1 = uuid("00006")
@@ -389,7 +393,7 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
         XCTAssertEqual(preserved.contentHash, "prev")
     }
 
-    // MARK: - TC-H7 P0 — oversized payload does NOT tombstone
+    // MARK: - carry-forward invariant: oversized payload does NOT tombstone
 
     func testTC_H7_OversizedPayloadPreservesCursorAndEmitsNoDelete() async throws {
         let u1 = uuid("00007")
@@ -429,7 +433,7 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
         XCTAssertEqual(preserved.payloadHash, "prevpay")
     }
 
-    // MARK: - TC-H9 self-human filtered
+    // MARK: - self-human filtered
 
     func testSelfHumanFileSkipped() async throws {
         let rig = makeRig(files: [
@@ -440,7 +444,7 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
         XCTAssertEqual(rig.transport.committedCursor, "{}")
     }
 
-    // MARK: - TC-H11 hash-mismatch sets recovery flag
+    // MARK: - hash-mismatch sets recovery flag
 
     func testHashMismatchSetsRecoveryFlag() async throws {
         let u1 = uuid("00011")
@@ -460,7 +464,7 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
         XCTAssertFalse(rig.transport.commitWasAttempted)
     }
 
-    // MARK: - TC-H14/H15/H16/H17 unhealthy reasons
+    // MARK: - unhealthy reasons
 
     func testNotConfiguredWhenConfigNil() async throws {
         let rig = makeRig(files: [], config: nil)
@@ -501,7 +505,7 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
                       "expected anomaly summary; got: \(src.lastError ?? "nil")")
     }
 
-    // MARK: - TC-H8/H19 bootstrap via known-ids
+    // MARK: - bootstrap via known-ids
 
     func testBootstrapViaKnownIDsTombstonesMissing() async throws {
         let u1 = uuid("00008")

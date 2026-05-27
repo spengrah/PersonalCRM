@@ -205,13 +205,18 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
                 continue
             }
             let sessionDir = (sessionsPath as NSString).appendingPathComponent(entry)
+            // A bare file at sessions/<uuid> (not a directory) is junk
+            // — Anarlog doesn't produce them and the operator may
+            // have created them by mistake. Skip silently so it
+            // can't suppress a legitimate tombstone for an actual
+            // session UUID that happens to collide.
+            guard filesystem.isDirectory(sessionDir) else { continue }
             // The directory's physical presence on disk is what gates
-            // tombstone emission per the P0 invariant. Insert into
-            // seenPhysicalUUIDs FIRST, BEFORE any read attempt — an
-            // unreadable directory is still physically present, so
-            // we must not let it be tombstoned. The carry-forward
-            // path below handles the unreadable case by preserving
-            // the prior cursor entry.
+            // tombstone emission. Insert into seenPhysicalUUIDs
+            // BEFORE the readability probe — an unreadable directory
+            // is still physically present, so we must not let it be
+            // tombstoned. The carry-forward path below handles the
+            // unreadable case by preserving the prior cursor entry.
             seenPhysicalUUIDs.insert(canonicalUUID)
             guard filesystem.isReadableDirectory(sessionDir) else {
                 parseFailedCount += 1
@@ -364,9 +369,58 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
                 continue
             }
 
+            // UTF-8 decode for the text bodies. A non-nil byte array
+            // that fails to decode as UTF-8 is a real content
+            // problem (binary in `_summary.md`, etc.). Carry forward
+            // rather than silently committing a "no summary" cursor
+            // entry that would drop the content on a future scan
+            // after the operator fixes the encoding.
+            let summary: String?
+            if let summaryBytes {
+                guard let decodedSummary = String(data: summaryBytes, encoding: .utf8) else {
+                    parseFailedCount += 1
+                    logger.warning("anarlog_sessions tick: summary_utf8_decode_failed", metadata: [
+                        "uuid": .private(canonicalUUID),
+                    ])
+                    carrySessionForward(
+                        uuid: canonicalUUID,
+                        metaBytesHash: metaBytesHash,
+                        summaryBytesHash: decoded[canonicalUUID]?.summaryHash,
+                        memoBytesHash: decoded[canonicalUUID]?.memoHash,
+                        prior: decoded[canonicalUUID],
+                        entryRoute: entryRoute,
+                        knownByEntityID: knownByEntityID,
+                        desiredCursor: &desiredCursor)
+                    continue
+                }
+                summary = decodedSummary
+            } else {
+                summary = nil
+            }
+            let memo: String?
+            if let memoBytes {
+                guard let decodedMemo = String(data: memoBytes, encoding: .utf8) else {
+                    parseFailedCount += 1
+                    logger.warning("anarlog_sessions tick: memo_utf8_decode_failed", metadata: [
+                        "uuid": .private(canonicalUUID),
+                    ])
+                    carrySessionForward(
+                        uuid: canonicalUUID,
+                        metaBytesHash: metaBytesHash,
+                        summaryBytesHash: decoded[canonicalUUID]?.summaryHash,
+                        memoBytesHash: decoded[canonicalUUID]?.memoHash,
+                        prior: decoded[canonicalUUID],
+                        entryRoute: entryRoute,
+                        knownByEntityID: knownByEntityID,
+                        desiredCursor: &desiredCursor)
+                    continue
+                }
+                memo = decodedMemo
+            } else {
+                memo = nil
+            }
+
             // Shape + size check.
-            let summary = summaryBytes.flatMap { String(data: $0, encoding: .utf8) }
-            let memo = memoBytes.flatMap { String(data: $0, encoding: .utf8) }
             let payload = AnarlogSessionsPayloadShaping.shape(
                 meta: meta, summary: summary, memo: memo, hostID: auth.hostID)
             let payloadBytes: Data

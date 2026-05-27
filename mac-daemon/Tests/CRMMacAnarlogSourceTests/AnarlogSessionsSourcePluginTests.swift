@@ -1,16 +1,17 @@
 // Tests for the AnarlogSessionsSourcePlugin per-tick orchestrator.
 //
-// Focus: same P0 invariants the humans plugin has, plus session-
-// specific behaviors:
-//   - TC-S21: pre-backfill-floor sessions → floor_skip cursor entry;
+// Focus: same carry-forward invariants the humans plugin has, plus
+// session-specific behaviors:
+//   - pre-backfill-floor sessions get a floor_skip cursor entry and
 //     never emit
-//   - TC-S23/S24: missing _meta.json or invalid JSON → carry-forward;
-//     no delete
-//   - TC-S25: skip-list dirs ignored
-//   - TC-S26: non-UUID dirs ignored
-//   - TC-S27: self-UUID filtered from participants
-//   - TC-S28: in-flight coalescing (JC7)
-//   - TC-S31: recovery branch reaches /known-ids (gets empty in PR 2)
+//   - missing _meta.json or invalid JSON → carry-forward; no delete
+//   - skip-list dirs ignored
+//   - non-UUID dirs ignored
+//   - bare files at sessions/<uuid> ignored (not a directory)
+//   - self-UUID filtered from participants
+//   - in-flight coalescing
+//   - recovery branch reaches /known-ids (currently returns empty;
+//     code path symmetric with humans)
 import XCTest
 import CRMMacCore
 import CRMMacPiClient
@@ -36,6 +37,10 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
 
         func exists(_ path: String) -> Bool {
             files[path] != nil || directories.contains(path)
+        }
+
+        func isDirectory(_ path: String) -> Bool {
+            directories.contains(path)
         }
 
         func isReadableDirectory(_ path: String) -> Bool {
@@ -310,7 +315,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
         XCTAssertEqual(payloadAny["memo"] as? String, "m")
     }
 
-    // MARK: - TC-S21 pre-floor sessions
+    // MARK: - pre-floor sessions
 
     func testPreFloorSessionGetsSentinelEntryAndNoEvent() async throws {
         let u1 = sessionUUID("00003")
@@ -329,7 +334,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
         XCTAssertTrue(sentinel.isFloorSkipped)
     }
 
-    // MARK: - TC-S22 oversized payload — same P0 as humans
+    // MARK: - oversized payload carry-forward
 
     func testOversizedSessionPayloadPreservesCursorAndEmitsNoDelete() async throws {
         let u1 = sessionUUID("00004")
@@ -366,7 +371,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
         XCTAssertEqual(preserved.payloadHash, "prevpay")
     }
 
-    // MARK: - TC-S23/S24 missing or invalid _meta.json
+    // MARK: - missing or invalid _meta.json
 
     func testMissingMetaPreservesCursor() async throws {
         let u1 = sessionUUID("00005")
@@ -424,7 +429,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
         XCTAssertNotNil(decoded[u1])
     }
 
-    // MARK: - TC-S25/S26 skip-list + non-UUID
+    // MARK: - skip-list + non-UUID
 
     func testSkipListEntriesIgnored() async throws {
         let rig = makeRig(
@@ -442,7 +447,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
         XCTAssertEqual(rig.transport.ingestBodies.count, 0)
     }
 
-    // MARK: - TC-S27 self-user filtered from participants
+    // MARK: - self-user filtered from participants
 
     func testSelfUserFilteredFromParticipants() async throws {
         let u1 = sessionUUID("00007")
@@ -471,7 +476,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
         XCTAssertEqual(parts, [realParticipant])
     }
 
-    // MARK: - TC-S28 in-flight coalescing
+    // MARK: - in-flight coalescing
 
     func testInFlightCoalescing() async throws {
         // Two concurrent tick() calls coalesce — the second only fires
@@ -491,7 +496,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(rig.transport.ingestCallCount, 1)
     }
 
-    // MARK: - TC-S31 recovery branch consults /known-ids
+    // MARK: - recovery branch consults /known-ids
 
     func testRecoveryBranchCallsKnownIDsEvenForSessions() async throws {
         let u1 = sessionUUID("00009")
@@ -507,7 +512,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
         }
         try await rig.plugin.tick()
         XCTAssertTrue(rig.transport.knownIDsCalled,
-                      "recovery branch must consult /known-ids (round-4 P1#6)")
+                      "recovery branch must consult /known-ids")
     }
 
     // MARK: - configuration unhealthy

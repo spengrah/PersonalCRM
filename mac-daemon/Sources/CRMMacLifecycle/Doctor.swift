@@ -183,8 +183,9 @@ public struct Doctor {
             } else {
                 // Probe readability and count files via listDirectory.
                 // A FilesystemError.permissionDenied is the TCC
-                // Files & Folders rejection the plan (D20) calls out
-                // as `anarlog:files_folders_permission_denied`.
+                // Files & Folders rejection — surface it as
+                // `anarlog:files_folders_permission_denied` so the
+                // operator knows to grant the permission.
                 do {
                     let entries = try deps.filesystem.listDirectory(at: humansPath)
                     let mdCount = entries.filter { $0.hasSuffix(".md") }.count

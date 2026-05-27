@@ -93,10 +93,21 @@ struct StatusCommand: ParsableCommand {
         let formatter = ISO8601DateFormatter()
         print("    last_scheduled_at:  \(s.lastScheduledAt.map { formatter.string(from: $0) } ?? "never")")
         print("    last_pushed_at:     \(s.lastPushedAt.map { formatter.string(from: $0) } ?? "never")")
+        // cursorUUIDCount is nil for two distinct reasons:
+        //   1. no state slot yet (source never ticked) → render as
+        //      "never"
+        //   2. state present but cursor JSON is malformed → render as
+        //      "(decode_error)"
+        // last_scheduled_at being nil tells us which case we're in
+        // (state.lastScheduledAt is bumped at the TOP of every tick,
+        // before any decode can happen).
         let countRendering: String
-        switch s.cursorUUIDCount {
-        case .none:    countRendering = "(decode_error)"
-        case .some(let n): countRendering = String(n)
+        if s.cursorUUIDCount == nil && s.lastScheduledAt == nil {
+            countRendering = "never"
+        } else if let n = s.cursorUUIDCount {
+            countRendering = String(n)
+        } else {
+            countRendering = "(decode_error)"
         }
         print("    cursor_uuid_count:  \(countRendering)")
         print("    schema_version:     \(s.schemaVersion)")

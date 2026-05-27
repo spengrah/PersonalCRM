@@ -61,6 +61,9 @@ public struct AnarlogConfigStoreSource: AnarlogConfigSource {
 public protocol AnarlogFilesystem: Sendable {
     /// True when `path` exists (file or directory).
     func exists(_ path: String) -> Bool
+    /// True when `path` is a directory (regardless of readability).
+    /// False for files and missing paths.
+    func isDirectory(_ path: String) -> Bool
     /// True when `path` is a readable directory. False on permission
     /// denied OR on non-directory.
     func isReadableDirectory(_ path: String) -> Bool
@@ -89,10 +92,14 @@ public final class ProductionAnarlogFilesystem: AnarlogFilesystem {
         FileManager.default.fileExists(atPath: path)
     }
 
-    public func isReadableDirectory(_ path: String) -> Bool {
+    public func isDirectory(_ path: String) -> Bool {
         var isDir: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
-        guard exists, isDir.boolValue else { return false }
+        return exists && isDir.boolValue
+    }
+
+    public func isReadableDirectory(_ path: String) -> Bool {
+        guard isDirectory(path) else { return false }
         return FileManager.default.isReadableFile(atPath: path)
     }
 

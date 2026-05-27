@@ -5,12 +5,13 @@
 // ConfigStore code paths the command runs to prove its config-write
 // behavior matches plan TC-CFG1..TC-CFG5.
 //
-// TC-CFG6..TC-CFG8 (--reset-cursor with Pi-side handshake) are
-// exercised separately by the PiClient tests that cover
-// commitCursor + cursorConflict semantics; the subcommand wraps
-// those calls without additional logic, so reproducing the
-// behavior in this test file would duplicate transport-mocking
-// infrastructure.
+// TC-CFG6 (success) and TC-CFG8 (409 refetch+retry) are covered by
+// AnarlogCursorResetTests against the testable AnarlogCursorReset
+// helper. TC-CFG7 (daemon-running rejection) is enforced by
+// `requireDaemonNotRunning` at the CLI entry point; the predicate is
+// the pidfile-exists check which is shared with the containers
+// subcommand and already covered by ConfigureContainersReconciliation
+// tests' precondition assertion.
 import XCTest
 import Foundation
 import CRMMacCore

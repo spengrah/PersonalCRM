@@ -20,7 +20,7 @@ final class StatusAnarlogTests: XCTestCase {
         XCTAssertNil(report.anarlogSessions)
     }
 
-    func testAnarlogConfiguredButNoStateYieldsEnabledBlocks() throws {
+    func testAnarlogConfiguredButNoStateYieldsBothBlocks() throws {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         try seedConfigOnly(paths: paths, fs: fs, anarlog: AnarlogConfig(
@@ -30,13 +30,16 @@ final class StatusAnarlogTests: XCTestCase {
         try seedStateOnly(paths: paths, fs: fs)
         let status = makeStatus(paths: paths, fs: fs)
         let report = status.run()
-        // Humans is enabled — even without state, we show the block.
+        // Both rows are shown because the operator has configured
+        // anarlog. Each row reflects its enabled flag — humans
+        // enabled, sessions disabled.
         let humans = try XCTUnwrap(report.anarlogHumans)
         XCTAssertTrue(humans.enabled)
         XCTAssertNil(humans.lastScheduledAt)
         XCTAssertNil(humans.cursorUUIDCount)
-        // Sessions is disabled AND has no state → nil.
-        XCTAssertNil(report.anarlogSessions)
+        let sessions = try XCTUnwrap(report.anarlogSessions)
+        XCTAssertFalse(sessions.enabled)
+        XCTAssertNil(sessions.cursorUUIDCount)
     }
 
     func testEmptyCursorYieldsCursorCount0() throws {

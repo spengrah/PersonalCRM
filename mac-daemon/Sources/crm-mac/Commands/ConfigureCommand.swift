@@ -424,7 +424,8 @@ struct AnarlogSubcommand: ParsableCommand {
         Task {
             do {
                 for source in sources {
-                    try await Self.resetOne(client: client, auth: auth, source: source)
+                    try await AnarlogCursorReset.resetOne(
+                        client: client, auth: auth, source: source)
                 }
             } catch {
                 thrown = error
@@ -439,35 +440,6 @@ struct AnarlogSubcommand: ParsableCommand {
         }
         for source in sources {
             print("\(source): cursor reset.")
-        }
-    }
-
-    private static func resetOne(
-        client: PiClient,
-        auth: PiAuth,
-        source: String
-    ) async throws {
-        let initial = try await client.getCursor(auth: auth, source: source)
-        do {
-            try await client.commitCursor(
-                auth: auth,
-                source: source,
-                cursor: "",
-                baseCursor: initial.cursor,
-                cursorEpoch: initial.cursorEpoch,
-                backfillComplete: false)
-        } catch PiClientError.cursorConflict(_, let conflict) {
-            // 409 — refetch + retry once. Spec line 514 documents the
-            // retry contract.
-            let baseCursor = conflict.currentCursor ?? initial.cursor
-            let epoch = conflict.currentEpoch ?? initial.cursorEpoch
-            try await client.commitCursor(
-                auth: auth,
-                source: source,
-                cursor: "",
-                baseCursor: baseCursor,
-                cursorEpoch: epoch,
-                backfillComplete: false)
         }
     }
 
