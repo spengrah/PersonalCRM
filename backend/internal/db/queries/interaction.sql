@@ -158,3 +158,14 @@ SELECT EXISTS (
       AND deleted_at IS NULL
     LIMIT 1
 ) AS has_response;
+
+-- name: ListSessionAttributedInteractions :many
+-- Returns all live interactions attributed to a specific anarlog session
+-- (both Step 4 orphan-with-tags and Step 5 walk-in supplemental). Used by
+-- the re-sync diff path in the meeting_note.recorded inline handler to
+-- compute the (existing - desired) set that needs soft-deleting.
+SELECT * FROM interaction
+WHERE source = 'anarlog_sessions'
+  AND source_ref LIKE sqlc.arg('source_ref_prefix')
+  AND deleted_at IS NULL
+ORDER BY source_ref;

@@ -305,6 +305,14 @@ type MeetingNote struct {
 	LinkageState     string             `json:"linkage_state"`
 	DeletedAt        pgtype.Timestamptz `json:"deleted_at"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	// SHA-256(JCS({meeting_at, title, sorted(participant_ids)})). Used to detect when matching inputs change on re-sync.
+	InputHash string `json:"input_hash"`
+	// SHA-256(JCS(sorted(resolved_contact_uuids))). Used to detect when tagged-participant->contact resolution changes (e.g., after a user import), even when input_hash is unchanged.
+	ResolvedSetHash string `json:"resolved_set_hash"`
+	// Lowercase-hex SHA-256 of JCS-canonicalized payload (minus host_id) from the most recent meeting_note.recorded event. Powers GET /sync/anarlog_sessions/known-ids. NULL for legacy rows; daemon falls back to @deleted@unknown sentinel per spec.
+	LastContentHash pgtype.Text `json:"last_content_hash"`
+	// Session start time from the daemon payload meeting_at. Drives linkage window math, /imports conflict UI, and the input_hash recipe.
+	MeetingAt pgtype.Timestamptz `json:"meeting_at"`
 }
 
 type MessagesMessage struct {

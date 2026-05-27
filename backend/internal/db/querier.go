@@ -260,6 +260,13 @@ type Querier interface {
 	// read-only operator diagnostics; the production dedupe path uses
 	// InsertEventConsumerClaim's rows-inserted signal instead of polling.
 	ExistsEventConsumerClaim(ctx context.Context, arg ExistsEventConsumerClaimParams) (bool, error)
+	// Returns candidate calendar_event rows for the meeting_note.recorded
+	// linkage-detection algorithm. Filters out cancelled events. Backed by
+	// idx_calendar_event_start (partial index on start_time WHERE
+	// status != 'cancelled' — already exists from migration 016). The
+	// output includes matched_contact_ids so the linkage handler can
+	// compute walk-in supplementals (Step 5).
+	FindCalendarEventsInWindow(ctx context.Context, arg FindCalendarEventsInWindowParams) ([]*CalendarEvent, error)
 	// peer_phone is stored raw from MTProto (typically digits only); contact_method
 	// value_normalized is E.164 with leading '+'. Compare on digits-only.
 	// Same DISTINCT ON ordering as the username variant — prefer rows with a
@@ -303,7 +310,22 @@ type Querier interface {
 	// gcal_attendee import candidates as matched after a CRM contact links them.
 	// Tombstoned candidates must not be rematched.
 	FindExternalContactsBySourceAndSourceID(ctx context.Context, arg FindExternalContactsBySourceAndSourceIDParams) ([]*ExternalContact, error)
+	// Used by the Import handler's anarlog backfill — when a user imports
+	// an anarlog_humans external_contact, the associated anarlog_human_id
+	// identity row's contact_id is linked to the imported CRM contact. The
+	// (identifier, identifier_type, source) triple is unique so this
+	// normally returns a 0- or 1-row slice; the list shape matches
+	// FindIdentitiesByIdentifier for consistency with the existing
+	// repository surface.
+	FindIdentitiesByAnarlogHumanID(ctx context.Context, anarlogHumanID string) ([]*ExternalIdentity, error)
 	FindIdentitiesByIdentifier(ctx context.Context, arg FindIdentitiesByIdentifierParams) ([]*ExternalIdentity, error)
+	// Lookup hook used by the meeting_note.recorded inline handler to
+	// resolve a payload's participant_ids (anarlog UUIDs) into CRM
+	// contact_ids. The (identifier, identifier_type, source) triple is
+	// unique, so this returns at most one row. The identifier_type is
+	// pinned to 'anarlog_human_id' and the source to 'anarlog_humans'
+	// (the only writer of these rows).
+	FindIdentityByAnarlogHumanID(ctx context.Context, anarlogHumanID string) (*ExternalIdentity, error)
 	// Find an existing interaction by contact, source, and source_ref (for deduplication)
 	FindInteractionBySourceRef(ctx context.Context, arg FindInteractionBySourceRefParams) (*Interaction, error)
 	// Find an existing manual interaction within a time window for a given
@@ -434,6 +456,13 @@ type Querier interface {
 	// Returns the live (non-soft-deleted) meeting_note row for a given anarlog
 	// session UUID. Used by the ingest path for dedup and re-sync detection.
 	GetMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error)
+	// Tombstone-aware lookup that holds a row-level lock for the duration of
+	// the caller's tx. Used by the meeting_note.recorded inline handler so a
+	// concurrent re-sync for the same session UUID serializes behind the
+	// first writer (see service/ingest.go handleMeetingNoteRecorded step 2).
+	// Returns tombstoned rows too — the revive path inspects DeletedAt to
+	// decide between revive and re-link branches.
+	GetMeetingNoteBySessionIDForUpdate(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error)
 	// Lookup by guid (primary external identifier). Used by reply-target
 	// resolution.
 	GetMessagesMessage(ctx context.Context, guid string) (*MessagesMessage, error)
@@ -479,6 +508,13 @@ type Querier interface {
 	GetTelegramMessage(ctx context.Context, arg GetTelegramMessageParams) (*TelegramMessage, error)
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
+	// Probe used by the dispatch loop's revive-bypass: when a duplicate
+	// meeting_note.recorded event arrives (same source_id, content unchanged)
+	// and a tombstoned row exists, the inline handler still runs so it can
+	// revive instead of silently leaving the row tombstoned. Filters
+	// explicitly to tombstoned rows because the live partial-unique index
+	// already covers the live-row case.
+	GetTombstonedMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error)
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	// Test-only: hard-deletes event rows whose (source, source_id) match the
 	// given source and a LIKE-prefix on source_id. Used by integration tests
@@ -538,7 +574,9 @@ type Querier interface {
 	// Spec: .ai/spec/mac-daemon-phase-2-anarlog-matching.md
 	// Inserts a meeting_note staging row. linkage_state must be supplied by the
 	// caller (the ingest tx computes it from the linkage detection algorithm);
-	// no DB-level default exists.
+	// no DB-level default exists. input_hash / resolved_set_hash /
+	// last_content_hash / meeting_at are supplied verbatim per the re-sync
+	// diff algorithm (see service/ingest.go handleMeetingNoteRecorded).
 	InsertMeetingNote(ctx context.Context, arg InsertMeetingNoteParams) (*MeetingNote, error)
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
@@ -613,6 +651,12 @@ type Querier interface {
 	// last_content_hash is NULL cause the daemon to fall back to the
 	// @deleted@unknown sentinel per the spec.
 	ListKnownExternalContactIDsByHostAndSource(ctx context.Context, arg ListKnownExternalContactIDsByHostAndSourceParams) ([]*ListKnownExternalContactIDsByHostAndSourceRow, error)
+	// Returns (source_id, last_content_hash) for every live meeting_note
+	// row owned by the given mac_host. Powers GET
+	// /api/v1/host/:id/sync/anarlog_sessions/known-ids. Tombstoned rows are
+	// excluded — the daemon's set-diff reconciliation requires that rows
+	// the Pi has soft-deleted are NOT reported as known.
+	ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID pgtype.UUID) ([]*ListKnownMeetingNoteIDsByHostRow, error)
 	ListMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all managed tasks for a provider (for reconciliation)
 	ListManagedContactTasks(ctx context.Context, provider string) ([]*ListManagedContactTasksRow, error)
@@ -626,6 +670,11 @@ type Querier interface {
 	// List past events that haven't updated last_contacted yet
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
+	// Returns all live interactions attributed to a specific anarlog session
+	// (both Step 4 orphan-with-tags and Step 5 walk-in supplemental). Used by
+	// the re-sync diff path in the meeting_note.recorded inline handler to
+	// compute the (existing - desired) set that needs soft-deleting.
+	ListSessionAttributedInteractions(ctx context.Context, sourceRefPrefix pgtype.Text) ([]*Interaction, error)
 	// Lists rows with matched_contact_id IS NULL — i.e., rows that the
 	// ingest service accepted into staging but couldn't match to a contact
 	// at the time. The crm-admin --messages-rematch-stranded command
@@ -724,6 +773,12 @@ type Querier interface {
 	// NULL keeps the statement idempotent across concurrent revive races.
 	// Preserves crm_contact_id, match_status, and all content columns.
 	ReviveExternalContact(ctx context.Context, id pgtype.UUID) (*ExternalContact, error)
+	// Clears deleted_at + writes the full updatable column set in a single
+	// statement so a tombstoned row that re-receives meeting_note.recorded
+	// comes back live with the new content (round-1 P0#1 delete-revive
+	// semantics). Defensive WHERE deleted_at IS NOT NULL keeps it idempotent
+	// across concurrent revive races.
+	ReviveMeetingNote(ctx context.Context, arg ReviveMeetingNoteParams) (*MeetingNote, error)
 	RevokeMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error)
 	// Lightweight query returning only IDs with search for navigation
 	SearchContactIDs(ctx context.Context, arg SearchContactIDsParams) ([]pgtype.UUID, error)
@@ -777,6 +832,11 @@ type Querier interface {
 	// soft-delete contract.
 	SoftDeleteExternalContact(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteInteraction(ctx context.Context, id pgtype.UUID) error
+	// Tombstones the live row for a session UUID. last_content_hash,
+	// input_hash, meeting_at are preserved on the row so a future revive
+	// has the prior content snapshot available. Idempotent (no-op when no
+	// live row exists).
+	SoftDeleteMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) error
 	SoftDeleteTelegramChannelMessages(ctx context.Context, arg SoftDeleteTelegramChannelMessagesParams) error
 	SoftDeleteTelegramMessages(ctx context.Context, messageIds []int32) error
 	// TEST ONLY. Hard-deletes calendar_event rows whose gcal_event_id starts
@@ -785,6 +845,10 @@ type Querier interface {
 	// TEST ONLY. Hard-deletes external_contact rows whose source_id starts with
 	// the given prefix. Used by t.Cleanup to remove fixtures inserted by a test.
 	TestDeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) error
+	// TEST ONLY. Hard-deletes meeting_note rows whose session UUID (as text)
+	// starts with the given prefix. Used by t.Cleanup to remove fixtures
+	// inserted by a test. Covers both live and tombstoned rows.
+	TestHardDeleteMeetingNotesBySessionIDPrefix(ctx context.Context, sessionIDPrefix string) error
 	// TEST ONLY. Checks whether a named index exists. Used by the integration
 	// test as a structural guard that migration 045's GIN indexes are actually
 	// present (a behavior-only test would pass even if a future migration
@@ -914,6 +978,14 @@ type Querier interface {
 	UpdateMatchedContactForStrandedMessage(ctx context.Context, arg UpdateMatchedContactForStrandedMessageParams) error
 	// Update the matched contact IDs for an event
 	UpdateMatchedContacts(ctx context.Context, arg UpdateMatchedContactsParams) (*CalendarEvent, error)
+	// Single update query used for both carry-forward and re-link branches
+	// of the re-sync algorithm. Caller controls the values: carry-forward
+	// passes the prior linkage values, re-link passes the recomputed values.
+	// Avoids two near-identical queries.
+	//
+	// The deleted_at filter prevents stomping on a tombstoned row (revive
+	// runs its own UPDATE path that also clears deleted_at).
+	UpdateMeetingNoteOnResync(ctx context.Context, arg UpdateMeetingNoteOnResyncParams) (*MeetingNote, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
 	// Update only the token data (for token refresh)
 	UpdateOAuthCredentialTokens(ctx context.Context, arg UpdateOAuthCredentialTokensParams) (*OauthCredential, error)

@@ -156,3 +156,15 @@ SET matched_contact_ids = array_append(matched_contact_ids, @contact_id::uuid),
     updated_at = NOW()
 WHERE id = @event_id::uuid
   AND NOT (@contact_id::uuid = ANY(matched_contact_ids));
+
+-- name: FindCalendarEventsInWindow :many
+-- Returns candidate calendar_event rows for the meeting_note.recorded
+-- linkage-detection algorithm. Filters out cancelled events. Backed by
+-- idx_calendar_event_start (partial index on start_time WHERE
+-- status != 'cancelled' — already exists from migration 016). The
+-- output includes matched_contact_ids so the linkage handler can
+-- compute walk-in supplementals (Step 5).
+SELECT * FROM calendar_event
+WHERE start_time BETWEEN sqlc.arg('window_start') AND sqlc.arg('window_end')
+  AND status != 'cancelled'
+ORDER BY start_time ASC;

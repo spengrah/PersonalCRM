@@ -77,6 +77,55 @@ func (q *Queries) DeleteIdentity(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const FindIdentitiesByAnarlogHumanID = `-- name: FindIdentitiesByAnarlogHumanID :many
+SELECT id, identifier, identifier_type, raw_identifier, source, source_id, contact_id, match_type, match_confidence, display_name, last_seen_at, message_count, created_at, updated_at FROM external_identity
+WHERE identifier_type = 'anarlog_human_id'
+  AND source = 'anarlog_humans'
+  AND identifier = $1
+`
+
+// Used by the Import handler's anarlog backfill — when a user imports
+// an anarlog_humans external_contact, the associated anarlog_human_id
+// identity row's contact_id is linked to the imported CRM contact. The
+// (identifier, identifier_type, source) triple is unique so this
+// normally returns a 0- or 1-row slice; the list shape matches
+// FindIdentitiesByIdentifier for consistency with the existing
+// repository surface.
+func (q *Queries) FindIdentitiesByAnarlogHumanID(ctx context.Context, anarlogHumanID string) ([]*ExternalIdentity, error) {
+	rows, err := q.db.Query(ctx, FindIdentitiesByAnarlogHumanID, anarlogHumanID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ExternalIdentity{}
+	for rows.Next() {
+		var i ExternalIdentity
+		if err := rows.Scan(
+			&i.ID,
+			&i.Identifier,
+			&i.IdentifierType,
+			&i.RawIdentifier,
+			&i.Source,
+			&i.SourceID,
+			&i.ContactID,
+			&i.MatchType,
+			&i.MatchConfidence,
+			&i.DisplayName,
+			&i.LastSeenAt,
+			&i.MessageCount,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const FindIdentitiesByIdentifier = `-- name: FindIdentitiesByIdentifier :many
 SELECT id, identifier, identifier_type, raw_identifier, source, source_id, contact_id, match_type, match_confidence, display_name, last_seen_at, message_count, created_at, updated_at FROM external_identity
 WHERE identifier_type = $1 AND identifier = $2
@@ -120,6 +169,41 @@ func (q *Queries) FindIdentitiesByIdentifier(ctx context.Context, arg FindIdenti
 		return nil, err
 	}
 	return items, nil
+}
+
+const FindIdentityByAnarlogHumanID = `-- name: FindIdentityByAnarlogHumanID :one
+SELECT id, identifier, identifier_type, raw_identifier, source, source_id, contact_id, match_type, match_confidence, display_name, last_seen_at, message_count, created_at, updated_at FROM external_identity
+WHERE identifier_type = 'anarlog_human_id'
+  AND source = 'anarlog_humans'
+  AND identifier = $1
+`
+
+// Lookup hook used by the meeting_note.recorded inline handler to
+// resolve a payload's participant_ids (anarlog UUIDs) into CRM
+// contact_ids. The (identifier, identifier_type, source) triple is
+// unique, so this returns at most one row. The identifier_type is
+// pinned to 'anarlog_human_id' and the source to 'anarlog_humans'
+// (the only writer of these rows).
+func (q *Queries) FindIdentityByAnarlogHumanID(ctx context.Context, anarlogHumanID string) (*ExternalIdentity, error) {
+	row := q.db.QueryRow(ctx, FindIdentityByAnarlogHumanID, anarlogHumanID)
+	var i ExternalIdentity
+	err := row.Scan(
+		&i.ID,
+		&i.Identifier,
+		&i.IdentifierType,
+		&i.RawIdentifier,
+		&i.Source,
+		&i.SourceID,
+		&i.ContactID,
+		&i.MatchType,
+		&i.MatchConfidence,
+		&i.DisplayName,
+		&i.LastSeenAt,
+		&i.MessageCount,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
 }
 
 const GetIdentityByID = `-- name: GetIdentityByID :one

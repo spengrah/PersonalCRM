@@ -58,6 +58,65 @@ func (q *Queries) DeleteEventsByAccount(ctx context.Context, googleAccountID str
 	return err
 }
 
+const FindCalendarEventsInWindow = `-- name: FindCalendarEventsInWindow :many
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
+WHERE start_time BETWEEN $1 AND $2
+  AND status != 'cancelled'
+ORDER BY start_time ASC
+`
+
+type FindCalendarEventsInWindowParams struct {
+	WindowStart pgtype.Timestamptz `json:"window_start"`
+	WindowEnd   pgtype.Timestamptz `json:"window_end"`
+}
+
+// Returns candidate calendar_event rows for the meeting_note.recorded
+// linkage-detection algorithm. Filters out cancelled events. Backed by
+// idx_calendar_event_start (partial index on start_time WHERE
+// status != 'cancelled' — already exists from migration 016). The
+// output includes matched_contact_ids so the linkage handler can
+// compute walk-in supplementals (Step 5).
+func (q *Queries) FindCalendarEventsInWindow(ctx context.Context, arg FindCalendarEventsInWindowParams) ([]*CalendarEvent, error) {
+	rows, err := q.db.Query(ctx, FindCalendarEventsInWindow, arg.WindowStart, arg.WindowEnd)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*CalendarEvent{}
+	for rows.Next() {
+		var i CalendarEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.GcalEventID,
+			&i.GcalCalendarID,
+			&i.GoogleAccountID,
+			&i.Title,
+			&i.Description,
+			&i.Location,
+			&i.StartTime,
+			&i.EndTime,
+			&i.AllDay,
+			&i.Status,
+			&i.UserResponse,
+			&i.OrganizerEmail,
+			&i.Attendees,
+			&i.MatchedContactIds,
+			&i.SyncedAt,
+			&i.LastContactedUpdated,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HtmlLink,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const FindEventsByAttendeeEmailUnmatchedForContact = `-- name: FindEventsByAttendeeEmailUnmatchedForContact :many
 SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
 WHERE jsonb_array_lower_values(attendees, 'email') && ARRAY[LOWER($1::text)]
