@@ -136,6 +136,18 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	ingestGroup.Use(ingestAuth)
 	ingestGroup.POST("/events", ingestHandler.IngestEvents)
 
+	// Import handler wired so TestMeetingNote_ImportBackfillResolvesOnResync
+	// exercises the real /imports/:id/link path (the handler invokes
+	// backfillAnarlogIdentity which links the anarlog_human_id identity
+	// row to the imported contact).
+	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+	matchService := service.NewImportMatchService(contactRepo)
+	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil)
+	enrichmentSvc.SetCadenceUpdater(wireCadenceUpdaterForAPITest(t, database, contactSvc))
+	importHandler := handlers.NewImportHandler(externalRepo, identityRepo, contactSvc, matchService, enrichmentSvc)
+	imports := router.Group("/api/v1/imports")
+	imports.POST("/candidates/:id/link", importHandler.LinkContact)
+
 	plain, _, err := macService.CreatePairingToken(ctx)
 	require.NoError(t, err)
 	pair, err := macService.PairWithToken(ctx, plain, "meeting-note-test", "0.1.0", 1)
@@ -181,8 +193,10 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 		// Drop interactions seeded by these tests (covers anarlog session refs).
 		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(cleanCtx, "anarlog_sessions", "anarlog:"+env.sourceIDPrefix+"%")
 		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(cleanCtx, "anarlog_sessions", "anarlog:%")
-		// Drop meeting_note rows seeded by these tests (by session-UUID prefix).
-		_ = meetingRepo.TestHardDeleteBySessionIDPrefix(cleanCtx, env.sourceIDPrefix+"%")
+		// Drop meeting_note rows seeded by these tests. Session UUIDs
+		// are caller-generated random UUIDs (no exploitable prefix), so
+		// scope by the paired mac_host_id this test created.
+		_ = meetingRepo.TestHardDeleteByHostID(cleanCtx, env.pairedHostID)
 		// Drop synthetic anarlog_humans external_contact rows.
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, env.sourceIDPrefix)
 		_, _ = database.Queries.DeleteExternalIdentitiesBySource(cleanCtx, "anarlog_humans")
@@ -688,7 +702,50 @@ func TestMeetingNote_ResyncDiffsInteractions(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// TC-DD1 (round-1 P1#8): two anarlog_human_ids mapping to the same CRM
+// Re-sync that changes meeting_at + title (without changing participants)
+// refreshes the existing session interactions' occurred_at + description
+// instead of leaving them stale.
+// ----------------------------------------------------------------------------
+func TestMeetingNote_ResyncRefreshesInteractionContent(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-")
+	suffix = strings.TrimSuffix(suffix, "-")
+	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
+	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
+
+	sessionUUID := uuid.NewString()
+	firstMeetingAt := time.Date(2026, 5, 20, 14, 0, 0, 0, time.UTC)
+	rec1 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, firstMeetingAt, "First Title", []string{anarlogA})
+	w := postMNIngest(t, env, map[string]any{"events": []any{rec1}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	before := listSessionInteractions(t, env, sessionUUID)
+	require.Len(t, before, 1)
+	require.True(t, firstMeetingAt.Equal(before[0].OccurredAt))
+	require.NotNil(t, before[0].Description)
+	require.Equal(t, "First Title", *before[0].Description)
+	beforeID := before[0].ID
+
+	// Re-sync with a different meeting_at + title. Same participant,
+	// same source_ref → the diff loop hits the in-both branch and
+	// refreshes occurred_at + description.
+	updatedMeetingAt := firstMeetingAt.Add(30 * time.Minute)
+	rec2 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, updatedMeetingAt, "Updated Title", []string{anarlogA})
+	w = postMNIngest(t, env, map[string]any{"events": []any{rec2}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
+
+	after := listSessionInteractions(t, env, sessionUUID)
+	require.Len(t, after, 1, "in-both diff must update, not drop+insert")
+	require.Equal(t, beforeID, after[0].ID, "same row updated in place")
+	require.True(t, updatedMeetingAt.Equal(after[0].OccurredAt), "occurred_at refreshed")
+	require.NotNil(t, after[0].Description)
+	require.Equal(t, "Updated Title", *after[0].Description)
+}
+
+// ----------------------------------------------------------------------------
+// TC-DD1: two anarlog_human_ids mapping to the same CRM
 // contact produce exactly ONE interaction.
 // ----------------------------------------------------------------------------
 func TestMeetingNote_DedupesByContactID(t *testing.T) {
@@ -740,48 +797,47 @@ func TestMeetingNote_ImportBackfillResolvesOnResync(t *testing.T) {
 	require.Equal(t, "orphan", resp.NeedsAttention[0].Reason)
 	require.Empty(t, listSessionInteractions(t, env, sessionUUID))
 
-	// Simulate user import via the repository LinkToContact + identity
-	// backfill. The handler-level import path is exercised by other
-	// tests; here we just need the side effect (identity row linked).
+	// Simulate user import via the actual /imports/:id/link handler
+	// endpoint. That handler calls backfillAnarlogIdentity which links
+	// the anarlog_human_id identity row to the imported contact —
+	// the exact path the production flow takes.
 	ctx := context.Background()
 	idents, err := env.identityRepo.FindIdentitiesByAnarlogHumanID(ctx, anarlogX)
 	require.NoError(t, err)
 	require.Len(t, idents, 1, "identity row planted at ingest time")
 	require.Nil(t, idents[0].ContactID, "unmatched before import")
-	_, err = env.identityRepo.LinkToContact(ctx, repository.LinkIdentityRequest{
-		IdentityID: idents[0].ID,
-		ContactID:  env.contactA,
-		MatchType:  repository.MatchTypeManual,
-	})
-	require.NoError(t, err)
 
-	// Re-send the same payload (same source_id since content didn't
-	// change) — bus-dedup will mark it duplicate, but the resolved-set
-	// hash now differs (was empty, now contains contactA), so the
-	// inline handler MUST run via the revive-bypass? Actually no: the
-	// revive-bypass only fires on tombstoned rows. The carry-forward
-	// gate compares input_hash AND resolved_set_hash. Resolved set
-	// changed, so the handler re-runs.
-	//
-	// But on a duplicate (same source_id), the dispatch loop skips the
-	// inline handler entirely unless shouldRunInlineOnDuplicate
-	// returns true. For non-tombstoned rows it returns false → the
-	// handler is skipped → resolved set drift is NOT picked up on a
-	// duplicate.
-	//
-	// The spec / plan calls for picking it up. The mechanism: the
-	// daemon sends a NEW source_id whenever the payload changes (the
-	// hash recipe). With identical participants + meeting_at + title,
-	// the content hash matches and the source_id matches → bus-dedup
-	// fires. The intended trigger for backfill-driven re-resolution
-	// is a SUBSEQUENT payload that does have content changes (e.g.,
-	// summary edit). Re-send with a slightly different title so the
-	// content hash differs.
-	rec2 := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Post-Import edit", []string{anarlogX})
-	w = postMNIngest(t, env, map[string]any{"events": []any{rec2}})
+	// Find the external_contact row for our anarlog candidate so we can
+	// POST to /imports/candidates/<id>/link.
+	external, err := env.externalRepo.GetBySource(ctx, "anarlog_humans", anarlogX, nil)
+	require.NoError(t, err)
+	require.NotNil(t, external)
+	linkReqBody, _ := json.Marshal(map[string]any{"crm_contact_id": env.contactA.String()})
+	linkReq := httptest.NewRequest(http.MethodPost,
+		"/api/v1/imports/candidates/"+external.ID.String()+"/link",
+		bytes.NewReader(linkReqBody))
+	linkReq.Header.Set("Content-Type", "application/json")
+	linkW := httptest.NewRecorder()
+	env.router.ServeHTTP(linkW, linkReq)
+	require.Equal(t, http.StatusOK, linkW.Code, "body: %s", linkW.Body.String())
+
+	// Verify backfill actually linked the identity row to contactA.
+	postIdents, err := env.identityRepo.FindIdentitiesByAnarlogHumanID(ctx, anarlogX)
+	require.NoError(t, err)
+	require.Len(t, postIdents, 1)
+	require.NotNil(t, postIdents[0].ContactID)
+	require.Equal(t, env.contactA, *postIdents[0].ContactID,
+		"import handler must backfill anarlog_human_id identity")
+
+	// Re-send the SAME payload (identical source_id). The dispatch
+	// loop's inline-on-duplicate probe must detect the live row and
+	// run the handler so the resolved-set-hash drift drives a re-link.
+	// Without this, an import after the first ingest would only take
+	// effect on a future content-changing event.
+	w = postMNIngest(t, env, map[string]any{"events": []any{rec1}})
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	resp2 := parseMNIngestResp(t, w)
-	require.Equal(t, 1, resp2.Accepted, "different content hash → fresh event")
+	require.Equal(t, 1, resp2.Duplicate, "identical source_id → bus dedup")
 
 	row := findMeetingNoteRow(t, env, sessionUUID)
 	require.NotNil(t, row)

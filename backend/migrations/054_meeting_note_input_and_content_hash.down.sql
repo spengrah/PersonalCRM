@@ -1,9 +1,9 @@
 -- Reverses 054_meeting_note_input_and_content_hash.up.sql.
 --
 -- Destructive: dropping these columns loses all stored hashes and the
--- session start time. Acceptable because PR 3 is forward-only and any
--- partial deployment that needs rollback also rolls back the producers
--- that populate these columns.
+-- session start time. Acceptable because the columns are forward-only
+-- additions and any partial deployment that needs rollback also rolls
+-- back the producers that populate them.
 
 ALTER TABLE meeting_note
     DROP CONSTRAINT IF EXISTS meeting_note_input_hash_check,

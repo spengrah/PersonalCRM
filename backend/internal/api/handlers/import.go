@@ -31,6 +31,15 @@ type PostImportHook interface {
 	OnPeerLinked(ctx context.Context, peerUserID int64, peerUsername string, contactID uuid.UUID) error
 }
 
+// ImportHandler intentionally holds direct repository references
+// (externalRepo, identityRepo) alongside service references. This
+// breaks the canonical handler→service→repository layering — kept as
+// a documented exception because the existing import flow already
+// reads/writes external_contact directly (GetByID, UpdateMatch,
+// Ignore) and bouncing those through a service wrapper would be
+// pure-passthrough code with no semantic gain. The identityRepo
+// dependency follows the same convention so the anarlog backfill
+// stays cohesive with the rest of the handler.
 type ImportHandler struct {
 	externalRepo   *repository.ExternalContactRepository
 	identityRepo   *repository.IdentityRepository
@@ -44,8 +53,8 @@ type ImportHandler struct {
 // NewImportHandler creates a new import handler. identityRepo may be
 // nil for callers that don't exercise the anarlog_humans backfill
 // path; when nil the import flow silently skips the anarlog identity
-// update (the meeting_note re-sync path would then re-resolve as
-// unmatched, which is the pre-PR-3 behavior).
+// update (the meeting_note re-sync path then re-resolves as unmatched,
+// which matches the no-backfill baseline behavior).
 func NewImportHandler(
 	externalRepo *repository.ExternalContactRepository,
 	identityRepo *repository.IdentityRepository,
@@ -599,8 +608,8 @@ func (h *ImportHandler) triggerPostImportHook(ctx context.Context, external *rep
 // supplied CRM contact. Mirrors the email/phone identity-link logic
 // that already runs for other import paths. Best-effort: a failure
 // here logs a warning but does not roll back the import — the worst
-// outcome is that the next meeting_note.recorded re-sync still resolves
-// the human as unmatched, which is the pre-PR-3 behavior.
+// outcome is that the next meeting_note.recorded re-sync resolves the
+// human as unmatched (the same as the no-backfill baseline).
 func (h *ImportHandler) backfillAnarlogIdentity(ctx context.Context, external *repository.ExternalContact, contactID uuid.UUID) {
 	if h.identityRepo == nil || external == nil || external.Source != "anarlog_humans" {
 		return

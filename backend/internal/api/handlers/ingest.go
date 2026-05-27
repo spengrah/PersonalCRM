@@ -119,8 +119,7 @@ type IngestError struct {
 // NeedsAttention is populated by the meeting_note.recorded inline
 // handler when a session lands in a state requiring user attention
 // (conflict_pending or orphan_needs_review). Emitted with `omitempty`
-// so existing daemons unaware of the field see a backward-compatible
-// response; the Mac daemon consumes it in phase 2 PR 6.
+// so daemons unaware of the field see a backward-compatible response.
 type IngestResponse struct {
 	Accepted       int                  `json:"accepted"`
 	Duplicate      int                  `json:"duplicate"`
@@ -270,7 +269,8 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 
 	// Map the service-layer NeedsAttentionItem to the handler-layer
 	// JSON shape. omitempty on the response field means nil/empty
-	// slice produces a wire-compatible response for pre-PR-6 daemons.
+	// slice produces a wire-compatible response for daemons that
+	// haven't shipped the consumer yet.
 	var responseNeedsAttention []NeedsAttentionItem
 	if len(needsAttention) > 0 {
 		responseNeedsAttention = make([]NeedsAttentionItem, len(needsAttention))

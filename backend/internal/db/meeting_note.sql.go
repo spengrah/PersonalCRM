@@ -147,6 +147,7 @@ INSERT INTO meeting_note (
     $12,
     $13
 )
+ON CONFLICT (anarlog_session_id) WHERE deleted_at IS NULL DO NOTHING
 RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at
 `
 
@@ -173,6 +174,14 @@ type InsertMeetingNoteParams struct {
 // no DB-level default exists. input_hash / resolved_set_hash /
 // last_content_hash / meeting_at are supplied verbatim per the re-sync
 // diff algorithm (see service/ingest.go handleMeetingNoteRecorded).
+//
+// ON CONFLICT DO NOTHING handles the concurrent first-insert race against
+// the partial unique index idx_meeting_note_session_id WHERE deleted_at IS
+// NULL. When two concurrent batches try to first-insert the same session
+// UUID, one wins and the other receives zero rows back; the caller then
+// re-reads with FOR UPDATE and falls through to the update path. sqlc :one
+// returns ErrNoRows in that case, which the repository translates to
+// db.ErrNotFound.
 func (q *Queries) InsertMeetingNote(ctx context.Context, arg InsertMeetingNoteParams) (*MeetingNote, error) {
 	row := q.db.QueryRow(ctx, InsertMeetingNote,
 		arg.AnarlogSessionID,
@@ -283,9 +292,8 @@ type ReviveMeetingNoteParams struct {
 
 // Clears deleted_at + writes the full updatable column set in a single
 // statement so a tombstoned row that re-receives meeting_note.recorded
-// comes back live with the new content (round-1 P0#1 delete-revive
-// semantics). Defensive WHERE deleted_at IS NOT NULL keeps it idempotent
-// across concurrent revive races.
+// comes back live with the new content. Defensive WHERE deleted_at IS
+// NOT NULL keeps it idempotent across concurrent revive races.
 func (q *Queries) ReviveMeetingNote(ctx context.Context, arg ReviveMeetingNoteParams) (*MeetingNote, error) {
 	row := q.db.QueryRow(ctx, ReviveMeetingNote,
 		arg.Title,
@@ -334,6 +342,20 @@ WHERE anarlog_session_id = $1 AND deleted_at IS NULL
 // live row exists).
 func (q *Queries) SoftDeleteMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, SoftDeleteMeetingNoteBySessionID, anarlogSessionID)
+	return err
+}
+
+const TestHardDeleteMeetingNotesByHostID = `-- name: TestHardDeleteMeetingNotesByHostID :exec
+DELETE FROM meeting_note
+WHERE mac_host_id = $1
+`
+
+// TEST ONLY. Hard-deletes every meeting_note row owned by the given
+// mac_host. Used by t.Cleanup when the test seeds meeting_notes with
+// system-generated UUIDs (no exploitable prefix). Covers both live and
+// tombstoned rows.
+func (q *Queries) TestHardDeleteMeetingNotesByHostID(ctx context.Context, macHostID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, TestHardDeleteMeetingNotesByHostID, macHostID)
 	return err
 }
 

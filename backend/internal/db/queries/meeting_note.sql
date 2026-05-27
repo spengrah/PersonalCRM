@@ -7,6 +7,14 @@
 -- no DB-level default exists. input_hash / resolved_set_hash /
 -- last_content_hash / meeting_at are supplied verbatim per the re-sync
 -- diff algorithm (see service/ingest.go handleMeetingNoteRecorded).
+--
+-- ON CONFLICT DO NOTHING handles the concurrent first-insert race against
+-- the partial unique index idx_meeting_note_session_id WHERE deleted_at IS
+-- NULL. When two concurrent batches try to first-insert the same session
+-- UUID, one wins and the other receives zero rows back; the caller then
+-- re-reads with FOR UPDATE and falls through to the update path. sqlc :one
+-- returns ErrNoRows in that case, which the repository translates to
+-- db.ErrNotFound.
 INSERT INTO meeting_note (
     anarlog_session_id,
     title,
@@ -36,6 +44,7 @@ INSERT INTO meeting_note (
     sqlc.arg('last_content_hash'),
     sqlc.arg('meeting_at')
 )
+ON CONFLICT (anarlog_session_id) WHERE deleted_at IS NULL DO NOTHING
 RETURNING *;
 
 -- name: GetMeetingNoteBySessionID :one
@@ -94,9 +103,8 @@ RETURNING *;
 -- name: ReviveMeetingNote :one
 -- Clears deleted_at + writes the full updatable column set in a single
 -- statement so a tombstoned row that re-receives meeting_note.recorded
--- comes back live with the new content (round-1 P0#1 delete-revive
--- semantics). Defensive WHERE deleted_at IS NOT NULL keeps it idempotent
--- across concurrent revive races.
+-- comes back live with the new content. Defensive WHERE deleted_at IS
+-- NOT NULL keeps it idempotent across concurrent revive races.
 UPDATE meeting_note SET
     deleted_at        = NULL,
     title             = sqlc.arg('title'),
@@ -138,3 +146,11 @@ ORDER BY source_id;
 -- inserted by a test. Covers both live and tombstoned rows.
 DELETE FROM meeting_note
 WHERE anarlog_session_id::text LIKE sqlc.arg('session_id_prefix')::text;
+
+-- name: TestHardDeleteMeetingNotesByHostID :exec
+-- TEST ONLY. Hard-deletes every meeting_note row owned by the given
+-- mac_host. Used by t.Cleanup when the test seeds meeting_notes with
+-- system-generated UUIDs (no exploitable prefix). Covers both live and
+-- tombstoned rows.
+DELETE FROM meeting_note
+WHERE mac_host_id = sqlc.arg('mac_host_id');

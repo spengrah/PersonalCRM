@@ -577,6 +577,14 @@ type Querier interface {
 	// no DB-level default exists. input_hash / resolved_set_hash /
 	// last_content_hash / meeting_at are supplied verbatim per the re-sync
 	// diff algorithm (see service/ingest.go handleMeetingNoteRecorded).
+	//
+	// ON CONFLICT DO NOTHING handles the concurrent first-insert race against
+	// the partial unique index idx_meeting_note_session_id WHERE deleted_at IS
+	// NULL. When two concurrent batches try to first-insert the same session
+	// UUID, one wins and the other receives zero rows back; the caller then
+	// re-reads with FOR UPDATE and falls through to the update path. sqlc :one
+	// returns ErrNoRows in that case, which the repository translates to
+	// db.ErrNotFound.
 	InsertMeetingNote(ctx context.Context, arg InsertMeetingNoteParams) (*MeetingNote, error)
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
@@ -775,9 +783,8 @@ type Querier interface {
 	ReviveExternalContact(ctx context.Context, id pgtype.UUID) (*ExternalContact, error)
 	// Clears deleted_at + writes the full updatable column set in a single
 	// statement so a tombstoned row that re-receives meeting_note.recorded
-	// comes back live with the new content (round-1 P0#1 delete-revive
-	// semantics). Defensive WHERE deleted_at IS NOT NULL keeps it idempotent
-	// across concurrent revive races.
+	// comes back live with the new content. Defensive WHERE deleted_at IS
+	// NOT NULL keeps it idempotent across concurrent revive races.
 	ReviveMeetingNote(ctx context.Context, arg ReviveMeetingNoteParams) (*MeetingNote, error)
 	RevokeMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error)
 	// Lightweight query returning only IDs with search for navigation
@@ -845,6 +852,11 @@ type Querier interface {
 	// TEST ONLY. Hard-deletes external_contact rows whose source_id starts with
 	// the given prefix. Used by t.Cleanup to remove fixtures inserted by a test.
 	TestDeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) error
+	// TEST ONLY. Hard-deletes every meeting_note row owned by the given
+	// mac_host. Used by t.Cleanup when the test seeds meeting_notes with
+	// system-generated UUIDs (no exploitable prefix). Covers both live and
+	// tombstoned rows.
+	TestHardDeleteMeetingNotesByHostID(ctx context.Context, macHostID pgtype.UUID) error
 	// TEST ONLY. Hard-deletes meeting_note rows whose session UUID (as text)
 	// starts with the given prefix. Used by t.Cleanup to remove fixtures
 	// inserted by a test. Covers both live and tombstoned rows.

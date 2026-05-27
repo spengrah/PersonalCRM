@@ -19,7 +19,7 @@ import (
 const (
 	LinkageStateLinked               = "linked"
 	LinkageStateLinkedImpromptu      = "linked_impromptu"
-	LinkageStateOrphanTitleAugmented = "orphan_title_augmented" // reserved for PR 4
+	LinkageStateOrphanTitleAugmented = "orphan_title_augmented" // reserved for the title-augmentation flow
 	LinkageStateOrphanNeedsReview    = "orphan_needs_review"
 	LinkageStateConflictPending      = "conflict_pending"
 )
@@ -95,8 +95,7 @@ type UpdateMeetingNoteOnResyncParams struct {
 
 // ReviveMeetingNoteParams is the same shape as the on-resync update,
 // but the underlying query also clears deleted_at. Used when a tombstoned
-// row re-receives meeting_note.recorded with the same source_id
-// (round-1 P0#1 delete-revive semantics).
+// row re-receives meeting_note.recorded with the same source_id.
 type ReviveMeetingNoteParams = UpdateMeetingNoteOnResyncParams
 
 // MeetingNoteRepository owns persistence for the meeting_note table.
@@ -177,7 +176,10 @@ func participantsJSON(parts []string) ([]byte, error) {
 }
 
 // InsertMeetingNoteTx inserts a first-insert meeting_note row inside the
-// caller's tx. Caller owns the tx lifecycle.
+// caller's tx. Caller owns the tx lifecycle. Returns (nil, db.ErrNotFound)
+// when a concurrent first-insert won the race against the partial unique
+// index (the SQL uses ON CONFLICT DO NOTHING). Callers handle the race by
+// re-reading the row with FOR UPDATE and falling through to the update path.
 func (r *MeetingNoteRepository) InsertMeetingNoteTx(ctx context.Context, tx pgx.Tx, params InsertMeetingNoteParams) (*MeetingNote, error) {
 	partsJSON, err := participantsJSON(params.Participants)
 	if err != nil {
@@ -199,6 +201,9 @@ func (r *MeetingNoteRepository) InsertMeetingNoteTx(ctx context.Context, tx pgx.
 		MeetingAt:        pgtype.Timestamptz{Time: params.MeetingAt, Valid: true},
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
 		return nil, err
 	}
 	return convertDbMeetingNote(row)
@@ -343,6 +348,14 @@ func (r *MeetingNoteRepository) ListKnownMeetingNoteSessionIDsByHost(ctx context
 // code must NOT call this.
 func (r *MeetingNoteRepository) TestHardDeleteBySessionIDPrefix(ctx context.Context, prefix string) error {
 	return r.queries.TestHardDeleteMeetingNotesBySessionIDPrefix(ctx, prefix)
+}
+
+// TestHardDeleteByHostID is a test-only cleanup helper that hard-deletes
+// every meeting_note row owned by a given mac_host. Used when the test
+// seeds rows with system-generated session UUIDs (no exploitable prefix).
+// Production code must NOT call this.
+func (r *MeetingNoteRepository) TestHardDeleteByHostID(ctx context.Context, hostID uuid.UUID) error {
+	return r.queries.TestHardDeleteMeetingNotesByHostID(ctx, uuidToPgUUID(hostID))
 }
 
 // nullableUUIDToPg converts a *uuid.UUID into a pgtype.UUID with
