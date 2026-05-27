@@ -115,11 +115,26 @@ type IngestError struct {
 // IngestResponse matches the spec §3.5 happy-path shape literally —
 // deliberately NOT wrapped in api.APIResponse. External daemons are
 // contract consumers and the wrapping would be a spec deviation.
+//
+// NeedsAttention is populated by the meeting_note.recorded inline
+// handler when a session lands in a state requiring user attention
+// (conflict_pending or orphan_needs_review). Emitted with `omitempty`
+// so existing daemons unaware of the field see a backward-compatible
+// response; the Mac daemon consumes it in phase 2 PR 6.
 type IngestResponse struct {
-	Accepted  int           `json:"accepted"`
-	Duplicate int           `json:"duplicate"`
-	Rejected  int           `json:"rejected"`
-	Errors    []IngestError `json:"errors"`
+	Accepted       int                  `json:"accepted"`
+	Duplicate      int                  `json:"duplicate"`
+	Rejected       int                  `json:"rejected"`
+	Errors         []IngestError        `json:"errors"`
+	NeedsAttention []NeedsAttentionItem `json:"needs_attention,omitempty"`
+}
+
+// NeedsAttentionItem is the per-session attention record surfaced in
+// IngestResponse. SessionID is the anarlog session UUID; Reason is
+// one of "orphan" | "conflict" (mirrors the service-layer constants).
+type NeedsAttentionItem struct {
+	SessionID string `json:"session_id"`
+	Reason    string `json:"reason"`
 }
 
 // IngestEvents is the HTTP handler for POST /api/v1/ingest/events.
@@ -225,7 +240,7 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 		return
 	}
 
-	accepted, duplicate, perEventRejections, err := h.ingestService.IngestBatch(c.Request.Context(), envsToIngest, originalIndices, hostID)
+	accepted, duplicate, perEventRejections, needsAttention, err := h.ingestService.IngestBatch(c.Request.Context(), envsToIngest, originalIndices, hostID)
 	if err != nil {
 		// Host revoked between auth-middleware validation and the
 		// batch's tx-internal FOR UPDATE lock — return 401 so the
@@ -253,18 +268,34 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 		})
 	}
 
+	// Map the service-layer NeedsAttentionItem to the handler-layer
+	// JSON shape. omitempty on the response field means nil/empty
+	// slice produces a wire-compatible response for pre-PR-6 daemons.
+	var responseNeedsAttention []NeedsAttentionItem
+	if len(needsAttention) > 0 {
+		responseNeedsAttention = make([]NeedsAttentionItem, len(needsAttention))
+		for i, na := range needsAttention {
+			responseNeedsAttention[i] = NeedsAttentionItem{
+				SessionID: na.SessionID,
+				Reason:    na.Reason,
+			}
+		}
+	}
+
 	logger.Info().
 		Int("batch_size", len(req.Events)).
 		Int("accepted", accepted).
 		Int("duplicate", duplicate).
 		Int("rejected", len(ingestErrors)).
+		Int("needs_attention", len(responseNeedsAttention)).
 		Msg("event batch ingested")
 
 	c.JSON(http.StatusOK, IngestResponse{
-		Accepted:  accepted,
-		Duplicate: duplicate,
-		Rejected:  len(ingestErrors),
-		Errors:    ingestErrors,
+		Accepted:       accepted,
+		Duplicate:      duplicate,
+		Rejected:       len(ingestErrors),
+		Errors:         ingestErrors,
+		NeedsAttention: responseNeedsAttention,
 	})
 }
 

@@ -121,6 +121,11 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 		riverClient,
 		nil,
 		hostRepo,
+		nil, // meetingNotes unused
+		nil, // calendar unused
+		nil, // interactions unused
+		nil, // identityLookup unused
+		nil, // contactSvc unused
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 

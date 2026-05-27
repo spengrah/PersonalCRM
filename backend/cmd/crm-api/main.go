@@ -304,16 +304,17 @@ func run() int {
 	// own MacHostService that wraps the same repo instance.
 	macHostRepoForIngest := repository.NewMacHostRepository(database.Queries)
 
-	ingestService := service.NewIngestService(
-		database,
-		eventBus,
-		identityServiceForIngest,
-		messagesMessageRepo,
-		riverClient,
-		externalContactRepoForIngest,
-		macHostRepoForIngest, // host-liveness re-check inside the batch tx
-	)
-	ingestHandler := handlers.NewIngestHandler(ingestService)
+	// meeting_note repo + calendar repo + identity repo for the inline
+	// meeting_note.recorded / .deleted handlers. Constructed
+	// unconditionally because the IngestService is always wired even
+	// when external sync is disabled — the Mac daemon can still post
+	// meeting_note.* on the host-auth path. The calendarRepo here is
+	// the same logical resource the feature-flagged
+	// google.NewCalendarRematchHandler block below constructs; safe to
+	// have two instances pointing at the same queries since
+	// CalendarEventRepository is stateless.
+	meetingNoteRepoForIngest := repository.NewMeetingNoteRepository(database.Queries)
+	calendarRepoForIngest := repository.NewCalendarEventRepository(database.Queries)
 
 	// Rematch service — constructed above ContactService so it can be
 	// passed as the RematchRegistry constructor arg. Handlers register
@@ -322,6 +323,26 @@ func run() int {
 
 	// Initialize services
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, rematchService)
+
+	// ingestService is constructed AFTER contactService because the
+	// inline meeting_note.recorded handler routes session-attributed
+	// interaction writes through ContactService.RecordInteractionTx so
+	// cadence updates + follow-up evaluation fire correctly.
+	ingestService := service.NewIngestService(
+		database,
+		eventBus,
+		identityServiceForIngest,
+		messagesMessageRepo,
+		riverClient,
+		externalContactRepoForIngest,
+		macHostRepoForIngest, // host-liveness re-check inside the batch tx
+		meetingNoteRepoForIngest,
+		calendarRepoForIngest,
+		interactionRepo,
+		identityRepoForIngest,
+		contactService,
+	)
+	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	// Telegram message repo construction (hoisted above the
 	// InteractionRecorder wiring so the consumer can mark messages

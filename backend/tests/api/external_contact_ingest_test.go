@@ -92,6 +92,11 @@ func setupExtContactIngestEnv(t *testing.T) *extContactIngestEnv {
 		nil, // riverClient unused
 		externalRepo,
 		hostRepo, // host-liveness re-check for the FOR UPDATE lock
+		nil,      // meetingNotes unused on external_contact path
+		nil,      // calendar unused
+		nil,      // interactions unused
+		nil,      // identityLookup unused
+		nil,      // contactSvc unused
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
