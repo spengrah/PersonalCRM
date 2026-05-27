@@ -132,7 +132,8 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	externalRepo := repository.NewExternalContactRepository(database.Queries)
-	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, contactMethodRepo, externalRepo, database.Pool, 4)
+	meetingNoteRepo := repository.NewMeetingNoteRepository(database.Queries)
+	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, contactMethodRepo, externalRepo, meetingNoteRepo, database.Pool, 4)
 
 	identityRepo := repository.NewIdentityRepository(database.Queries)
 	identityService := service.NewIdentityService(identityRepo)
@@ -216,6 +217,11 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 		riverClient,
 		externalRepo,
 		hostRepo,
+		nil, // meetingNotes unused on phone_call path
+		nil, // calendar unused
+		nil, // interactions unused
+		nil, // identityLookup unused
+		nil, // contactSvc unused
 		failWriter,
 		contactService,
 		cadenceUpdater,
