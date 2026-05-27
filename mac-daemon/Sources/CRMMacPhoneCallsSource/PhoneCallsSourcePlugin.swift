@@ -149,6 +149,11 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
 
     public func tick() async throws {
         let tickStart = clock()
+        // Persist lastScheduledAt to state.json BEFORE any gate /
+        // health-registry / pool-open work so a healthy-but-quiet tick
+        // still bumps the on-disk timestamp. The in-memory
+        // healthRegistry update below is heartbeat-payload-only.
+        await updateScheduled(at: tickStart)
         await healthRegistry.update(id, currentHealthSnapshot(
             enabled: true,
             lastScheduled: tickStart,
@@ -659,6 +664,30 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
             src.backfillComplete = backfillComplete
             src.lastPushedAt = lastPushedAt
             state.sources["phone_calls"] = src
+        }
+    }
+
+    /// Persist `lastScheduledAt` to state.json at the start of every
+    /// tick. Mirrors ICloudContactsSourcePlugin.updateScheduled(at:)
+    /// so state.sources["phone_calls"].lastScheduledAt is a reliable
+    /// cross-source liveness signal — the in-memory
+    /// SourceHealthRegistry update (via `currentHealthSnapshot`) is
+    /// heartbeat-payload-only and never written to disk. Without this
+    /// persistence, Doctor / debugging tools see no recent scheduled-
+    /// at for phone_calls even on a healthy-but-quiet tick. Failures
+    /// are logged-and-swallowed: a state.json write hiccup must not
+    /// abort the tick.
+    private func updateScheduled(at date: Date) async {
+        do {
+            try await mutator.mutate { state in
+                var src = state.sources["phone_calls"] ?? SourceState(cursor: "")
+                src.lastScheduledAt = date
+                state.sources["phone_calls"] = src
+            }
+        } catch {
+            logger.warning("phone_calls tick: lastScheduledAt mutate failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
         }
     }
 
