@@ -14,6 +14,7 @@ func TestIsAllowedPushSource(t *testing.T) {
 		"icloud_contacts",
 		"anarlog_humans",
 		"anarlog_sessions",
+		"phone_calls",
 	}
 	for _, src := range allowed {
 		src := src
@@ -55,6 +56,7 @@ func TestAllowedPushSourcesMap(t *testing.T) {
 		"icloud_contacts":  {},
 		"anarlog_humans":   {},
 		"anarlog_sessions": {},
+		"phone_calls":      {},
 	}
 	if len(AllowedPushSources) != len(expected) {
 		t.Fatalf("AllowedPushSources size = %d, want %d", len(AllowedPushSources), len(expected))
