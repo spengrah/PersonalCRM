@@ -215,7 +215,9 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
             sessionsEnabled: false),
         script: PiScript = PiScript()
     ) -> Rig {
-        let humansPath = config!.rootPath + "/humans"
+        // When config is nil the plugin short-circuits before touching
+        // the filesystem, so the path here is just a placeholder.
+        let humansPath = (config?.rootPath ?? "/tmp/anarlog-test") + "/humans"
         let fs = StubFilesystem(rootHumansPath: humansPath)
         for (uuid, body) in files {
             fs.put(path: "\(humansPath)/\(uuid).md", bytes: Data(body.utf8))
