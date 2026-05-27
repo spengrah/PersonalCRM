@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/anarlog"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -53,6 +54,8 @@ const (
 	ingestRejectLinkageQueryFailed                = "LINKAGE_QUERY_FAILED"
 	ingestRejectParticipantResolveFailed          = "PARTICIPANT_RESOLVE_FAILED"
 	ingestRejectInteractionWriteFailed            = "INTERACTION_WRITE_FAILED"
+	ingestRejectTitleMatchFailed                  = "TITLE_MATCH_FAILED"
+	ingestRejectTitleDiscoveryUpsertFailed        = "TITLE_DISCOVERY_UPSERT_FAILED"
 )
 
 // ErrHostRevokedDuringBatch is returned by IngestBatch when the
@@ -263,6 +266,21 @@ type FollowUpApplier interface {
 	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (postCommit func(context.Context), err error)
 }
 
+// IngestTitleMatcher is the narrow surface the meeting_note.recorded
+// handler uses to disambiguate a single title-extracted name token to
+// a CRM contact. Concrete is *anarlog.TitleMatcher.
+type IngestTitleMatcher interface {
+	MatchTitleToken(ctx context.Context, token string) (*repository.ContactMatch, error)
+}
+
+// IngestTitleDiscoveryWriter is the narrow surface the meeting_note
+// handler uses to persist anarlog_title weak-candidate rows for tokens
+// that didn't resolve to an existing CRM contact. Concrete is
+// *anarlog.DiscoveryWriter.
+type IngestTitleDiscoveryWriter interface {
+	UpsertTitleCandidateTx(ctx context.Context, tx pgx.Tx, sessionUUID uuid.UUID, normalizedToken, displayToken string) error
+}
+
 // IngestService persists pre-validated event envelopes inside a single
 // transaction. All envelopes in a batch commit together or roll back
 // together — spec §3.5 "all-or-nothing on unexpected errors."
@@ -295,6 +313,8 @@ type IngestService struct {
 	contactRecorder  ContactRecorder
 	cadence          CadenceApplier
 	followUp         FollowUpApplier
+	titleMatcher     IngestTitleMatcher
+	discovery        IngestTitleDiscoveryWriter
 }
 
 // NewIngestService builds an IngestService. Per-kind dependencies may
@@ -309,10 +329,11 @@ type IngestService struct {
 // concrete repository so the race window between auth and commit is
 // closed.
 //
-// meetingNotes/calendar/interactions/identityLookup/contactSvc are the
-// meeting_note.* inline handler's dependency set. Passing nil here is
-// supported for callers that don't need the meeting_note path; the
-// handler returns PAYLOAD_INVARIANT for missing wiring.
+// meetingNotes/calendar/interactions/identityLookup/contactSvc/
+// titleMatcher/discovery are the meeting_note.* inline handler's
+// dependency set. Passing nil here is supported for callers that don't
+// need the meeting_note path; the handler returns PAYLOAD_INVARIANT for
+// missing wiring.
 func NewIngestService(
 	database *db.Database,
 	bus *events.Bus,
@@ -330,6 +351,8 @@ func NewIngestService(
 	contactRecorder ContactRecorder,
 	cadence CadenceApplier,
 	followUp FollowUpApplier,
+	titleMatcher IngestTitleMatcher,
+	discovery IngestTitleDiscoveryWriter,
 ) *IngestService {
 	return &IngestService{
 		database:         database,
@@ -348,6 +371,8 @@ func NewIngestService(
 		contactRecorder:  contactRecorder,
 		cadence:          cadence,
 		followUp:         followUp,
+		titleMatcher:     titleMatcher,
+		discovery:        discovery,
 	}
 }
 
@@ -1720,17 +1745,36 @@ func computeMeetingNoteInputHash(meetingAt time.Time, title *string, participant
 }
 
 // computeResolvedSetHash returns the lowercase-hex SHA-256 of a
-// stable canonicalization of the resolved contact-UUID set. Used to
-// detect when participant→contact resolution changes between events
-// for the same session (e.g., after a user imports a previously-
-// unmatched anarlog_humans candidate).
-func computeResolvedSetHash(contactIDs []uuid.UUID) (string, error) {
-	strs := make([]string, len(contactIDs))
-	for i, id := range contactIDs {
-		strs[i] = id.String()
+// stable canonicalization of the union of tag-resolved + title-matched
+// contact UUIDs. The union captures drift in EITHER resolution path:
+// participant→contact (existing) or title-token→contact (added with
+// the anarlog title-parsing surface) — a change in either bumps the
+// hash and forces carry-forward to fail so the interaction-diff loop
+// can reconcile the title-derived `:title:` interactions.
+//
+// Note: when titleMatchedIDs is empty (no title or no title matches),
+// the union reduces to taggedIDs alone and the hash equals the
+// pre-title recipe — legacy meeting_note rows with empty titles or
+// no title matches keep their carry-forward semantics unchanged.
+func computeResolvedSetHash(taggedIDs []uuid.UUID, titleMatchedIDs []uuid.UUID) (string, error) {
+	union := make([]string, 0, len(taggedIDs)+len(titleMatchedIDs))
+	seen := make(map[uuid.UUID]struct{}, len(taggedIDs)+len(titleMatchedIDs))
+	for _, id := range taggedIDs {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		union = append(union, id.String())
 	}
-	sort.Strings(strs)
-	raw, err := json.Marshal(strs)
+	for _, id := range titleMatchedIDs {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		union = append(union, id.String())
+	}
+	sort.Strings(union)
+	raw, err := json.Marshal(union)
 	if err != nil {
 		return "", fmt.Errorf("marshal resolved set: %w", err)
 	}
@@ -1749,6 +1793,18 @@ func computeResolvedSetHash(contactIDs []uuid.UUID) (string, error) {
 type resolvedTag struct {
 	AnarlogID string
 	ContactID uuid.UUID
+}
+
+// resolvedTitle is a title-extracted name token that fuzzy-matched a
+// single CRM contact (high-confidence per the collision-gap rule).
+// Token preserves original casing for display; NormalizedToken is the
+// lowercased form used as the dedup + grouping key. The handler
+// deduplicates against resolvedTagged so a tagged human who also
+// appears in the title doesn't produce a second interaction.
+type resolvedTitle struct {
+	Token           string
+	NormalizedToken string
+	ContactID       uuid.UUID
 }
 
 // desiredInteraction is a single (contact_id, source_ref) pair the
@@ -1781,7 +1837,8 @@ func (s *IngestService) handleMeetingNoteRecorded(
 	authenticatedHostID uuid.UUID,
 ) (*NeedsAttentionItem, []func(context.Context), *IngestPerEventRejection) {
 	if s.meetingNotes == nil || s.calendar == nil || s.interactions == nil ||
-		s.identityLookup == nil || s.contactSvc == nil {
+		s.identityLookup == nil || s.contactSvc == nil ||
+		s.titleMatcher == nil || s.discovery == nil {
 		return nil, nil, &IngestPerEventRejection{
 			Code:    ingestRejectPayloadInvariant,
 			Message: "ingest service was not configured for meeting_note processing",
@@ -1863,9 +1920,55 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		resolvedTagged = append(resolvedTagged, resolvedTag{AnarlogID: pid, ContactID: *contactID})
 	}
 
-	// 4. Compute hashes. Stable order: input hash uses sorted
-	//    participant_ids; resolved-set hash uses sorted resolved
-	//    contact_ids.
+	// 4. Extract + match title tokens. Runs UNCONDITIONALLY (i.e., not
+	//    gated on carryForward, which doesn't exist yet at this point)
+	//    because the title-matched contact_ids feed into the
+	//    resolved_set_hash that DETERMINES carryForward. titleMatched
+	//    is deduplicated against resolvedTagged so a tagged human who
+	//    also appears in the title produces only one interaction.
+	titleStr := ""
+	if p.Title != nil {
+		titleStr = *p.Title
+	}
+	titleTokens := anarlog.ExtractNameTokens(titleStr)
+	titleMatched := make([]resolvedTitle, 0, len(titleTokens))
+	titleUnmatched := make([]string, 0, len(titleTokens))
+	for _, token := range titleTokens {
+		match, mErr := s.titleMatcher.MatchTitleToken(ctx, token)
+		if mErr != nil {
+			return nil, nil, &IngestPerEventRejection{
+				Code:    ingestRejectTitleMatchFailed,
+				Message: fmt.Sprintf("match title token %q: %s", token, mErr.Error()),
+			}
+		}
+		if match == nil {
+			titleUnmatched = append(titleUnmatched, token)
+			continue
+		}
+		// Dedup against resolvedTagged so the same contact doesn't get
+		// two interactions (the tagged-anchor form is canonical; the
+		// title-derived form is redundant for that contact).
+		alreadyTagged := false
+		for _, t := range resolvedTagged {
+			if t.ContactID == match.Contact.ID {
+				alreadyTagged = true
+				break
+			}
+		}
+		if alreadyTagged {
+			continue
+		}
+		titleMatched = append(titleMatched, resolvedTitle{
+			Token:           token,
+			NormalizedToken: strings.ToLower(token),
+			ContactID:       match.Contact.ID,
+		})
+	}
+
+	// 5. Compute hashes. Stable order: input hash uses sorted
+	//    participant_ids; resolved-set hash uses sorted UNION of
+	//    tag-resolved + title-matched contact_ids so drift in either
+	//    resolution path invalidates carry-forward.
 	newInputHash, err := computeMeetingNoteInputHash(p.MeetingAt, p.Title, p.ParticipantIDs)
 	if err != nil {
 		return nil, nil, &IngestPerEventRejection{
@@ -1877,7 +1980,11 @@ func (s *IngestService) handleMeetingNoteRecorded(
 	for i, r := range resolvedTagged {
 		resolvedContactIDs[i] = r.ContactID
 	}
-	newResolvedSetHash, err := computeResolvedSetHash(resolvedContactIDs)
+	titleMatchedIDs := make([]uuid.UUID, len(titleMatched))
+	for i, tm := range titleMatched {
+		titleMatchedIDs[i] = tm.ContactID
+	}
+	newResolvedSetHash, err := computeResolvedSetHash(resolvedContactIDs, titleMatchedIDs)
 	if err != nil {
 		return nil, nil, &IngestPerEventRejection{
 			Code:    ingestRejectMeetingNoteUpsertFailed,
@@ -1924,7 +2031,7 @@ func (s *IngestService) handleMeetingNoteRecorded(
 			}
 		}
 		candidatesLen = len(candidates)
-		finalLinkageState, finalLinkedKind, finalLinkedID, desired = decideLinkage(p, sessionID, candidates, resolvedTagged)
+		finalLinkageState, finalLinkedKind, finalLinkedID, desired = decideLinkage(p, sessionID, candidates, resolvedTagged, titleMatched)
 	}
 
 	// 6. Write meeting_note row. Branch on first-insert / revive /
@@ -2133,7 +2240,23 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		}
 	}
 
-	// 8. Single-point needs_attention computation. The caller appends
+	// 8. Discovery upsert for unmatched title tokens. Runs
+	//    UNCONDITIONALLY (not gated on !carryForward) so legacy
+	//    pre-title-parsing sessions whose hash happens to match under
+	//    both old and new recipes still backfill their discovery rows
+	//    on first re-ingest. The deterministic source_id (sha256 of
+	//    token||session_uuid) makes re-emit a cheap UPDATE refresh on
+	//    existing rows.
+	for _, token := range titleUnmatched {
+		if dErr := s.discovery.UpsertTitleCandidateTx(ctx, tx, sessionID, strings.ToLower(token), token); dErr != nil {
+			return nil, nil, &IngestPerEventRejection{
+				Code:    ingestRejectTitleDiscoveryUpsertFailed,
+				Message: fmt.Sprintf("upsert title candidate %q: %s", token, dErr.Error()),
+			}
+		}
+	}
+
+	// 9. Single-point needs_attention computation. The caller appends
 	//    this AFTER savepoint commit so a rollback path cannot leak an
 	//    item into the batch accumulator.
 	var needs *NeedsAttentionItem
@@ -2144,7 +2267,7 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		needs = &NeedsAttentionItem{SessionID: p.SourceID, Reason: NeedsAttentionReasonOrphan}
 	}
 
-	// 9. Structured log line for observability.
+	// 10. Structured log line for observability.
 	priorInputHash := ""
 	priorResolvedSetHash := ""
 	if prior != nil {
@@ -2171,6 +2294,9 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		Int("tagged_unresolved", len(p.ParticipantIDs)-len(resolvedTagged)).
 		Int("interactions_created", interactionsCreated).
 		Int("interactions_dropped", interactionsDropped).
+		Int("title_tokens_extracted", len(titleTokens)).
+		Int("title_tokens_matched", len(titleMatched)).
+		Int("title_tokens_unmatched", len(titleUnmatched)).
 		Bool("revive_path", revivePath).
 		Bool("carry_forward", carryForward).
 		Bool("input_hash_changed", priorInputHash != newInputHash).
@@ -2186,32 +2312,47 @@ func (s *IngestService) handleMeetingNoteRecorded(
 // interaction set.
 //
 //   - 0 candidates, no tagged humans → orphan_needs_review (no
-//     interactions).
-//   - 0 candidates, ≥1 resolved tagged human → linked_impromptu (one
-//     interaction per resolved contact).
+//     interactions). Title matches DO NOT promote a no-anchor orphan
+//     to augmented per spec invariant (tagged humans are the anchor).
+//   - 0 candidates, ≥1 resolved tagged human, 0 title-matched →
+//     linked_impromptu (one interaction per resolved contact).
+//   - 0 candidates, ≥1 resolved tagged human, ≥1 title-matched →
+//     orphan_title_augmented (tagged interactions PLUS one
+//     `:title:` interaction per title-matched contact).
 //   - 1 candidate → linked. A walk-in supplemental interaction is
 //     emitted for each resolved tagged contact NOT already in the
-//     event's matched_contact_ids.
-//   - 2+ candidates → conflict_pending. The current implementation
-//     never disambiguates; participant-signal scoring lands in a
-//     future revision.
+//     event's matched_contact_ids. Title matches DO NOT produce
+//     interactions in this state.
+//   - 2+ candidates → conflict_pending. Title matches DO NOT produce
+//     interactions in this state. Participant-signal scoring lands in
+//     a future revision.
 func decideLinkage(
 	p events.MeetingNoteRecordedPayload,
 	sessionID uuid.UUID,
 	candidates []repository.LinkageCandidate,
 	resolvedTagged []resolvedTag,
+	titleMatched []resolvedTitle,
 ) (state string, linkedKind *string, linkedID *uuid.UUID, desired []desiredInteraction) {
 	switch len(candidates) {
 	case 0:
 		if len(resolvedTagged) == 0 {
 			return repository.LinkageStateOrphanNeedsReview, nil, nil, nil
 		}
-		out := make([]desiredInteraction, 0, len(resolvedTagged))
+		out := make([]desiredInteraction, 0, len(resolvedTagged)+len(titleMatched))
 		for _, r := range resolvedTagged {
 			out = append(out, desiredInteraction{
 				ContactID: r.ContactID,
 				SourceRef: fmt.Sprintf("anarlog:%s:%s", sessionID.String(), r.ContactID.String()),
 			})
+		}
+		if len(titleMatched) > 0 {
+			for _, tm := range titleMatched {
+				out = append(out, desiredInteraction{
+					ContactID: tm.ContactID,
+					SourceRef: fmt.Sprintf("anarlog:%s:title:%s", sessionID.String(), tm.ContactID.String()),
+				})
+			}
+			return repository.LinkageStateOrphanTitleAugmented, nil, nil, out
 		}
 		return repository.LinkageStateLinkedImpromptu, nil, nil, out
 	case 1:

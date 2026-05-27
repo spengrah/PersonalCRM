@@ -14,6 +14,7 @@ import (
 const CountAllUnmatchedExternalContacts = `-- name: CountAllUnmatchedExternalContacts :one
 SELECT COUNT(*) FROM external_contact
 WHERE match_status = 'unmatched'
+  AND source != 'anarlog_title'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
 `
@@ -28,11 +29,15 @@ func (q *Queries) CountAllUnmatchedExternalContacts(ctx context.Context) (int64,
 const CountUnmatchedExternalContacts = `-- name: CountUnmatchedExternalContacts :one
 SELECT COUNT(*) FROM external_contact
 WHERE source = $1
+  AND source != 'anarlog_title'
   AND match_status = 'unmatched'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
 `
 
+// Per-source count; mirrors ListUnmatched's anarlog_title exclusion
+// so list+count cardinality stays consistent regardless of caller-
+// supplied source.
 func (q *Queries) CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error) {
 	row := q.db.QueryRow(ctx, CountUnmatchedExternalContacts, source)
 	var count int64
@@ -490,6 +495,7 @@ func (q *Queries) IgnoreExternalContact(ctx context.Context, id pgtype.UUID) err
 const ListAllUnmatchedExternalContacts = `-- name: ListAllUnmatchedExternalContacts :many
 SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
 WHERE match_status = 'unmatched'
+  AND source != 'anarlog_title'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
 ORDER BY source, display_name
@@ -764,6 +770,7 @@ func (q *Queries) ListKnownExternalContactIDsByHostAndSource(ctx context.Context
 const ListUnmatchedExternalContacts = `-- name: ListUnmatchedExternalContacts :many
 SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
 WHERE source = $1
+  AND source != 'anarlog_title'
   AND match_status = 'unmatched'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
@@ -777,6 +784,12 @@ type ListUnmatchedExternalContactsParams struct {
 	Offset int32  `json:"offset"`
 }
 
+// Per-source query; anarlog_title rows are intentionally NOT exposed
+// here — they live behind a dedicated grouped-by-token UI surface.
+// The `source != 'anarlog_title'` clause is defense-in-depth: if a
+// caller passes source='anarlog_title' (intentionally or via param
+// injection), this query returns empty rather than leaking weak
+// discovery rows into the per-source UI.
 func (q *Queries) ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error) {
 	rows, err := q.db.Query(ctx, ListUnmatchedExternalContacts, arg.Source, arg.Limit, arg.Offset)
 	if err != nil {

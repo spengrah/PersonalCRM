@@ -141,8 +141,15 @@ ORDER BY display_name
 LIMIT $3 OFFSET $4;
 
 -- name: ListUnmatchedExternalContacts :many
+-- Per-source query; anarlog_title rows are intentionally NOT exposed
+-- here — they live behind a dedicated grouped-by-token UI surface.
+-- The `source != 'anarlog_title'` clause is defense-in-depth: if a
+-- caller passes source='anarlog_title' (intentionally or via param
+-- injection), this query returns empty rather than leaking weak
+-- discovery rows into the per-source UI.
 SELECT * FROM external_contact
 WHERE source = $1
+  AND source != 'anarlog_title'
   AND match_status = 'unmatched'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
@@ -152,14 +159,19 @@ LIMIT $2 OFFSET $3;
 -- name: ListAllUnmatchedExternalContacts :many
 SELECT * FROM external_contact
 WHERE match_status = 'unmatched'
+  AND source != 'anarlog_title'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
 ORDER BY source, display_name
 LIMIT $1 OFFSET $2;
 
 -- name: CountUnmatchedExternalContacts :one
+-- Per-source count; mirrors ListUnmatched's anarlog_title exclusion
+-- so list+count cardinality stays consistent regardless of caller-
+-- supplied source.
 SELECT COUNT(*) FROM external_contact
 WHERE source = $1
+  AND source != 'anarlog_title'
   AND match_status = 'unmatched'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL;
@@ -167,6 +179,7 @@ WHERE source = $1
 -- name: CountAllUnmatchedExternalContacts :one
 SELECT COUNT(*) FROM external_contact
 WHERE match_status = 'unmatched'
+  AND source != 'anarlog_title'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL;
 

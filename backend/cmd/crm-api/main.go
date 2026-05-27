@@ -34,6 +34,7 @@ import (
 	"syscall"
 	"time"
 
+	"personal-crm/backend/internal/anarlog"
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
@@ -444,6 +445,13 @@ func run() int {
 	// contactService via the ContactInteractionRecorder interface for
 	// session-attributed interaction writes so cadence + follow-up
 	// fire correctly.
+	//
+	// anarlog title-extraction deps for the meeting_note.recorded inline
+	// handler: TitleMatcher disambiguates a single name token against
+	// the CRM contact table (trigram + collision-gap); DiscoveryWriter
+	// persists weak-candidate anarlog_title rows for unmatched tokens.
+	titleMatcher := anarlog.NewTitleMatcher(contactRepo)
+	titleDiscoveryWriter := anarlog.NewDiscoveryWriter(externalContactRepoForIngest)
 	ingestService := service.NewIngestService(
 		database,
 		eventBus,
@@ -461,6 +469,8 @@ func run() int {
 		contactService,
 		cadenceUpdater,
 		followUpManager,
+		titleMatcher,
+		titleDiscoveryWriter,
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
