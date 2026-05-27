@@ -431,6 +431,9 @@ type Querier interface {
 	// db.ErrNotFound as "no cursor committed yet" and surfaces an empty
 	// cursor + the host's current cursor_epoch.
 	GetMacHostSyncState(ctx context.Context, arg GetMacHostSyncStateParams) (*ExternalSyncState, error)
+	// Returns the live (non-soft-deleted) meeting_note row for a given anarlog
+	// session UUID. Used by the ingest path for dedup and re-sync detection.
+	GetMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error)
 	// Lookup by guid (primary external identifier). Used by reply-target
 	// resolution.
 	GetMessagesMessage(ctx context.Context, guid string) (*MessagesMessage, error)
@@ -531,6 +534,12 @@ type Querier interface {
 	// winner's cursor. backfill_complete is stored as a JSONB key on the
 	// metadata column — see the cursor wire contract in the handler.
 	InsertMacHostSyncCursor(ctx context.Context, arg InsertMacHostSyncCursorParams) (*InsertMacHostSyncCursorRow, error)
+	// Meeting Note queries
+	// Spec: .ai/spec/mac-daemon-phase-2-anarlog-matching.md
+	// Inserts a meeting_note staging row. linkage_state must be supplied by the
+	// caller (the ingest tx computes it from the linkage detection algorithm);
+	// no DB-level default exists.
+	InsertMeetingNote(ctx context.Context, arg InsertMeetingNoteParams) (*MeetingNote, error)
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all OAuth credentials

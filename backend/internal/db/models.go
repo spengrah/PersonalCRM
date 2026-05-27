@@ -292,6 +292,21 @@ type MacHostPairingToken struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
+type MeetingNote struct {
+	ID               pgtype.UUID        `json:"id"`
+	AnarlogSessionID pgtype.UUID        `json:"anarlog_session_id"`
+	Title            pgtype.Text        `json:"title"`
+	Summary          pgtype.Text        `json:"summary"`
+	Memo             pgtype.Text        `json:"memo"`
+	Participants     []byte             `json:"participants"`
+	MacHostID        pgtype.UUID        `json:"mac_host_id"`
+	LinkedKind       pgtype.Text        `json:"linked_kind"`
+	LinkedID         pgtype.UUID        `json:"linked_id"`
+	LinkageState     string             `json:"linkage_state"`
+	DeletedAt        pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
 type MessagesMessage struct {
 	ID                pgtype.UUID        `json:"id"`
 	Guid              string             `json:"guid"`

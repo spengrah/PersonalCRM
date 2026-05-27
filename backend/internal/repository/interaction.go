@@ -14,11 +14,12 @@ import (
 
 // Interaction source constants
 const (
-	InteractionSourceManual   = "manual"
-	InteractionSourceGCal     = "gcal"
-	InteractionSourceTodoist  = "todoist"
-	InteractionSourceTelegram = "telegram"
-	InteractionSourceMessages = "messages"
+	InteractionSourceManual          = "manual"
+	InteractionSourceGCal            = "gcal"
+	InteractionSourceTodoist         = "todoist"
+	InteractionSourceTelegram        = "telegram"
+	InteractionSourceMessages        = "messages"
+	InteractionSourceAnarlogSessions = "anarlog_sessions"
 )
 
 // Interaction direction constants
