@@ -27,6 +27,13 @@ public struct StatusReport: Equatable {
     /// Nil when state.sources["icloud_contacts"] is absent.
     public let icloudContacts: ICloudContactsSourceStatus?
 
+    /// Per-source status block for the anarlog_humans source.
+    /// Nil when the source is not configured AND state has no entry.
+    public let anarlogHumans: AnarlogSourceStatus?
+
+    /// Per-source status block for the anarlog_sessions source.
+    public let anarlogSessions: AnarlogSourceStatus?
+
     public init(
         installed: Bool,
         registered: Bool,
@@ -37,7 +44,9 @@ public struct StatusReport: Equatable {
         lastHeartbeatAt: Date?,
         stateSchemaVersion: Int?,
         messages: MessagesSourceStatus? = nil,
-        icloudContacts: ICloudContactsSourceStatus? = nil
+        icloudContacts: ICloudContactsSourceStatus? = nil,
+        anarlogHumans: AnarlogSourceStatus? = nil,
+        anarlogSessions: AnarlogSourceStatus? = nil
     ) {
         self.installed = installed
         self.registered = registered
@@ -49,6 +58,70 @@ public struct StatusReport: Equatable {
         self.stateSchemaVersion = stateSchemaVersion
         self.messages = messages
         self.icloudContacts = icloudContacts
+        self.anarlogHumans = anarlogHumans
+        self.anarlogSessions = anarlogSessions
+    }
+}
+
+/// Per-source status block for the anarlog reader plugins. Shared
+/// shape between humans + sessions — the only difference is the
+/// schema_version label.
+public struct AnarlogSourceStatus: Equatable {
+    public let enabled: Bool
+    public let lastScheduledAt: Date?
+    public let lastPushedAt: Date?
+    /// Decoded count of cursor entries (live + floor-skipped). 0 for
+    /// empty cursor; nil when the cursor JSON failed to decode.
+    public let cursorUUIDCount: Int?
+    /// Recovery flag — lastError starts with `recovery_requested:`.
+    public let recoveryRequested: Bool
+    public let lastError: String?
+    public let schemaVersion: String
+
+    public init(
+        enabled: Bool,
+        lastScheduledAt: Date?,
+        lastPushedAt: Date?,
+        cursorUUIDCount: Int?,
+        recoveryRequested: Bool,
+        lastError: String?,
+        schemaVersion: String
+    ) {
+        self.enabled = enabled
+        self.lastScheduledAt = lastScheduledAt
+        self.lastPushedAt = lastPushedAt
+        self.cursorUUIDCount = cursorUUIDCount
+        self.recoveryRequested = recoveryRequested
+        self.lastError = lastError
+        self.schemaVersion = schemaVersion
+    }
+
+    /// Decode a humans cursor string to a UUID count. Returns nil on
+    /// malformed input so Status can render `(decode_error)` instead
+    /// of silently zero.
+    public static func humansCursorUUIDCount(_ cursor: String) -> Int? {
+        if cursor.isEmpty { return 0 }
+        // Inline decode — Status stays free of any anarlog-target
+        // dependency. The shape is the literal `{uuid: {...}}` map
+        // per spec line 498; we only need the key count, so we use
+        // JSONSerialization without typed decoding.
+        guard let data = cursor.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return parsed.count
+    }
+
+    /// Same shape as humansCursorUUIDCount but for the sessions cursor.
+    /// Cursor entries with metaHash="floor_skip" are included in the
+    /// count — they're real entries, just sentinel ones.
+    public static func sessionsCursorUUIDCount(_ cursor: String) -> Int? {
+        if cursor.isEmpty { return 0 }
+        guard let data = cursor.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return parsed.count
     }
 }
 
@@ -191,6 +264,7 @@ public struct Status {
         var configPiURL: String?
         var hostID: UUID?
         var icloudContainerCount = 0
+        var anarlogConfig: AnarlogConfig?
         if let data = try? deps.filesystem.read(from: deps.paths.configFilePath) {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
@@ -199,6 +273,7 @@ public struct Status {
                 configPiURL = cfg.piURL.absoluteString
                 hostID = cfg.hostID
                 icloudContainerCount = cfg.sources?.icloudContacts?.containers.count ?? 0
+                anarlogConfig = cfg.sources?.anarlog
             }
         }
 
@@ -206,6 +281,8 @@ public struct Status {
         var schemaVersion: Int?
         var messagesStatus: MessagesSourceStatus?
         var icloudStatus: ICloudContactsSourceStatus?
+        var anarlogHumansStatus: AnarlogSourceStatus?
+        var anarlogSessionsStatus: AnarlogSourceStatus?
         if let data = try? deps.filesystem.read(from: deps.paths.stateFilePath) {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
@@ -232,6 +309,16 @@ public struct Status {
                         recoveryRequested: false,
                         lastError: nil)
                 }
+                anarlogHumansStatus = makeAnarlogStatus(
+                    state: state.sources["anarlog_humans"],
+                    enabled: anarlogConfig?.humansEnabled ?? false,
+                    cursorDecoder: AnarlogSourceStatus.humansCursorUUIDCount,
+                    schemaLabel: "anarlog_humans_v1")
+                anarlogSessionsStatus = makeAnarlogStatus(
+                    state: state.sources["anarlog_sessions"],
+                    enabled: anarlogConfig?.sessionsEnabled ?? false,
+                    cursorDecoder: AnarlogSourceStatus.sessionsCursorUUIDCount,
+                    schemaLabel: "anarlog_sessions_v1")
             }
         }
 
@@ -245,6 +332,32 @@ public struct Status {
             lastHeartbeatAt: lastHeartbeat,
             stateSchemaVersion: schemaVersion,
             messages: messagesStatus,
-            icloudContacts: icloudStatus)
+            icloudContacts: icloudStatus,
+            anarlogHumans: anarlogHumansStatus,
+            anarlogSessions: anarlogSessionsStatus)
+    }
+
+    /// Build an AnarlogSourceStatus from a SourceState slot. Returns
+    /// nil only when BOTH the source slot AND the enabled flag are
+    /// absent — operators see a status block for anarlog as soon as
+    /// they enable it, even before the first tick lands.
+    private func makeAnarlogStatus(
+        state: SourceState?,
+        enabled: Bool,
+        cursorDecoder: (String) -> Int?,
+        schemaLabel: String
+    ) -> AnarlogSourceStatus? {
+        if state == nil && !enabled {
+            return nil
+        }
+        let lastError = state?.lastError
+        return AnarlogSourceStatus(
+            enabled: enabled,
+            lastScheduledAt: state?.lastScheduledAt,
+            lastPushedAt: state?.lastPushedAt,
+            cursorUUIDCount: state.flatMap { cursorDecoder($0.cursor) },
+            recoveryRequested: (lastError ?? "").hasPrefix("recovery_requested:"),
+            lastError: lastError,
+            schemaVersion: schemaLabel)
     }
 }

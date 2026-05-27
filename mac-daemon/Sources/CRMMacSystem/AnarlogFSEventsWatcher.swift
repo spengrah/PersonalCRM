@@ -114,13 +114,17 @@ public final class AnarlogFSEventsWatcher: AnarlogFSEventsWatching, @unchecked S
             throw AnarlogFSEventsWatcherError.streamCreateFailed
         }
 
-        // Schedule on the main run loop. The daemon's signal-handling
-        // sources (SIGTERM / SIGINT) already block the main thread, so
-        // FSEvents wake-ups are processed there too. An alternative
-        // would be a dedicated dispatch queue; main loop is simpler
-        // and matches the daemon's single-threaded shutdown model.
-        FSEventStreamScheduleWithRunLoop(
-            s, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        // Schedule on a dedicated background dispatch queue rather than
+        // the run loop. `FSEventStreamScheduleWithRunLoop` is
+        // deprecated since macOS 13; `FSEventStreamSetDispatchQueue`
+        // is the modern replacement and lets us avoid blocking the
+        // main thread. We use a serial queue so callbacks arrive
+        // in-order (FSEvents itself coalesces within the latency
+        // window, so one queue per stream is sufficient).
+        let queue = DispatchQueue(
+            label: "xyz.spengrah.crm-mac.anarlog-fsevents",
+            qos: .utility)
+        FSEventStreamSetDispatchQueue(s, queue)
         if !FSEventStreamStart(s) {
             FSEventStreamInvalidate(s)
             FSEventStreamRelease(s)

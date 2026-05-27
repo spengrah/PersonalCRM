@@ -78,5 +78,32 @@ struct StatusCommand: ParsableCommand {
         } else {
             print("  icloud_contacts: (no containers configured; run `crm-mac configure containers`)")
         }
+
+        renderAnarlog("anarlog_humans", report.anarlogHumans)
+        renderAnarlog("anarlog_sessions", report.anarlogSessions)
+    }
+
+    private func renderAnarlog(_ name: String, _ status: AnarlogSourceStatus?) {
+        guard let s = status else {
+            print("  \(name): (no anarlog config; run `crm-mac configure anarlog --help`)")
+            return
+        }
+        print("  \(name):")
+        print("    enabled:            \(s.enabled)")
+        let formatter = ISO8601DateFormatter()
+        print("    last_scheduled_at:  \(s.lastScheduledAt.map { formatter.string(from: $0) } ?? "never")")
+        print("    last_pushed_at:     \(s.lastPushedAt.map { formatter.string(from: $0) } ?? "never")")
+        let countRendering: String
+        switch s.cursorUUIDCount {
+        case .none:    countRendering = "(decode_error)"
+        case .some(let n): countRendering = String(n)
+        }
+        print("    cursor_uuid_count:  \(countRendering)")
+        print("    schema_version:     \(s.schemaVersion)")
+        if s.recoveryRequested {
+            print("    recovery_requested: YES (\(s.lastError ?? "unknown reason"))")
+        } else if let err = s.lastError {
+            print("    last_error:         \(err)")
+        }
     }
 }

@@ -30,21 +30,24 @@
 // `NonInteractiveAllowlistWriter`.
 import Foundation
 import ArgumentParser
+import CRMMacAnarlogSource
 import CRMMacCore
 import CRMMacIcloudContactsSource
 import CRMMacLifecycle
+import CRMMacPiClient
 
 struct ConfigureCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "configure",
         abstract: "Interactive configuration (per-source subcommands).",
-        subcommands: [ContainersSubcommand.self])
+        subcommands: [ContainersSubcommand.self, AnarlogSubcommand.self])
 
     mutating func run() throws {
         print("crm-mac configure: pass a subcommand.")
         print("  containers   Manage the iCloud Contacts allowlist.")
+        print("  anarlog      Configure the Anarlog notes path + enable flags.")
         print("")
-        print("Run `crm-mac configure containers --help` for details.")
+        print("Run `crm-mac configure <subcommand> --help` for details.")
     }
 }
 
@@ -274,4 +277,204 @@ private func requireDaemonNotRunning(paths: LifecyclePaths) throws {
     FileHandle.standardError.write(Data(
         "crm-mac daemon appears to be running (pidfile at \(pidPath)). Stop it first: `crm-mac stop`.\n".utf8))
     throw ExitCode(3)
+}
+
+// MARK: - Anarlog subcommand
+
+/// `crm-mac configure anarlog [--path <abs>] [--enable …] [--disable …]
+/// [--reset-cursor …]` — manage the Anarlog notes path + per-source
+/// enable flags. The daemon must be stopped for any mutation.
+///
+/// --enable / --disable / --reset-cursor accept one of:
+///   humans | sessions | both
+struct AnarlogSubcommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "anarlog",
+        abstract: "Configure the Anarlog notes path and enable flags.")
+
+    enum Target: String, ExpressibleByArgument {
+        case humans
+        case sessions
+        case both
+    }
+
+    @Option(name: .long, help: "Absolute path to the Anarlog notes root (containing humans/ and sessions/).")
+    var path: String?
+
+    @Option(name: .long, help: "Enable a source: humans | sessions | both.")
+    var enable: Target?
+
+    @Option(name: .long, help: "Disable a source: humans | sessions | both.")
+    var disable: Target?
+
+    @Option(name: .long, help: "Reset the Pi-side cursor for a source: humans | sessions | both. Daemon must be stopped.")
+    var resetCursor: Target?
+
+    mutating func run() throws {
+        let ctx = ProductionContext()
+        try requireDaemonNotRunning(paths: ctx.paths)
+
+        let configStore = ConfigStore(
+            fileURL: URL(fileURLWithPath: ctx.paths.configFilePath))
+
+        if resetCursor != nil {
+            // Reset is a separate code path — it talks to the Pi to
+            // commit an empty cursor; doesn't touch config.json.
+            try runResetCursor(target: resetCursor!, ctx: ctx)
+            return
+        }
+
+        var current: AnarlogConfig
+        do {
+            if let existing = try configStore.loadAnarlogConfig() {
+                current = existing
+            } else if let path {
+                guard isAbsolutePath(path) else {
+                    FileHandle.standardError.write(Data(
+                        "anarlog path must be absolute, got: \(path)\n".utf8))
+                    throw ExitCode(2)
+                }
+                current = AnarlogConfig(rootPath: path)
+            } else {
+                FileHandle.standardError.write(Data(
+                    "no anarlog config yet — pass --path <abs-path> on first run.\n".utf8))
+                throw ExitCode(2)
+            }
+        } catch {
+            FileHandle.standardError.write(Data(
+                "failed to load config.json: \(error)\n".utf8))
+            throw ExitCode(2)
+        }
+
+        if let path {
+            guard isAbsolutePath(path) else {
+                FileHandle.standardError.write(Data(
+                    "anarlog path must be absolute, got: \(path)\n".utf8))
+                throw ExitCode(2)
+            }
+            current.rootPath = path
+        }
+        if let enable {
+            switch enable {
+            case .humans: current.humansEnabled = true
+            case .sessions: current.sessionsEnabled = true
+            case .both:
+                current.humansEnabled = true
+                current.sessionsEnabled = true
+            }
+        }
+        if let disable {
+            switch disable {
+            case .humans: current.humansEnabled = false
+            case .sessions: current.sessionsEnabled = false
+            case .both:
+                current.humansEnabled = false
+                current.sessionsEnabled = false
+            }
+        }
+        do {
+            try configStore.saveAnarlogConfig(current)
+        } catch {
+            FileHandle.standardError.write(Data(
+                "failed to write config.json: \(error)\n".utf8))
+            throw ExitCode(1)
+        }
+        print("anarlog config updated.")
+        print("  root_path:        \(current.rootPath)")
+        print("  humans_enabled:   \(current.humansEnabled)")
+        print("  sessions_enabled: \(current.sessionsEnabled)")
+        print("")
+        print("Start the daemon for changes to take effect: `crm-mac start`.")
+    }
+
+    /// Anarlog --reset-cursor handshake: load auth from keychain +
+    /// config, GET the current cursor (for baseCursor + cursorEpoch),
+    /// POST commitCursor with cursor="". On 409: refetch + retry once.
+    private func runResetCursor(target: Target, ctx: ProductionContext) throws {
+        let configStore = ConfigStore(
+            fileURL: URL(fileURLWithPath: ctx.paths.configFilePath))
+        let cfg: DaemonConfig
+        do {
+            cfg = try configStore.load()
+        } catch {
+            FileHandle.standardError.write(Data(
+                "failed to load config.json: \(error)\n".utf8))
+            throw ExitCode(1)
+        }
+        let apiKey: String
+        do {
+            apiKey = try ctx.keychain.readAPIKey()
+        } catch {
+            FileHandle.standardError.write(Data(
+                "failed to read API key from Keychain: \(error)\n".utf8))
+            throw ExitCode(1)
+        }
+        let auth = PiAuth(hostID: cfg.hostID, apiKey: apiKey)
+        let client = PiClient(baseURL: cfg.piURL, logger: ctx.logger)
+
+        let sources: [String]
+        switch target {
+        case .humans: sources = ["anarlog_humans"]
+        case .sessions: sources = ["anarlog_sessions"]
+        case .both: sources = ["anarlog_humans", "anarlog_sessions"]
+        }
+
+        let sem = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var thrown: Error?
+        Task {
+            do {
+                for source in sources {
+                    try await Self.resetOne(client: client, auth: auth, source: source)
+                }
+            } catch {
+                thrown = error
+            }
+            sem.signal()
+        }
+        sem.wait()
+        if let thrown {
+            FileHandle.standardError.write(Data(
+                "cursor reset failed: \(thrown)\n".utf8))
+            throw ExitCode(1)
+        }
+        for source in sources {
+            print("\(source): cursor reset.")
+        }
+    }
+
+    private static func resetOne(
+        client: PiClient,
+        auth: PiAuth,
+        source: String
+    ) async throws {
+        let initial = try await client.getCursor(auth: auth, source: source)
+        do {
+            try await client.commitCursor(
+                auth: auth,
+                source: source,
+                cursor: "",
+                baseCursor: initial.cursor,
+                cursorEpoch: initial.cursorEpoch,
+                backfillComplete: false)
+        } catch PiClientError.cursorConflict(_, let conflict) {
+            // 409 — refetch + retry once. Spec line 514 documents the
+            // retry contract.
+            let baseCursor = conflict.currentCursor ?? initial.cursor
+            let epoch = conflict.currentEpoch ?? initial.cursorEpoch
+            try await client.commitCursor(
+                auth: auth,
+                source: source,
+                cursor: "",
+                baseCursor: baseCursor,
+                cursorEpoch: epoch,
+                backfillComplete: false)
+        }
+    }
+
+    private func isAbsolutePath(_ s: String) -> Bool {
+        // Reject tildes too — operators should expand themselves; the
+        // daemon expands when reading config, but the persisted path
+        // should be the canonical absolute form.
+        s.hasPrefix("/")
+    }
 }
