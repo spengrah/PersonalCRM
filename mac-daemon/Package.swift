@@ -62,6 +62,7 @@ let package = Package(
                 "CRMMacLifecycle",
                 "CRMMacMessagesSource",
                 "CRMMacIcloudContactsSource",
+                "CRMMacAnarlogSource",
                 "CRMMacSystem",
             ],
             // Info.plist is embedded into the binary via linker
@@ -107,8 +108,21 @@ let package = Package(
                 "CRMMacPiClient",
             ]),
         .target(
+            name: "CRMMacAnarlogSource",
+            dependencies: [
+                "CRMMacCore",
+                "CRMMacPiClient",
+            ]),
+        .target(
             name: "CRMMacSystem",
-            dependencies: ["CRMMacCore", "CRMMacLifecycle"]),
+            dependencies: ["CRMMacCore", "CRMMacLifecycle"],
+            // FSEvents lives in CoreServices. Only the anarlog
+            // sessions watcher uses it; isolating the framework link
+            // here keeps the rest of the daemon Foundation-only.
+            linkerSettings: [
+                .linkedFramework("CoreServices",
+                                 .when(platforms: [.macOS])),
+            ]),
         .testTarget(name: "CRMMacCoreTests",
                     dependencies: ["CRMMacCore"]),
         .testTarget(name: "CRMMacPiClientTests",
@@ -127,6 +141,9 @@ let package = Package(
                     resources: [.copy("Fixtures")]),
         .testTarget(name: "CRMMacIcloudContactsSourceTests",
                     dependencies: ["CRMMacIcloudContactsSource", "CRMMacPiClient"],
+                    resources: [.copy("Fixtures")]),
+        .testTarget(name: "CRMMacAnarlogSourceTests",
+                    dependencies: ["CRMMacAnarlogSource", "CRMMacPiClient"],
                     resources: [.copy("Fixtures")]),
     ]
 )
