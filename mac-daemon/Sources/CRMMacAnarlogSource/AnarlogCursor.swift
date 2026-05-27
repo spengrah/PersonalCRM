@@ -6,11 +6,11 @@
 // `<uuid>@deleted@<hash>` source_ids without a Pi round-trip on
 // every delete.
 //
-// Spec extensions / owned deviations (documented in the plan):
+// Spec extensions / owned deviations:
 //   - humans: spec is `{content_hash, mtime}`; we add `payload_hash`.
 //   - sessions: spec is `{meta_mtime, meta_hash, summary_hash,
-//     memo_hash}`. We drop `meta_mtime` (per JC2 — mtime never drives
-//     skip decisions) and add `payload_hash`.
+//     memo_hash}`. We drop `meta_mtime` (mtime never drives skip
+//     decisions in this implementation) and add `payload_hash`.
 //
 // The cursor IS the literal `{uuid → entry}` map at the JSON root.
 // No `{version, ...}` wrapper. Future schema bumps will be handled
@@ -18,7 +18,7 @@
 //
 // Decoding: `decodeOrNil` returns nil on empty string OR malformed
 // JSON OR per-entry decode failure. The nil return is what routes
-// the tick into the bootstrap-via-known-ids path per D4. Returning
+// the tick into the bootstrap-via-known-ids path. Returning
 // an empty `[:]` would be wrong — it would signal "I have a cursor;
 // it's just empty" and route to the .delta path, which would emit
 // tombstones for everything the Pi has on file.
@@ -64,7 +64,7 @@ public enum AnarlogHumansCursorCodec {
     /// Decode a cursor string into the `{uuid → entry}` map.
     /// Returns nil for empty string, malformed JSON, or any per-entry
     /// decode failure (strict). The nil return is what routes the
-    /// tick into bootstrap-via-known-ids per D4.
+    /// tick into bootstrap-via-known-ids.
     public static func decodeOrNil(_ s: String) -> [String: AnarlogHumansCursorEntry]? {
         if s.isEmpty { return nil }
         guard let data = s.data(using: .utf8) else { return nil }
@@ -77,8 +77,8 @@ public enum AnarlogHumansCursorCodec {
 
 public struct AnarlogSessionsCursorEntry: Codable, Equatable, Sendable {
     /// SHA-256 of `_meta.json` bytes per spec line 196. The literal
-    /// `"floor_skip"` sentinel marks pre-backfill-floor sessions per
-    /// JC6 — those never emit an event.
+    /// `"floor_skip"` sentinel marks pre-backfill-floor sessions —
+    /// those never emit an event.
     public let metaHash: String
     /// SHA-256 of `_summary.md` bytes; nil when the file is absent.
     public let summaryHash: String?
@@ -118,7 +118,8 @@ public struct AnarlogSessionsCursorEntry: Codable, Equatable, Sendable {
 
 public enum AnarlogSessionsCursorCodec {
     /// Sentinel value placed in `metaHash` to mark pre-floor sessions
-    /// per JC6. These cursor entries exist so the same session isn't
+    /// for sessions older than the backfill floor. These cursor
+    /// entries exist so the same session isn't
     /// re-evaluated every tick, but never produce events.
     public static let floorSkipMarker = "floor_skip"
 

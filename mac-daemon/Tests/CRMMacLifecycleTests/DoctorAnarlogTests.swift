@@ -101,6 +101,73 @@ final class DoctorAnarlogTests: XCTestCase {
         XCTAssertNil(r.results.first { $0.name == "anarlog:path_missing" })
     }
 
+    func testHumansCountReportsFileCount() async {
+        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
+        let humansPath = "\(path)/humans"
+        let r = await runDoctor(
+            anarlog: AnarlogConfig(rootPath: path, humansEnabled: true),
+            extraDirs: [path, humansPath],
+            extraFiles: [
+                "\(humansPath)/a.md",
+                "\(humansPath)/b.md",
+                "\(humansPath)/c.md",
+                "\(humansPath)/.DS_Store",
+            ])
+        let count = r.results.first { $0.name == "anarlog:humans_count" }
+        XCTAssertNotNil(count)
+        XCTAssertEqual(count?.status, .pass)
+        XCTAssertTrue(count?.details.contains("3 human") ?? false,
+                      "expected 3 .md files counted; got: \(count?.details ?? "nil")")
+    }
+
+    func testSessionsCountReportsUUIDDirCount() async {
+        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
+        let sessionsPath = "\(path)/sessions"
+        let uuidShaped1 = "11111111-1111-1111-1111-111111111111"
+        let uuidShaped2 = "22222222-2222-2222-2222-222222222222"
+        let r = await runDoctor(
+            anarlog: AnarlogConfig(rootPath: path, sessionsEnabled: true),
+            extraDirs: [
+                path, sessionsPath,
+                "\(sessionsPath)/\(uuidShaped1)",
+                "\(sessionsPath)/\(uuidShaped2)",
+                "\(sessionsPath)/chats",
+            ],
+            extraFiles: ["\(sessionsPath)/settings.json"])
+        let count = r.results.first { $0.name == "anarlog:sessions_count" }
+        XCTAssertNotNil(count)
+        XCTAssertTrue(count?.details.contains("2 session") ?? false,
+                      "expected 2 UUID-shaped session dirs; got: \(count?.details ?? "nil")")
+    }
+
+    func testHumansFilesFoldersPermissionDeniedFails() async {
+        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
+        let humansPath = "\(path)/humans"
+        let r = await runDoctor(
+            anarlog: AnarlogConfig(rootPath: path, humansEnabled: true),
+            extraDirs: [path, humansPath],
+            permissionDeniedDirs: [humansPath])
+        let perm = r.results.first { $0.name == "anarlog:files_folders_permission_denied" }
+        XCTAssertNotNil(perm)
+        XCTAssertEqual(perm?.status, .fail)
+        // Count check should NOT fire when the listing was rejected
+        // — we either get the permission_denied row OR the count row,
+        // not both. (Same path, same probe.)
+        XCTAssertNil(r.results.first { $0.name == "anarlog:humans_count" })
+    }
+
+    func testSessionsFilesFoldersPermissionDeniedFails() async {
+        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
+        let sessionsPath = "\(path)/sessions"
+        let r = await runDoctor(
+            anarlog: AnarlogConfig(rootPath: path, sessionsEnabled: true),
+            extraDirs: [path, sessionsPath],
+            permissionDeniedDirs: [sessionsPath])
+        let perm = r.results.first { $0.name == "anarlog:files_folders_permission_denied" }
+        XCTAssertNotNil(perm)
+        XCTAssertEqual(perm?.status, .fail)
+    }
+
     // MARK: - test rig
 
     private func runDoctor(
@@ -108,6 +175,8 @@ final class DoctorAnarlogTests: XCTestCase {
         humansState: SourceState? = nil,
         sessionsState: SourceState? = nil,
         extraDirs: [String] = [],
+        extraFiles: [String] = [],
+        permissionDeniedDirs: Set<String> = [],
         clock: ClockAdapter? = nil
     ) async -> DoctorReport {
         let paths = TestPaths.make()
@@ -134,6 +203,10 @@ final class DoctorAnarlogTests: XCTestCase {
         for dir in extraDirs {
             try! fs.createDirectory(at: dir)
         }
+        for file in extraFiles {
+            try! fs.write(Data("x".utf8), to: file)
+        }
+        fs.permissionDeniedDirs = permissionDeniedDirs
         var script = FakeAgentService.Script()
         script.statusSequence = [.enabled]
         let deps = DoctorDependencies(

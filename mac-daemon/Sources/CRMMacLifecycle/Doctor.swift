@@ -180,11 +180,35 @@ public struct Doctor {
                     name: "anarlog:humans_subdir_missing",
                     status: .warn,
                     details: "humans/ subdirectory not found under \(rootPath)"))
-            } else if let humansSource {
-                results.append(lastTickResult(
-                    sourceName: "anarlog_humans.last_tick",
-                    state: humansSource,
-                    intervalSeconds: 5 * 60))
+            } else {
+                // Probe readability and count files via listDirectory.
+                // A FilesystemError.permissionDenied is the TCC
+                // Files & Folders rejection the plan (D20) calls out
+                // as `anarlog:files_folders_permission_denied`.
+                do {
+                    let entries = try deps.filesystem.listDirectory(at: humansPath)
+                    let mdCount = entries.filter { $0.hasSuffix(".md") }.count
+                    results.append(CheckResult(
+                        name: "anarlog:humans_count",
+                        status: .pass,
+                        details: "\(mdCount) human file(s) in \(humansPath)"))
+                } catch FilesystemError.permissionDenied {
+                    results.append(CheckResult(
+                        name: "anarlog:files_folders_permission_denied",
+                        status: .fail,
+                        details: "EACCES on \(humansPath); grant Files & Folders to crm-mac in System Settings"))
+                } catch {
+                    results.append(CheckResult(
+                        name: "anarlog:humans_count",
+                        status: .warn,
+                        details: "list humans/ failed: \(error)"))
+                }
+                if let humansSource {
+                    results.append(lastTickResult(
+                        sourceName: "anarlog_humans.last_tick",
+                        state: humansSource,
+                        intervalSeconds: 5 * 60))
+                }
             }
         }
         if cfg.sessionsEnabled {
@@ -194,11 +218,40 @@ public struct Doctor {
                     name: "anarlog:sessions_subdir_missing",
                     status: .warn,
                     details: "sessions/ subdirectory not found under \(rootPath)"))
-            } else if let sessionsSource {
-                results.append(lastTickResult(
-                    sourceName: "anarlog_sessions.last_tick",
-                    state: sessionsSource,
-                    intervalSeconds: 60 * 60))
+            } else {
+                do {
+                    let entries = try deps.filesystem.listDirectory(at: sessionsPath)
+                    // Sessions are UUID-named directories. We
+                    // best-effort count UUID-shaped entries rather
+                    // than every entry (Anarlog drops settings.json,
+                    // etc. in the root) — uses a 36-char + hyphen
+                    // shape probe rather than the full UUID
+                    // validator to keep Doctor free of any anarlog-
+                    // target dependency.
+                    let sessionCount = entries.filter {
+                        $0.count == 36 && $0.filter { $0 == "-" }.count == 4
+                    }.count
+                    results.append(CheckResult(
+                        name: "anarlog:sessions_count",
+                        status: .pass,
+                        details: "\(sessionCount) session(s) in \(sessionsPath)"))
+                } catch FilesystemError.permissionDenied {
+                    results.append(CheckResult(
+                        name: "anarlog:files_folders_permission_denied",
+                        status: .fail,
+                        details: "EACCES on \(sessionsPath); grant Files & Folders to crm-mac in System Settings"))
+                } catch {
+                    results.append(CheckResult(
+                        name: "anarlog:sessions_count",
+                        status: .warn,
+                        details: "list sessions/ failed: \(error)"))
+                }
+                if let sessionsSource {
+                    results.append(lastTickResult(
+                        sourceName: "anarlog_sessions.last_tick",
+                        state: sessionsSource,
+                        intervalSeconds: 60 * 60))
+                }
             }
         }
         return results

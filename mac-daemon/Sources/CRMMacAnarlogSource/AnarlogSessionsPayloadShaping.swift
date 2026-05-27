@@ -8,8 +8,8 @@
 //
 // title-vs-empty: when `meta.title` is empty AND that's all the meta
 // gives us, we still emit `title: ""` so the wire shape is
-// deterministic. PR 3's Pi-side normalization can decide whether
-// empty becomes nil.
+// deterministic. Pi-side normalization can decide whether empty
+// becomes nil.
 import Foundation
 import CRMMacCore
 
@@ -49,7 +49,7 @@ public enum AnarlogSessionsPayloadShaping {
     }
 
     /// Returns the pre-backfill-floor check used by the sessions
-    /// plugin to decide whether to emit a sentinel cursor entry (JC6).
+    /// plugin to decide whether to emit a sentinel cursor entry.
     public static func isPreBackfillFloor(_ meta: AnarlogSessionMeta) -> Bool {
         meta.createdAt < CRMMacAnarlogSource.sessionsBackfillFloor
     }

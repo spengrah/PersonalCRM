@@ -12,6 +12,10 @@ public final class InMemoryFilesystem: FilesystemAdapter, @unchecked Sendable {
     /// plist-write-failure branch of the installer.
     public var failWritesAtPath: String?
     public var failWritesReason: String = "injected failure"
+    /// If non-nil, `listDirectory(at:)` throws `.permissionDenied` for
+    /// the given path. Used to exercise Doctor's anarlog permission
+    /// branch.
+    public var permissionDeniedDirs: Set<String> = []
 
     public init() {}
 
@@ -127,6 +131,39 @@ public final class InMemoryFilesystem: FilesystemAdapter, @unchecked Sendable {
             throw FilesystemError.notFound(path)
         }
         return data
+    }
+
+    public func listDirectory(at path: String) throws -> [String] {
+        if permissionDeniedDirs.contains(path) {
+            throw FilesystemError.permissionDenied(path)
+        }
+        guard dirs.contains(path) else {
+            // Treat missing as empty rather than throwing — matches
+            // production FileManager behavior on a missing dir (which
+            // raises NSFileNoSuchFileError → we wrap to ioError, but
+            // the in-memory fake doesn't model the distinction since
+            // callers check exists() first).
+            return []
+        }
+        let prefix = path.hasSuffix("/") ? path : path + "/"
+        var children: Set<String> = []
+        for entry in entries.keys where entry.hasPrefix(prefix) {
+            let tail = String(entry.dropFirst(prefix.count))
+            if let slash = tail.firstIndex(of: "/") {
+                children.insert(String(tail[..<slash]))
+            } else {
+                children.insert(tail)
+            }
+        }
+        for d in dirs where d.hasPrefix(prefix) && d != path {
+            let tail = String(d.dropFirst(prefix.count))
+            if let slash = tail.firstIndex(of: "/") {
+                children.insert(String(tail[..<slash]))
+            } else {
+                children.insert(tail)
+            }
+        }
+        return Array(children).sorted()
     }
 
     public var allPaths: [String] { Array(entries.keys).sorted() }

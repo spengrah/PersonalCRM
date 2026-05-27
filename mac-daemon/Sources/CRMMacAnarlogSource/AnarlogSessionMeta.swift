@@ -16,7 +16,8 @@ import Foundation
 public struct AnarlogSessionParticipant: Equatable, Sendable {
     /// The participant's human UUID — maps Pi-side to a
     /// `external_identity` row of type `anarlog_human_id`. Sessions
-    /// reference humans via this id; the matching itself lives in PR 3+.
+    /// reference humans via this id; the matching itself lands
+    /// downstream of this PR.
     public let humanID: String
 
     public init(humanID: String) {

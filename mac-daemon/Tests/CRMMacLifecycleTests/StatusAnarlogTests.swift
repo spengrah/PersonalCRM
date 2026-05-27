@@ -116,6 +116,26 @@ final class StatusAnarlogTests: XCTestCase {
                        "publish_held_due_to_rejections (123 rejected)")
     }
 
+    func testBothSourcesDisabledStillShowsBlocks() throws {
+        let paths = TestPaths.make()
+        let fs = InMemoryFilesystem()
+        try seedConfigOnly(paths: paths, fs: fs, anarlog: AnarlogConfig(
+            rootPath: "/tmp/anarlog",
+            humansEnabled: false,
+            sessionsEnabled: false))
+        try seedStateOnly(paths: paths, fs: fs)
+        let status = makeStatus(paths: paths, fs: fs)
+        let report = status.run()
+        // Per TC-ST5: anarlog config present, both flags false →
+        // status blocks still appear with enabled: false so the
+        // operator sees the disabled state instead of wondering
+        // whether the row is missing.
+        let humans = try XCTUnwrap(report.anarlogHumans)
+        XCTAssertFalse(humans.enabled)
+        let sessions = try XCTUnwrap(report.anarlogSessions)
+        XCTAssertFalse(sessions.enabled)
+    }
+
     func testCursorCountStaticHelpers() {
         XCTAssertEqual(AnarlogSourceStatus.humansCursorUUIDCount(""), 0)
         XCTAssertEqual(AnarlogSourceStatus.humansCursorUUIDCount("{}"), 0)

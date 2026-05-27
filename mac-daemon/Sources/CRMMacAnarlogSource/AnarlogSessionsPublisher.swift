@@ -3,7 +3,7 @@
 //
 // Same shape as AnarlogHumansPublisher; per-source split exists so the
 // recovery-code set can differ (meeting_note has its own anticipated
-// PR 3 codes; humans uses external_contact_*).
+// meeting_note codes; humans uses external_contact_*).
 //
 // The two publishers are intentionally not merged into a single
 // generic — the in-flight set of recovery codes is small + each
@@ -85,10 +85,13 @@ public actor AnarlogSessionsPublisher {
         self.clock = clock
     }
 
-    /// Anticipated PR 3 codes for meeting_note hash mismatch. Listed
-    /// here ahead of Pi-side acceptance so the plugin already
-    /// recognizes them on the day the acceptance ships. Pi will never
-    /// emit these in PR 2 (all events get UNKNOWN_KIND rejected).
+    /// Codes the Pi-side handler is expected to surface on
+    /// meeting_note hash mismatch. Listed here ahead of Pi-side
+    /// acceptance so the plugin already recognizes them on the day
+    /// the acceptance ships. Until then the Pi rejects every
+    /// meeting_note event with UNKNOWN_KIND, which is NOT in this
+    /// set — the cursor stays held without triggering the recovery
+    /// flag.
     public static let recoveryCodes: Set<String> = [
         "MEETING_NOTE_HASH_MISMATCH",
         "MEETING_NOTE_DELETE_HASH_MISMATCH",

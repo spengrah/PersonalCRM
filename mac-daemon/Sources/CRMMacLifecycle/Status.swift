@@ -312,11 +312,13 @@ public struct Status {
                 anarlogHumansStatus = makeAnarlogStatus(
                     state: state.sources["anarlog_humans"],
                     enabled: anarlogConfig?.humansEnabled ?? false,
+                    configPresent: anarlogConfig != nil,
                     cursorDecoder: AnarlogSourceStatus.humansCursorUUIDCount,
                     schemaLabel: "anarlog_humans_v1")
                 anarlogSessionsStatus = makeAnarlogStatus(
                     state: state.sources["anarlog_sessions"],
                     enabled: anarlogConfig?.sessionsEnabled ?? false,
+                    configPresent: anarlogConfig != nil,
                     cursorDecoder: AnarlogSourceStatus.sessionsCursorUUIDCount,
                     schemaLabel: "anarlog_sessions_v1")
             }
@@ -338,16 +340,19 @@ public struct Status {
     }
 
     /// Build an AnarlogSourceStatus from a SourceState slot. Returns
-    /// nil only when BOTH the source slot AND the enabled flag are
-    /// absent — operators see a status block for anarlog as soon as
-    /// they enable it, even before the first tick lands.
+    /// nil only when the operator has NOT yet configured anarlog at
+    /// all (no `sources.anarlog` block in config.json AND no state
+    /// slot). Once configured, both rows are emitted — even when both
+    /// enable flags are false — so operators see the disabled state
+    /// explicitly rather than wondering whether the row is missing.
     private func makeAnarlogStatus(
         state: SourceState?,
         enabled: Bool,
+        configPresent: Bool,
         cursorDecoder: (String) -> Int?,
         schemaLabel: String
     ) -> AnarlogSourceStatus? {
-        if state == nil && !enabled {
+        if state == nil && !configPresent {
             return nil
         }
         let lastError = state?.lastError

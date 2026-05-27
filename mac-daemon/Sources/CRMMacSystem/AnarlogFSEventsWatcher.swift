@@ -17,10 +17,10 @@
 // re-walks the directory regardless, so distinguishing "which file"
 // is unnecessary. This keeps the watcher's surface minimal.
 //
-// Error handling: per round-2 P2#2, the closure is explicitly invoked
-// with no event details, and the wiring layer (DaemonCommand) wraps
-// the closure body in do/catch + warning log so a thrown error from
-// tick() doesn't silently disappear.
+// Error handling: the closure is invoked with no event details, and
+// the wiring layer (DaemonCommand) wraps the closure body in
+// do/catch + warning log so a thrown error from tick() doesn't
+// silently disappear.
 import Foundation
 import CoreServices
 import CRMMacCore

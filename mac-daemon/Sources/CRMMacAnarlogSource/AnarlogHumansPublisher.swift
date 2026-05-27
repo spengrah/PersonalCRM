@@ -89,9 +89,10 @@ public actor AnarlogHumansPublisher {
     }
 
     /// Per-event rejection codes that signal a daemon-Pi divergence.
-    /// Active once PR 3 ships acceptance for source=anarlog_humans;
-    /// harmless if the Pi never returns them (the plugin's commit
-    /// gate uses rejected.isEmpty so any rejection holds the cursor).
+    /// Active once the Pi-side handler ships acceptance for
+    /// source=anarlog_humans; harmless if the Pi never returns them
+    /// (the plugin's commit gate uses rejected.isEmpty so any
+    /// rejection holds the cursor).
     public static let recoveryCodes: Set<String> = [
         "EXTERNAL_CONTACT_HASH_MISMATCH",
         "EXTERNAL_CONTACT_DELETE_HASH_MISMATCH",

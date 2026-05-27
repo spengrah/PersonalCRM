@@ -47,8 +47,9 @@ public enum CRMMacAnarlogSource {
     public static let selfHumanUUID: String = "00000000-0000-0000-0000-000000000000"
 
     /// Files / dirs the sessions reader silently skips at the top
-    /// level of the configured `sessions/` directory. Per the parent
-    /// spec line 201 + JC1 inspection.
+    /// level of the configured `sessions/` directory. Tracks the
+    /// parent spec's skip-list plus a few entries observed in the
+    /// real Anarlog notes folder.
     public static let sessionSkipEntries: Set<String> = [
         "chats",
         "daily_notes.json",

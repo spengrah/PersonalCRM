@@ -1,22 +1,23 @@
 // AnarlogSessionsSourcePlugin — actor that orchestrates one
 // anarlog_sessions tick.
 //
-// Same route + P0 invariants as the humans plugin but with a few
-// session-specific twists:
+// Same route + carry-forward invariants as the humans plugin but
+// with a few session-specific twists:
 //   - reads three files per session (`_meta.json`, `_summary.md?`,
 //     `_memo.md?`); each contributes to the cursor entry's hash
 //     fields and only file-bytes changes drive contentChanged
 //   - pre-backfill-floor sessions (created_at < 2026-01-01) get a
 //     `floor_skip` sentinel cursor entry and never emit an event
 //   - skip-list filters at the top level (chats/, settings.json, etc.)
-//   - in-flight coalescing per JC7 — FSEvents and the safety timer
-//     can both fire near-simultaneously; only one tick runs at a
-//     time, with a flag to re-tick once if a request arrived mid-tick
-//   - calls /known-ids on bootstrap / recovery routes per round-4
-//     P1#6 (gets empty results in PR 2 — `external_contact` table
-//     has no anarlog_sessions rows — but the code path is symmetric
-//     with humans; PR 3 lights up tombstones via a Pi-side query body
-//     change)
+//   - in-flight coalescing — FSEvents and the safety timer can both
+//     fire near-simultaneously; only one tick runs at a time, with
+//     a flag to re-tick once if a request arrived mid-tick
+//   - calls /known-ids on bootstrap / recovery routes for symmetry
+//     with humans. Today the Pi-side query returns empty for
+//     source=anarlog_sessions (no `external_contact` rows with that
+//     source — sessions live in a future `meeting_note` table); a
+//     later change to the Pi-side query body lights up tombstones
+//     without any daemon code change.
 import Foundation
 import CRMMacCore
 import CRMMacPiClient
@@ -35,7 +36,7 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
     private let logger: LoggerProtocol
     private let clock: @Sendable () -> Date
 
-    // In-flight coalescing (JC7).
+    // In-flight coalescing.
     private var tickInFlight: Bool = false
     private var pendingRequest: Bool = false
 
@@ -64,7 +65,7 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
     }
 
     public func tick() async throws {
-        // In-flight coalescing per JC7. The actor's serial mailbox
+        // In-flight coalescing. The actor's serial mailbox
         // already prevents concurrent tick() bodies; this loop
         // additionally absorbs MULTIPLE pending requests while a tick
         // is running so the next tick fires exactly once after the
@@ -133,7 +134,7 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
         let priorError = state?.sources[id.rawValue]?.lastError ?? ""
         let recoveryRequested = priorError.hasPrefix("recovery_requested:")
 
-        // Route selection per D4.
+        // Route selection.
         var entryRoute: AnarlogTickRoute.Kind
         let decoded = decodedOpt ?? [:]
         if recoveryRequested {
@@ -144,12 +145,13 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
             entryRoute = .delta
         }
 
-        // /known-ids fetch. In PR 2 the Pi-side query returns empty
-        // for source=anarlog_sessions (no `external_contact` rows
-        // with that source — sessions live in a future `meeting_note`
-        // table). PR 3 changes the Pi-side query body, NOT this code.
-        // We still call /known-ids on bootstrap/recovery routes for
-        // symmetry with humans + so PR 3 lights up automatically.
+        // /known-ids fetch. The Pi-side query currently returns
+        // empty for source=anarlog_sessions (no `external_contact`
+        // rows with that source — sessions live in a future
+        // `meeting_note` table). We still call /known-ids on
+        // bootstrap/recovery routes for symmetry with humans so a
+        // future Pi-side query body change lights this up without
+        // any daemon-code edit.
         var knownIDs: KnownIDsData?
         if entryRoute == .bootstrapViaKnownIDs || entryRoute == .recovery {
             do {
@@ -203,8 +205,30 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
                 continue
             }
             let sessionDir = (sessionsPath as NSString).appendingPathComponent(entry)
-            guard filesystem.isReadableDirectory(sessionDir) else { continue }
+            // The directory's physical presence on disk is what gates
+            // tombstone emission per the P0 invariant. Insert into
+            // seenPhysicalUUIDs FIRST, BEFORE any read attempt — an
+            // unreadable directory is still physically present, so
+            // we must not let it be tombstoned. The carry-forward
+            // path below handles the unreadable case by preserving
+            // the prior cursor entry.
             seenPhysicalUUIDs.insert(canonicalUUID)
+            guard filesystem.isReadableDirectory(sessionDir) else {
+                parseFailedCount += 1
+                logger.warning("anarlog_sessions tick: session_dir_unreadable", metadata: [
+                    "uuid": .private(canonicalUUID),
+                ])
+                carrySessionForward(
+                    uuid: canonicalUUID,
+                    metaBytesHash: "",
+                    summaryBytesHash: nil,
+                    memoBytesHash: nil,
+                    prior: decoded[canonicalUUID],
+                    entryRoute: entryRoute,
+                    knownByEntityID: knownByEntityID,
+                    desiredCursor: &desiredCursor)
+                continue
+            }
 
             let metaPath = (sessionDir as NSString).appendingPathComponent("_meta.json")
             let summaryPath = (sessionDir as NSString).appendingPathComponent("_summary.md")
@@ -249,10 +273,60 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
                 continue
             }
             let metaBytesHash = AnarlogFileHash.sha256Hex(metaBytes)
-            let summaryBytes: Data? = filesystem.exists(summaryPath)
-                ? (try? filesystem.readFile(summaryPath)) : nil
-            let memoBytes: Data? = filesystem.exists(memoPath)
-                ? (try? filesystem.readFile(memoPath)) : nil
+            // Summary / memo: explicit read with carry-forward on
+            // failure. The previous `try?` happily swallowed
+            // permission denied + IO errors, which would commit a
+            // cursor that says "summary absent" when the file is
+            // actually present-but-unreadable — that drops the
+            // existing summary content on the next successful tick.
+            let summaryBytes: Data?
+            if filesystem.exists(summaryPath) {
+                do {
+                    summaryBytes = try filesystem.readFile(summaryPath)
+                } catch {
+                    parseFailedCount += 1
+                    logger.warning("anarlog_sessions tick: summary_read_failed", metadata: [
+                        "uuid": .private(canonicalUUID),
+                        "error": .private(String(describing: error)),
+                    ])
+                    carrySessionForward(
+                        uuid: canonicalUUID,
+                        metaBytesHash: metaBytesHash,
+                        summaryBytesHash: decoded[canonicalUUID]?.summaryHash,
+                        memoBytesHash: decoded[canonicalUUID]?.memoHash,
+                        prior: decoded[canonicalUUID],
+                        entryRoute: entryRoute,
+                        knownByEntityID: knownByEntityID,
+                        desiredCursor: &desiredCursor)
+                    continue
+                }
+            } else {
+                summaryBytes = nil
+            }
+            let memoBytes: Data?
+            if filesystem.exists(memoPath) {
+                do {
+                    memoBytes = try filesystem.readFile(memoPath)
+                } catch {
+                    parseFailedCount += 1
+                    logger.warning("anarlog_sessions tick: memo_read_failed", metadata: [
+                        "uuid": .private(canonicalUUID),
+                        "error": .private(String(describing: error)),
+                    ])
+                    carrySessionForward(
+                        uuid: canonicalUUID,
+                        metaBytesHash: metaBytesHash,
+                        summaryBytesHash: decoded[canonicalUUID]?.summaryHash,
+                        memoBytesHash: decoded[canonicalUUID]?.memoHash,
+                        prior: decoded[canonicalUUID],
+                        entryRoute: entryRoute,
+                        knownByEntityID: knownByEntityID,
+                        desiredCursor: &desiredCursor)
+                    continue
+                }
+            } else {
+                memoBytes = nil
+            }
             let summaryHash = summaryBytes.map(AnarlogFileHash.sha256Hex)
             let memoHash = memoBytes.map(AnarlogFileHash.sha256Hex)
 
@@ -371,7 +445,7 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
                 payloadHash: payloadHash)
         }
 
-        // Tombstone basis per D4. The floor_skip sentinel entries
+        // Tombstone basis. The floor_skip sentinel entries
         // never produce tombstones (isFloorSkipped guard).
         var tombstoneBasis: [AnarlogTombstoneBasisEntry] = []
         switch entryRoute {

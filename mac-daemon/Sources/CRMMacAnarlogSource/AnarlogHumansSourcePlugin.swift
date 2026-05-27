@@ -1,7 +1,7 @@
 // AnarlogHumansSourcePlugin — actor that orchestrates one
 // anarlog_humans tick.
 //
-// Per-tick flow (per D4 in the plan):
+// Per-tick flow:
 //   1. Bump state.sources[anarlog_humans].lastScheduledAt = NOW.
 //   2. Load config; mark not_configured / path_missing /
 //      humans_subdir_missing / files_folders_permission_denied as
@@ -23,11 +23,11 @@
 //          - prior cursor entry carried forward verbatim, OR
 //          - synthesized from /known-ids on bootstrap/recovery, OR
 //          - skipped if neither (no future deterministic delete possible)
-//        Critical: P0 invariant — tombstoneBasis MINUS
-//        seenPhysicalUUIDs is what fires deletes, NOT (basis MINUS
-//        desiredCursor). A previously-cursor'd file that became
-//        malformed this tick is STILL in seenPhysicalUUIDs, so its
-//        cursor entry is preserved + no delete is emitted.
+//        Critical invariant: tombstoneBasis MINUS seenPhysicalUUIDs
+//        is what fires deletes, NOT (basis MINUS desiredCursor). A
+//        previously-cursor'd file that became malformed this tick is
+//        STILL in seenPhysicalUUIDs, so its cursor entry is preserved
+//        and no delete event is emitted.
 //   7. Emit tombstones for tombstoneBasis - seenPhysicalUUIDs.
 //   8. Publish via AnarlogHumansPublisher.
 //   9. Set recovery flag on hash-mismatch.
@@ -35,7 +35,7 @@
 //  11. On clean commit: clear recovery flag if route was .recovery;
 //      record per-tick anomalies (parse_failed / payload_too_large
 //      counts) in lastError EVEN ON SUCCESS so they're visible via
-//      `crm-mac status` (P1#5 fix).
+//      `crm-mac status` without conflating with tick-aborting errors.
 import Foundation
 import CryptoKit
 import CRMMacCore
@@ -234,7 +234,7 @@ public actor AnarlogHumansSourcePlugin: SourcePlugin {
         let priorError = state?.sources[id.rawValue]?.lastError ?? ""
         let recoveryRequested = priorError.hasPrefix("recovery_requested:")
 
-        // Route selection per D4.
+        // Route selection.
         var entryRoute: AnarlogTickRoute.Kind
         let decoded = decodedOpt ?? [:]
         if recoveryRequested {
@@ -413,9 +413,9 @@ public actor AnarlogHumansSourcePlugin: SourcePlugin {
             }
 
             // Decide whether to emit an upsert + which payloadHash to
-            // store in the cursor entry. Per round-4 P1#2: recovery
-            // and bootstrap routes ALWAYS re-emit (Pi event-log dedups
-            // by source_id); delta route only when contentChanged.
+            // store in the cursor entry. Recovery and bootstrap
+            // routes ALWAYS re-emit (Pi event-log dedups by
+            // source_id); delta route only when contentChanged.
             let payloadHash: String
             let shouldEmit: Bool
             switch entryRoute {
@@ -427,11 +427,11 @@ public actor AnarlogHumansSourcePlugin: SourcePlugin {
                     payloadHash = (try? ContentHasher.contentHash(for: payloadBytes)) ?? ""
                     shouldEmit = !payloadHash.isEmpty
                 } else {
-                    // Carry prior payload hash forward (P1#2). On the
-                    // first post-PR-2 tick the prior entry has a
-                    // payloadHash; if somehow it's empty (legacy),
-                    // recompute one this tick so the next delete is
-                    // deterministic.
+                    // Carry prior payload hash forward — the prior
+                    // entry has a payloadHash; if somehow it's empty
+                    // (legacy on the first tick after this code
+                    // ships), recompute one this tick so the next
+                    // delete is deterministic.
                     if let prior, !prior.payloadHash.isEmpty {
                         payloadHash = prior.payloadHash
                     } else {
@@ -456,7 +456,7 @@ public actor AnarlogHumansSourcePlugin: SourcePlugin {
                 mtimeEpochMs: filesystem.mtime(filePath).map { Int64($0.timeIntervalSince1970 * 1000) })
         }
 
-        // Tombstone basis selection per D4.
+        // Tombstone basis selection.
         var tombstoneBasis: [AnarlogTombstoneBasisEntry] = []
         switch entryRoute {
         case .firstRun:
@@ -580,7 +580,7 @@ public actor AnarlogHumansSourcePlugin: SourcePlugin {
     // MARK: - per-file failure helper
 
     /// Carry forward the cursor entry for a present-but-failed-shape
-    /// file per P0 + round-5 P1#3:
+    /// file:
     ///   1. If we have a prior cursor entry, keep it verbatim — the
     ///      file is still physically present so it stays in
     ///      seenPhysicalUUIDs and never tombstones.
@@ -754,7 +754,8 @@ public actor AnarlogHumansSourcePlugin: SourcePlugin {
 /// Lowercase-hex SHA-256 of raw bytes. Distinct from
 /// `ContentHasher.contentHash(for:)` which does JCS canonicalization
 /// for the payload-hash recipe; this is the file-bytes hash that
-/// drives change detection per JC3 / D8 (two distinct hash concepts).
+/// drives change detection only (file-bytes hash and payload hash
+/// are two distinct hash concepts).
 /// Lives in this target so CRMMacCore stays out of the surface area
 /// for the anarlog source.
 public enum AnarlogFileHash {

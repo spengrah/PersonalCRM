@@ -2,10 +2,10 @@
 // and meeting_note.deleted IngestEvents emitted by the
 // anarlog_sessions plugin.
 //
-// Per spec lines 332-344 (parent spec) and JC9: field name `source_id`
-// (NOT `entity_id`) because meeting_note is a NEW kind in PR 3 and
-// the spec line uses `source_id`. The Pi-side struct shape will be
-// confirmed in PR 3; this is the daemon's chosen wire shape.
+// Per the parent spec: field name is `source_id` (NOT `entity_id`)
+// for meeting_note kinds, mirroring the spec's source_id naming
+// convention. The Pi-side struct shape lands separately; this is
+// the daemon's wire shape.
 import Foundation
 
 public struct MeetingNoteRecordedPayload: Encodable, Equatable, Sendable {
@@ -16,8 +16,8 @@ public struct MeetingNoteRecordedPayload: Encodable, Equatable, Sendable {
     public let sourceID: String
     /// Optional title from `_meta.json.title`. Empty string when
     /// absent; nil when the meta has no title field at all. The
-    /// distinction is preserved on the wire so PR 3 can normalize
-    /// either way without losing data.
+    /// distinction is preserved on the wire so the Pi-side handler
+    /// can normalize either way without losing data.
     public let title: String?
     /// Session creation timestamp from `_meta.json.created_at`.
     public let meetingAt: Date

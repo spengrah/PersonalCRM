@@ -206,7 +206,8 @@ struct DaemonCommand: AsyncParsableCommand {
                 onChange: { [weak anarlogSessionsPlugin, weak logger] in
                     // Wrap in do/catch so a thrown error from tick()
                     // is logged rather than silently swallowed
-                    // (round-2 P2#2).
+                    // (silent FSEvents-trigger error swallowing
+                    // would otherwise hide tick failures from the log).
                     Task {
                         do {
                             try await anarlogSessionsPlugin?.tick()

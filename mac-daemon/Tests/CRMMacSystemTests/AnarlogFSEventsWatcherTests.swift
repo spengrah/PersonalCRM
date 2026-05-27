@@ -90,6 +90,28 @@ final class AnarlogFSEventsWatcherTests: XCTestCase {
         }
     }
 
+    func testFileTouchTriggersCallback() throws {
+        // Real-FSEvents end-to-end test. Marked best-effort because
+        // FSEvents delivery latency varies (the watcher uses 1.5s
+        // coalescence; CI under load can stretch this). We allow up
+        // to 10s before giving up to keep the test reliable on
+        // GitHub Actions hosted runners.
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let expectation = XCTestExpectation(description: "FSEvents callback")
+        let watcher = AnarlogFSEventsWatcher(
+            path: dir.path,
+            coalescenceLatency: 0.25,
+            logger: NoopLogger(),
+            onChange: { expectation.fulfill() })
+        try watcher.start()
+        defer { watcher.stop() }
+        // Create a file under the watched directory.
+        let target = dir.appendingPathComponent("touched-\(UUID().uuidString).txt")
+        try Data("x".utf8).write(to: target)
+        wait(for: [expectation], timeout: 10.0)
+    }
+
     func testStartFailsOnNonexistentPath() {
         // FSEventStreamCreate doesn't fail for a non-existent path
         // (it just never delivers events) — but for completeness we

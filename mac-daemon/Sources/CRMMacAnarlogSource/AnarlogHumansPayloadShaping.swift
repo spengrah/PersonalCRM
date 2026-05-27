@@ -3,7 +3,7 @@
 // /api/v1/ingest/events for kind=external_contact.upserted,
 // source=anarlog_humans.
 //
-// Field mapping per spec line 187 + D6 in the plan:
+// Field mapping per the parent spec's humans frontmatter contract:
 //   - displayName = frontmatter.name (fallback "<no name>" — Pi
 //     requires non-empty for matching)
 //   - emails      = frontmatter.emails (no type, primary=false)
@@ -25,8 +25,8 @@ public enum AnarlogHumansPayloadShaping {
         record: AnarlogHumanRecord,
         hostID: UUID
     ) -> AnarlogExternalContactUpsertedPayload {
-        // Display name fallback per D6 — Pi rejects empty display
-        // names at the matching layer.
+        // Display name fallback — Pi rejects empty display names at
+        // the matching layer.
         let displayName = record.name.isEmpty ? "<no name>" : record.name
 
         let emails = record.emails
