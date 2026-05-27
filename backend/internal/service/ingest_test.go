@@ -1067,22 +1067,72 @@ func TestComputeResolvedSetHash_StableAcrossOrder(t *testing.T) {
 	id1 := uuid.New()
 	id2 := uuid.New()
 	id3 := uuid.New()
-	hashA, err := computeResolvedSetHash([]uuid.UUID{id1, id2, id3})
+	hashA, err := computeResolvedSetHash([]uuid.UUID{id1, id2, id3}, nil)
 	require.NoError(t, err)
-	hashB, err := computeResolvedSetHash([]uuid.UUID{id3, id1, id2})
+	hashB, err := computeResolvedSetHash([]uuid.UUID{id3, id1, id2}, nil)
 	require.NoError(t, err)
 	require.Equal(t, hashA, hashB)
+}
+
+// TestComputeResolvedSetHash_UnionsTaggedAndTitleMatched confirms the
+// hash includes BOTH tag-resolved and title-matched contact IDs so a
+// drift in either resolution path bumps the hash.
+func TestComputeResolvedSetHash_UnionsTaggedAndTitleMatched(t *testing.T) {
+	tagged := uuid.New()
+	titled := uuid.New()
+	taggedOnly, err := computeResolvedSetHash([]uuid.UUID{tagged}, nil)
+	require.NoError(t, err)
+	taggedAndTitled, err := computeResolvedSetHash([]uuid.UUID{tagged}, []uuid.UUID{titled})
+	require.NoError(t, err)
+	require.NotEqual(t, taggedOnly, taggedAndTitled,
+		"adding a title-matched contact must change the hash")
+
+	// Same set via different paths → same hash (dedup across slices).
+	viaTagged, err := computeResolvedSetHash([]uuid.UUID{tagged, titled}, nil)
+	require.NoError(t, err)
+	viaSplit, err := computeResolvedSetHash([]uuid.UUID{tagged}, []uuid.UUID{titled})
+	require.NoError(t, err)
+	require.Equal(t, viaTagged, viaSplit,
+		"hash depends on the union, not which slice contributed which id")
+}
+
+// TestComputeResolvedSetHash_EmptyTitleMatchedPreservesLegacyHash
+// confirms the carry-forward semantic stays intact for legacy rows
+// that have no title-matched contacts.
+func TestComputeResolvedSetHash_EmptyTitleMatchedPreservesLegacyHash(t *testing.T) {
+	tagged := uuid.New()
+	withNil, err := computeResolvedSetHash([]uuid.UUID{tagged}, nil)
+	require.NoError(t, err)
+	withEmpty, err := computeResolvedSetHash([]uuid.UUID{tagged}, []uuid.UUID{})
+	require.NoError(t, err)
+	require.Equal(t, withNil, withEmpty)
 }
 
 // TestDecideLinkage_NoCandidatesNoTagged returns orphan_needs_review
 // with no interactions.
 func TestDecideLinkage_NoCandidatesNoTagged(t *testing.T) {
 	sessionID := uuid.New()
-	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, nil)
+	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, nil, nil)
 	require.Equal(t, repository.LinkageStateOrphanNeedsReview, state)
 	require.Nil(t, kind)
 	require.Nil(t, id)
 	require.Empty(t, desired)
+}
+
+// TestDecideLinkage_NoCandidatesNoTaggedWithTitleMatches confirms the
+// spec invariant: title matches DO NOT promote a no-anchor orphan to
+// augmented (the anchor must be tagged humans).
+func TestDecideLinkage_NoCandidatesNoTaggedWithTitleMatches(t *testing.T) {
+	sessionID := uuid.New()
+	titled := uuid.New()
+	titleMatched := []resolvedTitle{
+		{Token: "Alice", NormalizedToken: "alice", ContactID: titled},
+	}
+	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, nil, titleMatched)
+	require.Equal(t, repository.LinkageStateOrphanNeedsReview, state)
+	require.Nil(t, kind)
+	require.Nil(t, id)
+	require.Empty(t, desired, "title matches alone never produce interactions")
 }
 
 // TestDecideLinkage_NoCandidatesWithTagged returns linked_impromptu and
@@ -1095,7 +1145,7 @@ func TestDecideLinkage_NoCandidatesWithTagged(t *testing.T) {
 		{AnarlogID: "human-a", ContactID: cA},
 		{AnarlogID: "human-b", ContactID: cB},
 	}
-	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, resolved)
+	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, resolved, nil)
 	require.Equal(t, repository.LinkageStateLinkedImpromptu, state)
 	require.Nil(t, kind)
 	require.Nil(t, id)
@@ -1105,6 +1155,29 @@ func TestDecideLinkage_NoCandidatesWithTagged(t *testing.T) {
 	gotRefs := []string{desired[0].SourceRef, desired[1].SourceRef}
 	require.Contains(t, gotRefs, refA)
 	require.Contains(t, gotRefs, refB)
+}
+
+// TestDecideLinkage_NoCandidatesWithTaggedAndTitleMatches returns
+// orphan_title_augmented with one tagged interaction PLUS one
+// `:title:` interaction per title-matched contact.
+func TestDecideLinkage_NoCandidatesWithTaggedAndTitleMatches(t *testing.T) {
+	sessionID := uuid.New()
+	cTagged := uuid.New()
+	cTitled := uuid.New()
+	resolved := []resolvedTag{{AnarlogID: "human-tagged", ContactID: cTagged}}
+	titleMatched := []resolvedTitle{
+		{Token: "Alice", NormalizedToken: "alice", ContactID: cTitled},
+	}
+	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, resolved, titleMatched)
+	require.Equal(t, repository.LinkageStateOrphanTitleAugmented, state)
+	require.Nil(t, kind)
+	require.Nil(t, id)
+	require.Len(t, desired, 2)
+	taggedRef := "anarlog:" + sessionID.String() + ":" + cTagged.String()
+	titleRef := "anarlog:" + sessionID.String() + ":title:" + cTitled.String()
+	gotRefs := []string{desired[0].SourceRef, desired[1].SourceRef}
+	require.Contains(t, gotRefs, taggedRef)
+	require.Contains(t, gotRefs, titleRef)
 }
 
 // TestDecideLinkage_OneCandidate_WalkinPresent_NoSupplement verifies
@@ -1120,7 +1193,7 @@ func TestDecideLinkage_OneCandidate_WalkinPresent_NoSupplement(t *testing.T) {
 		AttendeeContactIDs: []uuid.UUID{cA},
 	}
 	resolved := []resolvedTag{{AnarlogID: "human-a", ContactID: cA}}
-	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, resolved)
+	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, resolved, nil)
 	require.Equal(t, repository.LinkageStateLinked, state)
 	require.NotNil(t, kind)
 	require.Equal(t, "event", *kind)
@@ -1141,13 +1214,33 @@ func TestDecideLinkage_OneCandidate_TaggedNotInAttendees_AddsWalkin(t *testing.T
 		AttendeeContactIDs: []uuid.UUID{cA},
 	}
 	resolved := []resolvedTag{{AnarlogID: "human-b", ContactID: cB}}
-	state, kind, _, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, resolved)
+	state, kind, _, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, resolved, nil)
 	require.Equal(t, repository.LinkageStateLinked, state)
 	require.Equal(t, "event", *kind)
 	require.Len(t, desired, 1)
 	expectedRef := "anarlog:" + sessionID.String() + ":walkin:" + cB.String()
 	require.Equal(t, expectedRef, desired[0].SourceRef)
 	require.Equal(t, cB, desired[0].ContactID)
+}
+
+// TestDecideLinkage_OneCandidate_TitleMatchesDoNotProduceInteractions
+// verifies the spec invariant that title matches don't create
+// interactions in the linked state.
+func TestDecideLinkage_OneCandidate_TitleMatchesDoNotProduceInteractions(t *testing.T) {
+	sessionID := uuid.New()
+	cAttendee := uuid.New()
+	cTitled := uuid.New()
+	cand := repository.LinkageCandidate{
+		Kind:               "event",
+		ID:                 uuid.New(),
+		AttendeeContactIDs: []uuid.UUID{cAttendee},
+	}
+	titleMatched := []resolvedTitle{
+		{Token: "Alice", NormalizedToken: "alice", ContactID: cTitled},
+	}
+	state, _, _, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, nil, titleMatched)
+	require.Equal(t, repository.LinkageStateLinked, state)
+	require.Empty(t, desired, "title matches must not produce interactions in linked state")
 }
 
 // TestDecideLinkage_MultipleCandidates_ConflictPending verifies the
@@ -1159,9 +1252,26 @@ func TestDecideLinkage_MultipleCandidates_ConflictPending(t *testing.T) {
 		{Kind: "event", ID: uuid.New()},
 		{Kind: "event", ID: uuid.New()},
 	}
-	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil)
+	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
 	require.Equal(t, repository.LinkageStateConflictPending, state)
 	require.Nil(t, kind)
 	require.Nil(t, id)
+	require.Empty(t, desired)
+}
+
+// TestDecideLinkage_MultipleCandidates_TitleMatchesDoNotInteract
+// confirms title matches don't leak into conflict_pending state either.
+func TestDecideLinkage_MultipleCandidates_TitleMatchesDoNotInteract(t *testing.T) {
+	sessionID := uuid.New()
+	cands := []repository.LinkageCandidate{
+		{Kind: "event", ID: uuid.New()},
+		{Kind: "event", ID: uuid.New()},
+	}
+	titled := uuid.New()
+	titleMatched := []resolvedTitle{
+		{Token: "Alice", NormalizedToken: "alice", ContactID: titled},
+	}
+	state, _, _, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, titleMatched)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
 	require.Empty(t, desired)
 }
