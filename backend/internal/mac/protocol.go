@@ -24,8 +24,10 @@ const MinProtocolVersion int32 = 1
 // in external_sync_state with no provider matching it. New sources
 // are added here as their consumers ship.
 var AllowedPushSources = map[string]struct{}{
-	"messages":        {},
-	"icloud_contacts": {},
+	"messages":         {},
+	"icloud_contacts":  {},
+	"anarlog_humans":   {},
+	"anarlog_sessions": {},
 }
 
 // IsAllowedPushSource returns true when the supplied source is a known
