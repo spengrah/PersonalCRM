@@ -9,8 +9,9 @@
 //   - deinit-time cleanup is best-effort
 //
 // The real "FSEvents wakes the plugin" assertion is covered by the
-// smoke test in the plan (Step 4) — touching _meta.json triggers a
-// tick within a few seconds against the production daemon.
+// manual smoke test: touching _meta.json under the configured
+// sessions/ directory triggers a tick within a few seconds against
+// the production daemon.
 import XCTest
 import CRMMacCore
 @testable import CRMMacSystem
