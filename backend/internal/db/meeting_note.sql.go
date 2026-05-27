@@ -12,7 +12,7 @@ import (
 )
 
 const GetMeetingNoteBySessionID = `-- name: GetMeetingNoteBySessionID :one
-SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at FROM meeting_note
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates FROM meeting_note
 WHERE anarlog_session_id = $1
   AND deleted_at IS NULL
 `
@@ -39,12 +39,13 @@ func (q *Queries) GetMeetingNoteBySessionID(ctx context.Context, anarlogSessionI
 		&i.ResolvedSetHash,
 		&i.LastContentHash,
 		&i.MeetingAt,
+		&i.ConflictCandidates,
 	)
 	return &i, err
 }
 
 const GetMeetingNoteBySessionIDForUpdate = `-- name: GetMeetingNoteBySessionIDForUpdate :one
-SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at FROM meeting_note
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates FROM meeting_note
 WHERE anarlog_session_id = $1
 FOR UPDATE
 `
@@ -74,12 +75,13 @@ func (q *Queries) GetMeetingNoteBySessionIDForUpdate(ctx context.Context, anarlo
 		&i.ResolvedSetHash,
 		&i.LastContentHash,
 		&i.MeetingAt,
+		&i.ConflictCandidates,
 	)
 	return &i, err
 }
 
 const GetTombstonedMeetingNoteBySessionID = `-- name: GetTombstonedMeetingNoteBySessionID :one
-SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at FROM meeting_note
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates FROM meeting_note
 WHERE anarlog_session_id = $1
   AND deleted_at IS NOT NULL
 LIMIT 1
@@ -111,6 +113,7 @@ func (q *Queries) GetTombstonedMeetingNoteBySessionID(ctx context.Context, anarl
 		&i.ResolvedSetHash,
 		&i.LastContentHash,
 		&i.MeetingAt,
+		&i.ConflictCandidates,
 	)
 	return &i, err
 }
@@ -147,7 +150,7 @@ INSERT INTO meeting_note (
     $13
 )
 ON CONFLICT (anarlog_session_id) WHERE deleted_at IS NULL DO NOTHING
-RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at
+RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates
 `
 
 type InsertMeetingNoteParams struct {
@@ -215,6 +218,7 @@ func (q *Queries) InsertMeetingNote(ctx context.Context, arg InsertMeetingNotePa
 		&i.ResolvedSetHash,
 		&i.LastContentHash,
 		&i.MeetingAt,
+		&i.ConflictCandidates,
 	)
 	return &i, err
 }
@@ -271,7 +275,7 @@ UPDATE meeting_note SET
     last_content_hash = $10,
     meeting_at        = $11
 WHERE id = $12 AND deleted_at IS NOT NULL
-RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at
+RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates
 `
 
 type ReviveMeetingNoteParams struct {
@@ -326,6 +330,7 @@ func (q *Queries) ReviveMeetingNote(ctx context.Context, arg ReviveMeetingNotePa
 		&i.ResolvedSetHash,
 		&i.LastContentHash,
 		&i.MeetingAt,
+		&i.ConflictCandidates,
 	)
 	return &i, err
 }
@@ -385,7 +390,7 @@ UPDATE meeting_note SET
     last_content_hash = $10,
     meeting_at        = $11
 WHERE id = $12 AND deleted_at IS NULL
-RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at
+RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates
 `
 
 type UpdateMeetingNoteOnResyncParams struct {
@@ -443,6 +448,7 @@ func (q *Queries) UpdateMeetingNoteOnResync(ctx context.Context, arg UpdateMeeti
 		&i.ResolvedSetHash,
 		&i.LastContentHash,
 		&i.MeetingAt,
+		&i.ConflictCandidates,
 	)
 	return &i, err
 }
