@@ -139,6 +139,60 @@ final class PiClientIngestEventsTests: XCTestCase {
                        "payload must NOT be a base64 string")
     }
 
+    // MARK: - needs_attention decoding
+
+    func testIngestEventsNeedsAttentionAbsentDecodesAsEmpty() async throws {
+        // Legacy Pi response (pre-meeting_note) — no needs_attention key.
+        let response = Data(#"{"accepted":1,"duplicate":0,"rejected":0,"errors":[]}"#.utf8)
+        let script = MockTransportScript([.respond(status: 200, data: response)])
+        let result = try await client(script).ingestEvents(auth: auth, body: sampleBody())
+        XCTAssertEqual(result.accepted, 1)
+        XCTAssertTrue(result.needsAttention.isEmpty)
+    }
+
+    func testIngestEventsNeedsAttentionPresentDecodes() async throws {
+        let response = Data(#"""
+            {"accepted":1,
+             "duplicate":0,
+             "rejected":0,
+             "errors":[],
+             "needs_attention":[
+                {"session_id":"deadbeef-1111-2222-3333-444455556666","reason":"orphan"},
+                {"session_id":"cafebabe-aaaa-bbbb-cccc-ddddeeeeffff","reason":"conflict"}
+             ]}
+            """#.utf8)
+        let script = MockTransportScript([.respond(status: 200, data: response)])
+        let result = try await client(script).ingestEvents(auth: auth, body: sampleBody())
+        XCTAssertEqual(result.needsAttention.count, 2)
+        XCTAssertEqual(result.needsAttention[0].sessionID,
+                       "deadbeef-1111-2222-3333-444455556666")
+        XCTAssertEqual(result.needsAttention[0].reason, "orphan")
+        XCTAssertEqual(result.needsAttention[1].sessionID,
+                       "cafebabe-aaaa-bbbb-cccc-ddddeeeeffff")
+        XCTAssertEqual(result.needsAttention[1].reason, "conflict")
+    }
+
+    func testIngestEventsNeedsAttentionToleratesUnknownFields() async throws {
+        // Forward-compat: a future Pi adding fields to the items or to
+        // the top-level response should still decode cleanly.
+        let response = Data(#"""
+            {"accepted":1,
+             "duplicate":0,
+             "rejected":0,
+             "errors":[],
+             "needs_attention":[
+                {"session_id":"deadbeef-1111-2222-3333-444455556666",
+                 "reason":"orphan",
+                 "future_field":"ignored"}
+             ],
+             "future_top_level":"ignored"}
+            """#.utf8)
+        let script = MockTransportScript([.respond(status: 200, data: response)])
+        let result = try await client(script).ingestEvents(auth: auth, body: sampleBody())
+        XCTAssertEqual(result.needsAttention.count, 1)
+        XCTAssertEqual(result.needsAttention[0].reason, "orphan")
+    }
+
     func testEmptyPayloadRejectedAtEncode() {
         let bad = RawJSON(Data())
         let event = IngestEvent(source: "s", sourceID: "x", kind: "k",

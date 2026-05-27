@@ -89,18 +89,44 @@ public struct RawJSON: Encodable, Equatable, Sendable {
 
 /// Mirrors IngestResponse.  Pi-side response is NOT enveloped, so
 /// callers decode directly via JSONDecoder.decode(IngestEventsData.self).
+///
+/// `needsAttention` is populated by the Pi for inline meeting_note
+/// linkage outcomes (conflict_pending / orphan_needs_review). Older
+/// Pi instances omit the field; the decoder defaults to an empty
+/// array so legacy responses stay decodable.
 public struct IngestEventsData: Decodable, Equatable, Sendable {
     public let accepted: Int
     public let duplicate: Int
     public let rejected: Int
     public let errors: [IngestEventError]
+    public let needsAttention: [NeedsAttentionItem]
 
     public init(accepted: Int, duplicate: Int, rejected: Int,
-                errors: [IngestEventError]) {
+                errors: [IngestEventError],
+                needsAttention: [NeedsAttentionItem] = []) {
         self.accepted = accepted
         self.duplicate = duplicate
         self.rejected = rejected
         self.errors = errors
+        self.needsAttention = needsAttention
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accepted
+        case duplicate
+        case rejected
+        case errors
+        case needsAttention = "needs_attention"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.accepted = try c.decode(Int.self, forKey: .accepted)
+        self.duplicate = try c.decode(Int.self, forKey: .duplicate)
+        self.rejected = try c.decode(Int.self, forKey: .rejected)
+        self.errors = try c.decode([IngestEventError].self, forKey: .errors)
+        self.needsAttention = try c.decodeIfPresent(
+            [NeedsAttentionItem].self, forKey: .needsAttention) ?? []
     }
 }
 
@@ -113,6 +139,28 @@ public struct IngestEventError: Decodable, Equatable, Sendable {
         self.index = index
         self.code = code
         self.message = message
+    }
+}
+
+/// Per-session attention record surfaced inline on
+/// `POST /api/v1/ingest/events` responses. Mirrors the Pi-side
+/// `NeedsAttentionItem` at `backend/internal/api/handlers/ingest.go`.
+///
+/// `reason` is the canonical user-facing string the daemon
+/// pattern-matches on: `"conflict"` or `"orphan"`. The Pi pre-maps
+/// from its internal `linkage_state` values before emitting.
+public struct NeedsAttentionItem: Decodable, Equatable, Sendable {
+    public let sessionID: String
+    public let reason: String
+
+    public init(sessionID: String, reason: String) {
+        self.sessionID = sessionID
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case reason
     }
 }
 
