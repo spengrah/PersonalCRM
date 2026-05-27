@@ -159,13 +159,22 @@ final class AnarlogPathResolverTests: XCTestCase {
         XCTAssertTrue(url.path.contains("/foo"))
     }
 
-    func testUUIDValidatorAcceptsCanonical() {
-        XCTAssertEqual(
-            AnarlogUUIDValidator.canonicalize("0A18829E-12B6-40F6-93F8-6307973C926B"),
-            "0a18829e-12b6-40f6-93f8-6307973c926b")
+    func testUUIDValidatorAcceptsLowercaseCanonical() {
         XCTAssertEqual(
             AnarlogUUIDValidator.canonicalize("0a18829e-12b6-40f6-93f8-6307973c926b"),
             "0a18829e-12b6-40f6-93f8-6307973c926b")
+    }
+
+    func testUUIDValidatorRejectsUppercase() {
+        // The parent spec is explicit: case-sensitive lowercase. An
+        // uppercase variant might indicate a case-insensitive
+        // filesystem renamed a file behind the operator's back, so
+        // we don't want to accept and risk cursor key collisions.
+        XCTAssertNil(
+            AnarlogUUIDValidator.canonicalize("0A18829E-12B6-40F6-93F8-6307973C926B"))
+        XCTAssertNil(
+            AnarlogUUIDValidator.canonicalize("0a18829e-12b6-40F6-93f8-6307973c926b"),
+            "mixed-case must also be rejected")
     }
 
     func testUUIDValidatorRejectsMalformed() {

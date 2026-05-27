@@ -1,11 +1,9 @@
 // Coverage for AnarlogCursorReset — the configure --reset-cursor
-// handshake. The 409-retry contract (TC-CFG8) is the critical
-// asserter; success path (TC-CFG6) is exercised too.
-//
-// TC-CFG7 (daemon-running rejection) is enforced by
-// `requireDaemonNotRunning` in ConfigureCommand BEFORE calling
-// resetOne, so it's a CLI-layer concern that doesn't reach
-// AnarlogCursorReset. Verified by inspection.
+// handshake. The 409-retry contract is the critical asserter;
+// success path is exercised too. Daemon-running rejection is
+// enforced at the CLI entry point (requireDaemonNotRunning) BEFORE
+// calling resetOne, so it's a CLI-layer concern that doesn't reach
+// this helper.
 import XCTest
 @testable import CRMMacLifecycle
 @testable import CRMMacPiClient

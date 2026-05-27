@@ -133,6 +133,10 @@ public final class InMemoryFilesystem: FilesystemAdapter, @unchecked Sendable {
         return data
     }
 
+    public func isDirectory(at path: String) -> Bool {
+        dirs.contains(path)
+    }
+
     public func listDirectory(at path: String) throws -> [String] {
         if permissionDeniedDirs.contains(path) {
             throw FilesystemError.permissionDenied(path)

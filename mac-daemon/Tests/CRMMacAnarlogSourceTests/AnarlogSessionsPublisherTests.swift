@@ -52,11 +52,11 @@ final class AnarlogSessionsPublisherTests: XCTestCase {
     }
 
     func testUnknownKindRejectionHoldsCursor() async {
-        // PR 2 expectation: Pi rejects meeting_note.* with
-        // UNKNOWN_KIND because the kinds aren't registered yet.
-        // The recovery code set does NOT include UNKNOWN_KIND, so
-        // subsequent batches DO continue (the cursor still holds via
-        // the rejected.isEmpty gate).
+        // Pi currently rejects meeting_note.* with UNKNOWN_KIND
+        // because the kinds aren't registered yet. UNKNOWN_KIND is
+        // NOT in the recovery code set, so subsequent batches DO
+        // continue; the cursor still holds via the rejected.isEmpty
+        // gate.
         let publisher = AnarlogSessionsPublisher(
             sender: { _, body in
                 IngestEventsData(

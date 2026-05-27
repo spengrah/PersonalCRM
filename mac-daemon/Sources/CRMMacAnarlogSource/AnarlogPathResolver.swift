@@ -26,17 +26,22 @@ public enum AnarlogPathResolver {
     }
 }
 
-/// Lowercased canonical UUID validator. Spec line 184 says
-/// `<uuid>.md`; we accept the 8-4-4-4-12 hex form with hyphens, case
-/// insensitive but emit a lowercased canonical form to keep cursor
-/// keys stable across operator file-system case-sensitivity quirks.
+/// Canonical UUID validator. The parent spec requires a
+/// case-sensitive lowercase 8-4-4-4-12 hex shape with hyphens for
+/// session and human filenames — keeping the input strict matches
+/// what Anarlog emits and avoids the ambiguity of cursor keys whose
+/// case has been changed by an operator's filesystem case-sensitivity
+/// quirks.
 public enum AnarlogUUIDValidator {
-    /// Returns the canonicalized (lowercased) UUID string if `s`
-    /// matches the 8-4-4-4-12 hex shape with hyphens; nil otherwise.
+    /// Returns the (lowercase) UUID string when `s` matches the
+    /// case-sensitive lowercase 8-4-4-4-12 hex shape with hyphens;
+    /// nil otherwise.
     public static func canonicalize(_ s: String) -> String? {
-        // Foundation's UUID(uuidString:) is case-insensitive and
-        // returns nil for malformed input. We re-emit as lowercase
-        // via `uuidString.lowercased()`.
+        // Foundation's UUID(uuidString:) is case-insensitive, so we
+        // gate on a pre-check that rejects any uppercase character.
+        // Reject early on non-canonical case to keep cursor keys
+        // stable across operator filesystem quirks.
+        guard s == s.lowercased() else { return nil }
         guard let uuid = UUID(uuidString: s) else { return nil }
         return uuid.uuidString.lowercased()
     }

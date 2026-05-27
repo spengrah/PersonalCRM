@@ -3,8 +3,7 @@
 //     (Pi rejects empty for matching).
 //   - metadata ALWAYS carries pinned + pin_order (so metadata is never
 //     empty on the wire).
-//   - org_id / user_id / created_at land in metadata when present
-//     (round-2 P1#3 fix — the plan's metadata expansion).
+//   - org_id / user_id / created_at land in metadata when present.
 //   - emails arrive as ExternalContactMethodValue with no type and
 //     primary=false.
 //   - jobTitle becomes nil on empty (omitted on the wire).

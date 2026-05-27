@@ -222,16 +222,21 @@ public struct Doctor {
             } else {
                 do {
                     let entries = try deps.filesystem.listDirectory(at: sessionsPath)
-                    // Sessions are UUID-named directories. We
-                    // best-effort count UUID-shaped entries rather
-                    // than every entry (Anarlog drops settings.json,
-                    // etc. in the root) — uses a 36-char + hyphen
-                    // shape probe rather than the full UUID
-                    // validator to keep Doctor free of any anarlog-
-                    // target dependency.
-                    let sessionCount = entries.filter {
-                        $0.count == 36 && $0.filter { $0 == "-" }.count == 4
-                    }.count
+                    // Sessions are UUID-named DIRECTORIES. Best-effort
+                    // count entries that (a) match the 8-4-4-4-12
+                    // UUID shape AND (b) are actually directories on
+                    // disk — a bare file named like a UUID is junk
+                    // that the reader skips, so it shouldn't inflate
+                    // the count. Uses a 36-char + 4-hyphen shape
+                    // probe rather than the full UUID validator to
+                    // keep Doctor free of any anarlog-target dep.
+                    let sessionCount = entries
+                        .filter { $0.count == 36 && $0.filter { $0 == "-" }.count == 4 }
+                        .filter { name in
+                            let path = (sessionsPath as NSString).appendingPathComponent(name)
+                            return deps.filesystem.isDirectory(at: path)
+                        }
+                        .count
                     results.append(CheckResult(
                         name: "anarlog:sessions_count",
                         status: .pass,

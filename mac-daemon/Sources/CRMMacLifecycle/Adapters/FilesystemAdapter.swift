@@ -45,6 +45,11 @@ public protocol FilesystemAdapter {
     /// "path missing" from "path present but unreadable". Default
     /// impl provided for backward-compat with existing test fakes.
     func listDirectory(at path: String) throws -> [String]
+    /// True when `path` is a directory; false for files and missing
+    /// paths. Default impl returns false so existing fakes don't
+    /// break; production impl + the in-memory Doctor fake both
+    /// override.
+    func isDirectory(at path: String) -> Bool
 }
 
 public extension FilesystemAdapter {
@@ -55,5 +60,10 @@ public extension FilesystemAdapter {
     func listDirectory(at path: String) throws -> [String] {
         _ = path
         return []
+    }
+
+    func isDirectory(at path: String) -> Bool {
+        _ = path
+        return false
     }
 }

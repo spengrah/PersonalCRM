@@ -120,4 +120,10 @@ public struct ProductionFilesystemAdapter: FilesystemAdapter {
             throw FilesystemError.ioError("listDirectory \(path): \(error.localizedDescription)")
         }
     }
+
+    public func isDirectory(at path: String) -> Bool {
+        var isDir: ObjCBool = false
+        let exists = fm.fileExists(atPath: path, isDirectory: &isDir)
+        return exists && isDir.boolValue
+    }
 }

@@ -129,10 +129,10 @@ final class StatusAnarlogTests: XCTestCase {
         try seedStateOnly(paths: paths, fs: fs)
         let status = makeStatus(paths: paths, fs: fs)
         let report = status.run()
-        // Per TC-ST5: anarlog config present, both flags false →
+        // When anarlog config is present with both flags false, the
         // status blocks still appear with enabled: false so the
-        // operator sees the disabled state instead of wondering
-        // whether the row is missing.
+        // operator sees the disabled state explicitly instead of
+        // wondering whether the row is missing.
         let humans = try XCTUnwrap(report.anarlogHumans)
         XCTAssertFalse(humans.enabled)
         let sessions = try XCTUnwrap(report.anarlogSessions)

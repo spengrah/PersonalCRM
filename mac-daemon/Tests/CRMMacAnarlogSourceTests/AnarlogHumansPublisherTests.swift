@@ -59,8 +59,9 @@ final class AnarlogHumansPublisherTests: XCTestCase {
     }
 
     func testRejectionsHoldCursor() async {
-        // Simulate 3 events; one rejected with PAYLOAD_INVARIANT (PR 2
-        // expectation pre PR 3 acceptance).
+        // Simulate 3 events; one rejected with PAYLOAD_INVARIANT —
+        // the rejection holds the cursor until the operator addresses
+        // it.
         let publisher = AnarlogHumansPublisher(
             sender: { _, body in
                 IngestEventsData(
