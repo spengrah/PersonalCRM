@@ -996,7 +996,7 @@ func TestVerifyMeetingNoteInvariants_NonUUIDSourceID(t *testing.T) {
 	// runs the service-side check for defense-in-depth.
 	p := events.MeetingNoteRecordedPayload{
 		Version: 1, HostID: host, Source: "anarlog_sessions",
-		SourceID: "not-a-uuid", MeetingAt: time.Now(),
+		SourceID: "not-a-uuid", MeetingAt: accelerated.GetCurrentTime(),
 	}
 	pBytes, err := events.Marshal(events.KindMeetingNoteRecorded, p)
 	require.NoError(t, err)
@@ -1116,7 +1116,7 @@ func TestDecideLinkage_OneCandidate_WalkinPresent_NoSupplement(t *testing.T) {
 	cand := repository.LinkageCandidate{
 		Kind:               "event",
 		ID:                 uuid.New(),
-		OccurredAt:         time.Now(),
+		OccurredAt:         accelerated.GetCurrentTime(),
 		AttendeeContactIDs: []uuid.UUID{cA},
 	}
 	resolved := []resolvedTag{{AnarlogID: "human-a", ContactID: cA}}

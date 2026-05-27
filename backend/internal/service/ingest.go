@@ -1087,6 +1087,18 @@ func (s *IngestService) handleExternalContactUpserted(
 		external.MatchStatus == repository.MatchStatusUnmatched &&
 		external.DuplicateOfID == nil
 	matched := false
+	// matchedContactID tracks the CRM contact_id resolved by the
+	// email/phone match loops. The local `external` struct is from the
+	// initial UpsertTx and does NOT reflect the subsequent UpdateMatchTx
+	// write — capture the resolution separately so downstream logic
+	// (e.g., anarlog identity linking) sees the freshly-matched contact.
+	// On re-upsert / revive (canSetMatchOnRow=false) we fall back to the
+	// existing external.CRMContactID since that's the source of truth
+	// for the preserved match.
+	var matchedContactID *uuid.UUID
+	if external != nil && external.CRMContactID != nil {
+		matchedContactID = external.CRMContactID
+	}
 	for _, em := range p.Emails {
 		if em.Value == "" {
 			continue
@@ -1122,6 +1134,7 @@ func (s *IngestService) handleExternalContactUpserted(
 				}
 			}
 			matched = true
+			matchedContactID = result.ContactID
 		}
 	}
 	for _, ph := range p.Phones {
@@ -1158,6 +1171,7 @@ func (s *IngestService) handleExternalContactUpserted(
 				}
 			}
 			matched = true
+			matchedContactID = result.ContactID
 		}
 	}
 
@@ -1186,12 +1200,15 @@ func (s *IngestService) handleExternalContactUpserted(
 		// AND the new anarlog identity row is unmatched, link it.
 		// Defensive guards: only link when both sides have populated
 		// pointers AND the identity row is genuinely unmatched (avoid
-		// clobbering a manual link from a prior import).
-		if external != nil && external.CRMContactID != nil &&
+		// clobbering a manual link from a prior import). matchedContactID
+		// reflects the freshly-resolved contact from the email/phone
+		// loops above (the local external struct is stale across the
+		// UpdateMatchTx write).
+		if matchedContactID != nil &&
 			result != nil && result.Identity != nil && result.Identity.ContactID == nil {
 			if _, linkErr := s.identityLookup.LinkIdentityToContactTx(ctx, tx, repository.LinkIdentityRequest{
 				IdentityID: result.Identity.ID,
-				ContactID:  *external.CRMContactID,
+				ContactID:  *matchedContactID,
 				MatchType:  repository.MatchTypeExact,
 			}); linkErr != nil {
 				return &IngestPerEventRejection{
