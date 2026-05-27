@@ -40,6 +40,22 @@ RETURNING *;
 SELECT * FROM phone_call
 WHERE call_unique_id = @call_unique_id;
 
+-- name: GetPhoneCallByID :one
+-- Lookup by primary-key UUID. Used by the meeting_note resolve-link
+-- handler to verify a phone_call target exists before linking. Returns
+-- ErrNoRows on miss.
+SELECT * FROM phone_call
+WHERE id = @id;
+
+-- name: FindPhoneCallsInWindow :many
+-- Returns phone_call rows whose started_at falls inside the linkage
+-- window for the meeting_note linkage handler. No deleted_at filter —
+-- phone_call has no soft-delete column (see migration 055). Backed by
+-- idx_phone_call_started_at from migration 056.
+SELECT * FROM phone_call
+WHERE started_at BETWEEN sqlc.arg('window_start') AND sqlc.arg('window_end')
+ORDER BY started_at ASC;
+
 -- name: MarkPhoneCallProcessed :exec
 -- Marks the staging row as processed and links it to the resulting
 -- interaction. interaction_id is NULLable: missed-inbound-no-voicemail rows

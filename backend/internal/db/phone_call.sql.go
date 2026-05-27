@@ -11,6 +11,88 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const FindPhoneCallsInWindow = `-- name: FindPhoneCallsInWindow :many
+SELECT id, call_unique_id, peer_handle, peer_normalized, service, direction, answered, has_voicemail, duration_seconds, started_at, matched_contact_id, interaction_id, mac_host_id, processed_at, created_at FROM phone_call
+WHERE started_at BETWEEN $1 AND $2
+ORDER BY started_at ASC
+`
+
+type FindPhoneCallsInWindowParams struct {
+	WindowStart pgtype.Timestamptz `json:"window_start"`
+	WindowEnd   pgtype.Timestamptz `json:"window_end"`
+}
+
+// Returns phone_call rows whose started_at falls inside the linkage
+// window for the meeting_note linkage handler. No deleted_at filter —
+// phone_call has no soft-delete column (see migration 055). Backed by
+// idx_phone_call_started_at from migration 056.
+func (q *Queries) FindPhoneCallsInWindow(ctx context.Context, arg FindPhoneCallsInWindowParams) ([]*PhoneCall, error) {
+	rows, err := q.db.Query(ctx, FindPhoneCallsInWindow, arg.WindowStart, arg.WindowEnd)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*PhoneCall{}
+	for rows.Next() {
+		var i PhoneCall
+		if err := rows.Scan(
+			&i.ID,
+			&i.CallUniqueID,
+			&i.PeerHandle,
+			&i.PeerNormalized,
+			&i.Service,
+			&i.Direction,
+			&i.Answered,
+			&i.HasVoicemail,
+			&i.DurationSeconds,
+			&i.StartedAt,
+			&i.MatchedContactID,
+			&i.InteractionID,
+			&i.MacHostID,
+			&i.ProcessedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const GetPhoneCallByID = `-- name: GetPhoneCallByID :one
+SELECT id, call_unique_id, peer_handle, peer_normalized, service, direction, answered, has_voicemail, duration_seconds, started_at, matched_contact_id, interaction_id, mac_host_id, processed_at, created_at FROM phone_call
+WHERE id = $1
+`
+
+// Lookup by primary-key UUID. Used by the meeting_note resolve-link
+// handler to verify a phone_call target exists before linking. Returns
+// ErrNoRows on miss.
+func (q *Queries) GetPhoneCallByID(ctx context.Context, id pgtype.UUID) (*PhoneCall, error) {
+	row := q.db.QueryRow(ctx, GetPhoneCallByID, id)
+	var i PhoneCall
+	err := row.Scan(
+		&i.ID,
+		&i.CallUniqueID,
+		&i.PeerHandle,
+		&i.PeerNormalized,
+		&i.Service,
+		&i.Direction,
+		&i.Answered,
+		&i.HasVoicemail,
+		&i.DurationSeconds,
+		&i.StartedAt,
+		&i.MatchedContactID,
+		&i.InteractionID,
+		&i.MacHostID,
+		&i.ProcessedAt,
+		&i.CreatedAt,
+	)
+	return &i, err
+}
+
 const GetPhoneCallByUniqueID = `-- name: GetPhoneCallByUniqueID :one
 SELECT id, call_unique_id, peer_handle, peer_normalized, service, direction, answered, has_voicemail, duration_seconds, started_at, matched_contact_id, interaction_id, mac_host_id, processed_at, created_at FROM phone_call
 WHERE call_unique_id = $1

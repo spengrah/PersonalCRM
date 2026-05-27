@@ -44,6 +44,14 @@ type Querier interface {
 	// the row IDs actually claimed (RETURNING id) so the caller can detect
 	// partial claims and roll back.
 	ClaimTelegramMessages(ctx context.Context, arg ClaimTelegramMessagesParams) ([]pgtype.UUID, error)
+	// Promotes a conflict_pending row to the "none of these" Step 4 outcome
+	// (linked_impromptu / orphan_title_augmented / orphan_needs_review).
+	// Caller supplies the new state AND the new resolved_set_hash so the
+	// next daemon-side carry-forward correctly preserves the user's
+	// decision when matching inputs haven't changed. Clears linked_kind,
+	// linked_id, conflict_candidates. Returns pgx.ErrNoRows when the row
+	// is not in conflict_pending.
+	ClearMeetingNoteConflict(ctx context.Context, arg ClearMeetingNoteConflictParams) (*MeetingNote, error)
 	// Defensive recovery branch: clears claim columns for rows still
 	// carrying the expected stale session_ref. Used when the engine
 	// detected a recovery pass but FindEventBySource returned no row.
@@ -353,6 +361,11 @@ type Querier interface {
 	// two-step creation is visible to this guard. Used by the
 	// FollowUpManager consumer when running inside a worker transaction.
 	FindPendingFollowUpTx(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error)
+	// Returns phone_call rows whose started_at falls inside the linkage
+	// window for the meeting_note linkage handler. No deleted_at filter —
+	// phone_call has no soft-delete column (see migration 055). Backed by
+	// idx_phone_call_started_at from migration 056.
+	FindPhoneCallsInWindow(ctx context.Context, arg FindPhoneCallsInWindowParams) ([]*PhoneCall, error)
 	// Source-neutral generalization of FindRecentTelegramInteraction.
 	// Used by the shared aggregator (backend/internal/messaging/aggregation)
 	// for same-direction coalescing. source_ref_prefix should include
@@ -463,6 +476,14 @@ type Querier interface {
 	// db.ErrNotFound as "no cursor committed yet" and surfaces an empty
 	// cursor + the host's current cursor_epoch.
 	GetMacHostSyncState(ctx context.Context, arg GetMacHostSyncStateParams) (*ExternalSyncState, error)
+	// Reads a single live meeting_note row by primary key. Used by the
+	// resolve-link service to pre-validate the row exists before opening
+	// the FOR UPDATE tx (and by the needs-attention list endpoint when it
+	// needs a fresh read outside the list query).
+	GetMeetingNoteByID(ctx context.Context, id pgtype.UUID) (*MeetingNote, error)
+	// FOR UPDATE variant of GetMeetingNoteByID. Used inside the resolve-link
+	// tx to serialize concurrent resolve attempts on the same row.
+	GetMeetingNoteByIDForUpdate(ctx context.Context, id pgtype.UUID) (*MeetingNote, error)
 	// Returns the live (non-soft-deleted) meeting_note row for a given anarlog
 	// session UUID. Used by the ingest path for dedup and re-sync detection.
 	GetMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error)
@@ -505,6 +526,10 @@ type Querier interface {
 	// best-non-blank ordering for legacy rows where no resolved=true history
 	// exists yet.
 	GetPeerEntityByUserID(ctx context.Context, peerUserID pgtype.Int8) (*GetPeerEntityByUserIDRow, error)
+	// Lookup by primary-key UUID. Used by the meeting_note resolve-link
+	// handler to verify a phone_call target exists before linking. Returns
+	// ErrNoRows on miss.
+	GetPhoneCallByID(ctx context.Context, id pgtype.UUID) (*PhoneCall, error)
 	// Lookup by call_unique_id. Returns ErrNoRows on miss.
 	GetPhoneCallByUniqueID(ctx context.Context, callUniqueID string) (*PhoneCall, error)
 	GetSyncLog(ctx context.Context, id pgtype.UUID) (*ExternalSyncLog, error)
@@ -689,6 +714,14 @@ type Querier interface {
 	ListMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all managed tasks for a provider (for reconciliation)
 	ListManagedContactTasks(ctx context.Context, provider string) ([]*ListManagedContactTasksRow, error)
+	// Returns every live meeting_note row whose linkage_state is one of
+	// ('conflict_pending', 'orphan_needs_review'). Optional host_id filter
+	// via sqlc.narg — when NULL, returns all hosts; when set, filters to a
+	// specific mac_host_id. Ordered by meeting_at DESC so newest needs-
+	// attention items surface first. Index-backed by the partial
+	// idx_meeting_note_linkage_state from migration 053; the in-memory sort
+	// on the small filtered set is cheap.
+	ListMeetingNotesNeedingAttention(ctx context.Context, hostID pgtype.UUID) ([]*MeetingNote, error)
 	// List non-sensitive credential info for all credentials of a provider
 	ListOAuthCredentialStatuses(ctx context.Context, provider string) ([]*ListOAuthCredentialStatusesRow, error)
 	// List all OAuth credentials for a provider
@@ -810,6 +843,11 @@ type Querier interface {
 	// Uses array_replace for efficient in-place replacement
 	ReplaceContactInCalendarEvents(ctx context.Context, arg ReplaceContactInCalendarEventsParams) error
 	ResetTelegramChatConfigBackfill(ctx context.Context, telegramChatID int64) error
+	// Sets linked_kind, linked_id, linkage_state='linked',
+	// conflict_candidates=NULL on a row currently in linkage_state =
+	// 'conflict_pending'. Returns pgx.ErrNoRows (caller maps to 409) when
+	// the state-guard fires.
+	ResolveMeetingNoteToLinked(ctx context.Context, arg ResolveMeetingNoteToLinkedParams) (*MeetingNote, error)
 	// Clears deleted_at on a tombstoned row. Defensive WHERE deleted_at IS NOT
 	// NULL keeps the statement idempotent across concurrent revive races.
 	// Preserves crm_contact_id, match_status, and all content columns.

@@ -183,6 +183,63 @@ func (r *PhoneCallRepository) GetCallByUniqueID(ctx context.Context, callUniqueI
 	return &c, nil
 }
 
+// GetCallByID retrieves a phone_call row by primary-key UUID. Returns
+// db.ErrNotFound on miss. Non-tx variant for handler/service flows that
+// don't need a long-running transaction.
+func (r *PhoneCallRepository) GetCallByID(ctx context.Context, id uuid.UUID) (*PhoneCall, error) {
+	dbCall, err := r.queries.GetPhoneCallByID(ctx, uuidToPgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	c := convertDbPhoneCall(dbCall)
+	return &c, nil
+}
+
+// GetCallByIDTx is the tx-bound variant of GetCallByID.
+func (r *PhoneCallRepository) GetCallByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*PhoneCall, error) {
+	dbCall, err := db.New(tx).GetPhoneCallByID(ctx, uuidToPgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	c := convertDbPhoneCall(dbCall)
+	return &c, nil
+}
+
+// FindLinkageCandidatesTx returns phone_call rows whose started_at
+// falls inside the linkage window, projected into the LinkageCandidate
+// sum shape. The Pi-side meeting_note linkage handler unions these with
+// CalendarEventRepository.FindLinkageCandidatesTx so Step 3's overlap
+// math covers both candidate dimensions per spec §Step 1.
+func (r *PhoneCallRepository) FindLinkageCandidatesTx(ctx context.Context, tx pgx.Tx, windowStart, windowEnd time.Time) ([]LinkageCandidate, error) {
+	rows, err := db.New(tx).FindPhoneCallsInWindow(ctx, db.FindPhoneCallsInWindowParams{
+		WindowStart: pgtype.Timestamptz{Time: windowStart, Valid: true},
+		WindowEnd:   pgtype.Timestamptz{Time: windowEnd, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]LinkageCandidate, 0, len(rows))
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		c := convertDbPhoneCall(row)
+		out = append(out, LinkageCandidate{
+			Kind:          LinkedKindPhoneCall,
+			ID:            c.ID,
+			OccurredAt:    c.StartedAt,
+			PeerContactID: c.MatchedContactID,
+		})
+	}
+	return out, nil
+}
+
 // MarkProcessedParams is the input for MarkProcessed/MarkProcessedTx.
 // InteractionID is *uuid.UUID because missed-inbound-no-voicemail rows have
 // no interaction (content-delivered cadence; spec §`phone_calls` source).
