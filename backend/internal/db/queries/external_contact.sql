@@ -141,8 +141,12 @@ ORDER BY display_name
 LIMIT $3 OFFSET $4;
 
 -- name: ListUnmatchedExternalContacts :many
+-- The `source != 'anarlog_title'` filter excludes weak token-aggregated
+-- discovery rows from the per-source Imports UI list. anarlog_title
+-- rows are surfaced through a dedicated grouped-by-token UI surface.
 SELECT * FROM external_contact
 WHERE source = $1
+  AND source != 'anarlog_title'
   AND match_status = 'unmatched'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
@@ -152,6 +156,7 @@ LIMIT $2 OFFSET $3;
 -- name: ListAllUnmatchedExternalContacts :many
 SELECT * FROM external_contact
 WHERE match_status = 'unmatched'
+  AND source != 'anarlog_title'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
 ORDER BY source, display_name
@@ -160,6 +165,7 @@ LIMIT $1 OFFSET $2;
 -- name: CountUnmatchedExternalContacts :one
 SELECT COUNT(*) FROM external_contact
 WHERE source = $1
+  AND source != 'anarlog_title'
   AND match_status = 'unmatched'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL;
@@ -167,6 +173,7 @@ WHERE source = $1
 -- name: CountAllUnmatchedExternalContacts :one
 SELECT COUNT(*) FROM external_contact
 WHERE match_status = 'unmatched'
+  AND source != 'anarlog_title'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL;
 
