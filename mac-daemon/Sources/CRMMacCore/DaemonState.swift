@@ -32,19 +32,133 @@ public struct DaemonState: Codable, Equatable, Sendable {
     /// (`"messages"`, `"icloud_contacts"`, `"phone_calls"`). Empty
     /// until source readers begin committing cursors.
     public var sources: [String: SourceState]
+    /// Per-session orphan/conflict notifications the daemon has
+    /// raised (or attempted to raise) and is tracking. Cleared when
+    /// reconciliation (or a later ingest response) confirms the
+    /// session has transitioned out of the needs-attention queue.
+    ///
+    /// Additive Codable field — defaults to [] for existing
+    /// `state.json` files written before this field existed.
+    public var pendingOrphanNotifications: [PendingOrphanNotification]
+    /// Monotonic counter the orphan notification actor uses to
+    /// ordering-compare pending entries across reconcile vs. consume
+    /// races. Persisted so a daemon restart preserves ordering. The
+    /// counter only ever increases; rollover is not a concern
+    /// (UInt64 spans far beyond any realistic mutation volume).
+    ///
+    /// Additive Codable field — defaults to 0 for existing
+    /// `state.json` files written before this field existed.
+    public var notificationMutationSequence: UInt64
 
     public init(
         schemaVersion: Int = 1,
         hostID: UUID? = nil,
         lastHeartbeatAt: Date? = nil,
         lastKnownPiProtocolVersion: Int32? = nil,
-        sources: [String: SourceState] = [:]
+        sources: [String: SourceState] = [:],
+        pendingOrphanNotifications: [PendingOrphanNotification] = [],
+        notificationMutationSequence: UInt64 = 0
     ) {
         self.schemaVersion = schemaVersion
         self.hostID = hostID
         self.lastHeartbeatAt = lastHeartbeatAt
         self.lastKnownPiProtocolVersion = lastKnownPiProtocolVersion
         self.sources = sources
+        self.pendingOrphanNotifications = pendingOrphanNotifications
+        self.notificationMutationSequence = notificationMutationSequence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case hostID
+        case lastHeartbeatAt
+        case lastKnownPiProtocolVersion
+        case sources
+        case pendingOrphanNotifications
+        case notificationMutationSequence
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        self.hostID = try c.decodeIfPresent(UUID.self, forKey: .hostID)
+        self.lastHeartbeatAt = try c.decodeIfPresent(Date.self, forKey: .lastHeartbeatAt)
+        self.lastKnownPiProtocolVersion = try c.decodeIfPresent(
+            Int32.self, forKey: .lastKnownPiProtocolVersion)
+        self.sources = try c.decodeIfPresent(
+            [String: SourceState].self, forKey: .sources) ?? [:]
+        self.pendingOrphanNotifications = try c.decodeIfPresent(
+            [PendingOrphanNotification].self,
+            forKey: .pendingOrphanNotifications) ?? []
+        self.notificationMutationSequence = try c.decodeIfPresent(
+            UInt64.self, forKey: .notificationMutationSequence) ?? 0
+    }
+}
+
+/// One persisted entry in `DaemonState.pendingOrphanNotifications`.
+/// Tracks an orphan or conflict notification the daemon has surfaced
+/// (or attempted to surface) for a session that needs CRM attention.
+///
+/// `deliveryState` is tri-state. `"queued"` means the OS accepted the
+/// `add(_:)` call. `"denied"` means user-notification authorization
+/// was denied at add time, so the notification never reached the
+/// user. `"failed"` means `add(_:)` threw a non-permission error.
+/// Both `"denied"` and `"failed"` entries are RE-ATTEMPTED on the
+/// next consume() / reconcile() call for the same (sessionUUID,
+/// reason) — this prevents the permanent missed-notification trap
+/// that would occur if we treated "in the pending list" as a hard
+/// de-dup signal.
+///
+/// `mutationSequence` is a monotonic ordering token assigned on
+/// every mutation. Replaces wall-clock comparison for the
+/// reconcile-vs-consume race guard — the system clock can jump
+/// backward; a sequence can't.
+public struct PendingOrphanNotification: Codable, Equatable, Sendable {
+    public let sessionUUID: String
+    public let reason: String          // "orphan" | "conflict"
+    public let notifiedAt: Date
+    public var deliveryState: String   // "queued" | "denied" | "failed"
+    public var mutationSequence: UInt64
+
+    public init(
+        sessionUUID: String,
+        reason: String,
+        notifiedAt: Date,
+        deliveryState: String,
+        mutationSequence: UInt64
+    ) {
+        self.sessionUUID = sessionUUID
+        self.reason = reason
+        self.notifiedAt = notifiedAt
+        self.deliveryState = deliveryState
+        self.mutationSequence = mutationSequence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionUUID
+        case reason
+        case notifiedAt
+        case deliveryState
+        case mutationSequence
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.sessionUUID = try c.decode(String.self, forKey: .sessionUUID)
+        self.reason = try c.decode(String.self, forKey: .reason)
+        self.notifiedAt = try c.decode(Date.self, forKey: .notifiedAt)
+        // Older entries (written before deliveryState landed) decode
+        // as "queued" — the conservative default that assumes the
+        // raise succeeded. The next reconcile will correct if it
+        // didn't.
+        self.deliveryState = try c.decodeIfPresent(
+            String.self, forKey: .deliveryState) ?? "queued"
+        // Older entries (without sequence numbers) decode as 0 —
+        // they sort earliest, so any subsequent reconcile snapshot
+        // will treat them as "present at snapshot time" and can
+        // safely remove them.
+        self.mutationSequence = try c.decodeIfPresent(
+            UInt64.self, forKey: .mutationSequence) ?? 0
     }
 }
 
