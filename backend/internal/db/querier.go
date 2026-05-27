@@ -923,6 +923,10 @@ type Querier interface {
 	// TEST ONLY. Hard-deletes external_contact rows whose source_id starts with
 	// the given prefix. Used by t.Cleanup to remove fixtures inserted by a test.
 	TestDeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) error
+	// TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
+	// by integration tests that exercise the "target row vanished between
+	// snapshot and resolve-link" path. Production code must NOT call this.
+	TestHardDeleteCalendarEventByID(ctx context.Context, id pgtype.UUID) error
 	// TEST ONLY. Hard-deletes every meeting_note row owned by the given
 	// mac_host. Used by t.Cleanup when the test seeds meeting_notes with
 	// system-generated UUIDs (no exploitable prefix). Covers both live and

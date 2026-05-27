@@ -1832,10 +1832,13 @@ type desiredInteraction struct {
 // meeting_note.recorded envelope inside the per-event savepoint.
 //
 // Implements the full linkage-detection algorithm per
-// .ai/spec/mac-daemon-phase-2-anarlog-matching.md §Linkage detection.
-// Participant-signal disambiguation is deferred; the handler always
-// lands on conflict_pending when 2+ calendar candidates match. Re-sync
-// diff and the revive-on-tombstone branch share the same code path.
+// .ai/spec/mac-daemon-phase-2-anarlog-matching.md §Linkage detection,
+// including Step 3 participant-signal disambiguation: 2+ candidates
+// with a strict-max-non-zero overlap against the implied set (tagged
+// ∪ title-matched) auto-link; otherwise the row lands on
+// conflict_pending with the per-candidate snapshot persisted for the
+// resolve-link endpoint to consume. Re-sync diff and the
+// revive-on-tombstone branch share the same code path.
 //
 // Returns (needsAttention, followUps, rejection): needsAttention is
 // non-nil when the final linkage_state requires user attention
@@ -2063,6 +2066,13 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		}
 		candidatesLen = len(candidates)
 		finalLinkageState, finalLinkedKind, finalLinkedID, desired, conflictSnapshot = decideLinkage(p, sessionID, candidates, resolvedTagged, titleMatched)
+		if len(conflictSnapshot) > 0 {
+			// Observability — log the top overlap whether or not we
+			// landed on conflict_pending. The auto-resolved branch
+			// still benefits from the field (it surfaces "we picked
+			// because the winner had N overlapping participants").
+			conflictOverlapTop = conflictSnapshot[0].OverlapCount
+		}
 		if finalLinkageState == repository.LinkageStateConflictPending && len(conflictSnapshot) > 0 {
 			marshaled, mErr := json.Marshal(conflictSnapshot)
 			if mErr != nil {
@@ -2072,7 +2082,6 @@ func (s *IngestService) handleMeetingNoteRecorded(
 				}
 			}
 			conflictCandidatesBytes = marshaled
-			conflictOverlapTop = conflictSnapshot[0].OverlapCount
 		}
 	}
 
@@ -2432,7 +2441,10 @@ func decideLinkage(
 			walkins := stepFiveWalkins(*winner, resolvedTagged, sessionID)
 			kind := winner.Kind
 			id := winner.ID
-			return repository.LinkageStateLinked, &kind, &id, walkins, nil
+			// Snapshot returned for observability — caller logs but
+			// must NOT persist on a linked outcome (the column
+			// invariant: NULL for any state other than conflict_pending).
+			return repository.LinkageStateLinked, &kind, &id, walkins, snap
 		}
 		return repository.LinkageStateConflictPending, nil, nil, nil, snap
 	}

@@ -217,6 +217,28 @@ func (r *CalendarEventRepository) GetByID(ctx context.Context, id uuid.UUID) (*C
 	return &event, nil
 }
 
+// TestHardDeleteByID is a test-only helper that hard-deletes a single
+// calendar_event row by primary key. Production code must NOT call this.
+func (r *CalendarEventRepository) TestHardDeleteByID(ctx context.Context, id uuid.UUID) error {
+	return r.queries.TestHardDeleteCalendarEventByID(ctx, uuidToPgUUID(id))
+}
+
+// GetByIDTx is the tx-bound variant of GetByID. Used by callers that
+// need the read to participate in the same tx as a subsequent write
+// (e.g. the meeting_note resolve-link flow's target-existence check).
+func (r *CalendarEventRepository) GetByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*CalendarEvent, error) {
+	dbEvent, err := db.New(tx).GetCalendarEventByID(ctx, uuidToPgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+
+	event := convertDbCalendarEvent(dbEvent)
+	return &event, nil
+}
+
 // GetByGcalID retrieves a calendar event by its Google Calendar ID
 func (r *CalendarEventRepository) GetByGcalID(ctx context.Context, gcalEventID, gcalCalendarID, googleAccountID string) (*CalendarEvent, error) {
 	dbEvent, err := r.queries.GetCalendarEventByGcalID(ctx, db.GetCalendarEventByGcalIDParams{

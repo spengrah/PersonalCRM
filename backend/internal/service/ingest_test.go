@@ -1494,7 +1494,8 @@ func TestDecideLinkage_Step3_StrictWinnerAutoLinks(t *testing.T) {
 	require.NotNil(t, id)
 	require.Equal(t, winning.ID, *id)
 	require.Empty(t, desired, "tagged contact already in winning attendees → no walk-in")
-	require.Nil(t, snap, "snapshot only persisted on conflict_pending")
+	require.NotEmpty(t, snap, "snapshot returned for observability even on auto-link")
+	require.Equal(t, 1, snap[0].OverlapCount, "winner's overlap surfaces for logging")
 }
 
 // TestDecideLinkage_Step3_TiedTopFallsThroughToConflict — when two

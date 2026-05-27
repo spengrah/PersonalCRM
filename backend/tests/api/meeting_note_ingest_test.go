@@ -29,6 +29,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 )
@@ -219,7 +220,6 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 		identityRepo,
 		titleMatcher,
 		titleDiscoveryWriter,
-		interactionRepo,
 		contactSvc,
 	)
 	meetingNoteHandler := handlers.NewMeetingNoteHandler(meetingNoteService)
@@ -2416,6 +2416,14 @@ func (r *mnTestLinkageTargetReader) GetPhoneCallByID(ctx context.Context, id uui
 	return r.phoneCallRepo.GetCallByID(ctx, id)
 }
 
+func (r *mnTestLinkageTargetReader) GetEventByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.CalendarEvent, error) {
+	return r.calendarRepo.GetByIDTx(ctx, tx, id)
+}
+
+func (r *mnTestLinkageTargetReader) GetPhoneCallByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.PhoneCall, error) {
+	return r.phoneCallRepo.GetCallByIDTx(ctx, tx, id)
+}
+
 // postResolveLink posts to the resolve-link endpoint with the given
 // body and returns the response recorder.
 func postResolveLink(t *testing.T, env *meetingNoteIngestEnv, mnID string, body any) *httptest.ResponseRecorder {
@@ -2619,4 +2627,204 @@ func TestListNeedsAttention_BasicProjection(t *testing.T) {
 		require.False(t, c.TargetMissing)
 		require.NotNil(t, c.Preview)
 	}
+}
+
+// TestResolveLink_NoneOfTheseFiresDiscoveryUpsert — none_of_these
+// re-runs Step 4 and upserts anarlog_title discovery rows for
+// unmatched name tokens (P1#8 contract).
+func TestResolveLink_NoneOfTheseFiresDiscoveryUpsert(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	tokenC := newTitleToken(t, env) // unmatched → should generate a discovery row
+
+	meetingAt := time.Date(2026, 5, 8, 9, 0, 0, 0, time.UTC)
+	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+
+	sessionUUID := env.newSessionUUID()
+	title := tokenC + " sync"
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+
+	// The daemon-side ingest path already discovered the token on first
+	// ingest (Block B runs unconditionally). Hard-delete it so the
+	// resolve-link re-upsert is observable.
+	existing := getAnarlogTitleRow(t, env, strings.ToLower(tokenC), sessionUUID)
+	require.NotNil(t, existing)
+	require.NoError(t, env.database.Queries.TestDeleteExternalContactsBySourceIDPrefix(context.Background(), existing.SourceID))
+	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenC), sessionUUID))
+
+	w = postResolveLink(t, env, row.ID.String(), map[string]any{"action": "none_of_these"})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	refilled := getAnarlogTitleRow(t, env, strings.ToLower(tokenC), sessionUUID)
+	require.NotNil(t, refilled, "none_of_these must re-upsert discovery rows for unmatched title tokens")
+}
+
+// TestResolveLink_NoneOfTheseToOrphanNeedsReview — conflict_pending row
+// with empty participants and no title matches transitions to
+// orphan_needs_review with no interactions.
+func TestResolveLink_NoneOfTheseToOrphanNeedsReview(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC)
+	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+
+	sessionUUID := env.newSessionUUID()
+	// No title, no participants → on none_of_these, Step 4 hits
+	// orphan_needs_review.
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+
+	w = postResolveLink(t, env, row.ID.String(), map[string]any{"action": "none_of_these"})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	updated := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, updated)
+	require.Equal(t, repository.LinkageStateOrphanNeedsReview, updated.LinkageState)
+	require.Empty(t, updated.ConflictCandidates)
+	require.Empty(t, listSessionInteractions(t, env, sessionUUID))
+}
+
+// TestResolveLink_TargetMissingReturns404 — pick an event from the
+// snapshot whose row has since been hard-deleted; resolve-link returns
+// 404 (and the tx rolls back so the meeting_note stays
+// conflict_pending).
+func TestResolveLink_TargetMissingReturns404(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := time.Date(2026, 5, 8, 11, 0, 0, 0, time.UTC)
+	eventA := env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Target Missing", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+
+	// Hard-delete eventA via direct DB call (calendar_event has no
+	// soft-delete column).
+	ctx := context.Background()
+	_, err := env.database.Pool.Exec(ctx, "DELETE FROM calendar_event WHERE id = $1", eventA)
+	require.NoError(t, err)
+
+	w = postResolveLink(t, env, row.ID.String(), map[string]any{
+		"action": "link",
+		"kind":   "event",
+		"id":     eventA.String(),
+	})
+	require.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+	require.Contains(t, w.Body.String(), "linked target no longer exists")
+
+	// Row stays in conflict_pending — tx rolled back.
+	after := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, after)
+	require.Equal(t, repository.LinkageStateConflictPending, after.LinkageState)
+	require.NotEmpty(t, after.ConflictCandidates, "snapshot preserved on rollback")
+}
+
+// TestListNeedsAttention_HostFilter — the optional host_id query
+// parameter scopes the response.
+func TestListNeedsAttention_HostFilter(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Host Filter", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	// host_id = random uuid → 0 entries from this test's session
+	w = getNeedsAttention(t, env, uuid.NewString())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var resp struct {
+		Success bool                                 `json:"success"`
+		Data    []service.NeedsAttentionItemResponse `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	for _, item := range resp.Data {
+		require.NotEqual(t, sessionUUID, item.AnarlogSessionID.String(),
+			"unrelated host filter must exclude this test's row")
+	}
+
+	// host_id = this test's mac_host → row is present.
+	w = getNeedsAttention(t, env, env.pairedHostID.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var resp2 struct {
+		Success bool                                 `json:"success"`
+		Data    []service.NeedsAttentionItemResponse `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp2))
+	found := false
+	for _, item := range resp2.Data {
+		if item.AnarlogSessionID.String() == sessionUUID {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "matching host filter must include this test's row")
+}
+
+// TestListNeedsAttention_TargetMissingProjection — when a candidate's
+// target has been hard-deleted, the entry stays in the response with
+// target_missing=true and preview=nil.
+func TestListNeedsAttention_TargetMissingProjection(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := time.Date(2026, 5, 8, 13, 0, 0, 0, time.UTC)
+	eventA := env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Stale Target", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	// Hard-delete eventA so its snapshot entry becomes a stale pointer.
+	ctx := context.Background()
+	_, err := env.database.Pool.Exec(ctx, "DELETE FROM calendar_event WHERE id = $1", eventA)
+	require.NoError(t, err)
+
+	w = getNeedsAttention(t, env, env.pairedHostID.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var resp struct {
+		Success bool                                 `json:"success"`
+		Data    []service.NeedsAttentionItemResponse `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	var found *service.NeedsAttentionItemResponse
+	for i := range resp.Data {
+		if resp.Data[i].AnarlogSessionID.String() == sessionUUID {
+			found = &resp.Data[i]
+			break
+		}
+	}
+	require.NotNil(t, found)
+	var missingEntry *service.NeedsAttentionCandidate
+	var presentEntry *service.NeedsAttentionCandidate
+	for i := range found.Candidates {
+		c := &found.Candidates[i]
+		if c.TargetMissing {
+			missingEntry = c
+		} else {
+			presentEntry = c
+		}
+	}
+	require.NotNil(t, missingEntry, "stale snapshot entry stays in response")
+	require.Nil(t, missingEntry.Preview)
+	require.NotNil(t, presentEntry, "non-stale entry still rendered")
+	require.NotNil(t, presentEntry.Preview)
 }

@@ -157,6 +157,12 @@ SET matched_contact_ids = array_append(matched_contact_ids, @contact_id::uuid),
 WHERE id = @event_id::uuid
   AND NOT (@contact_id::uuid = ANY(matched_contact_ids));
 
+-- name: TestHardDeleteCalendarEventByID :exec
+-- TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
+-- by integration tests that exercise the "target row vanished between
+-- snapshot and resolve-link" path. Production code must NOT call this.
+DELETE FROM calendar_event WHERE id = sqlc.arg('id');
+
 -- name: FindCalendarEventsInWindow :many
 -- Returns candidate calendar_event rows for the meeting_note.recorded
 -- linkage-detection algorithm. Filters out cancelled events. Backed by

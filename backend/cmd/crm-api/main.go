@@ -59,6 +59,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	swaggerFiles "github.com/swaggo/files"
@@ -213,6 +214,18 @@ func (r *meetingNoteLinkageTargetReader) GetEventByID(ctx context.Context, id uu
 // GetPhoneCallByID satisfies service.LinkageTargetReader.
 func (r *meetingNoteLinkageTargetReader) GetPhoneCallByID(ctx context.Context, id uuid.UUID) (*repository.PhoneCall, error) {
 	return r.phoneCallRepo.GetCallByID(ctx, id)
+}
+
+// GetEventByIDTx satisfies service.LinkageTargetReader for the
+// tx-bound resolve flow.
+func (r *meetingNoteLinkageTargetReader) GetEventByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.CalendarEvent, error) {
+	return r.calendarRepo.GetByIDTx(ctx, tx, id)
+}
+
+// GetPhoneCallByIDTx satisfies service.LinkageTargetReader for the
+// tx-bound resolve flow.
+func (r *meetingNoteLinkageTargetReader) GetPhoneCallByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.PhoneCall, error) {
+	return r.phoneCallRepo.GetCallByIDTx(ctx, tx, id)
 }
 
 func main() {
@@ -511,7 +524,6 @@ func run() int {
 		identityRepoForIngest,
 		titleMatcher,
 		titleDiscoveryWriter,
-		interactionRepo,
 		contactService,
 	)
 	meetingNoteHandler := handlers.NewMeetingNoteHandler(meetingNoteService)

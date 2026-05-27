@@ -25,13 +25,17 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// LinkageTargetReader is the narrow surface MeetingNoteService needs to
-// verify that the resolve-link target row still exists at resolve-time.
-// Concrete is a small adapter over CalendarEventRepository +
-// PhoneCallRepository (see linkageTargetReader in main.go).
+// LinkageTargetReader is the narrow surface MeetingNoteService needs
+// for both the resolve-link target-existence check (must run inside
+// the resolve tx so the read+write are serializable) and the
+// needs-attention preview projection (best-effort, no tx). Concrete is
+// a small adapter over CalendarEventRepository + PhoneCallRepository
+// (see meetingNoteLinkageTargetReader in cmd/crm-api/main.go).
 type LinkageTargetReader interface {
 	GetEventByID(ctx context.Context, id uuid.UUID) (*repository.CalendarEvent, error)
 	GetPhoneCallByID(ctx context.Context, id uuid.UUID) (*repository.PhoneCall, error)
+	GetEventByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.CalendarEvent, error)
+	GetPhoneCallByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.PhoneCall, error)
 }
 
 // MeetingNoteResolveReader is the narrow read surface MeetingNoteService
@@ -81,7 +85,6 @@ type MeetingNoteService struct {
 	identityLookup  AnarlogIdentityLookup
 	titleMatcher    IngestTitleMatcher
 	titleDiscovery  IngestTitleDiscoveryWriter
-	interactions    InteractionWriter
 	contactRecorder ContactInteractionRecorder
 }
 
@@ -95,7 +98,6 @@ func NewMeetingNoteService(
 	identityLookup AnarlogIdentityLookup,
 	titleMatcher IngestTitleMatcher,
 	titleDiscovery IngestTitleDiscoveryWriter,
-	interactions InteractionWriter,
 	contactRecorder ContactInteractionRecorder,
 ) *MeetingNoteService {
 	return &MeetingNoteService{
@@ -106,7 +108,6 @@ func NewMeetingNoteService(
 		identityLookup:  identityLookup,
 		titleMatcher:    titleMatcher,
 		titleDiscovery:  titleDiscovery,
-		interactions:    interactions,
 		contactRecorder: contactRecorder,
 	}
 }
@@ -147,27 +148,31 @@ func (s *MeetingNoteService) ResolveLink(ctx context.Context, mnID uuid.UUID, in
 
 	var result *ResolveLinkResult
 	var followUps []func(context.Context)
-	var resultErr error
 
+	// Service-layer errors are returned from the tx closure so
+	// pgx.BeginTxFunc rolls back any partial writes (interactions,
+	// discovery rows) that happened before the failure. Read-only
+	// pre-check failures (ErrResolveLinkRowNotFound,
+	// ErrResolveLinkNotPending) also propagate this way — rolling
+	// back a no-write tx is harmless and the rule stays uniform.
+	// The handler maps the sentinel errors back to the right HTTP
+	// codes via errors.Is.
 	txErr := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		prior, err := s.meetingReader.GetMeetingNoteByIDForUpdateTx(ctx, tx, mnID)
 		if err != nil {
 			if errors.Is(err, db.ErrNotFound) {
-				resultErr = ErrResolveLinkRowNotFound
-				return nil
+				return ErrResolveLinkRowNotFound
 			}
 			return fmt.Errorf("read meeting_note: %w", err)
 		}
 		if prior.LinkageState != repository.LinkageStateConflictPending {
-			resultErr = ErrResolveLinkNotPending
-			return nil
+			return ErrResolveLinkNotPending
 		}
 
 		if input != nil {
 			res, created, fus, ferr := s.resolveToLinked(ctx, tx, prior, *input)
 			if ferr != nil {
-				resultErr = ferr
-				return nil
+				return ferr
 			}
 			result = &ResolveLinkResult{MeetingNote: res, InteractionsCreated: created}
 			followUps = fus
@@ -176,8 +181,7 @@ func (s *MeetingNoteService) ResolveLink(ctx context.Context, mnID uuid.UUID, in
 
 		res, created, fus, ferr := s.resolveNoneOfThese(ctx, tx, prior)
 		if ferr != nil {
-			resultErr = ferr
-			return nil
+			return ferr
 		}
 		result = &ResolveLinkResult{MeetingNote: res, InteractionsCreated: created}
 		followUps = fus
@@ -185,9 +189,6 @@ func (s *MeetingNoteService) ResolveLink(ctx context.Context, mnID uuid.UUID, in
 	})
 	if txErr != nil {
 		return nil, txErr
-	}
-	if resultErr != nil {
-		return nil, resultErr
 	}
 
 	// Run follow-up closures best-effort outside the tx. The user-facing
@@ -216,11 +217,13 @@ func (s *MeetingNoteService) resolveToLinked(ctx context.Context, tx pgx.Tx, pri
 		return nil, nil, nil, ErrResolveLinkIDNotCandidate
 	}
 
-	// Verify the target row still exists. Outside the snapshot we have
-	// no other anchor on the target's existence; a stale snapshot is
-	// the user-visible failure mode and we want a clear 404 over a
-	// silently broken pointer.
-	candidate, err := s.fetchCandidateAsLinkage(ctx, input.Kind, input.ID)
+	// Verify the target row still exists inside the SAME tx as the
+	// state transition so a concurrent delete cannot land between the
+	// existence check and the linked-pointer write. Outside the
+	// snapshot we have no other anchor on the target's existence; a
+	// stale snapshot is the user-visible failure mode and we want a
+	// clear 404 over a silently broken pointer.
+	candidate, err := s.fetchCandidateAsLinkageTx(ctx, tx, input.Kind, input.ID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -412,16 +415,18 @@ func (s *MeetingNoteService) writeDesiredInteractions(ctx context.Context, tx pg
 	return created, followUps, nil
 }
 
-// fetchCandidateAsLinkage reads the target row referenced by a snapshot
-// entry and projects it back into a LinkageCandidate so stepFiveWalkins
-// can use the kind-aware ImpliedAttendeeSet helper.
-func (s *MeetingNoteService) fetchCandidateAsLinkage(ctx context.Context, kind string, id uuid.UUID) (*repository.LinkageCandidate, error) {
+// fetchCandidateAsLinkageTx reads the target row referenced by a
+// snapshot entry and projects it back into a LinkageCandidate so
+// stepFiveWalkins can use the kind-aware ImpliedAttendeeSet helper.
+// Uses tx-bound reads so the existence check is serializable with the
+// subsequent state transition.
+func (s *MeetingNoteService) fetchCandidateAsLinkageTx(ctx context.Context, tx pgx.Tx, kind string, id uuid.UUID) (*repository.LinkageCandidate, error) {
 	if s.linkageTargets == nil {
 		return nil, errors.New("linkage target reader not configured")
 	}
 	switch kind {
 	case repository.LinkedKindEvent:
-		evt, err := s.linkageTargets.GetEventByID(ctx, id)
+		evt, err := s.linkageTargets.GetEventByIDTx(ctx, tx, id)
 		if err != nil {
 			if errors.Is(err, db.ErrNotFound) {
 				return nil, ErrResolveLinkTargetMissing
@@ -435,7 +440,7 @@ func (s *MeetingNoteService) fetchCandidateAsLinkage(ctx context.Context, kind s
 			AttendeeContactIDs: append([]uuid.UUID(nil), evt.MatchedContactIDs...),
 		}, nil
 	case repository.LinkedKindPhoneCall:
-		call, err := s.linkageTargets.GetPhoneCallByID(ctx, id)
+		call, err := s.linkageTargets.GetPhoneCallByIDTx(ctx, tx, id)
 		if err != nil {
 			if errors.Is(err, db.ErrNotFound) {
 				return nil, ErrResolveLinkTargetMissing
@@ -587,7 +592,11 @@ func (s *MeetingNoteService) ListNeedsAttention(ctx context.Context, hostID *uui
 			if uErr := json.Unmarshal(row.ConflictCandidates, &snap); uErr != nil {
 				return nil, fmt.Errorf("decode conflict_candidates for meeting_note %s: %w", row.ID, uErr)
 			}
-			item.Candidates = s.projectCandidates(ctx, snap)
+			cands, projErr := s.projectCandidates(ctx, snap)
+			if projErr != nil {
+				return nil, projErr
+			}
+			item.Candidates = cands
 		}
 		out = append(out, item)
 	}
@@ -595,9 +604,10 @@ func (s *MeetingNoteService) ListNeedsAttention(ctx context.Context, hostID *uui
 }
 
 // projectCandidates enriches each snapshot entry with a preview block
-// read from the target row. When the target is missing the entry stays
-// with TargetMissing=true and a nil preview.
-func (s *MeetingNoteService) projectCandidates(ctx context.Context, snap []repository.ConflictCandidateSummary) []NeedsAttentionCandidate {
+// read from the target row. When the target is missing (ErrNotFound)
+// the entry stays with TargetMissing=true and a nil preview; transient
+// read errors propagate so the list endpoint can return 500.
+func (s *MeetingNoteService) projectCandidates(ctx context.Context, snap []repository.ConflictCandidateSummary) ([]NeedsAttentionCandidate, error) {
 	out := make([]NeedsAttentionCandidate, 0, len(snap))
 	for _, c := range snap {
 		entry := NeedsAttentionCandidate{
@@ -606,44 +616,55 @@ func (s *MeetingNoteService) projectCandidates(ctx context.Context, snap []repos
 			OccurredAt:   c.OccurredAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 			OverlapCount: c.OverlapCount,
 		}
-		preview, missing := s.candidatePreview(ctx, c.Kind, c.ID)
+		preview, missing, err := s.candidatePreview(ctx, c.Kind, c.ID)
+		if err != nil {
+			return nil, err
+		}
 		entry.TargetMissing = missing
 		entry.Preview = preview
 		out = append(out, entry)
 	}
-	return out
+	return out, nil
 }
 
 // candidatePreview reads the target row to populate the preview block.
-// Returns (nil, true) when the target is missing or unreadable; the
-// resolve-link path will reject the same target with 404 if the user
-// later picks it, so the list and resolve endpoints stay consistent.
-func (s *MeetingNoteService) candidatePreview(ctx context.Context, kind string, id uuid.UUID) (*NeedsAttentionCandidatePreview, bool) {
+// Returns (nil, true) ONLY when the target row has actually been
+// deleted (db.ErrNotFound). Any other read error is logged + bubbles
+// up; callers degrade to a missing preview but the surface above
+// (ListNeedsAttention) propagates the error so transient DB issues
+// don't silently masquerade as user-visible "missing target" state.
+func (s *MeetingNoteService) candidatePreview(ctx context.Context, kind string, id uuid.UUID) (*NeedsAttentionCandidatePreview, bool, error) {
 	if s.linkageTargets == nil {
-		return nil, true
+		return nil, true, nil
 	}
 	switch kind {
 	case repository.LinkedKindEvent:
 		evt, err := s.linkageTargets.GetEventByID(ctx, id)
 		if err != nil {
-			return nil, true
+			if errors.Is(err, db.ErrNotFound) {
+				return nil, true, nil
+			}
+			return nil, false, fmt.Errorf("read calendar event preview: %w", err)
 		}
 		count := len(evt.Attendees)
 		return &NeedsAttentionCandidatePreview{
 			Title:         evt.Title,
 			AttendeeCount: &count,
-		}, false
+		}, false, nil
 	case repository.LinkedKindPhoneCall:
 		call, err := s.linkageTargets.GetPhoneCallByID(ctx, id)
 		if err != nil {
-			return nil, true
+			if errors.Is(err, db.ErrNotFound) {
+				return nil, true, nil
+			}
+			return nil, false, fmt.Errorf("read phone_call preview: %w", err)
 		}
 		handle := call.PeerHandle
 		return &NeedsAttentionCandidatePreview{
 			PeerHandle: &handle,
-		}, false
+		}, false, nil
 	default:
-		return nil, true
+		return nil, true, nil
 	}
 }
 
