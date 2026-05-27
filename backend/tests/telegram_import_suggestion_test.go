@@ -70,7 +70,7 @@ func setupTelegramImportSuggestionTest(t *testing.T) (
 	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil)
 	enrichmentService.SetCadenceUpdater(cadenceUpdater)
 
-	importHandler := handlers.NewImportHandler(externalRepo, contactService, matchService, enrichmentService)
+	importHandler := handlers.NewImportHandler(externalRepo, nil, contactService, matchService, enrichmentService)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
