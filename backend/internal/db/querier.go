@@ -133,6 +133,9 @@ type Querier interface {
 	CountTelegramMessagesByPeer(ctx context.Context) ([]*CountTelegramMessagesByPeerRow, error)
 	// Count messages for a single peer (for incremental discovery threshold check)
 	CountTelegramMessagesByPeerID(ctx context.Context, peerUserID pgtype.Int8) (*CountTelegramMessagesByPeerIDRow, error)
+	// Per-source count; mirrors ListUnmatched's anarlog_title exclusion
+	// so list+count cardinality stays consistent regardless of caller-
+	// supplied source.
 	CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error)
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
 	// Counts messages about to be linked for a given peer. Read BEFORE
@@ -715,9 +718,12 @@ type Querier interface {
 	ListTelegramChatConfigs(ctx context.Context) ([]*TelegramChatConfig, error)
 	ListTelegramChatConfigsForBackfill(ctx context.Context) ([]*TelegramChatConfig, error)
 	ListTelegramMessagesByChatUnprocessed(ctx context.Context, telegramChatID int64) ([]*TelegramMessage, error)
-	// The `source != 'anarlog_title'` filter excludes weak token-aggregated
-	// discovery rows from the per-source Imports UI list. anarlog_title
-	// rows are surfaced through a dedicated grouped-by-token UI surface.
+	// Per-source query; anarlog_title rows are intentionally NOT exposed
+	// here — they live behind a dedicated grouped-by-token UI surface.
+	// The `source != 'anarlog_title'` clause is defense-in-depth: if a
+	// caller passes source='anarlog_title' (intentionally or via param
+	// injection), this query returns empty rather than leaking weak
+	// discovery rows into the per-source UI.
 	ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	ListUnmatchedIdentities(ctx context.Context, arg ListUnmatchedIdentitiesParams) ([]*ExternalIdentity, error)
 	// Distinct contact IDs with at least one eligible (unprocessed AND

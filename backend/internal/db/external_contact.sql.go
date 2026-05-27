@@ -35,6 +35,9 @@ WHERE source = $1
   AND deleted_at IS NULL
 `
 
+// Per-source count; mirrors ListUnmatched's anarlog_title exclusion
+// so list+count cardinality stays consistent regardless of caller-
+// supplied source.
 func (q *Queries) CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error) {
 	row := q.db.QueryRow(ctx, CountUnmatchedExternalContacts, source)
 	var count int64
@@ -781,9 +784,12 @@ type ListUnmatchedExternalContactsParams struct {
 	Offset int32  `json:"offset"`
 }
 
-// The `source != 'anarlog_title'` filter excludes weak token-aggregated
-// discovery rows from the per-source Imports UI list. anarlog_title
-// rows are surfaced through a dedicated grouped-by-token UI surface.
+// Per-source query; anarlog_title rows are intentionally NOT exposed
+// here — they live behind a dedicated grouped-by-token UI surface.
+// The `source != 'anarlog_title'` clause is defense-in-depth: if a
+// caller passes source='anarlog_title' (intentionally or via param
+// injection), this query returns empty rather than leaking weak
+// discovery rows into the per-source UI.
 func (q *Queries) ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error) {
 	rows, err := q.db.Query(ctx, ListUnmatchedExternalContacts, arg.Source, arg.Limit, arg.Offset)
 	if err != nil {

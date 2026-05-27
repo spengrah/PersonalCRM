@@ -85,6 +85,18 @@ func TestExtractNameTokens(t *testing.T) {
 		{"word_boundary_may_june_dropped", "May & June 1:1", []string{}},
 		{"word_boundary_april_dropped", "April review", []string{}},
 		{"word_boundary_january_february_dropped", "January / February", []string{}},
+
+		// Non-ASCII inputs are silently dropped per spec philosophy.
+		// Regression: a multi-byte rune whose strings.ToLower changes
+		// byte length (e.g. Turkish capital İ — 2 bytes — vs lowercase
+		// "i" — 1 byte) used to desynchronize the lowercase/working
+		// byte offsets and corrupt an adjacent ASCII token. Now the
+		// non-ASCII byte is sanitized to a space in both copies so the
+		// neighboring "Alice" survives intact.
+		{"non_ascii_letter_dropped_preserves_neighbor",
+			"İ Alice and Bob", []string{"Alice", "Bob"}},
+		{"non_ascii_pure_yields_empty",
+			"日本語", []string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

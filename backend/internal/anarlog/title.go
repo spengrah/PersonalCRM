@@ -117,9 +117,16 @@ func ExtractNameTokens(title string) []string {
 
 	// Lowercase working copy is used for meta-token + date stripping.
 	// We replace matches with spaces on the ORIGINAL-case string at the
-	// same byte offsets to preserve casing for the keep-regex.
-	lower := strings.ToLower(title)
-	working := []byte(title)
+	// same byte offsets to preserve casing for the keep-regex. Both
+	// copies must therefore have IDENTICAL byte lengths — strings.ToLower
+	// on multi-byte UTF-8 (e.g. Turkish İ) can shrink/grow byte count
+	// and desynchronize the offsets, corrupting adjacent tokens. Spec
+	// says non-ASCII is silently dropped, so asciiSanitize replaces any
+	// non-ASCII byte with a `~` sentinel (chosen because it fails the
+	// keep-token regex, so any token containing it drops intact) in
+	// both copies. This guarantees offset alignment for the regex
+	// passes AND prevents corrupted partial-ASCII tokens.
+	lower, working := asciiSanitize(title)
 
 	blankOut := func(start, end int) {
 		for i := start; i < end && i < len(working); i++ {
@@ -172,6 +179,36 @@ func ExtractNameTokens(title string) []string {
 		out = append(out, tok)
 	}
 	return out
+}
+
+// asciiSanitize returns two byte-aligned copies of `s` with every
+// non-ASCII byte replaced by `~` (a sentinel that fails the keep-token
+// regex `^[A-Z][a-zA-Z]{1,29}$`, so any whitespace-bounded token that
+// originally contained non-ASCII bytes is dropped intact rather than
+// having its ASCII fragments emitted as corrupted partial tokens).
+// The first return value has ASCII letters lowercased; the second
+// preserves original casing. Both always have len == len(s). Used by
+// ExtractNameTokens so meta-token regex offsets computed against the
+// lowercase copy can be applied safely to the original-case copy.
+func asciiSanitize(s string) (lower string, original []byte) {
+	const nonASCIIMarker = '~'
+	original = make([]byte, len(s))
+	lowerBuf := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x80 {
+			original[i] = nonASCIIMarker
+			lowerBuf[i] = nonASCIIMarker
+			continue
+		}
+		original[i] = c
+		if c >= 'A' && c <= 'Z' {
+			lowerBuf[i] = c + ('a' - 'A')
+		} else {
+			lowerBuf[i] = c
+		}
+	}
+	return string(lowerBuf), original
 }
 
 // replaceFoldAll replaces every case-insensitive occurrence of `old`

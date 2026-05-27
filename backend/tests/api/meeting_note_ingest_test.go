@@ -1976,11 +1976,10 @@ func TestMeetingNote_TitleMatch_CountQueryExcludesAnarlogTitle(t *testing.T) {
 	// passing on an empty DB).
 	require.NotNil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenJ), sessionUUID))
 
-	// CountUnmatched("anarlog_title") MUST return 0 — the SQL filter
-	// (AND source != 'anarlog_title') zeroes out every row at the DB
-	// level regardless of what other tests in the shared DB are doing.
-	// This is a true invariant assertion, not a before/after delta, so
-	// it's resistant to parallel test pollution.
+	// CountUnmatched("anarlog_title") MUST return 0 — the defense-in-
+	// depth `source != 'anarlog_title'` filter zeroes out every row
+	// regardless of what other tests in the shared DB are doing. True
+	// invariant assertion, resistant to parallel test pollution.
 	srcCount, err := env.externalRepo.CountUnmatched(ctx, "anarlog_title")
 	require.NoError(t, err)
 	require.Equal(t, int64(0), srcCount,
@@ -2001,9 +2000,6 @@ func TestMeetingNote_TitleMatch_CountQueryExcludesAnarlogTitle(t *testing.T) {
 	// CountAllUnmatched + ListAllUnmatched MUST also exclude the row.
 	// We assert by iterating the full unmatched-across-sources list and
 	// checking the deterministic source_id we just wrote is absent.
-	// This is an invariant check (no before/after delta on the count
-	// itself, which would be flaky on a shared DB), so it survives
-	// concurrent activity in other tests.
 	sid, err := uuid.Parse(sessionUUID)
 	require.NoError(t, err)
 	wroteSourceID := computeTestAnarlogTitleSourceID(strings.ToLower(tokenJ), sid)
@@ -2015,12 +2011,6 @@ func TestMeetingNote_TitleMatch_CountQueryExcludesAnarlogTitle(t *testing.T) {
 		require.NotEqual(t, wroteSourceID, row.SourceID,
 			"ListAllUnmatched MUST NOT include our specific anarlog_title row")
 	}
-	// CountAllUnmatched is harder to invariant-assert on a shared DB,
-	// but we can pin the relationship list+count parity by re-checking
-	// the count delta a delta-free way: after our write, CountAll is
-	// either unchanged or smaller-equal-than the prior list-length;
-	// either way, the all-imports list cannot contain our row, which
-	// is the only assertion that matters for the filter contract.
 	allCount, err := env.externalRepo.CountAllUnmatched(ctx)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, allCount, int64(0))
