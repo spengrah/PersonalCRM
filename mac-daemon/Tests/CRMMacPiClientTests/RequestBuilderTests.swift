@@ -61,4 +61,52 @@ final class RequestBuilderTests: XCTestCase {
         let permissions = json["permissions"] as? [String: Any]
         XCTAssertEqual(permissions?["fda"] as? Bool, true)
     }
+
+    // MARK: - needsAttention
+
+    func testNeedsAttentionPathAndQuery() throws {
+        let req = try RequestBuilder(baseURL: baseURL)
+            .needsAttention(auth: auth, hostID: auth.hostID)
+        XCTAssertEqual(req.httpMethod, "GET")
+        XCTAssertNil(req.httpBody)
+        XCTAssertEqual(req.url?.path, "/api/v1/meeting-notes/needs-attention")
+        let comps = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)
+        let queryItems = comps?.queryItems ?? []
+        XCTAssertEqual(queryItems.count, 1)
+        XCTAssertEqual(queryItems[0].name, "host_id")
+        XCTAssertEqual(queryItems[0].value, auth.hostID.uuidString.lowercased())
+    }
+
+    func testNeedsAttentionSendsHostAuthHeadersNotApiKey() throws {
+        // Regression test pinning the host-auth header shape. The
+        // daemon must NEVER send X-API-Key for this endpoint — it
+        // doesn't possess the global API key. A future refactor
+        // adding X-API-Key would silently 401 in production because
+        // the daemon's pair key isn't the global key.
+        let req = try RequestBuilder(baseURL: baseURL)
+            .needsAttention(auth: auth, hostID: auth.hostID)
+        XCTAssertEqual(req.value(forHTTPHeaderField: "X-Mac-Host-ID")?.lowercased(),
+                       auth.hostID.uuidString.lowercased())
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"),
+                       "Bearer \(auth.apiKey)")
+        XCTAssertNil(req.value(forHTTPHeaderField: "X-API-Key"))
+    }
+
+    func testNeedsAttentionLowercasesHostIDInQuery() throws {
+        // Even if a caller (e.g. test that constructs a UUID via a
+        // mixed-case string) passes a non-lowercase UUID, the
+        // builder lowercases it to match the Pi's canonical form.
+        let mixedCase = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let req = try RequestBuilder(baseURL: baseURL)
+            .needsAttention(auth: auth, hostID: mixedCase)
+        let comps = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)
+        XCTAssertEqual(comps?.queryItems?.first?.value,
+                       "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    }
+
+    func testNeedsAttentionHonorsBaseURLTrailingSlash() throws {
+        let req = try RequestBuilder(baseURL: URL(string: "https://pi.example.test/")!)
+            .needsAttention(auth: auth, hostID: auth.hostID)
+        XCTAssertEqual(req.url?.path, "/api/v1/meeting-notes/needs-attention")
+    }
 }

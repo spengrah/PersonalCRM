@@ -140,6 +140,38 @@ struct RequestBuilder {
         return req
     }
 
+    func needsAttention(auth: PiAuth, hostID: UUID) throws -> URLRequest {
+        // Query param is percent-encoded by URLComponents. The host
+        // ID is also lowercased to match the Pi's canonical form.
+        guard var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            throw RequestBuilderError.malformedURL(baseURL.absoluteString)
+        }
+        let basePath = comps.path.hasSuffix("/")
+            ? String(comps.path.dropLast())
+            : comps.path
+        comps.path = basePath + "/api/v1/meeting-notes/needs-attention"
+        comps.queryItems = [
+            URLQueryItem(name: "host_id", value: hostID.uuidString.lowercased()),
+        ]
+        guard let url = comps.url else {
+            throw RequestBuilderError.malformedURL(baseURL.absoluteString)
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        // Reuses the existing per-host auth helper. Sends
+        // X-Mac-Host-ID + Authorization: Bearer <pair-key>. The
+        // daemon does NOT possess the global env-var API key the
+        // Pi's APIKeyMiddleware validates against; this endpoint
+        // requires a dual-auth dispatcher on the Pi side (added in
+        // a separate PR) to accept the host-auth path. Until that
+        // dual-auth lands, this request 401s in production, which
+        // the daemon handles gracefully via authenticationRevoked
+        // → log + skip reconcile.
+        Self.applyAuth(&req, auth: auth)
+        return req
+    }
+
     func ingestEvents(auth: PiAuth, body: IngestEventsBody) throws -> URLRequest {
         let url = try resolve(path: "/api/v1/ingest/events")
         var req = URLRequest(url: url)
