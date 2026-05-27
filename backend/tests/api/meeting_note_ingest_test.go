@@ -58,6 +58,12 @@ type meetingNoteIngestEnv struct {
 	// scoped to those UUIDs only (no broad sweeps on the shared DB).
 	sessionUUIDs   []string
 	sessionUUIDsMu sync.Mutex
+	// seededAnarlogIDs tracks anarlog_humans external_contact source_ids
+	// (UUID strings) seeded by tests. ValidatePayload requires the IDs
+	// to parse as UUIDs so we cannot prefix them for the broader
+	// prefix-cleanup; track them explicitly instead.
+	seededAnarlogIDs   []string
+	seededAnarlogIDsMu sync.Mutex
 }
 
 // trackSession records the session UUID for targeted cleanup.
@@ -227,7 +233,17 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 		// are caller-generated random UUIDs (no exploitable prefix), so
 		// scope by the paired mac_host_id this test created.
 		_ = meetingRepo.TestHardDeleteByHostID(cleanCtx, env.pairedHostID)
-		// Drop synthetic anarlog_humans external_contact rows.
+		// Drop anarlog_humans external_contact rows seeded by this test.
+		// ValidatePayload forces the source_id to be a UUID so we cannot
+		// share a single prefix; track the IDs explicitly instead.
+		env.seededAnarlogIDsMu.Lock()
+		anarlogIDs := append([]string(nil), env.seededAnarlogIDs...)
+		env.seededAnarlogIDsMu.Unlock()
+		for _, aid := range anarlogIDs {
+			_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, aid)
+		}
+		// Synthetic icloud_contacts seed cleanup keeps the prefix sweep
+		// for non-UUID source_ids (none in this file today, but harmless).
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, env.sourceIDPrefix)
 		_, _ = database.Queries.DeleteExternalIdentitiesBySource(cleanCtx, "anarlog_humans")
 		_, _ = database.Queries.DeleteEventsBySource(cleanCtx, "anarlog_sessions")
@@ -256,6 +272,9 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 func (e *meetingNoteIngestEnv) seedAnarlogHumanResolvingTo(t *testing.T, email string) string {
 	t.Helper()
 	anarlogID := uuid.NewString()
+	e.seededAnarlogIDsMu.Lock()
+	e.seededAnarlogIDs = append(e.seededAnarlogIDs, anarlogID)
+	e.seededAnarlogIDsMu.Unlock()
 	dn := "Tagged Human " + anarlogID[:8]
 	p := events.ExternalContactUpsertedPayload{
 		Version:     1,
@@ -1097,21 +1116,28 @@ func TestMeetingNote_ConcurrentFirstInsertConverges(t *testing.T) {
 
 	var wg sync.WaitGroup
 	start := make(chan struct{})
-	results := make(chan int, 2)
+	type result struct {
+		code int
+		resp ingestMNResponse
+	}
+	results := make(chan result, 2)
 	for _, ev := range []map[string]any{rec1, rec2} {
 		wg.Add(1)
 		go func(payload map[string]any) {
 			defer wg.Done()
 			<-start // release together
 			w := postMNIngest(t, env, map[string]any{"events": []any{payload}})
-			results <- w.Code
+			results <- result{code: w.Code, resp: parseMNIngestResp(t, w)}
 		}(ev)
 	}
 	close(start)
 	wg.Wait()
 	close(results)
-	for code := range results {
-		require.Equal(t, http.StatusOK, code, "both batches must succeed")
+	for r := range results {
+		require.Equal(t, http.StatusOK, r.code, "both batches must succeed")
+		require.Equal(t, 1, r.resp.Accepted, "each batch must accept its event (one inserts, the other re-reads + updates)")
+		require.Equal(t, 0, r.resp.Rejected, "no per-event rejection on conflict path")
+		require.Empty(t, r.resp.Errors, "no errors on conflict path")
 	}
 
 	// Exactly ONE live meeting_note row exists.

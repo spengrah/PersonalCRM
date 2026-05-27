@@ -1130,7 +1130,7 @@ func TestDecideLinkage_OneCandidate_WalkinPresent_NoSupplement(t *testing.T) {
 }
 
 // TestDecideLinkage_OneCandidate_TaggedNotInAttendees_AddsWalkin
-// fires Step 5 walk-in supplemental for the missing contact.
+// fires the walk-in supplemental interaction for the missing contact.
 func TestDecideLinkage_OneCandidate_TaggedNotInAttendees_AddsWalkin(t *testing.T) {
 	sessionID := uuid.New()
 	cA := uuid.New() // in attendees

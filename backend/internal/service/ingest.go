@@ -1684,11 +1684,10 @@ type desiredInteraction struct {
 // meeting_note.recorded envelope inside the per-event savepoint.
 //
 // Implements the full linkage-detection algorithm per
-// .ai/spec/mac-daemon-phase-2-anarlog-matching.md §Linkage detection
-// — Steps 1, 2, 4, 5. Participant-signal disambiguation (Step 3) is
-// deferred; the handler always lands on conflict_pending when 2+
-// calendar candidates match. Re-sync diff and the revive-on-tombstone
-// branch share the same code path.
+// .ai/spec/mac-daemon-phase-2-anarlog-matching.md §Linkage detection.
+// Participant-signal disambiguation is deferred; the handler always
+// lands on conflict_pending when 2+ calendar candidates match. Re-sync
+// diff and the revive-on-tombstone branch share the same code path.
 //
 // Returns (needsAttention, followUps, rejection): needsAttention is
 // non-nil when the final linkage_state requires user attention
@@ -2102,18 +2101,18 @@ func (s *IngestService) handleMeetingNoteRecorded(
 	return needs, followUps, nil
 }
 
-// decideLinkage implements the spec's linkage-detection algorithm
-// (Steps 1, 2, 4, 5 — participant-signal disambiguation is deferred).
-// Returns the linkage state, linked_kind/id pointers, and the desired
-// session-attributed interaction set.
+// decideLinkage implements the spec's linkage-detection algorithm.
+// Participant-signal disambiguation is deferred. Returns the linkage
+// state, linked_kind/id pointers, and the desired session-attributed
+// interaction set.
 //
 //   - 0 candidates, no tagged humans → orphan_needs_review (no
 //     interactions).
 //   - 0 candidates, ≥1 resolved tagged human → linked_impromptu (one
 //     interaction per resolved contact).
-//   - 1 candidate → linked. Step 5 walk-in supplemental fires for each
-//     resolved tagged contact NOT already in the event's
-//     matched_contact_ids.
+//   - 1 candidate → linked. A walk-in supplemental interaction is
+//     emitted for each resolved tagged contact NOT already in the
+//     event's matched_contact_ids.
 //   - 2+ candidates → conflict_pending. The current implementation
 //     never disambiguates; participant-signal scoring lands in a
 //     future revision.
@@ -2140,7 +2139,7 @@ func decideLinkage(
 		cand := candidates[0]
 		kind := cand.Kind
 		id := cand.ID
-		// Step 5 walk-in supplemental: per tagged contact NOT in event
+		// Walk-in supplemental: per tagged contact NOT in event
 		// attendees, add one walk-in interaction.
 		attendees := make(map[uuid.UUID]struct{}, len(cand.AttendeeContactIDs))
 		for _, aid := range cand.AttendeeContactIDs {
