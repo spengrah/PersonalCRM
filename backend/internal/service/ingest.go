@@ -1160,6 +1160,48 @@ func (s *IngestService) handleExternalContactUpserted(
 			matched = true
 		}
 	}
+
+	// Anarlog-humans identity registration. For source='anarlog_humans'
+	// only, write an external_identity row keyed by the anarlog_human_id
+	// itself so the meeting_note.recorded handler can resolve
+	// participant_ids → CRM contact_ids via FindContactIDByAnarlogHumanIDTx.
+	// If the email/phone path above resolved a contact_id, link the new
+	// identity row to it in the same tx. The Import-handler backfill
+	// (handlers/import.go) covers the "tag now, import later" path.
+	if env.Source == "anarlog_humans" && s.identityLookup != nil {
+		result, idErr := s.identity.MatchOrCreateTx(ctx, tx, MatchRequest{
+			RawIdentifier: p.EntityID,
+			Type:          identity.IdentifierTypeAnarlogHuman,
+			Source:        env.Source,
+			SourceID:      &p.EntityID,
+			DisplayName:   p.DisplayName,
+		})
+		if idErr != nil {
+			return &IngestPerEventRejection{
+				Code:    ingestRejectIdentityMatchFailed,
+				Message: fmt.Sprintf("identity match (anarlog_human_id): %s", idErr.Error()),
+			}
+		}
+		// If the external_contact's email/phone resolved a CRM contact
+		// AND the new anarlog identity row is unmatched, link it.
+		// Defensive guards: only link when both sides have populated
+		// pointers AND the identity row is genuinely unmatched (avoid
+		// clobbering a manual link from a prior import).
+		if external != nil && external.CRMContactID != nil &&
+			result != nil && result.Identity != nil && result.Identity.ContactID == nil {
+			if _, linkErr := s.identityLookup.LinkIdentityToContactTx(ctx, tx, repository.LinkIdentityRequest{
+				IdentityID: result.Identity.ID,
+				ContactID:  *external.CRMContactID,
+				MatchType:  repository.MatchTypeExact,
+			}); linkErr != nil {
+				return &IngestPerEventRejection{
+					Code:    ingestRejectIdentityMatchFailed,
+					Message: fmt.Sprintf("link anarlog_human_id identity to contact: %s", linkErr.Error()),
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
