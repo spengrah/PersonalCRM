@@ -145,6 +145,7 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 
 	titleMatcher := anarlog.NewTitleMatcher(contactRepo)
 	titleDiscoveryWriter := anarlog.NewDiscoveryWriter(externalRepo)
+	phoneCallRepo := repository.NewPhoneCallRepository(database.Queries)
 	ingestService := service.NewIngestService(
 		database,
 		eventBus,
@@ -158,12 +159,13 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 		interactionRepo,
 		identityRepo,
 		contactSvc,
-		nil, // phoneCalls unused on meeting_note path
+		nil, // phoneCalls (writer) unused on meeting_note path
 		nil, // contactRecorder unused
 		nil, // cadence unused
 		nil, // followUp unused
 		titleMatcher,
 		titleDiscoveryWriter,
+		phoneCallRepo, // phone_call linkage candidates (read)
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 

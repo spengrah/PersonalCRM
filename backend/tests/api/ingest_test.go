@@ -123,7 +123,7 @@ func setupIngestTestRouter(t *testing.T, enableIngest bool) *ingestTestSetup {
 	// safe — raw_message envelopes are rejected at the handler with
 	// PAYLOAD_INVALID before reaching the inline handler. nil
 	// hostLiveness skips the FOR UPDATE re-check (test path).
-	ingestService := service.NewIngestService(database, eventBus, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ingestService := service.NewIngestService(database, eventBus, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	gin.SetMode(gin.TestMode)
@@ -699,7 +699,7 @@ func TestIngest_MidTxRollback_RollsBack_And_Returns500(t *testing.T) {
 	// so the rest of the suite isn't affected.
 	fake := &failingRepo{inner: setup.eventRepo, failOn: 3}
 	bus := setup.busFactory(fake)
-	ingestService := service.NewIngestService(setup.database, bus, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ingestService := service.NewIngestService(setup.database, bus, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler := handlers.NewIngestHandler(ingestService)
 
 	cfg := config.TestConfig()

@@ -471,6 +471,7 @@ func run() int {
 		followUpManager,
 		titleMatcher,
 		titleDiscoveryWriter,
+		phoneCallRepoForIngest, // phone_call linkage candidates for meeting_note Step 1
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
