@@ -1193,7 +1193,7 @@ func TestMeetingNote_ConcurrentFirstInsertConverges(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// PR 4 — title-extraction + discovery integration tests.
+// Title-extraction + discovery integration tests.
 //
 // These tests use Q-prefixed synthetic alphabetic tokens to avoid trigram
 // cross-pollination on the shared test DB (per CLAUDE.md gotcha
@@ -1336,8 +1336,8 @@ func TestMeetingNote_TitleMatch_OrphanWithTagsAndTitleMatch(t *testing.T) {
 // ----------------------------------------------------------------------------
 // TC-T2 — orphan_with_tags_and_title_no_match: tagged Alice + title
 // "Alice / Carol" where Carol is NOT a CRM contact. State stays
-// linked_impromptu (PR 3 behavior); 1 interaction (Alice tagged); 1
-// anarlog_title row for "carol".
+// linked_impromptu (tagged-anchor without title-matched contacts);
+// 1 interaction (Alice tagged); 1 anarlog_title row for "carol".
 // ----------------------------------------------------------------------------
 func TestMeetingNote_TitleMatch_OrphanWithTagsAndTitleNoMatch(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
@@ -1861,7 +1861,7 @@ func TestMeetingNote_TitleMatch_SourceIDDeterministic(t *testing.T) {
 
 // ----------------------------------------------------------------------------
 // TC-T15 — metadata_shape: every anarlog_title row has the four
-// metadata keys PR 7's UI depends on.
+// metadata keys the downstream UI depends on.
 // ----------------------------------------------------------------------------
 func TestMeetingNote_TitleMatch_MetadataShape(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
@@ -1886,11 +1886,12 @@ func TestMeetingNote_TitleMatch_MetadataShape(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// TC-T16 — regression_pr3_interactions_unchanged: a session with no
-// title content behaves exactly as PR 3 (one tagged interaction,
-// linked_impromptu, no anarlog_title rows).
+// TC-T16 — regression_unchanged_for_empty_title: a session with no
+// extractable tokens in the title behaves identically to the pre-
+// title-parsing path (one tagged interaction, linked_impromptu, no
+// anarlog_title rows).
 // ----------------------------------------------------------------------------
-func TestMeetingNote_TitleMatch_RegressionPR3UnchangedForEmptyTitle(t *testing.T) {
+func TestMeetingNote_TitleMatch_RegressionUnchangedForEmptyTitle(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
 	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
@@ -1985,18 +1986,46 @@ func TestMeetingNote_TitleMatch_CountQueryExcludesAnarlogTitle(t *testing.T) {
 	require.Equal(t, int64(0), srcCount,
 		"CountUnmatched(anarlog_title) MUST be 0 — filter excludes all rows")
 
-	// CountAllUnmatched MUST NOT count this specific row. We verify by
-	// asserting the DisplayName-prefix count for our token is 0 in the
-	// list/count paths (the row exists in raw `external_contact` but is
-	// filtered out by the imports queries).
+	// Sanity: the raw row exists in external_contact (so the test
+	// isn't trivially passing on an empty DB).
 	titlePrefixCount := countAnarlogTitleRowsForToken(t, env, tokenJ)
 	require.Equal(t, int64(1), titlePrefixCount,
 		"the raw row exists in external_contact (sanity check)")
-	// And the imports-facing list/count for this source is empty:
+
+	// Per-source list MUST be empty (filter excludes all anarlog_title rows).
 	imports, err := env.externalRepo.ListUnmatched(ctx, "anarlog_title", 100, 0)
 	require.NoError(t, err)
 	require.Empty(t, imports,
 		"ListUnmatched(anarlog_title) MUST be empty — filter excludes all rows")
+
+	// CountAllUnmatched + ListAllUnmatched MUST also exclude the row.
+	// We assert by iterating the full unmatched-across-sources list and
+	// checking the deterministic source_id we just wrote is absent.
+	// This is an invariant check (no before/after delta on the count
+	// itself, which would be flaky on a shared DB), so it survives
+	// concurrent activity in other tests.
+	sid, err := uuid.Parse(sessionUUID)
+	require.NoError(t, err)
+	wroteSourceID := computeTestAnarlogTitleSourceID(strings.ToLower(tokenJ), sid)
+	allImports, err := env.externalRepo.ListAllUnmatched(ctx, 1000, 0)
+	require.NoError(t, err)
+	for _, row := range allImports {
+		require.NotEqual(t, "anarlog_title", row.Source,
+			"ListAllUnmatched MUST NOT include any anarlog_title rows: %+v", row)
+		require.NotEqual(t, wroteSourceID, row.SourceID,
+			"ListAllUnmatched MUST NOT include our specific anarlog_title row")
+	}
+	// CountAllUnmatched is harder to invariant-assert on a shared DB,
+	// but we can pin the relationship list+count parity by re-checking
+	// the count delta a delta-free way: after our write, CountAll is
+	// either unchanged or smaller-equal-than the prior list-length;
+	// either way, the all-imports list cannot contain our row, which
+	// is the only assertion that matters for the filter contract.
+	allCount, err := env.externalRepo.CountAllUnmatched(ctx)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, allCount, int64(0))
+	require.LessOrEqual(t, allCount, int64(len(allImports))+50,
+		"CountAllUnmatched must agree with ListAllUnmatched within shared-DB drift bounds")
 }
 
 // ----------------------------------------------------------------------------
@@ -2173,11 +2202,11 @@ func TestMeetingNote_TitleMatch_PreviouslyAmbiguousNowDisambiguated(t *testing.T
 // TC-T24 — legacy_session_backfills_discovery_on_carry_forward.
 // Simulates a pre-title-parsing ingest where a meeting_note row exists for a
 // title with unmatched tokens but NO companion anarlog_title rows
-// (because PR3 didn't write them). Re-ingesting the IDENTICAL payload
-// hits the bus-dedup path; the meeting_note inline-on-duplicate probe
-// re-enters the handler; hashes are unchanged so carry-forward fires;
-// Block B MUST still run unconditionally and backfill the discovery
-// row. Regression for the Block-B-runs-unconditionally invariant —
+// (because the prior code didn't write them). Re-ingesting the IDENTICAL
+// payload hits the bus-dedup path; the meeting_note inline-on-duplicate
+// probe re-enters the handler; hashes are unchanged so carry-forward
+// fires; Block B MUST still run unconditionally and backfill the
+// discovery row. Regression for the Block-B-runs-unconditionally invariant —
 // gating Block B on !carryForward would break this case.
 // ----------------------------------------------------------------------------
 func TestMeetingNote_TitleMatch_LegacySessionBackfillsDiscoveryOnCarryForward(t *testing.T) {

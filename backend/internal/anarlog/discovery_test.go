@@ -97,7 +97,7 @@ func TestUpsertTitleCandidateTx_TitleCaseNormalization(t *testing.T) {
 }
 
 // TestUpsertTitleCandidateTx_MetadataShape — verifies the four keys
-// the PR 7 UI contract depends on.
+// the downstream UI contract depends on.
 func TestUpsertTitleCandidateTx_MetadataShape(t *testing.T) {
 	mock := &mockExternalUpserter{}
 	w := NewDiscoveryWriter(mock)
