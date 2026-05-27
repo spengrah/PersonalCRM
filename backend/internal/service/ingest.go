@@ -2294,6 +2294,9 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		Int("tagged_unresolved", len(p.ParticipantIDs)-len(resolvedTagged)).
 		Int("interactions_created", interactionsCreated).
 		Int("interactions_dropped", interactionsDropped).
+		Int("title_tokens_extracted", len(titleTokens)).
+		Int("title_tokens_matched", len(titleMatched)).
+		Int("title_tokens_unmatched", len(titleUnmatched)).
 		Bool("revive_path", revivePath).
 		Bool("carry_forward", carryForward).
 		Bool("input_hash_changed", priorInputHash != newInputHash).
