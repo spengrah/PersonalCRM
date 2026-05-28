@@ -78,7 +78,6 @@ final class RepairerTests: XCTestCase {
     ) -> Repairer {
         Repairer(RepairerDependencies(
             paths: makePaths(),
-            filesystem: InMemoryFilesystem(),
             keychain: keychain,
             configStoreFactory: { url in ConfigStore(fileURL: url) },
             piClientFactory: { url in

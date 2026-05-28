@@ -94,7 +94,6 @@ struct ProductionContext {
         let capturedLogger = logger
         return Repairer(RepairerDependencies(
             paths: paths,
-            filesystem: filesystem,
             keychain: keychain,
             configStoreFactory: { url in ConfigStore(fileURL: url) },
             piClientFactory: { url in PiClient(baseURL: url, logger: capturedLogger) },

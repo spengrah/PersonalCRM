@@ -12,6 +12,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/service"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -264,19 +265,46 @@ func TestMacHostRotateKey_WrongCurrentKey(t *testing.T) {
 	require.Nil(t, row.ConsumedAt, "token must not be consumed by rejected rotate")
 }
 
+// callRotateAPIKeyDirect calls the service layer directly with the
+// pre-rotation authenticated hash already captured. This bypasses
+// middleware so we can deterministically exercise the CAS race: both
+// callers prove they "saw" the same starting hash, exactly as
+// happens when their HTTP requests both reach middleware before the
+// first commit. Avoids the flaky HTTP-level race where the second
+// request can be ordered AFTER the first commit at the middleware
+// layer (and then correctly fail with INVALID_KEY rather than
+// STALE_AUTH).
+func callRotateAPIKeyDirect(
+	t *testing.T,
+	env *macHostTestEnv,
+	hostID uuid.UUID,
+	startingHash, token string,
+) (*service.RotateAPIKeyResult, error) {
+	t.Helper()
+	return env.macService.RotateAPIKey(context.Background(), hostID, startingHash, token)
+}
+
 func TestMacHostRotateKey_ConcurrentRotation_DifferentTokens(t *testing.T) {
 	env := setupMacHostEnv(t)
-	hostID, oldKey := pairFreshHost(t, env, "rotate-concurrent-diff")
+	hostID, _ := pairFreshHost(t, env, "rotate-concurrent-diff")
 	tokenA := mintRotateToken(t, env)
 	tokenB := mintRotateToken(t, env)
 
-	// Launch two parallel rotations with the same OLD key but
-	// different tokens. Both authenticate via middleware (same
-	// api_key_hash); one wins the row lock, the other's CAS check
-	// fails and it returns 401 STALE_AUTH without consuming its token.
+	// Snapshot the pre-rotation hash. Both goroutines pass THIS hash
+	// as the expectedCurrentHash, modelling the in-flight HTTP case
+	// where both requests' middleware saw the same starting state
+	// before either committed. Bypassing middleware here is what
+	// makes the test deterministic — if we used HTTP, the second
+	// request could legitimately race past the first commit and get
+	// INVALID_KEY at the middleware layer (a different valid
+	// outcome) instead of STALE_AUTH at the service CAS check.
+	pre, err := env.hostRepo.GetHost(context.Background(), hostID)
+	require.NoError(t, err)
+	startingHash := pre.APIKeyHash
+
 	type rotateOutcome struct {
-		status int
-		body   string
+		res *service.RotateAPIKeyResult
+		err error
 	}
 	results := make(chan rotateOutcome, 2)
 	var wg sync.WaitGroup
@@ -284,10 +312,8 @@ func TestMacHostRotateKey_ConcurrentRotation_DifferentTokens(t *testing.T) {
 		wg.Add(1)
 		go func(token string) {
 			defer wg.Done()
-			w := macHTTP(t, env, http.MethodPost, "/api/v1/host/"+hostID.String()+"/rotate-key",
-				hostAuthHeaders(hostID, oldKey),
-				map[string]any{"pairing_token": token})
-			results <- rotateOutcome{status: w.Code, body: w.Body.String()}
+			res, err := callRotateAPIKeyDirect(t, env, hostID, startingHash, token)
+			results <- rotateOutcome{res: res, err: err}
 		}(tok)
 	}
 	wg.Wait()
@@ -296,27 +322,17 @@ func TestMacHostRotateKey_ConcurrentRotation_DifferentTokens(t *testing.T) {
 	successes := 0
 	staleAuth := 0
 	for r := range results {
-		switch r.status {
-		case http.StatusOK:
+		if r.err == nil {
 			successes++
-		case http.StatusUnauthorized:
-			// Must be STALE_AUTH (not generic INVALID_KEY).
-			var errBody struct {
-				Error struct {
-					Code string `json:"code"`
-				} `json:"error"`
-			}
-			require.NoError(t, json.Unmarshal([]byte(r.body), &errBody))
-			require.Equal(t, "STALE_AUTH", errBody.Error.Code,
-				"401 loser must be STALE_AUTH, not %s; body=%s",
-				errBody.Error.Code, r.body)
-			staleAuth++
-		default:
-			t.Fatalf("unexpected status %d body=%s", r.status, r.body)
+			require.NotNil(t, r.res)
+			continue
 		}
+		require.ErrorIs(t, r.err, service.ErrAPIKeyStaleAuth,
+			"loser must fail CAS (ErrAPIKeyStaleAuth), got %v", r.err)
+		staleAuth++
 	}
 	require.Equal(t, 1, successes, "exactly one rotation must succeed")
-	require.Equal(t, 1, staleAuth, "exactly one rotation must fail with STALE_AUTH")
+	require.Equal(t, 1, staleAuth, "exactly one rotation must fail STALE_AUTH")
 
 	// Verify the loser's token is NOT consumed by inspecting the DB.
 	consumedCount := 0
@@ -336,17 +352,22 @@ func TestMacHostRotateKey_ConcurrentRotation_DifferentTokens(t *testing.T) {
 
 func TestMacHostRotateKey_ConcurrentRotation_SameToken(t *testing.T) {
 	env := setupMacHostEnv(t)
-	hostID, oldKey := pairFreshHost(t, env, "rotate-concurrent-same")
+	hostID, _ := pairFreshHost(t, env, "rotate-concurrent-same")
 	token := mintRotateToken(t, env)
 
 	// Two parallel rotations with the SAME single token. The service
 	// orders row-lock → CAS check → token check. The loser ALWAYS
-	// fails CAS first, so the rejection is 401 STALE_AUTH (not 400
-	// TOKEN_ALREADY_USED). Asserting the exact code locks down the
-	// ordering invariant.
+	// fails CAS first, so the rejection is ErrAPIKeyStaleAuth (NOT
+	// ErrPairingTokenAlreadyUsed). Asserting the exact error locks
+	// down the ordering invariant. See callRotateAPIKeyDirect for
+	// why this test bypasses HTTP.
+	pre, err := env.hostRepo.GetHost(context.Background(), hostID)
+	require.NoError(t, err)
+	startingHash := pre.APIKeyHash
+
 	type rotateOutcome struct {
-		status int
-		body   string
+		res *service.RotateAPIKeyResult
+		err error
 	}
 	results := make(chan rotateOutcome, 2)
 	var wg sync.WaitGroup
@@ -354,10 +375,8 @@ func TestMacHostRotateKey_ConcurrentRotation_SameToken(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			w := macHTTP(t, env, http.MethodPost, "/api/v1/host/"+hostID.String()+"/rotate-key",
-				hostAuthHeaders(hostID, oldKey),
-				map[string]any{"pairing_token": token})
-			results <- rotateOutcome{status: w.Code, body: w.Body.String()}
+			res, err := callRotateAPIKeyDirect(t, env, hostID, startingHash, token)
+			results <- rotateOutcome{res: res, err: err}
 		}()
 	}
 	wg.Wait()
@@ -366,27 +385,18 @@ func TestMacHostRotateKey_ConcurrentRotation_SameToken(t *testing.T) {
 	successes := 0
 	staleAuth := 0
 	for r := range results {
-		switch r.status {
-		case http.StatusOK:
+		if r.err == nil {
 			successes++
-		case http.StatusUnauthorized:
-			var errBody struct {
-				Error struct {
-					Code string `json:"code"`
-				} `json:"error"`
-			}
-			require.NoError(t, json.Unmarshal([]byte(r.body), &errBody))
-			require.Equal(t, "STALE_AUTH", errBody.Error.Code,
-				"loser must fail CAS (STALE_AUTH) before reaching token-consume; body=%s", r.body)
-			staleAuth++
-		default:
-			t.Fatalf("unexpected status %d body=%s", r.status, r.body)
+			continue
 		}
+		require.ErrorIs(t, r.err, service.ErrAPIKeyStaleAuth,
+			"loser must fail CAS (ErrAPIKeyStaleAuth) before reaching token-consume, got %v", r.err)
+		staleAuth++
 	}
 	require.Equal(t, 1, successes, "exactly one rotation must succeed")
-	require.Equal(t, 1, staleAuth, "exactly one rotation must fail with STALE_AUTH")
+	require.Equal(t, 1, staleAuth, "exactly one rotation must fail STALE_AUTH")
 
-	// The token IS consumed (by the winner before the loser's CAS).
+	// The token IS consumed (by the winner, before the loser's CAS).
 	hash := sha256.Sum256([]byte(token))
 	tx, err := env.database.Pool.Begin(context.Background())
 	require.NoError(t, err)

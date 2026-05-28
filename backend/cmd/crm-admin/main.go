@@ -24,6 +24,14 @@
 //
 //	--revoke-host <uuid>          Revoke a paired Mac host by id.
 //
+//	--rotate-host-key <uuid>      Validate the given host_id is an active
+//	                              paired host, mint a fresh pairing token,
+//	                              and print the templated
+//	                              `crm-mac install --re-pair --pair <token>`
+//	                              command. The rotation itself runs on the
+//	                              Mac — this binary does not hold the
+//	                              per-host pair-key.
+//
 // See backend/internal/messages/admin_rematch.go for the rematch
 // business logic and backend/internal/service/mac_host.go for the
 // pairing service. This binary is a thin CLI shim so the entire

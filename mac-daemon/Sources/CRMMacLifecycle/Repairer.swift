@@ -22,7 +22,6 @@ import CRMMacPiClient
 
 public struct RepairerDependencies {
     public let paths: LifecyclePaths
-    public let filesystem: FilesystemAdapter
     public let keychain: KeychainStore
     public let configStoreFactory: @Sendable (URL) -> ConfigStore
     /// Matches Installer's signature: takes a `URL` (the
@@ -33,7 +32,6 @@ public struct RepairerDependencies {
 
     public init(
         paths: LifecyclePaths,
-        filesystem: FilesystemAdapter,
         keychain: KeychainStore,
         configStoreFactory: @escaping @Sendable (URL) -> ConfigStore,
         piClientFactory: @escaping @Sendable (URL) -> PiClient,
@@ -41,7 +39,6 @@ public struct RepairerDependencies {
         logger: LoggerProtocol
     ) {
         self.paths = paths
-        self.filesystem = filesystem
         self.keychain = keychain
         self.configStoreFactory = configStoreFactory
         self.piClientFactory = piClientFactory
@@ -52,7 +49,6 @@ public struct RepairerDependencies {
 
 public enum RepairerError: Error, CustomStringConvertible {
     case noExistingInstall(reason: String)
-    case readCurrentKeyFailed(underlying: String)
     case rotateRequestFailed(underlying: PiClientError)
     /// Persistent failure AFTER a successful server-side rotation.
     /// At this point the server has committed the new api-key hash
@@ -72,7 +68,6 @@ public enum RepairerError: Error, CustomStringConvertible {
     public var description: String {
         switch self {
         case .noExistingInstall(let r): return "no existing install: \(r)"
-        case .readCurrentKeyFailed(let e): return "read current api-key failed: \(e)"
         case .rotateRequestFailed(let e): return "rotate request failed: \(e)"
         case .persistFailedAfterRotation:
             // Deliberately redact the plaintext — the CLI wrapper is

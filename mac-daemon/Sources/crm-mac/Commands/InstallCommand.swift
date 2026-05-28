@@ -330,8 +330,21 @@ struct InstallCommand: AsyncParsableCommand {
                 """.utf8))
             throw ExitCode(4)
         } catch RepairerError.responseDateParseFailed(let raw) {
+            // The api-key WAS written to disk before this throw, so
+            // server-side rotation succeeded. But the daemon-restart
+            // step was skipped because the response was malformed —
+            // a currently-running daemon still holds the OLD key in
+            // memory and will start failing auth on its next
+            // heartbeat. The operator's recovery is to force a
+            // restart so the daemon re-reads the new api-key file.
             FileHandle.standardError.write(Data(
-                "Pi response had unparseable api_key_rotated_at value: \(raw)\nThe new api-key was written to disk and the rotation likely succeeded server-side. Verify the daemon's next heartbeat returns 200 via `crm-mac status`.\n".utf8))
+                """
+                Pi response had unparseable api_key_rotated_at value: \(raw)
+                The new api-key was written to disk; the rotation likely succeeded server-side, but the daemon restart step was skipped.
+                If a daemon is currently running it is still holding the OLD key in memory and will start returning 401 on its next heartbeat.
+                Run `crm-mac stop && crm-mac start` (NOT just `crm-mac start`) to force the running daemon to restart and pick up the new api-key. Then verify via `crm-mac status` that heartbeats return 200.
+
+                """.utf8))
             throw ExitCode(6)
         }
     }
