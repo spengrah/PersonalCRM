@@ -458,6 +458,19 @@ func TestIntegration_FollowUpManager_OutboundFreshCreatesPendingRow(t *testing.T
 	require.NotNil(t, pending.IdempotencyKey, "step-1 insert must populate idempotency_key")
 	assert.NotEmpty(t, *pending.IdempotencyKey)
 
+	// E2 call-site wire-format lock: the stored marker_json must decode to
+	// (reach_out, followup_loop) with the contact's id and the configured
+	// integration instance — proving the follow-up create passes the correct
+	// fields to EncodeMarker.
+	markerJSON, ok := pending.Metadata["marker_json"].(string)
+	require.True(t, ok, "pending follow-up metadata must carry marker_json")
+	marker, ok := contacttask.DecodeMarker(markerJSON)
+	require.True(t, ok, "marker_json must decode as a CRM marker")
+	assert.Equal(t, contact.ID.String(), marker.ContactID)
+	assert.Equal(t, contacttask.KindReachOut, marker.Kind)
+	assert.Equal(t, contacttask.LifecycleFollowUpLoop, marker.Lifecycle)
+	assert.Equal(t, "inst-test", marker.Instance)
+
 	// river_job row: kind=todoist_followup_create, args contains contact_task_id.
 	n := env.countRiverJobsByKind(t, (consumerjobs.TodoistFollowUpCreateJobArgs{}).Kind(), pending.ID)
 	assert.Equal(t, 1, n, "a single TodoistFollowUpCreateJob must be enqueued in the same tx")
