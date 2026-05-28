@@ -11,8 +11,126 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const ClearMeetingNoteConflict = `-- name: ClearMeetingNoteConflict :one
+UPDATE meeting_note SET
+    linked_kind         = NULL,
+    linked_id           = NULL,
+    linkage_state       = $1,
+    conflict_candidates = NULL,
+    resolved_set_hash   = $2
+WHERE id = $3
+  AND deleted_at IS NULL
+  AND linkage_state = 'conflict_pending'
+RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates
+`
+
+type ClearMeetingNoteConflictParams struct {
+	NewState           string      `json:"new_state"`
+	NewResolvedSetHash string      `json:"new_resolved_set_hash"`
+	ID                 pgtype.UUID `json:"id"`
+}
+
+// Promotes a conflict_pending row to the "none of these" Step 4 outcome
+// (linked_impromptu / orphan_title_augmented / orphan_needs_review).
+// Caller supplies the new state AND the new resolved_set_hash so the
+// next daemon-side carry-forward correctly preserves the user's
+// decision when matching inputs haven't changed. Clears linked_kind,
+// linked_id, conflict_candidates. Returns pgx.ErrNoRows when the row
+// is not in conflict_pending.
+func (q *Queries) ClearMeetingNoteConflict(ctx context.Context, arg ClearMeetingNoteConflictParams) (*MeetingNote, error) {
+	row := q.db.QueryRow(ctx, ClearMeetingNoteConflict, arg.NewState, arg.NewResolvedSetHash, arg.ID)
+	var i MeetingNote
+	err := row.Scan(
+		&i.ID,
+		&i.AnarlogSessionID,
+		&i.Title,
+		&i.Summary,
+		&i.Memo,
+		&i.Participants,
+		&i.MacHostID,
+		&i.LinkedKind,
+		&i.LinkedID,
+		&i.LinkageState,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.InputHash,
+		&i.ResolvedSetHash,
+		&i.LastContentHash,
+		&i.MeetingAt,
+		&i.ConflictCandidates,
+	)
+	return &i, err
+}
+
+const GetMeetingNoteByID = `-- name: GetMeetingNoteByID :one
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates FROM meeting_note
+WHERE id = $1 AND deleted_at IS NULL
+`
+
+// Reads a single live meeting_note row by primary key. Used by the
+// resolve-link service to pre-validate the row exists before opening
+// the FOR UPDATE tx (and by the needs-attention list endpoint when it
+// needs a fresh read outside the list query).
+func (q *Queries) GetMeetingNoteByID(ctx context.Context, id pgtype.UUID) (*MeetingNote, error) {
+	row := q.db.QueryRow(ctx, GetMeetingNoteByID, id)
+	var i MeetingNote
+	err := row.Scan(
+		&i.ID,
+		&i.AnarlogSessionID,
+		&i.Title,
+		&i.Summary,
+		&i.Memo,
+		&i.Participants,
+		&i.MacHostID,
+		&i.LinkedKind,
+		&i.LinkedID,
+		&i.LinkageState,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.InputHash,
+		&i.ResolvedSetHash,
+		&i.LastContentHash,
+		&i.MeetingAt,
+		&i.ConflictCandidates,
+	)
+	return &i, err
+}
+
+const GetMeetingNoteByIDForUpdate = `-- name: GetMeetingNoteByIDForUpdate :one
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates FROM meeting_note
+WHERE id = $1 AND deleted_at IS NULL
+FOR UPDATE
+`
+
+// FOR UPDATE variant of GetMeetingNoteByID. Used inside the resolve-link
+// tx to serialize concurrent resolve attempts on the same row.
+func (q *Queries) GetMeetingNoteByIDForUpdate(ctx context.Context, id pgtype.UUID) (*MeetingNote, error) {
+	row := q.db.QueryRow(ctx, GetMeetingNoteByIDForUpdate, id)
+	var i MeetingNote
+	err := row.Scan(
+		&i.ID,
+		&i.AnarlogSessionID,
+		&i.Title,
+		&i.Summary,
+		&i.Memo,
+		&i.Participants,
+		&i.MacHostID,
+		&i.LinkedKind,
+		&i.LinkedID,
+		&i.LinkageState,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.InputHash,
+		&i.ResolvedSetHash,
+		&i.LastContentHash,
+		&i.MeetingAt,
+		&i.ConflictCandidates,
+	)
+	return &i, err
+}
+
 const GetMeetingNoteBySessionID = `-- name: GetMeetingNoteBySessionID :one
-SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at FROM meeting_note
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates FROM meeting_note
 WHERE anarlog_session_id = $1
   AND deleted_at IS NULL
 `
@@ -39,12 +157,13 @@ func (q *Queries) GetMeetingNoteBySessionID(ctx context.Context, anarlogSessionI
 		&i.ResolvedSetHash,
 		&i.LastContentHash,
 		&i.MeetingAt,
+		&i.ConflictCandidates,
 	)
 	return &i, err
 }
 
 const GetMeetingNoteBySessionIDForUpdate = `-- name: GetMeetingNoteBySessionIDForUpdate :one
-SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at FROM meeting_note
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates FROM meeting_note
 WHERE anarlog_session_id = $1
 FOR UPDATE
 `
@@ -74,12 +193,13 @@ func (q *Queries) GetMeetingNoteBySessionIDForUpdate(ctx context.Context, anarlo
 		&i.ResolvedSetHash,
 		&i.LastContentHash,
 		&i.MeetingAt,
+		&i.ConflictCandidates,
 	)
 	return &i, err
 }
 
 const GetTombstonedMeetingNoteBySessionID = `-- name: GetTombstonedMeetingNoteBySessionID :one
-SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at FROM meeting_note
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates FROM meeting_note
 WHERE anarlog_session_id = $1
   AND deleted_at IS NOT NULL
 LIMIT 1
@@ -111,6 +231,7 @@ func (q *Queries) GetTombstonedMeetingNoteBySessionID(ctx context.Context, anarl
 		&i.ResolvedSetHash,
 		&i.LastContentHash,
 		&i.MeetingAt,
+		&i.ConflictCandidates,
 	)
 	return &i, err
 }
@@ -130,7 +251,8 @@ INSERT INTO meeting_note (
     input_hash,
     resolved_set_hash,
     last_content_hash,
-    meeting_at
+    meeting_at,
+    conflict_candidates
 ) VALUES (
     $1,
     $2,
@@ -144,26 +266,28 @@ INSERT INTO meeting_note (
     $10,
     $11,
     $12,
-    $13
+    $13,
+    $14
 )
 ON CONFLICT (anarlog_session_id) WHERE deleted_at IS NULL DO NOTHING
-RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at
+RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates
 `
 
 type InsertMeetingNoteParams struct {
-	AnarlogSessionID pgtype.UUID        `json:"anarlog_session_id"`
-	Title            pgtype.Text        `json:"title"`
-	Summary          pgtype.Text        `json:"summary"`
-	Memo             pgtype.Text        `json:"memo"`
-	Participants     []byte             `json:"participants"`
-	MacHostID        pgtype.UUID        `json:"mac_host_id"`
-	LinkedKind       pgtype.Text        `json:"linked_kind"`
-	LinkedID         pgtype.UUID        `json:"linked_id"`
-	LinkageState     string             `json:"linkage_state"`
-	InputHash        string             `json:"input_hash"`
-	ResolvedSetHash  string             `json:"resolved_set_hash"`
-	LastContentHash  pgtype.Text        `json:"last_content_hash"`
-	MeetingAt        pgtype.Timestamptz `json:"meeting_at"`
+	AnarlogSessionID   pgtype.UUID        `json:"anarlog_session_id"`
+	Title              pgtype.Text        `json:"title"`
+	Summary            pgtype.Text        `json:"summary"`
+	Memo               pgtype.Text        `json:"memo"`
+	Participants       []byte             `json:"participants"`
+	MacHostID          pgtype.UUID        `json:"mac_host_id"`
+	LinkedKind         pgtype.Text        `json:"linked_kind"`
+	LinkedID           pgtype.UUID        `json:"linked_id"`
+	LinkageState       string             `json:"linkage_state"`
+	InputHash          string             `json:"input_hash"`
+	ResolvedSetHash    string             `json:"resolved_set_hash"`
+	LastContentHash    pgtype.Text        `json:"last_content_hash"`
+	MeetingAt          pgtype.Timestamptz `json:"meeting_at"`
+	ConflictCandidates []byte             `json:"conflict_candidates"`
 }
 
 // Meeting Note queries
@@ -196,6 +320,7 @@ func (q *Queries) InsertMeetingNote(ctx context.Context, arg InsertMeetingNotePa
 		arg.ResolvedSetHash,
 		arg.LastContentHash,
 		arg.MeetingAt,
+		arg.ConflictCandidates,
 	)
 	var i MeetingNote
 	err := row.Scan(
@@ -215,6 +340,7 @@ func (q *Queries) InsertMeetingNote(ctx context.Context, arg InsertMeetingNotePa
 		&i.ResolvedSetHash,
 		&i.LastContentHash,
 		&i.MeetingAt,
+		&i.ConflictCandidates,
 	)
 	return &i, err
 }
@@ -256,37 +382,139 @@ func (q *Queries) ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID p
 	return items, nil
 }
 
+const ListMeetingNotesNeedingAttention = `-- name: ListMeetingNotesNeedingAttention :many
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates FROM meeting_note
+WHERE deleted_at IS NULL
+  AND linkage_state IN ('conflict_pending', 'orphan_needs_review')
+  AND ($1::uuid IS NULL OR mac_host_id = $1)
+ORDER BY meeting_at DESC
+`
+
+// Returns every live meeting_note row whose linkage_state is one of
+// ('conflict_pending', 'orphan_needs_review'). Optional host_id filter
+// via sqlc.narg — when NULL, returns all hosts; when set, filters to a
+// specific mac_host_id. Ordered by meeting_at DESC so newest needs-
+// attention items surface first. Index-backed by the partial
+// idx_meeting_note_linkage_state from migration 053; the in-memory sort
+// on the small filtered set is cheap.
+func (q *Queries) ListMeetingNotesNeedingAttention(ctx context.Context, hostID pgtype.UUID) ([]*MeetingNote, error) {
+	rows, err := q.db.Query(ctx, ListMeetingNotesNeedingAttention, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*MeetingNote{}
+	for rows.Next() {
+		var i MeetingNote
+		if err := rows.Scan(
+			&i.ID,
+			&i.AnarlogSessionID,
+			&i.Title,
+			&i.Summary,
+			&i.Memo,
+			&i.Participants,
+			&i.MacHostID,
+			&i.LinkedKind,
+			&i.LinkedID,
+			&i.LinkageState,
+			&i.DeletedAt,
+			&i.CreatedAt,
+			&i.InputHash,
+			&i.ResolvedSetHash,
+			&i.LastContentHash,
+			&i.MeetingAt,
+			&i.ConflictCandidates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ResolveMeetingNoteToLinked = `-- name: ResolveMeetingNoteToLinked :one
+UPDATE meeting_note SET
+    linked_kind         = $1,
+    linked_id           = $2,
+    linkage_state       = 'linked',
+    conflict_candidates = NULL
+WHERE id = $3
+  AND deleted_at IS NULL
+  AND linkage_state = 'conflict_pending'
+RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates
+`
+
+type ResolveMeetingNoteToLinkedParams struct {
+	LinkedKind pgtype.Text `json:"linked_kind"`
+	LinkedID   pgtype.UUID `json:"linked_id"`
+	ID         pgtype.UUID `json:"id"`
+}
+
+// Sets linked_kind, linked_id, linkage_state='linked',
+// conflict_candidates=NULL on a row currently in linkage_state =
+// 'conflict_pending'. Returns pgx.ErrNoRows (caller maps to 409) when
+// the state-guard fires.
+func (q *Queries) ResolveMeetingNoteToLinked(ctx context.Context, arg ResolveMeetingNoteToLinkedParams) (*MeetingNote, error) {
+	row := q.db.QueryRow(ctx, ResolveMeetingNoteToLinked, arg.LinkedKind, arg.LinkedID, arg.ID)
+	var i MeetingNote
+	err := row.Scan(
+		&i.ID,
+		&i.AnarlogSessionID,
+		&i.Title,
+		&i.Summary,
+		&i.Memo,
+		&i.Participants,
+		&i.MacHostID,
+		&i.LinkedKind,
+		&i.LinkedID,
+		&i.LinkageState,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.InputHash,
+		&i.ResolvedSetHash,
+		&i.LastContentHash,
+		&i.MeetingAt,
+		&i.ConflictCandidates,
+	)
+	return &i, err
+}
+
 const ReviveMeetingNote = `-- name: ReviveMeetingNote :one
 UPDATE meeting_note SET
-    deleted_at        = NULL,
-    title             = $1,
-    summary           = $2,
-    memo              = $3,
-    participants      = $4,
-    linked_kind       = $5,
-    linked_id         = $6,
-    linkage_state     = $7,
-    input_hash        = $8,
-    resolved_set_hash = $9,
-    last_content_hash = $10,
-    meeting_at        = $11
-WHERE id = $12 AND deleted_at IS NOT NULL
-RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at
+    deleted_at          = NULL,
+    title               = $1,
+    summary             = $2,
+    memo                = $3,
+    participants        = $4,
+    linked_kind         = $5,
+    linked_id           = $6,
+    linkage_state       = $7,
+    input_hash          = $8,
+    resolved_set_hash   = $9,
+    last_content_hash   = $10,
+    meeting_at          = $11,
+    conflict_candidates = $12
+WHERE id = $13 AND deleted_at IS NOT NULL
+RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates
 `
 
 type ReviveMeetingNoteParams struct {
-	Title           pgtype.Text        `json:"title"`
-	Summary         pgtype.Text        `json:"summary"`
-	Memo            pgtype.Text        `json:"memo"`
-	Participants    []byte             `json:"participants"`
-	LinkedKind      pgtype.Text        `json:"linked_kind"`
-	LinkedID        pgtype.UUID        `json:"linked_id"`
-	LinkageState    string             `json:"linkage_state"`
-	InputHash       string             `json:"input_hash"`
-	ResolvedSetHash string             `json:"resolved_set_hash"`
-	LastContentHash pgtype.Text        `json:"last_content_hash"`
-	MeetingAt       pgtype.Timestamptz `json:"meeting_at"`
-	ID              pgtype.UUID        `json:"id"`
+	Title              pgtype.Text        `json:"title"`
+	Summary            pgtype.Text        `json:"summary"`
+	Memo               pgtype.Text        `json:"memo"`
+	Participants       []byte             `json:"participants"`
+	LinkedKind         pgtype.Text        `json:"linked_kind"`
+	LinkedID           pgtype.UUID        `json:"linked_id"`
+	LinkageState       string             `json:"linkage_state"`
+	InputHash          string             `json:"input_hash"`
+	ResolvedSetHash    string             `json:"resolved_set_hash"`
+	LastContentHash    pgtype.Text        `json:"last_content_hash"`
+	MeetingAt          pgtype.Timestamptz `json:"meeting_at"`
+	ConflictCandidates []byte             `json:"conflict_candidates"`
+	ID                 pgtype.UUID        `json:"id"`
 }
 
 // Clears deleted_at + writes the full updatable column set in a single
@@ -306,6 +534,7 @@ func (q *Queries) ReviveMeetingNote(ctx context.Context, arg ReviveMeetingNotePa
 		arg.ResolvedSetHash,
 		arg.LastContentHash,
 		arg.MeetingAt,
+		arg.ConflictCandidates,
 		arg.ID,
 	)
 	var i MeetingNote
@@ -326,6 +555,7 @@ func (q *Queries) ReviveMeetingNote(ctx context.Context, arg ReviveMeetingNotePa
 		&i.ResolvedSetHash,
 		&i.LastContentHash,
 		&i.MeetingAt,
+		&i.ConflictCandidates,
 	)
 	return &i, err
 }
@@ -373,34 +603,36 @@ func (q *Queries) TestHardDeleteMeetingNotesBySessionIDPrefix(ctx context.Contex
 
 const UpdateMeetingNoteOnResync = `-- name: UpdateMeetingNoteOnResync :one
 UPDATE meeting_note SET
-    title             = $1,
-    summary           = $2,
-    memo              = $3,
-    participants      = $4,
-    linked_kind       = $5,
-    linked_id         = $6,
-    linkage_state     = $7,
-    input_hash        = $8,
-    resolved_set_hash = $9,
-    last_content_hash = $10,
-    meeting_at        = $11
-WHERE id = $12 AND deleted_at IS NULL
-RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at
+    title               = $1,
+    summary             = $2,
+    memo                = $3,
+    participants        = $4,
+    linked_kind         = $5,
+    linked_id           = $6,
+    linkage_state       = $7,
+    input_hash          = $8,
+    resolved_set_hash   = $9,
+    last_content_hash   = $10,
+    meeting_at          = $11,
+    conflict_candidates = $12
+WHERE id = $13 AND deleted_at IS NULL
+RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates
 `
 
 type UpdateMeetingNoteOnResyncParams struct {
-	Title           pgtype.Text        `json:"title"`
-	Summary         pgtype.Text        `json:"summary"`
-	Memo            pgtype.Text        `json:"memo"`
-	Participants    []byte             `json:"participants"`
-	LinkedKind      pgtype.Text        `json:"linked_kind"`
-	LinkedID        pgtype.UUID        `json:"linked_id"`
-	LinkageState    string             `json:"linkage_state"`
-	InputHash       string             `json:"input_hash"`
-	ResolvedSetHash string             `json:"resolved_set_hash"`
-	LastContentHash pgtype.Text        `json:"last_content_hash"`
-	MeetingAt       pgtype.Timestamptz `json:"meeting_at"`
-	ID              pgtype.UUID        `json:"id"`
+	Title              pgtype.Text        `json:"title"`
+	Summary            pgtype.Text        `json:"summary"`
+	Memo               pgtype.Text        `json:"memo"`
+	Participants       []byte             `json:"participants"`
+	LinkedKind         pgtype.Text        `json:"linked_kind"`
+	LinkedID           pgtype.UUID        `json:"linked_id"`
+	LinkageState       string             `json:"linkage_state"`
+	InputHash          string             `json:"input_hash"`
+	ResolvedSetHash    string             `json:"resolved_set_hash"`
+	LastContentHash    pgtype.Text        `json:"last_content_hash"`
+	MeetingAt          pgtype.Timestamptz `json:"meeting_at"`
+	ConflictCandidates []byte             `json:"conflict_candidates"`
+	ID                 pgtype.UUID        `json:"id"`
 }
 
 // Single update query used for both carry-forward and re-link branches
@@ -423,6 +655,7 @@ func (q *Queries) UpdateMeetingNoteOnResync(ctx context.Context, arg UpdateMeeti
 		arg.ResolvedSetHash,
 		arg.LastContentHash,
 		arg.MeetingAt,
+		arg.ConflictCandidates,
 		arg.ID,
 	)
 	var i MeetingNote
@@ -443,6 +676,7 @@ func (q *Queries) UpdateMeetingNoteOnResync(ctx context.Context, arg UpdateMeeti
 		&i.ResolvedSetHash,
 		&i.LastContentHash,
 		&i.MeetingAt,
+		&i.ConflictCandidates,
 	)
 	return &i, err
 }

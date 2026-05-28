@@ -132,6 +132,7 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 		nil, // followUp unused
 		nil, // titleMatcher unused
 		nil, // discovery unused
+		nil, // phoneCallLinkage unused
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 

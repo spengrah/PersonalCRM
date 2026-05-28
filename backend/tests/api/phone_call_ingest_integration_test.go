@@ -228,6 +228,7 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 		followUpManager,
 		nil, // titleMatcher unused on phone_call path
 		nil, // discovery unused
+		nil, // phoneCallLinkage unused on phone_call path
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 

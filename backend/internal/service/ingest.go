@@ -199,6 +199,16 @@ type CalendarLinkageReader interface {
 	FindLinkageCandidatesTx(ctx context.Context, tx pgx.Tx, windowStart, windowEnd time.Time) ([]repository.LinkageCandidate, error)
 }
 
+// PhoneCallLinkageReader is the narrow surface the meeting_note
+// handler needs to enumerate candidate phone_call rows in a time
+// window. Concrete is *repository.PhoneCallRepository. Optional —
+// nil is supported for tests that don't exercise the phone_call
+// linkage path; the inline handler skips the phone_call query when
+// the dep is nil.
+type PhoneCallLinkageReader interface {
+	FindLinkageCandidatesTx(ctx context.Context, tx pgx.Tx, windowStart, windowEnd time.Time) ([]repository.LinkageCandidate, error)
+}
+
 // InteractionWriter is the narrow surface for the re-sync diff path
 // (list session-attributed live interactions, soft-delete obsoletes)
 // and the meeting_note.deleted cascade. Refreshes of existing
@@ -306,6 +316,7 @@ type IngestService struct {
 	hostLiveness     HostLivenessChecker
 	meetingNotes     MeetingNoteWriter
 	calendar         CalendarLinkageReader
+	phoneCallLinkage PhoneCallLinkageReader
 	interactions     InteractionWriter
 	identityLookup   AnarlogIdentityLookup
 	contactSvc       ContactInteractionRecorder
@@ -353,6 +364,7 @@ func NewIngestService(
 	followUp FollowUpApplier,
 	titleMatcher IngestTitleMatcher,
 	discovery IngestTitleDiscoveryWriter,
+	phoneCallLinkage PhoneCallLinkageReader,
 ) *IngestService {
 	return &IngestService{
 		database:         database,
@@ -364,6 +376,7 @@ func NewIngestService(
 		hostLiveness:     hostLiveness,
 		meetingNotes:     meetingNotes,
 		calendar:         calendar,
+		phoneCallLinkage: phoneCallLinkage,
 		interactions:     interactions,
 		identityLookup:   identityLookup,
 		contactSvc:       contactSvc,
@@ -1819,10 +1832,13 @@ type desiredInteraction struct {
 // meeting_note.recorded envelope inside the per-event savepoint.
 //
 // Implements the full linkage-detection algorithm per
-// .ai/spec/mac-daemon-phase-2-anarlog-matching.md §Linkage detection.
-// Participant-signal disambiguation is deferred; the handler always
-// lands on conflict_pending when 2+ calendar candidates match. Re-sync
-// diff and the revive-on-tombstone branch share the same code path.
+// .ai/spec/mac-daemon-phase-2-anarlog-matching.md §Linkage detection,
+// including Step 3 participant-signal disambiguation: 2+ candidates
+// with a strict-max-non-zero overlap against the implied set (tagged
+// ∪ title-matched) auto-link; otherwise the row lands on
+// conflict_pending with the per-candidate snapshot persisted for the
+// resolve-link endpoint to consume. Re-sync diff and the
+// revive-on-tombstone branch share the same code path.
 //
 // Returns (needsAttention, followUps, rejection): needsAttention is
 // non-nil when the final linkage_state requires user attention
@@ -2005,17 +2021,25 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		prior.ResolvedSetHash == newResolvedSetHash
 
 	var (
-		finalLinkageState   string
-		finalLinkedKind     *string
-		finalLinkedID       *uuid.UUID
-		desired             []desiredInteraction
-		candidatesLen       int
-		interactionsCreated int
-		interactionsDropped int
+		finalLinkageState       string
+		finalLinkedKind         *string
+		finalLinkedID           *uuid.UUID
+		desired                 []desiredInteraction
+		candidatesLen           int
+		interactionsCreated     int
+		interactionsDropped     int
+		conflictSnapshot        []repository.ConflictCandidateSummary
+		conflictCandidatesBytes []byte
+		conflictOverlapTop      int
 	)
 
 	if carryForward {
-		// Preserve prior linkage. No interaction writes.
+		// Preserve prior linkage. No interaction writes. The
+		// conflict_candidates column is preserved verbatim by
+		// passing prior.ConflictCandidates through to the update
+		// params below; this keeps an existing snapshot intact when
+		// a duplicate meeting_note.recorded arrives on a
+		// conflict_pending row.
 		finalLinkageState = prior.LinkageState
 		finalLinkedKind = prior.LinkedKind
 		finalLinkedID = prior.LinkedID
@@ -2030,27 +2054,66 @@ func (s *IngestService) handleMeetingNoteRecorded(
 				Message: fmt.Sprintf("find linkage candidates: %s", candErr.Error()),
 			}
 		}
+		if s.phoneCallLinkage != nil {
+			pcCands, pcErr := s.phoneCallLinkage.FindLinkageCandidatesTx(ctx, tx, windowStart, windowEnd)
+			if pcErr != nil {
+				return nil, nil, &IngestPerEventRejection{
+					Code:    ingestRejectLinkageQueryFailed,
+					Message: fmt.Sprintf("find phone_call linkage candidates: %s", pcErr.Error()),
+				}
+			}
+			candidates = append(candidates, pcCands...)
+		}
 		candidatesLen = len(candidates)
-		finalLinkageState, finalLinkedKind, finalLinkedID, desired = decideLinkage(p, sessionID, candidates, resolvedTagged, titleMatched)
+		finalLinkageState, finalLinkedKind, finalLinkedID, desired, conflictSnapshot = decideLinkage(p, sessionID, candidates, resolvedTagged, titleMatched)
+		if len(conflictSnapshot) > 0 {
+			// Observability — log the top overlap whether or not we
+			// landed on conflict_pending. The auto-resolved branch
+			// still benefits from the field (it surfaces "we picked
+			// because the winner had N overlapping participants").
+			conflictOverlapTop = conflictSnapshot[0].OverlapCount
+		}
+		if finalLinkageState == repository.LinkageStateConflictPending && len(conflictSnapshot) > 0 {
+			marshaled, mErr := json.Marshal(conflictSnapshot)
+			if mErr != nil {
+				return nil, nil, &IngestPerEventRejection{
+					Code:    ingestRejectMeetingNoteUpsertFailed,
+					Message: fmt.Sprintf("marshal conflict candidates snapshot: %s", mErr.Error()),
+				}
+			}
+			conflictCandidatesBytes = marshaled
+		}
 	}
 
 	// 6. Write meeting_note row. Branch on first-insert / revive /
 	//    carry-forward / re-link. The repository params are nearly
 	//    identical across branches; only the destination method differs.
+	//
+	// conflict_candidates handling:
+	//   - First-insert / revive / re-link: pass conflictCandidatesBytes,
+	//     which is the freshly marshaled snapshot when the new state is
+	//     conflict_pending and nil otherwise.
+	//   - Carry-forward: pass prior.ConflictCandidates verbatim so an
+	//     existing snapshot is preserved when a duplicate event arrives.
+	updateConflictCandidates := conflictCandidatesBytes
+	if carryForward {
+		updateConflictCandidates = prior.ConflictCandidates
+	}
 	params := repository.InsertMeetingNoteParams{
-		AnarlogSessionID: sessionID,
-		Title:            p.Title,
-		Summary:          p.Summary,
-		Memo:             p.Memo,
-		Participants:     p.ParticipantIDs,
-		MacHostID:        &authenticatedHostID,
-		LinkedKind:       finalLinkedKind,
-		LinkedID:         finalLinkedID,
-		LinkageState:     finalLinkageState,
-		InputHash:        newInputHash,
-		ResolvedSetHash:  newResolvedSetHash,
-		LastContentHash:  &contentHash,
-		MeetingAt:        p.MeetingAt,
+		AnarlogSessionID:   sessionID,
+		Title:              p.Title,
+		Summary:            p.Summary,
+		Memo:               p.Memo,
+		Participants:       p.ParticipantIDs,
+		MacHostID:          &authenticatedHostID,
+		LinkedKind:         finalLinkedKind,
+		LinkedID:           finalLinkedID,
+		LinkageState:       finalLinkageState,
+		InputHash:          newInputHash,
+		ResolvedSetHash:    newResolvedSetHash,
+		LastContentHash:    &contentHash,
+		MeetingAt:          p.MeetingAt,
+		ConflictCandidates: conflictCandidatesBytes,
 	}
 	switch {
 	case prior == nil:
@@ -2074,18 +2137,19 @@ func (s *IngestService) handleMeetingNoteRecorded(
 				}
 			}
 			updateParams := repository.UpdateMeetingNoteOnResyncParams{
-				ID:              racedRow.ID,
-				Title:           p.Title,
-				Summary:         p.Summary,
-				Memo:            p.Memo,
-				Participants:    p.ParticipantIDs,
-				LinkedKind:      finalLinkedKind,
-				LinkedID:        finalLinkedID,
-				LinkageState:    finalLinkageState,
-				InputHash:       newInputHash,
-				ResolvedSetHash: newResolvedSetHash,
-				LastContentHash: &contentHash,
-				MeetingAt:       p.MeetingAt,
+				ID:                 racedRow.ID,
+				Title:              p.Title,
+				Summary:            p.Summary,
+				Memo:               p.Memo,
+				Participants:       p.ParticipantIDs,
+				LinkedKind:         finalLinkedKind,
+				LinkedID:           finalLinkedID,
+				LinkageState:       finalLinkageState,
+				InputHash:          newInputHash,
+				ResolvedSetHash:    newResolvedSetHash,
+				LastContentHash:    &contentHash,
+				MeetingAt:          p.MeetingAt,
+				ConflictCandidates: conflictCandidatesBytes,
 			}
 			if _, err := s.meetingNotes.UpdateMeetingNoteOnResyncTx(ctx, tx, updateParams); err != nil {
 				return nil, nil, &IngestPerEventRejection{
@@ -2096,18 +2160,19 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		}
 	case revivePath:
 		reviveParams := repository.ReviveMeetingNoteParams{
-			ID:              prior.ID,
-			Title:           p.Title,
-			Summary:         p.Summary,
-			Memo:            p.Memo,
-			Participants:    p.ParticipantIDs,
-			LinkedKind:      finalLinkedKind,
-			LinkedID:        finalLinkedID,
-			LinkageState:    finalLinkageState,
-			InputHash:       newInputHash,
-			ResolvedSetHash: newResolvedSetHash,
-			LastContentHash: &contentHash,
-			MeetingAt:       p.MeetingAt,
+			ID:                 prior.ID,
+			Title:              p.Title,
+			Summary:            p.Summary,
+			Memo:               p.Memo,
+			Participants:       p.ParticipantIDs,
+			LinkedKind:         finalLinkedKind,
+			LinkedID:           finalLinkedID,
+			LinkageState:       finalLinkageState,
+			InputHash:          newInputHash,
+			ResolvedSetHash:    newResolvedSetHash,
+			LastContentHash:    &contentHash,
+			MeetingAt:          p.MeetingAt,
+			ConflictCandidates: conflictCandidatesBytes,
 		}
 		if _, err := s.meetingNotes.ReviveMeetingNoteTx(ctx, tx, reviveParams); err != nil {
 			return nil, nil, &IngestPerEventRejection{
@@ -2117,18 +2182,19 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		}
 	default:
 		updateParams := repository.UpdateMeetingNoteOnResyncParams{
-			ID:              prior.ID,
-			Title:           p.Title,
-			Summary:         p.Summary,
-			Memo:            p.Memo,
-			Participants:    p.ParticipantIDs,
-			LinkedKind:      finalLinkedKind,
-			LinkedID:        finalLinkedID,
-			LinkageState:    finalLinkageState,
-			InputHash:       newInputHash,
-			ResolvedSetHash: newResolvedSetHash,
-			LastContentHash: &contentHash,
-			MeetingAt:       p.MeetingAt,
+			ID:                 prior.ID,
+			Title:              p.Title,
+			Summary:            p.Summary,
+			Memo:               p.Memo,
+			Participants:       p.ParticipantIDs,
+			LinkedKind:         finalLinkedKind,
+			LinkedID:           finalLinkedID,
+			LinkageState:       finalLinkageState,
+			InputHash:          newInputHash,
+			ResolvedSetHash:    newResolvedSetHash,
+			LastContentHash:    &contentHash,
+			MeetingAt:          p.MeetingAt,
+			ConflictCandidates: updateConflictCandidates,
 		}
 		if _, err := s.meetingNotes.UpdateMeetingNoteOnResyncTx(ctx, tx, updateParams); err != nil {
 			return nil, nil, &IngestPerEventRejection{
@@ -2297,6 +2363,8 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		Int("title_tokens_extracted", len(titleTokens)).
 		Int("title_tokens_matched", len(titleMatched)).
 		Int("title_tokens_unmatched", len(titleUnmatched)).
+		Int("conflict_candidates_count", len(conflictSnapshot)).
+		Int("conflict_overlap_top", conflictOverlapTop).
 		Bool("revive_path", revivePath).
 		Bool("carry_forward", carryForward).
 		Bool("input_hash_changed", priorInputHash != newInputHash).
@@ -2307,9 +2375,10 @@ func (s *IngestService) handleMeetingNoteRecorded(
 }
 
 // decideLinkage implements the spec's linkage-detection algorithm.
-// Participant-signal disambiguation is deferred. Returns the linkage
-// state, linked_kind/id pointers, and the desired session-attributed
-// interaction set.
+// Returns the linkage state, linked_kind/id pointers, the desired
+// session-attributed interaction set, AND the conflict-candidate
+// snapshot (non-nil only when the resulting state is conflict_pending —
+// see disambiguateCandidates).
 //
 //   - 0 candidates, no tagged humans → orphan_needs_review (no
 //     interactions). Title matches DO NOT promote a no-anchor orphan
@@ -2321,22 +2390,26 @@ func (s *IngestService) handleMeetingNoteRecorded(
 //     `:title:` interaction per title-matched contact).
 //   - 1 candidate → linked. A walk-in supplemental interaction is
 //     emitted for each resolved tagged contact NOT already in the
-//     event's matched_contact_ids. Title matches DO NOT produce
-//     interactions in this state.
-//   - 2+ candidates → conflict_pending. Title matches DO NOT produce
-//     interactions in this state. Participant-signal scoring lands in
-//     a future revision.
+//     candidate's intrinsic attendee set (event matched_contact_ids
+//     OR phone_call peer per LinkageCandidate.ImpliedAttendeeSet).
+//     Title matches DO NOT produce interactions in this state.
+//   - 2+ candidates → Step 3 participant-signal disambiguation. If
+//     exactly one candidate has the strictly-highest non-zero overlap
+//     with the implied contact set (tagged ∪ title-matched), auto-link
+//     to it and run Step 5 walk-in supplemental as if there had been
+//     one candidate from the start. Otherwise → conflict_pending with
+//     the snapshot of the per-candidate overlap table.
 func decideLinkage(
 	p events.MeetingNoteRecordedPayload,
 	sessionID uuid.UUID,
 	candidates []repository.LinkageCandidate,
 	resolvedTagged []resolvedTag,
 	titleMatched []resolvedTitle,
-) (state string, linkedKind *string, linkedID *uuid.UUID, desired []desiredInteraction) {
+) (state string, linkedKind *string, linkedID *uuid.UUID, desired []desiredInteraction, snapshot []repository.ConflictCandidateSummary) {
 	switch len(candidates) {
 	case 0:
 		if len(resolvedTagged) == 0 {
-			return repository.LinkageStateOrphanNeedsReview, nil, nil, nil
+			return repository.LinkageStateOrphanNeedsReview, nil, nil, nil, nil
 		}
 		out := make([]desiredInteraction, 0, len(resolvedTagged)+len(titleMatched))
 		for _, r := range resolvedTagged {
@@ -2352,33 +2425,136 @@ func decideLinkage(
 					SourceRef: fmt.Sprintf("anarlog:%s:title:%s", sessionID.String(), tm.ContactID.String()),
 				})
 			}
-			return repository.LinkageStateOrphanTitleAugmented, nil, nil, out
+			return repository.LinkageStateOrphanTitleAugmented, nil, nil, out, nil
 		}
-		return repository.LinkageStateLinkedImpromptu, nil, nil, out
+		return repository.LinkageStateLinkedImpromptu, nil, nil, out, nil
 	case 1:
 		cand := candidates[0]
+		walkins := stepFiveWalkins(cand, resolvedTagged, sessionID)
 		kind := cand.Kind
 		id := cand.ID
-		// Walk-in supplemental: per tagged contact NOT in event
-		// attendees, add one walk-in interaction.
-		attendees := make(map[uuid.UUID]struct{}, len(cand.AttendeeContactIDs))
-		for _, aid := range cand.AttendeeContactIDs {
-			attendees[aid] = struct{}{}
-		}
-		walkins := make([]desiredInteraction, 0)
-		for _, r := range resolvedTagged {
-			if _, present := attendees[r.ContactID]; present {
-				continue
-			}
-			walkins = append(walkins, desiredInteraction{
-				ContactID: r.ContactID,
-				SourceRef: fmt.Sprintf("anarlog:%s:walkin:%s", sessionID.String(), r.ContactID.String()),
-			})
-		}
-		return repository.LinkageStateLinked, &kind, &id, walkins
+		return repository.LinkageStateLinked, &kind, &id, walkins, nil
 	default:
-		return repository.LinkageStateConflictPending, nil, nil, nil
+		implied := buildImpliedSet(resolvedTagged, titleMatched)
+		winner, snap := disambiguateCandidates(candidates, implied)
+		if winner != nil {
+			walkins := stepFiveWalkins(*winner, resolvedTagged, sessionID)
+			kind := winner.Kind
+			id := winner.ID
+			// Snapshot returned for observability — caller logs but
+			// must NOT persist on a linked outcome (the column
+			// invariant: NULL for any state other than conflict_pending).
+			return repository.LinkageStateLinked, &kind, &id, walkins, snap
+		}
+		return repository.LinkageStateConflictPending, nil, nil, nil, snap
 	}
+}
+
+// stepFiveWalkins emits one walk-in supplemental desiredInteraction per
+// resolved tagged contact that isn't in the linked candidate's intrinsic
+// attendee set. Centralized so the daemon-side `case 1:` branch AND the
+// Step 3 auto-link path share the same kind-aware computation
+// (LinkageCandidate.ImpliedAttendeeSet is correct for both event and
+// phone_call kinds).
+func stepFiveWalkins(cand repository.LinkageCandidate, resolvedTagged []resolvedTag, sessionID uuid.UUID) []desiredInteraction {
+	attendees := cand.ImpliedAttendeeSet()
+	walkins := make([]desiredInteraction, 0)
+	for _, r := range resolvedTagged {
+		if _, present := attendees[r.ContactID]; present {
+			continue
+		}
+		walkins = append(walkins, desiredInteraction{
+			ContactID: r.ContactID,
+			SourceRef: fmt.Sprintf("anarlog:%s:walkin:%s", sessionID.String(), r.ContactID.String()),
+		})
+	}
+	return walkins
+}
+
+// buildImpliedSet returns the set of contact_ids derived from the
+// union of resolvedTagged.ContactID and titleMatched.ContactID per
+// spec §Step 3.1. Title matches already deduplicate against
+// resolvedTagged upstream (handleMeetingNoteRecorded), so the union
+// is effectively just resolvedTagged ∪ titleMatched.
+func buildImpliedSet(resolvedTagged []resolvedTag, titleMatched []resolvedTitle) map[uuid.UUID]struct{} {
+	implied := make(map[uuid.UUID]struct{}, len(resolvedTagged)+len(titleMatched))
+	for _, r := range resolvedTagged {
+		implied[r.ContactID] = struct{}{}
+	}
+	for _, tm := range titleMatched {
+		implied[tm.ContactID] = struct{}{}
+	}
+	return implied
+}
+
+// disambiguateCandidates implements Step 3 of the spec's
+// linkage-detection algorithm. Returns (winner, snapshot) where:
+//
+//   - winner is a pointer into the candidates slice when exactly one
+//     candidate has the strictly-highest non-zero overlap with the
+//     implied contact set; nil otherwise.
+//   - snapshot is the full per-candidate overlap table sorted by
+//     overlap_count desc, then occurred_at asc as a deterministic
+//     tie-breaker.
+//
+// The caller is expected to gate on len(candidates) >= 2 (the case 0/1
+// branches in decideLinkage handle smaller sets); the helper still
+// degrades gracefully on smaller inputs.
+//
+// An empty implied set always yields nil winner — no signal to
+// disambiguate with — and returns the snapshot with all overlap_count=0.
+func disambiguateCandidates(
+	candidates []repository.LinkageCandidate,
+	implied map[uuid.UUID]struct{},
+) (*repository.LinkageCandidate, []repository.ConflictCandidateSummary) {
+	snapshot := make([]repository.ConflictCandidateSummary, 0, len(candidates))
+	for i := range candidates {
+		c := &candidates[i]
+		overlap := 0
+		switch c.Kind {
+		case repository.LinkedKindEvent:
+			for _, aid := range c.AttendeeContactIDs {
+				if _, ok := implied[aid]; ok {
+					overlap++
+				}
+			}
+		case repository.LinkedKindPhoneCall:
+			if c.PeerContactID != nil {
+				if _, ok := implied[*c.PeerContactID]; ok {
+					overlap = 1
+				}
+			}
+		}
+		snapshot = append(snapshot, repository.ConflictCandidateSummary{
+			Kind:         c.Kind,
+			ID:           c.ID,
+			OccurredAt:   c.OccurredAt,
+			OverlapCount: overlap,
+		})
+	}
+	sort.SliceStable(snapshot, func(i, j int) bool {
+		if snapshot[i].OverlapCount != snapshot[j].OverlapCount {
+			return snapshot[i].OverlapCount > snapshot[j].OverlapCount
+		}
+		return snapshot[i].OccurredAt.Before(snapshot[j].OccurredAt)
+	})
+
+	if len(snapshot) == 0 {
+		return nil, snapshot
+	}
+	top := snapshot[0]
+	if top.OverlapCount == 0 {
+		return nil, snapshot
+	}
+	if len(snapshot) > 1 && snapshot[1].OverlapCount == top.OverlapCount {
+		return nil, snapshot
+	}
+	for i := range candidates {
+		if candidates[i].ID == top.ID {
+			return &candidates[i], snapshot
+		}
+	}
+	return nil, snapshot
 }
 
 // handleMeetingNoteDeleted runs the per-event domain logic for a

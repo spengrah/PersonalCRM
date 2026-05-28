@@ -313,6 +313,8 @@ type MeetingNote struct {
 	LastContentHash pgtype.Text `json:"last_content_hash"`
 	// Session start time from the daemon payload meeting_at. Drives linkage window math, /imports conflict UI, and the input_hash recipe.
 	MeetingAt pgtype.Timestamptz `json:"meeting_at"`
+	// Persisted snapshot of the per-candidate participant-overlap table recorded at the moment linkage_state was set to conflict_pending. NULL for any other state. Shape: array of {kind, id, occurred_at, overlap_count} sorted by overlap desc then occurred_at asc. The GET /api/v1/meeting-notes/needs-attention endpoint projects from this column directly. The POST /resolve-link endpoint validates that user-supplied (kind, id) tuples appear in this snapshot.
+	ConflictCandidates []byte `json:"conflict_candidates"`
 }
 
 type MessagesMessage struct {

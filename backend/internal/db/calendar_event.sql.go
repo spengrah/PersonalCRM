@@ -552,6 +552,18 @@ func (q *Queries) MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) 
 	return err
 }
 
+const TestHardDeleteCalendarEventByID = `-- name: TestHardDeleteCalendarEventByID :exec
+DELETE FROM calendar_event WHERE id = $1
+`
+
+// TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
+// by integration tests that exercise the "target row vanished between
+// snapshot and resolve-link" path. Production code must NOT call this.
+func (q *Queries) TestHardDeleteCalendarEventByID(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, TestHardDeleteCalendarEventByID, id)
+	return err
+}
+
 const UpdateMatchedContacts = `-- name: UpdateMatchedContacts :one
 UPDATE calendar_event
 SET matched_contact_ids = $2,

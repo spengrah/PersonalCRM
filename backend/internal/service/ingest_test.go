@@ -1112,7 +1112,7 @@ func TestComputeResolvedSetHash_EmptyTitleMatchedPreservesLegacyHash(t *testing.
 // with no interactions.
 func TestDecideLinkage_NoCandidatesNoTagged(t *testing.T) {
 	sessionID := uuid.New()
-	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, nil, nil)
+	state, kind, id, desired, _ := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, nil, nil)
 	require.Equal(t, repository.LinkageStateOrphanNeedsReview, state)
 	require.Nil(t, kind)
 	require.Nil(t, id)
@@ -1128,7 +1128,7 @@ func TestDecideLinkage_NoCandidatesNoTaggedWithTitleMatches(t *testing.T) {
 	titleMatched := []resolvedTitle{
 		{Token: "Alice", NormalizedToken: "alice", ContactID: titled},
 	}
-	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, nil, titleMatched)
+	state, kind, id, desired, _ := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, nil, titleMatched)
 	require.Equal(t, repository.LinkageStateOrphanNeedsReview, state)
 	require.Nil(t, kind)
 	require.Nil(t, id)
@@ -1145,7 +1145,7 @@ func TestDecideLinkage_NoCandidatesWithTagged(t *testing.T) {
 		{AnarlogID: "human-a", ContactID: cA},
 		{AnarlogID: "human-b", ContactID: cB},
 	}
-	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, resolved, nil)
+	state, kind, id, desired, _ := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, resolved, nil)
 	require.Equal(t, repository.LinkageStateLinkedImpromptu, state)
 	require.Nil(t, kind)
 	require.Nil(t, id)
@@ -1168,7 +1168,7 @@ func TestDecideLinkage_NoCandidatesWithTaggedAndTitleMatches(t *testing.T) {
 	titleMatched := []resolvedTitle{
 		{Token: "Alice", NormalizedToken: "alice", ContactID: cTitled},
 	}
-	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, resolved, titleMatched)
+	state, kind, id, desired, _ := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, nil, resolved, titleMatched)
 	require.Equal(t, repository.LinkageStateOrphanTitleAugmented, state)
 	require.Nil(t, kind)
 	require.Nil(t, id)
@@ -1193,7 +1193,7 @@ func TestDecideLinkage_OneCandidate_WalkinPresent_NoSupplement(t *testing.T) {
 		AttendeeContactIDs: []uuid.UUID{cA},
 	}
 	resolved := []resolvedTag{{AnarlogID: "human-a", ContactID: cA}}
-	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, resolved, nil)
+	state, kind, id, desired, _ := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, resolved, nil)
 	require.Equal(t, repository.LinkageStateLinked, state)
 	require.NotNil(t, kind)
 	require.Equal(t, "event", *kind)
@@ -1214,7 +1214,7 @@ func TestDecideLinkage_OneCandidate_TaggedNotInAttendees_AddsWalkin(t *testing.T
 		AttendeeContactIDs: []uuid.UUID{cA},
 	}
 	resolved := []resolvedTag{{AnarlogID: "human-b", ContactID: cB}}
-	state, kind, _, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, resolved, nil)
+	state, kind, _, desired, _ := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, resolved, nil)
 	require.Equal(t, repository.LinkageStateLinked, state)
 	require.Equal(t, "event", *kind)
 	require.Len(t, desired, 1)
@@ -1238,29 +1238,34 @@ func TestDecideLinkage_OneCandidate_TitleMatchesDoNotProduceInteractions(t *test
 	titleMatched := []resolvedTitle{
 		{Token: "Alice", NormalizedToken: "alice", ContactID: cTitled},
 	}
-	state, _, _, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, nil, titleMatched)
+	state, _, _, desired, _ := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{cand}, nil, titleMatched)
 	require.Equal(t, repository.LinkageStateLinked, state)
 	require.Empty(t, desired, "title matches must not produce interactions in linked state")
 }
 
-// TestDecideLinkage_MultipleCandidates_ConflictPending verifies the
-// handler always lands on conflict_pending for 2+ candidates (the
-// participant-signal disambiguation flow is deferred).
+// TestDecideLinkage_MultipleCandidates_ConflictPending verifies that
+// 2+ candidates with no implied-set signal (no tagged, no title-matched)
+// land on conflict_pending and surface the per-candidate snapshot.
 func TestDecideLinkage_MultipleCandidates_ConflictPending(t *testing.T) {
 	sessionID := uuid.New()
 	cands := []repository.LinkageCandidate{
 		{Kind: "event", ID: uuid.New()},
 		{Kind: "event", ID: uuid.New()},
 	}
-	state, kind, id, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	state, kind, id, desired, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
 	require.Equal(t, repository.LinkageStateConflictPending, state)
 	require.Nil(t, kind)
 	require.Nil(t, id)
 	require.Empty(t, desired)
+	require.Len(t, snap, 2, "snapshot includes every candidate")
+	for _, s := range snap {
+		require.Equal(t, 0, s.OverlapCount, "empty implied set → overlap 0")
+	}
 }
 
 // TestDecideLinkage_MultipleCandidates_TitleMatchesDoNotInteract
-// confirms title matches don't leak into conflict_pending state either.
+// confirms that when title matches don't overlap with any candidate's
+// attendees, the result is still conflict_pending with no interactions.
 func TestDecideLinkage_MultipleCandidates_TitleMatchesDoNotInteract(t *testing.T) {
 	sessionID := uuid.New()
 	cands := []repository.LinkageCandidate{
@@ -1271,7 +1276,242 @@ func TestDecideLinkage_MultipleCandidates_TitleMatchesDoNotInteract(t *testing.T
 	titleMatched := []resolvedTitle{
 		{Token: "Alice", NormalizedToken: "alice", ContactID: titled},
 	}
-	state, _, _, desired := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, titleMatched)
+	state, _, _, desired, _ := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, titleMatched)
 	require.Equal(t, repository.LinkageStateConflictPending, state)
 	require.Empty(t, desired)
+}
+
+// ----------------------------------------------------------------------------
+// disambiguateCandidates Step 3 algorithm
+// ----------------------------------------------------------------------------
+
+// TestDisambiguateCandidates_EmptyImplied returns nil winner and a
+// snapshot with all overlap=0 — no signal to disambiguate with.
+func TestDisambiguateCandidates_EmptyImplied(t *testing.T) {
+	cands := []repository.LinkageCandidate{
+		{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{uuid.New()}},
+		{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{uuid.New()}},
+	}
+	winner, snap := disambiguateCandidates(cands, map[uuid.UUID]struct{}{})
+	require.Nil(t, winner)
+	require.Len(t, snap, 2)
+	for _, s := range snap {
+		require.Equal(t, 0, s.OverlapCount)
+	}
+}
+
+// TestDisambiguateCandidates_StrictWinnerUniqueOverlap picks the
+// candidate whose attendees cover more of the implied set.
+func TestDisambiguateCandidates_StrictWinnerUniqueOverlap(t *testing.T) {
+	cA := uuid.New()
+	cB := uuid.New()
+	cC := uuid.New()
+	cand1 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cA, cB}}
+	cand2 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cC}}
+	cands := []repository.LinkageCandidate{cand1, cand2}
+	implied := map[uuid.UUID]struct{}{cA: {}, cB: {}}
+	winner, snap := disambiguateCandidates(cands, implied)
+	require.NotNil(t, winner)
+	require.Equal(t, cand1.ID, winner.ID)
+	require.Equal(t, 2, snap[0].OverlapCount)
+	require.Equal(t, 0, snap[1].OverlapCount)
+}
+
+// TestDisambiguateCandidates_TiedAtTop returns nil winner; the strictly-
+// highest rule fails when two candidates share the top overlap.
+func TestDisambiguateCandidates_TiedAtTop(t *testing.T) {
+	cA := uuid.New()
+	cand1 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cA}}
+	cand2 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cA}}
+	winner, snap := disambiguateCandidates([]repository.LinkageCandidate{cand1, cand2}, map[uuid.UUID]struct{}{cA: {}})
+	require.Nil(t, winner)
+	require.Len(t, snap, 2)
+	require.Equal(t, 1, snap[0].OverlapCount)
+	require.Equal(t, 1, snap[1].OverlapCount)
+}
+
+// TestDisambiguateCandidates_TiedAtTopWithThirdLess — top two tied,
+// third strictly less. Still no winner because the top tier is tied.
+func TestDisambiguateCandidates_TiedAtTopWithThirdLess(t *testing.T) {
+	cA := uuid.New()
+	cB := uuid.New()
+	cC := uuid.New()
+	c1 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cA, cB}}
+	c2 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cA, cB}}
+	c3 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cC}}
+	winner, snap := disambiguateCandidates([]repository.LinkageCandidate{c1, c2, c3}, map[uuid.UUID]struct{}{cA: {}, cB: {}, cC: {}})
+	require.Nil(t, winner)
+	require.Equal(t, 2, snap[0].OverlapCount)
+	require.Equal(t, 2, snap[1].OverlapCount)
+	require.Equal(t, 1, snap[2].OverlapCount)
+}
+
+// TestDisambiguateCandidates_StrictWinnerAmongThree resolves correctly
+// when overlaps are [3,1,1].
+func TestDisambiguateCandidates_StrictWinnerAmongThree(t *testing.T) {
+	cA := uuid.New()
+	cB := uuid.New()
+	cC := uuid.New()
+	c1 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cA, cB, cC}}
+	c2 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cA}}
+	c3 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cB}}
+	winner, _ := disambiguateCandidates([]repository.LinkageCandidate{c1, c2, c3}, map[uuid.UUID]struct{}{cA: {}, cB: {}, cC: {}})
+	require.NotNil(t, winner)
+	require.Equal(t, c1.ID, winner.ID)
+}
+
+// TestDisambiguateCandidates_PhoneCallPeerMatch — phone_call wins
+// when its peer covers the only implied contact while the event has zero
+// overlap.
+func TestDisambiguateCandidates_PhoneCallPeerMatch(t *testing.T) {
+	cA := uuid.New()
+	evt := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New()}
+	call := repository.LinkageCandidate{Kind: repository.LinkedKindPhoneCall, ID: uuid.New(), PeerContactID: &cA}
+	winner, _ := disambiguateCandidates([]repository.LinkageCandidate{evt, call}, map[uuid.UUID]struct{}{cA: {}})
+	require.NotNil(t, winner)
+	require.Equal(t, call.ID, winner.ID)
+}
+
+// TestDisambiguateCandidates_PhoneCallPeerNil — a phone_call candidate
+// with PeerContactID=nil contributes zero overlap; the event with
+// overlap=1 wins.
+func TestDisambiguateCandidates_PhoneCallPeerNil(t *testing.T) {
+	cA := uuid.New()
+	evt := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cA}}
+	call := repository.LinkageCandidate{Kind: repository.LinkedKindPhoneCall, ID: uuid.New(), PeerContactID: nil}
+	winner, _ := disambiguateCandidates([]repository.LinkageCandidate{evt, call}, map[uuid.UUID]struct{}{cA: {}})
+	require.NotNil(t, winner)
+	require.Equal(t, evt.ID, winner.ID)
+}
+
+// TestDisambiguateCandidates_SnapshotDeterministicSort — same overlap,
+// earlier occurred_at sorts first.
+func TestDisambiguateCandidates_SnapshotDeterministicSort(t *testing.T) {
+	cA := uuid.New()
+	base := accelerated.GetCurrentTime()
+	c1 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), OccurredAt: base.Add(2 * time.Minute), AttendeeContactIDs: []uuid.UUID{cA}}
+	c2 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), OccurredAt: base, AttendeeContactIDs: []uuid.UUID{cA}}
+	c3 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), OccurredAt: base.Add(1 * time.Minute), AttendeeContactIDs: []uuid.UUID{cA}}
+	_, snap := disambiguateCandidates([]repository.LinkageCandidate{c1, c2, c3}, map[uuid.UUID]struct{}{cA: {}})
+	require.Len(t, snap, 3)
+	require.Equal(t, c2.ID, snap[0].ID)
+	require.Equal(t, c3.ID, snap[1].ID)
+	require.Equal(t, c1.ID, snap[2].ID)
+}
+
+// TestDisambiguateCandidates_SingleZeroOverlap — defensive: helper
+// handles single-candidate input even though the gate is len>=2 in the
+// caller, returning nil winner because the sole overlap is 0.
+func TestDisambiguateCandidates_SingleZeroOverlap(t *testing.T) {
+	c1 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{uuid.New()}}
+	winner, snap := disambiguateCandidates([]repository.LinkageCandidate{c1}, map[uuid.UUID]struct{}{})
+	require.Nil(t, winner)
+	require.Len(t, snap, 1)
+	require.Equal(t, 0, snap[0].OverlapCount)
+}
+
+// TestDisambiguateCandidates_LargeMixedKindSet — 5 candidates spanning
+// event + phone_call kinds with mixed implied membership; verify the
+// exact winner is the one with the highest overlap.
+func TestDisambiguateCandidates_LargeMixedKindSet(t *testing.T) {
+	a := uuid.New()
+	b := uuid.New()
+	c := uuid.New()
+	implied := map[uuid.UUID]struct{}{a: {}, b: {}, c: {}}
+
+	winningEvent := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{a, b, c}}
+	losingEvent := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{a, uuid.New()}}
+	bystanderEvent := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{uuid.New()}}
+	matchingCall := repository.LinkageCandidate{Kind: repository.LinkedKindPhoneCall, ID: uuid.New(), PeerContactID: &b}
+	unrelatedCall := repository.LinkageCandidate{Kind: repository.LinkedKindPhoneCall, ID: uuid.New()}
+
+	winner, snap := disambiguateCandidates(
+		[]repository.LinkageCandidate{winningEvent, losingEvent, bystanderEvent, matchingCall, unrelatedCall},
+		implied,
+	)
+	require.NotNil(t, winner)
+	require.Equal(t, winningEvent.ID, winner.ID)
+	require.Equal(t, 3, snap[0].OverlapCount, "winning event covers a,b,c")
+}
+
+// TestBuildImpliedSet covers the union semantics.
+func TestBuildImpliedSet(t *testing.T) {
+	cA := uuid.New()
+	cB := uuid.New()
+	cT := uuid.New()
+	tagged := []resolvedTag{{AnarlogID: "x", ContactID: cA}, {AnarlogID: "y", ContactID: cB}}
+	titles := []resolvedTitle{{Token: "T", NormalizedToken: "t", ContactID: cT}}
+	got := buildImpliedSet(tagged, titles)
+	require.Len(t, got, 3)
+	_, hasA := got[cA]
+	_, hasB := got[cB]
+	_, hasT := got[cT]
+	require.True(t, hasA)
+	require.True(t, hasB)
+	require.True(t, hasT)
+}
+
+// TestLinkageCandidateImpliedAttendeeSet covers the kind-aware
+// attendee-set helper used by Step 5's walk-in computation.
+func TestLinkageCandidateImpliedAttendeeSet(t *testing.T) {
+	cA := uuid.New()
+	cB := uuid.New()
+	evt := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, AttendeeContactIDs: []uuid.UUID{cA, cB}}
+	got := evt.ImpliedAttendeeSet()
+	require.Len(t, got, 2)
+	_, hasA := got[cA]
+	_, hasB := got[cB]
+	require.True(t, hasA)
+	require.True(t, hasB)
+
+	call := repository.LinkageCandidate{Kind: repository.LinkedKindPhoneCall, PeerContactID: &cA}
+	got = call.ImpliedAttendeeSet()
+	require.Len(t, got, 1)
+	_, hasA = got[cA]
+	require.True(t, hasA)
+
+	callNilPeer := repository.LinkageCandidate{Kind: repository.LinkedKindPhoneCall}
+	got = callNilPeer.ImpliedAttendeeSet()
+	require.Empty(t, got)
+}
+
+// TestDecideLinkage_Step3_StrictWinnerAutoLinks — a tagged participant
+// breaks the tie and the algorithm auto-links to the strict winner,
+// emitting the same Step 5 walk-in supplemental as if there had been
+// one candidate from the start.
+func TestDecideLinkage_Step3_StrictWinnerAutoLinks(t *testing.T) {
+	sessionID := uuid.New()
+	cA := uuid.New()
+	cB := uuid.New()
+	winning := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cA}}
+	losing := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cB}}
+	resolved := []resolvedTag{{AnarlogID: "human-a", ContactID: cA}}
+
+	state, kind, id, desired, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{winning, losing}, resolved, nil)
+	require.Equal(t, repository.LinkageStateLinked, state)
+	require.NotNil(t, kind)
+	require.Equal(t, repository.LinkedKindEvent, *kind)
+	require.NotNil(t, id)
+	require.Equal(t, winning.ID, *id)
+	require.Empty(t, desired, "tagged contact already in winning attendees → no walk-in")
+	require.NotEmpty(t, snap, "snapshot returned for observability even on auto-link")
+	require.Equal(t, 1, snap[0].OverlapCount, "winner's overlap surfaces for logging")
+}
+
+// TestDecideLinkage_Step3_TiedTopFallsThroughToConflict — when two
+// candidates tie at the top, the conflict_pending state stands and the
+// snapshot is returned for persistence.
+func TestDecideLinkage_Step3_TiedTopFallsThroughToConflict(t *testing.T) {
+	sessionID := uuid.New()
+	cA := uuid.New()
+	c1 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cA}}
+	c2 := repository.LinkageCandidate{Kind: repository.LinkedKindEvent, ID: uuid.New(), AttendeeContactIDs: []uuid.UUID{cA}}
+	resolved := []resolvedTag{{AnarlogID: "human-a", ContactID: cA}}
+
+	state, kind, id, desired, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{c1, c2}, resolved, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
+	require.Nil(t, kind)
+	require.Nil(t, id)
+	require.Empty(t, desired)
+	require.Len(t, snap, 2)
 }

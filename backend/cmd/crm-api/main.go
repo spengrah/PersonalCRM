@@ -59,6 +59,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	swaggerFiles "github.com/swaggo/files"
@@ -193,6 +194,38 @@ func (d *deferredAggregatorReenqueuer) Reenqueue(ctx context.Context, env *event
 		return nil
 	}
 	return inner.Reenqueue(ctx, env, contactID)
+}
+
+// meetingNoteLinkageTargetReader adapts the calendar + phone_call
+// repositories into the polymorphic service.LinkageTargetReader
+// interface that MeetingNoteService consumes. Kept inline in main.go
+// per the single-file build convention (any file the binary needs must
+// be compilable as part of `go build cmd/crm-api/main.go`).
+type meetingNoteLinkageTargetReader struct {
+	calendarRepo  *repository.CalendarEventRepository
+	phoneCallRepo *repository.PhoneCallRepository
+}
+
+// GetEventByID satisfies service.LinkageTargetReader.
+func (r *meetingNoteLinkageTargetReader) GetEventByID(ctx context.Context, id uuid.UUID) (*repository.CalendarEvent, error) {
+	return r.calendarRepo.GetByID(ctx, id)
+}
+
+// GetPhoneCallByID satisfies service.LinkageTargetReader.
+func (r *meetingNoteLinkageTargetReader) GetPhoneCallByID(ctx context.Context, id uuid.UUID) (*repository.PhoneCall, error) {
+	return r.phoneCallRepo.GetCallByID(ctx, id)
+}
+
+// GetEventByIDTx satisfies service.LinkageTargetReader for the
+// tx-bound resolve flow.
+func (r *meetingNoteLinkageTargetReader) GetEventByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.CalendarEvent, error) {
+	return r.calendarRepo.GetByIDTx(ctx, tx, id)
+}
+
+// GetPhoneCallByIDTx satisfies service.LinkageTargetReader for the
+// tx-bound resolve flow.
+func (r *meetingNoteLinkageTargetReader) GetPhoneCallByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.PhoneCall, error) {
+	return r.phoneCallRepo.GetCallByIDTx(ctx, tx, id)
 }
 
 func main() {
@@ -471,8 +504,29 @@ func run() int {
 		followUpManager,
 		titleMatcher,
 		titleDiscoveryWriter,
+		phoneCallRepoForIngest, // phone_call linkage candidates for meeting_note Step 1
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
+
+	// User-driven conflict-resolution surface for meeting_note rows.
+	// Mirrors the daemon-side IngestService.handleMeetingNoteRecorded
+	// path; uses a small adapter to satisfy the polymorphic
+	// LinkageTargetReader interface (event vs phone_call lookup by UUID).
+	meetingNoteLinkageTargets := &meetingNoteLinkageTargetReader{
+		calendarRepo:  calendarRepoForIngest,
+		phoneCallRepo: phoneCallRepoForIngest,
+	}
+	meetingNoteService := service.NewMeetingNoteService(
+		database,
+		meetingNoteRepoForIngest,
+		meetingNoteRepoForIngest,
+		meetingNoteLinkageTargets,
+		identityRepoForIngest,
+		titleMatcher,
+		titleDiscoveryWriter,
+		contactService,
+	)
+	meetingNoteHandler := handlers.NewMeetingNoteHandler(meetingNoteService)
 
 	// Register the consumer worker. The worker is registered UNCONDITIONALLY —
 	// river rejects unknown job kinds at dequeue time, so having the worker
@@ -1091,6 +1145,16 @@ func run() int {
 		interactions := v1.Group("/interactions")
 		{
 			interactions.DELETE("/:id", interactionHandler.DeleteInteraction)
+		}
+
+		// Meeting-note conflict-resolution + needs-attention.
+		// User-driven counterpart to the daemon-side ingest path; lives
+		// under the API-key middleware (single-user CRM — the daemon
+		// has an API key too).
+		meetingNotes := v1.Group("/meeting-notes")
+		{
+			meetingNotes.GET("/needs-attention", meetingNoteHandler.ListNeedsAttention)
+			meetingNotes.POST("/:id/resolve-link", meetingNoteHandler.ResolveLink)
 		}
 
 		// Rematch routes — always registered; service no-ops when no handlers

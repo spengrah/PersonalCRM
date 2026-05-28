@@ -328,6 +328,8 @@ v1 := router.Group("/api/v1")
 | **Imports** | `/imports/candidates` | GET | ImportHandler | Import candidates |
 | | `/imports/:id/import` | POST | ImportHandler | Import as new contact |
 | | `/imports/:id/link` | POST | ImportHandler | Link to existing |
+| **Meeting Notes** | `/meeting-notes/needs-attention` | GET | MeetingNoteHandler | List meeting_note rows in `conflict_pending` or `orphan_needs_review`. Optional `?host_id=<uuid>` to scope by mac_host. |
+| | `/meeting-notes/:id/resolve-link` | POST | MeetingNoteHandler | Resolve a `conflict_pending` row. Body is a discriminated union: `{"action":"link","kind":"event"\|"phone_call","id":"<uuid>"}` or `{"action":"none_of_these"}`. |
 | **Todoist** | `/todoist/settings` | GET/PATCH | TodoistHandler | Todoist settings |
 | | `/todoist/projects` | GET | TodoistHandler | List projects |
 | | `/todoist/labels` | GET | TodoistHandler | List labels |
