@@ -858,6 +858,10 @@ type Querier interface {
 	// NOT NULL keeps it idempotent across concurrent revive races.
 	ReviveMeetingNote(ctx context.Context, arg ReviveMeetingNoteParams) (*MeetingNote, error)
 	RevokeMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error)
+	// Atomically replaces api_key_hash and bumps api_key_rotated_at. Used
+	// by the rotate-key endpoint. Filters revoked hosts so a revoked host
+	// cannot be silently re-activated by a rotation.
+	RotateMacHostAPIKey(ctx context.Context, arg RotateMacHostAPIKeyParams) (*MacHost, error)
 	// Lightweight query returning only IDs with search for navigation
 	SearchContactIDs(ctx context.Context, arg SearchContactIDsParams) ([]pgtype.UUID, error)
 	// Lightweight query returning only IDs with search and sorting for navigation
@@ -873,7 +877,10 @@ type Querier interface {
 	// Go test fixtures), test setup uses these instead of pool.Exec.
 	// Inserts a host with caller-supplied hostname + bcrypted api_key_hash.
 	// Used by integration tests that need to bypass the pairing flow.
-	SeedMacHost(ctx context.Context, arg SeedMacHostParams) (*MacHost, error)
+	// RETURNING is the minimal id-only set so step-by-step migration tests
+	// that run this against earlier schemas (before columns added in later
+	// migrations exist) don't trip on the column expansion of RETURNING *.
+	SeedMacHost(ctx context.Context, arg SeedMacHostParams) (pgtype.UUID, error)
 	// Inserts a pairing token with caller-supplied hash + expiry. Tests use
 	// this to seed expired tokens (cannot mint via the real Create path
 	// because the service enforces a forward-only TTL).

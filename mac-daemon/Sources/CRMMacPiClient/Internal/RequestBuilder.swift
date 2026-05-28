@@ -32,6 +32,15 @@ struct PairRequestBody: Encodable {
     }
 }
 
+/// Pre-formatted rotate-key request body.
+struct RotateAPIKeyRequestBody: Encodable {
+    let pairingToken: String
+
+    private enum CodingKeys: String, CodingKey {
+        case pairingToken = "pairing_token"
+    }
+}
+
 enum RequestBuilderError: Error {
     case malformedURL(String)
     case encode(String)
@@ -64,6 +73,23 @@ struct RequestBuilder {
             req.httpBody = try JSONEncoder().encode(body)
         } catch {
             throw RequestBuilderError.encode("encode pair body: \(error)")
+        }
+        return req
+    }
+
+    func rotateAPIKey(auth: PiAuth, pairingToken: String) throws -> URLRequest {
+        let url = try resolve(path:
+            "/api/v1/host/\(auth.hostID.uuidString.lowercased())/rotate-key")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        Self.applyAuth(&req, auth: auth)
+        let body = RotateAPIKeyRequestBody(pairingToken: pairingToken)
+        do {
+            req.httpBody = try JSONEncoder().encode(body)
+        } catch {
+            throw RequestBuilderError.encode("encode rotate-key body: \(error)")
         }
         return req
     }

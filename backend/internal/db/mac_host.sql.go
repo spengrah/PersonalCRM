@@ -41,7 +41,7 @@ INSERT INTO mac_host (
     $3,
     $4
 )
-RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at
+RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at
 `
 
 type CreateMacHostParams struct {
@@ -73,6 +73,7 @@ func (q *Queries) CreateMacHost(ctx context.Context, arg CreateMacHostParams) (*
 		&i.ApiKeyRevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApiKeyRotatedAt,
 	)
 	return &i, err
 }
@@ -118,7 +119,7 @@ func (q *Queries) DeleteExpiredPairingTokens(ctx context.Context) (int64, error)
 }
 
 const GetActiveMacHostByID = `-- name: GetActiveMacHostByID :one
-SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at FROM mac_host
+SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at FROM mac_host
 WHERE id = $1 AND api_key_revoked_at IS NULL
 `
 
@@ -140,12 +141,13 @@ func (q *Queries) GetActiveMacHostByID(ctx context.Context, id pgtype.UUID) (*Ma
 		&i.ApiKeyRevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApiKeyRotatedAt,
 	)
 	return &i, err
 }
 
 const GetActiveMacHostByIDForUpdate = `-- name: GetActiveMacHostByIDForUpdate :one
-SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at FROM mac_host
+SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at FROM mac_host
 WHERE id = $1 AND api_key_revoked_at IS NULL
 FOR UPDATE
 `
@@ -172,12 +174,13 @@ func (q *Queries) GetActiveMacHostByIDForUpdate(ctx context.Context, id pgtype.U
 		&i.ApiKeyRevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApiKeyRotatedAt,
 	)
 	return &i, err
 }
 
 const GetMacHost = `-- name: GetMacHost :one
-SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at FROM mac_host WHERE id = $1
+SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at FROM mac_host WHERE id = $1
 `
 
 func (q *Queries) GetMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error) {
@@ -196,6 +199,7 @@ func (q *Queries) GetMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, err
 		&i.ApiKeyRevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApiKeyRotatedAt,
 	)
 	return &i, err
 }
@@ -246,7 +250,7 @@ func (q *Queries) GetPairingTokenByHashForUpdate(ctx context.Context, tokenHash 
 }
 
 const ListActiveMacHosts = `-- name: ListActiveMacHosts :many
-SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at FROM mac_host
+SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at FROM mac_host
 WHERE api_key_revoked_at IS NULL
 ORDER BY created_at DESC
 `
@@ -273,6 +277,7 @@ func (q *Queries) ListActiveMacHosts(ctx context.Context) ([]*MacHost, error) {
 			&i.ApiKeyRevokedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ApiKeyRotatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -285,7 +290,7 @@ func (q *Queries) ListActiveMacHosts(ctx context.Context) ([]*MacHost, error) {
 }
 
 const ListMacHosts = `-- name: ListMacHosts :many
-SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at FROM mac_host
+SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at FROM mac_host
 ORDER BY created_at DESC
 `
 
@@ -311,6 +316,7 @@ func (q *Queries) ListMacHosts(ctx context.Context) ([]*MacHost, error) {
 			&i.ApiKeyRevokedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ApiKeyRotatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -353,7 +359,7 @@ const RevokeMacHost = `-- name: RevokeMacHost :one
 UPDATE mac_host
 SET api_key_revoked_at = NOW()
 WHERE id = $1 AND api_key_revoked_at IS NULL
-RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at
+RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at
 `
 
 func (q *Queries) RevokeMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error) {
@@ -372,6 +378,44 @@ func (q *Queries) RevokeMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, 
 		&i.ApiKeyRevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApiKeyRotatedAt,
+	)
+	return &i, err
+}
+
+const RotateMacHostAPIKey = `-- name: RotateMacHostAPIKey :one
+UPDATE mac_host
+SET api_key_hash = $1,
+    api_key_rotated_at = NOW()
+WHERE id = $2 AND api_key_revoked_at IS NULL
+RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at
+`
+
+type RotateMacHostAPIKeyParams struct {
+	ApiKeyHash string      `json:"api_key_hash"`
+	ID         pgtype.UUID `json:"id"`
+}
+
+// Atomically replaces api_key_hash and bumps api_key_rotated_at. Used
+// by the rotate-key endpoint. Filters revoked hosts so a revoked host
+// cannot be silently re-activated by a rotation.
+func (q *Queries) RotateMacHostAPIKey(ctx context.Context, arg RotateMacHostAPIKeyParams) (*MacHost, error) {
+	row := q.db.QueryRow(ctx, RotateMacHostAPIKey, arg.ApiKeyHash, arg.ID)
+	var i MacHost
+	err := row.Scan(
+		&i.ID,
+		&i.Hostname,
+		&i.DaemonVersion,
+		&i.ProtocolVersion,
+		&i.LastHeartbeatAt,
+		&i.Permissions,
+		&i.SourceHealth,
+		&i.CursorEpoch,
+		&i.ApiKeyHash,
+		&i.ApiKeyRevokedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ApiKeyRotatedAt,
 	)
 	return &i, err
 }
@@ -384,7 +428,7 @@ SET last_heartbeat_at  = NOW(),
     permissions        = $3,
     source_health      = $4
 WHERE id = $5 AND api_key_revoked_at IS NULL
-RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at
+RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at
 `
 
 type UpdateMacHostHeartbeatParams struct {
@@ -417,6 +461,7 @@ func (q *Queries) UpdateMacHostHeartbeat(ctx context.Context, arg UpdateMacHostH
 		&i.ApiKeyRevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApiKeyRotatedAt,
 	)
 	return &i, err
 }

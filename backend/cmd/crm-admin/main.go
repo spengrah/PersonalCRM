@@ -24,6 +24,14 @@
 //
 //	--revoke-host <uuid>          Revoke a paired Mac host by id.
 //
+//	--rotate-host-key <uuid>      Validate the given host_id is an active
+//	                              paired host, mint a fresh pairing token,
+//	                              and print the templated
+//	                              `crm-mac install --re-pair --pair <token>`
+//	                              command. The rotation itself runs on the
+//	                              Mac — this binary does not hold the
+//	                              per-host pair-key.
+//
 // See backend/internal/messages/admin_rematch.go for the rematch
 // business logic and backend/internal/service/mac_host.go for the
 // pairing service. This binary is a thin CLI shim so the entire
@@ -104,6 +112,7 @@ type runOptions struct {
 	hostnameLabel    string
 	listHosts        bool
 	revokeHostID     string
+	rotateHostID     string
 }
 
 func main() {
@@ -166,13 +175,16 @@ func validateSubcommand(opts runOptions) error {
 	if opts.revokeHostID != "" {
 		active++
 	}
+	if opts.rotateHostID != "" {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
-			"--messages-rematch-stranded, --mint-pairing-token, --list-hosts, --revoke-host <uuid>")
+			"--messages-rematch-stranded, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
 	}
 	if active > 1 {
 		return errors.New("subcommand flags are mutually exclusive; pass exactly one of " +
-			"--messages-rematch-stranded, --mint-pairing-token, --list-hosts, --revoke-host <uuid>")
+			"--messages-rematch-stranded, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
 	}
 	return nil
 }
@@ -192,6 +204,10 @@ func parseArgs(args []string) (runOptions, error) {
 		"Print active paired Mac hosts for ambiguous-pair recovery.")
 	fs.StringVar(&opts.revokeHostID, "revoke-host", "",
 		"Revoke an existing paired Mac host by UUID.")
+	fs.StringVar(&opts.rotateHostID, "rotate-host-key", "",
+		"Validate the given host_id is active, mint a fresh pairing token, "+
+			"and print the `crm-mac install --re-pair` command for rotating "+
+			"that host's api-key. The rotation itself runs on the Mac.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
@@ -213,6 +229,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runListHosts(ctx, deps)
 	case opts.revokeHostID != "":
 		return runRevokeHost(ctx, opts, deps)
+	case opts.rotateHostID != "":
+		return runRotateHostKey(ctx, opts, deps)
 	case opts.rematchStranded:
 		return runRematchStranded(ctx, deps)
 	}
@@ -276,6 +294,42 @@ func runRevokeHost(ctx context.Context, opts runOptions, deps adminDeps) error {
 	}
 	if _, err := fmt.Fprintf(deps.stdout, "revoked host_id=%s\n", id); err != nil {
 		return fmt.Errorf("write revoke summary: %w", err)
+	}
+	return nil
+}
+
+// runRotateHostKey validates the given host_id is active, mints a
+// fresh pairing token, and prints the templated `crm-mac install
+// --re-pair --pair <token>` command. The rotation itself happens on
+// the Mac (the daemon authenticates with its CURRENT pair-key, which
+// the Pi-side CLI deliberately does not hold).
+func runRotateHostKey(ctx context.Context, opts runOptions, deps adminDeps) error {
+	id, err := uuid.Parse(strings.TrimSpace(opts.rotateHostID))
+	if err != nil {
+		return fmt.Errorf("--rotate-host-key must be a valid UUID: %w", err)
+	}
+	hosts, err := deps.hosts.ListActiveHosts(ctx)
+	if err != nil {
+		return fmt.Errorf("list active hosts: %w", err)
+	}
+	found := false
+	for _, h := range hosts {
+		if h.ID == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("--rotate-host-key %s: no active host with that id (already revoked?)", id)
+	}
+	token, expiresAt, err := deps.tokens.CreatePairingToken(ctx)
+	if err != nil {
+		return fmt.Errorf("mint pairing token: %w", err)
+	}
+	if _, err := fmt.Fprintf(deps.stdout,
+		"token=%s\nexpires_at=%s\n\nRun on the Mac:\n  crm-mac install --re-pair --pair %s\n",
+		token, expiresAt.UTC().Format(time.RFC3339), token); err != nil {
+		return fmt.Errorf("write rotate-host-key output: %w", err)
 	}
 	return nil
 }

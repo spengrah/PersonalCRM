@@ -23,6 +23,7 @@ type MacHostRouteDeps struct {
 //
 //   - POST /api/v1/host                            (public, IP rate-limited inside handler)
 //   - POST /api/v1/host/:id/heartbeat              (host bearer auth)
+//   - POST /api/v1/host/:id/rotate-key             (host bearer auth)
 //   - GET  /api/v1/host/:id/sync/:source/cursor    (host bearer auth)
 //   - POST /api/v1/host/:id/sync/:source/cursor    (host bearer auth)
 //   - GET  /api/v1/host/:id/sync/:source/known-ids (host bearer auth; per-source tombstone reconciliation)
@@ -42,6 +43,7 @@ func RegisterMacHostRoutes(router *gin.Engine, deps MacHostRouteDeps) {
 	macDaemon.Use(auth.MacHostAuthMiddleware(deps.HostRepo, auth.DefaultPasswordComparator, deps.AuthLimiter))
 	{
 		macDaemon.POST("/host/:id/heartbeat", deps.Handler.Heartbeat)
+		macDaemon.POST("/host/:id/rotate-key", deps.Handler.RotateKey)
 		macDaemon.GET("/host/:id/sync/:source/cursor", deps.Handler.GetCursor)
 		macDaemon.POST("/host/:id/sync/:source/cursor", deps.Handler.CommitCursor)
 		macDaemon.GET("/host/:id/sync/:source/known-ids", deps.Handler.KnownIDs)

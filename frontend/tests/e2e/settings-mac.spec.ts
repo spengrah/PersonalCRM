@@ -255,6 +255,65 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await deleteAllMacHosts(request)
   })
 
+  test('opens rotate-key modal with templated CLI command when Rotate Key is clicked', async ({
+    page,
+    request,
+    context,
+  }) => {
+    await deleteAllMacHosts(request)
+    await seedMacHost(request, { hostname: 'rotate-test-host', protocol_version: 1 })
+
+    // Grant clipboard permissions so navigator.clipboard.readText
+    // works for the Copy assertion below.
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+
+    const listPromise = page.waitForResponse(
+      resp => resp.url().endsWith('/api/v1/host') && resp.request().method() === 'GET',
+      { timeout: 15_000 }
+    )
+    await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
+    await listPromise
+
+    const row = page.getByTestId('mac-host-row').first()
+    await expect(row.getByText('rotate-test-host')).toBeVisible({ timeout: 10_000 })
+
+    const rotateButton = row.getByRole('button', {
+      name: /Rotate pair-key for rotate-test-host/i,
+    })
+    await expect(rotateButton).toBeVisible()
+
+    const tokenResponsePromise = page.waitForResponse(
+      resp =>
+        resp.url().includes('/api/v1/host/pairing-token') && resp.request().method() === 'POST',
+      { timeout: 10_000 }
+    )
+    await rotateButton.click()
+    const resp = await tokenResponsePromise
+    expect(resp.status()).toBe(200)
+
+    const dialog = page.getByRole('dialog', { name: /Rotate pair-key for rotate-test-host/i })
+    await expect(dialog).toBeVisible({ timeout: 5_000 })
+
+    // The displayed command is the full templated re-pair invocation —
+    // operator can copy and paste directly into a Mac terminal. The
+    // token is base64url-encoded 24 bytes = 32 chars.
+    const commandEl = page.getByTestId('rotate-key-command')
+    await expect(commandEl).toBeVisible({ timeout: 10_000 })
+    const commandText = (await commandEl.textContent()) ?? ''
+    expect(commandText).toMatch(/^crm-mac install --re-pair --pair [A-Za-z0-9_-]{32,}$/)
+
+    // Copy button copies the FULL command (not just the token).
+    await dialog.getByRole('button', { name: /Copy/i }).click()
+    await expect(dialog.getByRole('button', { name: /Copied/i })).toBeVisible({ timeout: 5_000 })
+    const clipboardText = await page.evaluate(() => navigator.clipboard.readText())
+    expect(clipboardText).toBe(commandText)
+
+    await dialog.getByRole('button', { name: 'Close' }).click()
+    await expect(dialog).not.toBeVisible()
+
+    await deleteAllMacHosts(request)
+  })
+
   test('uninstall flow removes a paired host', async ({ page, request }) => {
     await deleteAllMacHosts(request)
     await seedMacHost(request, { hostname: 'e2e-uninstall-me', protocol_version: 1 })

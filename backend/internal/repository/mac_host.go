@@ -27,6 +27,7 @@ type MacHost struct {
 	CursorEpoch     int64
 	APIKeyHash      string
 	APIKeyRevokedAt *time.Time
+	APIKeyRotatedAt *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
@@ -62,6 +63,10 @@ func convertDbMacHost(m *db.MacHost) *MacHost {
 	if m.ApiKeyRevokedAt.Valid {
 		t := m.ApiKeyRevokedAt.Time
 		out.APIKeyRevokedAt = &t
+	}
+	if m.ApiKeyRotatedAt.Valid {
+		t := m.ApiKeyRotatedAt.Time
+		out.APIKeyRotatedAt = &t
 	}
 	if m.CreatedAt.Valid {
 		out.CreatedAt = m.CreatedAt.Time
@@ -277,6 +282,29 @@ func (r *MacHostRepository) UpdateHeartbeat(ctx context.Context, id uuid.UUID, p
 	return convertDbMacHost(row), nil
 }
 
+// RotateAPIKeyTx atomically replaces the host's api_key_hash and bumps
+// api_key_rotated_at. Returns db.ErrNotFound if the host is missing or
+// already revoked. Tx-bound variant only — rotation is always inside
+// the service's pair-token-consume tx for atomicity.
+func (r *MacHostRepository) RotateAPIKeyTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id uuid.UUID,
+	newAPIKeyHash string,
+) (*MacHost, error) {
+	row, err := db.New(tx).RotateMacHostAPIKey(ctx, db.RotateMacHostAPIKeyParams{
+		ID:         uuidToPgUUID(id),
+		ApiKeyHash: newAPIKeyHash,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, fmt.Errorf("rotate mac_host api_key: %w", err)
+	}
+	return convertDbMacHost(row), nil
+}
+
 // MacHostCursorEpoch is the lock-and-read result returned by
 // GetCursorEpochForCommit. The host is locked FOR UPDATE so concurrent
 // commits for the same host serialize on this row.
@@ -343,7 +371,7 @@ func (r *MacHostRepository) SeedHostForTest(
 	// Patch permissions + source_health via the heartbeat path — the
 	// seed query only sets defaults for those JSONB columns.
 	patched, err := r.queries.UpdateMacHostHeartbeat(ctx, db.UpdateMacHostHeartbeatParams{
-		ID:              row.ID,
+		ID:              row,
 		DaemonVersion:   daemonVersion,
 		ProtocolVersion: protocolVersion,
 		Permissions:     permissions,

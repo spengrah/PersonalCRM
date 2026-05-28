@@ -59,6 +59,16 @@ SET last_heartbeat_at  = NOW(),
 WHERE id = @id AND api_key_revoked_at IS NULL
 RETURNING *;
 
+-- name: RotateMacHostAPIKey :one
+-- Atomically replaces api_key_hash and bumps api_key_rotated_at. Used
+-- by the rotate-key endpoint. Filters revoked hosts so a revoked host
+-- cannot be silently re-activated by a rotation.
+UPDATE mac_host
+SET api_key_hash = @api_key_hash,
+    api_key_rotated_at = NOW()
+WHERE id = @id AND api_key_revoked_at IS NULL
+RETURNING *;
+
 -- name: GetMacHostCursorEpoch :one
 -- Reads the host's cursor_epoch with a row lock. Used by the cursor
 -- commit path to serialize concurrent commits per host and to bind

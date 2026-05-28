@@ -339,6 +339,7 @@ v1 := router.Group("/api/v1")
 | **Ingest** | `/ingest/events` | POST | IngestHandler | Batched event ingestion (gated by `EVENT_BUS_INGEST_ENABLED`). Composite auth: `X-Mac-Host-ID` header → host-auth path (Mac daemon raw_message.\* only); absent → global API-key path (internal Pi publishers). Service enforces per-path kind allowlist. |
 | **Mac Daemon (public)** | `/host` | POST | MacHostHandler | Daemon pairs with a token — rate-limited per source IP, no auth |
 | **Mac Daemon (host auth)** | `/host/:id/heartbeat` | POST | MacHostHandler | Periodic daemon heartbeat — `Authorization: Bearer <host-key>` + `X-Mac-Host-ID` |
+| | `/host/:id/rotate-key` | POST | MacHostHandler | In-place pair-key rotation — caller proves CURRENT key control AND provides a fresh pairing token; preserves host_id, cursor_epoch, launchd, TCC |
 | | `/host/:id/sync/:source/cursor` | GET | MacHostHandler | Read push-cursor for (host, source) |
 | | `/host/:id/sync/:source/cursor` | POST | MacHostHandler | Commit push-cursor (three-stage CAS) |
 | | `/host/:id/sync/:source/known-ids` | GET | MacHostHandler | Per-(host, source) live external_contact `{source_id, last_content_hash}` set for daemon tombstone reconciliation |

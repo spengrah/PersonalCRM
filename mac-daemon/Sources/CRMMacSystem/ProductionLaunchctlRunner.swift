@@ -32,6 +32,10 @@ public struct ProductionLaunchctlRunner: LaunchctlRunner {
         try run(arguments: ["print", "gui/\(userIDProvider())/\(label)"])
     }
 
+    public func kickstart(label: String) throws -> LaunchctlInvocation {
+        try run(arguments: ["kickstart", "-k", "gui/\(userIDProvider())/\(label)"])
+    }
+
     private func run(arguments: [String]) throws -> LaunchctlInvocation {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: launchctlPath)

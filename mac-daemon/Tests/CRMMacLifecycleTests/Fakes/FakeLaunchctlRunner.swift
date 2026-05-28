@@ -12,6 +12,7 @@ public final class FakeLaunchctlRunner: LaunchctlRunner, @unchecked Sendable {
         public var bootstrap: [Int32] = [0]
         public var bootout: [Int32] = [0]
         public var printService: [Int32] = [1]
+        public var kickstart: [Int32] = [0]
         public init() {}
     }
 
@@ -19,10 +20,15 @@ public final class FakeLaunchctlRunner: LaunchctlRunner, @unchecked Sendable {
     public private(set) var bootstrapCalls: [String] = []
     public private(set) var bootoutCalls: [String] = []
     public private(set) var printServiceCalls: [String] = []
+    public private(set) var kickstartCalls: [String] = []
     /// If non-nil, `printService(label:)` throws this error on the
     /// next invocation. Used to exercise the launchctl-spawn-failure
     /// branch of Installer.existingInstallDetected.
     public var printServiceThrowsOnce: Error?
+    /// If non-nil, `kickstart(label:)` throws this error on the next
+    /// invocation. Used by RepairerTests to exercise the kickstart-
+    /// threw branch.
+    public var kickstartThrowsOnce: Error?
 
     public init(script: Script = Script()) {
         self.script = script
@@ -56,6 +62,18 @@ public final class FakeLaunchctlRunner: LaunchctlRunner, @unchecked Sendable {
         let exit = script.printService.isEmpty ? 1 : script.printService.removeFirst()
         return LaunchctlInvocation(
             arguments: ["print", "gui/501/\(label)"],
+            exitCode: exit)
+    }
+
+    public func kickstart(label: String) throws -> LaunchctlInvocation {
+        kickstartCalls.append(label)
+        if let err = kickstartThrowsOnce {
+            kickstartThrowsOnce = nil
+            throw err
+        }
+        let exit = script.kickstart.isEmpty ? 0 : script.kickstart.removeFirst()
+        return LaunchctlInvocation(
+            arguments: ["kickstart", "-k", "gui/501/\(label)"],
             exitCode: exit)
     }
 }
