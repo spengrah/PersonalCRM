@@ -14,6 +14,7 @@ export interface MacHost {
   source_health: Record<string, unknown>
   cursor_epoch: number
   api_key_revoked_at?: string
+  api_key_rotated_at?: string
   created_at: string
   updated_at: string
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Cpu, ArrowLeft, RefreshCw, Trash2, Copy, AlertTriangle } from 'lucide-react'
+import { Cpu, ArrowLeft, RefreshCw, Trash2, Copy, AlertTriangle, KeyRound } from 'lucide-react'
 
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
@@ -64,6 +64,14 @@ export default function MacSettingsPage() {
     null
   )
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  // rotateKeyForHost is the host whose Rotate Key button was clicked;
+  // null when the modal is closed. Track the full host (not just id) so
+  // the modal can display the hostname without re-fetching.
+  const [rotateKeyForHost, setRotateKeyForHost] = useState<MacHost | null>(null)
+  const [rotateKeyToken, setRotateKeyToken] = useState<{
+    token: string
+    expires_at: string
+  } | null>(null)
 
   // Tick `now` once a second so the relative-time labels stay current.
   useEffect(() => {
@@ -84,6 +92,22 @@ export default function MacSettingsPage() {
   const handleClosePairingModal = () => {
     setPairingModalOpen(false)
     setPairingToken(null)
+  }
+
+  const handleRotateKey = async (host: MacHost) => {
+    setRotateKeyForHost(host)
+    setRotateKeyToken(null)
+    try {
+      const tok = await createToken.mutateAsync()
+      setRotateKeyToken(tok)
+    } catch (err) {
+      console.error('rotate-key token mint failed', err)
+    }
+  }
+
+  const handleCloseRotateKeyModal = () => {
+    setRotateKeyForHost(null)
+    setRotateKeyToken(null)
   }
 
   const handleConfirmDelete = async () => {
@@ -184,18 +208,36 @@ export default function MacSettingsPage() {
                                 {heartbeatLabel(host, now)}
                               </dd>
                             </div>
+                            {host.api_key_rotated_at ? (
+                              <div>
+                                <dt className="inline font-medium">Last rotated:</dt>{' '}
+                                <dd className="inline">
+                                  {new Date(host.api_key_rotated_at).toLocaleString()}
+                                </dd>
+                              </div>
+                            ) : null}
                           </dl>
                           <PermissionsBadges permissions={host.permissions} />
                           <SourceHealthTable health={host.source_health} hostId={host.id} />
                         </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setConfirmDeleteId(host.id)}
-                          aria-label={`Uninstall ${host.hostname}`}
-                        >
-                          <Trash2 className="w-4 h-4 mr-1" /> Uninstall
-                        </Button>
+                        <div className="flex items-center space-x-2 flex-shrink-0">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleRotateKey(host)}
+                            aria-label={`Rotate pair-key for ${host.hostname}`}
+                          >
+                            <KeyRound className="w-4 h-4 mr-1" /> Rotate Key
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setConfirmDeleteId(host.id)}
+                            aria-label={`Uninstall ${host.hostname}`}
+                          >
+                            <Trash2 className="w-4 h-4 mr-1" /> Uninstall
+                          </Button>
+                        </div>
                       </div>
                     </li>
                   )
@@ -212,6 +254,16 @@ export default function MacSettingsPage() {
           isPending={createToken.isPending}
           isError={createToken.isError}
           onClose={handleClosePairingModal}
+        />
+      ) : null}
+
+      {rotateKeyForHost ? (
+        <RotateKeyModal
+          hostname={rotateKeyForHost.hostname}
+          token={rotateKeyToken}
+          isPending={createToken.isPending}
+          isError={createToken.isError}
+          onClose={handleCloseRotateKeyModal}
         />
       ) : null}
 
@@ -277,6 +329,93 @@ function PairingTokenModal({ token, isPending, isError, onClose }: PairingTokenM
                 <Copy className="w-4 h-4 mr-1" /> {copied ? 'Copied' : 'Copy'}
               </Button>
             </div>
+          </div>
+        ) : null}
+        <div className="mt-6 flex justify-end">
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export interface RotateKeyModalProps {
+  hostname: string
+  token: { token: string; expires_at: string } | null
+  isPending: boolean
+  isError: boolean
+  onClose: () => void
+}
+
+/**
+ * RotateKeyModal mints + displays a single-use pairing token plus
+ * the templated `crm-mac install --re-pair --pair <token>` command
+ * the operator runs on the Mac. The browser never holds the
+ * daemon's current pair-key — the rotation itself runs on the Mac,
+ * authenticated by the daemon's current key + the token shown here.
+ *
+ * Exported for the RTL unit test that locks the templated-command
+ * rendering + copy behavior.
+ */
+export function RotateKeyModal({
+  hostname,
+  token,
+  isPending,
+  isError,
+  onClose,
+}: RotateKeyModalProps) {
+  const [copied, setCopied] = useState(false)
+
+  const fullCommand = token ? `crm-mac install --re-pair --pair ${token.token}` : ''
+
+  const handleCopy = async () => {
+    if (!token) return
+    try {
+      await navigator.clipboard.writeText(fullCommand)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error('clipboard write failed', err)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Rotate pair-key for ${hostname}`}
+    >
+      <div className="bg-white rounded-lg shadow-lg max-w-md w-full m-4 p-6">
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">Rotate pair-key for {hostname}</h2>
+        {isPending ? (
+          <p className="text-gray-600">Generating pairing token...</p>
+        ) : isError ? (
+          <p className="text-red-700">Failed to mint pairing token. Please try again.</p>
+        ) : token ? (
+          <div className="space-y-3">
+            <p className="text-sm text-gray-700">
+              Run this on the Mac to rotate its api-key. The daemon will restart automatically; no
+              re-install, no re-grant of permissions required. The current api-key stops working the
+              moment the rotation completes.
+            </p>
+            <div className="flex items-center space-x-2">
+              <code
+                className="flex-1 min-w-0 px-3 py-2 bg-gray-100 rounded text-sm font-mono text-gray-900 break-all"
+                data-testid="rotate-key-command"
+              >
+                {fullCommand}
+              </code>
+              <Button variant="outline" size="sm" onClick={handleCopy}>
+                <Copy className="w-4 h-4 mr-1" /> {copied ? 'Copied' : 'Copy'}
+              </Button>
+            </div>
+            <p className="text-xs text-gray-600">
+              Token expires at {new Date(token.expires_at).toLocaleString()} and can be used only
+              once.
+            </p>
           </div>
         ) : null}
         <div className="mt-6 flex justify-end">
