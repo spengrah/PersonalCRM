@@ -2,7 +2,6 @@ package todoist
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -1549,48 +1548,18 @@ func isPendingTempID(task *repository.ContactTask) bool {
 // parse above verifies the sync item belongs to the same contact + cadence
 // kind, so advancing ExternalTaskID = item.ID is safe.
 func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item SyncItem) (*repository.ContactTask, bool) {
-	// Parse CRM marker from description to get contact ID + kind/lifecycle.
-	type crmMarker struct {
-		CRM       bool   `json:"crm"`
-		ContactID string `json:"contact_id"`
-		Kind      string `json:"kind"`
-		Lifecycle string `json:"lifecycle"`
-	}
-	var marker crmMarker
-	descToTry := item.Description
-	if err := json.Unmarshal([]byte(descToTry), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
-		marker = crmMarker{}
-		if idx := strings.LastIndex(item.Description, "{"); idx >= 0 {
-			descToTry = item.Description[idx:]
-		}
-		if err := json.Unmarshal([]byte(descToTry), &marker); err != nil || !marker.CRM || marker.ContactID == "" {
-			return nil, false
-		}
+	// Parse + normalize the CRM marker from the description to get the
+	// contact ID + (kind, lifecycle). DecodeMarker handles the markdown-
+	// prefix retry and legacy-kind translation; an unrecognized or absent
+	// marker yields ok=false.
+	marker, ok := contacttask.DecodeMarker(item.Description)
+	if !ok {
+		return nil, false
 	}
 
 	contactID, err := uuid.Parse(marker.ContactID)
 	if err != nil {
 		return nil, false
-	}
-
-	// Translate legacy markers (no lifecycle field) into the new
-	// (kind, lifecycle) shape. Recovery here is cadence-only; non-cadence
-	// markers fall through the gate below. The unconditional translation
-	// keeps the parsed marker fields useful for future debugging.
-	if marker.Lifecycle == "" {
-		switch marker.Kind {
-		case "cadence", "":
-			marker.Kind = contacttask.KindReachOut
-			marker.Lifecycle = contacttask.LifecycleCadenceDue
-		case "follow_up":
-			marker.Kind = contacttask.KindReachOut
-			marker.Lifecycle = contacttask.LifecycleFollowUpLoop
-		case "action":
-			marker.Kind = contacttask.KindAction
-			marker.Lifecycle = contacttask.LifecycleManual
-		default:
-			return nil, false
-		}
 	}
 
 	// Cadence-only recovery: follow-up and manual rows reconcile via the
