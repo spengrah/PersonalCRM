@@ -75,7 +75,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         ])
         let center = makeCenter(presenter: presenter, lookup: lookup)
         await center.consume(needsAttention: [
-            NeedsAttentionItem(sessionID: session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
@@ -100,7 +100,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let center = makeCenter(presenter: presenter)
         await center.consume(needsAttention: [
-            NeedsAttentionItem(sessionID: session1, reason: "conflict"),
+            NotificationConsumeItem(sessionID: session1, reason: "conflict"),
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
@@ -115,9 +115,9 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let center = makeCenter(presenter: presenter)
         await center.consume(needsAttention: [
-            NeedsAttentionItem(sessionID: session1, reason: "orphan"),
-            NeedsAttentionItem(sessionID: session1, reason: "orphan"),
-            NeedsAttentionItem(sessionID: session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
@@ -126,7 +126,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
     func testConsumeDedupAcrossCalls() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let center = makeCenter(presenter: presenter)
-        let item = NeedsAttentionItem(sessionID: session1, reason: "orphan")
+        let item = NotificationConsumeItem(sessionID: session1, reason: "orphan")
         await center.consume(needsAttention: [item])
         await center.consume(needsAttention: [item])
         let calls = await presenter.recordedAddCalls()
@@ -138,7 +138,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
     func testConsumeAuthDeniedPersistsAndRetriesOnNextCall() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: false)
         let center = makeCenter(presenter: presenter)
-        let item = NeedsAttentionItem(sessionID: session1, reason: "orphan")
+        let item = NotificationConsumeItem(sessionID: session1, reason: "orphan")
         await center.consume(needsAttention: [item])
         var calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 0)  // Skipped due to denial.
@@ -164,7 +164,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true,
                                                       addError: TestError())
         let center = makeCenter(presenter: presenter)
-        let item = NeedsAttentionItem(sessionID: session1, reason: "orphan")
+        let item = NotificationConsumeItem(sessionID: session1, reason: "orphan")
         await center.consume(needsAttention: [item])
         var state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications.count, 1)
@@ -184,7 +184,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let center = makeCenter(presenter: presenter)
         await center.consume(needsAttention: [
-            NeedsAttentionItem(sessionID: session1, reason: "future-unknown-reason"),
+            NotificationConsumeItem(sessionID: session1, reason: "future-unknown-reason"),
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertTrue(calls.isEmpty)
@@ -199,7 +199,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let center = makeCenter(presenter: presenter)
         // No canned metadata → lookup returns nil.
         await center.consume(needsAttention: [
-            NeedsAttentionItem(sessionID: session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
@@ -217,7 +217,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         ])
         let center = makeCenter(presenter: presenter, lookup: lookup)
         await center.consume(needsAttention: [
-            NeedsAttentionItem(sessionID: session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
@@ -243,15 +243,13 @@ final class OrphanNotificationCenterTests: XCTestCase {
         // Pi returns session1 + session2.
         let center = makeCenter(presenter: presenter, fetcher: { [self] in
             [
-                NeedsAttentionListItem(
-                    id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
-                    anarlogSessionID: UUID(uuidString: self.session1)!,
+                NotificationReconcileItem(
+                    anarlogSessionID: self.session1,
                     linkageState: "orphan_needs_review",
                     title: "Synthetic Session 1",
                     meetingAt: "2026-05-27T14:00:00Z"),
-                NeedsAttentionListItem(
-                    id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
-                    anarlogSessionID: UUID(uuidString: self.session2)!,
+                NotificationReconcileItem(
+                    anarlogSessionID: self.session2,
                     linkageState: "conflict_pending",
                     title: "Synthetic Session 2",
                     meetingAt: "2026-05-27T15:00:00Z"),
@@ -287,9 +285,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
         // Pi returns only session1 → session2 should be removed.
         let center = makeCenter(presenter: presenter, fetcher: { [self] in
             [
-                NeedsAttentionListItem(
-                    id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
-                    anarlogSessionID: UUID(uuidString: self.session1)!,
+                NotificationReconcileItem(
+                    anarlogSessionID: self.session1,
                     linkageState: "orphan_needs_review",
                     title: "Synthetic Session 1",
                     meetingAt: "2026-05-27T14:00:00Z"),
@@ -346,9 +343,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
         }
         let center = makeCenter(presenter: presenter, fetcher: { [self] in
             [
-                NeedsAttentionListItem(
-                    id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
-                    anarlogSessionID: UUID(uuidString: self.session1)!,
+                NotificationReconcileItem(
+                    anarlogSessionID: self.session1,
                     linkageState: "orphan_needs_review",
                     title: "Synthetic Session 1",
                     meetingAt: "2026-05-27T14:00:00Z"),
@@ -371,9 +367,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
         ])
         let center = makeCenter(presenter: presenter, lookup: lookup, fetcher: { [self] in
             [
-                NeedsAttentionListItem(
-                    id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
-                    anarlogSessionID: UUID(uuidString: self.session1)!,
+                NotificationReconcileItem(
+                    anarlogSessionID: self.session1,
                     linkageState: "orphan_needs_review",
                     title: "Authoritative Pi Title",
                     meetingAt: "2026-05-27T14:00:00Z"),
@@ -396,9 +391,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
         ])
         let center = makeCenter(presenter: presenter, lookup: lookup, fetcher: { [self] in
             [
-                NeedsAttentionListItem(
-                    id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
-                    anarlogSessionID: UUID(uuidString: self.session1)!,
+                NotificationReconcileItem(
+                    anarlogSessionID: self.session1,
                     linkageState: "orphan_needs_review",
                     title: nil,
                     meetingAt: "2026-05-27T14:00:00Z"),
@@ -446,6 +440,68 @@ final class OrphanNotificationCenterTests: XCTestCase {
         XCTAssertEqual(remaining[0].sessionUUID, session2)
     }
 
+    // MARK: - TC-OC22b: in-mutator sequence guard re-applied
+
+    func testReconcileSkipsRemovalIfEntrySequenceBumpedMidRun() async throws {
+        // Simulate: snapshot.sequence=1 captures session1 at
+        // sequence=1. Mid-reconcile (BEFORE removeNotificationIfStale
+        // runs), a concurrent consume() upserts session1 bumping
+        // mutationSequence to 99. Reconcile's removal loop iterates
+        // — the outer guard at iteration time may still pass (it
+        // saw sequence=1 in the snapshot), but the INNER guard
+        // inside the mutator closure must see the fresh sequence
+        // and preserve the entry.
+        //
+        // We simulate the concurrent upsert by mutating state
+        // BEFORE calling reconcile. The snapshot will capture
+        // sequence=1; the in-mutator check will see sequence=99.
+        let presenter = FakeUserNotificationPresenter(authorizationResult: true)
+        // Initial state: snapshot.sequence=1, entry with sequence=1.
+        try await mutator.mutate { state in
+            state.notificationMutationSequence = 1
+            state.pendingOrphanNotifications = [
+                PendingOrphanNotification(
+                    sessionUUID: self.session1, reason: "orphan",
+                    notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
+                    deliveryState: "queued", mutationSequence: 1),
+            ]
+        }
+
+        // Build a custom fetcher closure that, BEFORE returning,
+        // mutates the persisted state to bump session1 to
+        // sequence=99 — simulating a concurrent consume() that
+        // landed between snapshot read and Pi fetch.
+        let mutatorRef = mutator!
+        let session1Ref = session1
+        let center = OrphanNotificationCenter(
+            presenter: presenter,
+            opener: FakeWorkspaceOpener(),
+            mutator: mutator,
+            metadataLookup: FakeSessionMetadataLookup(),
+            piURL: piURL,
+            needsAttentionFetcher: {
+                try await mutatorRef.mutate { state in
+                    state.notificationMutationSequence = 99
+                    state.pendingOrphanNotifications[0].mutationSequence = 99
+                    _ = session1Ref
+                }
+                return []  // Pi returns empty → triggers removal path.
+            },
+            logger: NoopLogger())
+        await center.reconcile()
+
+        // The entry's sequence (99) exceeded snapshot.sequence (1)
+        // by the time the in-mutator check ran → entry preserved,
+        // OS notification untouched.
+        let state = try stateStore.load()
+        XCTAssertEqual(state.pendingOrphanNotifications.count, 1,
+                       "entry with sequence > snapshot must survive removal pass")
+        XCTAssertEqual(state.pendingOrphanNotifications[0].sessionUUID, session1)
+        let removed = await presenter.recordedRemoveDelivered()
+        XCTAssertTrue(removed.isEmpty,
+                      "no OS-side removal when persisted entry is preserved")
+    }
+
     // MARK: - TC-OC23: reconcile re-raises denied entries still in Pi set
 
     func testReconcileReRaisesDeniedEntries() async throws {
@@ -461,9 +517,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
         }
         let center = makeCenter(presenter: presenter, fetcher: { [self] in
             [
-                NeedsAttentionListItem(
-                    id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
-                    anarlogSessionID: UUID(uuidString: self.session1)!,
+                NotificationReconcileItem(
+                    anarlogSessionID: self.session1,
                     linkageState: "orphan_needs_review",
                     title: "Synthetic Session 1",
                     meetingAt: "2026-05-27T14:00:00Z"),
@@ -494,9 +549,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
         // Pi now says the same session is conflict (reason flipped).
         let center = makeCenter(presenter: presenter, fetcher: { [self] in
             [
-                NeedsAttentionListItem(
-                    id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
-                    anarlogSessionID: UUID(uuidString: self.session1)!,
+                NotificationReconcileItem(
+                    anarlogSessionID: self.session1,
                     linkageState: "conflict_pending",
                     title: "Synthetic Session 1",
                     meetingAt: "2026-05-27T14:00:00Z"),
@@ -553,7 +607,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         XCTAssertTrue(stillInstalled1)
         // Push the actor through several await boundaries.
         await center.consume(needsAttention: [
-            NeedsAttentionItem(sessionID: session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
         ])
         let stillInstalled2 = await center.hasDelegateInstalled()
         XCTAssertTrue(stillInstalled2, "delegate must survive across await boundaries")

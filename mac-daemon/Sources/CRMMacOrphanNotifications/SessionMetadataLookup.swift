@@ -1,3 +1,7 @@
+// Domain types owned by CRMMacOrphanNotifications. Wire types from
+// CRMMacPiClient are mapped into these at the composition boundary
+// so the notification module doesn't depend on transport DTOs.
+//
 // SessionMetadataLookup — narrow protocol the notification module
 // uses to retrieve session title + time + directory URL for a
 // given session UUID.

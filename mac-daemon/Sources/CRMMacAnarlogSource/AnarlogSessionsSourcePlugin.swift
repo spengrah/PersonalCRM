@@ -561,10 +561,18 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
         }
 
         // Forward any needs_attention items the Pi surfaced to
-        // the notification center. Best-effort: consume() never
-        // throws, but we don't block the cursor commit on it.
+        // the notification center. Map the transport DTO
+        // (NeedsAttentionItem from CRMMacPiClient) to the
+        // notification module's domain type at this boundary so
+        // CRMMacOrphanNotifications doesn't depend on the wire
+        // shape. Best-effort: consume() never throws, but we
+        // don't block the cursor commit on it.
         if !outcome.needsAttention.isEmpty {
-            await orphanNotificationCenter?.consume(needsAttention: outcome.needsAttention)
+            let domainItems = outcome.needsAttention.map { wire in
+                NotificationConsumeItem(
+                    sessionID: wire.sessionID, reason: wire.reason)
+            }
+            await orphanNotificationCenter?.consume(needsAttention: domainItems)
         }
 
         let cleanBatch = outcome.rejected.isEmpty && outcome.unconfirmed == 0

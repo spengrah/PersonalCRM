@@ -188,7 +188,18 @@ struct DaemonCommand: AsyncParsableCommand {
             configSource: anarlogConfigSource,
             filesystem: anarlogFilesystem)
         let needsAttentionFetcher: NeedsAttentionFetcher = { [piClient, auth] in
-            try await piClient.needsAttention(auth: auth, hostID: auth.hostID)
+            // Map the PiClient transport DTO to the notification
+            // module's domain type at this composition boundary
+            // — CRMMacOrphanNotifications doesn't import
+            // CRMMacPiClient.
+            let wire = try await piClient.needsAttention(auth: auth, hostID: auth.hostID)
+            return wire.map { row in
+                NotificationReconcileItem(
+                    anarlogSessionID: row.anarlogSessionID.uuidString.lowercased(),
+                    linkageState: row.linkageState,
+                    title: row.title,
+                    meetingAt: row.meetingAt)
+            }
         }
         let orphanClock = ctx.clock
         let orphanNotificationCenter = OrphanNotificationCenter(

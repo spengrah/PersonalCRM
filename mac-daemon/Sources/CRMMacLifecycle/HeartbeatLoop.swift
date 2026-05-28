@@ -94,10 +94,10 @@ public final class HeartbeatLoop: SourcePlugin {
             }
             // Fire the first-success latch (dedup internally). The
             // latch's callback runs exactly once across the daemon's
-            // lifetime — PR 6 uses it to trigger
-            // OrphanNotificationCenter.reconcile() at startup once
-            // the Pi is proven reachable. Fire-and-forget via a
-            // Task so a slow callback doesn't stall the heartbeat.
+            // lifetime — the orphan-notification subsystem uses
+            // this to trigger reconcile() at startup once the Pi
+            // is proven reachable. Fire-and-forget via a Task so
+            // a slow callback doesn't stall the heartbeat.
             if let latch = firstSuccessLatch {
                 Task { await latch.fireOnce() }
             }

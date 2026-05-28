@@ -3,10 +3,10 @@
 //
 // Apple's API requires an NSObject conforming to the delegate
 // protocol (Swift actor types can't be the delegate directly).
-// The actor retains this delegate strongly per §D20 — the OS
-// holds the delegate `weak`, so without a strong owner the
-// delegate would deallocate at the next await boundary and taps
-// would silently stop firing.
+// The actor retains this delegate strongly — the OS holds
+// UNUserNotificationCenter.delegate as a `weak` reference, so
+// without a strong owner the delegate would deallocate at the
+// next await boundary and taps would silently stop firing.
 import Foundation
 import UserNotifications
 

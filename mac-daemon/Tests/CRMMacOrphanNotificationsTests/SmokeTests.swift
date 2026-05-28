@@ -77,15 +77,21 @@ final class SmokeTests: XCTestCase {
         // Construct a synthetic IngestEventsData mirroring what the
         // Pi would return for an ingest containing one untagged
         // session. The decoder lands the value with the field
-        // pre-populated; we go directly to the actor's entry point
-        // for a deterministic smoke gate.
+        // pre-populated; the plugin maps each NeedsAttentionItem
+        // (transport DTO) to a NotificationConsumeItem (notification
+        // domain type) at the composition boundary, then forwards
+        // to the actor. We replicate that mapping here for the
+        // end-to-end smoke gate.
         let ingestResponse = IngestEventsData(
             accepted: 1, duplicate: 0, rejected: 0, errors: [],
             needsAttention: [
                 NeedsAttentionItem(sessionID: session1, reason: "orphan"),
             ])
+        let domainItems = ingestResponse.needsAttention.map { wire in
+            NotificationConsumeItem(sessionID: wire.sessionID, reason: wire.reason)
+        }
 
-        await center.consume(needsAttention: ingestResponse.needsAttention)
+        await center.consume(needsAttention: domainItems)
 
         // The fake presenter recorded exactly one request — the
         // same call the production presenter would have made to
@@ -138,16 +144,14 @@ final class SmokeTests: XCTestCase {
             needsAttentionFetcher: { [self] in
                 [
                     // session1 stays.
-                    NeedsAttentionListItem(
-                        id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
-                        anarlogSessionID: UUID(uuidString: self.session1)!,
+                    NotificationReconcileItem(
+                        anarlogSessionID: self.session1,
                         linkageState: "conflict_pending",
                         title: "Synthetic Session 1",
                         meetingAt: "2026-05-27T14:00:00Z"),
                     // session3 is new.
-                    NeedsAttentionListItem(
-                        id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
-                        anarlogSessionID: UUID(uuidString: self.session3)!,
+                    NotificationReconcileItem(
+                        anarlogSessionID: self.session3,
                         linkageState: "orphan_needs_review",
                         title: "Synthetic Session 3",
                         meetingAt: "2026-05-27T15:00:00Z"),

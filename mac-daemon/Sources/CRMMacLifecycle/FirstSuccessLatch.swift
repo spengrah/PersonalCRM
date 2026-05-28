@@ -4,11 +4,11 @@
 // latch's underlying closure runs exactly once (on the FIRST
 // success), regardless of how many times fireOnce() is called.
 //
-// Used by PR 6 to trigger OrphanNotificationCenter.reconcile()
-// after the daemon's first heartbeat succeeds — that's the
-// earliest point where we know the Pi is reachable AND the
-// host_id is still valid, so /needs-attention will not 401 due
-// to a revoked key.
+// The orphan-notification subsystem uses this latch to trigger
+// reconcile() after the daemon's first heartbeat succeeds —
+// that's the earliest point where we know the Pi is reachable
+// AND the host_id is still valid, so /needs-attention will not
+// 401 due to a revoked key.
 import Foundation
 
 public actor FirstSuccessLatch {

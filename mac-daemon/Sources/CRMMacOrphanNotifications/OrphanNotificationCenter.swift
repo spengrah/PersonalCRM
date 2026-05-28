@@ -19,23 +19,27 @@
 //     Uses a mutationSequence guard so a concurrent consume(...)
 //     that upserts AFTER the snapshot isn't accidentally erased.
 //
-// The actor strongly retains an OrphanNotificationDelegate (per
-// §D20 — Apple's center.delegate is `weak`) so taps continue
-// firing across await boundaries.
+// The actor strongly retains an OrphanNotificationDelegate
+// because Apple's UNUserNotificationCenter.delegate is a `weak`
+// reference; without an owner of this strength the delegate
+// deallocates at the next await boundary and taps stop firing.
 import Foundation
 import UserNotifications
 import CRMMacCore
-import CRMMacPiClient
 
 /// Closure that fetches the current needs-attention set from the
 /// Pi. Captures auth + hostID at composition time so the actor's
-/// reconcile() is parameterless.
+/// reconcile() is parameterless. Returns domain-typed
+/// NotificationReconcileItems — the composition boundary maps
+/// PiClient wire DTOs to these.
 public typealias NeedsAttentionFetcher =
-    @Sendable () async throws -> [NeedsAttentionListItem]
+    @Sendable () async throws -> [NotificationReconcileItem]
 
-/// Delivery-state values for PendingOrphanNotification. Mirrors
-/// the spec in §D3 / §D5. Tri-state because denied/failed entries
-/// are retried on the next opportunity.
+/// Delivery-state values for PendingOrphanNotification.
+/// Tri-state because denied/failed entries are retried on the
+/// next consume() / reconcile() opportunity — that prevents the
+/// permanent missed-notification trap that would result from
+/// treating any entry in the pending list as a hard de-dup signal.
 public enum PendingDeliveryState {
     public static let queued = "queued"
     public static let denied = "denied"
@@ -93,7 +97,7 @@ public actor OrphanNotificationCenter {
     }
 
     // Test-only accessor: returns true when a delegate has been
-    // installed. Used by TC-OC25 (delegate-retention regression).
+    // installed. Used by the delegate-retention regression test.
     public func hasDelegateInstalled() -> Bool {
         delegate != nil
     }
@@ -109,7 +113,7 @@ public actor OrphanNotificationCenter {
     /// `queued` entry is skipped. An existing `denied`/`failed`
     /// entry is RE-ATTEMPTED — this is the missed-notification
     /// recovery hook.
-    public func consume(needsAttention items: [NeedsAttentionItem]) async {
+    public func consume(needsAttention items: [NotificationConsumeItem]) async {
         if items.isEmpty { return }
 
         // Within-batch dedup so two identical entries in a single
@@ -153,7 +157,7 @@ public actor OrphanNotificationCenter {
     /// Snapshot the persisted pending list + the current
     /// mutationSequence, fetch the Pi's authoritative set, and
     /// reconcile. Race-safe vs. a concurrent consume(...) via the
-    /// sequence guard (see §D4 / TC-OC22).
+    /// sequence guard.
     public func reconcile() async {
         if reconcileInFlight {
             logger.debug("orphan-notify: reconcile already in flight, skipping")
@@ -176,7 +180,7 @@ public actor OrphanNotificationCenter {
         }
 
         // Fetch the Pi's authoritative set.
-        let piItems: [NeedsAttentionListItem]
+        let piItems: [NotificationReconcileItem]
         do {
             piItems = try await needsAttentionFetcher()
         } catch {
@@ -188,7 +192,7 @@ public actor OrphanNotificationCenter {
 
         // Build the Pi-set keyed by (uuid, reason). Drop entries
         // whose linkage_state isn't a recognized value.
-        var piByKey: [String: NeedsAttentionListItem] = [:]
+        var piByKey: [String: NotificationReconcileItem] = [:]
         for pi in piItems {
             guard let reason = mapLinkageStateToReason(pi.linkageState) else {
                 logger.warning("orphan-notify: reconcile dropped unknown linkage_state", metadata: [
@@ -198,7 +202,7 @@ public actor OrphanNotificationCenter {
             }
             let key = notificationIdentifier(
                 reason: reason,
-                sessionUUID: pi.anarlogSessionID.uuidString.lowercased())
+                sessionUUID: pi.anarlogSessionID.lowercased())
             piByKey[key] = pi
         }
         let piKeys = Set(piByKey.keys)
@@ -219,7 +223,7 @@ public actor OrphanNotificationCenter {
             })
         for (key, pi) in piByKey {
             guard let reason = mapLinkageStateToReason(pi.linkageState) else { continue }
-            let sessionUUID = pi.anarlogSessionID.uuidString.lowercased()
+            let sessionUUID = pi.anarlogSessionID.lowercased()
             if let existing = snapByKey[key] {
                 if existing.deliveryState != PendingDeliveryState.queued {
                     // Re-raise: previously denied/failed but the
@@ -245,12 +249,18 @@ public actor OrphanNotificationCenter {
         // Compute removes: snapshot entries no longer in Pi's set,
         // and whose mutationSequence ≤ snapshotSequence (so a
         // concurrent consume(...) that appended AFTER the snapshot
-        // isn't erased).
+        // isn't erased). The sequence guard is also re-applied
+        // INSIDE the mutator closure (see removeNotificationIfStale)
+        // so a concurrent upsert that lands between the snapshot
+        // and the OS-side removal is still preserved.
         for snap in snapshot.entries {
             let key = notificationIdentifier(reason: snap.reason, sessionUUID: snap.sessionUUID)
             if piKeys.contains(key) { continue }
             if snap.mutationSequence > snapshot.sequence { continue }
-            await removeNotification(sessionUUID: snap.sessionUUID, reason: snap.reason)
+            await removeNotificationIfStale(
+                sessionUUID: snap.sessionUUID,
+                reason: snap.reason,
+                maxSequence: snapshot.sequence)
         }
     }
 
@@ -392,23 +402,74 @@ public actor OrphanNotificationCenter {
         }
     }
 
-    private func removeNotification(sessionUUID: String, reason: String) async {
+    /// Remove the OS notification + persisted entry for a
+    /// (sessionUUID, reason) pair, ONLY if the persisted entry's
+    /// mutationSequence is ≤ maxSequence. This re-applies the
+    /// reconcile-vs-consume race guard inside the mutator's
+    /// serialized closure: if a concurrent consume() upserted the
+    /// same key with a higher sequence between snapshot time and
+    /// now, the persisted entry is preserved and the OS-side
+    /// removal is skipped (the concurrent consume will have raised
+    /// the OS notification freshly; we must not erase it).
+    private func removeNotificationIfStale(
+        sessionUUID: String,
+        reason: String,
+        maxSequence: UInt64
+    ) async {
         let identifier = notificationIdentifier(reason: reason, sessionUUID: sessionUUID)
-        await presenter.removeDelivered(withIdentifiers: [identifier])
-        await presenter.removePending(withIdentifiers: [identifier])
+        // Atomically check + remove. The mutator closure can't
+        // mutate captured vars under Swift 6 strict-concurrency,
+        // so we read back the persisted state after the mutate
+        // call and inspect whether the entry is gone — that's the
+        // signal to also remove from the OS queue.
+        let preExisted: Bool
+        do {
+            preExisted = try await mutator.read().pendingOrphanNotifications.contains {
+                $0.sessionUUID == sessionUUID && $0.reason == reason
+            }
+        } catch {
+            logger.warning("orphan-notify: removeNotificationIfStale pre-read failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+            return
+        }
+        guard preExisted else { return }
         do {
             try await mutator.mutate { state in
-                state.pendingOrphanNotifications.removeAll {
+                if let idx = state.pendingOrphanNotifications.firstIndex(where: {
                     $0.sessionUUID == sessionUUID && $0.reason == reason
+                }), state.pendingOrphanNotifications[idx].mutationSequence <= maxSequence {
+                    state.pendingOrphanNotifications.remove(at: idx)
                 }
             }
         } catch {
-            logger.warning("orphan-notify: removeNotification persist failed", metadata: [
+            logger.warning("orphan-notify: removeNotificationIfStale persist failed", metadata: [
                 "error": .private(String(describing: error)),
                 "session_uuid": .private(sessionUUID),
                 "reason": .public(reason),
             ])
+            return
         }
+        // Post-mutate read: was the entry removed? If yes, the
+        // in-mutator sequence check passed → also remove from OS.
+        // If no, a concurrent consume() bumped the sequence above
+        // maxSequence and the mutate left the entry in place →
+        // skip the OS-side removal so the fresh notification
+        // stays on screen.
+        let stillPresent: Bool
+        do {
+            stillPresent = try await mutator.read().pendingOrphanNotifications.contains {
+                $0.sessionUUID == sessionUUID && $0.reason == reason
+            }
+        } catch {
+            logger.warning("orphan-notify: removeNotificationIfStale post-read failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+            return
+        }
+        if stillPresent { return }
+        await presenter.removeDelivered(withIdentifiers: [identifier])
+        await presenter.removePending(withIdentifiers: [identifier])
     }
 
     // MARK: - persistence helpers
