@@ -108,41 +108,94 @@ public actor OrphanNotificationCenter {
         await presenter.setDelegate(UserNotificationDelegateRef(d))
     }
 
-    /// Sweep Notification Center for ghost notifications minted by
-    /// older daemon builds that used the unversioned
-    /// `<reason>:<uuid>` identifier scheme, AND downgrade any
-    /// matching persisted entries so the next reconcile re-raises
-    /// them with versioned identifiers. Without the persisted-state
-    /// half of this sweep, a `queued` entry left over from a
-    /// pre-versioned build would be no-op'd by reconcile (which
-    /// treats queued entries as already-delivered) and the user
-    /// would silently lose the notification on upgrade.
+    /// Startup sweep that reconciles Notification Center with the
+    /// daemon's persisted state. Removes two classes of ghost
+    /// notifications:
     ///
-    /// Best-effort — wired into daemon startup once and safe to run
-    /// even when there's nothing to clean up.
+    /// 1. Legacy unversioned ids (`<reason>:<uuid>`) minted by
+    ///    pre-versioning daemon builds. The new code can't target
+    ///    these via stale-remove because its identifiers are
+    ///    versioned.
+    ///
+    /// 2. Orphaned versioned ids (`<reason>:<uuid>:<seq>`) that no
+    ///    persisted entry's `osIdentifierSequence` references.
+    ///    These accrue when a daemon crash lands between
+    ///    `presenter.add` succeeding and the post-add confirm
+    ///    persisting — the OS keeps the notification but the
+    ///    persisted entry is `failed` with `osIdentifierSequence:
+    ///    nil`, so reconcile re-raises and a NEW versioned
+    ///    notification appears alongside the orphaned one.
+    ///
+    /// Also downgrades persisted `queued` entries whose
+    /// `osIdentifierSequence` is nil (or whose `mutationSequence`
+    /// is 0 from pre-sequencing builds) so reconcile re-raises
+    /// with a versioned identifier. Without this, an upgraded
+    /// operator would silently lose the notification when the
+    /// legacy OS id was swept.
+    ///
+    /// Best-effort — wired into daemon startup once and safe to
+    /// run even when there's nothing to clean up.
     public func cleanupLegacyOSNotifications() async {
         let delivered = await presenter.getDeliveredIdentifiers()
         let pending = await presenter.getPendingIdentifiers()
-        let legacyDelivered = delivered.filter { isLegacyNotificationIdentifier($0) }
-        let legacyPending = pending.filter { isLegacyNotificationIdentifier($0) }
-        if !legacyDelivered.isEmpty {
-            await presenter.removeDelivered(withIdentifiers: legacyDelivered)
-        }
-        if !legacyPending.isEmpty {
-            await presenter.removePending(withIdentifiers: legacyPending)
+
+        // Build the set of identifiers persisted state EXPECTS to
+        // exist on the OS side: queued entries with a known
+        // osIdentifierSequence. Anything else with an
+        // orphan:/conflict: prefix is a ghost (legacy or
+        // crash-orphaned) and gets swept.
+        let expectedIdentifiers: Set<String>
+        do {
+            expectedIdentifiers = try await mutator.read()
+                .pendingOrphanNotifications
+                .reduce(into: Set<String>()) { acc, entry in
+                    guard entry.deliveryState == PendingDeliveryState.queued,
+                          let osSeq = entry.osIdentifierSequence else { return }
+                    acc.insert(notificationIdentifier(
+                        reason: entry.reason,
+                        sessionUUID: entry.sessionUUID,
+                        sequence: osSeq))
+                }
+        } catch {
+            logger.warning("orphan-notify: startup sweep read failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+            return
         }
 
-        // Downgrade persisted entries that were minted before
-        // osIdentifierSequence existed. Two markers identify a
-        // legacy entry: (a) osIdentifierSequence is nil while
-        // deliveryState is 'queued' (queued entries written by the
-        // new code always carry osIdentifierSequence), or (b)
-        // mutationSequence is 0 (the decoded-default for entries
-        // written before sequencing existed at all). Both cases
-        // mean the OS notification — if any — was minted with a
-        // legacy identifier the new code can't target via
-        // stale-remove. Downgrading to 'failed' enrolls them in
-        // the retry loop so reconcile re-raises with a versioned id.
+        // An id is a "ghost" iff it claims to be one of ours
+        // (orphan: or conflict: prefix) AND isn't in the expected
+        // set. This catches both legacy unversioned ids and
+        // orphaned versioned ids in a single pass.
+        func isGhost(_ id: String) -> Bool {
+            if expectedIdentifiers.contains(id) { return false }
+            if isLegacyNotificationIdentifier(id) { return true }
+            // Versioned id whose sequence isn't expected by state.
+            let parts = id.split(separator: ":", omittingEmptySubsequences: false)
+            guard parts.count == 3 else { return false }
+            let prefix = String(parts[0])
+            return prefix == NotificationReason.orphan ||
+                prefix == NotificationReason.conflict
+        }
+
+        let ghostDelivered = delivered.filter(isGhost)
+        let ghostPending = pending.filter(isGhost)
+        if !ghostDelivered.isEmpty {
+            await presenter.removeDelivered(withIdentifiers: ghostDelivered)
+        }
+        if !ghostPending.isEmpty {
+            await presenter.removePending(withIdentifiers: ghostPending)
+        }
+
+        // Downgrade persisted entries that lack a usable
+        // osIdentifierSequence while still appearing 'queued'.
+        // Two markers identify these: (a) osIdentifierSequence is
+        // nil (legacy decode, or post-crash where the pre-add
+        // persist landed but confirm didn't), or (b)
+        // mutationSequence is 0 (decoded-default for pre-
+        // sequencing entries). Both cases mean reconcile would
+        // treat the entry as already-delivered and never re-raise.
+        // Downgrading to 'failed' enrolls them in the retry loop.
         let downgradedCount: Int
         do {
             downgradedCount = try await mutator.mutateReturning { state -> Int in
@@ -164,16 +217,16 @@ public actor OrphanNotificationCenter {
                 return count
             }
         } catch {
-            logger.warning("orphan-notify: legacy persisted-state downgrade failed", metadata: [
+            logger.warning("orphan-notify: startup sweep persisted-state downgrade failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
             return
         }
 
-        if !legacyDelivered.isEmpty || !legacyPending.isEmpty || downgradedCount > 0 {
-            logger.info("orphan-notify: cleaned up legacy unversioned notifications", metadata: [
-                "delivered_count": .public(String(legacyDelivered.count)),
-                "pending_count": .public(String(legacyPending.count)),
+        if !ghostDelivered.isEmpty || !ghostPending.isEmpty || downgradedCount > 0 {
+            logger.info("orphan-notify: startup sweep removed ghost notifications", metadata: [
+                "delivered_count": .public(String(ghostDelivered.count)),
+                "pending_count": .public(String(ghostPending.count)),
                 "downgraded_persisted_count": .public(String(downgradedCount)),
             ])
         }

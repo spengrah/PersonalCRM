@@ -720,15 +720,33 @@ final class OrphanNotificationCenterTests: XCTestCase {
     /// never disappear.
     func testCleanupLegacyOSNotificationsRemovesUnversionedIDs() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
+        // Seed persisted state with two entries whose
+        // osIdentifierSequence matches versioned OS ids that
+        // should be PRESERVED (they're tracked).
+        try await mutator.mutate { state in
+            state.notificationMutationSequence = 9
+            state.pendingOrphanNotifications = [
+                PendingOrphanNotification(
+                    sessionUUID: Self.session2, reason: "conflict",
+                    notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
+                    deliveryState: "queued", mutationSequence: 4,
+                    osIdentifierSequence: 4),
+                PendingOrphanNotification(
+                    sessionUUID: Self.session2, reason: "orphan",
+                    notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
+                    deliveryState: "queued", mutationSequence: 9,
+                    osIdentifierSequence: 9),
+            ]
+        }
         await presenter.seedDeliveredIdentifiers([
-            "orphan:\(Self.session1)",
-            "conflict:\(Self.session2):4",            // versioned — keep
-            "orphan:\(Self.session3)",
+            "orphan:\(Self.session1)",                // unversioned — ghost
+            "conflict:\(Self.session2):4",            // tracked — keep
+            "orphan:\(Self.session3)",                // unversioned — ghost
             "crm-mac-prod-presenter-test-xyz",        // unrelated — keep
         ])
         await presenter.seedPendingIdentifiers([
-            "conflict:\(Self.session1)",
-            "orphan:\(Self.session2):9",              // versioned — keep
+            "conflict:\(Self.session1)",              // unversioned — ghost
+            "orphan:\(Self.session2):9",              // tracked — keep
         ])
         let center = makeCenter(presenter: presenter)
 
@@ -739,13 +757,30 @@ final class OrphanNotificationCenterTests: XCTestCase {
         XCTAssertEqual(removedDelivered.count, 1)
         XCTAssertEqual(Set(removedDelivered[0]),
                        Set(["orphan:\(Self.session1)", "orphan:\(Self.session3)"]),
-                       "only unversioned orphan/conflict ids should be swept")
+                       "only unversioned (or otherwise untracked) orphan/conflict ids should be swept")
         XCTAssertEqual(removedPending.count, 1)
         XCTAssertEqual(removedPending[0], ["conflict:\(Self.session1)"])
     }
 
-    func testCleanupLegacyOSNotificationsIsNoOpWhenNothingLegacy() async throws {
+    func testCleanupLegacyOSNotificationsIsNoOpWhenAllVersionedAndTracked() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
+        // Seed persisted state so the versioned OS ids below are
+        // recognized as tracked (not ghosts).
+        try await mutator.mutate { state in
+            state.notificationMutationSequence = 2
+            state.pendingOrphanNotifications = [
+                PendingOrphanNotification(
+                    sessionUUID: Self.session1, reason: "orphan",
+                    notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
+                    deliveryState: "queued", mutationSequence: 1,
+                    osIdentifierSequence: 1),
+                PendingOrphanNotification(
+                    sessionUUID: Self.session2, reason: "conflict",
+                    notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
+                    deliveryState: "queued", mutationSequence: 2,
+                    osIdentifierSequence: 2),
+            ]
+        }
         await presenter.seedDeliveredIdentifiers([
             "orphan:\(Self.session1):1",
             "conflict:\(Self.session2):2",
@@ -823,26 +858,52 @@ final class OrphanNotificationCenterTests: XCTestCase {
 
     // MARK: - TC-OC30: reentrant raise guard
 
-    /// Reentrancy regression. With the new persist-failed-first
-    /// flow, a concurrent consume() that lands at the same key
-    /// after the pre-add persist (which marks 'failed') but before
-    /// the OS call returns must NOT start a parallel raise — the
-    /// in-actor `raisesInFlight` guard skips it. Without the guard,
-    /// both raises would queue OS notifications with consecutive
+    /// Reentrancy regression. With the persist-failed-first flow,
+    /// a concurrent consume() that lands at the same key after the
+    /// pre-add persist (which marks 'failed') but before the OS
+    /// call returns must NOT start a parallel raise — the in-actor
+    /// `raisesInFlight` guard skips it. Without the guard, both
+    /// raises would queue OS notifications with consecutive
     /// sequence numbers and only the last confirmed sequence would
     /// be tracked, leaving an orphaned OS notification.
     ///
-    /// We can't deterministically interleave two awaits on the
-    /// same actor, so we use the FakeUserNotificationPresenter's
-    /// recording semantics: a fast-firing consume that lands while
-    /// another raise is mid-flight must be skipped, leaving exactly
-    /// one OS add call per key per logical raise.
-    ///
-    /// The looser invariant test: starting two consume(...) calls
-    /// for the same key back-to-back should produce exactly one OS
-    /// raise, not two (the second observes 'queued' or in-flight
-    /// and skips).
-    func testConsecutiveConsumesForSameKeyProduceSingleRaise() async throws {
+    /// Run multiple consume() calls concurrently via TaskGroup. The
+    /// FakeUserNotificationPresenter's `add(_:)` is an `await` on
+    /// its own actor, so concurrent center.consume(...) tasks can
+    /// interleave at that suspension point — exactly the reentrancy
+    /// window the guard protects against.
+    func testConcurrentConsumesForSameKeyDedupViaInFlightGuard() async throws {
+        let presenter = FakeUserNotificationPresenter(authorizationResult: true)
+        let center = makeCenter(presenter: presenter)
+        let item = NotificationConsumeItem(sessionID: Self.session1, reason: "orphan")
+        let centerRef = center
+        let itemRef = item
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<8 {
+                group.addTask {
+                    await centerRef.consume(needsAttention: [itemRef])
+                }
+            }
+        }
+        let calls = await presenter.recordedAddCalls()
+        XCTAssertEqual(calls.count, 1,
+            "concurrent consumes for the same (reason, session) must dedup to a single raise")
+        // Verify state is internally consistent: exactly one entry,
+        // queued, with an osIdentifierSequence that matches the
+        // single OS-side raise.
+        let state = try stateStore.load()
+        XCTAssertEqual(state.pendingOrphanNotifications.count, 1)
+        XCTAssertEqual(state.pendingOrphanNotifications[0].deliveryState, "queued")
+        XCTAssertNotNil(state.pendingOrphanNotifications[0].osIdentifierSequence)
+        let osSeq = state.pendingOrphanNotifications[0].osIdentifierSequence!
+        XCTAssertEqual(calls[0].identifier, "orphan:\(Self.session1):\(osSeq)")
+    }
+
+    /// Sequential consumes for the same key after the first one
+    /// confirmed 'queued' should also dedup — the entry is now
+    /// queued, so raiseIfNotAlreadyQueued short-circuits before
+    /// the in-flight guard even comes into play.
+    func testSequentialConsumesAfterFirstQueuedDedupViaQueuedShortCircuit() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let center = makeCenter(presenter: presenter)
         let item = NotificationConsumeItem(sessionID: Self.session1, reason: "orphan")
@@ -851,7 +912,48 @@ final class OrphanNotificationCenterTests: XCTestCase {
         await center.consume(needsAttention: [item])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1,
-            "subsequent consumes for the same (reason, session) must dedup against the first raise")
+            "subsequent consumes for the same (reason, session) must dedup against the queued entry")
+    }
+
+    // MARK: - TC-OC31: crash-orphaned versioned ids are swept
+
+    /// Daemon crash window: presenter.add succeeded (OS has the
+    /// versioned notification) but confirmPostAdd never ran, so
+    /// persisted state retains the pre-add 'failed' entry with
+    /// osIdentifierSequence=nil. On restart, the startup sweep
+    /// must remove the orphaned versioned OS notification (no
+    /// persisted entry references its sequence), otherwise a
+    /// reconcile re-raise would queue a SECOND versioned id
+    /// alongside the first and the orphan would never be cleaned.
+    func testCleanupLegacyOSNotificationsRemovesCrashOrphanedVersionedIDs() async throws {
+        let presenter = FakeUserNotificationPresenter(authorizationResult: true)
+        try await mutator.mutate { state in
+            state.notificationMutationSequence = 4
+            state.pendingOrphanNotifications = [
+                // Crash-window survivor: pre-add persist landed
+                // ('failed'), OS add succeeded, but confirm never
+                // wrote the osIdentifierSequence.
+                PendingOrphanNotification(
+                    sessionUUID: Self.session1, reason: "orphan",
+                    notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
+                    deliveryState: "failed", mutationSequence: 4,
+                    osIdentifierSequence: nil),
+            ]
+        }
+        // The OS still has the versioned notification from before
+        // the crash. Persisted state doesn't know about it.
+        await presenter.seedDeliveredIdentifiers([
+            "orphan:\(Self.session1):4",
+        ])
+        await presenter.seedPendingIdentifiers([])
+        let center = makeCenter(presenter: presenter)
+
+        await center.cleanupLegacyOSNotifications()
+
+        let removedDelivered = await presenter.recordedRemoveDelivered()
+        XCTAssertEqual(removedDelivered.count, 1,
+            "crash-orphaned versioned id must be swept")
+        XCTAssertEqual(removedDelivered[0], ["orphan:\(Self.session1):4"])
     }
 
     /// Entries written by builds older than sequencing itself
