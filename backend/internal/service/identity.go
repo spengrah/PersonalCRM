@@ -36,6 +36,34 @@ type MatchResult struct {
 	Cached    bool
 }
 
+// NormalizationPolicy controls how MatchOrCreateTx treats an identifier
+// that normalizes to the empty string.
+type NormalizationPolicy int
+
+const (
+	// NormalizationFailEmpty rejects an empty-after-normalization
+	// identifier with an error. Use for callers where each envelope
+	// carries exactly one identifier and an un-normalizable value is
+	// fatal data (e.g. raw_message / call peer handles): there is
+	// nothing to fall back to, and rejecting holds the daemon cursor
+	// for retry rather than silently dropping the event.
+	//
+	// This is the iota zero value deliberately: the parameter is
+	// required and positional so the zero value is never an implicit
+	// default, but if a struct literal or reflection path ever produced
+	// a zero value, failing (not silently dropping) is the correct
+	// fail-closed choice.
+	NormalizationFailEmpty NormalizationPolicy = iota
+
+	// NormalizationSkipEmpty treats an empty-after-normalization
+	// identifier as a no-op: MatchOrCreateTx returns (nil, nil) without
+	// touching the database. Use for callers that loop over many
+	// identifiers and want partial success (e.g. the external_contact
+	// emails/phones loops): one junk field must not reject the whole
+	// envelope.
+	NormalizationSkipEmpty
+)
+
 // IdentityService handles identity matching operations
 type IdentityService struct {
 	identityRepo *repository.IdentityRepository
@@ -215,10 +243,23 @@ func (s *IdentityService) recordKnownMatch(ctx context.Context, normalized strin
 // per-event rejection instead. The non-tx MatchOrCreate keeps its
 // existing forgiving behavior for the sync providers that already
 // depend on it.
-func (s *IdentityService) MatchOrCreateTx(ctx context.Context, tx pgx.Tx, req MatchRequest) (*MatchResult, error) {
+//
+// The policy parameter controls the empty-after-normalization case:
+//   - NormalizationFailEmpty returns an error (for single-identifier
+//     callers where an un-normalizable value is fatal data).
+//   - NormalizationSkipEmpty returns (nil, nil) without touching the
+//     database (for loop callers that want partial success). Callers
+//     under this policy must treat a nil result as "nothing to match";
+//     only this policy can return (nil, nil).
+func (s *IdentityService) MatchOrCreateTx(ctx context.Context, tx pgx.Tx, req MatchRequest, policy NormalizationPolicy) (*MatchResult, error) {
 	normalized := identity.Normalize(req.RawIdentifier, req.Type)
 	if normalized == "" {
-		return nil, fmt.Errorf("empty identifier after normalization")
+		switch policy {
+		case NormalizationSkipEmpty:
+			return nil, nil
+		default: // NormalizationFailEmpty (and the fail-closed zero value)
+			return nil, fmt.Errorf("empty identifier after normalization")
+		}
 	}
 
 	// Contact-driven mode is intentionally NOT supported on the tx

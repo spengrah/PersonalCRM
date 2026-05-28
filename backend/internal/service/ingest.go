@@ -148,7 +148,7 @@ type JobInsertTxer interface {
 // IdentityMatcher is the narrow surface for the per-event identity
 // match call. Concrete is *IdentityService.
 type IdentityMatcher interface {
-	MatchOrCreateTx(ctx context.Context, tx pgx.Tx, req MatchRequest) (*MatchResult, error)
+	MatchOrCreateTx(ctx context.Context, tx pgx.Tx, req MatchRequest, policy NormalizationPolicy) (*MatchResult, error)
 }
 
 // MessagesUpserter is the narrow surface for the per-event staging
@@ -864,7 +864,10 @@ func (s *IngestService) handleRawMessage(
 		SourceID:      &p.Guid,
 		DisplayName:   p.PeerName,
 	}
-	matchResult, err := s.identity.MatchOrCreateTx(ctx, tx, matchReq)
+	// FailEmpty: a raw_message carries exactly one peer handle, so an
+	// un-normalizable handle is fatal data — reject the event (the
+	// daemon holds its cursor for retry) rather than dropping it.
+	matchResult, err := s.identity.MatchOrCreateTx(ctx, tx, matchReq, NormalizationFailEmpty)
 	if err != nil {
 		return nil, &IngestPerEventRejection{
 			Code:    ingestRejectIdentityMatchFailed,
@@ -1250,22 +1253,15 @@ func (s *IngestService) handleExternalContactUpserted(
 		if em.Value == "" {
 			continue
 		}
-		// Skip values that normalize to empty (e.g. whitespace-only).
-		// Otherwise MatchOrCreateTx returns an error that the caller
-		// treats as a fatal envelope rejection, stalling daemon cursor
-		// advancement on a single junk field. The internal empty-check
-		// inside MatchOrCreateTx stays as defense-in-depth for other
-		// callers (e.g. handleRawMessage, where a single un-normalizable
-		// peer handle IS a fatal data-quality problem).
-		if identity.Normalize(em.Value, identity.IdentifierTypeEmail) == "" {
-			continue
-		}
+		// SkipEmpty: a value that normalizes to empty (e.g. whitespace)
+		// is a no-op rather than an envelope rejection — one junk field
+		// must not reject the whole external_contact upsert.
 		result, err := s.identity.MatchOrCreateTx(ctx, tx, MatchRequest{
 			RawIdentifier: em.Value,
 			Type:          identity.IdentifierTypeEmail,
 			Source:        env.Source,
 			DisplayName:   p.DisplayName,
-		})
+		}, NormalizationSkipEmpty)
 		if err != nil {
 			return &IngestPerEventRejection{
 				Code:    ingestRejectIdentityMatchFailed,
@@ -1288,21 +1284,15 @@ func (s *IngestService) handleExternalContactUpserted(
 		if ph.Value == "" {
 			continue
 		}
-		// Skip values that normalize to empty (e.g. "+", whitespace).
-		// Otherwise MatchOrCreateTx returns an error that the caller
-		// treats as a fatal envelope rejection, stalling daemon cursor
-		// advancement on a single junk field. The internal empty-check
-		// inside MatchOrCreateTx stays as defense-in-depth for other
-		// callers.
-		if identity.Normalize(ph.Value, identity.IdentifierTypePhone) == "" {
-			continue
-		}
+		// SkipEmpty: a value that normalizes to empty (e.g. "+",
+		// whitespace) is a no-op rather than an envelope rejection — one
+		// junk field must not reject the whole external_contact upsert.
 		result, err := s.identity.MatchOrCreateTx(ctx, tx, MatchRequest{
 			RawIdentifier: ph.Value,
 			Type:          identity.IdentifierTypePhone,
 			Source:        env.Source,
 			DisplayName:   p.DisplayName,
-		})
+		}, NormalizationSkipEmpty)
 		if err != nil {
 			return &IngestPerEventRejection{
 				Code:    ingestRejectIdentityMatchFailed,
@@ -1330,13 +1320,18 @@ func (s *IngestService) handleExternalContactUpserted(
 	// identity row to it in the same tx. The Import-handler backfill
 	// (handlers/import.go) covers the "tag now, import later" path.
 	if env.Source == "anarlog_humans" && s.identityLookup != nil {
+		// FailEmpty: the anarlog_human_id is the single structural key
+		// the meeting_note resolution chain hangs on. A whitespace-only
+		// ID (which passes the upstream non-empty-string guard but
+		// normalizes to empty) is fatal data — reject the event rather
+		// than landing a row with no resolvable identity.
 		result, idErr := s.identity.MatchOrCreateTx(ctx, tx, MatchRequest{
 			RawIdentifier: p.EntityID,
 			Type:          identity.IdentifierTypeAnarlogHuman,
 			Source:        env.Source,
 			SourceID:      &p.EntityID,
 			DisplayName:   p.DisplayName,
-		})
+		}, NormalizationFailEmpty)
 		if idErr != nil {
 			return &IngestPerEventRejection{
 				Code:    ingestRejectIdentityMatchFailed,

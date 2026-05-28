@@ -152,6 +152,10 @@ func (s *IngestService) handleCall(
 	// MatchOrCreateTx call uses RawIdentifier; identity.Normalize is
 	// invoked inside the match path so the raw + type pair are
 	// sufficient. The result.ContactID is nil on unmatched peer.
+	//
+	// FailEmpty: a call carries exactly one peer handle, so an
+	// un-normalizable handle is fatal data — reject the event (the
+	// daemon holds its cursor for retry) rather than dropping it.
 	idType := identity.DetectIdentifierType(p.PeerHandle)
 	matchReq := MatchRequest{
 		RawIdentifier: p.PeerHandle,
@@ -159,7 +163,7 @@ func (s *IngestService) handleCall(
 		Source:        env.Source,
 		SourceID:      &p.CallUniqueID,
 	}
-	matchResult, err := s.identity.MatchOrCreateTx(ctx, tx, matchReq)
+	matchResult, err := s.identity.MatchOrCreateTx(ctx, tx, matchReq, NormalizationFailEmpty)
 	if err != nil {
 		return nil, &IngestPerEventRejection{
 			Code:    ingestRejectIdentityMatchFailed,

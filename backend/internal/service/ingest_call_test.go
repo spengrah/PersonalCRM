@@ -425,6 +425,9 @@ func TestHandleCall_MissedInboundNoVoicemail_SkipsInteractionEmit(t *testing.T) 
 	require.Len(t, h.phoneCalls.markProcessedArgs, 1, "row must be marked processed even when no interaction is created")
 	require.Nil(t, h.phoneCalls.markProcessedArgs[0].InteractionID, "missed-no-voicemail row keeps interaction_id NULL")
 	require.Empty(t, h.contactRecorder.calls, "contact recorder must NOT be called for missed-no-voicemail")
+	// handleCall carries exactly one peer handle, so it must declare
+	// FailEmpty: an un-normalizable handle is fatal data.
+	require.Equal(t, []NormalizationPolicy{NormalizationFailEmpty}, h.identity.policies)
 }
 
 // TestHandleCall_Outbound_ForcesAnsweredNullOnStaging (T11): outbound
