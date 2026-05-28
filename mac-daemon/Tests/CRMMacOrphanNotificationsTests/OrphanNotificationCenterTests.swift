@@ -237,7 +237,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
                 PendingOrphanNotification(
                     sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 1),
+                    deliveryState: "queued", mutationSequence: 1,
+                    osIdentifierSequence: 1),
             ]
         }
         // Pi returns Self.session1 + Self.session2.
@@ -269,18 +270,21 @@ final class OrphanNotificationCenterTests: XCTestCase {
 
     func testReconcileRemovesStaleEntries() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
-        // Pre-seed two entries.
+        // Pre-seed two entries — both with osIdentifierSequence set
+        // because both represent live queued OS notifications.
         try await mutator.mutate { state in
             state.notificationMutationSequence = 2
             state.pendingOrphanNotifications = [
                 PendingOrphanNotification(
                     sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 1),
+                    deliveryState: "queued", mutationSequence: 1,
+                    osIdentifierSequence: 1),
                 PendingOrphanNotification(
                     sessionUUID: Self.session2, reason: "conflict",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 2),
+                    deliveryState: "queued", mutationSequence: 2,
+                    osIdentifierSequence: 2),
             ]
         }
         // Pi returns only Self.session1 → Self.session2 should be removed.
@@ -314,7 +318,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
                 PendingOrphanNotification(
                     sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 1),
+                    deliveryState: "queued", mutationSequence: 1,
+                    osIdentifierSequence: 1),
             ]
         }
         let center = makeCenter(presenter: presenter, fetcher: {
@@ -339,7 +344,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
                 PendingOrphanNotification(
                     sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 1),
+                    deliveryState: "queued", mutationSequence: 1,
+                    osIdentifierSequence: 1),
             ]
         }
         let center = makeCenter(presenter: presenter, fetcher: {
@@ -423,12 +429,14 @@ final class OrphanNotificationCenterTests: XCTestCase {
                 PendingOrphanNotification(
                     sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 1),
+                    deliveryState: "queued", mutationSequence: 1,
+                    osIdentifierSequence: 1),
                 // Y arrived after snapshot — sequence > snapshotSequence.
                 PendingOrphanNotification(
                     sessionUUID: Self.session2, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_001),
-                    deliveryState: "queued", mutationSequence: 99),
+                    deliveryState: "queued", mutationSequence: 99,
+                    osIdentifierSequence: 99),
             ]
         }
         let center = makeCenter(presenter: presenter, fetcher: { [] })
@@ -464,7 +472,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
                 PendingOrphanNotification(
                     sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 1),
+                    deliveryState: "queued", mutationSequence: 1,
+                    osIdentifierSequence: 1),
             ]
         }
 
@@ -513,7 +522,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
                 PendingOrphanNotification(
                     sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "denied", mutationSequence: 5),
+                    deliveryState: "denied", mutationSequence: 5,
+                    osIdentifierSequence: nil),
             ]
         }
         let center = makeCenter(presenter: presenter, fetcher: {
@@ -545,7 +555,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
                 PendingOrphanNotification(
                     sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 1),
+                    deliveryState: "queued", mutationSequence: 1,
+                    osIdentifierSequence: 1),
             ]
         }
         // Pi now says the same session is conflict (reason flipped).
@@ -638,15 +649,19 @@ final class OrphanNotificationCenterTests: XCTestCase {
     func testStaleRemovalIdentifierCarriesEntryRecordedSequence() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         try await mutator.mutate { state in
-            // Snapshot sequence = 5, but the stale entry was upserted
-            // at sequence 3 (an earlier mutation). The remove
-            // identifier must carry "3", not "5".
+            // Snapshot sequence = 5, but the stale entry's OS
+            // notification was minted at sequence 3 (an earlier
+            // raise). The remove identifier must carry "3", not "5"
+            // — i.e. the entry's osIdentifierSequence, not its
+            // current mutationSequence and not the snapshot's
+            // sequence.
             state.notificationMutationSequence = 5
             state.pendingOrphanNotifications = [
                 PendingOrphanNotification(
                     sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 3),
+                    deliveryState: "queued", mutationSequence: 4,
+                    osIdentifierSequence: 3),
             ]
         }
         // Pi returns empty → triggers stale-removal path.
@@ -657,10 +672,10 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let removedPending = await presenter.recordedRemovePending()
         XCTAssertEqual(removedDelivered.count, 1)
         XCTAssertEqual(removedDelivered[0], ["orphan:\(Self.session1):3"],
-                       "stale-remove identifier must carry the entry's recorded sequence (3)")
+                       "stale-remove identifier must carry the entry's osIdentifierSequence (3)")
         XCTAssertEqual(removedPending.count, 1)
         XCTAssertEqual(removedPending[0], ["orphan:\(Self.session1):3"],
-                       "stale-remove identifier must carry the entry's recorded sequence (3)")
+                       "stale-remove identifier must carry the entry's osIdentifierSequence (3)")
     }
 
     // MARK: - TC-OC27: race-survival — fresh raise has different identifier from stale remove
@@ -744,5 +759,92 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let removedPending = await presenter.recordedRemovePending()
         XCTAssertTrue(removedDelivered.isEmpty)
         XCTAssertTrue(removedPending.isEmpty)
+    }
+
+    // MARK: - TC-OC29: legacy persisted entries are downgraded so reconcile re-raises
+
+    /// A pre-versioned daemon build's persisted `queued` entry has
+    /// no `osIdentifierSequence`. Reconcile treats `queued` entries
+    /// as already-delivered no-ops, so without an explicit
+    /// downgrade the user would silently lose the notification on
+    /// upgrade (the OS notification gets swept away by the
+    /// legacy-id sweep, but the persisted state still says
+    /// `queued` so reconcile doesn't re-raise). The cleanup must
+    /// downgrade these to `failed` to enroll them in the retry loop.
+    func testCleanupLegacyOSNotificationsDowngradesQueuedEntriesWithoutOSIDSequence() async throws {
+        let presenter = FakeUserNotificationPresenter(authorizationResult: true)
+        await presenter.seedDeliveredIdentifiers([])
+        await presenter.seedPendingIdentifiers([])
+        try await mutator.mutate { state in
+            state.notificationMutationSequence = 5
+            state.pendingOrphanNotifications = [
+                // Legacy: queued but no osIdentifierSequence.
+                PendingOrphanNotification(
+                    sessionUUID: Self.session1, reason: "orphan",
+                    notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
+                    deliveryState: "queued", mutationSequence: 5,
+                    osIdentifierSequence: nil),
+                // Fully-versioned: queued with osIdentifierSequence
+                // — must be left alone.
+                PendingOrphanNotification(
+                    sessionUUID: Self.session2, reason: "conflict",
+                    notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
+                    deliveryState: "queued", mutationSequence: 5,
+                    osIdentifierSequence: 5),
+                // Already in retry state — must be left alone (it's
+                // already enrolled in the retry loop).
+                PendingOrphanNotification(
+                    sessionUUID: Self.session3, reason: "orphan",
+                    notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
+                    deliveryState: "denied", mutationSequence: 5,
+                    osIdentifierSequence: nil),
+            ]
+        }
+        let center = makeCenter(presenter: presenter)
+
+        await center.cleanupLegacyOSNotifications()
+
+        let state = try stateStore.load()
+        let bySession = Dictionary(
+            uniqueKeysWithValues: state.pendingOrphanNotifications.map {
+                ($0.sessionUUID, $0)
+            })
+        XCTAssertEqual(bySession[Self.session1]?.deliveryState, "failed",
+                       "legacy queued entry without osIdentifierSequence must be downgraded")
+        XCTAssertGreaterThan(bySession[Self.session1]?.mutationSequence ?? 0, 5,
+                             "downgrade must bump mutationSequence to refresh the race guard")
+        XCTAssertEqual(bySession[Self.session2]?.deliveryState, "queued",
+                       "versioned queued entry must be left alone")
+        XCTAssertEqual(bySession[Self.session2]?.osIdentifierSequence, 5,
+                       "versioned queued entry's osIdentifierSequence must be preserved")
+        XCTAssertEqual(bySession[Self.session3]?.deliveryState, "denied",
+                       "non-queued entries must be left alone (already retrying)")
+    }
+
+    /// Entries written by builds older than sequencing itself
+    /// decode with mutationSequence=0. Treat these as legacy too —
+    /// the OS notification (if any) was minted with the unversioned
+    /// scheme and the legacy-id sweep just removed it.
+    func testCleanupLegacyOSNotificationsDowngradesEntriesWithZeroSequence() async throws {
+        let presenter = FakeUserNotificationPresenter(authorizationResult: true)
+        await presenter.seedDeliveredIdentifiers([])
+        await presenter.seedPendingIdentifiers([])
+        try await mutator.mutate { state in
+            state.notificationMutationSequence = 0
+            state.pendingOrphanNotifications = [
+                PendingOrphanNotification(
+                    sessionUUID: Self.session1, reason: "orphan",
+                    notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
+                    deliveryState: "queued", mutationSequence: 0,
+                    osIdentifierSequence: nil),
+            ]
+        }
+        let center = makeCenter(presenter: presenter)
+
+        await center.cleanupLegacyOSNotifications()
+
+        let state = try stateStore.load()
+        XCTAssertEqual(state.pendingOrphanNotifications.count, 1)
+        XCTAssertEqual(state.pendingOrphanNotifications[0].deliveryState, "failed")
     }
 }

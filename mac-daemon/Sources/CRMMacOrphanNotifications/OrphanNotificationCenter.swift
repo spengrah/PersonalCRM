@@ -98,12 +98,16 @@ public actor OrphanNotificationCenter {
 
     /// Sweep Notification Center for ghost notifications minted by
     /// older daemon builds that used the unversioned
-    /// `<reason>:<uuid>` identifier scheme. Operators upgrading from
-    /// pre-versioned builds otherwise see notifications the new
-    /// code can't track (the new scheme is `<reason>:<uuid>:<seq>`,
-    /// so the legacy ids never match a remove call from this
-    /// version). Best-effort — wired into daemon startup once and
-    /// safe to run even when there's nothing to clean up.
+    /// `<reason>:<uuid>` identifier scheme, AND downgrade any
+    /// matching persisted entries so the next reconcile re-raises
+    /// them with versioned identifiers. Without the persisted-state
+    /// half of this sweep, a `queued` entry left over from a
+    /// pre-versioned build would be no-op'd by reconcile (which
+    /// treats queued entries as already-delivered) and the user
+    /// would silently lose the notification on upgrade.
+    ///
+    /// Best-effort — wired into daemon startup once and safe to run
+    /// even when there's nothing to clean up.
     public func cleanupLegacyOSNotifications() async {
         let delivered = await presenter.getDeliveredIdentifiers()
         let pending = await presenter.getPendingIdentifiers()
@@ -115,10 +119,50 @@ public actor OrphanNotificationCenter {
         if !legacyPending.isEmpty {
             await presenter.removePending(withIdentifiers: legacyPending)
         }
-        if !legacyDelivered.isEmpty || !legacyPending.isEmpty {
+
+        // Downgrade persisted entries that were minted before
+        // osIdentifierSequence existed. Two markers identify a
+        // legacy entry: (a) osIdentifierSequence is nil while
+        // deliveryState is 'queued' (queued entries written by the
+        // new code always carry osIdentifierSequence), or (b)
+        // mutationSequence is 0 (the decoded-default for entries
+        // written before sequencing existed at all). Both cases
+        // mean the OS notification — if any — was minted with a
+        // legacy identifier the new code can't target via
+        // stale-remove. Downgrading to 'failed' enrolls them in
+        // the retry loop so reconcile re-raises with a versioned id.
+        let downgradedCount: Int
+        do {
+            downgradedCount = try await mutator.mutateReturning { state -> Int in
+                var count = 0
+                for idx in state.pendingOrphanNotifications.indices {
+                    let e = state.pendingOrphanNotifications[idx]
+                    let isQueued = e.deliveryState == PendingDeliveryState.queued
+                    let lacksOSSequence = e.osIdentifierSequence == nil
+                    let legacyEntry = e.mutationSequence == 0
+                    guard isQueued && (lacksOSSequence || legacyEntry) else { continue }
+                    state.notificationMutationSequence &+= 1
+                    let seq = state.notificationMutationSequence
+                    state.pendingOrphanNotifications[idx].deliveryState =
+                        PendingDeliveryState.failed
+                    state.pendingOrphanNotifications[idx].mutationSequence = seq
+                    state.pendingOrphanNotifications[idx].osIdentifierSequence = nil
+                    count += 1
+                }
+                return count
+            }
+        } catch {
+            logger.warning("orphan-notify: legacy persisted-state downgrade failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+            return
+        }
+
+        if !legacyDelivered.isEmpty || !legacyPending.isEmpty || downgradedCount > 0 {
             logger.info("orphan-notify: cleaned up legacy unversioned notifications", metadata: [
                 "delivered_count": .public(String(legacyDelivered.count)),
                 "pending_count": .public(String(legacyPending.count)),
+                "downgraded_persisted_count": .public(String(downgradedCount)),
             ])
         }
     }
@@ -407,24 +451,31 @@ public actor OrphanNotificationCenter {
             _ = await upsertPending(
                 sessionUUID: sessionUUID,
                 reason: reason,
-                deliveryState: PendingDeliveryState.denied)
+                deliveryState: PendingDeliveryState.denied,
+                osIdentifierSequence: nil)
             return
         }
 
-        // Persist first so the assigned mutationSequence can be
-        // baked into the OS identifier. Ordering matters: if the
-        // process crashes between the persist and the presenter.add,
-        // the next reconcile sees a "queued" entry with no OS-side
-        // notification and re-raises (denied/failed entries are
-        // re-attempted; queued aren't, so we briefly accept a window
-        // where the queued state slightly precedes the OS-side
-        // request — the alternative would either (a) leave the OS
-        // notification untraceable or (b) require an "in-flight"
-        // sub-state, both worse than this trade).
-        let assignedSeq = await upsertPending(
+        // Optimistically persist as 'failed' first to (a) allocate
+        // the mutationSequence used in the OS identifier and (b)
+        // close the crash window — if the daemon dies between this
+        // write and presenter.add returning, the persisted entry is
+        // already in the retry state and the next reconcile re-raises.
+        // The OS-identifier sequence is recorded only after we
+        // actually issue the OS call, so a daemon crash leaves no
+        // osIdentifierSequence pointing at a non-existent OS
+        // notification.
+        let preAddResult = await upsertPendingPreAdd(
             sessionUUID: sessionUUID,
-            reason: reason,
-            deliveryState: PendingDeliveryState.queued)
+            reason: reason)
+        guard preAddResult.persisted else {
+            // Persist failed → don't issue the OS call. We'd have
+            // no reliable way to track it (no sequence to bake into
+            // the identifier; no persisted entry to drive
+            // stale-remove). The next reconcile re-attempts.
+            return
+        }
+        let assignedSeq = preAddResult.sequence
         let identifier = notificationIdentifier(
             reason: reason,
             sessionUUID: sessionUUID,
@@ -438,16 +489,25 @@ public actor OrphanNotificationCenter {
         do {
             try await presenter.add(spec)
         } catch {
-            logger.warning("orphan-notify: presenter.add threw; persisting as 'failed'", metadata: [
+            logger.warning("orphan-notify: presenter.add threw; entry remains 'failed' for retry", metadata: [
                 "session_uuid": .private(sessionUUID),
                 "reason": .public(reason),
                 "error": .private(String(describing: error)),
             ])
-            _ = await upsertPending(
-                sessionUUID: sessionUUID,
-                reason: reason,
-                deliveryState: PendingDeliveryState.failed)
+            // Entry already persisted as 'failed' by the pre-add
+            // step. The next consume() or reconcile() will retry.
+            return
         }
+        // Confirm success: transition state to 'queued' and record
+        // the OS identifier's sequence so stale-remove can target
+        // the actual OS notification. The mutationSequence bumps
+        // (concurrent-mutation race guard) but the
+        // osIdentifierSequence stays at the value baked into the
+        // identifier we just gave the OS.
+        await confirmPostAdd(
+            sessionUUID: sessionUUID,
+            reason: reason,
+            osIdentifierSequence: assignedSeq)
     }
 
     /// Remove the OS notification + persisted entry for a
@@ -491,23 +551,32 @@ public actor OrphanNotificationCenter {
             return
         }
 
-        // Build the identifier from the ENTRY's mutationSequence,
-        // not from maxSequence. A concurrent consume() that lands
-        // between this read and the OS removal will mint a NEW
-        // identifier (different sequence component) and the
-        // freshly-raised OS notification is therefore not stripped
-        // by the call below.
-        let identifier = notificationIdentifier(
-            reason: reason,
-            sessionUUID: sessionUUID,
-            sequence: entry.mutationSequence)
-
-        // OS cleanup first. If it returns, follow with the
-        // persisted-state cleanup. The persisted entry serves as
-        // the retry signal: until removed, the next reconcile
-        // sees it and re-attempts OS cleanup.
-        await presenter.removeDelivered(withIdentifiers: [identifier])
-        await presenter.removePending(withIdentifiers: [identifier])
+        // Build the identifier from the ENTRY's
+        // osIdentifierSequence — the sequence actually baked into
+        // the OS notification when presenter.add was called. Using
+        // mutationSequence would drift if the entry was upserted
+        // (e.g. failed → queued confirmation) after the add. A
+        // concurrent consume() that lands between this read and the
+        // OS removal will mint a NEW identifier (different sequence
+        // component) and the freshly-raised OS notification is
+        // therefore not stripped by the call below.
+        //
+        // If osIdentifierSequence is nil, no OS notification was
+        // ever queued for this entry (denied / failed / legacy
+        // pre-versioned entry) — skip the OS-side removal but still
+        // clean up persisted state.
+        if let osSeq = entry.osIdentifierSequence {
+            let identifier = notificationIdentifier(
+                reason: reason,
+                sessionUUID: sessionUUID,
+                sequence: osSeq)
+            // OS cleanup first. If it returns, follow with the
+            // persisted-state cleanup. The persisted entry serves
+            // as the retry signal: until removed, the next reconcile
+            // sees it and re-attempts OS cleanup.
+            await presenter.removeDelivered(withIdentifiers: [identifier])
+            await presenter.removePending(withIdentifiers: [identifier])
+        }
         do {
             try await mutator.mutate { state in
                 // Re-check the sequence inside the mutator closure
@@ -538,19 +607,16 @@ public actor OrphanNotificationCenter {
     // MARK: - persistence helpers
 
     /// Upserts the (sessionUUID, reason) entry with the given
-    /// deliveryState and returns the mutationSequence assigned by
-    /// this upsert. The returned value is the authoritative sequence
-    /// the caller must use when minting the OS-side identifier —
-    /// embedding it in the identifier is the key to the
-    /// reconcile-vs-consume race fix. Returns 0 on persist failure;
-    /// callers treat that as a no-OS-id fallback (an identifier
-    /// with sequence=0 still differs from prior sequences and
-    /// won't collide with a fresh raise).
+    /// deliveryState. Bumps `mutationSequence` for the race guard.
+    /// Returns the assigned sequence, or 0 on persist failure
+    /// (callers must check via the `osIdentifierSequence` argument
+    /// before relying on the return value for an OS-side call).
     @discardableResult
     private func upsertPending(
         sessionUUID: String,
         reason: String,
-        deliveryState: String
+        deliveryState: String,
+        osIdentifierSequence: UInt64?
     ) async -> UInt64 {
         let now = clock()
         do {
@@ -562,6 +628,9 @@ public actor OrphanNotificationCenter {
                 }) {
                     state.pendingOrphanNotifications[idx].deliveryState = deliveryState
                     state.pendingOrphanNotifications[idx].mutationSequence = seq
+                    if let osSeq = osIdentifierSequence {
+                        state.pendingOrphanNotifications[idx].osIdentifierSequence = osSeq
+                    }
                     // notifiedAt is preserved from the original
                     // raise — the entry is the same notification
                     // semantically, just with updated delivery
@@ -573,7 +642,8 @@ public actor OrphanNotificationCenter {
                             reason: reason,
                             notifiedAt: now,
                             deliveryState: deliveryState,
-                            mutationSequence: seq))
+                            mutationSequence: seq,
+                            osIdentifierSequence: osIdentifierSequence))
                 }
                 return seq
             }
@@ -583,6 +653,72 @@ public actor OrphanNotificationCenter {
             ])
             return 0
         }
+    }
+
+    /// Pre-add upsert: persist the entry as 'failed' (the retry
+    /// state) before issuing the OS call. Returns the assigned
+    /// sequence + a flag indicating persistence success. On persist
+    /// failure (flag=false) the caller MUST NOT call presenter.add,
+    /// because there's no persisted entry to drive a later stale-
+    /// remove. The 'failed' state is the same one used after a
+    /// real presenter.add error; reconcile re-raises it on the next
+    /// pass, so a daemon crash between this write and the OS call
+    /// is fully self-healing.
+    private func upsertPendingPreAdd(
+        sessionUUID: String,
+        reason: String
+    ) async -> (persisted: Bool, sequence: UInt64) {
+        let now = clock()
+        do {
+            let seq = try await mutator.mutateReturning { state -> UInt64 in
+                state.notificationMutationSequence &+= 1
+                let seq = state.notificationMutationSequence
+                if let idx = state.pendingOrphanNotifications.firstIndex(where: {
+                    $0.sessionUUID == sessionUUID && $0.reason == reason
+                }) {
+                    state.pendingOrphanNotifications[idx].deliveryState =
+                        PendingDeliveryState.failed
+                    state.pendingOrphanNotifications[idx].mutationSequence = seq
+                    // osIdentifierSequence is NOT updated here — the
+                    // OS call hasn't been made yet. confirmPostAdd
+                    // sets it on success.
+                } else {
+                    state.pendingOrphanNotifications.append(
+                        PendingOrphanNotification(
+                            sessionUUID: sessionUUID,
+                            reason: reason,
+                            notifiedAt: now,
+                            deliveryState: PendingDeliveryState.failed,
+                            mutationSequence: seq,
+                            osIdentifierSequence: nil))
+                }
+                return seq
+            }
+            return (persisted: true, sequence: seq)
+        } catch {
+            logger.warning("orphan-notify: pre-add persist failed; OS call skipped", metadata: [
+                "error": .private(String(describing: error)),
+                "session_uuid": .private(sessionUUID),
+                "reason": .public(reason),
+            ])
+            return (persisted: false, sequence: 0)
+        }
+    }
+
+    /// Post-add confirmation: presenter.add succeeded; transition
+    /// the entry to 'queued' and stamp the OS identifier's sequence
+    /// onto the entry so future stale-remove calls can target the
+    /// actual OS notification.
+    private func confirmPostAdd(
+        sessionUUID: String,
+        reason: String,
+        osIdentifierSequence: UInt64
+    ) async {
+        _ = await upsertPending(
+            sessionUUID: sessionUUID,
+            reason: reason,
+            deliveryState: PendingDeliveryState.queued,
+            osIdentifierSequence: osIdentifierSequence)
     }
 
     private func maybeResetAuthorizationCacheIfAnyNotQueued() async {

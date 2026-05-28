@@ -119,19 +119,32 @@ public struct PendingOrphanNotification: Codable, Equatable, Sendable {
     public let notifiedAt: Date
     public var deliveryState: String   // "queued" | "denied" | "failed"
     public var mutationSequence: UInt64
+    /// Sequence component baked into the OS notification's identifier
+    /// the last time `presenter.add(_:)` was called for this entry.
+    /// `nil` when no OS notification was ever queued for the entry
+    /// (e.g. denied authorization, persist-only states, legacy
+    /// entries from pre-versioned daemon builds). Distinct from
+    /// `mutationSequence` because state transitions (e.g. failed →
+    /// queued after add success) bump `mutationSequence` for the
+    /// race guard but must NOT change the OS-side identifier the
+    /// notification was minted with — otherwise stale-remove can't
+    /// target the original notification.
+    public var osIdentifierSequence: UInt64?
 
     public init(
         sessionUUID: String,
         reason: String,
         notifiedAt: Date,
         deliveryState: String,
-        mutationSequence: UInt64
+        mutationSequence: UInt64,
+        osIdentifierSequence: UInt64? = nil
     ) {
         self.sessionUUID = sessionUUID
         self.reason = reason
         self.notifiedAt = notifiedAt
         self.deliveryState = deliveryState
         self.mutationSequence = mutationSequence
+        self.osIdentifierSequence = osIdentifierSequence
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -140,6 +153,7 @@ public struct PendingOrphanNotification: Codable, Equatable, Sendable {
         case notifiedAt
         case deliveryState
         case mutationSequence
+        case osIdentifierSequence
     }
 
     public init(from decoder: Decoder) throws {
@@ -159,6 +173,13 @@ public struct PendingOrphanNotification: Codable, Equatable, Sendable {
         // safely remove them.
         self.mutationSequence = try c.decodeIfPresent(
             UInt64.self, forKey: .mutationSequence) ?? 0
+        // Older entries lack this field — decoded as nil. The
+        // startup legacy-notification sweep handles the resulting
+        // gap: any pre-versioned OS notification is removed from
+        // Notification Center and the matching persisted entry is
+        // downgraded so a re-raise mints a fresh versioned id.
+        self.osIdentifierSequence = try c.decodeIfPresent(
+            UInt64.self, forKey: .osIdentifierSequence)
     }
 }
 

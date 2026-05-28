@@ -54,7 +54,8 @@ final class SmokeTests: XCTestCase {
     ///
     /// This is the literal "synthesize an orphan ingest response,
     /// assert UNUserNotificationCenter has the expected request
-    /// queued" check the user requires as a PR 6 acceptance gate.
+    /// queued" check that gates acceptance of the orphan-
+    /// notification flow.
     func testOrphanIngestResponseQueuesNotification() async throws {
         let fakePresenter = FakeUserNotificationPresenter(authorizationResult: true)
         let sessionDir = URL(fileURLWithPath: "/tmp/anarlog/sessions/\(Self.session1)")
@@ -127,11 +128,13 @@ final class SmokeTests: XCTestCase {
                 PendingOrphanNotification(
                     sessionUUID: Self.session1, reason: "conflict",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 1),
+                    deliveryState: "queued", mutationSequence: 1,
+                    osIdentifierSequence: 1),
                 PendingOrphanNotification(
                     sessionUUID: Self.session2, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 2),
+                    deliveryState: "queued", mutationSequence: 2,
+                    osIdentifierSequence: 2),
             ]
         }
 
