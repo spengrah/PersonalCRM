@@ -411,20 +411,26 @@ public actor OrphanNotificationCenter {
     /// now, the persisted entry is preserved and the OS-side
     /// removal is skipped (the concurrent consume will have raised
     /// the OS notification freshly; we must not erase it).
+    ///
+    /// Ordering: OS cleanup runs BEFORE the persisted deletion.
+    /// If the process crashes between the two, the next reconcile
+    /// still sees the entry and retries the OS-side cleanup. The
+    /// reverse order (persist first, then OS) would strand the OS
+    /// notification with no signal to retry.
     private func removeNotificationIfStale(
         sessionUUID: String,
         reason: String,
         maxSequence: UInt64
     ) async {
         let identifier = notificationIdentifier(reason: reason, sessionUUID: sessionUUID)
-        // Atomically check + remove. The mutator closure can't
-        // mutate captured vars under Swift 6 strict-concurrency,
-        // so we read back the persisted state after the mutate
-        // call and inspect whether the entry is gone — that's the
-        // signal to also remove from the OS queue.
-        let preExisted: Bool
+
+        // Decide whether to remove by reading the current state.
+        // Swift 6 strict-concurrency forbids mutating captured
+        // vars inside the mutator closure, so we read here and
+        // re-check inside the mutator below.
+        let entry: PendingOrphanNotification?
         do {
-            preExisted = try await mutator.read().pendingOrphanNotifications.contains {
+            entry = try await mutator.read().pendingOrphanNotifications.first {
                 $0.sessionUUID == sessionUUID && $0.reason == reason
             }
         } catch {
@@ -433,9 +439,24 @@ public actor OrphanNotificationCenter {
             ])
             return
         }
-        guard preExisted else { return }
+        guard let entry, entry.mutationSequence <= maxSequence else {
+            // Either no entry, or a concurrent consume() bumped
+            // the sequence above maxSequence — preserve.
+            return
+        }
+
+        // OS cleanup first. If it returns, follow with the
+        // persisted-state cleanup. The persisted entry serves as
+        // the retry signal: until removed, the next reconcile
+        // sees it and re-attempts OS cleanup.
+        await presenter.removeDelivered(withIdentifiers: [identifier])
+        await presenter.removePending(withIdentifiers: [identifier])
         do {
             try await mutator.mutate { state in
+                // Re-check the sequence inside the mutator closure
+                // for the race-safety guarantee. A concurrent
+                // consume() that landed between the read above and
+                // this mutate must NOT have its fresh entry erased.
                 if let idx = state.pendingOrphanNotifications.firstIndex(where: {
                     $0.sessionUUID == sessionUUID && $0.reason == reason
                 }), state.pendingOrphanNotifications[idx].mutationSequence <= maxSequence {
@@ -448,28 +469,13 @@ public actor OrphanNotificationCenter {
                 "session_uuid": .private(sessionUUID),
                 "reason": .public(reason),
             ])
-            return
+            // The OS notification is already removed at this
+            // point; the persisted entry remains. Next reconcile
+            // will see the entry, find it not in Pi's set, and
+            // re-attempt — which becomes a no-op on the OS side
+            // (removeDelivered/Pending on a non-existent id is
+            // safe) and re-tries the persist.
         }
-        // Post-mutate read: was the entry removed? If yes, the
-        // in-mutator sequence check passed → also remove from OS.
-        // If no, a concurrent consume() bumped the sequence above
-        // maxSequence and the mutate left the entry in place →
-        // skip the OS-side removal so the fresh notification
-        // stays on screen.
-        let stillPresent: Bool
-        do {
-            stillPresent = try await mutator.read().pendingOrphanNotifications.contains {
-                $0.sessionUUID == sessionUUID && $0.reason == reason
-            }
-        } catch {
-            logger.warning("orphan-notify: removeNotificationIfStale post-read failed", metadata: [
-                "error": .private(String(describing: error)),
-            ])
-            return
-        }
-        if stillPresent { return }
-        await presenter.removeDelivered(withIdentifiers: [identifier])
-        await presenter.removePending(withIdentifiers: [identifier])
     }
 
     // MARK: - persistence helpers

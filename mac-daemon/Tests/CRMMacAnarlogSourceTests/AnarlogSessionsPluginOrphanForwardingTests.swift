@@ -3,9 +3,9 @@
 // outcome.needsAttention to OrphanNotificationCenter.consume(...)
 // after a successful publish.
 //
-// The fix in commit 7 added the forwarding; this test pins it so
-// a future refactor that drops the call (e.g. moving it under an
-// `if` that fires only on non-empty rejection sets) is caught.
+// Pins the forwarding wire-up so a future refactor that drops
+// the call (e.g. moving it under an `if` that fires only on
+// non-empty rejection sets) is caught.
 import XCTest
 import UserNotifications
 import CRMMacCore
@@ -220,4 +220,3 @@ private final class SimpleScriptTransport: @unchecked Sendable {
         }
     }
 }
-

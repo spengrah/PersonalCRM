@@ -143,7 +143,6 @@ let package = Package(
             name: "CRMMacOrphanNotifications",
             dependencies: [
                 "CRMMacCore",
-                "CRMMacPiClient",
             ]),
         .target(
             name: "CRMMacSystem",

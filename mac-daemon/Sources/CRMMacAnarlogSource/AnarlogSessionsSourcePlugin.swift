@@ -565,8 +565,10 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
         // (NeedsAttentionItem from CRMMacPiClient) to the
         // notification module's domain type at this boundary so
         // CRMMacOrphanNotifications doesn't depend on the wire
-        // shape. Best-effort: consume() never throws, but we
-        // don't block the cursor commit on it.
+        // shape. consume() is non-throwing — we await it before
+        // committing the cursor below so a slow consume() applies
+        // back-pressure onto the next tick rather than letting
+        // notifications pile up unbounded behind the cursor.
         if !outcome.needsAttention.isEmpty {
             let domainItems = outcome.needsAttention.map { wire in
                 NotificationConsumeItem(
