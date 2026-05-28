@@ -20,9 +20,9 @@ final class OrphanNotificationCenterTests: XCTestCase {
     // MARK: - test rig
 
     private let piURL = URL(string: "https://pi.example")!
-    private let session1 = "deadbeef-1111-2222-3333-444455556661"
-    private let session2 = "deadbeef-1111-2222-3333-444455556662"
-    private let session3 = "deadbeef-1111-2222-3333-444455556663"
+    private static let session1 = "deadbeef-1111-2222-3333-444455556661"
+    private static let session2 = "deadbeef-1111-2222-3333-444455556662"
+    private static let session3 = "deadbeef-1111-2222-3333-444455556663"
 
     private var tempStateURL: URL!
     private var stateStore: StateStore!
@@ -235,21 +235,21 @@ final class OrphanNotificationCenterTests: XCTestCase {
             state.notificationMutationSequence = 1
             state.pendingOrphanNotifications = [
                 PendingOrphanNotification(
-                    sessionUUID: self.session1, reason: "orphan",
+                    sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
                     deliveryState: "queued", mutationSequence: 1),
             ]
         }
         // Pi returns session1 + session2.
-        let center = makeCenter(presenter: presenter, fetcher: { [self] in
+        let center = makeCenter(presenter: presenter, fetcher: {
             [
                 NotificationReconcileItem(
-                    anarlogSessionID: self.session1,
+                    anarlogSessionID: Self.session1,
                     linkageState: "orphan_needs_review",
                     title: "Synthetic Session 1",
                     meetingAt: "2026-05-27T14:00:00Z"),
                 NotificationReconcileItem(
-                    anarlogSessionID: self.session2,
+                    anarlogSessionID: Self.session2,
                     linkageState: "conflict_pending",
                     title: "Synthetic Session 2",
                     meetingAt: "2026-05-27T15:00:00Z"),
@@ -273,20 +273,20 @@ final class OrphanNotificationCenterTests: XCTestCase {
             state.notificationMutationSequence = 2
             state.pendingOrphanNotifications = [
                 PendingOrphanNotification(
-                    sessionUUID: self.session1, reason: "orphan",
+                    sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
                     deliveryState: "queued", mutationSequence: 1),
                 PendingOrphanNotification(
-                    sessionUUID: self.session2, reason: "conflict",
+                    sessionUUID: Self.session2, reason: "conflict",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
                     deliveryState: "queued", mutationSequence: 2),
             ]
         }
         // Pi returns only session1 → session2 should be removed.
-        let center = makeCenter(presenter: presenter, fetcher: { [self] in
+        let center = makeCenter(presenter: presenter, fetcher: {
             [
                 NotificationReconcileItem(
-                    anarlogSessionID: self.session1,
+                    anarlogSessionID: Self.session1,
                     linkageState: "orphan_needs_review",
                     title: "Synthetic Session 1",
                     meetingAt: "2026-05-27T14:00:00Z"),
@@ -311,7 +311,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         try await mutator.mutate { state in
             state.pendingOrphanNotifications = [
                 PendingOrphanNotification(
-                    sessionUUID: self.session1, reason: "orphan",
+                    sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
                     deliveryState: "queued", mutationSequence: 1),
             ]
@@ -336,15 +336,15 @@ final class OrphanNotificationCenterTests: XCTestCase {
             state.notificationMutationSequence = 1
             state.pendingOrphanNotifications = [
                 PendingOrphanNotification(
-                    sessionUUID: self.session1, reason: "orphan",
+                    sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
                     deliveryState: "queued", mutationSequence: 1),
             ]
         }
-        let center = makeCenter(presenter: presenter, fetcher: { [self] in
+        let center = makeCenter(presenter: presenter, fetcher: {
             [
                 NotificationReconcileItem(
-                    anarlogSessionID: self.session1,
+                    anarlogSessionID: Self.session1,
                     linkageState: "orphan_needs_review",
                     title: "Synthetic Session 1",
                     meetingAt: "2026-05-27T14:00:00Z"),
@@ -365,10 +365,10 @@ final class OrphanNotificationCenterTests: XCTestCase {
             session1: SessionMetadata(title: "Stale Filesystem Title",
                                       createdAt: nil, sessionDirURL: nil),
         ])
-        let center = makeCenter(presenter: presenter, lookup: lookup, fetcher: { [self] in
+        let center = makeCenter(presenter: presenter, lookup: lookup, fetcher: {
             [
                 NotificationReconcileItem(
-                    anarlogSessionID: self.session1,
+                    anarlogSessionID: Self.session1,
                     linkageState: "orphan_needs_review",
                     title: "Authoritative Pi Title",
                     meetingAt: "2026-05-27T14:00:00Z"),
@@ -389,10 +389,10 @@ final class OrphanNotificationCenterTests: XCTestCase {
             session1: SessionMetadata(title: "Fallback Filesystem Title",
                                       createdAt: nil, sessionDirURL: nil),
         ])
-        let center = makeCenter(presenter: presenter, lookup: lookup, fetcher: { [self] in
+        let center = makeCenter(presenter: presenter, lookup: lookup, fetcher: {
             [
                 NotificationReconcileItem(
-                    anarlogSessionID: self.session1,
+                    anarlogSessionID: Self.session1,
                     linkageState: "orphan_needs_review",
                     title: nil,
                     meetingAt: "2026-05-27T14:00:00Z"),
@@ -420,12 +420,12 @@ final class OrphanNotificationCenterTests: XCTestCase {
             state.notificationMutationSequence = 1
             state.pendingOrphanNotifications = [
                 PendingOrphanNotification(
-                    sessionUUID: self.session1, reason: "orphan",
+                    sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
                     deliveryState: "queued", mutationSequence: 1),
                 // Y arrived after snapshot — sequence > snapshotSequence.
                 PendingOrphanNotification(
-                    sessionUUID: self.session2, reason: "orphan",
+                    sessionUUID: Self.session2, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_001),
                     deliveryState: "queued", mutationSequence: 99),
             ]
@@ -461,7 +461,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
             state.notificationMutationSequence = 1
             state.pendingOrphanNotifications = [
                 PendingOrphanNotification(
-                    sessionUUID: self.session1, reason: "orphan",
+                    sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
                     deliveryState: "queued", mutationSequence: 1),
             ]
@@ -510,15 +510,15 @@ final class OrphanNotificationCenterTests: XCTestCase {
             state.notificationMutationSequence = 5
             state.pendingOrphanNotifications = [
                 PendingOrphanNotification(
-                    sessionUUID: self.session1, reason: "orphan",
+                    sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
                     deliveryState: "denied", mutationSequence: 5),
             ]
         }
-        let center = makeCenter(presenter: presenter, fetcher: { [self] in
+        let center = makeCenter(presenter: presenter, fetcher: {
             [
                 NotificationReconcileItem(
-                    anarlogSessionID: self.session1,
+                    anarlogSessionID: Self.session1,
                     linkageState: "orphan_needs_review",
                     title: "Synthetic Session 1",
                     meetingAt: "2026-05-27T14:00:00Z"),
@@ -541,16 +541,16 @@ final class OrphanNotificationCenterTests: XCTestCase {
             state.notificationMutationSequence = 1
             state.pendingOrphanNotifications = [
                 PendingOrphanNotification(
-                    sessionUUID: self.session1, reason: "orphan",
+                    sessionUUID: Self.session1, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
                     deliveryState: "queued", mutationSequence: 1),
             ]
         }
         // Pi now says the same session is conflict (reason flipped).
-        let center = makeCenter(presenter: presenter, fetcher: { [self] in
+        let center = makeCenter(presenter: presenter, fetcher: {
             [
                 NotificationReconcileItem(
-                    anarlogSessionID: self.session1,
+                    anarlogSessionID: Self.session1,
                     linkageState: "conflict_pending",
                     title: "Synthetic Session 1",
                     meetingAt: "2026-05-27T14:00:00Z"),

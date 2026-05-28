@@ -72,7 +72,7 @@ public actor FakeUserNotificationPresenter: UserNotificationPresenter {
         removePendingCalls.append(ids)
     }
 
-    public func setDelegate(_ delegate: UNUserNotificationCenterDelegate?) async {
+    public func setDelegate(_ delegate: sending UNUserNotificationCenterDelegate?) async {
         setDelegateCalls += 1
         if let d = delegate {
             lastDelegate = DelegateRef(value: d)

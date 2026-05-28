@@ -20,9 +20,9 @@ import CRMMacPiClient
 final class SmokeTests: XCTestCase {
 
     private let piURL = URL(string: "https://pi.example")!
-    private let session1 = "deadbeef-1111-2222-3333-444455556661"
-    private let session2 = "deadbeef-1111-2222-3333-444455556662"
-    private let session3 = "deadbeef-1111-2222-3333-444455556663"
+    private static let session1 = "deadbeef-1111-2222-3333-444455556661"
+    private static let session2 = "deadbeef-1111-2222-3333-444455556662"
+    private static let session3 = "deadbeef-1111-2222-3333-444455556663"
 
     private var tempStateURL: URL!
     private var stateStore: StateStore!
@@ -125,11 +125,11 @@ final class SmokeTests: XCTestCase {
             state.notificationMutationSequence = 2
             state.pendingOrphanNotifications = [
                 PendingOrphanNotification(
-                    sessionUUID: self.session1, reason: "conflict",
+                    sessionUUID: Self.session1, reason: "conflict",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
                     deliveryState: "queued", mutationSequence: 1),
                 PendingOrphanNotification(
-                    sessionUUID: self.session2, reason: "orphan",
+                    sessionUUID: Self.session2, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
                     deliveryState: "queued", mutationSequence: 2),
             ]
@@ -141,17 +141,17 @@ final class SmokeTests: XCTestCase {
             mutator: mutator,
             metadataLookup: FakeSessionMetadataLookup(),
             piURL: piURL,
-            needsAttentionFetcher: { [self] in
+            needsAttentionFetcher: {
                 [
                     // session1 stays.
                     NotificationReconcileItem(
-                        anarlogSessionID: self.session1,
+                        anarlogSessionID: Self.session1,
                         linkageState: "conflict_pending",
                         title: "Synthetic Session 1",
                         meetingAt: "2026-05-27T14:00:00Z"),
                     // session3 is new.
                     NotificationReconcileItem(
-                        anarlogSessionID: self.session3,
+                        anarlogSessionID: Self.session3,
                         linkageState: "orphan_needs_review",
                         title: "Synthetic Session 3",
                         meetingAt: "2026-05-27T15:00:00Z"),

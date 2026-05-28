@@ -62,8 +62,11 @@ public protocol UserNotificationPresenter: Sendable {
 
     /// Register a delegate for tap-handling. The OS holds the
     /// delegate `weak`, so the caller MUST retain it independently
-    /// or taps stop firing.
-    func setDelegate(_ delegate: UNUserNotificationCenterDelegate?) async
+    /// or taps stop firing. The `sending` annotation transfers the
+    /// reference into the presenter's isolation region — Swift 6
+    /// strict concurrency rejects passing a non-Sendable class
+    /// reference into an actor without this hint.
+    func setDelegate(_ delegate: sending UNUserNotificationCenterDelegate?) async
 }
 
 /// Production conformance — wraps `UNUserNotificationCenter.current()`.
@@ -109,7 +112,7 @@ public final class UserNotificationCenterPresenter: UserNotificationPresenter, @
         center.removePendingNotificationRequests(withIdentifiers: ids)
     }
 
-    public func setDelegate(_ delegate: UNUserNotificationCenterDelegate?) async {
+    public func setDelegate(_ delegate: sending UNUserNotificationCenterDelegate?) async {
         let center = UNUserNotificationCenter.current()
         center.delegate = delegate
     }
