@@ -106,7 +106,7 @@ final class AnarlogSessionsPluginOrphanForwardingTests: XCTestCase {
         let calls = await fakePresenter.recordedCalls()
         XCTAssertEqual(calls.count, 1,
                        "plugin should forward outcome.needsAttention to center")
-        XCTAssertEqual(calls[0].identifier, "orphan:\(Self.sessionUUIDA)")
+        XCTAssertEqual(calls[0].identifier, "orphan:\(Self.sessionUUIDA):1")
         XCTAssertTrue(calls[0].body.contains("Forwarded Session"))
 
         try? FileManager.default.removeItem(atPath: stateURL.path)
@@ -178,6 +178,8 @@ private actor FakeFwdPresenter: UserNotificationPresenter {
     func removeDelivered(withIdentifiers ids: [String]) async {}
     func removePending(withIdentifiers ids: [String]) async {}
     func setDelegate(_ ref: UserNotificationDelegateRef?) async {}
+    func getDeliveredIdentifiers() async -> [String] { [] }
+    func getPendingIdentifiers() async -> [String] { [] }
 }
 
 private struct FakeFwdOpener: WorkspaceOpener {

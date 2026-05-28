@@ -99,15 +99,20 @@ public struct DaemonState: Codable, Equatable, Sendable {
 /// Tracks an orphan or conflict notification the daemon has surfaced
 /// (or attempted to surface) for a session that needs CRM attention.
 ///
-/// `deliveryState` is tri-state. `"queued"` means the OS accepted the
-/// `add(_:)` call. `"denied"` means user-notification authorization
+/// `deliveryState` is tri-state. `"queued"` means the OS accepted
+/// the `add(_:)` call AND the post-add confirmation persisted the
+/// transition. `"denied"` means user-notification authorization
 /// was denied at add time, so the notification never reached the
-/// user. `"failed"` means `add(_:)` threw a non-permission error.
-/// Both `"denied"` and `"failed"` entries are RE-ATTEMPTED on the
-/// next consume() / reconcile() call for the same (sessionUUID,
-/// reason) — this prevents the permanent missed-notification trap
-/// that would occur if we treated "in the pending list" as a hard
-/// de-dup signal.
+/// user. `"failed"` covers three sub-cases: (a) `add(_:)` threw a
+/// non-permission error, (b) the entry is mid-raise (the in-flight
+/// pre-add persist marks 'failed' to seed retry semantics if the
+/// process crashes before confirmation), (c) the post-add
+/// confirmation persist failed. In all three cases the same retry
+/// posture applies. Both `"denied"` and `"failed"` entries are
+/// RE-ATTEMPTED on the next consume() / reconcile() call for the
+/// same (sessionUUID, reason) — this prevents the permanent
+/// missed-notification trap that would occur if we treated "in
+/// the pending list" as a hard de-dup signal.
 ///
 /// `mutationSequence` is a monotonic ordering token assigned on
 /// every mutation. Replaces wall-clock comparison for the
@@ -119,19 +124,32 @@ public struct PendingOrphanNotification: Codable, Equatable, Sendable {
     public let notifiedAt: Date
     public var deliveryState: String   // "queued" | "denied" | "failed"
     public var mutationSequence: UInt64
+    /// Sequence component baked into the OS notification's identifier
+    /// the last time `presenter.add(_:)` was called for this entry.
+    /// `nil` when no OS notification was ever queued for the entry
+    /// (e.g. denied authorization, persist-only states, legacy
+    /// entries from pre-versioned daemon builds). Distinct from
+    /// `mutationSequence` because state transitions (e.g. failed →
+    /// queued after add success) bump `mutationSequence` for the
+    /// race guard but must NOT change the OS-side identifier the
+    /// notification was minted with — otherwise stale-remove can't
+    /// target the original notification.
+    public var osIdentifierSequence: UInt64?
 
     public init(
         sessionUUID: String,
         reason: String,
         notifiedAt: Date,
         deliveryState: String,
-        mutationSequence: UInt64
+        mutationSequence: UInt64,
+        osIdentifierSequence: UInt64? = nil
     ) {
         self.sessionUUID = sessionUUID
         self.reason = reason
         self.notifiedAt = notifiedAt
         self.deliveryState = deliveryState
         self.mutationSequence = mutationSequence
+        self.osIdentifierSequence = osIdentifierSequence
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -140,6 +158,7 @@ public struct PendingOrphanNotification: Codable, Equatable, Sendable {
         case notifiedAt
         case deliveryState
         case mutationSequence
+        case osIdentifierSequence
     }
 
     public init(from decoder: Decoder) throws {
@@ -159,6 +178,13 @@ public struct PendingOrphanNotification: Codable, Equatable, Sendable {
         // safely remove them.
         self.mutationSequence = try c.decodeIfPresent(
             UInt64.self, forKey: .mutationSequence) ?? 0
+        // Older entries lack this field — decoded as nil. The
+        // startup legacy-notification sweep handles the resulting
+        // gap: any pre-versioned OS notification is removed from
+        // Notification Center and the matching persisted entry is
+        // downgraded so a re-raise mints a fresh versioned id.
+        self.osIdentifierSequence = try c.decodeIfPresent(
+            UInt64.self, forKey: .osIdentifierSequence)
     }
 }
 

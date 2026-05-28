@@ -54,7 +54,8 @@ final class SmokeTests: XCTestCase {
     ///
     /// This is the literal "synthesize an orphan ingest response,
     /// assert UNUserNotificationCenter has the expected request
-    /// queued" check the user requires as a PR 6 acceptance gate.
+    /// queued" check that gates acceptance of the orphan-
+    /// notification flow.
     func testOrphanIngestResponseQueuesNotification() async throws {
         let fakePresenter = FakeUserNotificationPresenter(authorizationResult: true)
         let sessionDir = URL(fileURLWithPath: "/tmp/anarlog/sessions/\(Self.session1)")
@@ -99,7 +100,7 @@ final class SmokeTests: XCTestCase {
         let calls = await fakePresenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1, "exactly one notification should be queued")
         let request = calls[0]
-        XCTAssertEqual(request.identifier, "orphan:\(Self.session1)")
+        XCTAssertEqual(request.identifier, "orphan:\(Self.session1):1")
         XCTAssertEqual(request.title, "Untagged session")
         XCTAssertTrue(request.body.contains("Tag participants in Anarlog"))
         XCTAssertTrue(request.body.contains("Synthetic Smoke Session"))
@@ -127,11 +128,13 @@ final class SmokeTests: XCTestCase {
                 PendingOrphanNotification(
                     sessionUUID: Self.session1, reason: "conflict",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 1),
+                    deliveryState: "queued", mutationSequence: 1,
+                    osIdentifierSequence: 1),
                 PendingOrphanNotification(
                     sessionUUID: Self.session2, reason: "orphan",
                     notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
-                    deliveryState: "queued", mutationSequence: 2),
+                    deliveryState: "queued", mutationSequence: 2,
+                    osIdentifierSequence: 2),
             ]
         }
 
@@ -162,18 +165,22 @@ final class SmokeTests: XCTestCase {
 
         await center.reconcile()
 
-        // One add for Self.session3 (new).
+        // One add for Self.session3 (new). The snapshot's sequence
+        // was 2; the new upsert increments to 3.
         let adds = await presenter.recordedAddCalls()
         XCTAssertEqual(adds.count, 1)
-        XCTAssertEqual(adds[0].identifier, "orphan:\(Self.session3)")
+        XCTAssertEqual(adds[0].identifier, "orphan:\(Self.session3):3")
 
-        // One delivered + one pending removal for Self.session2 (stale).
+        // One delivered + one pending removal for Self.session2
+        // (stale). The remove identifier carries the ENTRY's
+        // osIdentifierSequence (2 from the seed), not the snapshot's
+        // sequence — see OrphanNotificationCenter.removeNotificationIfStale.
         let removedDelivered = await presenter.recordedRemoveDelivered()
         let removedPending = await presenter.recordedRemovePending()
         XCTAssertEqual(removedDelivered.count, 1)
-        XCTAssertEqual(removedDelivered[0], ["orphan:\(Self.session2)"])
+        XCTAssertEqual(removedDelivered[0], ["orphan:\(Self.session2):2"])
         XCTAssertEqual(removedPending.count, 1)
-        XCTAssertEqual(removedPending[0], ["orphan:\(Self.session2)"])
+        XCTAssertEqual(removedPending[0], ["orphan:\(Self.session2):2"])
 
         let state = try stateStore.load()
         let keys = Set(state.pendingOrphanNotifications.map {

@@ -212,6 +212,10 @@ struct DaemonCommand: AsyncParsableCommand {
             logger: logger,
             clock: { orphanClock.now() })
         await orphanNotificationCenter.installDelegate()
+        // One-time cleanup of any unversioned notifications minted
+        // by older daemon builds. Operators upgrading otherwise see
+        // ghost notifications the new code can't track.
+        await orphanNotificationCenter.cleanupLegacyOSNotifications()
         let reconcileLoopPlugin = NotificationReconcileLoopPlugin(
             center: orphanNotificationCenter,
             logger: logger)
