@@ -128,7 +128,10 @@ final class PiClientNeedsAttentionTests: XCTestCase {
 
     func testMaps5xxToServerError() async {
         let response = Data(#"{"success":false,"error":{"code":"INTERNAL_ERROR","message":"boom"}}"#.utf8)
-        let script = MockTransportScript([.respond(status: 500, data: response)])
+        // RetryingTransport retries 5xx 5 times (so 6 attempts total)
+        // before surfacing the error. Script enough responses to
+        // exhaust the retry budget.
+        let script = MockTransportScript(Array(repeating: .respond(status: 500, data: response), count: 6))
         await assertThrows({
             _ = try await client(script).needsAttention(auth: auth, hostID: auth.hostID)
         }) { error in

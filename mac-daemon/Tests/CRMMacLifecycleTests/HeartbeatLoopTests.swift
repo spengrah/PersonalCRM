@@ -206,12 +206,18 @@ extension HeartbeatLoopTests {
     func testFirstSuccessLatchFiresOnlyAfterTransientThenSuccess() async throws {
         let writer = RecordingHeartbeatStateWriter()
         let exitHandler = CapturingExitHandler()
+        // RetryingTransport retries 5xx 5 times (6 total attempts).
+        // Tick 1: exhaust all 6 attempts as 503 → transient surfaces,
+        //         latch unfired.
+        // Tick 2: 200 → latch fires.
+        let script: [LifecycleMockTransport.Step] = Array(
+            repeating: .respond(status: 503, data: Data("{}".utf8)),
+            count: 6) + [
+                .respond(status: 200, data: heartbeat200JSON),
+            ]
         let client = PiClient(
             baseURL: URL(string: "https://pi.example.test")!,
-            transport: LifecycleMockTransport([
-                .respond(status: 503, data: Data("{}".utf8)),
-                .respond(status: 200, data: heartbeat200JSON),
-            ]).asTransport(),
+            transport: LifecycleMockTransport(script).asTransport(),
             sleep: noopSleep)
         let counter = LatchCallCounter()
         let latch = FirstSuccessLatch { await counter.bump() }
@@ -223,7 +229,7 @@ extension HeartbeatLoopTests {
             logger: NoopLogger(),
             clock: FixedClock(),
             firstSuccessLatch: latch)
-        // First tick: 503 → transient — latch unfired.
+        // First tick: 503 (post-retry exhaustion) → transient — latch unfired.
         try await loop.tick()
         await Task.yield()
         var count = await counter.value
