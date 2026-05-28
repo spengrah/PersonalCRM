@@ -17,6 +17,7 @@ import CRMMacCore
 import CRMMacIcloudContactsSource
 import CRMMacLifecycle
 import CRMMacMessagesSource
+import CRMMacOrphanNotifications
 import CRMMacPhoneCallsSource
 import CRMMacPiClient
 import CRMMacSystem
@@ -108,15 +109,9 @@ struct DaemonCommand: AsyncParsableCommand {
 
         let healthProvider = RegistryHealthProvider(
             registry: healthRegistry, logger: logger)
-        let heartbeat = HeartbeatLoop(
-            piClient: piClient,
-            auth: auth,
-            stateWriter: stateWriter,
-            exitHandler: ctx.exitHandler,
-            logger: logger,
-            clock: ctx.clock,
-            refresher: refresher,
-            sourceHealthProvider: healthProvider)
+        // HeartbeatLoop is constructed below — after the orphan
+        // notification center exists — so the FirstSuccessLatch can
+        // capture the center for the startup-reconcile callback.
 
         // iCloud Contacts source. Reads CNContactStore on the host
         // (Contacts permission required), publishes external_contact.*
@@ -181,6 +176,35 @@ struct DaemonCommand: AsyncParsableCommand {
                 try await piClient.ingestEvents(auth: auth, body: body)
             },
             auth: auth, logger: logger)
+
+        // Orphan-notification subsystem. Wraps the macOS
+        // UNUserNotificationCenter; raises persistent alerts when
+        // the Pi flags a session as orphan / conflict-pending, and
+        // clears them when reconciliation confirms the session has
+        // exited the needs-attention queue.
+        let orphanPresenter = UserNotificationCenterPresenter()
+        let orphanOpener = NSWorkspaceOpener()
+        let orphanMetadataLookup = AnarlogSessionMetadataLookup(
+            configSource: anarlogConfigSource,
+            filesystem: anarlogFilesystem)
+        let needsAttentionFetcher: NeedsAttentionFetcher = { [piClient, auth] in
+            try await piClient.needsAttention(auth: auth, hostID: auth.hostID)
+        }
+        let orphanClock = ctx.clock
+        let orphanNotificationCenter = OrphanNotificationCenter(
+            presenter: orphanPresenter,
+            opener: orphanOpener,
+            mutator: stateMutator,
+            metadataLookup: orphanMetadataLookup,
+            piURL: artifacts.config.piURL,
+            needsAttentionFetcher: needsAttentionFetcher,
+            logger: logger,
+            clock: { orphanClock.now() })
+        await orphanNotificationCenter.installDelegate()
+        let reconcileLoopPlugin = NotificationReconcileLoopPlugin(
+            center: orphanNotificationCenter,
+            logger: logger)
+
         let anarlogSessionsPlugin = AnarlogSessionsSourcePlugin(
             piClient: piClient,
             auth: auth,
@@ -189,7 +213,28 @@ struct DaemonCommand: AsyncParsableCommand {
             filesystem: anarlogFilesystem,
             configSource: anarlogConfigSource,
             healthRegistry: healthRegistry,
+            orphanNotificationCenter: orphanNotificationCenter,
             logger: logger)
+
+        // FirstSuccessLatch: fires the orphan center's reconcile()
+        // once after the daemon's first successful heartbeat. The
+        // 300s NotificationReconcileLoopPlugin handles steady-state
+        // drift; this latch handles startup recovery for sessions
+        // that arrived while the daemon was offline.
+        let orphanStartupReconcileLatch = FirstSuccessLatch {
+            await orphanNotificationCenter.reconcile()
+        }
+
+        let heartbeat = HeartbeatLoop(
+            piClient: piClient,
+            auth: auth,
+            stateWriter: stateWriter,
+            exitHandler: ctx.exitHandler,
+            logger: logger,
+            clock: ctx.clock,
+            refresher: refresher,
+            sourceHealthProvider: healthProvider,
+            firstSuccessLatch: orphanStartupReconcileLatch)
 
         // FSEvents watcher for the sessions plugin. We start the
         // watcher only when the config is loadable + sessions is
@@ -268,6 +313,7 @@ struct DaemonCommand: AsyncParsableCommand {
             icloudPlugin,
             anarlogHumansPlugin,
             anarlogSessionsPlugin,
+            reconcileLoopPlugin,
         ]
         let scheduler = DispatchSourceScheduleRunner(logger: logger)
         // preShutdown hook stops the FSEvents watcher before plugins
