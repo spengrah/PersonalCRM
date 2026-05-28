@@ -139,7 +139,7 @@ The pairing token model means there's no admin/bootstrap key in widespread use �
 
 #### `phone_calls` (Phone + FaceTime via CallHistoryDB)
 
-- **Source:** `~/Library/Application Support/CallHistoryDB/CallHistory.storedata` (Core Data SQLite). Read-only via GRDB.swift with `?mode=ro` (NOT `immutable=1`); back-off on `SQLITE_BUSY` (the Phone/FaceTime apps hold a writer lock while a call is in progress). Unlike `chat.db` (which Messages.app checkpoints aggressively), macOS does not checkpoint CallHistoryDB's WAL on any predictable cadence — observed in production: `CallHistory.storedata` stale by days while `CallHistory.storedata-wal` is megabytes of live writes — so `immutable=1` would make the reader blind to recent calls. SQLITE_BUSY retries cover the concurrent-writer case; reopen-every-tick keeps each handle short-lived. Covers Continuity-mirrored iPhone voice calls, native macOS Phone-app calls (macOS Sequoia+), FaceTime audio, and FaceTime video — all unified in `ZCALLRECORD`.
+- **Source:** `~/Library/Application Support/CallHistoryDB/CallHistory.storedata` (Core Data SQLite). Read-only via GRDB.swift, opened through `SQLiteSnapshotReader.readOnlyURI(for:)` (the chokepoint that produces `?mode=ro`, NOT `immutable=1`); back-off on `SQLITE_BUSY` (the Phone/FaceTime apps hold a writer lock while a call is in progress). Unlike `chat.db` (which Messages.app checkpoints aggressively), macOS does not checkpoint CallHistoryDB's WAL on any predictable cadence — observed in production: `CallHistory.storedata` stale by days while `CallHistory.storedata-wal` is megabytes of live writes — so `immutable=1` would make the reader blind to recent calls. SQLITE_BUSY retries cover the concurrent-writer case; reopen-every-tick keeps each handle short-lived. Covers Continuity-mirrored iPhone voice calls, native macOS Phone-app calls (macOS Sequoia+), FaceTime audio, and FaceTime video — all unified in `ZCALLRECORD`.
 - **Cursor:** `MAX(ZDATE)` from `ZCALLRECORD` (Mac absolute time — seconds since 2001-01-01, converted to UTC at emit). Same `backfill_cursor` + `live_cursor` JSON shape as `messages`; install-time max is the live-cursor anchor.
 - **Identifier types emitted:** generic `phone` and `email`. Channel/provenance carried in `source='phone_calls'`, with the specific service (voice / facetime_audio / facetime_video) recorded in the `service` column on the `phone_call` staging row. The service enum derives from `ZSERVICE_PROVIDER` + `ZCALLTYPE` together: `com.apple.Telephony` → `voice`; `com.apple.FaceTime` + `ZCALLTYPE=8` → `facetime_audio`; `com.apple.FaceTime` + `ZCALLTYPE=16` → `facetime_video`. (`ZSERVICE_PROVIDER` alone is insufficient — empirically only two values exist on macOS Sequoia.) Rationale matches `messages`: identifier type describes identifier shape, source describes the integration; FaceTime-only handles (Apple IDs) naturally fall into `email`.
 - **Content:** per-call record — direction (`ZORIGINATED`: 1=outgoing), peer handle (`ZADDRESS`, normalized via existing `identity/normalize.go` E.164/email rules), service (derived from `ZSERVICE_PROVIDER` + `ZCALLTYPE` per above), answered (`ZANSWERED` — **reliable only for inbound**; see "connected outbound" rule below), duration in seconds (`ZDURATION`), voicemail-present flag (`ZHASMESSAGE` — macOS sets to 1 when an unanswered inbound call left a voicemail; verified empirically against a real CallHistoryDB to have zero false positives, all flagged rows being `ZANSWERED=0 ZORIGINATED=0`), call timestamp (`ZDATE`), unique ID (`ZUNIQUE_ID` — primary dedup key, globally unique per call across Continuity-paired devices). **Voicemail audio + transcripts are not stored on the Mac** — they remain on the paired iPhone; Continuity propagates only the presence flag. `ZHASMESSAGE` is therefore the only voicemail signal available to the daemon, and surfacing voicemail content (audio/transcript) on the contact timeline is explicitly out of scope until an iOS companion source exists.
@@ -170,7 +170,7 @@ The pairing token model means there's no admin/bootstrap key in widespread use �
 
 #### `whatsapp`
 
-- **Source:** `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/` — primary DB `ChatStorage.sqlite`. Secondary: `ContactsV2.sqlite`, `ExtChatDB/ExtChatDatabase.sqlite`. Read-only via GRDB.swift with `?mode=ro` and backoff on `SQLITE_CANTOPEN`/`SQLITE_BUSY` (WhatsApp.app holds locks while running). **AUDIT before adding `immutable=1`:** validate WhatsApp's WAL-checkpoint cadence on the developer's machine first. `phone_calls` shipped with `immutable=1` and silently missed every WAL-resident write for 8+ days because macOS rarely checkpoints CallHistoryDB; WhatsApp.app may have the same pattern.
+- **Source:** `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/` — primary DB `ChatStorage.sqlite`. Secondary: `ContactsV2.sqlite`, `ExtChatDB/ExtChatDatabase.sqlite`. Read-only via GRDB.swift and backoff on `SQLITE_CANTOPEN`/`SQLITE_BUSY` (WhatsApp.app holds locks while running). **Every live-DB open MUST go through `SQLiteSnapshotReader.readOnlyURI(for:)`** (the single chokepoint that produces the read-only WAL-aware `file://<path>?mode=ro` URI — no `immutable=1`, no `cache=shared`). NEVER add `immutable=1`: it tells SQLite to ignore the WAL and serve only the main-file snapshot, so an immutable reader silently misses every uncheckpointed write. `phone_calls` shipped with `immutable=1` and missed every WAL-resident write for 8+ days because macOS rarely checkpoints CallHistoryDB; WhatsApp.app may have the same WAL-cadence pattern, so the WAL-aware `mode=ro` shape is the correct default. Each of the multiple SQLite DBs here must route through the helper individually (the `SQLiteURILiteralGuardTests` grep enforces one `readOnlyURI(...)` call per file DB open).
 - **Cursor:** `ZWAMESSAGE.ZSORT` (monotonic integer, indexed).
 - **Identifier type emitted:** `whatsapp`. Rationale: `whatsapp` is both a `contact_method.type` (added in migration 008) and an identifier_type with dual-mapping behavior (matches `contact_method.whatsapp` AND `contact_method.phone`). Functional matching difference vs generic `phone` — preserves matches against contacts that have explicitly tagged WhatsApp methods.
 - **Content:** message body (`ZWAMESSAGE.ZTEXT`), `ZSTANZAID` (server-side message ID — primary dedup key across hosts), chat JID, sender JID, `ZISFROMME`, group membership via `ZWAGROUPMEMBER`, media type tag from `ZWAMEDIAITEM.ZMEDIATYPE`. Optional media metadata: filename, size, no content.
@@ -745,6 +745,7 @@ v1 ships across 8 PRs. PRs 1-5 are Pi-side (Go); PRs 6-8 are Mac-side (Swift). E
   }
   ```
 - `SourceContext` carries Pi client, cursor read/write, logger.
+- **Data sources conform to `DataSourcePlugin`, a sub-protocol of `SourcePlugin`** (added later). `DataSourcePlugin` requires `mutator`/`clock`/`logger` + a `performTick()` hook; its protocol extension provides the `tick()` witness that auto-persists the per-tick liveness heartbeat (`state.sources[id].lastScheduledAt`) before delegating to `performTick()`, so a data plugin cannot forget the on-disk heartbeat. Conformers implement `performTick()` ONLY — declaring a concrete `tick()` would shadow the extension default and silently disable the heartbeat (enforced by the conformance suite + a `func tick(`-ban grep). Operational loops (`HeartbeatLoop`, the notification reconcile loop) stay on the bare `SourcePlugin`. The bare snippet above is the base contract; the in-tree `SourcePlugin` shipped as `id`/`tickInterval`/`tick()`.
 
 **CI:**
 - New `mac-daemon-tests` job inside `.github/workflows/ci.yml` on `macos-15` (pinned).
@@ -780,7 +781,7 @@ Anchor only; full scope brainstormed before PR7 kicks off.
 - Live cursor (event-stream tail) + 30-day backwards scan on newly-known identifiers.
 - Backfill to 2026-01-01.
 - Event publishing: `raw_message.received` / `raw_message.sent` to `POST /api/v1/ingest/events`.
-- Conforms `MessagesSource` to `SourcePlugin` from PR6.
+- Conforms `MessagesSource` to `DataSourcePlugin` (the heartbeat-persisting sub-protocol of `SourcePlugin` from PR6).
 - Pi-side bits already merged in PR2/PR3/PR4.
 
 ##### PR8 — `icloud_contacts` source
@@ -791,7 +792,7 @@ Anchor only; full scope brainstormed before PR8 kicks off.
 - Container allowlist picker UX in `crm-mac install` and `crm-mac configure`.
 - Token expiration → full resync + tombstone reconciliation.
 - Event publishing: `external_contact.upserted` / `external_contact.deleted` to `POST /api/v1/ingest/events`.
-- Conforms `ICloudContactsSource` to `SourcePlugin` from PR6.
+- Conforms `ICloudContactsSource` to `DataSourcePlugin` (the heartbeat-persisting sub-protocol of `SourcePlugin` from PR6).
 - Pi-side bits already merged in PR5.
 
 ### v1.5 — Phone & FaceTime call history
@@ -799,14 +800,14 @@ Anchor only; full scope brainstormed before PR8 kicks off.
 Small follow-on to v1 that reuses every cross-cutting concern v1 paid for (FDA permission, pairing, `MacHostAuthMiddleware`, ingest-service inline-event pattern from `meeting_note`/`external_contact`, `known-identifiers` filter, push-strategy provider scheduling, Mac settings page). Adds one Swift source reader, one staging table, one set of event kinds, one migration. No aggregator changes (calls are 1:1 with interactions; no burst-windowing).
 
 **Daemon:**
-- Swift `PhoneCalls` reader (GRDB.swift, read-only): opens `~/Library/Application Support/CallHistoryDB/CallHistory.storedata` with `?mode=ro` (NOT `immutable=1` — macOS does not checkpoint CallHistoryDB's WAL frequently, so an immutable reader would miss days of calls); back-off on `SQLITE_BUSY`.
+- Swift `PhoneCalls` reader (GRDB.swift, read-only): opens `~/Library/Application Support/CallHistoryDB/CallHistory.storedata` through `SQLiteSnapshotReader.readOnlyURI(for:)` (`?mode=ro`, NOT `immutable=1` — macOS does not checkpoint CallHistoryDB's WAL frequently, so an immutable reader would miss days of calls); back-off on `SQLITE_BUSY`.
 - Schema validation via `PRAGMA table_info` on `ZCALLRECORD` at startup; mark reader unhealthy on column-name drift. Required columns at minimum: `ZUNIQUE_ID`, `ZDATE`, `ZADDRESS`, `ZORIGINATED`, `ZANSWERED`, `ZDURATION`, `ZSERVICE_PROVIDER`, `ZCALLTYPE`, `ZHASMESSAGE`. The reader must explicitly check `ZHASMESSAGE` is present (voicemail semantics depend on it) and refuse to start if missing (Phone/FaceTime DB has migrated in past macOS releases — defence-in-depth).
 - Cursor: `MAX(ZDATE)` from `ZCALLRECORD`. Same `backfill_cursor` + `live_cursor` JSON shape as `messages`.
 - Backfill to 2026-01-01.
 - Reuses the daemon-side `known-identifiers` filter + 30-day backwards-scan logic from v1's `messages` source (extract into a shared helper if not already factored out in PR7).
 - Service enum derivation: `ZSERVICE_PROVIDER + ZCALLTYPE` together — see source description above. Reader must reject unknown combinations with a structured warning rather than silently emitting a wrong service tag.
 - Event publishing: `call.received` / `call.sent` to `POST /api/v1/ingest/events`. Payload includes `has_voicemail` (`ZHASMESSAGE`), `answered` (`ZANSWERED`, inbound only), `duration_seconds` (`ZDURATION`), `service`, `direction`, `started_at`, `peer_handle`, `peer_normalized`, `call_unique_id`. All inbound rows that survive the known-identifiers filter are forwarded — including missed-no-voicemail — so the Pi can decide interaction creation centrally rather than the daemon embedding cadence policy.
-- Conforms `PhoneCallsSource` to `SourcePlugin` from PR6.
+- Conforms `PhoneCallsSource` to `DataSourcePlugin` (the heartbeat-persisting sub-protocol of `SourcePlugin` from PR6).
 
 **Pi backend:**
 - New `phone_call` staging table (globally unique on `call_unique_id`, `interaction_id` nullable).
