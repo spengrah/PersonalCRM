@@ -180,7 +180,14 @@ final class DataSourcePluginConformanceTests: XCTestCase {
         var extractedIDCount = 0
         for fileURL in try Self.swiftFiles(under: sourcesRoot) {
             let code = try String(contentsOf: fileURL, encoding: .utf8)
-            guard code.range(of: #":\s*DataSourcePlugin"#, options: .regularExpression) != nil
+            // Match `DataSourcePlugin` in a conformance position —
+            // preceded by `:` (sole conformance) OR `,` (comma-separated
+            // multi-protocol clause, e.g. `: Foo, DataSourcePlugin`).
+            // `\b` after the name avoids matching a longer identifier.
+            // Does NOT match `protocol DataSourcePlugin:` (colon after)
+            // or `extension DataSourcePlugin` (no preceding `:`/`,`).
+            guard code.range(of: #"[:,]\s*DataSourcePlugin\b"#,
+                             options: .regularExpression) != nil
             else { continue }
             conformerFileCount += 1
             let cases = Self.idCaseLiterals(in: code)
