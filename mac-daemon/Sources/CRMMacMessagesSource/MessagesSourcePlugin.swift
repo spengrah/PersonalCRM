@@ -507,10 +507,15 @@ public actor MessagesSourcePlugin: SourcePlugin {
         }
         var config = Configuration()
         config.readonly = true
-        // Don't add ?immutable=1 — Messages.app is actively writing.
+        // URI shape + WAL rationale (incl. why we must NOT use
+        // `immutable=1`) owned by `SQLiteSnapshotReader`.
+        // `Configuration.readonly` is defense-in-depth; the URI's
+        // `mode=ro` is the primary read-only/WAL-aware guard.
         let pool: DatabasePool
         do {
-            pool = try DatabasePool(path: self.config.chatDBPath.path, configuration: config)
+            pool = try DatabasePool(
+                path: SQLiteSnapshotReader.readOnlyURI(for: self.config.chatDBPath),
+                configuration: config)
         } catch let dbError as DatabaseError {
             // FDA / sandbox denial: SQLITE_AUTH (23), SQLITE_PERM (3),
             // or SQLITE_CANTOPEN (14). Distinguish from a transient
