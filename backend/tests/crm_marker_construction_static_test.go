@@ -6,14 +6,18 @@
 // companion (the suspenders) to the grep guard at
 // scripts/ci/crm-marker-construction-guard.sh (the belt).
 //
-// Two construction shapes are detected:
+// Three construction shapes are detected:
 //
 //	(a) a map composite literal containing a "crm" string-literal key whose
 //	    value is the bool literal true — the form every inline encoder used.
 //	(b) a struct type declaration with a field carrying a `json:"crm"` tag —
 //	    a struct encoder reintroduced outside the primitive.
+//	(c) an index-assignment statement of the form `<map>["crm"] = true`
+//	    (*ast.AssignStmt whose LHS is an *ast.IndexExpr with a "crm"
+//	    string-literal index and a bool-true RHS) — an incrementally-built
+//	    marker map.
 //
-// Both must live ONLY in internal/contacttask/marker.go, and within that file
+// All must live ONLY in internal/contacttask/marker.go, and within that file
 // only inside the sanctioned declarations (allowedConstructionSites). A stray
 // marker construction added to an unrelated function — even inside marker.go
 // itself — trips the guard.
@@ -24,6 +28,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -44,9 +49,9 @@ var allowedConstructionSites = map[string]string{
 
 // TestCRMMarkerConstruction_OnlyAllowedSites walks the Go AST of
 // backend/internal + backend/cmd/crm-api and asserts every CRM-marker
-// construction (map literal with "crm":true, or struct with a json:"crm" tag)
-// lives in allowedConstructionSites. Generated sqlc files and test files are
-// skipped.
+// construction (map literal with "crm":true, an index assignment
+// `m["crm"] = true`, or a struct with a json:"crm" tag) lives in
+// allowedConstructionSites. Generated sqlc files and test files are skipped.
 func TestCRMMarkerConstruction_OnlyAllowedSites(t *testing.T) {
 	moduleRoot, err := backendModuleRoot()
 	if err != nil {
@@ -105,7 +110,13 @@ func TestCRMMarkerConstruction_OnlyAllowedSites(t *testing.T) {
 						continue
 					}
 					ast.Inspect(d.Body, func(n ast.Node) bool {
-						if !isCRMMarkerMapLiteral(n) {
+						var kind string
+						switch {
+						case isCRMMarkerMapLiteral(n):
+							kind = `map literal "crm":true`
+						case isCRMMarkerIndexAssign(n):
+							kind = `index assignment ["crm"] = true`
+						default:
 							return true
 						}
 						key := relSlash + ":" + d.Name.Name
@@ -116,7 +127,7 @@ func TestCRMMarkerConstruction_OnlyAllowedSites(t *testing.T) {
 							file: relSlash,
 							line: fset.Position(n.Pos()).Line,
 							decl: d.Name.Name,
-							kind: `map literal "crm":true`,
+							kind: kind,
 						})
 						return true
 					})
@@ -207,6 +218,42 @@ func isCRMMarkerMapLiteral(n ast.Node) bool {
 	return false
 }
 
+// isCRMMarkerIndexAssign reports whether n is an assignment statement of the
+// form `<map>["crm"] = true` — an incrementally-built marker map. Matches both
+// `=` and `:=` assignments whose LHS is an index expression with a "crm"
+// string-literal index and whose corresponding RHS is the bool literal true.
+func isCRMMarkerIndexAssign(n ast.Node) bool {
+	assign, ok := n.(*ast.AssignStmt)
+	if !ok {
+		return false
+	}
+	for i, lhs := range assign.Lhs {
+		idx, ok := lhs.(*ast.IndexExpr)
+		if !ok {
+			continue
+		}
+		key, ok := idx.Index.(*ast.BasicLit)
+		if !ok || key.Kind != token.STRING {
+			continue
+		}
+		unq, err := strconv.Unquote(key.Value)
+		if err != nil || unq != "crm" {
+			continue
+		}
+		// Parallel-assignment safe: match the RHS at the same position when
+		// the counts line up; otherwise (e.g. multi-value call RHS) treat the
+		// "crm" index target as a hit conservatively.
+		if len(assign.Rhs) == len(assign.Lhs) {
+			if val, ok := assign.Rhs[i].(*ast.Ident); ok && val.Name == "true" {
+				return true
+			}
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // structHasCRMJSONTag reports whether the struct has any field tagged
 // `json:"crm"` (with or without options like `json:"crm,omitempty"`).
 func structHasCRMJSONTag(st *ast.StructType) bool {
@@ -233,37 +280,106 @@ func structHasCRMJSONTag(st *ast.StructType) bool {
 	return false
 }
 
-// TestCRMMarkerConstruction_NegativeGuardCatchesStray synthesizes a tiny Go
-// file with a stray "crm":true map literal in an unallowlisted function, runs
-// the same detection against it, and asserts a violation is reported. Without
-// this, a future loosening of the detector could silently pass.
+// TestCRMMarkerConstruction_NegativeGuardCatchesStray synthesizes tiny Go
+// snippets with a stray marker construction in an unallowlisted function, runs
+// the AST detection against each, and asserts a violation is reported. Covers
+// both the map-literal form and the incremental index-assignment form so a
+// future loosening of either detector fails loudly.
 func TestCRMMarkerConstruction_NegativeGuardCatchesStray(t *testing.T) {
-	src := `package poc
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "map literal",
+			src: `package poc
 
 func strayEncoder() map[string]any {
 	return map[string]any{"crm": true, "contact_id": "x"}
 }
-`
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "poc.go", src, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse poc: %v", err)
+`,
+		},
+		{
+			name: "index assignment",
+			src: `package poc
+
+func strayEncoder() map[string]any {
+	m := map[string]any{}
+	m["crm"] = true
+	m["contact_id"] = "x"
+	return m
+}
+`,
+		},
 	}
 
-	var found bool
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
-		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			if isCRMMarkerMapLiteral(n) {
-				found = true
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "poc.go", tc.src, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parse poc: %v", err)
 			}
-			return true
+
+			var found bool
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					if isCRMMarkerMapLiteral(n) || isCRMMarkerIndexAssign(n) {
+						found = true
+					}
+					return true
+				})
+			}
+			if !found {
+				t.Fatalf("negative guard did not detect the stray %s — the real guard would let a new construction through", tc.name)
+			}
 		})
 	}
-	if !found {
-		t.Fatal("negative guard did not detect the stray marker literal — the real guard would let a new construction through")
+}
+
+// TestCRMMarkerGrepGuard_CatchesIndexAssignment runs the actual grep guard
+// script against a temporary stray file built with the incremental
+// `m["crm"] = true` form, and asserts the script exits non-zero. This proves
+// the belt (grep) layer covers pattern (d), complementing the AST suspenders
+// above. The stray file is written under backend/internal and removed after.
+func TestCRMMarkerGrepGuard_CatchesIndexAssignment(t *testing.T) {
+	moduleRoot, err := backendModuleRoot()
+	if err != nil {
+		t.Fatalf("locate backend module root: %v", err)
+	}
+	repoRoot := filepath.Dir(moduleRoot)
+	guard := filepath.Join(repoRoot, "scripts", "ci", "crm-marker-construction-guard.sh")
+	if _, statErr := os.Stat(guard); statErr != nil {
+		t.Fatalf("guard script not found at %s: %v", guard, statErr)
+	}
+
+	// Sanity: the guard must currently pass on the real tree (no false
+	// positives) before we inject the stray.
+	if out, runErr := exec.Command(guard).CombinedOutput(); runErr != nil {
+		t.Fatalf("guard unexpectedly failed on clean tree: %v\n%s", runErr, out)
+	}
+
+	strayDir := filepath.Join(moduleRoot, "internal", "todoist")
+	strayPath := filepath.Join(strayDir, "zz_crm_marker_grep_probe.go")
+	content := "package todoist\n\nfunc crmMarkerGrepProbe() map[string]any {\n\tm := map[string]any{}\n\tm[\"crm\"] = true\n\treturn m\n}\n"
+	if writeErr := os.WriteFile(strayPath, []byte(content), 0o644); writeErr != nil {
+		t.Fatalf("write stray probe: %v", writeErr)
+	}
+	defer func() {
+		if rmErr := os.Remove(strayPath); rmErr != nil {
+			t.Errorf("remove stray probe %s: %v", strayPath, rmErr)
+		}
+	}()
+
+	out, runErr := exec.Command(guard).CombinedOutput()
+	if runErr == nil {
+		t.Fatalf("grep guard did NOT flag the stray index-assignment marker; output:\n%s", out)
+	}
+	if !strings.Contains(string(out), "zz_crm_marker_grep_probe.go") {
+		t.Errorf("grep guard failed but did not name the stray file; output:\n%s", out)
 	}
 }

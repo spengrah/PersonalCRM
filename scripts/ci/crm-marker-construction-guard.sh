@@ -7,10 +7,11 @@
 # other file that constructs the marker risks drifting the wire format
 # away from the single sanctioned encoder.
 #
-# Fingerprint (three patterns, OR'd together):
+# Fingerprint (four patterns, OR'd together):
 #   (a) map-literal / JSON key  "crm" : true        — today's form
 #   (b) struct field tag        json:"crm"          — a struct encoder
 #   (c) escaped-string JSON     \"crm\":true        — hand-built literals
+#   (d) index assignment        m["crm"] = true     — incremental build
 #
 # Allowlist = exactly one file. After the refactor, no other file builds
 # the marker, so the only legitimate hit is the primitive. The companion
@@ -28,8 +29,8 @@ ALLOWLIST=(
   "backend/internal/contacttask/marker.go"
 )
 
-# (a) "crm" : true   (b) json:"crm"   (c) \"crm\":true
-PATTERN='"crm"[[:space:]]*:[[:space:]]*true|json:"crm"|\\"crm\\"[[:space:]]*:[[:space:]]*true'
+# (a) "crm" : true   (b) json:"crm"   (c) \"crm\":true   (d) ["crm"] = true
+PATTERN='"crm"[[:space:]]*:[[:space:]]*true|json:"crm"|\\"crm\\"[[:space:]]*:[[:space:]]*true|\["crm"\][[:space:]]*=[[:space:]]*true'
 
 if command -v rg >/dev/null 2>&1; then
   HITS=$(rg -l "$PATTERN" \

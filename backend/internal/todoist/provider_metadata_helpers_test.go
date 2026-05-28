@@ -57,6 +57,75 @@ func TestSetSyncedLastOutreachAt_NilOutreach(t *testing.T) {
 		"setSyncedLastOutreachAt must not write synced_last_contacted even when contact has LastContacted")
 }
 
+// TestSetSyncedLastContacted_WritesLCOnlyAndPreservesSiblings asserts the
+// LC-only helper writes synced_last_contacted (when set), preserves sibling
+// keys (mutate-and-return), and is a no-op for the LC key when LastContacted
+// is nil.
+func TestSetSyncedLastContacted_WritesLCOnlyAndPreservesSiblings(t *testing.T) {
+	contacted := time.Date(2024, 5, 1, 9, 0, 0, 0, time.UTC)
+
+	t.Run("writes LC and preserves siblings", func(t *testing.T) {
+		metadata := map[string]any{
+			"sibling_key":                   "preserve-me",
+			MetadataKeySyncedLastOutreachAt: "2023-09-09T00:00:00Z",
+		}
+		got := setSyncedLastContacted(metadata, &repository.Contact{LastContacted: &contacted})
+		assert.Equal(t, contacted.Format(time.RFC3339), got[MetadataKeySyncedLastContacted],
+			"must write synced_last_contacted")
+		assert.Equal(t, "preserve-me", got["sibling_key"], "must preserve sibling keys")
+		assert.Equal(t, "2023-09-09T00:00:00Z", got[MetadataKeySyncedLastOutreachAt],
+			"must not touch synced_last_outreach_at")
+	})
+
+	t.Run("nil LastContacted is a no-op", func(t *testing.T) {
+		got := setSyncedLastContacted(map[string]any{"k": "v"}, &repository.Contact{LastContacted: nil})
+		_, has := got[MetadataKeySyncedLastContacted]
+		assert.False(t, has, "no synced_last_contacted should be written when LastContacted is nil")
+		assert.Equal(t, "v", got["k"], "must preserve existing keys")
+	})
+
+	t.Run("nil map is allocated", func(t *testing.T) {
+		got := setSyncedLastContacted(nil, &repository.Contact{LastContacted: &contacted})
+		require.NotNil(t, got)
+		assert.Equal(t, contacted.Format(time.RFC3339), got[MetadataKeySyncedLastContacted])
+	})
+}
+
+// TestSetPendingCreateState_WritesFullShape asserts the Group-A pending-create
+// helper writes pending_temp_id + synced_deadline + both synced_* keys (each
+// gated on its own contact field), preserves sibling keys, and gates the
+// synced_* keys correctly when the contact fields are nil.
+func TestSetPendingCreateState_WritesFullShape(t *testing.T) {
+	contacted := time.Date(2024, 5, 1, 9, 0, 0, 0, time.UTC)
+	outreach := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("full shape with both contact fields set", func(t *testing.T) {
+		metadata := map[string]any{"marker_json": `{"crm":true}`}
+		got := setPendingCreateState(metadata, "temp-123", "2099-01-01", &repository.Contact{
+			LastContacted:  &contacted,
+			LastOutreachAt: &outreach,
+		})
+		assert.Equal(t, "temp-123", got[MetadataKeyPendingTempID])
+		assert.Equal(t, "2099-01-01", got[MetadataKeySyncedDeadline])
+		assert.Equal(t, contacted.Format(time.RFC3339), got[MetadataKeySyncedLastContacted])
+		assert.Equal(t, outreach.Format(time.RFC3339), got[MetadataKeySyncedLastOutreachAt])
+		assert.Equal(t, `{"crm":true}`, got["marker_json"], "must preserve sibling keys")
+	})
+
+	t.Run("synced_* keys gated on nil contact fields", func(t *testing.T) {
+		got := setPendingCreateState(nil, "temp-456", "2099-02-02", &repository.Contact{
+			LastContacted:  nil,
+			LastOutreachAt: nil,
+		})
+		assert.Equal(t, "temp-456", got[MetadataKeyPendingTempID])
+		assert.Equal(t, "2099-02-02", got[MetadataKeySyncedDeadline])
+		_, hasLC := got[MetadataKeySyncedLastContacted]
+		_, hasLO := got[MetadataKeySyncedLastOutreachAt]
+		assert.False(t, hasLC, "synced_last_contacted must be omitted when LastContacted is nil")
+		assert.False(t, hasLO, "synced_last_outreach_at must be omitted when LastOutreachAt is nil")
+	})
+}
+
 // TestReconcileExistingTask_LOBackfillPreservesStaleLC is the behavioral guard
 // for the P1 fix. Setup: a managed cadence task with a STALE stored
 // synced_last_contacted, MISSING synced_last_outreach_at, and
