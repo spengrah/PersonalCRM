@@ -12,10 +12,10 @@ import (
 )
 
 // TestSetSyncedLastOutreachAt_DoesNotTouchLastContacted is the helper-purity
-// unit test for the P1 fix. setSyncedLastOutreachAt must write ONLY
-// synced_last_outreach_at and leave any existing synced_last_contacted value
-// byte-identical — refreshing it here would mask stale state and suppress a
-// legitimate close+recreate in the deadlines-match drift path.
+// unit test for the asymmetry invariant. setSyncedLastOutreachAt must write
+// ONLY synced_last_outreach_at and leave any existing synced_last_contacted
+// value byte-identical — refreshing it here would mask stale state and
+// suppress a legitimate close+recreate in the deadlines-match drift path.
 func TestSetSyncedLastOutreachAt_DoesNotTouchLastContacted(t *testing.T) {
 	staleLC := "2023-01-01T00:00:00Z"
 	metadata := map[string]any{
@@ -91,10 +91,10 @@ func TestSetSyncedLastContacted_WritesLCOnlyAndPreservesSiblings(t *testing.T) {
 	})
 }
 
-// TestSetPendingCreateState_WritesFullShape asserts the Group-A pending-create
-// helper writes pending_temp_id + synced_deadline + both synced_* keys (each
-// gated on its own contact field), preserves sibling keys, and gates the
-// synced_* keys correctly when the contact fields are nil.
+// TestSetPendingCreateState_WritesFullShape asserts the pending-create helper
+// writes pending_temp_id + synced_deadline + both synced_* keys (each gated on
+// its own contact field), preserves sibling keys, and gates the synced_* keys
+// correctly when the contact fields are nil.
 func TestSetPendingCreateState_WritesFullShape(t *testing.T) {
 	contacted := time.Date(2024, 5, 1, 9, 0, 0, 0, time.UTC)
 	outreach := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
@@ -127,8 +127,8 @@ func TestSetPendingCreateState_WritesFullShape(t *testing.T) {
 }
 
 // TestReconcileExistingTask_LOBackfillPreservesStaleLC is the behavioral guard
-// for the P1 fix. Setup: a managed cadence task with a STALE stored
-// synced_last_contacted, MISSING synced_last_outreach_at, and
+// for the asymmetry invariant. Setup: a managed cadence task with a STALE
+// stored synced_last_contacted, MISSING synced_last_outreach_at, and
 // synced_deadline == currentDeadline. The contact has both LastContacted
 // (advanced past the stale stored value) and LastOutreachAt set.
 //

@@ -1031,9 +1031,9 @@ func setSyncedLastOutreachAt(metadata map[string]any, contact *repository.Contac
 
 // setPendingCreateState writes the pending-create key set: pending_temp_id +
 // synced_deadline (always), then BOTH synced_* keys (each gated on its own
-// contact field being non-nil). Used by the Group A "pending-create"
-// branches, which all write this identical shape. Allocates the map if nil
-// and returns it, preserving sibling keys.
+// contact field being non-nil). Used by the branches that queue a new Todoist
+// task, which all write this identical shape. Allocates the map if nil and
+// returns it, preserving sibling keys.
 func setPendingCreateState(metadata map[string]any, tempID, deadline string, contact *repository.Contact) map[string]any {
 	if metadata == nil {
 		metadata = make(map[string]any)

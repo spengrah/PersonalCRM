@@ -17,10 +17,15 @@
 //	    string-literal index and a bool-true RHS) — an incrementally-built
 //	    marker map.
 //
+// Shape (a) is detected inside function bodies AND in top-level var/const
+// initializers (so a package-level `var x = map[string]any{"crm":true}` is not
+// a hole); shape (c) is detected inside function bodies (the only place
+// statements live).
+//
 // All must live ONLY in internal/contacttask/marker.go, and within that file
 // only inside the sanctioned declarations (allowedConstructionSites). A stray
-// marker construction added to an unrelated function — even inside marker.go
-// itself — trips the guard.
+// marker construction added to an unrelated function — or a top-level var —
+// even inside marker.go itself — trips the guard.
 package tests
 
 import (
@@ -47,6 +52,101 @@ var allowedConstructionSites = map[string]string{
 	"internal/contacttask/marker.go:crmMarkerJSON": "decode-only wire struct",
 }
 
+// markerViolation records one disallowed CRM-marker construction site.
+type markerViolation struct {
+	file string
+	line int
+	decl string
+	kind string
+}
+
+// findCRMMarkerConstructions scans one parsed file for CRM-marker
+// construction sites and returns any that fall outside allowedConstructionSites.
+// relSlash is the file's path relative to the backend module root (forward
+// slashes), used to build the allowlist key. Detection covers:
+//   - map composite literals with "crm":true, in function bodies AND top-level
+//     var/const initializers
+//   - index assignments `m["crm"] = true`, in function bodies
+//   - struct type declarations with a json:"crm" field tag
+//
+// Both the real-tree test and the negative self-test call this, so the two can
+// never drift apart.
+func findCRMMarkerConstructions(relSlash string, file *ast.File, fset *token.FileSet) []markerViolation {
+	var violations []markerViolation
+	record := func(declName string, pos token.Pos, kind string) {
+		key := relSlash + ":" + declName
+		if _, allowed := allowedConstructionSites[key]; allowed {
+			return
+		}
+		violations = append(violations, markerViolation{
+			file: relSlash,
+			line: fset.Position(pos).Line,
+			decl: declName,
+			kind: kind,
+		})
+	}
+
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Body == nil {
+				continue
+			}
+			ast.Inspect(d.Body, func(n ast.Node) bool {
+				switch {
+				case isCRMMarkerMapLiteral(n):
+					record(d.Name.Name, n.Pos(), `map literal "crm":true`)
+				case isCRMMarkerIndexAssign(n):
+					record(d.Name.Name, n.Pos(), `index assignment ["crm"] = true`)
+				}
+				return true
+			})
+		case *ast.GenDecl:
+			switch d.Tok {
+			case token.TYPE:
+				for _, spec := range d.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					st, ok := ts.Type.(*ast.StructType)
+					if !ok {
+						continue
+					}
+					if !structHasCRMJSONTag(st) {
+						continue
+					}
+					record(ts.Name.Name, ts.Pos(), `struct field json:"crm"`)
+				}
+			case token.VAR, token.CONST:
+				// Top-level var/const with a composite-literal initializer
+				// (e.g. var x = map[string]any{"crm":true}). Walk each value
+				// expression; key the violation by the declared name so it
+				// lands in the same allowlist as the func/type sites.
+				for _, spec := range d.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					declName := "<anonymous>"
+					if len(vs.Names) > 0 {
+						declName = vs.Names[0].Name
+					}
+					for _, val := range vs.Values {
+						ast.Inspect(val, func(n ast.Node) bool {
+							if isCRMMarkerMapLiteral(n) {
+								record(declName, n.Pos(), `map literal "crm":true`)
+							}
+							return true
+						})
+					}
+				}
+			}
+		}
+	}
+	return violations
+}
+
 // TestCRMMarkerConstruction_OnlyAllowedSites walks the Go AST of
 // backend/internal + backend/cmd/crm-api and asserts every CRM-marker
 // construction (map literal with "crm":true, an index assignment
@@ -63,13 +163,7 @@ func TestCRMMarkerConstruction_OnlyAllowedSites(t *testing.T) {
 		filepath.Join(moduleRoot, "cmd", "crm-api"),
 	}
 
-	type violation struct {
-		file string
-		line int
-		decl string
-		kind string
-	}
-	var violations []violation
+	var violations []markerViolation
 
 	fset := token.NewFileSet()
 	for _, root := range roots {
@@ -103,63 +197,7 @@ func TestCRMMarkerConstruction_OnlyAllowedSites(t *testing.T) {
 				return err
 			}
 
-			for _, decl := range file.Decls {
-				switch d := decl.(type) {
-				case *ast.FuncDecl:
-					if d.Body == nil {
-						continue
-					}
-					ast.Inspect(d.Body, func(n ast.Node) bool {
-						var kind string
-						switch {
-						case isCRMMarkerMapLiteral(n):
-							kind = `map literal "crm":true`
-						case isCRMMarkerIndexAssign(n):
-							kind = `index assignment ["crm"] = true`
-						default:
-							return true
-						}
-						key := relSlash + ":" + d.Name.Name
-						if _, allowed := allowedConstructionSites[key]; allowed {
-							return true
-						}
-						violations = append(violations, violation{
-							file: relSlash,
-							line: fset.Position(n.Pos()).Line,
-							decl: d.Name.Name,
-							kind: kind,
-						})
-						return true
-					})
-				case *ast.GenDecl:
-					if d.Tok != token.TYPE {
-						continue
-					}
-					for _, spec := range d.Specs {
-						ts, ok := spec.(*ast.TypeSpec)
-						if !ok {
-							continue
-						}
-						st, ok := ts.Type.(*ast.StructType)
-						if !ok {
-							continue
-						}
-						if !structHasCRMJSONTag(st) {
-							continue
-						}
-						key := relSlash + ":" + ts.Name.Name
-						if _, allowed := allowedConstructionSites[key]; allowed {
-							continue
-						}
-						violations = append(violations, violation{
-							file: relSlash,
-							line: fset.Position(ts.Pos()).Line,
-							decl: ts.Name.Name,
-							kind: `struct field json:"crm"`,
-						})
-					}
-				}
-			}
+			violations = append(violations, findCRMMarkerConstructions(relSlash, file, fset)...)
 			return nil
 		}); err != nil {
 			t.Fatalf("walk %s: %v", root, err)
@@ -281,17 +319,18 @@ func structHasCRMJSONTag(st *ast.StructType) bool {
 }
 
 // TestCRMMarkerConstruction_NegativeGuardCatchesStray synthesizes tiny Go
-// snippets with a stray marker construction in an unallowlisted function, runs
-// the AST detection against each, and asserts a violation is reported. Covers
-// both the map-literal form and the incremental index-assignment form so a
-// future loosening of either detector fails loudly.
+// snippets with a stray marker construction outside the allowlist, runs the
+// SAME findCRMMarkerConstructions walk the real test uses, and asserts a
+// violation is reported. Covers the map-literal form (in a function and in a
+// top-level var), the incremental index-assignment form, and the struct-tag
+// form, so a future loosening of any detector fails loudly.
 func TestCRMMarkerConstruction_NegativeGuardCatchesStray(t *testing.T) {
 	cases := []struct {
 		name string
 		src  string
 	}{
 		{
-			name: "map literal",
+			name: "map literal in func",
 			src: `package poc
 
 func strayEncoder() map[string]any {
@@ -300,7 +339,7 @@ func strayEncoder() map[string]any {
 `,
 		},
 		{
-			name: "index assignment",
+			name: "index assignment in func",
 			src: `package poc
 
 func strayEncoder() map[string]any {
@@ -311,7 +350,27 @@ func strayEncoder() map[string]any {
 }
 `,
 		},
+		{
+			name: "top-level var initializer",
+			src: `package poc
+
+var strayMarker = map[string]any{"crm": true, "contact_id": "x"}
+`,
+		},
+		{
+			name: "struct field json tag",
+			src: `package poc
+
+type strayMarkerStruct struct {
+	CRM bool ` + "`json:\"crm\"`" + `
+}
+`,
+		},
 	}
+
+	// Use a relSlash NOT present in allowedConstructionSites so any detected
+	// construction counts as a violation.
+	const unallowlistedRel = "internal/poc/poc.go"
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -320,21 +379,8 @@ func strayEncoder() map[string]any {
 			if err != nil {
 				t.Fatalf("parse poc: %v", err)
 			}
-
-			var found bool
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					continue
-				}
-				ast.Inspect(fn.Body, func(n ast.Node) bool {
-					if isCRMMarkerMapLiteral(n) || isCRMMarkerIndexAssign(n) {
-						found = true
-					}
-					return true
-				})
-			}
-			if !found {
+			got := findCRMMarkerConstructions(unallowlistedRel, file, fset)
+			if len(got) == 0 {
 				t.Fatalf("negative guard did not detect the stray %s — the real guard would let a new construction through", tc.name)
 			}
 		})
