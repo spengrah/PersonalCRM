@@ -96,6 +96,33 @@ public actor OrphanNotificationCenter {
         await presenter.setDelegate(UserNotificationDelegateRef(d))
     }
 
+    /// Sweep Notification Center for ghost notifications minted by
+    /// older daemon builds that used the unversioned
+    /// `<reason>:<uuid>` identifier scheme. Operators upgrading from
+    /// pre-versioned builds otherwise see notifications the new
+    /// code can't track (the new scheme is `<reason>:<uuid>:<seq>`,
+    /// so the legacy ids never match a remove call from this
+    /// version). Best-effort — wired into daemon startup once and
+    /// safe to run even when there's nothing to clean up.
+    public func cleanupLegacyOSNotifications() async {
+        let delivered = await presenter.getDeliveredIdentifiers()
+        let pending = await presenter.getPendingIdentifiers()
+        let legacyDelivered = delivered.filter { isLegacyNotificationIdentifier($0) }
+        let legacyPending = pending.filter { isLegacyNotificationIdentifier($0) }
+        if !legacyDelivered.isEmpty {
+            await presenter.removeDelivered(withIdentifiers: legacyDelivered)
+        }
+        if !legacyPending.isEmpty {
+            await presenter.removePending(withIdentifiers: legacyPending)
+        }
+        if !legacyDelivered.isEmpty || !legacyPending.isEmpty {
+            logger.info("orphan-notify: cleaned up legacy unversioned notifications", metadata: [
+                "delivered_count": .public(String(legacyDelivered.count)),
+                "pending_count": .public(String(legacyPending.count)),
+            ])
+        }
+    }
+
     // Test-only accessor: returns true when a delegate has been
     // installed. Used by the delegate-retention regression test.
     public func hasDelegateInstalled() -> Bool {
@@ -126,7 +153,11 @@ public actor OrphanNotificationCenter {
         await maybeResetAuthorizationCacheIfAnyNotQueued()
 
         for item in items {
-            let key = notificationIdentifier(reason: item.reason, sessionUUID: item.sessionID)
+            // Within-batch dedup is keyed on the sequence-independent
+            // pair so two identical items in one batch produce a single
+            // raise. The OS-side identifier is sequence-versioned
+            // separately when the request is actually queued.
+            let key = "\(item.reason):\(item.sessionID)"
             if seenWithinBatch.contains(key) { continue }
             seenWithinBatch.insert(key)
 
@@ -190,8 +221,12 @@ public actor OrphanNotificationCenter {
             return
         }
 
-        // Build the Pi-set keyed by (uuid, reason). Drop entries
-        // whose linkage_state isn't a recognized value.
+        // Build the Pi-set keyed by (reason, uuid). Drop entries
+        // whose linkage_state isn't a recognized value. The match
+        // key is sequence-independent because the Pi side has no
+        // notion of the daemon's sequence — matching across snapshot
+        // vs Pi must be done on the semantic pair, with sequence
+        // only baked into the OS-side identifier at request time.
         var piByKey: [String: NotificationReconcileItem] = [:]
         for pi in piItems {
             guard let reason = mapLinkageStateToReason(pi.linkageState) else {
@@ -200,7 +235,7 @@ public actor OrphanNotificationCenter {
                 ])
                 continue
             }
-            let key = notificationIdentifier(
+            let key = matchKey(
                 reason: reason,
                 sessionUUID: pi.anarlogSessionID.lowercased())
             piByKey[key] = pi
@@ -219,7 +254,7 @@ public actor OrphanNotificationCenter {
         // the snapshot.
         let snapByKey: [String: PendingOrphanNotification] = Dictionary(
             uniqueKeysWithValues: snapshot.entries.map {
-                (notificationIdentifier(reason: $0.reason, sessionUUID: $0.sessionUUID), $0)
+                (matchKey(reason: $0.reason, sessionUUID: $0.sessionUUID), $0)
             })
         for (key, pi) in piByKey {
             guard let reason = mapLinkageStateToReason(pi.linkageState) else { continue }
@@ -254,7 +289,7 @@ public actor OrphanNotificationCenter {
         // so a concurrent upsert that lands between the snapshot
         // and the OS-side removal is still preserved.
         for snap in snapshot.entries {
-            let key = notificationIdentifier(reason: snap.reason, sessionUUID: snap.sessionUUID)
+            let key = matchKey(reason: snap.reason, sessionUUID: snap.sessionUUID)
             if piKeys.contains(key) { continue }
             if snap.mutationSequence > snapshot.sequence { continue }
             await removeNotificationIfStale(
@@ -363,20 +398,37 @@ public actor OrphanNotificationCenter {
     ) async {
         // Ask for authorization (lazy first-use).
         let granted = await ensureAuthorization()
-        let identifier = notificationIdentifier(reason: reason, sessionUUID: sessionUUID)
 
         if !granted {
             logger.warning("orphan-notify: authorization denied; persisting as 'denied'", metadata: [
                 "session_uuid": .private(sessionUUID),
                 "reason": .public(reason),
             ])
-            await upsertPending(
+            _ = await upsertPending(
                 sessionUUID: sessionUUID,
                 reason: reason,
                 deliveryState: PendingDeliveryState.denied)
             return
         }
 
+        // Persist first so the assigned mutationSequence can be
+        // baked into the OS identifier. Ordering matters: if the
+        // process crashes between the persist and the presenter.add,
+        // the next reconcile sees a "queued" entry with no OS-side
+        // notification and re-raises (denied/failed entries are
+        // re-attempted; queued aren't, so we briefly accept a window
+        // where the queued state slightly precedes the OS-side
+        // request — the alternative would either (a) leave the OS
+        // notification untraceable or (b) require an "in-flight"
+        // sub-state, both worse than this trade).
+        let assignedSeq = await upsertPending(
+            sessionUUID: sessionUUID,
+            reason: reason,
+            deliveryState: PendingDeliveryState.queued)
+        let identifier = notificationIdentifier(
+            reason: reason,
+            sessionUUID: sessionUUID,
+            sequence: assignedSeq)
         let spec = makeSpec(
             identifier: identifier,
             sessionUUID: sessionUUID,
@@ -385,17 +437,13 @@ public actor OrphanNotificationCenter {
             createdAt: createdAt)
         do {
             try await presenter.add(spec)
-            await upsertPending(
-                sessionUUID: sessionUUID,
-                reason: reason,
-                deliveryState: PendingDeliveryState.queued)
         } catch {
             logger.warning("orphan-notify: presenter.add threw; persisting as 'failed'", metadata: [
                 "session_uuid": .private(sessionUUID),
                 "reason": .public(reason),
                 "error": .private(String(describing: error)),
             ])
-            await upsertPending(
+            _ = await upsertPending(
                 sessionUUID: sessionUUID,
                 reason: reason,
                 deliveryState: PendingDeliveryState.failed)
@@ -422,8 +470,6 @@ public actor OrphanNotificationCenter {
         reason: String,
         maxSequence: UInt64
     ) async {
-        let identifier = notificationIdentifier(reason: reason, sessionUUID: sessionUUID)
-
         // Decide whether to remove by reading the current state.
         // Swift 6 strict-concurrency forbids mutating captured
         // vars inside the mutator closure, so we read here and
@@ -444,6 +490,17 @@ public actor OrphanNotificationCenter {
             // the sequence above maxSequence — preserve.
             return
         }
+
+        // Build the identifier from the ENTRY's mutationSequence,
+        // not from maxSequence. A concurrent consume() that lands
+        // between this read and the OS removal will mint a NEW
+        // identifier (different sequence component) and the
+        // freshly-raised OS notification is therefore not stripped
+        // by the call below.
+        let identifier = notificationIdentifier(
+            reason: reason,
+            sessionUUID: sessionUUID,
+            sequence: entry.mutationSequence)
 
         // OS cleanup first. If it returns, follow with the
         // persisted-state cleanup. The persisted entry serves as
@@ -480,14 +537,24 @@ public actor OrphanNotificationCenter {
 
     // MARK: - persistence helpers
 
+    /// Upserts the (sessionUUID, reason) entry with the given
+    /// deliveryState and returns the mutationSequence assigned by
+    /// this upsert. The returned value is the authoritative sequence
+    /// the caller must use when minting the OS-side identifier —
+    /// embedding it in the identifier is the key to the
+    /// reconcile-vs-consume race fix. Returns 0 on persist failure;
+    /// callers treat that as a no-OS-id fallback (an identifier
+    /// with sequence=0 still differs from prior sequences and
+    /// won't collide with a fresh raise).
+    @discardableResult
     private func upsertPending(
         sessionUUID: String,
         reason: String,
         deliveryState: String
-    ) async {
+    ) async -> UInt64 {
         let now = clock()
         do {
-            try await mutator.mutate { state in
+            return try await mutator.mutateReturning { state -> UInt64 in
                 state.notificationMutationSequence &+= 1
                 let seq = state.notificationMutationSequence
                 if let idx = state.pendingOrphanNotifications.firstIndex(where: {
@@ -508,11 +575,13 @@ public actor OrphanNotificationCenter {
                             deliveryState: deliveryState,
                             mutationSequence: seq))
                 }
+                return seq
             }
         } catch {
             logger.warning("orphan-notify: upsert persist failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
+            return 0
         }
     }
 
@@ -591,6 +660,17 @@ public actor OrphanNotificationCenter {
         f.dateStyle = .short
         f.timeStyle = .short
         return " at \(f.string(from: date))"
+    }
+
+    /// Sequence-independent semantic key used for cross-snapshot
+    /// matching (Pi-truth ↔ persisted snapshot). The OS-side
+    /// identifier carries an extra sequence component for race
+    /// safety; matching across snapshots is on the semantic pair
+    /// only (a snapshot at sequence S and a Pi response describing
+    /// the same session must map to the same key regardless of
+    /// the snapshot's sequence).
+    private func matchKey(reason: String, sessionUUID: String) -> String {
+        "\(reason):\(sessionUUID)"
     }
 
     private static func parseRFC3339(_ s: String) -> Date? {

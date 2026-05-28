@@ -23,6 +23,8 @@ public actor FakeUserNotificationPresenter: UserNotificationPresenter {
     public private(set) var setDelegateCalls: Int = 0
     public private(set) var requestAuthorizationCalls: Int = 0
     private var lastDelegate: DelegateRef?
+    private var seededDelivered: [String] = []
+    private var seededPending: [String] = []
 
     public init(authorizationResult: Bool = true, addError: Error? = nil) {
         self.authorizationResult = authorizationResult
@@ -35,6 +37,18 @@ public actor FakeUserNotificationPresenter: UserNotificationPresenter {
 
     public func setAddError(_ value: Error?) {
         self.addError = value
+    }
+
+    /// Seed the identifiers `getDeliveredIdentifiers()` will return —
+    /// used by the legacy-notification-sweep test to simulate
+    /// pre-versioned ids already in Notification Center.
+    public func seedDeliveredIdentifiers(_ ids: [String]) {
+        seededDelivered = ids
+    }
+
+    /// Seed the identifiers `getPendingIdentifiers()` will return.
+    public func seedPendingIdentifiers(_ ids: [String]) {
+        seededPending = ids
     }
 
     /// Test accessor — returns the recorded list of add() specs.
@@ -71,5 +85,13 @@ public actor FakeUserNotificationPresenter: UserNotificationPresenter {
     public func setDelegate(_ ref: UserNotificationDelegateRef?) async {
         setDelegateCalls += 1
         lastDelegate = ref
+    }
+
+    public func getDeliveredIdentifiers() async -> [String] {
+        seededDelivered
+    }
+
+    public func getPendingIdentifiers() async -> [String] {
+        seededPending
     }
 }

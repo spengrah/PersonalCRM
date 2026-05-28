@@ -39,11 +39,38 @@ public func mapLinkageStateToReason(_ linkageState: String) -> String? {
     }
 }
 
-/// Composes a stable per-(reason, sessionUUID) identifier for the
+/// Composes a per-(reason, sessionUUID, sequence) identifier for the
 /// OS notification. Distinct identifiers for orphan vs conflict on
-/// the same session prevent the OS from silently replacing one
-/// with the other — `UNUserNotificationCenter.add(_:)` REPLACES a
-/// request with an existing identifier.
-public func notificationIdentifier(reason: String, sessionUUID: String) -> String {
-    "\(reason):\(sessionUUID)"
+/// the same session prevent the OS from silently replacing one with
+/// the other — `UNUserNotificationCenter.add(_:)` REPLACES a request
+/// with an existing identifier.
+///
+/// The trailing sequence component is the entry's mutationSequence
+/// at the moment the OS request was issued. Including it eliminates
+/// a reconcile-vs-consume TOCTOU race: when the reconcile loop
+/// removes a stale notification, it removes the identifier for the
+/// sequence it observed in the snapshot — a freshly-raised
+/// notification at a higher sequence has a different identifier and
+/// is not collaterally stripped from Notification Center.
+public func notificationIdentifier(
+    reason: String,
+    sessionUUID: String,
+    sequence: UInt64
+) -> String {
+    "\(reason):\(sessionUUID):\(sequence)"
+}
+
+/// True iff the identifier was minted by an older daemon build that
+/// used the unversioned `<reason>:<uuid>` scheme. New identifiers
+/// have a trailing `:<sequence>` component, so a legacy id splits
+/// to exactly two `:`-separated fields and starts with a known
+/// reason prefix. UUIDs use hyphens, never colons, so this split is
+/// reliable. Used at daemon startup to sweep ghost notifications
+/// the new code can't track.
+public func isLegacyNotificationIdentifier(_ id: String) -> Bool {
+    let parts = id.split(separator: ":", omittingEmptySubsequences: false)
+    guard parts.count == 2 else { return false }
+    let prefix = String(parts[0])
+    return prefix == NotificationReason.orphan ||
+        prefix == NotificationReason.conflict
 }

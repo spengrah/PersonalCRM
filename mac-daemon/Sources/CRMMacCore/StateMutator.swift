@@ -33,6 +33,21 @@ public actor StateMutator {
         try store.save(state)
     }
 
+    /// Variant of `mutate(_:)` that lets the closure surface a
+    /// derived value from inside the serialized read-modify-write —
+    /// useful when the caller needs to know, e.g., the sequence
+    /// number assigned during the mutation. The persisted state is
+    /// saved before the value is returned. The return value must be
+    /// Sendable so it can cross the actor boundary safely.
+    public func mutateReturning<T: Sendable>(
+        _ change: @Sendable (inout DaemonState) throws -> T
+    ) async throws -> T {
+        var state = try store.load()
+        let value = try change(&state)
+        try store.save(state)
+        return value
+    }
+
     /// Load the current state without modifying it. Convenience for
     /// callers that need a consistent read alongside a separate mutate.
     public func read() async throws -> DaemonState {

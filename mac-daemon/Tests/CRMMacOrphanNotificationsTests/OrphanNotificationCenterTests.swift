@@ -79,7 +79,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
-        XCTAssertEqual(calls[0].identifier, "orphan:\(Self.session1)")
+        XCTAssertEqual(calls[0].identifier, "orphan:\(Self.session1):1")
         XCTAssertEqual(calls[0].title, "Untagged session")
         XCTAssertTrue(calls[0].body.contains("Tag participants in Anarlog"))
         XCTAssertTrue(calls[0].body.contains("Synthetic Test Session"))
@@ -104,7 +104,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
-        XCTAssertEqual(calls[0].identifier, "conflict:\(Self.session1)")
+        XCTAssertEqual(calls[0].identifier, "conflict:\(Self.session1):1")
         XCTAssertEqual(calls[0].title, "Session needs CRM attention")
         XCTAssertEqual(calls[0].userInfo["reason"], "conflict")
     }
@@ -257,9 +257,10 @@ final class OrphanNotificationCenterTests: XCTestCase {
         })
         await center.reconcile()
         // Self.session1 was already queued → no re-raise. Self.session2 is new → raised.
+        // Snapshot's sequence was 1; the new upsert increments to 2.
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
-        XCTAssertEqual(calls[0].identifier, "conflict:\(Self.session2)")
+        XCTAssertEqual(calls[0].identifier, "conflict:\(Self.session2):2")
         let state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications.count, 2)
     }
@@ -296,9 +297,9 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let removedDelivered = await presenter.recordedRemoveDelivered()
         let removedPending = await presenter.recordedRemovePending()
         XCTAssertEqual(removedDelivered.count, 1)
-        XCTAssertEqual(removedDelivered[0], ["conflict:\(Self.session2)"])
+        XCTAssertEqual(removedDelivered[0], ["conflict:\(Self.session2):2"])
         XCTAssertEqual(removedPending.count, 1)
-        XCTAssertEqual(removedPending[0], ["conflict:\(Self.session2)"])
+        XCTAssertEqual(removedPending[0], ["conflict:\(Self.session2):2"])
         let state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications.count, 1)
         XCTAssertEqual(state.pendingOrphanNotifications[0].sessionUUID, Self.session1)
@@ -527,7 +528,8 @@ final class OrphanNotificationCenterTests: XCTestCase {
         await center.reconcile()
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1, "denied entry re-raised on reconcile")
-        XCTAssertEqual(calls[0].identifier, "orphan:\(Self.session1)")
+        // Snapshot's sequence was 5; the re-raise upsert increments to 6.
+        XCTAssertEqual(calls[0].identifier, "orphan:\(Self.session1):6")
         let state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications[0].deliveryState, "queued")
         XCTAssertGreaterThan(state.pendingOrphanNotifications[0].mutationSequence, 5)
@@ -560,9 +562,12 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let adds = await presenter.recordedAddCalls()
         let removed = await presenter.recordedRemoveDelivered()
         XCTAssertEqual(adds.count, 1)
-        XCTAssertEqual(adds[0].identifier, "conflict:\(Self.session1)")
+        // Snapshot's sequence was 1; the new-reason upsert increments to 2.
+        XCTAssertEqual(adds[0].identifier, "conflict:\(Self.session1):2")
         XCTAssertEqual(removed.count, 1)
-        XCTAssertEqual(removed[0], ["orphan:\(Self.session1)"])
+        // Stale-remove targets the legacy-reason entry's recorded
+        // sequence (1 from the seed), not the latest sequence.
+        XCTAssertEqual(removed[0], ["orphan:\(Self.session1):1"])
         let state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications.count, 1)
         XCTAssertEqual(state.pendingOrphanNotifications[0].reason, "conflict")
@@ -617,5 +622,127 @@ final class OrphanNotificationCenterTests: XCTestCase {
         XCTAssertEqual(delegateCount, 1)
         let stored = await presenter.currentDelegate()
         XCTAssertNotNil(stored)
+    }
+
+    // MARK: - TC-OC26: stale removal uses entry's own sequence
+
+    /// Regression for the reconcile-vs-consume TOCTOU race. The
+    /// stale-remove path MUST mint the OS identifier from the
+    /// observed entry's mutationSequence — NOT from `maxSequence`,
+    /// the latest snapshot sequence, or anything else. A
+    /// concurrent consume() that lands between snapshot and OS-
+    /// removal will upsert a fresh entry at a HIGHER sequence;
+    /// because that fresh OS notification's identifier carries
+    /// the higher sequence, the stale-remove call (which carries
+    /// the lower sequence) cannot collaterally strip it.
+    func testStaleRemovalIdentifierCarriesEntryRecordedSequence() async throws {
+        let presenter = FakeUserNotificationPresenter(authorizationResult: true)
+        try await mutator.mutate { state in
+            // Snapshot sequence = 5, but the stale entry was upserted
+            // at sequence 3 (an earlier mutation). The remove
+            // identifier must carry "3", not "5".
+            state.notificationMutationSequence = 5
+            state.pendingOrphanNotifications = [
+                PendingOrphanNotification(
+                    sessionUUID: Self.session1, reason: "orphan",
+                    notifiedAt: Date(timeIntervalSince1970: 1_715_000_000),
+                    deliveryState: "queued", mutationSequence: 3),
+            ]
+        }
+        // Pi returns empty → triggers stale-removal path.
+        let center = makeCenter(presenter: presenter, fetcher: { [] })
+        await center.reconcile()
+
+        let removedDelivered = await presenter.recordedRemoveDelivered()
+        let removedPending = await presenter.recordedRemovePending()
+        XCTAssertEqual(removedDelivered.count, 1)
+        XCTAssertEqual(removedDelivered[0], ["orphan:\(Self.session1):3"],
+                       "stale-remove identifier must carry the entry's recorded sequence (3)")
+        XCTAssertEqual(removedPending.count, 1)
+        XCTAssertEqual(removedPending[0], ["orphan:\(Self.session1):3"],
+                       "stale-remove identifier must carry the entry's recorded sequence (3)")
+    }
+
+    // MARK: - TC-OC27: race-survival — fresh raise has different identifier from stale remove
+
+    /// Even when a concurrent consume() lands at the same key
+    /// between the snapshot and the OS-side removal, the fresh
+    /// raise's OS identifier MUST differ from the stale remove's
+    /// identifier (different sequence component). This proves the
+    /// versioned-identifier scheme severs the cross-contamination
+    /// vector even if interleaving were possible inside actor
+    /// isolation.
+    ///
+    /// We can't deterministically interleave inside an actor
+    /// (await boundaries serialize), so we simulate the race
+    /// outcome: seed two entries at the same (reason, uuid) at
+    /// distinct sequences and assert the identifiers a raise and a
+    /// remove WOULD mint are non-overlapping.
+    func testRaceSurvivalFreshRaiseIdentifierDiffersFromStaleRemove() async throws {
+        let staleSequence: UInt64 = 7
+        let freshSequence: UInt64 = 8
+        let staleIdentifier = notificationIdentifier(
+            reason: "orphan", sessionUUID: Self.session1, sequence: staleSequence)
+        let freshIdentifier = notificationIdentifier(
+            reason: "orphan", sessionUUID: Self.session1, sequence: freshSequence)
+        XCTAssertNotEqual(staleIdentifier, freshIdentifier,
+            "stale-remove identifier and fresh-raise identifier must differ")
+        // Sanity-check the format: the trailing sequence must be the
+        // only differentiator (same prefix, different suffix).
+        XCTAssertTrue(staleIdentifier.hasPrefix("orphan:\(Self.session1):"))
+        XCTAssertTrue(freshIdentifier.hasPrefix("orphan:\(Self.session1):"))
+        XCTAssertTrue(staleIdentifier.hasSuffix(":\(staleSequence)"))
+        XCTAssertTrue(freshIdentifier.hasSuffix(":\(freshSequence)"))
+    }
+
+    // MARK: - TC-OC28: legacy-notification migration sweep
+
+    /// Operators upgrading from a pre-versioned daemon build may
+    /// have unversioned `<reason>:<uuid>` notifications still
+    /// resident in Notification Center. The new code never mints
+    /// or tracks those ids, so it must explicitly clean them up on
+    /// startup. Otherwise the user sees ghost notifications that
+    /// never disappear.
+    func testCleanupLegacyOSNotificationsRemovesUnversionedIDs() async throws {
+        let presenter = FakeUserNotificationPresenter(authorizationResult: true)
+        await presenter.seedDeliveredIdentifiers([
+            "orphan:\(Self.session1)",
+            "conflict:\(Self.session2):4",            // versioned — keep
+            "orphan:\(Self.session3)",
+            "crm-mac-prod-presenter-test-xyz",        // unrelated — keep
+        ])
+        await presenter.seedPendingIdentifiers([
+            "conflict:\(Self.session1)",
+            "orphan:\(Self.session2):9",              // versioned — keep
+        ])
+        let center = makeCenter(presenter: presenter)
+
+        await center.cleanupLegacyOSNotifications()
+
+        let removedDelivered = await presenter.recordedRemoveDelivered()
+        let removedPending = await presenter.recordedRemovePending()
+        XCTAssertEqual(removedDelivered.count, 1)
+        XCTAssertEqual(Set(removedDelivered[0]),
+                       Set(["orphan:\(Self.session1)", "orphan:\(Self.session3)"]),
+                       "only unversioned orphan/conflict ids should be swept")
+        XCTAssertEqual(removedPending.count, 1)
+        XCTAssertEqual(removedPending[0], ["conflict:\(Self.session1)"])
+    }
+
+    func testCleanupLegacyOSNotificationsIsNoOpWhenNothingLegacy() async throws {
+        let presenter = FakeUserNotificationPresenter(authorizationResult: true)
+        await presenter.seedDeliveredIdentifiers([
+            "orphan:\(Self.session1):1",
+            "conflict:\(Self.session2):2",
+        ])
+        await presenter.seedPendingIdentifiers([])
+        let center = makeCenter(presenter: presenter)
+
+        await center.cleanupLegacyOSNotifications()
+
+        let removedDelivered = await presenter.recordedRemoveDelivered()
+        let removedPending = await presenter.recordedRemovePending()
+        XCTAssertTrue(removedDelivered.isEmpty)
+        XCTAssertTrue(removedPending.isEmpty)
     }
 }

@@ -83,6 +83,18 @@ public protocol UserNotificationPresenter: Sendable {
     /// a raw non-Sendable class reference into an actor-isolated
     /// implementation.
     func setDelegate(_ ref: UserNotificationDelegateRef?) async
+
+    /// Identifiers of notifications the OS has already delivered to
+    /// Notification Center. Returns identifier strings only (the
+    /// caller never needs the full UNNotification, which isn't
+    /// Sendable). Used by the startup migration sweep to find
+    /// ghost notifications minted by older daemon builds.
+    func getDeliveredIdentifiers() async -> [String]
+
+    /// Identifiers of notifications enqueued with the OS but not yet
+    /// delivered. Same shape as `getDeliveredIdentifiers()` for the
+    /// pending queue.
+    func getPendingIdentifiers() async -> [String]
 }
 
 /// Production conformance — wraps `UNUserNotificationCenter.current()`.
@@ -131,5 +143,17 @@ public final class UserNotificationCenterPresenter: UserNotificationPresenter, @
     public func setDelegate(_ ref: UserNotificationDelegateRef?) async {
         let center = UNUserNotificationCenter.current()
         center.delegate = ref?.value
+    }
+
+    public func getDeliveredIdentifiers() async -> [String] {
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications()
+        return delivered.map { $0.request.identifier }
+    }
+
+    public func getPendingIdentifiers() async -> [String] {
+        let center = UNUserNotificationCenter.current()
+        let pending = await center.pendingNotificationRequests()
+        return pending.map { $0.identifier }
     }
 }

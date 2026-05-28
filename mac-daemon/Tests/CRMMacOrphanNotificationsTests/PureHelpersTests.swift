@@ -27,15 +27,17 @@ final class PureHelpersTests: XCTestCase {
     func testIdentifierForOrphan() {
         XCTAssertEqual(
             notificationIdentifier(reason: "orphan",
-                                   sessionUUID: "deadbeef-1111-2222-3333-444455556666"),
-            "orphan:deadbeef-1111-2222-3333-444455556666")
+                                   sessionUUID: "deadbeef-1111-2222-3333-444455556666",
+                                   sequence: 7),
+            "orphan:deadbeef-1111-2222-3333-444455556666:7")
     }
 
     func testIdentifierForConflict() {
         XCTAssertEqual(
             notificationIdentifier(reason: "conflict",
-                                   sessionUUID: "deadbeef-1111-2222-3333-444455556666"),
-            "conflict:deadbeef-1111-2222-3333-444455556666")
+                                   sessionUUID: "deadbeef-1111-2222-3333-444455556666",
+                                   sequence: 42),
+            "conflict:deadbeef-1111-2222-3333-444455556666:42")
     }
 
     func testIdentifierDistinctAcrossReasons() {
@@ -45,8 +47,50 @@ final class PureHelpersTests: XCTestCase {
         // the OS replaces an orphan with a conflict (or vice
         // versa) silently.
         XCTAssertNotEqual(
-            notificationIdentifier(reason: "orphan", sessionUUID: uuid),
-            notificationIdentifier(reason: "conflict", sessionUUID: uuid))
+            notificationIdentifier(reason: "orphan", sessionUUID: uuid, sequence: 1),
+            notificationIdentifier(reason: "conflict", sessionUUID: uuid, sequence: 1))
+    }
+
+    func testIdentifierDistinctAcrossSequencesForSameReasonAndSession() {
+        // Critical invariant for the reconcile-vs-consume race fix:
+        // two different mutationSequence values for the same
+        // (reason, sessionUUID) MUST produce distinct identifiers,
+        // so a stale-remove targeting sequence N cannot collaterally
+        // strip a freshly-raised notification at sequence N+1.
+        let uuid = "deadbeef-1111-2222-3333-444455556666"
+        XCTAssertNotEqual(
+            notificationIdentifier(reason: "orphan", sessionUUID: uuid, sequence: 5),
+            notificationIdentifier(reason: "orphan", sessionUUID: uuid, sequence: 6))
+    }
+
+    // MARK: - isLegacyNotificationIdentifier
+
+    func testLegacyIdentifierDetectionForOrphan() {
+        XCTAssertTrue(isLegacyNotificationIdentifier(
+            "orphan:deadbeef-1111-2222-3333-444455556666"))
+    }
+
+    func testLegacyIdentifierDetectionForConflict() {
+        XCTAssertTrue(isLegacyNotificationIdentifier(
+            "conflict:deadbeef-1111-2222-3333-444455556666"))
+    }
+
+    func testVersionedIdentifierIsNotLegacy() {
+        // The new scheme has three colon-separated components.
+        XCTAssertFalse(isLegacyNotificationIdentifier(
+            "orphan:deadbeef-1111-2222-3333-444455556666:1"))
+        XCTAssertFalse(isLegacyNotificationIdentifier(
+            "conflict:deadbeef-1111-2222-3333-444455556666:99"))
+    }
+
+    func testUnrelatedIdentifierIsNotLegacy() {
+        // Other identifier prefixes (or arbitrary strings) must
+        // never be treated as legacy orphan/conflict ids.
+        XCTAssertFalse(isLegacyNotificationIdentifier(
+            "crm-mac-prod-presenter-test-deadbeef"))
+        XCTAssertFalse(isLegacyNotificationIdentifier("foo:bar"))
+        XCTAssertFalse(isLegacyNotificationIdentifier(""))
+        XCTAssertFalse(isLegacyNotificationIdentifier("orphan"))
     }
 
     // MARK: - clickTargetURL
