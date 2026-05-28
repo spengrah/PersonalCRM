@@ -266,6 +266,85 @@ func TestRunRevokeHostError(t *testing.T) {
 	}
 }
 
+func TestRunRotateHostKeyMalformedUUID(t *testing.T) {
+	deps, _, tokens, hosts, _, _ := newTestDeps()
+	err := run(context.Background(), runOptions{rotateHostID: "not-a-uuid"}, deps)
+	if err == nil {
+		t.Fatal("expected uuid parse error")
+	}
+	if tokens.calls != 0 {
+		t.Fatalf("token must not be minted on malformed UUID; got %d calls", tokens.calls)
+	}
+	if hosts.calls != 0 {
+		t.Fatalf("host list must not be queried on malformed UUID; got %d calls", hosts.calls)
+	}
+}
+
+func TestRunRotateHostKeyHostNotFound(t *testing.T) {
+	deps, _, tokens, hosts, _, _ := newTestDeps()
+	hosts.hosts = []*repository.MacHost{
+		{ID: uuid.New(), Hostname: "other"},
+	}
+	err := run(context.Background(), runOptions{rotateHostID: uuid.New().String()}, deps)
+	if err == nil {
+		t.Fatal("expected not-found error")
+	}
+	if !strings.Contains(err.Error(), "no active host") {
+		t.Fatalf("expected not-found message, got %v", err)
+	}
+	if tokens.calls != 0 {
+		t.Fatalf("token must not be minted when host is missing; got %d calls", tokens.calls)
+	}
+}
+
+func TestRunRotateHostKeyListError(t *testing.T) {
+	deps, _, tokens, hosts, _, _ := newTestDeps()
+	hosts.err = errors.New("db down")
+	err := run(context.Background(), runOptions{rotateHostID: uuid.New().String()}, deps)
+	if err == nil {
+		t.Fatal("expected list error")
+	}
+	if tokens.calls != 0 {
+		t.Fatalf("token must not be minted when list fails; got %d calls", tokens.calls)
+	}
+}
+
+func TestRunRotateHostKeyHappy(t *testing.T) {
+	deps, stdout, tokens, hosts, _, _ := newTestDeps()
+	id := uuid.New()
+	hosts.hosts = []*repository.MacHost{
+		{ID: id, Hostname: "mac-1"},
+	}
+	err := run(context.Background(), runOptions{rotateHostID: id.String()}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tokens.calls != 1 {
+		t.Fatalf("expected 1 mint, got %d", tokens.calls)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "token=test-token-base64") {
+		t.Fatalf("missing token: %q", out)
+	}
+	if !strings.Contains(out, "crm-mac install --re-pair --pair test-token-base64") {
+		t.Fatalf("missing templated re-pair command: %q", out)
+	}
+}
+
+func TestRunRotateHostKeyTokenMintError(t *testing.T) {
+	deps, _, tokens, hosts, _, _ := newTestDeps()
+	id := uuid.New()
+	hosts.hosts = []*repository.MacHost{{ID: id, Hostname: "mac-1"}}
+	tokens.err = errors.New("rng failed")
+	err := run(context.Background(), runOptions{rotateHostID: id.String()}, deps)
+	if err == nil {
+		t.Fatal("expected mint error")
+	}
+	if !strings.Contains(err.Error(), "mint pairing token") {
+		t.Fatalf("expected wrapped mint error, got %v", err)
+	}
+}
+
 func TestRunRematchStrandedDelegates(t *testing.T) {
 	deps, stdout, _, _, _, rematch := newTestDeps()
 	rematch.result = &messages.RematchStrandedResult{
@@ -328,6 +407,15 @@ func TestParseArgsAllFlags(t *testing.T) {
 			func(t *testing.T, o runOptions) {
 				if !o.rematchStranded {
 					t.Fatal("rematch flag not set")
+				}
+			},
+		},
+		{
+			"rotate-host-key",
+			[]string{"--rotate-host-key", "11111111-2222-3333-4444-555555555555"},
+			func(t *testing.T, o runOptions) {
+				if o.rotateHostID != "11111111-2222-3333-4444-555555555555" {
+					t.Fatalf("expected rotate id, got %q", o.rotateHostID)
 				}
 			},
 		},
