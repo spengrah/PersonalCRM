@@ -1682,14 +1682,12 @@ func (p *CadenceSyncProvider) createTaskCommand(contact *repository.Contact, set
 	// Build description with CRM marker (link is in title)
 	var descBuilder strings.Builder
 
-	marker := map[string]any{
-		"crm":        true,
-		"contact_id": contact.ID.String(),
-		"kind":       contacttask.KindReachOut,
-		"lifecycle":  contacttask.LifecycleCadenceDue,
-		"instance":   settings.IntegrationInstanceID,
-	}
-	markerJSON, err := json.Marshal(marker)
+	markerJSON, err := contacttask.EncodeMarker(contacttask.CRMMarker{
+		ContactID: contact.ID.String(),
+		Kind:      contacttask.KindReachOut,
+		Lifecycle: contacttask.LifecycleCadenceDue,
+		Instance:  settings.IntegrationInstanceID,
+	})
 	if err != nil {
 		logger.Error().Err(err).Str("contactId", contact.ID.String()).Msg("failed to marshal CRM marker - task may not sync properly")
 	}

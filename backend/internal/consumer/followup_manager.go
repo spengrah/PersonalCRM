@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -547,14 +546,12 @@ func (h *FollowUpManager) applyCreate(
 	deadlineStr := deadline.Format(todoist.DateFormat)
 	contactLink := fmt.Sprintf("%s/contacts/%s", h.frontendURL, p.ContactID.String())
 	content := fmt.Sprintf("Follow up: [%s](%s) (awaiting reply)", contact.FullName, contactLink)
-	marker := map[string]any{
-		"crm":        true,
-		"contact_id": p.ContactID.String(),
-		"kind":       contacttask.KindReachOut,
-		"lifecycle":  contacttask.LifecycleFollowUpLoop,
-		"instance":   settings.IntegrationInstanceID,
-	}
-	markerJSON, err := json.Marshal(marker)
+	markerJSON, err := contacttask.EncodeMarker(contacttask.CRMMarker{
+		ContactID: p.ContactID.String(),
+		Kind:      contacttask.KindReachOut,
+		Lifecycle: contacttask.LifecycleFollowUpLoop,
+		Instance:  settings.IntegrationInstanceID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal marker: %w", err)
 	}

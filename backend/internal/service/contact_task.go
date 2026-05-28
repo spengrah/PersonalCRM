@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -166,17 +165,15 @@ func (s *ContactTaskService) CreateManualTask(ctx context.Context, req CreateMan
 		descBuilder.WriteString("\n\n---\n")
 	}
 
-	// Add CRM marker for sync identification (use json.Marshal for safety).
-	// Both kind and lifecycle are written; readers that ignore lifecycle
-	// continue to work and the backfill path translates legacy markers.
-	marker := map[string]any{
-		"crm":        true,
-		"contact_id": contact.ID.String(),
-		"kind":       req.Kind,
-		"lifecycle":  contacttask.LifecycleManual,
-		"instance":   settings.IntegrationInstanceID,
-	}
-	markerJSON, err := json.Marshal(marker)
+	// Add CRM marker for sync identification. Both kind and lifecycle are
+	// written; readers that ignore lifecycle continue to work and the
+	// backfill path translates legacy markers.
+	markerJSON, err := contacttask.EncodeMarker(contacttask.CRMMarker{
+		ContactID: contact.ID.String(),
+		Kind:      req.Kind,
+		Lifecycle: contacttask.LifecycleManual,
+		Instance:  settings.IntegrationInstanceID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal marker: %w", err)
 	}
