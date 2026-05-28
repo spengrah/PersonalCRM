@@ -45,19 +45,26 @@ public struct AnarlogSessionsBatchOutcome: Equatable, Sendable {
     public let rejected: [AnarlogSessionsRejection]
     public let unconfirmed: Int
     public let anyBatchSucceeded: Bool
+    /// Aggregated needs_attention items from every batch in this
+    /// publish. The plugin forwards these to OrphanNotificationCenter
+    /// after the publish returns; existing callers that ignore this
+    /// field continue to work unchanged (default `[]`).
+    public let needsAttention: [NeedsAttentionItem]
 
     public init(
         accepted: Int,
         duplicate: Int,
         rejected: [AnarlogSessionsRejection],
         unconfirmed: Int,
-        anyBatchSucceeded: Bool
+        anyBatchSucceeded: Bool,
+        needsAttention: [NeedsAttentionItem] = []
     ) {
         self.accepted = accepted
         self.duplicate = duplicate
         self.rejected = rejected
         self.unconfirmed = unconfirmed
         self.anyBatchSucceeded = anyBatchSucceeded
+        self.needsAttention = needsAttention
     }
 }
 
@@ -101,7 +108,8 @@ public actor AnarlogSessionsPublisher {
         if items.isEmpty {
             return AnarlogSessionsBatchOutcome(
                 accepted: 0, duplicate: 0, rejected: [],
-                unconfirmed: 0, anyBatchSucceeded: false)
+                unconfirmed: 0, anyBatchSucceeded: false,
+                needsAttention: [])
         }
 
         var totalAccepted = 0
@@ -110,6 +118,12 @@ public actor AnarlogSessionsPublisher {
         var unconfirmed = 0
         var anyBatchSucceeded = false
         var sawRecoveryCode = false
+        // Aggregate needs_attention across every batch. The Pi
+        // emits one entry per session per response, so this is
+        // an additive concatenation; downstream de-dup (by
+        // sessionUUID + reason) happens inside
+        // OrphanNotificationCenter.
+        var needsAttention: [NeedsAttentionItem] = []
 
         let batches = splitIntoBatches(items)
         var remainingItemsAfterBatch = items.count
@@ -119,6 +133,7 @@ public actor AnarlogSessionsPublisher {
                 let response = try await sender(auth, body)
                 totalAccepted += response.accepted
                 totalDuplicate += response.duplicate
+                needsAttention.append(contentsOf: response.needsAttention)
                 var batchRecoveryHit = false
                 for err in response.errors {
                     guard err.index >= 0, err.index < batch.count else {
@@ -192,7 +207,8 @@ public actor AnarlogSessionsPublisher {
             duplicate: totalDuplicate,
             rejected: rejections,
             unconfirmed: unconfirmed,
-            anyBatchSucceeded: anyBatchSucceeded)
+            anyBatchSucceeded: anyBatchSucceeded,
+            needsAttention: needsAttention)
     }
 
     // MARK: - private
