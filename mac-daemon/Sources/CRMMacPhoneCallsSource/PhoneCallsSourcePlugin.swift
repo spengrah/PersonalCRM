@@ -7,11 +7,9 @@
 //     inhibits emission of `call.*` events that an older Pi can't
 //     accept.
 //   - Check schema health: drift -> source_health unhealthy + return.
-//   - Open CallHistoryDB DatabasePool with `?mode=ro` (NOT
-//     `immutable=1`) fresh each tick. CallHistoryDB's WAL accumulates
-//     for days between macOS-driven checkpoints, and `immutable=1`
-//     hides every WAL-resident write from the reader, so we'd miss
-//     every call between checkpoints. Reopening per tick keeps the
+//   - Open CallHistoryDB DatabasePool fresh each tick via the
+//     read-only WAL-aware URI from `SQLiteSnapshotReader` (which owns
+//     the WAL-visibility rationale). Reopening per tick keeps the
 //     handle short-lived; SQLITE_BUSY retries cover concurrent
 //     writers (Phone.app / FaceTime / Continuity).
 //   - Load cursor: piClient.getCursor("phone_calls") -> decode into
@@ -71,20 +69,23 @@ public struct PhoneCallsSourceConfig: Sendable {
 /// same normalizer without taking a cross-source dep.
 public typealias HandleCanonicalizer = @Sendable (String) -> String
 
-public actor PhoneCallsSourcePlugin: SourcePlugin {
+public actor PhoneCallsSourcePlugin: DataSourcePlugin {
     public nonisolated let id: SourceID = .phoneCalls
     public nonisolated let tickInterval: TimeInterval
 
     private let config: PhoneCallsSourceConfig
     private let piClient: PiClient
     private let auth: PiAuth
-    private let mutator: StateMutator
+    // nonisolated: read by the DataSourcePlugin extension's tick() from
+    // a nonisolated context. Sound because all three are immutable lets
+    // holding Sendable values (same pattern as `id`/`tickInterval`).
+    public nonisolated let mutator: StateMutator
     private let publisher: PhoneCallsPublisher
     private let cache: KnownIdentifiersCache
     private let canonicalizer: HandleCanonicalizer
     private let heartbeatStateProvider: HeartbeatStateProvider
-    private let logger: LoggerProtocol
-    private let clock: @Sendable () -> Date
+    public nonisolated let logger: LoggerProtocol
+    public nonisolated let clock: @Sendable () -> Date
     private let healthRegistry: SourceHealthRegistry
 
     /// Cached schema health. Validated on first successful open. We
@@ -150,13 +151,14 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
         self.clock = clock
     }
 
-    public func tick() async throws {
+    public func performTick() async throws {
+        // The DataSourcePlugin extension already bumped state.json
+        // `lastScheduledAt` via `clock()` before entering here. This
+        // second `clock()` read feeds the in-memory heartbeat-payload
+        // registry snapshot + budget math; with a fixed test clock the
+        // two reads are equal, and in production the sub-ms drift is
+        // irrelevant for a coarse liveness timestamp.
         let tickStart = clock()
-        // Persist lastScheduledAt to state.json BEFORE any gate /
-        // health-registry / pool-open work so a healthy-but-quiet tick
-        // still bumps the on-disk timestamp. The in-memory
-        // healthRegistry update below is heartbeat-payload-only.
-        await updateScheduled(at: tickStart)
         await healthRegistry.update(id, currentHealthSnapshot(
             enabled: true,
             lastScheduled: tickStart,
@@ -585,31 +587,19 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
 
     private struct FDAError: Error {}
 
-    /// Open CallHistoryDB fresh every tick. We use `?mode=ro` and
-    /// deliberately do NOT pass `immutable=1` — Phone.app, FaceTime,
-    /// and Continuity write to CallHistoryDB while the daemon runs,
-    /// and `immutable=1` would tell SQLite to ignore the WAL entirely
-    /// and serve only the install-time snapshot of the main DB file.
-    /// macOS does not checkpoint CallHistoryDB's WAL on any
-    /// predictable cadence (we've observed `CallHistory.storedata`
-    /// stale by days while `CallHistory.storedata-wal` is megabytes
-    /// of live writes), so an immutable reader would silently miss
-    /// every call between checkpoints. The reopen-every-tick pattern
-    /// keeps each handle short-lived; transient writer-lock contention
-    /// surfaces as SQLITE_BUSY and is absorbed by GRDB's default
-    /// DatabasePool busy-retry policy.
+    /// Open CallHistoryDB fresh every tick. The reopen-every-tick
+    /// pattern keeps each handle short-lived; transient writer-lock
+    /// contention surfaces as SQLITE_BUSY and is absorbed by GRDB's
+    /// default DatabasePool busy-retry policy. The read-only,
+    /// WAL-aware URI shape (and the WAL-visibility rationale for why we
+    /// must NOT use `immutable=1`) is owned by `SQLiteSnapshotReader`.
     private func openFreshPool() async throws -> DatabasePool {
         var grdbConfig = Configuration()
         grdbConfig.readonly = true
-        // Open in WAL-aware read-only mode. GRDB's DatabasePool accepts
-        // a URI when prefixed with `file:`; SQLite parses the query
-        // string. We do NOT add `immutable=1` — see the doc comment
-        // above for the WAL-visibility rationale. The Messages plugin
-        // achieves the same WAL-aware read-only property via a bare
-        // path + `Configuration.readonly = true`; the URI vs bare-path
-        // shape is incidental, but the absence of `immutable=1` is
-        // the load-bearing invariant for picking up uncheckpointed writes.
-        let uri = Self.callHistoryDBURI(for: config.callHistoryDBPath)
+        // URI shape + WAL rationale owned by `SQLiteSnapshotReader`.
+        // `Configuration.readonly` is defense-in-depth; the URI's
+        // `mode=ro` is the primary read-only/WAL-aware guard.
+        let uri = SQLiteSnapshotReader.readOnlyURI(for: config.callHistoryDBPath)
         let pool: DatabasePool
         do {
             pool = try DatabasePool(path: uri, configuration: grdbConfig)
@@ -671,38 +661,6 @@ public actor PhoneCallsSourcePlugin: SourcePlugin {
             src.lastPushedAt = lastPushedAt
             state.sources["phone_calls"] = src
         }
-    }
-
-    /// Persist `lastScheduledAt` to state.json at the start of every
-    /// tick. Mirrors ICloudContactsSourcePlugin.updateScheduled(at:)
-    /// so state.sources["phone_calls"].lastScheduledAt is a reliable
-    /// cross-source liveness signal — the in-memory
-    /// SourceHealthRegistry update (via `currentHealthSnapshot`) is
-    /// heartbeat-payload-only and never written to disk. Without this
-    /// persistence, Doctor / debugging tools see no recent scheduled-
-    /// at for phone_calls even on a healthy-but-quiet tick. Failures
-    /// are logged-and-swallowed: a state.json write hiccup must not
-    /// abort the tick.
-    private func updateScheduled(at date: Date) async {
-        do {
-            try await mutator.mutate { state in
-                var src = state.sources[self.id.rawValue] ?? SourceState()
-                src.lastScheduledAt = date
-                state.sources[self.id.rawValue] = src
-            }
-        } catch {
-            logger.warning("phone_calls tick: lastScheduledAt mutate failed", metadata: [
-                "error": .private(String(describing: error)),
-            ])
-        }
-    }
-
-    /// Construct the SQLite URI used by `openFreshPool`. Exposed as a
-    /// static helper so tests can exercise the exact production URI
-    /// shape without re-implementing it; if this changes, both code
-    /// paths stay in sync.
-    internal static func callHistoryDBURI(for path: URL) -> String {
-        "file://\(path.path)?mode=ro"
     }
 
     // MARK: - health surface

@@ -19,6 +19,7 @@
 // only N rows. With the fix, step 3 returns N+M.
 import XCTest
 import GRDB
+import CRMMacCore
 @testable import CRMMacPhoneCallsSource
 
 final class CallHistoryDBWALVisibilityTests: XCTestCase {
@@ -89,13 +90,13 @@ final class CallHistoryDBWALVisibilityTests: XCTestCase {
     /// 2025-01-01T00:00:00Z in Apple-epoch seconds.
     private let baseZDate: Double = 1_735_689_600 - 978_307_200
 
-    /// Production-path open: reuses `PhoneCallsSourcePlugin.callHistoryDBURI`
+    /// Production-path open: reuses `SQLiteSnapshotReader.readOnlyURI`
     /// to build the exact URI production uses, so a future change to the
     /// URI shape lands in both call sites simultaneously.
     private func openProductionReader(at path: String) throws -> DatabasePool {
         var config = Configuration()
         config.readonly = true
-        let uri = PhoneCallsSourcePlugin.callHistoryDBURI(for: URL(fileURLWithPath: path))
+        let uri = SQLiteSnapshotReader.readOnlyURI(for: URL(fileURLWithPath: path))
         return try DatabasePool(path: uri, configuration: config)
     }
 

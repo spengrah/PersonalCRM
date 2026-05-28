@@ -181,5 +181,21 @@ let package = Package(
                                    "CRMMacOrphanNotifications"]),
         .testTarget(name: "CRMMacOrphanNotificationsTests",
                     dependencies: ["CRMMacOrphanNotifications", "CRMMacPiClient"]),
+        // Cross-cutting conformance suite for DataSourcePlugin. Depends
+        // on the four source LIBRARY targets (Anarlog houses BOTH the
+        // humans + sessions plugins) plus Core/PiClient, and
+        // OrphanNotifications (a transitive dep of CRMMacAnarlogSource —
+        // SwiftPM does not propagate transitive deps to test targets, so
+        // list it explicitly, mirroring CRMMacAnarlogSourceTests).
+        .testTarget(name: "CRMMacConformanceTests",
+                    dependencies: [
+                        "CRMMacCore",
+                        "CRMMacPiClient",
+                        "CRMMacMessagesSource",
+                        "CRMMacPhoneCallsSource",
+                        "CRMMacIcloudContactsSource",
+                        "CRMMacAnarlogSource",
+                        "CRMMacOrphanNotifications",
+                    ]),
     ]
 )

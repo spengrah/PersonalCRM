@@ -1,14 +1,9 @@
 // CallHistoryDBReader — GRDB-backed read-only iterator over
 // CallHistoryDB ZCALLRECORD rows.
 //
-// Opens CallHistoryDB with `?mode=ro` (WAL-aware; NOT `immutable=1`).
-// Phone.app / FaceTime / Continuity write to CallHistoryDB
-// concurrently, and macOS does not checkpoint its WAL on any
-// predictable cadence, so an `immutable=1` reader would be blind to
-// every call until the WAL eventually folds into the main file.
-// Concurrent-writer contention surfaces as SQLITE_BUSY and is absorbed
-// by GRDB's default DatabasePool busy-retry policy; the daemon's
-// reopen-every-tick pattern keeps each handle short-lived.
+// Operates on an already-open `Database` the plugin hands in (opened
+// via `SQLiteSnapshotReader`, which owns the read-only WAL-aware URI
+// shape + the rationale for why we must NOT use `immutable=1`).
 //
 // Cursor primitive: (ZDATE, Z_PK) lexicographic pair. ZDATE is
 // Apple-epoch SECONDS since 2001-01-01 (Core Data's CFAbsoluteTime
