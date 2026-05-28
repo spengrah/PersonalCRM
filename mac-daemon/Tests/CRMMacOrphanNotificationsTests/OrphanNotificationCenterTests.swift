@@ -68,27 +68,27 @@ final class OrphanNotificationCenterTests: XCTestCase {
     func testConsumeOrphanRaisesAndPersists() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let lookup = FakeSessionMetadataLookup(canned: [
-            session1: SessionMetadata(
+            Self.session1: SessionMetadata(
                 title: "Synthetic Test Session",
                 createdAt: Date(timeIntervalSince1970: 1_716_000_000),
-                sessionDirURL: URL(fileURLWithPath: "/tmp/anarlog/sessions/\(session1)")),
+                sessionDirURL: URL(fileURLWithPath: "/tmp/anarlog/sessions/\(Self.session1)")),
         ])
         let center = makeCenter(presenter: presenter, lookup: lookup)
         await center.consume(needsAttention: [
-            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: Self.session1, reason: "orphan"),
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
-        XCTAssertEqual(calls[0].identifier, "orphan:\(session1)")
+        XCTAssertEqual(calls[0].identifier, "orphan:\(Self.session1)")
         XCTAssertEqual(calls[0].title, "Untagged session")
         XCTAssertTrue(calls[0].body.contains("Tag participants in Anarlog"))
         XCTAssertTrue(calls[0].body.contains("Synthetic Test Session"))
-        XCTAssertEqual(calls[0].userInfo["session_uuid"], session1)
+        XCTAssertEqual(calls[0].userInfo["session_uuid"], Self.session1)
         XCTAssertEqual(calls[0].userInfo["reason"], "orphan")
 
         let state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications.count, 1)
-        XCTAssertEqual(state.pendingOrphanNotifications[0].sessionUUID, session1)
+        XCTAssertEqual(state.pendingOrphanNotifications[0].sessionUUID, Self.session1)
         XCTAssertEqual(state.pendingOrphanNotifications[0].reason, "orphan")
         XCTAssertEqual(state.pendingOrphanNotifications[0].deliveryState, "queued")
         XCTAssertGreaterThan(state.notificationMutationSequence, 0)
@@ -100,11 +100,11 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let center = makeCenter(presenter: presenter)
         await center.consume(needsAttention: [
-            NotificationConsumeItem(sessionID: session1, reason: "conflict"),
+            NotificationConsumeItem(sessionID: Self.session1, reason: "conflict"),
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
-        XCTAssertEqual(calls[0].identifier, "conflict:\(session1)")
+        XCTAssertEqual(calls[0].identifier, "conflict:\(Self.session1)")
         XCTAssertEqual(calls[0].title, "Session needs CRM attention")
         XCTAssertEqual(calls[0].userInfo["reason"], "conflict")
     }
@@ -115,9 +115,9 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let center = makeCenter(presenter: presenter)
         await center.consume(needsAttention: [
-            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
-            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
-            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: Self.session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: Self.session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: Self.session1, reason: "orphan"),
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
@@ -126,7 +126,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
     func testConsumeDedupAcrossCalls() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let center = makeCenter(presenter: presenter)
-        let item = NotificationConsumeItem(sessionID: session1, reason: "orphan")
+        let item = NotificationConsumeItem(sessionID: Self.session1, reason: "orphan")
         await center.consume(needsAttention: [item])
         await center.consume(needsAttention: [item])
         let calls = await presenter.recordedAddCalls()
@@ -138,7 +138,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
     func testConsumeAuthDeniedPersistsAndRetriesOnNextCall() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: false)
         let center = makeCenter(presenter: presenter)
-        let item = NotificationConsumeItem(sessionID: session1, reason: "orphan")
+        let item = NotificationConsumeItem(sessionID: Self.session1, reason: "orphan")
         await center.consume(needsAttention: [item])
         var calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 0)  // Skipped due to denial.
@@ -164,7 +164,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true,
                                                       addError: TestError())
         let center = makeCenter(presenter: presenter)
-        let item = NotificationConsumeItem(sessionID: session1, reason: "orphan")
+        let item = NotificationConsumeItem(sessionID: Self.session1, reason: "orphan")
         await center.consume(needsAttention: [item])
         var state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications.count, 1)
@@ -184,7 +184,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let center = makeCenter(presenter: presenter)
         await center.consume(needsAttention: [
-            NotificationConsumeItem(sessionID: session1, reason: "future-unknown-reason"),
+            NotificationConsumeItem(sessionID: Self.session1, reason: "future-unknown-reason"),
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertTrue(calls.isEmpty)
@@ -199,7 +199,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let center = makeCenter(presenter: presenter)
         // No canned metadata → lookup returns nil.
         await center.consume(needsAttention: [
-            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: Self.session1, reason: "orphan"),
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
@@ -213,11 +213,11 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let longTitle = String(repeating: "X", count: 200)
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let lookup = FakeSessionMetadataLookup(canned: [
-            session1: SessionMetadata(title: longTitle, createdAt: nil, sessionDirURL: nil),
+            Self.session1: SessionMetadata(title: longTitle, createdAt: nil, sessionDirURL: nil),
         ])
         let center = makeCenter(presenter: presenter, lookup: lookup)
         await center.consume(needsAttention: [
-            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: Self.session1, reason: "orphan"),
         ])
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
@@ -230,7 +230,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
 
     func testReconcileAddsMissingEntries() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
-        // Pre-seed pending list with session1 (already queued).
+        // Pre-seed pending list with Self.session1 (already queued).
         try await mutator.mutate { state in
             state.notificationMutationSequence = 1
             state.pendingOrphanNotifications = [
@@ -240,7 +240,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
                     deliveryState: "queued", mutationSequence: 1),
             ]
         }
-        // Pi returns session1 + session2.
+        // Pi returns Self.session1 + Self.session2.
         let center = makeCenter(presenter: presenter, fetcher: {
             [
                 NotificationReconcileItem(
@@ -256,10 +256,10 @@ final class OrphanNotificationCenterTests: XCTestCase {
             ]
         })
         await center.reconcile()
-        // session1 was already queued → no re-raise. session2 is new → raised.
+        // Self.session1 was already queued → no re-raise. Self.session2 is new → raised.
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1)
-        XCTAssertEqual(calls[0].identifier, "conflict:\(session2)")
+        XCTAssertEqual(calls[0].identifier, "conflict:\(Self.session2)")
         let state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications.count, 2)
     }
@@ -282,7 +282,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
                     deliveryState: "queued", mutationSequence: 2),
             ]
         }
-        // Pi returns only session1 → session2 should be removed.
+        // Pi returns only Self.session1 → Self.session2 should be removed.
         let center = makeCenter(presenter: presenter, fetcher: {
             [
                 NotificationReconcileItem(
@@ -296,12 +296,12 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let removedDelivered = await presenter.recordedRemoveDelivered()
         let removedPending = await presenter.recordedRemovePending()
         XCTAssertEqual(removedDelivered.count, 1)
-        XCTAssertEqual(removedDelivered[0], ["conflict:\(session2)"])
+        XCTAssertEqual(removedDelivered[0], ["conflict:\(Self.session2)"])
         XCTAssertEqual(removedPending.count, 1)
-        XCTAssertEqual(removedPending[0], ["conflict:\(session2)"])
+        XCTAssertEqual(removedPending[0], ["conflict:\(Self.session2)"])
         let state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications.count, 1)
-        XCTAssertEqual(state.pendingOrphanNotifications[0].sessionUUID, session1)
+        XCTAssertEqual(state.pendingOrphanNotifications[0].sessionUUID, Self.session1)
     }
 
     // MARK: - TC-OC9: reconcile with Pi error is a no-op
@@ -362,7 +362,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
     func testReconcileUsesPiTitleDirectly() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let lookup = FakeSessionMetadataLookup(canned: [
-            session1: SessionMetadata(title: "Stale Filesystem Title",
+            Self.session1: SessionMetadata(title: "Stale Filesystem Title",
                                       createdAt: nil, sessionDirURL: nil),
         ])
         let center = makeCenter(presenter: presenter, lookup: lookup, fetcher: {
@@ -386,7 +386,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
     func testReconcileFallsBackToLookupWhenPiTitleNil() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let lookup = FakeSessionMetadataLookup(canned: [
-            session1: SessionMetadata(title: "Fallback Filesystem Title",
+            Self.session1: SessionMetadata(title: "Fallback Filesystem Title",
                                       createdAt: nil, sessionDirURL: nil),
         ])
         let center = makeCenter(presenter: presenter, lookup: lookup, fetcher: {
@@ -437,15 +437,15 @@ final class OrphanNotificationCenterTests: XCTestCase {
         // Y preserved (sequence=99 > snapshot.sequence=1).
         let remaining = state.pendingOrphanNotifications
         XCTAssertEqual(remaining.count, 1)
-        XCTAssertEqual(remaining[0].sessionUUID, session2)
+        XCTAssertEqual(remaining[0].sessionUUID, Self.session2)
     }
 
     // MARK: - TC-OC22b: in-mutator sequence guard re-applied
 
     func testReconcileSkipsRemovalIfEntrySequenceBumpedMidRun() async throws {
-        // Simulate: snapshot.sequence=1 captures session1 at
+        // Simulate: snapshot.sequence=1 captures Self.session1 at
         // sequence=1. Mid-reconcile (BEFORE removeNotificationIfStale
-        // runs), a concurrent consume() upserts session1 bumping
+        // runs), a concurrent consume() upserts Self.session1 bumping
         // mutationSequence to 99. Reconcile's removal loop iterates
         // — the outer guard at iteration time may still pass (it
         // saw sequence=1 in the snapshot), but the INNER guard
@@ -468,11 +468,11 @@ final class OrphanNotificationCenterTests: XCTestCase {
         }
 
         // Build a custom fetcher closure that, BEFORE returning,
-        // mutates the persisted state to bump session1 to
+        // mutates the persisted state to bump Self.session1 to
         // sequence=99 — simulating a concurrent consume() that
         // landed between snapshot read and Pi fetch.
         let mutatorRef = mutator!
-        let session1Ref = session1
+        let session1Ref = Self.session1
         let center = OrphanNotificationCenter(
             presenter: presenter,
             opener: FakeWorkspaceOpener(),
@@ -496,7 +496,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications.count, 1,
                        "entry with sequence > snapshot must survive removal pass")
-        XCTAssertEqual(state.pendingOrphanNotifications[0].sessionUUID, session1)
+        XCTAssertEqual(state.pendingOrphanNotifications[0].sessionUUID, Self.session1)
         let removed = await presenter.recordedRemoveDelivered()
         XCTAssertTrue(removed.isEmpty,
                       "no OS-side removal when persisted entry is preserved")
@@ -527,7 +527,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         await center.reconcile()
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1, "denied entry re-raised on reconcile")
-        XCTAssertEqual(calls[0].identifier, "orphan:\(session1)")
+        XCTAssertEqual(calls[0].identifier, "orphan:\(Self.session1)")
         let state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications[0].deliveryState, "queued")
         XCTAssertGreaterThan(state.pendingOrphanNotifications[0].mutationSequence, 5)
@@ -560,9 +560,9 @@ final class OrphanNotificationCenterTests: XCTestCase {
         let adds = await presenter.recordedAddCalls()
         let removed = await presenter.recordedRemoveDelivered()
         XCTAssertEqual(adds.count, 1)
-        XCTAssertEqual(adds[0].identifier, "conflict:\(session1)")
+        XCTAssertEqual(adds[0].identifier, "conflict:\(Self.session1)")
         XCTAssertEqual(removed.count, 1)
-        XCTAssertEqual(removed[0], ["orphan:\(session1)"])
+        XCTAssertEqual(removed[0], ["orphan:\(Self.session1)"])
         let state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications.count, 1)
         XCTAssertEqual(state.pendingOrphanNotifications[0].reason, "conflict")
@@ -573,28 +573,28 @@ final class OrphanNotificationCenterTests: XCTestCase {
     func testDelegateDidReceiveOpensWorkspaceWithCorrectURL() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let opener = FakeWorkspaceOpener(openResult: true)
-        let sessionDir = URL(fileURLWithPath: "/tmp/anarlog/sessions/\(session1)")
+        let sessionDir = URL(fileURLWithPath: "/tmp/anarlog/sessions/\(Self.session1)")
         let lookup = FakeSessionMetadataLookup(canned: [
-            session1: SessionMetadata(
+            Self.session1: SessionMetadata(
                 title: "Session 1", createdAt: nil, sessionDirURL: sessionDir),
-            session2: SessionMetadata(title: "Session 2", createdAt: nil, sessionDirURL: nil),
+            Self.session2: SessionMetadata(title: "Session 2", createdAt: nil, sessionDirURL: nil),
         ])
         let center = makeCenter(presenter: presenter, opener: opener, lookup: lookup)
 
         // Orphan tap → opens session dir URL.
-        await center.handleTap(reason: "orphan", sessionUUID: session1)
+        await center.handleTap(reason: "orphan", sessionUUID: Self.session1)
         var opened = await opener.recordedOpenedURLs()
         XCTAssertEqual(opened.count, 1)
         XCTAssertEqual(opened[0], sessionDir)
 
         // Conflict tap → opens Pi UI deep link.
-        await center.handleTap(reason: "conflict", sessionUUID: session2)
+        await center.handleTap(reason: "conflict", sessionUUID: Self.session2)
         opened = await opener.recordedOpenedURLs()
         XCTAssertEqual(opened.count, 2)
         let comps = URLComponents(url: opened[1], resolvingAgainstBaseURL: false)
         XCTAssertEqual(comps?.path, "/imports")
         let q = comps?.queryItems ?? []
-        XCTAssertEqual(q.first(where: { $0.name == "session" })?.value, session2)
+        XCTAssertEqual(q.first(where: { $0.name == "session" })?.value, Self.session2)
     }
 
     // MARK: - TC-OC25: delegate is retained after actor init
@@ -607,7 +607,7 @@ final class OrphanNotificationCenterTests: XCTestCase {
         XCTAssertTrue(stillInstalled1)
         // Push the actor through several await boundaries.
         await center.consume(needsAttention: [
-            NotificationConsumeItem(sessionID: session1, reason: "orphan"),
+            NotificationConsumeItem(sessionID: Self.session1, reason: "orphan"),
         ])
         let stillInstalled2 = await center.hasDelegateInstalled()
         XCTAssertTrue(stillInstalled2, "delegate must survive across await boundaries")

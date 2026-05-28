@@ -93,7 +93,7 @@ public actor OrphanNotificationCenter {
     public func installDelegate() async {
         let d = OrphanNotificationDelegate(center: self)
         self.delegate = d
-        await presenter.setDelegate(d)
+        await presenter.setDelegate(UserNotificationDelegateRef(d))
     }
 
     // Test-only accessor: returns true when a delegate has been

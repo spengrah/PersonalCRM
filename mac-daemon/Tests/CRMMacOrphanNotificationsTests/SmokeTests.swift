@@ -57,9 +57,9 @@ final class SmokeTests: XCTestCase {
     /// queued" check the user requires as a PR 6 acceptance gate.
     func testOrphanIngestResponseQueuesNotification() async throws {
         let fakePresenter = FakeUserNotificationPresenter(authorizationResult: true)
-        let sessionDir = URL(fileURLWithPath: "/tmp/anarlog/sessions/\(session1)")
+        let sessionDir = URL(fileURLWithPath: "/tmp/anarlog/sessions/\(Self.session1)")
         let fakeLookup = FakeSessionMetadataLookup(canned: [
-            session1: SessionMetadata(
+            Self.session1: SessionMetadata(
                 title: "Synthetic Smoke Session",
                 createdAt: Date(timeIntervalSince1970: 1_716_134_400),
                 sessionDirURL: sessionDir),
@@ -85,7 +85,7 @@ final class SmokeTests: XCTestCase {
         let ingestResponse = IngestEventsData(
             accepted: 1, duplicate: 0, rejected: 0, errors: [],
             needsAttention: [
-                NeedsAttentionItem(sessionID: session1, reason: "orphan"),
+                NeedsAttentionItem(sessionID: Self.session1, reason: "orphan"),
             ])
         let domainItems = ingestResponse.needsAttention.map { wire in
             NotificationConsumeItem(sessionID: wire.sessionID, reason: wire.reason)
@@ -99,17 +99,17 @@ final class SmokeTests: XCTestCase {
         let calls = await fakePresenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1, "exactly one notification should be queued")
         let request = calls[0]
-        XCTAssertEqual(request.identifier, "orphan:\(session1)")
+        XCTAssertEqual(request.identifier, "orphan:\(Self.session1)")
         XCTAssertEqual(request.title, "Untagged session")
         XCTAssertTrue(request.body.contains("Tag participants in Anarlog"))
         XCTAssertTrue(request.body.contains("Synthetic Smoke Session"))
-        XCTAssertEqual(request.userInfo["session_uuid"], session1)
+        XCTAssertEqual(request.userInfo["session_uuid"], Self.session1)
         XCTAssertEqual(request.userInfo["reason"], "orphan")
 
         // The pending list was persisted with deliveryState="queued".
         let state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications.count, 1)
-        XCTAssertEqual(state.pendingOrphanNotifications[0].sessionUUID, session1)
+        XCTAssertEqual(state.pendingOrphanNotifications[0].sessionUUID, Self.session1)
         XCTAssertEqual(state.pendingOrphanNotifications[0].reason, "orphan")
         XCTAssertEqual(state.pendingOrphanNotifications[0].deliveryState, "queued")
         XCTAssertGreaterThan(state.notificationMutationSequence, 0)
@@ -143,43 +143,43 @@ final class SmokeTests: XCTestCase {
             piURL: piURL,
             needsAttentionFetcher: {
                 [
-                    // session1 stays.
+                    // Self.session1 stays.
                     NotificationReconcileItem(
                         anarlogSessionID: Self.session1,
                         linkageState: "conflict_pending",
                         title: "Synthetic Session 1",
                         meetingAt: "2026-05-27T14:00:00Z"),
-                    // session3 is new.
+                    // Self.session3 is new.
                     NotificationReconcileItem(
                         anarlogSessionID: Self.session3,
                         linkageState: "orphan_needs_review",
                         title: "Synthetic Session 3",
                         meetingAt: "2026-05-27T15:00:00Z"),
-                    // session2 is NOT in the Pi response → should be removed.
+                    // Self.session2 is NOT in the Pi response → should be removed.
                 ]
             },
             logger: NoopLogger())
 
         await center.reconcile()
 
-        // One add for session3 (new).
+        // One add for Self.session3 (new).
         let adds = await presenter.recordedAddCalls()
         XCTAssertEqual(adds.count, 1)
-        XCTAssertEqual(adds[0].identifier, "orphan:\(session3)")
+        XCTAssertEqual(adds[0].identifier, "orphan:\(Self.session3)")
 
-        // One delivered + one pending removal for session2 (stale).
+        // One delivered + one pending removal for Self.session2 (stale).
         let removedDelivered = await presenter.recordedRemoveDelivered()
         let removedPending = await presenter.recordedRemovePending()
         XCTAssertEqual(removedDelivered.count, 1)
-        XCTAssertEqual(removedDelivered[0], ["orphan:\(session2)"])
+        XCTAssertEqual(removedDelivered[0], ["orphan:\(Self.session2)"])
         XCTAssertEqual(removedPending.count, 1)
-        XCTAssertEqual(removedPending[0], ["orphan:\(session2)"])
+        XCTAssertEqual(removedPending[0], ["orphan:\(Self.session2)"])
 
         let state = try stateStore.load()
         let keys = Set(state.pendingOrphanNotifications.map {
             "\($0.reason):\($0.sessionUUID)"
         })
-        XCTAssertEqual(keys, ["conflict:\(session1)", "orphan:\(session3)"])
+        XCTAssertEqual(keys, ["conflict:\(Self.session1)", "orphan:\(Self.session3)"])
     }
 
     // MARK: - TC-INT3 (heartbeat-first-success triggers reconcile)

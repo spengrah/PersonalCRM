@@ -5,13 +5,9 @@ import Foundation
 import UserNotifications
 @testable import CRMMacOrphanNotifications
 
-/// Sendable wrapper around UNUserNotificationCenterDelegate so the
-/// fake actor can store the reference without violating Swift 6's
-/// strict-concurrency check. The delegate type itself is an
-/// `@unchecked Sendable` NSObject in the production OrphanNotificationDelegate.
-public struct DelegateRef: @unchecked Sendable {
-    public let value: UNUserNotificationCenterDelegate
-}
+/// Local alias for the production wrapper, used to keep the existing
+/// test assertions terse.
+public typealias DelegateRef = UserNotificationDelegateRef
 
 /// Records calls to UserNotificationPresenter. The
 /// `authorizationResult` constructor argument seeds the first
@@ -72,12 +68,8 @@ public actor FakeUserNotificationPresenter: UserNotificationPresenter {
         removePendingCalls.append(ids)
     }
 
-    public func setDelegate(_ delegate: sending UNUserNotificationCenterDelegate?) async {
+    public func setDelegate(_ ref: UserNotificationDelegateRef?) async {
         setDelegateCalls += 1
-        if let d = delegate {
-            lastDelegate = DelegateRef(value: d)
-        } else {
-            lastDelegate = nil
-        }
+        lastDelegate = ref
     }
 }

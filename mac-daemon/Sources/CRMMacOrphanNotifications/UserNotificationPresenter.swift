@@ -13,6 +13,22 @@
 import Foundation
 import UserNotifications
 
+/// Sendable wrapper around UNUserNotificationCenterDelegate.
+/// Swift 6 strict concurrency rejects passing a non-Sendable class
+/// reference (the delegate) across actor isolation; the actual
+/// delegate object is `@unchecked Sendable` (NSObject subclass with
+/// no mutable per-instance state), so we transport it through this
+/// trivial wrapper. The `sending` keyword on a parameter does not
+/// suffice on Swift 6.0 protocol-witness implementations under
+/// actor isolation, so we bake the Sendable contract into the
+/// argument type instead.
+public struct UserNotificationDelegateRef: @unchecked Sendable {
+    public let value: UNUserNotificationCenterDelegate
+    public init(_ value: UNUserNotificationCenterDelegate) {
+        self.value = value
+    }
+}
+
 /// Sendable wire-shape for a notification request. The presenter
 /// converts this to UNNotificationRequest internally; the fake
 /// records the spec for test assertions.
@@ -62,11 +78,11 @@ public protocol UserNotificationPresenter: Sendable {
 
     /// Register a delegate for tap-handling. The OS holds the
     /// delegate `weak`, so the caller MUST retain it independently
-    /// or taps stop firing. The `sending` annotation transfers the
-    /// reference into the presenter's isolation region — Swift 6
-    /// strict concurrency rejects passing a non-Sendable class
-    /// reference into an actor without this hint.
-    func setDelegate(_ delegate: sending UNUserNotificationCenterDelegate?) async
+    /// or taps stop firing. Wrapped in `UserNotificationDelegateRef`
+    /// (Sendable) because Swift 6 strict concurrency forbids passing
+    /// a raw non-Sendable class reference into an actor-isolated
+    /// implementation.
+    func setDelegate(_ ref: UserNotificationDelegateRef?) async
 }
 
 /// Production conformance — wraps `UNUserNotificationCenter.current()`.
@@ -112,8 +128,8 @@ public final class UserNotificationCenterPresenter: UserNotificationPresenter, @
         center.removePendingNotificationRequests(withIdentifiers: ids)
     }
 
-    public func setDelegate(_ delegate: sending UNUserNotificationCenterDelegate?) async {
+    public func setDelegate(_ ref: UserNotificationDelegateRef?) async {
         let center = UNUserNotificationCenter.current()
-        center.delegate = delegate
+        center.delegate = ref?.value
     }
 }
