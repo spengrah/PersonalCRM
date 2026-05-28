@@ -29,6 +29,12 @@ import PackageDescription
 //   - CRMMacIcloudContactsSource (Foundation + Contacts + Core + PiClient):
 //                                CNContactStore reader + icloud_contacts source
 //                                plugin. Contacts framework is isolated here.
+//   - CRMMacOrphanNotifications  (Foundation + UserNotifications + AppKit + Core
+//                                + PiClient): macOS notification center actor +
+//                                pending-notification persistence + 5-min
+//                                reconcile loop. UserNotifications + AppKit
+//                                imports are isolated here so the rest of the
+//                                daemon stays Foundation-only.
 //   - CRMMacSystem               (Foundation + os.log + Security + Contacts + Core
 //                                + Lifecycle): production impls of the Lifecycle
 //                                adapter protocols, including the production
@@ -68,6 +74,7 @@ let package = Package(
                 "CRMMacPhoneCallsSource",
                 "CRMMacIcloudContactsSource",
                 "CRMMacAnarlogSource",
+                "CRMMacOrphanNotifications",
                 "CRMMacSystem",
             ],
             // Info.plist is embedded into the binary via linker
@@ -124,6 +131,18 @@ let package = Package(
             dependencies: [
                 "CRMMacCore",
                 "CRMMacPiClient",
+                // The sessions plugin forwards needs_attention items
+                // to OrphanNotificationCenter after every batch. The
+                // OPPOSITE direction (notifications → anarlog) is
+                // forbidden — OrphanNotificationCenter consumes a
+                // narrow SessionMetadataLookup protocol whose
+                // concrete adapter lives in this target.
+                "CRMMacOrphanNotifications",
+            ]),
+        .target(
+            name: "CRMMacOrphanNotifications",
+            dependencies: [
+                "CRMMacCore",
             ]),
         .target(
             name: "CRMMacSystem",
@@ -158,6 +177,9 @@ let package = Package(
                     dependencies: ["CRMMacIcloudContactsSource", "CRMMacPiClient"],
                     resources: [.copy("Fixtures")]),
         .testTarget(name: "CRMMacAnarlogSourceTests",
-                    dependencies: ["CRMMacAnarlogSource", "CRMMacPiClient"]),
+                    dependencies: ["CRMMacAnarlogSource", "CRMMacPiClient",
+                                   "CRMMacOrphanNotifications"]),
+        .testTarget(name: "CRMMacOrphanNotificationsTests",
+                    dependencies: ["CRMMacOrphanNotifications", "CRMMacPiClient"]),
     ]
 )

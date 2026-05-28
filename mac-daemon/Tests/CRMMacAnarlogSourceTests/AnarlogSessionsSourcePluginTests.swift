@@ -174,6 +174,9 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
                 "errors": i.errors.map {
                     ["index": $0.index, "code": $0.code, "message": $0.message]
                 },
+                "needs_attention": i.needsAttention.map {
+                    ["session_id": $0.sessionID, "reason": $0.reason]
+                },
             ])
         }
         private static func ok(_ req: URLRequest) -> HTTPURLResponse {

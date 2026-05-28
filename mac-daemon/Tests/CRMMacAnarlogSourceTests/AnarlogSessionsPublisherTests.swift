@@ -144,4 +144,65 @@ final class AnarlogSessionsPublisherTests: XCTestCase {
         let outcome = await publisher.publish(items: items)
         XCTAssertEqual(outcome.accepted, 2)
     }
+
+    func testNeedsAttentionAggregatedAcrossBatches() async {
+        // 250 items → ≥ 2 batches at maxEventsPerBatch=100. The
+        // publisher must concatenate needs_attention across all
+        // batches; the plugin downstream forwards them to the
+        // notification center.
+        let session1 = "deadbeef-1111-2222-3333-444455556661"
+        let session2 = "deadbeef-1111-2222-3333-444455556662"
+        let session3 = "deadbeef-1111-2222-3333-444455556663"
+        actor BatchCounter {
+            var i: Int = 0
+            func next() -> Int { defer { i += 1 }; return i }
+        }
+        let counter = BatchCounter()
+        let publisher = AnarlogSessionsPublisher(
+            sender: { _, body in
+                let idx = await counter.next()
+                // Batch 0 surfaces session1+session2; batch 1
+                // surfaces session3. The publisher's outcome
+                // should carry all three.
+                let na: [NeedsAttentionItem]
+                if idx == 0 {
+                    na = [
+                        NeedsAttentionItem(sessionID: session1, reason: "orphan"),
+                        NeedsAttentionItem(sessionID: session2, reason: "conflict"),
+                    ]
+                } else if idx == 1 {
+                    na = [NeedsAttentionItem(sessionID: session3, reason: "orphan")]
+                } else {
+                    na = []
+                }
+                return IngestEventsData(
+                    accepted: body.events.count,
+                    duplicate: 0, rejected: 0, errors: [],
+                    needsAttention: na)
+            },
+            auth: auth, logger: NoopLogger())
+        let outcome = await publisher.publish(items: (1...250).map(makeRecordedItem))
+        XCTAssertEqual(outcome.needsAttention.count, 3)
+        XCTAssertTrue(outcome.needsAttention.contains {
+            $0.sessionID == session1 && $0.reason == "orphan"
+        })
+        XCTAssertTrue(outcome.needsAttention.contains {
+            $0.sessionID == session2 && $0.reason == "conflict"
+        })
+        XCTAssertTrue(outcome.needsAttention.contains {
+            $0.sessionID == session3 && $0.reason == "orphan"
+        })
+    }
+
+    func testNeedsAttentionEmptyByDefaultWhenSenderOmits() async {
+        let publisher = AnarlogSessionsPublisher(
+            sender: { _, body in
+                IngestEventsData(
+                    accepted: body.events.count,
+                    duplicate: 0, rejected: 0, errors: [])
+            },
+            auth: auth, logger: NoopLogger())
+        let outcome = await publisher.publish(items: [makeRecordedItem(index: 1)])
+        XCTAssertTrue(outcome.needsAttention.isEmpty)
+    }
 }

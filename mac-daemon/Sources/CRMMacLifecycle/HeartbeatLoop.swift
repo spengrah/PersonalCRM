@@ -37,6 +37,7 @@ public final class HeartbeatLoop: SourcePlugin {
     private let clock: ClockAdapter
     private let refresher: KnownIdentifiersRefresher?
     private let sourceHealthProvider: SourceHealthProvider?
+    private let firstSuccessLatch: FirstSuccessLatch?
 
     public init(
         piClient: PiClient,
@@ -47,7 +48,8 @@ public final class HeartbeatLoop: SourcePlugin {
         clock: ClockAdapter,
         tickInterval: TimeInterval = 60,
         refresher: KnownIdentifiersRefresher? = nil,
-        sourceHealthProvider: SourceHealthProvider? = nil
+        sourceHealthProvider: SourceHealthProvider? = nil,
+        firstSuccessLatch: FirstSuccessLatch? = nil
     ) {
         self.piClient = piClient
         self.auth = auth
@@ -58,6 +60,7 @@ public final class HeartbeatLoop: SourcePlugin {
         self.tickInterval = tickInterval
         self.refresher = refresher
         self.sourceHealthProvider = sourceHealthProvider
+        self.firstSuccessLatch = firstSuccessLatch
     }
 
     public func tick() async throws {
@@ -88,6 +91,15 @@ public final class HeartbeatLoop: SourcePlugin {
                         "error": .private(String(describing: error)),
                     ])
                 }
+            }
+            // Fire the first-success latch (dedup internally). The
+            // latch's callback runs exactly once across the daemon's
+            // lifetime — the orphan-notification subsystem uses
+            // this to trigger reconcile() at startup once the Pi
+            // is proven reachable. Fire-and-forget via a Task so
+            // a slow callback doesn't stall the heartbeat.
+            if let latch = firstSuccessLatch {
+                Task { await latch.fireOnce() }
             }
         } catch PiClientError.authenticationRevoked(let message) {
             logger.error("heartbeat: 401 — exiting", metadata: ["message": .public(message)])

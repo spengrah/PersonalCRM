@@ -140,6 +140,35 @@ struct RequestBuilder {
         return req
     }
 
+    func needsAttention(auth: PiAuth, hostID: UUID) throws -> URLRequest {
+        // Query param is percent-encoded by URLComponents. The host
+        // ID is also lowercased to match the Pi's canonical form.
+        guard var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            throw RequestBuilderError.malformedURL(baseURL.absoluteString)
+        }
+        let basePath = comps.path.hasSuffix("/")
+            ? String(comps.path.dropLast())
+            : comps.path
+        comps.path = basePath + "/api/v1/meeting-notes/needs-attention"
+        comps.queryItems = [
+            URLQueryItem(name: "host_id", value: hostID.uuidString.lowercased()),
+        ]
+        guard let url = comps.url else {
+            throw RequestBuilderError.malformedURL(baseURL.absoluteString)
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        // Reuses the existing per-host auth helper. Sends
+        // X-Mac-Host-ID + Authorization: Bearer <pair-key>. The Pi's
+        // /meeting-notes/needs-attention route is mounted under the
+        // composite IngestAuth middleware (same dispatcher that
+        // accepts the daemon's host-auth on /ingest/events), so this
+        // path resolves without needing the global env-var API key.
+        Self.applyAuth(&req, auth: auth)
+        return req
+    }
+
     func ingestEvents(auth: PiAuth, body: IngestEventsBody) throws -> URLRequest {
         let url = try resolve(path: "/api/v1/ingest/events")
         var req = URLRequest(url: url)

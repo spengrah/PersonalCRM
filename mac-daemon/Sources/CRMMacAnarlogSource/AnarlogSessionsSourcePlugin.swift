@@ -20,6 +20,7 @@
 //     without any daemon code change.
 import Foundation
 import CRMMacCore
+import CRMMacOrphanNotifications
 import CRMMacPiClient
 
 public actor AnarlogSessionsSourcePlugin: SourcePlugin {
@@ -33,6 +34,7 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
     private let filesystem: AnarlogFilesystem
     private let configSource: AnarlogConfigSource
     private let healthRegistry: SourceHealthRegistry
+    private let orphanNotificationCenter: OrphanNotificationCenter?
     private let logger: LoggerProtocol
     private let clock: @Sendable () -> Date
 
@@ -49,6 +51,7 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
         filesystem: AnarlogFilesystem,
         configSource: AnarlogConfigSource,
         healthRegistry: SourceHealthRegistry,
+        orphanNotificationCenter: OrphanNotificationCenter? = nil,
         logger: LoggerProtocol,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -60,6 +63,7 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
         self.filesystem = filesystem
         self.configSource = configSource
         self.healthRegistry = healthRegistry
+        self.orphanNotificationCenter = orphanNotificationCenter
         self.logger = logger
         self.clock = clock
     }
@@ -554,6 +558,23 @@ public actor AnarlogSessionsSourcePlugin: SourcePlugin {
         }
         if hadHashMismatch {
             await setRecoveryFlag(reason: "hash_mismatch")
+        }
+
+        // Forward any needs_attention items the Pi surfaced to
+        // the notification center. Map the transport DTO
+        // (NeedsAttentionItem from CRMMacPiClient) to the
+        // notification module's domain type at this boundary so
+        // CRMMacOrphanNotifications doesn't depend on the wire
+        // shape. consume() is non-throwing — we await it before
+        // committing the cursor below so a slow consume() applies
+        // back-pressure onto the next tick rather than letting
+        // notifications pile up unbounded behind the cursor.
+        if !outcome.needsAttention.isEmpty {
+            let domainItems = outcome.needsAttention.map { wire in
+                NotificationConsumeItem(
+                    sessionID: wire.sessionID, reason: wire.reason)
+            }
+            await orphanNotificationCenter?.consume(needsAttention: domainItems)
         }
 
         let cleanBatch = outcome.rejected.isEmpty && outcome.unconfirmed == 0
