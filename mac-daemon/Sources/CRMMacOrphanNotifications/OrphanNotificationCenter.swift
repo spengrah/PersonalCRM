@@ -278,7 +278,7 @@ public actor OrphanNotificationCenter {
             // pair so two identical items in one batch produce a single
             // raise. The OS-side identifier is sequence-versioned
             // separately when the request is actually queued.
-            let key = "\(item.reason):\(item.sessionID)"
+            let key = matchKey(reason: item.reason, sessionUUID: item.sessionID)
             if seenWithinBatch.contains(key) { continue }
             seenWithinBatch.insert(key)
 
