@@ -21,6 +21,9 @@ struct ProductionContext {
     /// + uninstall's legacy-cleanup path. Stays wired even after the
     /// migration runs because uninstall can run more than once.
     let legacyLaunchctl: LaunchctlRunner
+    /// Production launchctl runner — used by the re-pair flow's
+    /// kickstart-restart step.
+    let launchctl: LaunchctlRunner
     let clock: ClockAdapter
     let exitHandler: ExitHandler
 
@@ -57,6 +60,7 @@ struct ProductionContext {
         self.bundleAssembler = BundleAssembler(
             filesystem: fs, executable: exec)
         self.legacyLaunchctl = ProductionLaunchctlRunner()
+        self.launchctl = ProductionLaunchctlRunner()
         self.clock = SystemClock()
         self.exitHandler = SystemExitHandler()
     }
@@ -79,6 +83,23 @@ struct ProductionContext {
             logger: logger,
             legacyKeychain: ProductionKeychainStore(),
             legacyLaunchctl: legacyLaunchctl))
+    }
+
+    func repairer() -> Repairer {
+        // Capture the production logger by-value before forming the
+        // @Sendable closure so it doesn't reach back into `self`
+        // (ProductionContext is not Sendable; mirrors the pattern in
+        // InstallCommand.runContactsPermissionFlow that constructs
+        // fresh ProductionContext() instances inside @Sendable closures).
+        let capturedLogger = logger
+        return Repairer(RepairerDependencies(
+            paths: paths,
+            filesystem: filesystem,
+            keychain: keychain,
+            configStoreFactory: { url in ConfigStore(fileURL: url) },
+            piClientFactory: { url in PiClient(baseURL: url, logger: capturedLogger) },
+            launchctl: launchctl,
+            logger: logger))
     }
 
     func uninstaller() -> Uninstaller {

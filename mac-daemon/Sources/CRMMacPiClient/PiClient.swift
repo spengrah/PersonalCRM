@@ -75,6 +75,21 @@ public final class PiClient: @unchecked Sendable {
         return try decodePair(data: data, http: http)
     }
 
+    /// POST /api/v1/host/:id/rotate-key. Returns the new plaintext
+    /// api-key + the timestamp the server recorded for the rotation.
+    /// `maxRetries: 0` because the rotate tx is non-idempotent: a
+    /// retry against a tx that really did succeed would consume a
+    /// second token via the next attempt.
+    public func rotateAPIKey(
+        auth: PiAuth,
+        newPairingToken: String
+    ) async throws -> RotateAPIKeyData {
+        let request = try builder.rotateAPIKey(
+            auth: auth, pairingToken: newPairingToken)
+        let (data, http) = try await transport.send(request, maxRetries: 0)
+        return try decodeRotateAPIKey(data: data, http: http)
+    }
+
     public func heartbeat(auth: PiAuth, body: HeartbeatBody) async throws -> HeartbeatData {
         let request = try builder.heartbeat(auth: auth, body: body)
         let (data, http) = try await transport.send(request)
@@ -169,6 +184,73 @@ public final class PiClient: @unchecked Sendable {
         case 500...599:
             // RetryingTransport surfaces 5xx as PiClientError.serverError;
             // any 5xx reaching here is anomalous and worth surfacing.
+            throw PiClientError.serverError(
+                status: http.statusCode,
+                message: errorMessage(data) ?? "server error \(http.statusCode)")
+        default:
+            throw PiClientError.transport(
+                underlying: "unexpected status \(http.statusCode)")
+        }
+    }
+
+    private func decodeRotateAPIKey(data: Data, http: HTTPURLResponse) throws -> RotateAPIKeyData {
+        switch http.statusCode {
+        case 200:
+            return try decodeSuccess(data: data, type: RotateAPIKeyData.self)
+        case 400:
+            // 400s carry distinct codes (INVALID_PAIRING_TOKEN,
+            // TOKEN_ALREADY_USED, TOKEN_EXPIRED). mapClient4xx returns
+            // PiClientError.clientError with the code preserved so the
+            // CLI wrapper can branch on it.
+            throw mapClient4xx(status: http.statusCode, data: data)
+        case 401:
+            // Two distinct 401 codes:
+            //   INVALID_KEY → map to authenticationRevoked for shared
+            //     CLI handling (matches every other endpoint's 401).
+            //   STALE_AUTH → distinct operator remediation
+            //     ("re-pair against the new live key"). Preserved as
+            //     clientError(401, "STALE_AUTH", _) so the CLI can
+            //     branch.
+            struct Auth401Probe: Decodable {
+                let error: APIError?
+            }
+            if let probe = try? decoder.decode(Auth401Probe.self, from: data),
+               probe.error?.code == "STALE_AUTH" {
+                throw PiClientError.clientError(
+                    status: 401,
+                    code: "STALE_AUTH",
+                    message: probe.error?.message ?? "api-key stale; another rotation committed")
+            }
+            throw PiClientError.authenticationRevoked(
+                message: errorMessage(data) ?? "authentication revoked")
+        case 404:
+            // 404 could mean either:
+            //   (a) the Pi recognized the route but the host id was
+            //       revoked between auth and tx-internal lookup
+            //       (handler returns SendNotFound which emits the
+            //       standard {success:false, error:{...}} envelope).
+            //   (b) the Pi is an older version that doesn't have the
+            //       rotate-key route at all (gin returns an empty 404
+            //       body with no `success` field).
+            // Distinguish via body shape so the CLI wrapper can print
+            // distinct remediation ("host gone" vs "Pi needs upgrade").
+            struct EnvelopeProbe: Decodable {
+                let success: Bool
+                let error: APIError?
+            }
+            if let probe = try? decoder.decode(EnvelopeProbe.self, from: data) {
+                throw PiClientError.clientError(
+                    status: 404,
+                    code: probe.error?.code ?? "NOT_FOUND",
+                    message: probe.error?.message ?? "host not found")
+            }
+            throw PiClientError.clientError(
+                status: 404,
+                code: "ROUTE_NOT_FOUND",
+                message: "Pi did not recognize POST /api/v1/host/:id/rotate-key — Pi may need an upgrade")
+        case 400...499:
+            throw mapClient4xx(status: http.statusCode, data: data)
+        case 500...599:
             throw PiClientError.serverError(
                 status: http.statusCode,
                 message: errorMessage(data) ?? "server error \(http.statusCode)")

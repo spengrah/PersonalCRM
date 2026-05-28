@@ -2,7 +2,7 @@
 // switch on these to map to exit codes or operator messages.
 import Foundation
 
-public enum PiClientError: Error, Equatable, CustomStringConvertible {
+public enum PiClientError: Error, Equatable, Sendable, CustomStringConvertible {
     /// 410 PAIRING_TOKEN_INVALID. Token was invalid, expired, or
     /// already used — the Pi deliberately returns one opaque code.
     case pairingTokenRejected(message: String)
