@@ -441,20 +441,62 @@ func (s *stubExternalContactWriter) SoftDeleteTx(_ context.Context, _ pgx.Tx, _ 
 
 // stubIdentityMatcher returns a configured MatchResult / error for
 // every MatchOrCreateTx call. requests records the inputs of each call
-// so tests can assert which raw values reached the matcher (used by the
-// "skip un-normalizable identifiers" tests, which need to prove that
-// junk values like "+" or "   " never even hit the matcher).
+// and policies records the policy each caller passed, so tests can
+// assert caller wiring (which policy each call site declares and that
+// junk values are now routed through the matcher under SkipEmpty).
+//
+// The stub does NOT call identity.Normalize — it returns whatever the
+// test configures — so the real normalization-driven skip is proven at
+// the unit (nil-repo) and integration layers, not here. resultsByRaw
+// lets a test return a genuine (nil, nil) for selected RawIdentifier
+// values (mimicking the real SkipEmpty contract) while returning a
+// populated result for others.
 type stubIdentityMatcher struct {
-	result   *MatchResult
-	err      error
-	calls    int
-	requests []MatchRequest
+	result       *MatchResult            // default result when resultsByRaw has no entry
+	resultsByRaw map[string]*MatchResult // per-RawIdentifier override; a nil value returns (nil, err)
+	err          error
+	calls        int
+	requests     []MatchRequest
+	policies     []NormalizationPolicy // parallel to requests
 }
 
-func (s *stubIdentityMatcher) MatchOrCreateTx(_ context.Context, _ pgx.Tx, req MatchRequest) (*MatchResult, error) {
+func (s *stubIdentityMatcher) MatchOrCreateTx(_ context.Context, _ pgx.Tx, req MatchRequest, policy NormalizationPolicy) (*MatchResult, error) {
 	s.calls++
 	s.requests = append(s.requests, req)
+	s.policies = append(s.policies, policy)
+	if s.resultsByRaw != nil {
+		if r, ok := s.resultsByRaw[req.RawIdentifier]; ok {
+			return r, s.err // r may be nil → (nil, err); with err==nil this is the (nil,nil) SkipEmpty contract
+		}
+	}
 	return s.result, s.err
+}
+
+// stubMessagesUpserter is a minimal MessagesUpserter for the
+// handleRawMessage unit test; it records nothing the test needs beyond a
+// non-error return so the handler runs past the identity match.
+type stubMessagesUpserter struct {
+	resp *repository.MessagesMessage
+	err  error
+}
+
+func (s *stubMessagesUpserter) UpsertMessageTx(_ context.Context, _ pgx.Tx, _ repository.UpsertMessagesMessageParams) (*repository.MessagesMessage, error) {
+	return s.resp, s.err
+}
+
+// stubAnarlogIdentityLookup is a minimal AnarlogIdentityLookup for the
+// anarlog-block unit test.
+type stubAnarlogIdentityLookup struct {
+	linkResp *repository.ExternalIdentity
+	linkErr  error
+}
+
+func (s *stubAnarlogIdentityLookup) FindContactIDByAnarlogHumanIDTx(_ context.Context, _ pgx.Tx, _ string) (*uuid.UUID, error) {
+	return nil, nil
+}
+
+func (s *stubAnarlogIdentityLookup) LinkIdentityToContactTx(_ context.Context, _ pgx.Tx, _ repository.LinkIdentityRequest) (*repository.ExternalIdentity, error) {
+	return s.linkResp, s.linkErr
 }
 
 // TestHandleExternalContactUpserted_PostUpsertTombstoneTriggersRevive
@@ -568,13 +610,14 @@ func upsertEnvWithContactMethods(t *testing.T, host uuid.UUID, entityID string, 
 	}
 }
 
-// TestHandleExternalContactUpserted_SkipsPhonesThatNormalizeToEmpty
-// proves the call-site pre-check filters phones whose value normalizes
-// to empty (e.g. "+", whitespace-only) BEFORE invoking MatchOrCreateTx.
-// This is the unit-level proof that the cursor-stall fix avoids the
-// lower-layer "empty identifier after normalization" rejection — the
-// matcher never sees those values at all.
-func TestHandleExternalContactUpserted_SkipsPhonesThatNormalizeToEmpty(t *testing.T) {
+// TestHandleExternalContactUpserted_PhonesLoopUsesSkipEmpty proves the
+// phones loop routes every non-literal-empty value through
+// MatchOrCreateTx under NormalizationSkipEmpty. Only the literal-empty
+// guard (ph.Value == "") still pre-filters at the call site; the
+// empty-after-normalization skip now happens inside the real matcher
+// (covered by the nil-repo unit test and the integration suite). The
+// stub does not normalize, so junk values like "+"/"   " reach it here.
+func TestHandleExternalContactUpserted_PhonesLoopUsesSkipEmpty(t *testing.T) {
 	rowID := uuid.New()
 	hostID := uuid.New()
 	liveRow := &repository.ExternalContact{
@@ -597,17 +640,25 @@ func TestHandleExternalContactUpserted_SkipsPhonesThatNormalizeToEmpty(t *testin
 	env := upsertEnvWithContactMethods(t, hostID, "CN-junk-phone",
 		nil, []string{"+", "   ", "+15551234567"})
 	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
-	require.Nil(t, rej, "handler must not reject when junk phones are skipped")
-	require.Equal(t, 1, stubIdent.calls, "matcher must be invoked exactly once (for the valid phone)")
-	require.Len(t, stubIdent.requests, 1)
-	require.Equal(t, "+15551234567", stubIdent.requests[0].RawIdentifier)
-	require.Equal(t, identity.IdentifierTypePhone, stubIdent.requests[0].Type)
+	require.Nil(t, rej, "handler must not reject under SkipEmpty")
+	// All three non-literal-empty phones reach the matcher; the real
+	// empty-after-normalization skip happens inside MatchOrCreateTx.
+	require.Equal(t, 3, stubIdent.calls)
+	require.Len(t, stubIdent.requests, 3)
+	require.Equal(t, []string{"+", "   ", "+15551234567"},
+		[]string{stubIdent.requests[0].RawIdentifier, stubIdent.requests[1].RawIdentifier, stubIdent.requests[2].RawIdentifier})
+	for i, pol := range stubIdent.policies {
+		require.Equal(t, NormalizationSkipEmpty, pol, "phone call %d must pass SkipEmpty", i)
+		require.Equal(t, identity.IdentifierTypePhone, stubIdent.requests[i].Type)
+	}
 }
 
-// TestHandleExternalContactUpserted_SkipsEmailsThatNormalizeToEmpty
-// mirrors the phone case for emails. Whitespace/tab-only values must
-// not reach MatchOrCreateTx.
-func TestHandleExternalContactUpserted_SkipsEmailsThatNormalizeToEmpty(t *testing.T) {
+// TestHandleExternalContactUpserted_EmailsLoopUsesSkipEmpty mirrors the
+// phone case for emails: every non-literal-empty value is routed through
+// MatchOrCreateTx under NormalizationSkipEmpty. The stub does not
+// normalize, so whitespace/tab-only values reach it here; the real skip
+// happens inside the matcher.
+func TestHandleExternalContactUpserted_EmailsLoopUsesSkipEmpty(t *testing.T) {
 	rowID := uuid.New()
 	hostID := uuid.New()
 	liveRow := &repository.ExternalContact{
@@ -630,19 +681,25 @@ func TestHandleExternalContactUpserted_SkipsEmailsThatNormalizeToEmpty(t *testin
 	env := upsertEnvWithContactMethods(t, hostID, "CN-junk-email",
 		[]string{"   ", "\t", "ok@example.com"}, nil)
 	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
-	require.Nil(t, rej, "handler must not reject when junk emails are skipped")
-	require.Equal(t, 1, stubIdent.calls, "matcher must be invoked exactly once (for the valid email)")
-	require.Len(t, stubIdent.requests, 1)
-	require.Equal(t, "ok@example.com", stubIdent.requests[0].RawIdentifier)
-	require.Equal(t, identity.IdentifierTypeEmail, stubIdent.requests[0].Type)
+	require.Nil(t, rej, "handler must not reject under SkipEmpty")
+	require.Equal(t, 3, stubIdent.calls)
+	require.Len(t, stubIdent.requests, 3)
+	require.Equal(t, []string{"   ", "\t", "ok@example.com"},
+		[]string{stubIdent.requests[0].RawIdentifier, stubIdent.requests[1].RawIdentifier, stubIdent.requests[2].RawIdentifier})
+	for i, pol := range stubIdent.policies {
+		require.Equal(t, NormalizationSkipEmpty, pol, "email call %d must pass SkipEmpty", i)
+		require.Equal(t, identity.IdentifierTypeEmail, stubIdent.requests[i].Type)
+	}
 }
 
-// TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_NoMatcherCalls
-// proves that an envelope whose every identifier normalizes to empty
-// still ingests cleanly — no matcher calls, no rejection. The contact
-// lands as an external_contact row with zero linked identities,
-// available for manual review.
-func TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_NoMatcherCalls(t *testing.T) {
+// TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_StillAccepts
+// proves that an envelope whose every (non-literal-empty) identifier is
+// un-normalizable still ingests cleanly. Under the new design the junk
+// values DO reach MatchOrCreateTx (the per-loop guard is gone); the real
+// matcher no-ops them under SkipEmpty by returning (nil, nil). Here the
+// stub returns (nil, nil) for every value to mirror that contract, and
+// the handler must accept the envelope with no rejection.
+func TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_StillAccepts(t *testing.T) {
 	rowID := uuid.New()
 	hostID := uuid.New()
 	liveRow := &repository.ExternalContact{
@@ -656,7 +713,11 @@ func TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_NoMatc
 		getErr:     db.ErrNotFound,
 		upsertResp: liveRow,
 	}
-	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
+	// Every junk value maps to (nil, nil), mirroring the real SkipEmpty
+	// empty-after-normalization contract.
+	stubIdent := &stubIdentityMatcher{
+		resultsByRaw: map[string]*MatchResult{"\t": nil, "+": nil},
+	}
 
 	svc := &IngestService{
 		identity:         stubIdent,
@@ -666,16 +727,23 @@ func TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_NoMatc
 		[]string{"\t"}, []string{"+"})
 	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
 	require.Nil(t, rej, "handler must accept envelope even if all identifiers normalize to empty")
-	require.Equal(t, 0, stubIdent.calls, "matcher must NOT be invoked when all identifiers are un-normalizable")
+	require.Equal(t, 2, stubIdent.calls, "both junk values now reach the matcher under SkipEmpty")
+	for i, pol := range stubIdent.policies {
+		require.Equal(t, NormalizationSkipEmpty, pol, "call %d must pass SkipEmpty", i)
+	}
 }
 
-// TestHandleExternalContactUpserted_MixedJunkAndValid_CallsMatcherOnceWithValid
-// proves both loops run to completion and the matcher receives exactly
-// the two valid values, in source order (emails first, then phones).
-// Junk in one loop must not short-circuit the other.
-func TestHandleExternalContactUpserted_MixedJunkAndValid_CallsMatcherOnceWithValid(t *testing.T) {
+// TestHandleExternalContactUpserted_MixedJunkAndValid_NilResultTolerance
+// proves both loops run to completion with every value routed through
+// the matcher under SkipEmpty, and that the match flow correctly treats
+// a (nil, nil) result (the SkipEmpty no-op for junk) as "no match" while
+// still acting on the populated result for the valid value. Junk in one
+// loop must not short-circuit the other, and the (nil, nil) returns must
+// not break the shared matched/canSetMatchOnRow flow.
+func TestHandleExternalContactUpserted_MixedJunkAndValid_NilResultTolerance(t *testing.T) {
 	rowID := uuid.New()
 	hostID := uuid.New()
+	matchedContactID := uuid.New()
 	liveRow := &repository.ExternalContact{
 		ID:          rowID,
 		Source:      "icloud_contacts",
@@ -686,8 +754,18 @@ func TestHandleExternalContactUpserted_MixedJunkAndValid_CallsMatcherOnceWithVal
 		getResp:    nil,
 		getErr:     db.ErrNotFound,
 		upsertResp: liveRow,
+		updateResp: liveRow, // UpdateMatchTx return is ignored by the handler
 	}
-	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
+	// Junk values return (nil, nil); the valid email returns a populated
+	// match so the email loop sets the external_contact match.
+	stubIdent := &stubIdentityMatcher{
+		resultsByRaw: map[string]*MatchResult{
+			"   ":            nil,
+			"+":              nil,
+			"ok@example.com": {ContactID: &matchedContactID},
+			"+15551234567":   {ContactID: &matchedContactID},
+		},
+	}
 
 	svc := &IngestService{
 		identity:         stubIdent,
@@ -698,13 +776,100 @@ func TestHandleExternalContactUpserted_MixedJunkAndValid_CallsMatcherOnceWithVal
 		[]string{"+", "+15551234567"})
 	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
 	require.Nil(t, rej)
-	require.Equal(t, 2, stubIdent.calls, "matcher must be invoked once per valid identifier")
-	require.Len(t, stubIdent.requests, 2)
-	// Emails loop runs first, then phones.
-	require.Equal(t, "ok@example.com", stubIdent.requests[0].RawIdentifier)
-	require.Equal(t, identity.IdentifierTypeEmail, stubIdent.requests[0].Type)
-	require.Equal(t, "+15551234567", stubIdent.requests[1].RawIdentifier)
-	require.Equal(t, identity.IdentifierTypePhone, stubIdent.requests[1].Type)
+	// All four non-literal-empty values reach the matcher in source order
+	// (emails loop first, then phones).
+	require.Equal(t, 4, stubIdent.calls)
+	require.Len(t, stubIdent.requests, 4)
+	require.Equal(t,
+		[]string{"   ", "ok@example.com", "+", "+15551234567"},
+		[]string{stubIdent.requests[0].RawIdentifier, stubIdent.requests[1].RawIdentifier, stubIdent.requests[2].RawIdentifier, stubIdent.requests[3].RawIdentifier})
+	for i, pol := range stubIdent.policies {
+		require.Equal(t, NormalizationSkipEmpty, pol, "call %d must pass SkipEmpty", i)
+	}
+	// The first populated match (the valid email) sets the match exactly
+	// once; the trailing (nil,nil) junk phone and the already-matched
+	// valid phone do not trigger a second UpdateMatchTx (matched=true).
+	require.Equal(t, 1, stubExt.updateCalls, "exactly one match set despite (nil,nil) junk results")
+}
+
+// TestHandleRawMessage_UsesFailEmptyPolicy proves handleRawMessage
+// declares NormalizationFailEmpty for its single peer-handle match: an
+// un-normalizable handle is fatal data, so the matcher must reject (not
+// silently skip) rather than hand back (nil, nil) to a nil-unsafe deref.
+func TestHandleRawMessage_UsesFailEmptyPolicy(t *testing.T) {
+	hostID := uuid.New()
+	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
+	svc := &IngestService{
+		identity: stubIdent,
+		messages: &stubMessagesUpserter{resp: &repository.MessagesMessage{}},
+	}
+	payload := mustMarshalRawMsg(events.RawMessageReceivedPayload{
+		Version:     1,
+		HostID:      hostID,
+		Source:      "messages",
+		Guid:        "guid-1",
+		ChatID:      "chat-1",
+		PeerHandle:  "+15551234567",
+		MessageType: "text",
+		SentAt:      accelerated.GetCurrentTime(),
+	})
+	env := &events.Envelope{
+		Source:   "messages",
+		SourceID: "guid-1",
+		Kind:     events.KindRawMessageReceived,
+		Payload:  payload,
+	}
+	_, rej := svc.handleRawMessage(context.Background(), nil, env, hostID)
+	require.Nil(t, rej)
+	require.Equal(t, []NormalizationPolicy{NormalizationFailEmpty}, stubIdent.policies)
+}
+
+// TestHandleExternalContactUpserted_AnarlogBlockUsesFailEmpty proves the
+// anarlog_humans block declares NormalizationFailEmpty: the
+// anarlog_human_id is the single structural key the meeting_note
+// resolution chain hangs on, so an un-normalizable id is fatal data.
+func TestHandleExternalContactUpserted_AnarlogBlockUsesFailEmpty(t *testing.T) {
+	rowID := uuid.New()
+	hostID := uuid.New()
+	liveRow := &repository.ExternalContact{
+		ID:          rowID,
+		Source:      "anarlog_humans",
+		SourceID:    "AH-1",
+		MatchStatus: repository.MatchStatusUnmatched,
+	}
+	stubExt := &stubExternalContactWriter{
+		getResp:    nil,
+		getErr:     db.ErrNotFound,
+		upsertResp: liveRow,
+	}
+	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
+	svc := &IngestService{
+		identity:         stubIdent,
+		externalContacts: stubExt,
+		identityLookup:   &stubAnarlogIdentityLookup{},
+	}
+	payload := mustMarshalExtUpsert(events.ExternalContactUpsertedPayload{
+		Version:  1,
+		HostID:   hostID,
+		Source:   "anarlog_humans",
+		EntityID: "AH-1",
+	})
+	// handleExternalContactUpserted extracts a 64-char content-hash
+	// suffix from SourceID for every source, so build a real one.
+	hashHex, err := ComputeContentHash(payload)
+	require.NoError(t, err)
+	env := &events.Envelope{
+		Source:   "anarlog_humans",
+		SourceID: "AH-1@" + hashHex,
+		Kind:     events.KindExternalContactUpserted,
+		Payload:  payload,
+	}
+	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	require.Nil(t, rej)
+	// Only the anarlog block calls the matcher (no emails/phones present).
+	require.Equal(t, []NormalizationPolicy{NormalizationFailEmpty}, stubIdent.policies)
+	require.Equal(t, "AH-1", stubIdent.requests[0].RawIdentifier)
+	require.Equal(t, identity.IdentifierTypeAnarlogHuman, stubIdent.requests[0].Type)
 }
 
 // TestVerifyExternalContactInvariants_HashMismatchRejected proves the

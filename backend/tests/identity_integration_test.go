@@ -517,3 +517,119 @@ func TestIdentityService_Integration(t *testing.T) {
 		assert.Equal(t, repository.MatchTypeUnmatched, unlinked.MatchType)
 	})
 }
+
+// TestIdentityService_NormalizationPolicy_Integration exercises the
+// MatchOrCreateTx policy parameter against a real database. Each
+// sub-test opens its own tx and rolls it back so the valid-input writes
+// never persist into the shared personal_crm_test DB.
+func TestIdentityService_NormalizationPolicy_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+
+	// Migrations are applied once by TestMain.
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	if err != nil {
+		t.Skipf("Could not connect to database: %v", err)
+	}
+	defer database.Close()
+
+	identityRepo := repository.NewIdentityRepository(database.Queries)
+	identityService := service.NewIdentityService(identityRepo)
+
+	t.Run("FailEmpty_EmptyAfterNormalization_ReturnsError", func(t *testing.T) {
+		tx, err := database.Pool.Begin(ctx)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		// "+" normalizes to "" for phone.
+		result, err := identityService.MatchOrCreateTx(ctx, tx, service.MatchRequest{
+			RawIdentifier: "+",
+			Type:          identity.IdentifierTypePhone,
+			Source:        "test_policy_fail_empty",
+		}, service.NormalizationFailEmpty)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "empty identifier after normalization")
+		require.Nil(t, result)
+	})
+
+	t.Run("SkipEmpty_EmptyAfterNormalization_ReturnsNilNil", func(t *testing.T) {
+		tx, err := database.Pool.Begin(ctx)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		// Same junk input, SkipEmpty policy: the contract is (nil, nil).
+		// The end-to-end "junk leaves no identity row" guarantee is
+		// covered by the committed HTTP-stack tests under tests/api/.
+		result, err := identityService.MatchOrCreateTx(ctx, tx, service.MatchRequest{
+			RawIdentifier: "+",
+			Type:          identity.IdentifierTypePhone,
+			Source:        "test_policy_skip_empty",
+		}, service.NormalizationSkipEmpty)
+		require.NoError(t, err)
+		require.Nil(t, result)
+	})
+
+	t.Run("SkipEmpty_ValidIdentifier_BehavesNormally", func(t *testing.T) {
+		tx, err := database.Pool.Begin(ctx)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		// Randomized source + identifier so the in-tx read-back cannot
+		// match a stale row left by a prior run in the shared test DB.
+		suffix := uuid.NewString()
+		rawEmail := "skip-valid-" + suffix + "@example.com"
+		source := "test_policy_skip_valid_" + suffix
+
+		result, err := identityService.MatchOrCreateTx(ctx, tx, service.MatchRequest{
+			RawIdentifier: rawEmail,
+			Type:          identity.IdentifierTypeEmail,
+			Source:        source,
+		}, service.NormalizationSkipEmpty)
+		require.NoError(t, err)
+		require.NotNil(t, result, "valid input under SkipEmpty must not no-op")
+		require.NotNil(t, result.Identity, "valid input must produce an identity row")
+
+		// Confirm the row exists in-tx before rollback.
+		normalized := identity.Normalize(rawEmail, identity.IdentifierTypeEmail)
+		readBack, err := identityRepo.GetByIdentifierTx(ctx, tx, identity.IdentifierTypeEmail, normalized, source)
+		require.NoError(t, err)
+		require.NotNil(t, readBack)
+		require.Equal(t, normalized, readBack.Identifier)
+	})
+
+	t.Run("FailEmpty_ValidIdentifier_BehavesNormally", func(t *testing.T) {
+		tx, err := database.Pool.Begin(ctx)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		suffix := uuid.NewString()
+		rawEmail := "fail-valid-" + suffix + "@example.com"
+		source := "test_policy_fail_valid_" + suffix
+
+		result, err := identityService.MatchOrCreateTx(ctx, tx, service.MatchRequest{
+			RawIdentifier: rawEmail,
+			Type:          identity.IdentifierTypeEmail,
+			Source:        source,
+		}, service.NormalizationFailEmpty)
+		require.NoError(t, err)
+		require.NotNil(t, result, "valid input under FailEmpty preserves old behavior")
+		require.NotNil(t, result.Identity, "valid input must produce an identity row")
+
+		normalized := identity.Normalize(rawEmail, identity.IdentifierTypeEmail)
+		readBack, err := identityRepo.GetByIdentifierTx(ctx, tx, identity.IdentifierTypeEmail, normalized, source)
+		require.NoError(t, err)
+		require.NotNil(t, readBack)
+		require.Equal(t, normalized, readBack.Identifier)
+	})
+}
