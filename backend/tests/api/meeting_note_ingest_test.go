@@ -224,10 +224,20 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 		contactSvc,
 	)
 	meetingNoteHandler := handlers.NewMeetingNoteHandler(meetingNoteService)
-	mnGroup := router.Group("/api/v1/meeting-notes")
-	mnGroup.Use(auth.APIKeyMiddleware(cfg))
-	mnGroup.GET("/needs-attention", meetingNoteHandler.ListNeedsAttention)
-	mnGroup.POST("/:id/resolve-link", meetingNoteHandler.ResolveLink)
+	// Wiring mirrors production main.go: resolve-link stays under
+	// the v1 API-key group; needs-attention sits under the composite
+	// IngestAuthMiddleware so the Mac daemon's X-Mac-Host-ID +
+	// Bearer pair-key auth can reach the recovery endpoint.
+	resolveLinkGroup := router.Group("/api/v1/meeting-notes")
+	resolveLinkGroup.Use(auth.APIKeyMiddleware(cfg))
+	resolveLinkGroup.POST("/:id/resolve-link", meetingNoteHandler.ResolveLink)
+
+	needsAttentionGroup := router.Group("/api/v1/meeting-notes")
+	needsAttentionGroup.Use(auth.IngestAuthMiddleware(
+		auth.APIKeyMiddleware(cfg),
+		auth.MacHostAuthMiddleware(hostRepo, auth.DefaultPasswordComparator, auth.DefaultMacHostAuthLimiterConfig()),
+	))
+	needsAttentionGroup.GET("/needs-attention", meetingNoteHandler.ListNeedsAttention)
 
 	plain, _, err := macService.CreatePairingToken(ctx)
 	require.NoError(t, err)
@@ -2618,6 +2628,28 @@ func TestResolveLink_NoneOfTheseToLinkedImpromptu(t *testing.T) {
 	require.Len(t, ixs, 1, "one interaction per resolved tagged contact")
 	require.NotNil(t, ixs[0].SourceRef)
 	require.Equal(t, "anarlog:"+sessionUUID+":"+env.contactA.String(), *ixs[0].SourceRef)
+}
+
+// TestListNeedsAttention_AcceptsDaemonHostAuth — regression for the
+// auth-path bug where needs-attention was mounted under straight
+// APIKeyMiddleware and 401-ed the Mac daemon's pair-key auth. The
+// route now lives under IngestAuthMiddleware (same composite that
+// fronts /ingest/events); this test asserts the daemon's headers
+// (X-Mac-Host-ID + Authorization: Bearer <pair-key>) reach the
+// handler successfully. If a future edit moves the route back under
+// straight APIKeyMiddleware this test will 401 and catch the
+// regression.
+func TestListNeedsAttention_AcceptsDaemonHostAuth(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	path := "/api/v1/meeting-notes/needs-attention?host_id=" + env.pairedHostID.String()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("X-Mac-Host-ID", env.pairedHostID.String())
+	req.Header.Set("Authorization", "Bearer "+env.pairedHostKey)
+	w := httptest.NewRecorder()
+	env.router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code,
+		"daemon's host-auth headers must reach the needs-attention handler — body: %s",
+		w.Body.String())
 }
 
 // TestListNeedsAttention_BasicProjection — seed a conflict_pending row
