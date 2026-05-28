@@ -26,6 +26,10 @@ public struct SourceID: RawRepresentable, Hashable, Codable, ExpressibleByString
     public static let anarlogHumans: SourceID = "anarlog_humans"
     public static let anarlogSessions: SourceID = "anarlog_sessions"
     public static let phoneCalls: SourceID = "phone_calls"
+    /// Periodic poll of /meeting-notes/needs-attention that
+    /// reconciles the daemon's local pending-notification table
+    /// against the Pi's authoritative set.
+    public static let notificationReconcile: SourceID = "notification_reconcile"
 }
 
 /// A poller of one external source. The stub implementations log a
