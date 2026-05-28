@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy deploy-pi deploy-mac deploy-all setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher
+.PHONY: help setup dev build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy deploy-pi deploy-mac deploy-all setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -291,7 +291,7 @@ test: test-unit test-integration test-frontend
 
 test-unit:
 	@echo "Running backend unit tests..."
-	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... -v -short
+	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... -v -short
 
 test-integration-fast:
 	@echo "Running backend integration tests (default set)..."
@@ -359,7 +359,7 @@ lint-fix:
 	@echo "Running golangci-lint with auto-fix..."
 	@cd backend && $(GOLANGCI_LINT) run --fix ./...
 
-ci-test: lint check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher test-unit test-integration-fast test-frontend
+ci-test: lint check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction test-unit test-integration-fast test-frontend
 	@echo "✅ All CI tests passed"
 
 # Sole-writer guard: verifies only CadenceUpdater calls cadence-writing queries.
@@ -382,6 +382,13 @@ check-followup-sole-writer:
 # indicates a partial revert. See scripts/ci/rematch-sole-dispatcher-guard.sh.
 check-rematch-sole-dispatcher:
 	@$(REPO_ROOT)/scripts/ci/rematch-sole-dispatcher-guard.sh
+
+# CRM-marker construction guard: verifies the Todoist CRM-marker wire format
+# is built only in contacttask.EncodeMarker. Runs alongside the Go AST test
+# at backend/tests/crm_marker_construction_static_test.go. See
+# scripts/ci/crm-marker-construction-guard.sh.
+check-crm-marker-construction:
+	@$(REPO_ROOT)/scripts/ci/crm-marker-construction-guard.sh
 
 # Code generation
 sqlc:
