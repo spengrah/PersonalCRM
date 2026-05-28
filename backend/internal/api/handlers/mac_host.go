@@ -25,6 +25,7 @@ import (
 type MacHostService interface {
 	CreatePairingToken(ctx context.Context) (plaintext string, expiresAt time.Time, err error)
 	PairWithToken(ctx context.Context, plaintextToken, hostname, daemonVersion string, protocolVersion int32) (*service.PairResult, error)
+	RotateAPIKey(ctx context.Context, hostID uuid.UUID, expectedCurrentHash string, plaintextToken string) (*service.RotateAPIKeyResult, error)
 	Heartbeat(ctx context.Context, hostID uuid.UUID, payload repository.HeartbeatPayload) (*repository.MacHost, error)
 	CommitCursor(ctx context.Context, params repository.CommitMacHostCursorParams) error
 	GetCursor(ctx context.Context, source string, hostID uuid.UUID) (*repository.MacHostCursor, error)
@@ -67,6 +68,7 @@ type MacHostView struct {
 	SourceHealth    json.RawMessage `json:"source_health"`
 	CursorEpoch     int64           `json:"cursor_epoch"`
 	APIKeyRevokedAt *time.Time      `json:"api_key_revoked_at,omitempty"`
+	APIKeyRotatedAt *time.Time      `json:"api_key_rotated_at,omitempty"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
 }
@@ -90,6 +92,7 @@ func toMacHostView(h *repository.MacHost) MacHostView {
 		SourceHealth:    sourceHealth,
 		CursorEpoch:     h.CursorEpoch,
 		APIKeyRevokedAt: h.APIKeyRevokedAt,
+		APIKeyRotatedAt: h.APIKeyRotatedAt,
 		CreatedAt:       h.CreatedAt,
 		UpdatedAt:       h.UpdatedAt,
 	}
@@ -257,6 +260,85 @@ func (h *MacHostHandler) Heartbeat(c *gin.Context) {
 		CursorEpoch:        host.CursorEpoch,
 		ProtocolVersion:    mac.ProtocolVersion,
 		MinProtocolVersion: mac.MinProtocolVersion,
+	}, nil)
+}
+
+// rotateKeyRequest is the rotate-key endpoint body. The pairing_token
+// is the operator-minted single-show token; the daemon's CURRENT
+// pair-key authenticates via MacHostAuthMiddleware (Bearer header).
+type rotateKeyRequest struct {
+	PairingToken string `json:"pairing_token"`
+}
+
+// rotateKeyResponse is the success body. The new api_key is the
+// plaintext key; the daemon must persist it to the api-key file
+// before issuing any further requests (the OLD key stops
+// authenticating the moment this response returns).
+type rotateKeyResponse struct {
+	APIKey          string    `json:"api_key"`
+	APIKeyRotatedAt time.Time `json:"api_key_rotated_at"`
+}
+
+// RotateKey rotates the host's api-key in place. The host_id is
+// preserved; cursor_epoch, hostname, source_health, permissions are
+// all unchanged. The OLD api-key stops authenticating immediately
+// post-commit.
+//
+// Auth: MacHostAuthMiddleware (caller proves control of the CURRENT
+// pair-key via Bearer header + X-Mac-Host-ID). The :id route param is
+// checked against X-Mac-Host-ID by the middleware (403 mismatch).
+func (h *MacHostHandler) RotateKey(c *gin.Context) {
+	host, ok := auth.MacHostFromContext(c)
+	if !ok {
+		api.SendInternalError(c, "missing mac_host context")
+		return
+	}
+
+	var req rotateKeyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.SendValidationError(c, "Invalid request body", err.Error())
+		return
+	}
+	if req.PairingToken == "" {
+		api.SendValidationError(c, "pairing_token is required", "")
+		return
+	}
+
+	// Pass host.APIKeyHash from middleware context to enable the
+	// service-layer compare-and-swap (see service.RotateAPIKey). Without
+	// this, two concurrent rotations with the same starting pair-key
+	// could both commit, silently invalidating the first operator's key.
+	res, err := h.svc.RotateAPIKey(c.Request.Context(), host.ID, host.APIKeyHash, req.PairingToken)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrPairingTokenInvalid):
+			api.SendError(c, http.StatusBadRequest, "INVALID_PAIRING_TOKEN", "pairing token invalid", "")
+			return
+		case errors.Is(err, service.ErrPairingTokenAlreadyUsed):
+			api.SendError(c, http.StatusBadRequest, "TOKEN_ALREADY_USED", "pairing token already consumed", "")
+			return
+		case errors.Is(err, service.ErrPairingTokenExpired):
+			api.SendError(c, http.StatusBadRequest, "TOKEN_EXPIRED", "pairing token expired", "")
+			return
+		case errors.Is(err, service.ErrAPIKeyStaleAuth):
+			api.SendError(c, http.StatusUnauthorized, "STALE_AUTH", "api-key was rotated by another request; re-authenticate", "")
+			return
+		case errors.Is(err, db.ErrNotFound):
+			// Host was revoked or deleted between auth and tx-internal
+			// lookup. Return 404 rather than 410: the repository
+			// collapses "no such id" and "revoked id" to ErrNotFound,
+			// so the safer operator-recovery message is "the host id
+			// you're asking to rotate doesn't exist as an active row".
+			api.SendNotFound(c, "Mac host")
+			return
+		}
+		logger.Error().Err(err).Msg("rotate key handler: unexpected error")
+		api.SendInternalError(c, "rotate key failed")
+		return
+	}
+	api.SendSuccess(c, http.StatusOK, rotateKeyResponse{
+		APIKey:          res.APIKey,
+		APIKeyRotatedAt: res.APIKeyRotatedAt,
 	}, nil)
 }
 
