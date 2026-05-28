@@ -104,7 +104,16 @@ public actor FakeUserNotificationPresenter: UserNotificationPresenter {
 
     public func add(_ spec: NotificationRequestSpec) async throws {
         addCalls.append(spec)
-        if addGateArmed {
+        // Gate only the FIRST add(_:) call after armAddGate(); any
+        // subsequent call returns immediately. This keeps the
+        // reentrancy test deterministic: if raisesInFlight regresses
+        // and a second add(_:) lands while the first is parked, it
+        // won't get stuck waiting on the same single-slot
+        // continuation — instead it returns, the test sees a second
+        // recorded call, and fails cleanly with the expected
+        // assertion mismatch.
+        if addGateArmed && addGate == nil {
+            addGateArmed = false
             addsAwaitingGate += 1
             await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                 addGate = cont
