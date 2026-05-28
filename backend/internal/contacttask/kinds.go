@@ -1,6 +1,9 @@
 // Package contacttask defines neutral constants for the orthogonal
-// (kind, lifecycle) axes on contact_task. Constants only — no DB, no
-// handlers — so any package can import without risking cycles.
+// (kind, lifecycle) axes on contact_task, plus the canonical CRM-marker
+// codec (EncodeMarker/DecodeMarker, see marker.go) that serializes those
+// constants into the JSON marker embedded in Todoist task descriptions.
+// Constants + a pure codec only — no DB, no handlers, no HTTP — so any
+// package can import without risking cycles.
 //
 // The two axes are independent dispatch surfaces:
 //   - kind tracks the semantic completion behaviour (interaction
