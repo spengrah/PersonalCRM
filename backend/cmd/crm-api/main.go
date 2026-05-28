@@ -1117,6 +1117,15 @@ func run() int {
 		ingestGroup.Use(ingestAuth)
 		ingestGroup.POST("/events", ingestHandler.IngestEvents)
 		logger.Info().Msg("event bus ingestion endpoint enabled")
+
+		// Daemon recovery endpoint: the Mac daemon polls this on
+		// startup to reconcile its local pending-notification table
+		// against the Pi's current truth. Lives under composite auth
+		// so the daemon's X-Mac-Host-ID + Bearer pair-key path
+		// resolves; the frontend (global API key) can also reach it.
+		meetingNoteRecoveryGroup := router.Group("/api/v1/meeting-notes")
+		meetingNoteRecoveryGroup.Use(ingestAuth)
+		meetingNoteRecoveryGroup.GET("/needs-attention", meetingNoteHandler.ListNeedsAttention)
 	}
 
 	// API routes
@@ -1147,13 +1156,11 @@ func run() int {
 			interactions.DELETE("/:id", interactionHandler.DeleteInteraction)
 		}
 
-		// Meeting-note conflict-resolution + needs-attention.
-		// User-driven counterpart to the daemon-side ingest path; lives
-		// under the API-key middleware (single-user CRM — the daemon
-		// has an API key too).
+		// Meeting-note conflict-resolution — user-driven, called from
+		// the frontend with the global API key. Stays under the v1
+		// APIKeyMiddleware group.
 		meetingNotes := v1.Group("/meeting-notes")
 		{
-			meetingNotes.GET("/needs-attention", meetingNoteHandler.ListNeedsAttention)
 			meetingNotes.POST("/:id/resolve-link", meetingNoteHandler.ResolveLink)
 		}
 

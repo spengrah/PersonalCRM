@@ -177,7 +177,7 @@ private actor FakeFwdPresenter: UserNotificationPresenter {
     func add(_ spec: NotificationRequestSpec) async throws { calls.append(spec) }
     func removeDelivered(withIdentifiers ids: [String]) async {}
     func removePending(withIdentifiers ids: [String]) async {}
-    func setDelegate(_ delegate: UNUserNotificationCenterDelegate?) async {}
+    func setDelegate(_ delegate: sending UNUserNotificationCenterDelegate?) async {}
 }
 
 private struct FakeFwdOpener: WorkspaceOpener {

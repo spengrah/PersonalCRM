@@ -160,14 +160,11 @@ struct RequestBuilder {
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         // Reuses the existing per-host auth helper. Sends
-        // X-Mac-Host-ID + Authorization: Bearer <pair-key>. The
-        // daemon does NOT possess the global env-var API key the
-        // Pi's APIKeyMiddleware validates against; this endpoint
-        // requires a dual-auth dispatcher on the Pi side (added in
-        // a separate PR) to accept the host-auth path. Until that
-        // dual-auth lands, this request 401s in production, which
-        // the daemon handles gracefully via authenticationRevoked
-        // → log + skip reconcile.
+        // X-Mac-Host-ID + Authorization: Bearer <pair-key>. The Pi's
+        // /meeting-notes/needs-attention route is mounted under the
+        // composite IngestAuth middleware (same dispatcher that
+        // accepts the daemon's host-auth on /ingest/events), so this
+        // path resolves without needing the global env-var API key.
         Self.applyAuth(&req, auth: auth)
         return req
     }
