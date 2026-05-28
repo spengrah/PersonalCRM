@@ -140,6 +140,20 @@ public final class PiClient: @unchecked Sendable {
         return try decodeIngestEvents(data: data, http: http)
     }
 
+    /// GET /api/v1/meeting-notes/needs-attention?host_id=<uuid>.
+    /// Returns the current set of meeting_note rows in linkage_state
+    /// conflict_pending or orphan_needs_review for the given host.
+    /// Response is enveloped per api.SendSuccess; decoded via the
+    /// existing decodeSuccess helper.
+    public func needsAttention(
+        auth: PiAuth,
+        hostID: UUID
+    ) async throws -> [NeedsAttentionListItem] {
+        let request = try builder.needsAttention(auth: auth, hostID: hostID)
+        let (data, http) = try await transport.send(request)
+        return try decodeNeedsAttention(data: data, http: http)
+    }
+
     // MARK: - decoding helpers
 
     private func decodePair(data: Data, http: HTTPURLResponse) throws -> PairData {
@@ -298,6 +312,25 @@ public final class PiClient: @unchecked Sendable {
             throw PiClientError.upgradeRequired(
                 minVersion: minVersion,
                 message: errorMessage(data) ?? "upgrade required")
+        case 400...499:
+            throw mapClient4xx(status: http.statusCode, data: data)
+        case 500...599:
+            throw PiClientError.serverError(
+                status: http.statusCode,
+                message: errorMessage(data) ?? "server error \(http.statusCode)")
+        default:
+            throw PiClientError.transport(
+                underlying: "unexpected status \(http.statusCode)")
+        }
+    }
+
+    private func decodeNeedsAttention(data: Data, http: HTTPURLResponse) throws -> [NeedsAttentionListItem] {
+        switch http.statusCode {
+        case 200:
+            return try decodeSuccess(data: data, type: [NeedsAttentionListItem].self)
+        case 401:
+            throw PiClientError.authenticationRevoked(
+                message: errorMessage(data) ?? "authentication revoked")
         case 400...499:
             throw mapClient4xx(status: http.statusCode, data: data)
         case 500...599:
