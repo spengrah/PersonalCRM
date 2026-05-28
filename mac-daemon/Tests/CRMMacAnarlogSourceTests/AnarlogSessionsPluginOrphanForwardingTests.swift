@@ -18,7 +18,7 @@ final class AnarlogSessionsPluginOrphanForwardingTests: XCTestCase {
     private let testAuth = PiAuth(
         hostID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
         apiKey: "k")
-    private let sessionUUIDA = "0a631ec3-fa11-47d2-aa0f-17b320860001"
+    private static let sessionUUIDA = "0a631ec3-fa11-47d2-aa0f-17b320860001"
 
     func testPluginForwardsNeedsAttentionToCenter() async throws {
         let rootPath = "/tmp/anarlog-fwd-\(UUID().uuidString)"
@@ -26,11 +26,11 @@ final class AnarlogSessionsPluginOrphanForwardingTests: XCTestCase {
         let fs = StubFS()
         fs.putDir(rootPath)
         fs.putDir(sessionsPath)
-        let sessionDir = "\(sessionsPath)/\(sessionUUIDA)"
+        let sessionDir = "\(sessionsPath)/\(Self.sessionUUIDA)"
         fs.putDir(sessionDir)
         let metaJSON = """
         {
-          "id": "\(sessionUUIDA)",
+          "id": "\(Self.sessionUUIDA)",
           "title": "Forwarded Session",
           "created_at": "2026-03-16T20:34:49Z",
           "user_id": "\(CRMMacAnarlogSource.selfHumanUUID)",
@@ -47,7 +47,7 @@ final class AnarlogSessionsPluginOrphanForwardingTests: XCTestCase {
                     accepted: body.events.count,
                     duplicate: 0, rejected: 0, errors: [],
                     needsAttention: [
-                        NeedsAttentionItem(sessionID: self.sessionUUIDA,
+                        NeedsAttentionItem(sessionID: Self.sessionUUIDA,
                                            reason: "orphan"),
                     ])
             },
@@ -106,7 +106,7 @@ final class AnarlogSessionsPluginOrphanForwardingTests: XCTestCase {
         let calls = await fakePresenter.recordedCalls()
         XCTAssertEqual(calls.count, 1,
                        "plugin should forward outcome.needsAttention to center")
-        XCTAssertEqual(calls[0].identifier, "orphan:\(sessionUUIDA)")
+        XCTAssertEqual(calls[0].identifier, "orphan:\(Self.sessionUUIDA)")
         XCTAssertTrue(calls[0].body.contains("Forwarded Session"))
 
         try? FileManager.default.removeItem(atPath: stateURL.path)
