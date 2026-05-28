@@ -371,7 +371,7 @@ const SeedMacHost = `-- name: SeedMacHost :one
 
 INSERT INTO mac_host (hostname, daemon_version, protocol_version, api_key_hash)
 VALUES ($1, $2, $3, $4)
-RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at
+RETURNING id
 `
 
 type SeedMacHostParams struct {
@@ -385,30 +385,19 @@ type SeedMacHostParams struct {
 // Go test fixtures), test setup uses these instead of pool.Exec.
 // Inserts a host with caller-supplied hostname + bcrypted api_key_hash.
 // Used by integration tests that need to bypass the pairing flow.
-func (q *Queries) SeedMacHost(ctx context.Context, arg SeedMacHostParams) (*MacHost, error) {
+// RETURNING is the minimal id-only set so step-by-step migration tests
+// that run this against earlier schemas (before columns added in later
+// migrations exist) don't trip on the column expansion of RETURNING *.
+func (q *Queries) SeedMacHost(ctx context.Context, arg SeedMacHostParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, SeedMacHost,
 		arg.Hostname,
 		arg.DaemonVersion,
 		arg.ProtocolVersion,
 		arg.ApiKeyHash,
 	)
-	var i MacHost
-	err := row.Scan(
-		&i.ID,
-		&i.Hostname,
-		&i.DaemonVersion,
-		&i.ProtocolVersion,
-		&i.LastHeartbeatAt,
-		&i.Permissions,
-		&i.SourceHealth,
-		&i.CursorEpoch,
-		&i.ApiKeyHash,
-		&i.ApiKeyRevokedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ApiKeyRotatedAt,
-	)
-	return &i, err
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const SeedPairingToken = `-- name: SeedPairingToken :one

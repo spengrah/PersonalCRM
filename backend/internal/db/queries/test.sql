@@ -48,9 +48,12 @@ DELETE FROM external_identity WHERE source_id = $1;
 -- name: SeedMacHost :one
 -- Inserts a host with caller-supplied hostname + bcrypted api_key_hash.
 -- Used by integration tests that need to bypass the pairing flow.
+-- RETURNING is the minimal id-only set so step-by-step migration tests
+-- that run this against earlier schemas (before columns added in later
+-- migrations exist) don't trip on the column expansion of RETURNING *.
 INSERT INTO mac_host (hostname, daemon_version, protocol_version, api_key_hash)
 VALUES (@hostname, @daemon_version, @protocol_version, @api_key_hash)
-RETURNING *;
+RETURNING id;
 
 -- name: SeedRevokedMacHost :one
 -- Inserts a host that is already revoked (api_key_revoked_at = NOW()).

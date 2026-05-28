@@ -371,7 +371,7 @@ func (r *MacHostRepository) SeedHostForTest(
 	// Patch permissions + source_health via the heartbeat path — the
 	// seed query only sets defaults for those JSONB columns.
 	patched, err := r.queries.UpdateMacHostHeartbeat(ctx, db.UpdateMacHostHeartbeatParams{
-		ID:              row.ID,
+		ID:              row,
 		DaemonVersion:   daemonVersion,
 		ProtocolVersion: protocolVersion,
 		Permissions:     permissions,

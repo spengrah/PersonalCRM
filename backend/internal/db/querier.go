@@ -877,7 +877,10 @@ type Querier interface {
 	// Go test fixtures), test setup uses these instead of pool.Exec.
 	// Inserts a host with caller-supplied hostname + bcrypted api_key_hash.
 	// Used by integration tests that need to bypass the pairing flow.
-	SeedMacHost(ctx context.Context, arg SeedMacHostParams) (*MacHost, error)
+	// RETURNING is the minimal id-only set so step-by-step migration tests
+	// that run this against earlier schemas (before columns added in later
+	// migrations exist) don't trip on the column expansion of RETURNING *.
+	SeedMacHost(ctx context.Context, arg SeedMacHostParams) (pgtype.UUID, error)
 	// Inserts a pairing token with caller-supplied hash + expiry. Tests use
 	// this to seed expired tokens (cannot mint via the real Create path
 	// because the service enforces a forward-only TTL).
