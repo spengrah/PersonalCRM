@@ -147,19 +147,22 @@ struct AnarlogTickRoute: Equatable {
     }
 }
 
-public actor AnarlogHumansSourcePlugin: SourcePlugin {
+public actor AnarlogHumansSourcePlugin: DataSourcePlugin {
     public nonisolated let id: SourceID = .anarlogHumans
     public nonisolated let tickInterval: TimeInterval
 
     private let piClient: PiClient
     private let auth: PiAuth
-    private let mutator: StateMutator
+    // nonisolated: read by the DataSourcePlugin extension's tick() from
+    // a nonisolated context. Sound because all three are immutable lets
+    // holding Sendable values (same pattern as `id`/`tickInterval`).
+    public nonisolated let mutator: StateMutator
     private let publisher: AnarlogHumansPublisher
     private let filesystem: AnarlogFilesystem
     private let configSource: AnarlogConfigSource
     private let healthRegistry: SourceHealthRegistry
-    private let logger: LoggerProtocol
-    private let clock: @Sendable () -> Date
+    public nonisolated let logger: LoggerProtocol
+    public nonisolated let clock: @Sendable () -> Date
 
     public init(
         tickInterval: TimeInterval = CRMMacAnarlogSource.humansTickInterval,
@@ -185,13 +188,18 @@ public actor AnarlogHumansSourcePlugin: SourcePlugin {
         self.clock = clock
     }
 
-    public func tick() async throws {
+    public func performTick() async throws {
         try await runTick()
     }
 
     private func runTick() async throws {
+        // The DataSourcePlugin extension already bumped state.json
+        // `lastScheduledAt` via `clock()` before performTick() ran.
+        // This `clock()` read feeds the in-memory heartbeat-payload
+        // registry snapshot; with a fixed test clock the two reads are
+        // equal, and in production the sub-ms drift is irrelevant for a
+        // coarse liveness timestamp.
         let tickStart = clock()
-        await updateScheduled(at: tickStart)
         await healthRegistry.update(
             id, healthSnapshot(enabled: true, lastScheduled: tickStart))
 
@@ -628,20 +636,6 @@ public actor AnarlogHumansSourcePlugin: SourcePlugin {
     }
 
     // MARK: - state mutators
-
-    private func updateScheduled(at date: Date) async {
-        do {
-            try await mutator.mutate { state in
-                var src = state.sources[self.id.rawValue] ?? SourceState()
-                src.lastScheduledAt = date
-                state.sources[self.id.rawValue] = src
-            }
-        } catch {
-            logger.warning("anarlog_humans tick: lastScheduledAt mutate failed", metadata: [
-                "error": .private(String(describing: error)),
-            ])
-        }
-    }
 
     private func commitCleanTick(
         cursor: String,

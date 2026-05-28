@@ -52,18 +52,21 @@ public struct MessagesSourceConfig: Sendable {
     }
 }
 
-public actor MessagesSourcePlugin: SourcePlugin {
+public actor MessagesSourcePlugin: DataSourcePlugin {
     public nonisolated let id: SourceID = .messages
     public nonisolated let tickInterval: TimeInterval
 
     private let config: MessagesSourceConfig
     private let piClient: PiClient
     private let auth: PiAuth
-    private let mutator: StateMutator
+    // nonisolated: read by the DataSourcePlugin extension's tick() from
+    // a nonisolated context. Sound because all three are immutable lets
+    // holding Sendable values (same pattern as `id`/`tickInterval`).
+    public nonisolated let mutator: StateMutator
     private let publisher: MessagesPublisher
     private let cache: KnownIdentifiersCache
-    private let logger: LoggerProtocol
-    private let clock: @Sendable () -> Date
+    public nonisolated let logger: LoggerProtocol
+    public nonisolated let clock: @Sendable () -> Date
     private let healthRegistry: SourceHealthRegistry
 
     /// Cached pool, opened lazily on first successful tick.
@@ -107,13 +110,14 @@ public actor MessagesSourcePlugin: SourcePlugin {
         self.clock = clock
     }
 
-    public func tick() async throws {
+    public func performTick() async throws {
+        // The DataSourcePlugin extension already bumped state.json
+        // `lastScheduledAt` via `clock()` before entering here. This
+        // second `clock()` read feeds the in-memory heartbeat-payload
+        // registry snapshot + budget math; with a fixed test clock the
+        // two reads are equal, and in production the sub-ms drift is
+        // irrelevant for a coarse liveness timestamp.
         let tickStart = clock()
-        // Persist lastScheduledAt to state.json BEFORE any pool-open
-        // / schema-check work so a healthy-but-quiet tick still bumps
-        // the on-disk timestamp. The in-memory healthRegistry update
-        // below is heartbeat-payload-only.
-        await updateScheduled(at: tickStart)
         await healthRegistry.update(id, await currentHealthSnapshot(
             enabled: true,
             lastScheduled: tickStart,
@@ -578,30 +582,6 @@ public actor MessagesSourcePlugin: SourcePlugin {
             src.backfillComplete = backfillComplete
             src.lastPushedAt = lastPushedAt
             state.sources["messages"] = src
-        }
-    }
-
-    /// Persist `lastScheduledAt` to state.json at the start of every
-    /// tick. Mirrors ICloudContactsSourcePlugin.updateScheduled(at:)
-    /// so state.sources["messages"].lastScheduledAt is a reliable
-    /// cross-source liveness signal — the in-memory
-    /// SourceHealthRegistry update (via `currentHealthSnapshot`) is
-    /// heartbeat-payload-only and never written to disk. Without this
-    /// persistence, Doctor / debugging tools see no recent scheduled-
-    /// at for messages even on a healthy-but-quiet tick. Failures
-    /// are logged-and-swallowed: a state.json write hiccup must not
-    /// abort the tick.
-    private func updateScheduled(at date: Date) async {
-        do {
-            try await mutator.mutate { state in
-                var src = state.sources[self.id.rawValue] ?? SourceState()
-                src.lastScheduledAt = date
-                state.sources[self.id.rawValue] = src
-            }
-        } catch {
-            logger.warning("messages tick: lastScheduledAt mutate failed", metadata: [
-                "error": .private(String(describing: error)),
-            ])
         }
     }
 

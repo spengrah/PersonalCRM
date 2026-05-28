@@ -88,21 +88,24 @@ public struct ICloudContactsConfigStoreSource: ICloudContactsConfigSource {
     }
 }
 
-public actor ICloudContactsSourcePlugin: SourcePlugin {
+public actor ICloudContactsSourcePlugin: DataSourcePlugin {
     public nonisolated let id: SourceID = .icloudContacts
     public nonisolated let tickInterval: TimeInterval
 
     private let piClient: PiClient
     private let auth: PiAuth
-    private let mutator: StateMutator
+    // nonisolated: read by the DataSourcePlugin extension's tick() from
+    // a nonisolated context. Sound because all three are immutable lets
+    // holding Sendable values (same pattern as `id`/`tickInterval`).
+    public nonisolated let mutator: StateMutator
     private let publisher: ICloudContactsPublisher
     private let cache: ContactHashCache
     private let reader: ContactStoreReader
     private let authAdapter: ContactsAuthorizationAdapter
     private let configSource: ICloudContactsConfigSource
     private let healthRegistry: SourceHealthRegistry
-    private let logger: LoggerProtocol
-    private let clock: @Sendable () -> Date
+    public nonisolated let logger: LoggerProtocol
+    public nonisolated let clock: @Sendable () -> Date
 
     public init(
         tickInterval: TimeInterval = CRMMacIcloudContactsSource.defaultTickInterval,
@@ -132,7 +135,7 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
         self.clock = clock
     }
 
-    public func tick() async throws {
+    public func performTick() async throws {
         // Wrap the whole tick in a do/catch envelope so any abort
         // path (throw, early return, end-of-tick) deterministically
         // discards staged cache removals BEFORE the next tick can
@@ -151,12 +154,13 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
     }
 
     private func runTick() async throws {
+        // The DataSourcePlugin extension already bumped state.json
+        // `lastScheduledAt` via `clock()` before performTick() ran.
+        // This `clock()` read feeds the in-memory heartbeat-payload
+        // registry snapshot; with a fixed test clock the two reads are
+        // equal, and in production the sub-ms drift is irrelevant for a
+        // coarse liveness timestamp.
         let tickStart = clock()
-        // Bump lastScheduledAt for staleness diagnostics — a
-        // quiet-but-healthy source bumps this every tick even when
-        // no events are emitted. Doctor reads this AND lastPushedAt
-        // to surface a meaningful staleness signal.
-        await updateScheduled(at: tickStart)
         await healthRegistry.update(id, currentHealthSnapshot(
             enabled: true, lastScheduled: tickStart))
 
@@ -604,20 +608,6 @@ public actor ICloudContactsSourcePlugin: SourcePlugin {
     }
 
     // MARK: - state mutators
-
-    private func updateScheduled(at date: Date) async {
-        do {
-            try await mutator.mutate { state in
-                var src = state.sources[self.id.rawValue] ?? SourceState()
-                src.lastScheduledAt = date
-                state.sources[self.id.rawValue] = src
-            }
-        } catch {
-            logger.warning("icloud tick: lastScheduledAt mutate failed", metadata: [
-                "error": .private(String(describing: error)),
-            ])
-        }
-    }
 
     private func updatePushed(at date: Date) async {
         do {
