@@ -173,7 +173,7 @@ final class SmokeTests: XCTestCase {
 
         // One delivered + one pending removal for Self.session2
         // (stale). The remove identifier carries the ENTRY's
-        // mutationSequence (2 from the seed), not the snapshot's
+        // osIdentifierSequence (2 from the seed), not the snapshot's
         // sequence — see OrphanNotificationCenter.removeNotificationIfStale.
         let removedDelivered = await presenter.recordedRemoveDelivered()
         let removedPending = await presenter.recordedRemovePending()

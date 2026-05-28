@@ -639,13 +639,15 @@ final class OrphanNotificationCenterTests: XCTestCase {
 
     /// Regression for the reconcile-vs-consume TOCTOU race. The
     /// stale-remove path MUST mint the OS identifier from the
-    /// observed entry's mutationSequence — NOT from `maxSequence`,
-    /// the latest snapshot sequence, or anything else. A
-    /// concurrent consume() that lands between snapshot and OS-
-    /// removal will upsert a fresh entry at a HIGHER sequence;
-    /// because that fresh OS notification's identifier carries
-    /// the higher sequence, the stale-remove call (which carries
-    /// the lower sequence) cannot collaterally strip it.
+    /// observed entry's osIdentifierSequence — NOT from
+    /// mutationSequence, `maxSequence`, the latest snapshot
+    /// sequence, or anything else. A concurrent consume() that
+    /// lands between snapshot and OS-removal will upsert a fresh
+    /// entry at a higher mutationSequence; because that fresh OS
+    /// notification's identifier carries its OWN osIdentifierSequence
+    /// (assigned at presenter.add time), the stale-remove call —
+    /// targeting the observed entry's recorded osIdentifierSequence —
+    /// cannot collaterally strip the new notification.
     func testStaleRemovalIdentifierCarriesEntryRecordedSequence() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         try await mutator.mutate { state in
@@ -867,30 +869,51 @@ final class OrphanNotificationCenterTests: XCTestCase {
     /// sequence numbers and only the last confirmed sequence would
     /// be tracked, leaving an orphaned OS notification.
     ///
-    /// Run multiple consume() calls concurrently via TaskGroup. The
-    /// FakeUserNotificationPresenter's `add(_:)` is an `await` on
-    /// its own actor, so concurrent center.consume(...) tasks can
-    /// interleave at that suspension point — exactly the reentrancy
-    /// window the guard protects against.
+    /// Uses the FakeUserNotificationPresenter's add-gate to
+    /// deterministically hold the first raise inside presenter.add
+    /// — i.e. AFTER the pre-add persist marked the entry 'failed'
+    /// and AFTER the entry was inserted into raisesInFlight. While
+    /// parked there, we kick off a second consume(); without the
+    /// in-flight guard it would observe the 'failed' entry and
+    /// start a parallel raise. The test fails if the second
+    /// consume issues an additional presenter.add call.
     func testConcurrentConsumesForSameKeyDedupViaInFlightGuard() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let center = makeCenter(presenter: presenter)
         let item = NotificationConsumeItem(sessionID: Self.session1, reason: "orphan")
+
+        // Arm the gate so the first consume parks inside add().
+        await presenter.armAddGate()
+
         let centerRef = center
         let itemRef = item
-        await withTaskGroup(of: Void.self) { group in
-            for _ in 0..<8 {
-                group.addTask {
-                    await centerRef.consume(needsAttention: [itemRef])
-                }
-            }
+        // Kick off the first consume in a background task; it
+        // parks at presenter.add holding raisesInFlight.
+        let firstTask = Task {
+            await centerRef.consume(needsAttention: [itemRef])
         }
+
+        // Wait until the first consume is actually inside add()
+        // (not just scheduled). Bounded poll — total budget 2s.
+        var pollAttempts = 0
+        while await presenter.addsCurrentlyAwaitingGate() == 0 {
+            pollAttempts += 1
+            XCTAssertLessThan(pollAttempts, 200, "first consume never reached presenter.add")
+            try await Task.sleep(nanoseconds: 10_000_000)  // 10ms
+        }
+
+        // Second consume should hit the in-flight guard and skip.
+        // (This await completes synchronously through the actor;
+        // no add() suspension since the guard returns early.)
+        await center.consume(needsAttention: [item])
+
+        // Release the gate so the first consume can finish.
+        await presenter.releaseAddGate()
+        _ = await firstTask.value
+
         let calls = await presenter.recordedAddCalls()
         XCTAssertEqual(calls.count, 1,
-            "concurrent consumes for the same (reason, session) must dedup to a single raise")
-        // Verify state is internally consistent: exactly one entry,
-        // queued, with an osIdentifierSequence that matches the
-        // single OS-side raise.
+            "second consume must dedup via raisesInFlight while first is mid-add")
         let state = try stateStore.load()
         XCTAssertEqual(state.pendingOrphanNotifications.count, 1)
         XCTAssertEqual(state.pendingOrphanNotifications[0].deliveryState, "queued")

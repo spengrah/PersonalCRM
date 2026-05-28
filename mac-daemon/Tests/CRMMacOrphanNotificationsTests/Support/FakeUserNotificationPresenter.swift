@@ -25,6 +25,15 @@ public actor FakeUserNotificationPresenter: UserNotificationPresenter {
     private var lastDelegate: DelegateRef?
     private var seededDelivered: [String] = []
     private var seededPending: [String] = []
+    // Gate used by the reentrancy test: when set, add(_:) parks
+    // the caller on this continuation until releaseAddGate() is
+    // called. Lets the test deterministically hold the first
+    // raise mid-flight (after the pre-add persist, before the
+    // confirmPostAdd write) and then run additional consume()
+    // calls to verify they hit the raisesInFlight guard.
+    private var addGate: CheckedContinuation<Void, Never>?
+    private var addGateArmed: Bool = false
+    private var addsAwaitingGate: Int = 0
 
     public init(authorizationResult: Bool = true, addError: Error? = nil) {
         self.authorizationResult = authorizationResult
@@ -51,6 +60,32 @@ public actor FakeUserNotificationPresenter: UserNotificationPresenter {
         seededPending = ids
     }
 
+    /// Arm the add-gate. While armed, the next add(_:) call will
+    /// suspend on a continuation; releaseAddGate() resumes it.
+    /// Used by tests to deterministically hold a raise mid-flight.
+    public func armAddGate() {
+        addGateArmed = true
+    }
+
+    /// Release a single waiter parked on the add-gate (if any) and
+    /// disarm the gate so subsequent add(_:) calls return
+    /// immediately. Idempotent and safe to call even if no waiter
+    /// is parked.
+    public func releaseAddGate() {
+        addGateArmed = false
+        if let cont = addGate {
+            addGate = nil
+            cont.resume()
+        }
+    }
+
+    /// Number of add(_:) calls currently parked on the gate. Tests
+    /// poll this to confirm the first raise is mid-flight before
+    /// kicking off the second.
+    public func addsCurrentlyAwaitingGate() -> Int {
+        addsAwaitingGate
+    }
+
     /// Test accessor — returns the recorded list of add() specs.
     public func recordedAddCalls() -> [NotificationRequestSpec] { addCalls }
 
@@ -69,6 +104,13 @@ public actor FakeUserNotificationPresenter: UserNotificationPresenter {
 
     public func add(_ spec: NotificationRequestSpec) async throws {
         addCalls.append(spec)
+        if addGateArmed {
+            addsAwaitingGate += 1
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                addGate = cont
+            }
+            addsAwaitingGate -= 1
+        }
         if let err = addError {
             throw err
         }

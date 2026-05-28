@@ -180,22 +180,25 @@ public actor OrphanNotificationCenter {
 
         let ghostDelivered = delivered.filter(isGhost)
         let ghostPending = pending.filter(isGhost)
-        if !ghostDelivered.isEmpty {
-            await presenter.removeDelivered(withIdentifiers: ghostDelivered)
-        }
-        if !ghostPending.isEmpty {
-            await presenter.removePending(withIdentifiers: ghostPending)
-        }
 
-        // Downgrade persisted entries that lack a usable
-        // osIdentifierSequence while still appearing 'queued'.
-        // Two markers identify these: (a) osIdentifierSequence is
-        // nil (legacy decode, or post-crash where the pre-add
-        // persist landed but confirm didn't), or (b)
-        // mutationSequence is 0 (decoded-default for pre-
-        // sequencing entries). Both cases mean reconcile would
-        // treat the entry as already-delivered and never re-raise.
-        // Downgrading to 'failed' enrolls them in the retry loop.
+        // Downgrade persisted entries FIRST, before any OS-side
+        // removal. If the persist fails (next block returns early
+        // on error), we leave the OS notifications alone too —
+        // otherwise a downgrade-failure-after-OS-removal would
+        // strand the entry in 'queued', reconcile would treat it
+        // as already-delivered, and the user would silently lose
+        // the notification with no retry path.
+        //
+        // The downgrade targets persisted entries that lack a
+        // usable osIdentifierSequence while still appearing
+        // 'queued'. Two markers identify these: (a)
+        // osIdentifierSequence is nil (legacy decode, or post-
+        // crash where the pre-add persist landed but confirm
+        // didn't), or (b) mutationSequence is 0 (decoded-default
+        // for pre-sequencing entries). Both cases mean reconcile
+        // would treat the entry as already-delivered and never
+        // re-raise. Downgrading to 'failed' enrolls them in the
+        // retry loop.
         let downgradedCount: Int
         do {
             downgradedCount = try await mutator.mutateReturning { state -> Int in
@@ -217,10 +220,19 @@ public actor OrphanNotificationCenter {
                 return count
             }
         } catch {
-            logger.warning("orphan-notify: startup sweep persisted-state downgrade failed", metadata: [
+            logger.warning("orphan-notify: startup sweep persisted-state downgrade failed; OS side untouched", metadata: [
                 "error": .private(String(describing: error)),
             ])
             return
+        }
+
+        // Persisted state is now consistent. Safe to remove the
+        // OS-side ghosts.
+        if !ghostDelivered.isEmpty {
+            await presenter.removeDelivered(withIdentifiers: ghostDelivered)
+        }
+        if !ghostPending.isEmpty {
+            await presenter.removePending(withIdentifiers: ghostPending)
         }
 
         if !ghostDelivered.isEmpty || !ghostPending.isEmpty || downgradedCount > 0 {
