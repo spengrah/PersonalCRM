@@ -371,7 +371,7 @@ const SeedMacHost = `-- name: SeedMacHost :one
 
 INSERT INTO mac_host (hostname, daemon_version, protocol_version, api_key_hash)
 VALUES ($1, $2, $3, $4)
-RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at
+RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at
 `
 
 type SeedMacHostParams struct {
@@ -406,6 +406,7 @@ func (q *Queries) SeedMacHost(ctx context.Context, arg SeedMacHostParams) (*MacH
 		&i.ApiKeyRevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApiKeyRotatedAt,
 	)
 	return &i, err
 }
@@ -441,7 +442,7 @@ func (q *Queries) SeedPairingToken(ctx context.Context, arg SeedPairingTokenPara
 const SeedRevokedMacHost = `-- name: SeedRevokedMacHost :one
 INSERT INTO mac_host (hostname, daemon_version, protocol_version, api_key_hash, api_key_revoked_at)
 VALUES ($1, $2, $3, $4, NOW())
-RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at
+RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at
 `
 
 type SeedRevokedMacHostParams struct {
@@ -479,6 +480,7 @@ func (q *Queries) SeedRevokedMacHost(ctx context.Context, arg SeedRevokedMacHost
 		&i.ApiKeyRevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApiKeyRotatedAt,
 	)
 	return &i, err
 }

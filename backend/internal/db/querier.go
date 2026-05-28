@@ -858,6 +858,10 @@ type Querier interface {
 	// NOT NULL keeps it idempotent across concurrent revive races.
 	ReviveMeetingNote(ctx context.Context, arg ReviveMeetingNoteParams) (*MeetingNote, error)
 	RevokeMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error)
+	// Atomically replaces api_key_hash and bumps api_key_rotated_at. Used
+	// by the rotate-key endpoint. Filters revoked hosts so a revoked host
+	// cannot be silently re-activated by a rotation.
+	RotateMacHostAPIKey(ctx context.Context, arg RotateMacHostAPIKeyParams) (*MacHost, error)
 	// Lightweight query returning only IDs with search for navigation
 	SearchContactIDs(ctx context.Context, arg SearchContactIDsParams) ([]pgtype.UUID, error)
 	// Lightweight query returning only IDs with search and sorting for navigation

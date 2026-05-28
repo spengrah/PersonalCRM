@@ -281,6 +281,7 @@ type MacHost struct {
 	ApiKeyRevokedAt pgtype.Timestamptz `json:"api_key_revoked_at"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ApiKeyRotatedAt pgtype.Timestamptz `json:"api_key_rotated_at"`
 }
 
 type MacHostPairingToken struct {
