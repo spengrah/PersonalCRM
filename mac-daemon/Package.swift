@@ -178,7 +178,8 @@ let package = Package(
                     dependencies: ["CRMMacIcloudContactsSource", "CRMMacPiClient"],
                     resources: [.copy("Fixtures")]),
         .testTarget(name: "CRMMacAnarlogSourceTests",
-                    dependencies: ["CRMMacAnarlogSource", "CRMMacPiClient"]),
+                    dependencies: ["CRMMacAnarlogSource", "CRMMacPiClient",
+                                   "CRMMacOrphanNotifications"]),
         .testTarget(name: "CRMMacOrphanNotificationsTests",
                     dependencies: ["CRMMacOrphanNotifications", "CRMMacPiClient"]),
     ]
