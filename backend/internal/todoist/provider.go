@@ -850,18 +850,7 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 	// Update metadata. Preserve existing keys — pre-skip synced_deadline is
 	// consulted by the reconciler's skip-drift branch to close+recreate on
 	// HTTP failure.
-	metadata := task.Metadata
-	if metadata == nil {
-		metadata = make(map[string]any)
-	}
-	metadata[MetadataKeyPendingTempID] = replacementCmd.TempID
-	metadata[MetadataKeySyncedDeadline] = deadlineStr
-	if contact.LastContacted != nil {
-		metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
-	}
-	if contact.LastOutreachAt != nil {
-		metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
-	}
+	metadata := setPendingCreateState(task.Metadata, replacementCmd.TempID, deadlineStr, contact)
 	if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, task.ID, metadata); err != nil {
 		return processItemResult{Err: fmt.Errorf("update task metadata: %w", err)}
 	}
@@ -1011,6 +1000,51 @@ func (p *CadenceSyncProvider) handleActionTaskTriggers(
 	return processItemResult{Processed: true}
 }
 
+// setSyncedLastContacted writes ONLY synced_last_contacted into metadata when
+// contact.LastContacted is non-nil. It allocates the map if nil and returns
+// it, preserving any sibling keys (mutate-and-return, not replace).
+func setSyncedLastContacted(metadata map[string]any, contact *repository.Contact) map[string]any {
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	if contact.LastContacted != nil {
+		metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
+	}
+	return metadata
+}
+
+// setSyncedLastOutreachAt writes ONLY synced_last_outreach_at into metadata
+// when contact.LastOutreachAt is non-nil. It must NOT touch
+// synced_last_contacted: the outreach-only backfill branches run before
+// wasContactedSinceSync, and refreshing synced_last_contacted there would
+// mask stale state and suppress a legitimate close+recreate. Allocates the
+// map if nil and returns it, preserving sibling keys.
+func setSyncedLastOutreachAt(metadata map[string]any, contact *repository.Contact) map[string]any {
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	if contact.LastOutreachAt != nil {
+		metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+	}
+	return metadata
+}
+
+// setPendingCreateState writes the pending-create key set: pending_temp_id +
+// synced_deadline (always), then BOTH synced_* keys (each gated on its own
+// contact field being non-nil). Used by the Group A "pending-create"
+// branches, which all write this identical shape. Allocates the map if nil
+// and returns it, preserving sibling keys.
+func setPendingCreateState(metadata map[string]any, tempID, deadline string, contact *repository.Contact) map[string]any {
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	metadata[MetadataKeyPendingTempID] = tempID
+	metadata[MetadataKeySyncedDeadline] = deadline
+	metadata = setSyncedLastContacted(metadata, contact)
+	metadata = setSyncedLastOutreachAt(metadata, contact)
+	return metadata
+}
+
 // reconcileContactTasks ensures all contacts with cadence have managed tasks
 // and that existing tasks have deadlines matching the contact's contact_by.
 //
@@ -1099,17 +1133,8 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 			cmd := p.createTaskCommand(&contact, settings, &currentDeadline)
 			commands = append(commands, cmd)
 
-			// Create task link (with temp_id, synced_deadline, and synced_last_contacted)
-			taskMetadata := map[string]any{
-				MetadataKeyPendingTempID:  cmd.TempID,
-				MetadataKeySyncedDeadline: currentDeadline,
-			}
-			if contact.LastContacted != nil {
-				taskMetadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
-			}
-			if contact.LastOutreachAt != nil {
-				taskMetadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
-			}
+			// Create task link (with temp_id, synced_deadline, and both synced_* keys)
+			taskMetadata := setPendingCreateState(make(map[string]any), cmd.TempID, currentDeadline, &contact)
 			_, createErr := p.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 				ContactID:      contact.ID,
 				Provider:       SourceName,
@@ -1176,13 +1201,7 @@ func (p *CadenceSyncProvider) closeOnOutreach(
 		}
 
 		// Update synced_last_outreach_at so we don't re-fire on the next tick
-		metadata := task.Metadata
-		if metadata == nil {
-			metadata = make(map[string]any)
-		}
-		if contact.LastOutreachAt != nil {
-			metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
-		}
+		metadata := setSyncedLastOutreachAt(task.Metadata, contact)
 		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 			logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to update synced_last_outreach_at after outreach detection")
 		}
@@ -1197,11 +1216,7 @@ func (p *CadenceSyncProvider) closeOnOutreach(
 	// without this pre-gate path.
 	if _, hasSyncedLO := task.Metadata[MetadataKeySyncedLastOutreachAt].(string); !hasSyncedLO {
 		if contact.LastOutreachAt != nil {
-			metadata := task.Metadata
-			if metadata == nil {
-				metadata = make(map[string]any)
-			}
-			metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+			metadata := setSyncedLastOutreachAt(task.Metadata, contact)
 			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 				logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_last_outreach_at (pre-gate)")
 			} else {
@@ -1265,18 +1280,7 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 		// batch's temp_id_mapping response couldn't be applied via
 		// processTempIDMappings. Emitting the commands anyway would
 		// create a Todoist task with no way to map back to the contact_task.
-		metadata := task.Metadata
-		if metadata == nil {
-			metadata = make(map[string]any)
-		}
-		metadata[MetadataKeyPendingTempID] = cmd.TempID
-		metadata[MetadataKeySyncedDeadline] = currentDeadline
-		if contact.LastContacted != nil {
-			metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
-		}
-		if contact.LastOutreachAt != nil {
-			metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
-		}
+		metadata := setPendingCreateState(task.Metadata, cmd.TempID, currentDeadline, contact)
 		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 			logger.Warn().Err(err).
 				Str("contactId", contact.ID.String()).
@@ -1310,12 +1314,8 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 			metadata = make(map[string]any)
 		}
 		metadata[MetadataKeySyncedDeadline] = currentDeadline
-		if contact.LastContacted != nil {
-			metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
-		}
-		if contact.LastOutreachAt != nil {
-			metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
-		}
+		metadata = setSyncedLastContacted(metadata, contact)
+		metadata = setSyncedLastOutreachAt(metadata, contact)
 		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 			logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_deadline")
 		}
@@ -1327,14 +1327,7 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 	// meaning non-Todoist contacts would never be detected.
 	if _, hasSyncedLC := task.Metadata[MetadataKeySyncedLastContacted].(string); !hasSyncedLC {
 		if contact.LastContacted != nil {
-			metadata := task.Metadata
-			if metadata == nil {
-				metadata = make(map[string]any)
-			}
-			metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
-			if contact.LastOutreachAt != nil {
-				metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
-			}
+			metadata := setSyncedLastOutreachAt(setSyncedLastContacted(task.Metadata, contact), contact)
 			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 				logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_last_contacted")
 			} else {
@@ -1348,11 +1341,7 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 	// Without this, wasReachedOutSinceSync would always return false for legacy tasks.
 	if _, hasSyncedLO := task.Metadata[MetadataKeySyncedLastOutreachAt].(string); !hasSyncedLO {
 		if contact.LastOutreachAt != nil {
-			metadata := task.Metadata
-			if metadata == nil {
-				metadata = make(map[string]any)
-			}
-			metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
+			metadata := setSyncedLastOutreachAt(task.Metadata, contact)
 			if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 				logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_last_outreach_at")
 			} else {
@@ -1393,18 +1382,7 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 				commands = append(commands, cmd)
 
 				// Update metadata
-				metadata := task.Metadata
-				if metadata == nil {
-					metadata = make(map[string]any)
-				}
-				metadata[MetadataKeyPendingTempID] = cmd.TempID
-				metadata[MetadataKeySyncedDeadline] = deadlineStr
-				if contact.LastContacted != nil {
-					metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
-				}
-				if contact.LastOutreachAt != nil {
-					metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
-				}
+				metadata := setPendingCreateState(task.Metadata, cmd.TempID, deadlineStr, contact)
 				if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 					logger.Warn().Err(err).Msg("failed to update metadata after non-Todoist contact")
 				}
@@ -1437,18 +1415,7 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 	// we'll have an orphaned task (no pending_temp_id to map). This is logged but not fatal
 	// because the sync is async - we can't roll back Todoist commands. The orphaned task
 	// will be cleaned up on the next full sync when it appears in items without a linked contact.
-	metadata := task.Metadata
-	if metadata == nil {
-		metadata = make(map[string]any)
-	}
-	metadata[MetadataKeyPendingTempID] = cmd.TempID
-	metadata[MetadataKeySyncedDeadline] = currentDeadline
-	if contact.LastContacted != nil {
-		metadata[MetadataKeySyncedLastContacted] = contact.LastContacted.Format(time.RFC3339)
-	}
-	if contact.LastOutreachAt != nil {
-		metadata[MetadataKeySyncedLastOutreachAt] = contact.LastOutreachAt.Format(time.RFC3339)
-	}
+	metadata := setPendingCreateState(task.Metadata, cmd.TempID, currentDeadline, contact)
 	if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 		logger.Error().
 			Err(err).
