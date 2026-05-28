@@ -65,6 +65,18 @@ public actor OrphanNotificationCenter {
     // owner of this strength the delegate deallocates at the
     // next await boundary and taps stop firing.
     private var delegate: OrphanNotificationDelegate?
+    // Set of (reason, sessionUUID) pairs currently mid-raise.
+    // Swift actors are reentrant across await boundaries, so a
+    // concurrent consume()/reconcile() can land between our pre-
+    // add persist (which marks the entry 'failed' to seed the
+    // retry semantics) and the presenter.add suspension point.
+    // Without this guard, the reentrant call would see 'failed'
+    // and start a parallel raise — producing two OS notifications
+    // for the same key, only one of which has its sequence tracked
+    // for later stale-remove. Membership is per actor instance and
+    // is keyed on the same semantic pair the rest of the actor
+    // uses for entry identity.
+    private var raisesInFlight: Set<String> = []
 
     public init(
         presenter: UserNotificationPresenter,
@@ -440,6 +452,20 @@ public actor OrphanNotificationCenter {
         title: String?,
         createdAt: Date?
     ) async {
+        // Reentrancy guard: a concurrent consume()/reconcile() that
+        // lands at the same key while this raise is awaiting the
+        // OS call must not start a parallel raise. The pre-add
+        // persist marks the entry 'failed' (retry state), which is
+        // exactly the trigger that would normally cause re-raise —
+        // so we need a separate in-actor signal that "a raise is
+        // already in progress for this key, stand down".
+        let raiseKey = matchKey(reason: reason, sessionUUID: sessionUUID)
+        if raisesInFlight.contains(raiseKey) {
+            return
+        }
+        raisesInFlight.insert(raiseKey)
+        defer { raisesInFlight.remove(raiseKey) }
+
         // Ask for authorization (lazy first-use).
         let granted = await ensureAuthorization()
 
@@ -504,10 +530,28 @@ public actor OrphanNotificationCenter {
         // (concurrent-mutation race guard) but the
         // osIdentifierSequence stays at the value baked into the
         // identifier we just gave the OS.
-        await confirmPostAdd(
+        let confirmed = await confirmPostAdd(
             sessionUUID: sessionUUID,
             reason: reason,
             osIdentifierSequence: assignedSeq)
+        if !confirmed {
+            // Persist failed AFTER the OS already accepted the
+            // request. We now have an OS notification with no
+            // tracked osIdentifierSequence in persisted state, so
+            // future stale-remove would miss it. Best-effort:
+            // remove the notification we just queued (we still
+            // know its identifier locally). Worst case the user
+            // briefly sees the notification before this cleanup
+            // fires — preferable to a permanently-untracked
+            // ghost. The persisted entry remains 'failed' so the
+            // next retry can re-attempt the full cycle.
+            logger.warning("orphan-notify: confirm persist failed; removing untrackable OS notification", metadata: [
+                "session_uuid": .private(sessionUUID),
+                "reason": .public(reason),
+            ])
+            await presenter.removeDelivered(withIdentifiers: [identifier])
+            await presenter.removePending(withIdentifiers: [identifier])
+        }
     }
 
     /// Remove the OS notification + persisted entry for a
@@ -708,17 +752,19 @@ public actor OrphanNotificationCenter {
     /// Post-add confirmation: presenter.add succeeded; transition
     /// the entry to 'queued' and stamp the OS identifier's sequence
     /// onto the entry so future stale-remove calls can target the
-    /// actual OS notification.
+    /// actual OS notification. Returns true on persist success.
+    @discardableResult
     private func confirmPostAdd(
         sessionUUID: String,
         reason: String,
         osIdentifierSequence: UInt64
-    ) async {
-        _ = await upsertPending(
+    ) async -> Bool {
+        let seq = await upsertPending(
             sessionUUID: sessionUUID,
             reason: reason,
             deliveryState: PendingDeliveryState.queued,
             osIdentifierSequence: osIdentifierSequence)
+        return seq != 0
     }
 
     private func maybeResetAuthorizationCacheIfAnyNotQueued() async {

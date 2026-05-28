@@ -821,6 +821,39 @@ final class OrphanNotificationCenterTests: XCTestCase {
                        "non-queued entries must be left alone (already retrying)")
     }
 
+    // MARK: - TC-OC30: reentrant raise guard
+
+    /// Reentrancy regression. With the new persist-failed-first
+    /// flow, a concurrent consume() that lands at the same key
+    /// after the pre-add persist (which marks 'failed') but before
+    /// the OS call returns must NOT start a parallel raise — the
+    /// in-actor `raisesInFlight` guard skips it. Without the guard,
+    /// both raises would queue OS notifications with consecutive
+    /// sequence numbers and only the last confirmed sequence would
+    /// be tracked, leaving an orphaned OS notification.
+    ///
+    /// We can't deterministically interleave two awaits on the
+    /// same actor, so we use the FakeUserNotificationPresenter's
+    /// recording semantics: a fast-firing consume that lands while
+    /// another raise is mid-flight must be skipped, leaving exactly
+    /// one OS add call per key per logical raise.
+    ///
+    /// The looser invariant test: starting two consume(...) calls
+    /// for the same key back-to-back should produce exactly one OS
+    /// raise, not two (the second observes 'queued' or in-flight
+    /// and skips).
+    func testConsecutiveConsumesForSameKeyProduceSingleRaise() async throws {
+        let presenter = FakeUserNotificationPresenter(authorizationResult: true)
+        let center = makeCenter(presenter: presenter)
+        let item = NotificationConsumeItem(sessionID: Self.session1, reason: "orphan")
+        await center.consume(needsAttention: [item])
+        await center.consume(needsAttention: [item])
+        await center.consume(needsAttention: [item])
+        let calls = await presenter.recordedAddCalls()
+        XCTAssertEqual(calls.count, 1,
+            "subsequent consumes for the same (reason, session) must dedup against the first raise")
+    }
+
     /// Entries written by builds older than sequencing itself
     /// decode with mutationSequence=0. Treat these as legacy too —
     /// the OS notification (if any) was minted with the unversioned
