@@ -197,7 +197,9 @@ public struct Repairer {
         //    the new api-key is on disk. If kickstart fails (e.g.
         //    service not registered, launchctl returned non-zero),
         //    surface a warning so the CLI wrapper can print clear
-        //    operator-side remediation ("run crm-mac start").
+        //    operator-side remediation (`crm-mac stop && crm-mac
+        //    start` — a stop+start cycle is required because the
+        //    running daemon has the old key cached in memory).
         var restartIssued = false
         var restartWarning: String?
         do {

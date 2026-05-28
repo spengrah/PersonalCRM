@@ -344,9 +344,9 @@ final class RepairerTests: XCTestCase {
         }
         // The api-key WAS written to disk (step 4 happens before step 5).
         XCTAssertEqual(keychain.currentValue, "new-key",
-            "api-key is written before the date parse so the operator's recovery path is `crm-mac start`")
+            "api-key is written before the date parse so the new key reaches disk before the throw")
         XCTAssertTrue(launchctl.kickstartCalls.isEmpty,
-            "kickstart skipped because the date-parse throw occurs before the kickstart step")
+            "kickstart skipped because the date-parse throw occurs before the kickstart step (operator must run `crm-mac stop && crm-mac start` to pick up the new key)")
     }
 
     func testApiKeyRotatedAtParsesWithFractionalSeconds() async throws {
