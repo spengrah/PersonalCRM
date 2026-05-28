@@ -9,10 +9,10 @@
 //
 // Family 1 — forbidden SQLite-URI string literals (the original bug
 //   class). A re-introduced `?mode=ro` literal, an `immutable=1` flag
-//   (which would re-blind the reader to WAL-resident writes — the #336
-//   regression), a `cache=shared` flag (deliberately never used), or a
-//   bare `file://` SQLite URI prefix anywhere in code other than the
-//   helper.
+//   (which would re-blind the reader to WAL-resident writes — the
+//   production regression that motivated this guard), a `cache=shared`
+//   flag (deliberately never used), or a bare `file://` SQLite URI
+//   prefix anywhere in code other than the helper.
 //
 // Family 2 — forbidden bare-path live-DB opens. A future
 //   `DatabasePool(path: config.whatsappDBPath.path, ...)` would slip
@@ -86,7 +86,8 @@ final class SQLiteURILiteralGuardTests: XCTestCase {
         // code (belt-and-suspenders; the helper uses neither).
         if code.contains("immutable=1") {
             out.append("\(filename): `immutable=1` forbidden — it re-blinds the " +
-                       "reader to WAL-resident writes (the #336 regression).")
+                       "reader to WAL-resident writes (the production regression " +
+                       "that motivated this guard).")
         }
         if code.contains("cache=shared") {
             out.append("\(filename): `cache=shared` forbidden — GRDB only honours it " +

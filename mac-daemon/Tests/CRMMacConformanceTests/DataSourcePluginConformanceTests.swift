@@ -110,14 +110,20 @@ final class DataSourcePluginConformanceTests: XCTestCase {
                            "lastScheduledAt == T to state.json")
 
             // (2) heartbeat-payload registry — written by the plugin's
-            // own healthRegistry.update(...) inside performTick().
+            // own healthRegistry.update(...) inside performTick(). Each
+            // plugin's fast-path snapshot stamps lastScheduledAt from
+            // the same injected (fixed) clock — either the tick-start
+            // snapshot (gated PhoneCalls) or the markUnhealthy snapshot
+            // (the other four) — so the heartbeat-payload timestamp must
+            // be exactly T, not merely non-nil. A plugin that emits a
+            // stale/wrong heartbeat timestamp fails here.
             let snap = await spec.registry.read(plugin.id)
             XCTAssertNotNil(snap,
                             "\(plugin.id.rawValue): performTick() must report a " +
                             "SourceHealthRegistry snapshot")
-            XCTAssertNotNil(snap?.lastScheduledAt,
-                            "\(plugin.id.rawValue): the heartbeat-payload snapshot " +
-                            "must carry lastScheduledAt (feeds the Pi /heartbeat)")
+            XCTAssertEqual(snap?.lastScheduledAt, fixedInstant,
+                           "\(plugin.id.rawValue): the heartbeat-payload snapshot must " +
+                           "carry lastScheduledAt == T (feeds the Pi /heartbeat)")
 
             behaviorallyTestedIDs.insert(plugin.id)
         }
@@ -165,11 +171,21 @@ final class DataSourcePluginConformanceTests: XCTestCase {
     func testSourceDerivedConformerSetMatchesExpected() throws {
         let sourcesRoot = Self.resolveSourcesRoot()
         var sourceDerived: Set<SourceID> = []
+        // Track conformer files vs. successfully-extracted ids so a
+        // conformer whose declaration shape defeats the regex (extension
+        // conformance, comma-separated clause, computed id, id literal
+        // in another file) fails LOUDLY via the count check below rather
+        // than being silently invisible to the set comparison.
+        var conformerFileCount = 0
+        var extractedIDCount = 0
         for fileURL in try Self.swiftFiles(under: sourcesRoot) {
             let code = try String(contentsOf: fileURL, encoding: .utf8)
             guard code.range(of: #":\s*DataSourcePlugin"#, options: .regularExpression) != nil
             else { continue }
-            for rawCase in Self.idCaseLiterals(in: code) {
+            conformerFileCount += 1
+            let cases = Self.idCaseLiterals(in: code)
+            for rawCase in cases {
+                extractedIDCount += 1
                 guard let id = Self.sourceID(forCaseName: rawCase) else {
                     XCTFail("\(fileURL.lastPathComponent): unknown SourceID case " +
                             "`.\(rawCase)` — update sourceID(forCaseName:) when adding a " +
@@ -179,6 +195,18 @@ final class DataSourcePluginConformanceTests: XCTestCase {
                 sourceDerived.insert(id)
             }
         }
+        // One conformer file -> exactly one id literal -> one expected
+        // entry. Any mismatch means the scanner missed (or double-counted)
+        // a conformer; surface it instead of letting old==old pass.
+        XCTAssertEqual(conformerFileCount, Self.expectedDataSources.count,
+                       "found \(conformerFileCount) `: DataSourcePlugin` conformer " +
+                       "file(s) but expected \(Self.expectedDataSources.count) — a new " +
+                       "conformer must be wired into expectedDataSources + layer (a)'s loop")
+        XCTAssertEqual(extractedIDCount, conformerFileCount,
+                       "extracted \(extractedIDCount) id literal(s) from " +
+                       "\(conformerFileCount) conformer file(s) — a conformer whose " +
+                       "`id: SourceID = .<case>` form defeats the scanner must keep the " +
+                       "documented single-line form OR the scanner must be upgraded")
         XCTAssertEqual(sourceDerived, Self.expectedDataSources,
                        "the set of `: DataSourcePlugin` conformers derived from Sources/ " +
                        "must equal expectedDataSources; a new conformer must be added to " +

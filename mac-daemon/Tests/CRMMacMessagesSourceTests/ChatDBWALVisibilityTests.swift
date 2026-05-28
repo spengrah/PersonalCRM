@@ -2,11 +2,14 @@
 // read path (`SQLiteSnapshotReader.readOnlyURI`). Mirrors
 // CallHistoryDBWALVisibilityTests on the phone_calls side.
 //
-// Messages.app writes chat.db in WAL mode continuously, and macOS
-// does not checkpoint it on any predictable cadence. If the reader
-// were ever opened with `?...&immutable=1`, SQLite would serve only
-// the main DB file and ignore the -wal sidecar — blinding the daemon
-// to every message written since the last checkpoint.
+// Messages.app writes chat.db in WAL mode continuously. Even though
+// Messages.app checkpoints more aggressively than CallHistoryDB, any
+// write made since the last checkpoint lives in the -wal sidecar. If
+// the reader were ever opened with `?...&immutable=1`, SQLite would
+// serve only the main DB file and ignore the -wal sidecar — blinding
+// the daemon to every such uncheckpointed message. This locks in that
+// the bare-path -> SQLiteSnapshotReader URI conversion did not regress
+// WAL visibility, and guards against a future immutable=1 slip.
 //
 // This test exercises the production scenario end-to-end and is
 // deliberately FILE-BACKED (not InMemoryChatDB): an in-memory DB has
