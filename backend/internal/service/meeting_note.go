@@ -125,11 +125,11 @@ type ResolveLinkInput struct {
 // during a resolve-link flow. Returned to the handler so the HTTP
 // response can include the audit trail.
 type CreatedInteraction struct {
-	ID         uuid.UUID
-	ContactID  uuid.UUID
-	SourceRef  string
-	OccurredAt string
-	Direction  string
+	ID         uuid.UUID `json:"id"`
+	ContactID  uuid.UUID `json:"contact_id"`
+	SourceRef  string    `json:"source_ref"`
+	OccurredAt string    `json:"occurred_at"`
+	Direction  string    `json:"direction"`
 }
 
 // ResolveLinkResult is the value returned by ResolveLink.
