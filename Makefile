@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy deploy-pi deploy-mac deploy-all setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction
+.PHONY: help setup dev build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy deploy-pi deploy-mac deploy-all setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction lint-ingest-registry
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -351,13 +351,21 @@ ci-build: ci-build-backend ci-build-frontend
 # Linting
 GOLANGCI_LINT := $(shell which golangci-lint 2>/dev/null || echo $$(go env GOPATH)/bin/golangci-lint)
 
-lint:
+lint: lint-ingest-registry
 	@echo "Running golangci-lint..."
 	@cd backend && $(GOLANGCI_LINT) run ./...
 
 lint-fix:
 	@echo "Running golangci-lint with auto-fix..."
 	@cd backend && $(GOLANGCI_LINT) run --fix ./...
+
+# Grep guard for #342's descriptor table: fails if the IngestBatch body
+# names any event kind (constant or dotted literal) or per-family
+# predicate — routing must go through the daemonFamily kindToFamily
+# table. See scripts/check-ingest-registry.sh and the agreement test
+# backend/internal/service/ingest_registry_test.go.
+lint-ingest-registry:
+	@$(REPO_ROOT)/scripts/check-ingest-registry.sh
 
 ci-test: lint check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction test-unit test-integration-fast test-frontend
 	@echo "✅ All CI tests passed"

@@ -91,6 +91,9 @@ jobs:
       - name: Check CRM-marker construction invariant
         run: ./scripts/ci/crm-marker-construction-guard.sh
 
+      - name: Check ingest-registry descriptor invariant
+        run: ./scripts/check-ingest-registry.sh
+
       - name: Run unit tests
         working-directory: backend
         run: go test -short -v ./...
