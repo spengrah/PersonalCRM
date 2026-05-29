@@ -46,10 +46,9 @@ import (
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/health"
-	"personal-crm/backend/internal/icloudcontacts"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/messages"
-	"personal-crm/backend/internal/phonecalls"
+	"personal-crm/backend/internal/push"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
@@ -794,25 +793,13 @@ func run() int {
 			logger.Info().Msg("Contact task handler initialized")
 		}
 
-		// Register the Messages push provider. The source is push-only —
-		// data lands via /api/v1/ingest/events from the Mac daemon, never
-		// via the scheduler — so Sync() is a no-op. The scheduler's push-
-		// strategy exclusion in ListDueAccounts ensures we never poll it.
-		providerRegistry.Register(messages.New())
-		logger.Info().Msg("Messages push provider registered")
-
-		// Register the iCloud Contacts push provider. Same push-only
-		// semantics as Messages — data lands via the Mac daemon's
-		// external_contact.* events; the scheduler skips push providers
-		// in ListDueAccounts.
-		providerRegistry.Register(icloudcontacts.New())
-		logger.Info().Msg("iCloud Contacts push provider registered")
-
-		// Register the Phone & FaceTime call-history push provider
-		// (phase 1.5). Same push-only semantics — data lands via the
-		// Mac daemon's call.received / call.sent events.
-		providerRegistry.Register(phonecalls.New())
-		logger.Info().Msg("Phone & FaceTime push provider registered")
+		// Register every Mac-daemon push-source provider. Each is
+		// push-only — data lands via /api/v1/ingest/events, never via the
+		// scheduler (ListDueAccounts skips push strategy) — so Sync() is a
+		// no-op. The registration lives in one helper so the daemonFamily
+		// agreement test can cross-check it against the descriptor table.
+		push.RegisterPushProviders(providerRegistry)
+		logger.Info().Msg("Push providers registered (messages, icloud_contacts, phone_calls)")
 
 		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
 
