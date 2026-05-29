@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -138,10 +136,9 @@ func newProviderTestEnv(t *testing.T) *providerTestEnv {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPathForTest()); err != nil {
-		t.Fatalf("run migrations: %v", err)
-	}
-
+	// Migrations are applied once into the template; the per-package clone
+	// (testdb.SetupPackage in testmain_integration_test.go) inherits the
+	// fully-migrated schema, so no inline db.RunMigrations is needed here.
 	ctx := context.Background()
 	database, err := db.NewDatabase(ctx, config.DatabaseConfig{
 		URL:               databaseURL,
@@ -223,18 +220,6 @@ func cancelledContext() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	return ctx
-}
-
-// migrationsPathForTest returns the absolute path to backend/migrations from the
-// location of this test file. Same-package test, so we can't reuse
-// tests/integration_test.go's getMigrationsPath helper.
-func migrationsPathForTest() string {
-	if path := os.Getenv("MIGRATIONS_PATH"); path != "" && filepath.IsAbs(path) {
-		return path
-	}
-	_, filename, _, _ := runtime.Caller(0)
-	testDir := filepath.Dir(filename) // backend/internal/todoist
-	return filepath.Join(testDir, "..", "..", "migrations")
 }
 
 // createDismissalContact creates a contact with cadence set, a full set of

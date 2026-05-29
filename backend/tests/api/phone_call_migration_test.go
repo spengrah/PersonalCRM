@@ -1,9 +1,10 @@
+//go:build integration_testdb
+
 package api
 
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,8 +13,8 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/testdb"
 
-	"github.com/golang-migrate/migrate/v4"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,41 +37,21 @@ import (
 //     down. Guard raises. Hard-delete (NOT soft-delete: guard counts
 //     rows regardless of deleted_at), re-run down — succeeds.
 //
-// Gated by MAC_HOST_MIGRATION_TEST because this test mutates shared
-// schema (rolls down to 054, re-applies 055). Same isolation reasoning
-// as TestMacHostMigrations.
+// Runs against its own ephemeral clone (testdb.NewEphemeralClone), so the
+// mid-test schema rollback (down to 054, re-apply 055) cannot affect the
+// package clone or sibling packages. Same isolation reasoning as
+// TestMacHostMigrations.
 func TestPhoneCallMigration055(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	if os.Getenv("MAC_HOST_MIGRATION_TEST") == "" {
-		t.Skip("MAC_HOST_MIGRATION_TEST not set; this test mutates shared schema and must run in isolation")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+
+	// Dedicated ephemeral clone: dropped wholesale on cleanup, so no
+	// HEAD-restore is needed.
+	databaseURL, drop := testdb.NewEphemeralClone(t)
+	t.Cleanup(drop)
 
 	ctx := context.Background()
-
-	// Always restore the schema to HEAD on exit.
-	t.Cleanup(func() {
-		m, err := newMigrator(databaseURL)
-		if err != nil {
-			t.Logf("cleanup migrator: %v", err)
-			return
-		}
-		defer closeMigrator(t, m)
-		if version, dirty, vErr := m.Version(); vErr == nil && dirty {
-			t.Logf("cleanup: forcing migration version %d (was dirty)", version)
-			if fErr := m.Force(int(version)); fErr != nil {
-				t.Logf("cleanup force: %v", fErr)
-			}
-		}
-		if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-			t.Logf("cleanup Up: %v", err)
-		}
-	})
 
 	// Roll down to 054 so we can re-apply 055 from scratch.
 	mig, err := newMigrator(databaseURL)
@@ -93,7 +74,6 @@ func TestPhoneCallMigration055(t *testing.T) {
 	phoneCallRepo := repository.NewPhoneCallRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
-	macHostRepo := repository.NewMacHostRepository(database.Queries)
 
 	suffix := uuid.NewString()[:8]
 
@@ -113,14 +93,16 @@ func TestPhoneCallMigration055(t *testing.T) {
 
 	// Case 2: a phone_call row blocks the down migration.
 	t.Run("DownRefusesPhoneCallRows", func(t *testing.T) {
-		// Seed a per-test host for FK + cleanup.
-		host, err := macHostRepo.SeedRevokedHostForTest(ctx,
-			"mig-pc-host-"+suffix+"-2", "0.0.0", 1, "h2-"+suffix)
-		require.NoError(t, err)
-
+		// phone_call.mac_host_id is nullable (ON DELETE SET NULL), and the
+		// 055-down guard only counts phone_call rows — it does not inspect
+		// mac_host_id. We leave MacHostID nil rather than seeding a host: the
+		// SeedRevokedMacHost query RETURNs api_key_rotated_at, a column added
+		// by migration 057, which does not exist on this clone rolled down to
+		// 055. (TestMacHostMigrations seeds via SeedMacHost, which RETURNs only
+		// id and is therefore schema-version-agnostic.)
 		uniqueID := "mig-pc-call-" + suffix + "-2"
 		answered := true
-		_, err = phoneCallRepo.UpsertCall(ctx, repository.UpsertPhoneCallParams{
+		_, err := phoneCallRepo.UpsertCall(ctx, repository.UpsertPhoneCallParams{
 			CallUniqueID:    uniqueID,
 			PeerHandle:      "+15551234567",
 			PeerNormalized:  "+15551234567",
@@ -129,7 +111,7 @@ func TestPhoneCallMigration055(t *testing.T) {
 			Answered:        &answered,
 			DurationSeconds: 1,
 			StartedAt:       accelerated.GetCurrentTime().Truncate(time.Microsecond),
-			MacHostID:       &host.ID,
+			MacHostID:       nil,
 		})
 		require.NoError(t, err)
 
@@ -221,8 +203,8 @@ func TestPhoneCallMigration055(t *testing.T) {
 		closeMigrator(t, mig)
 	})
 
-	// Final sanity: the table exists post-test (the outer Cleanup will
-	// migrate.Up() if not).
+	// Final sanity: 055 was re-applied above, so the phone_call table exists
+	// and the lookup returns not-found rather than a missing-table error.
 	_, err = phoneCallRepo.GetCallByUniqueID(ctx, "definitely-not-here-"+suffix)
 	assert.True(t, errors.Is(err, db.ErrNotFound))
 }
