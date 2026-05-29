@@ -139,6 +139,31 @@ SELECT COUNT(*) FROM river_job WHERE kind = @kind AND finalized_at IS NULL;
 -- pollution is bounded by DeleteRiverJobsByKindAny in test cleanup.
 SELECT COUNT(*) FROM river_job WHERE kind = @kind;
 
+-- name: GetRiverJobStateByID :one
+-- Test assertion — returns the river_job.state for a single job id. Used by
+-- rescue-on-crash polling to wait out River's async completer
+-- (running->completed lands after the worker returns). River exposes no
+-- production sqlc layer; this is the test-boundary seam, mirroring the
+-- existing CountRiverJobsByKind test query.
+SELECT state FROM river_job WHERE id = @id;
+
+-- name: SweepRiverJobsInCloneForTest :execrows
+-- Test setup — drop ALL river_job rows, but ONLY when connected to a
+-- per-package clone DB (current_database() matching the clone-name prefix).
+-- The rescue-on-crash test calls this to clear foreign-kind leftovers (e.g.
+-- interaction_recorder) created by earlier tests in the same per-package
+-- clone, which its live River client would otherwise fetch and churn on,
+-- widening the completer race. Fail-closed by construction: on a shared test
+-- DB or the dev DB the WHERE is false and it deletes nothing, so a manual
+-- no-tag run pointed at a real database can never wipe its queue. The prefix
+-- mirrors clonePrefix in internal/testdb (cannot import that build-tagged
+-- package from an untagged test file). EVERY underscore in the prefix is
+-- escaped so each is matched literally, not as a LIKE single-char wildcard —
+-- for a broad delete the guard must match the exact clone-name prefix, not a
+-- looser pattern.
+DELETE FROM river_job
+WHERE current_database() LIKE 'personal\_crm\_test\_clone\_%' ESCAPE '\';
+
 -- name: DeleteInteractionsByContactAndSource :execrows
 -- Test teardown — drops interactions seeded by a test under the given
 -- (contact_id, source) pair. Scoped to the seeded contact so production
