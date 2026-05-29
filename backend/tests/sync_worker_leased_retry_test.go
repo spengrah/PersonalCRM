@@ -333,6 +333,34 @@ type syncLogPool interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// waitForRiverJobState polls river_job for the given job id until its state
+// equals want, or the ctx deadline fires. River's completer writes the
+// running->completed transition asynchronously after the worker callback
+// returns, so a single un-polled read can observe a stale 'running'. Mirrors
+// waitForSyncLogStatus. Real wall-clock time per the polling-wait rule (not
+// business-logic time, so not accelerated.GetCurrentTime). Reads through the
+// test-only sqlc query, not raw SQL.
+func waitForRiverJobState(t *testing.T, ctx context.Context, queries *db.Queries, jobID int64, want db.RiverJobState) {
+	t.Helper()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	var last db.RiverJobState
+	for {
+		state, err := queries.GetRiverJobStateByID(ctx, jobID)
+		if err == nil {
+			last = state
+			if state == want {
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for river_job id=%d state=%q (last observed %q, err=%v)", jobID, want, last, err)
+		case <-ticker.C:
+		}
+	}
+}
+
 // TestSyncWorker_RescueOnCrash simulates the #208 scenario: a worker
 // begins processing a job, writes a `status='running'` external_sync_log
 // row, and then the process dies before CompleteSyncLog fires. The
@@ -370,9 +398,19 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	t.Cleanup(func() { database.Close() })
 
 	source := "retry_test_rescue_on_crash"
-	// Clean up any leftovers from a prior test run.
-	_, _ = database.Pool.Exec(ctx,
-		`DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
+	// Sweep ALL river_job rows in this package clone before starting our own
+	// client. Leftover rows of foreign kinds (e.g. interaction_recorder) from
+	// earlier tests in the same per-package clone would otherwise be fetched by
+	// this test's live River client, adding completer/maintenance churn that
+	// widens the completer race below. Tests in this package run serially (no
+	// t.Parallel); the sweep runs before this test starts its own client, so it
+	// races no live producer of this test. The query is fail-closed (deletes
+	// only on a clone DB), so on a non-clone DB it is a harmless no-op and the
+	// test's own t.Cleanup still scrubs this test's source-scoped rows.
+	sweepCtx, sweepCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer sweepCancel()
+	_, err = database.Queries.SweepRiverJobsInCloneForTest(sweepCtx)
+	require.NoError(t, err, "sweep river_job in package clone")
 	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_log WHERE source = $1`, source)
 	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source = $1`, source)
 
@@ -445,9 +483,12 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	require.NoError(t, err)
 	svc.SetRiverEnqueuer(client)
 
-	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer startCancel()
-	require.NoError(t, client.Start(startCtx))
+	// Start with the root ctx, never a timeout-derived context: River binds its
+	// fetch/work loops (and the JobRescuer maintenance service) to the context
+	// passed to Start (BaseStartStop.StartInit wraps it with WithCancelCause), so
+	// a start-deadline cancel can silently stop fetching. (Documented project
+	// gotcha; applies to test harnesses too.)
+	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stopCancel()
@@ -498,14 +539,13 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	assert.Equal(t, repository.SyncStatusIdle, updatedState.Status,
 		"status must land on 'idle' after rescue")
 
-	// Assertion 4: the same river_job row we seeded ended up completed.
-	// This is what proves the rescuer (not a fresh Insert) drove the
-	// retry — if the row had been stuck forever, its final state would
-	// still be 'running'.
-	var finalJobState string
-	require.NoError(t, database.Pool.QueryRow(ctx,
-		`SELECT state FROM river_job WHERE id = $1`, insertedJobID,
-	).Scan(&finalJobState))
-	assert.Equal(t, "completed", finalJobState,
-		"the seeded stuck job should have been rescued and completed")
+	// Assertion 4: the same river_job row we seeded ended up completed. River's
+	// completer flushes running->completed asynchronously after the worker
+	// returns, so poll rather than read once (the un-polled read raced the
+	// completer under full-suite load). A genuine "stuck forever" regression
+	// still fails loudly via the helper's t.Fatalf on deadline. This is also
+	// what proves the rescuer (not a fresh Insert) drove the retry.
+	jobStateCtx, jobStateCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer jobStateCancel()
+	waitForRiverJobState(t, jobStateCtx, database.Queries, insertedJobID, db.RiverJobStateCompleted)
 }
