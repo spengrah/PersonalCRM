@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy deploy-pi deploy-mac deploy-all setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction lint-ingest-registry
+.PHONY: help setup dev build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy deploy-pi deploy-mac deploy-all setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-mac-host-migrations check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -367,7 +367,7 @@ lint-fix:
 lint-ingest-registry:
 	@$(REPO_ROOT)/scripts/check-ingest-registry.sh
 
-ci-test: lint check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction test-unit test-integration-fast test-frontend
+ci-test: lint check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists test-unit test-integration-fast test-frontend
 	@echo "✅ All CI tests passed"
 
 # Sole-writer guard: verifies only CadenceUpdater calls cadence-writing queries.
@@ -397,6 +397,14 @@ check-rematch-sole-dispatcher:
 # scripts/ci/crm-marker-construction-guard.sh.
 check-crm-marker-construction:
 	@$(REPO_ROOT)/scripts/ci/crm-marker-construction-guard.sh
+
+# Duplicated-SELECT-list guard: fails if an identical explicit >=3-column
+# SELECT projection of the same table appears in 2+ source queries (use
+# SELECT * for full-row reads). Runs alongside the Go test at
+# backend/tests/sqlc_select_list_static_test.go (authoritative parser). See
+# scripts/ci/sqlc-select-list-guard.sh.
+check-sqlc-select-lists:
+	@$(REPO_ROOT)/scripts/ci/sqlc-select-list-guard.sh
 
 # Code generation
 sqlc:
