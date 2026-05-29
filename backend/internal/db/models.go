@@ -370,6 +370,12 @@ type OauthCredential struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 }
 
+type PgConstraint struct {
+	Oid      pgtype.Uint32 `json:"oid"`
+	Conname  string        `json:"conname"`
+	Conrelid pgtype.Uint32 `json:"conrelid"`
+}
+
 type PhoneCall struct {
 	ID               pgtype.UUID        `json:"id"`
 	CallUniqueID     string             `json:"call_unique_id"`

@@ -152,3 +152,17 @@ DELETE FROM interaction WHERE contact_id = @contact_id AND source = @source;
 -- table's interaction_id points to.
 SELECT COUNT(*) FROM interaction
 WHERE id = @id AND contact_id = @contact_id AND source = @source;
+
+-- name: GetInteractionSourceCheckDef :one
+-- Test assertion — returns the rendered definition of the
+-- interaction_source_check CHECK constraint via pg_get_constraintdef.
+-- Scoped by (conrelid, conname) because constraint names are NOT
+-- globally unique — scoping to the interaction relation avoids a future
+-- cross-table/-schema name collision. The descriptor-vs-CHECK agreement
+-- test parses the returned ARRAY[...] string literals to assert the
+-- live CHECK set equals the repository.InteractionSource* constants.
+-- Read-only catalog access; production code never calls this.
+SELECT pg_get_constraintdef(c.oid)::text AS constraint_def
+FROM pg_constraint c
+WHERE c.conrelid = 'interaction'::regclass
+  AND c.conname = 'interaction_source_check';

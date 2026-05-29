@@ -382,6 +382,16 @@ func (r *InteractionRepository) HardDeleteInteractionsBySourceRefPrefix(ctx cont
 	})
 }
 
+// GetInteractionSourceCheckDef is a test-only helper returning the live
+// rendered definition of the interaction_source_check CHECK constraint
+// (via pg_get_constraintdef). The descriptor-vs-CHECK agreement test
+// parses the returned ARRAY[...] string literals to assert the live
+// CHECK set matches the InteractionSource* constants set-for-set.
+// Read-only catalog access; production code never calls this.
+func (r *InteractionRepository) GetInteractionSourceCheckDef(ctx context.Context) (string, error) {
+	return r.queries.GetInteractionSourceCheckDef(ctx)
+}
+
 // UpdateInteractionTimestamp extends an existing interaction's occurred_at and description.
 func (r *InteractionRepository) UpdateInteractionTimestamp(ctx context.Context, id uuid.UUID, occurredAt time.Time, description *string) (*Interaction, error) {
 	dbInteraction, err := r.queries.UpdateInteractionTimestamp(ctx, db.UpdateInteractionTimestampParams{

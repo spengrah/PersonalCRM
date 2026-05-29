@@ -318,6 +318,28 @@ func (q *Queries) DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUs
 	return result.RowsAffected(), nil
 }
 
+const GetInteractionSourceCheckDef = `-- name: GetInteractionSourceCheckDef :one
+SELECT pg_get_constraintdef(c.oid)::text AS constraint_def
+FROM pg_constraint c
+WHERE c.conrelid = 'interaction'::regclass
+  AND c.conname = 'interaction_source_check'
+`
+
+// Test assertion — returns the rendered definition of the
+// interaction_source_check CHECK constraint via pg_get_constraintdef.
+// Scoped by (conrelid, conname) because constraint names are NOT
+// globally unique — scoping to the interaction relation avoids a future
+// cross-table/-schema name collision. The descriptor-vs-CHECK agreement
+// test parses the returned ARRAY[...] string literals to assert the
+// live CHECK set equals the repository.InteractionSource* constants.
+// Read-only catalog access; production code never calls this.
+func (q *Queries) GetInteractionSourceCheckDef(ctx context.Context) (string, error) {
+	row := q.db.QueryRow(ctx, GetInteractionSourceCheckDef)
+	var constraint_def string
+	err := row.Scan(&constraint_def)
+	return constraint_def, err
+}
+
 const SeedExternalSyncState = `-- name: SeedExternalSyncState :one
 INSERT INTO external_sync_state
     (source, account_id, enabled, status, strategy, next_sync_at)
