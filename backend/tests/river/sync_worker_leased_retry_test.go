@@ -1,4 +1,4 @@
-package tests
+package river
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
 	syncpkg "personal-crm/backend/internal/sync"
+	"personal-crm/backend/tests/testsupport"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
@@ -70,7 +71,7 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
+	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 
 	// Migrations are applied once by TestMain.
 
@@ -224,7 +225,7 @@ func TestSyncWorker_AbandonedLogOnStartupRecovery(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
+	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 
 	// Migrations are applied once by TestMain.
 
@@ -381,7 +382,7 @@ func waitForRiverJobState(t *testing.T, ctx context.Context, queries *db.Queries
 // can opt in locally without always paying the 45s cost. CI coverage
 // for this test lives in the dedicated Backend Slow Tests workflow.
 func TestSyncWorker_RescueOnCrash(t *testing.T) {
-	requireLongTests(t)
+	testsupport.RequireLongTests(t)
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
@@ -390,7 +391,7 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
+	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 	// Migrations are applied once by TestMain.
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
