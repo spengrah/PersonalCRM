@@ -541,6 +541,12 @@ type Querier interface {
 	GetPhoneCallByID(ctx context.Context, id pgtype.UUID) (*PhoneCall, error)
 	// Lookup by call_unique_id. Returns ErrNoRows on miss.
 	GetPhoneCallByUniqueID(ctx context.Context, callUniqueID string) (*PhoneCall, error)
+	// Test assertion — returns the river_job.state for a single job id. Used by
+	// rescue-on-crash polling to wait out River's async completer
+	// (running->completed lands after the worker returns). River exposes no
+	// production sqlc layer; this is the test-boundary seam, mirroring the
+	// existing CountRiverJobsByKind test query.
+	GetRiverJobStateByID(ctx context.Context, id int64) (RiverJobState, error)
 	GetSyncLog(ctx context.Context, id pgtype.UUID) (*ExternalSyncLog, error)
 	// External Sync State Queries
 	GetSyncState(ctx context.Context, id pgtype.UUID) (*ExternalSyncState, error)
@@ -944,6 +950,20 @@ type Querier interface {
 	SoftDeleteMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) error
 	SoftDeleteTelegramChannelMessages(ctx context.Context, arg SoftDeleteTelegramChannelMessagesParams) error
 	SoftDeleteTelegramMessages(ctx context.Context, messageIds []int32) error
+	// Test setup — drop ALL river_job rows, but ONLY when connected to a
+	// per-package clone DB (current_database() matching the clone-name prefix).
+	// The rescue-on-crash test calls this to clear foreign-kind leftovers (e.g.
+	// interaction_recorder) created by earlier tests in the same per-package
+	// clone, which its live River client would otherwise fetch and churn on,
+	// widening the completer race. Fail-closed by construction: on a shared test
+	// DB or the dev DB the WHERE is false and it deletes nothing, so a manual
+	// no-tag run pointed at a real database can never wipe its queue. The prefix
+	// mirrors clonePrefix in internal/testdb (cannot import that build-tagged
+	// package from an untagged test file). EVERY underscore in the prefix is
+	// escaped so each is matched literally, not as a LIKE single-char wildcard —
+	// for a broad delete the guard must match the exact clone-name prefix, not a
+	// looser pattern.
+	SweepRiverJobsInCloneForTest(ctx context.Context) (int64, error)
 	// TEST ONLY. Hard-deletes calendar_event rows whose gcal_event_id starts
 	// with the given prefix. Used by t.Cleanup to remove fixtures.
 	TestDeleteCalendarEventsByGcalEventIDPrefix(ctx context.Context, prefix string) error

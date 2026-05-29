@@ -340,6 +340,22 @@ func (q *Queries) GetInteractionSourceCheckDef(ctx context.Context) (string, err
 	return constraint_def, err
 }
 
+const GetRiverJobStateByID = `-- name: GetRiverJobStateByID :one
+SELECT state FROM river_job WHERE id = $1
+`
+
+// Test assertion — returns the river_job.state for a single job id. Used by
+// rescue-on-crash polling to wait out River's async completer
+// (running->completed lands after the worker returns). River exposes no
+// production sqlc layer; this is the test-boundary seam, mirroring the
+// existing CountRiverJobsByKind test query.
+func (q *Queries) GetRiverJobStateByID(ctx context.Context, id int64) (RiverJobState, error) {
+	row := q.db.QueryRow(ctx, GetRiverJobStateByID, id)
+	var state RiverJobState
+	err := row.Scan(&state)
+	return state, err
+}
+
 const SeedExternalSyncState = `-- name: SeedExternalSyncState :one
 INSERT INTO external_sync_state
     (source, account_id, enabled, status, strategy, next_sync_at)
@@ -494,4 +510,30 @@ func (q *Queries) SeedRevokedMacHost(ctx context.Context, arg SeedRevokedMacHost
 		&i.ApiKeyRotatedAt,
 	)
 	return &i, err
+}
+
+const SweepRiverJobsInCloneForTest = `-- name: SweepRiverJobsInCloneForTest :execrows
+DELETE FROM river_job
+WHERE current_database() LIKE 'personal\_crm\_test\_clone\_%' ESCAPE '\'
+`
+
+// Test setup — drop ALL river_job rows, but ONLY when connected to a
+// per-package clone DB (current_database() matching the clone-name prefix).
+// The rescue-on-crash test calls this to clear foreign-kind leftovers (e.g.
+// interaction_recorder) created by earlier tests in the same per-package
+// clone, which its live River client would otherwise fetch and churn on,
+// widening the completer race. Fail-closed by construction: on a shared test
+// DB or the dev DB the WHERE is false and it deletes nothing, so a manual
+// no-tag run pointed at a real database can never wipe its queue. The prefix
+// mirrors clonePrefix in internal/testdb (cannot import that build-tagged
+// package from an untagged test file). EVERY underscore in the prefix is
+// escaped so each is matched literally, not as a LIKE single-char wildcard —
+// for a broad delete the guard must match the exact clone-name prefix, not a
+// looser pattern.
+func (q *Queries) SweepRiverJobsInCloneForTest(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, SweepRiverJobsInCloneForTest)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
