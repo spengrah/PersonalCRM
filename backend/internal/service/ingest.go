@@ -851,7 +851,7 @@ func verifyRawMessageInvariants(env *events.Envelope, authenticatedHostID uuid.U
 //  1. payload decodes cleanly into the per-kind struct.
 //  2. payload.HostID matches the authenticated host (no host
 //     cross-impersonation).
-//  3. env.Source is in allowedExternalContactSources.
+//  3. env.Source is in the external_contact family's allowed sources.
 //  4. payload.Source matches env.Source.
 //  5. payload.EntityID is non-empty.
 //  6. env.SourceID format matches the kind's content-hash discriminator
@@ -1427,7 +1427,7 @@ func toRepoAddressEntries(in []events.ExternalContactAddressValue) []repository.
 // Properties checked (mirrors verifyExternalContactInvariants):
 //  1. payload decodes cleanly into the per-kind struct.
 //  2. payload.HostID matches the authenticated host.
-//  3. env.Source is in allowedMeetingNoteSources.
+//  3. env.Source is in the meeting_note family's allowed sources.
 //  4. payload.Source matches env.Source.
 //  5. payload.SourceID parses as a UUID.
 //  6. env.SourceID matches the kind's content-hash discriminator shape

@@ -27,7 +27,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-TARGET="backend/internal/service/ingest.go"
+# Target defaults to the production ingest.go. An optional first argument
+# overrides it so the companion self-test
+# (backend/tests/ingest_registry_guard_static_test.go) can point the guard
+# at a synthetic fixture and confirm it actually catches a violation.
+# Production callers (Makefile, CI) pass no argument.
+TARGET="${1:-backend/internal/service/ingest.go}"
 
 if [[ ! -f "$TARGET" ]]; then
   echo "❌ ingest-registry guard: $TARGET not found" >&2

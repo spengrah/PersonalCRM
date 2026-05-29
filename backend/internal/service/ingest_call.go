@@ -22,7 +22,7 @@ import (
 //  1. Payload decodes cleanly into CallPayload.
 //  2. payload.HostID matches the authenticated host (no host
 //     cross-impersonation).
-//  3. env.Source is in allowedCallSources.
+//  3. env.Source is in the call family's allowed sources.
 //  4. payload.Source matches env.Source.
 //  5. payload.CallUniqueID is non-empty and equals env.SourceID (so
 //     event-log dedup key and staging-table dedup key are the same
